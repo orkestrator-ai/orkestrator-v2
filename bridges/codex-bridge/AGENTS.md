@@ -248,8 +248,12 @@ replay shows it as the card, never as a message the user typed. See
   which counts the container marker files (`/.dockerenv`,
   `/run/.containerenv`) for every session, whatever sandbox its policy names,
   as well as a container session policy; a Linux host with no marker is
-  probed for a refused user namespace (`codex-user-namespace-probe.ts`; only
-  a refusal it saw turns the sandbox off, never an unknown answer). Keep the
+  probed for a refused user namespace (`codex-user-namespace-probe.ts`). Only
+  a non-zero exit whose error output names a failed namespace operation counts
+  as a refusal; a spawn error, timeout, signal or any other failure is unknown
+  and keeps the sandbox on. Ask Codex's own sandbox (`codex sandbox -- true`)
+  first: Ubuntu's AppArmor profile permits `/usr/bin/bwrap` and not Codex's
+  helper, so a system `bwrap` success never proves Codex's sandbox runs. Keep the
   coordinator and permission-profile exclusions. The session reports it as `readOnlyCommandSandbox` on
   `/session/:id/status`. See "Codex read-only turns in a container" in
   [`coordinator.md`](../../docs/architecture/coordinator.md).

@@ -33,8 +33,10 @@
  * neither, the bridge probes whether the host lets a process create a user
  * namespace (`codex-user-namespace-probe.ts`): Ubuntu's AppArmor restriction
  * or a kernel with unprivileged namespaces off fails every Codex command the
- * same way. Only a refusal the probe saw turns the sandbox off; a host that
- * allows the namespace, or one the probe cannot judge, keeps Codex's sandbox.
+ * same way. Only a refusal the probe saw (a helper's exit naming a failed
+ * namespace operation) turns the sandbox off; a host that allows the
+ * namespace, or one the probe cannot judge (a timeout, a spawn error, any
+ * other failure), keeps Codex's sandbox.
  */
 import { existsSync } from "node:fs";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";

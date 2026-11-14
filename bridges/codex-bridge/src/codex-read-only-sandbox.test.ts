@@ -94,8 +94,9 @@ describe("codexReadOnlyCommandSandboxOff", () => {
     }
   });
 
-  test("a host refusal never touches a coordinator, macOS or a container reason", () => {
-    const refusal = () => "refused";
+  test("a host refusal never touches a coordinator, a permission profile, macOS or a container reason", () => {
+    let probed = 0;
+    const refusal = () => (probed++, "refused");
     expect(
       codexReadOnlyCommandSandboxOff({
         policy: policy("provider", "coordinator-read-only"),
@@ -104,6 +105,19 @@ describe("codexReadOnlyCommandSandboxOff", () => {
         userNamespaceRefusal: refusal,
       }),
     ).toBeUndefined();
+    for (const hostPolicy of [undefined, policy("none"), policy("provider")]) {
+      expect(
+        codexReadOnlyCommandSandboxOff({
+          ...(hostPolicy ? { policy: hostPolicy } : {}),
+          permissionProfile: "orkestrator-coordinator",
+          platform: "linux",
+          inContainer: () => false,
+          userNamespaceRefusal: refusal,
+        }),
+      ).toBeUndefined();
+    }
+    // None of the exclusions so far needed the probe's answer.
+    expect(probed).toBe(0);
     expect(
       codexReadOnlyCommandSandboxOff({
         platform: "darwin",

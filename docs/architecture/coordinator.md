@@ -1588,12 +1588,22 @@ its `submit_review_report` call, made from a code-mode cell
 with no approval asked; nothing is written to the checkout.
 macOS and a coordinator (which runs under its launcher's permission
 profile) keep Codex's sandbox. A Linux host with no container marker is
-probed (`codex-user-namespace-probe.ts`): `bwrap` creating a user namespace
-when it is on PATH, else `unshare --user`, cached for five minutes. A host
-that refuses it (Ubuntu's `apparmor_restrict_unprivileged_userns`, a kernel
-with `unprivileged_userns_clone=0`) runs the turn the same way and reports a
-host-worded reason; a host that allows it, or where neither program exists
-to ask, keeps Codex's sandbox. The boundary on such a host is the exec-policy
+probed (`codex-user-namespace-probe.ts`). It first runs `true` under Codex's
+own sandbox (`codex sandbox -c sandbox_mode="read-only" -- true`, from
+`CODEX_PATH`), the path a turn's commands take; when Codex cannot be asked or
+its answer is unknown it asks `bwrap` on PATH, else `unshare --user`. Only a
+non-zero exit whose error output names a failed namespace operation (`No
+permissions to create a new namespace`, `setting up uid map`, a
+`/proc/self/uid_map` write) is a refusal. A spawn error, a timeout, a signal
+or any other failure (`execvp true: No such file`) is unknown. A system
+program's success is unknown too: Ubuntu's `bwrap-userns-restrict` profile
+lets `/usr/bin/bwrap` create a namespace that Codex's bundled, unconfined
+bubblewrap is refused, so it proves nothing about Codex's helper. A definite
+answer is cached for five minutes, an unknown one for 30 seconds. A host that
+refuses it (Ubuntu's `apparmor_restrict_unprivileged_userns`, a kernel with
+`unprivileged_userns_clone=0`) runs the turn the same way and reports a
+host-worded reason; a host that allows it, or one the probe cannot judge,
+keeps Codex's sandbox. The boundary on such a host is the exec-policy
 allowlist and the declined approvals, with no network denial beyond Codex's
 own setting.
 

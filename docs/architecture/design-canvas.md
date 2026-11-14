@@ -797,8 +797,9 @@ existing Keychain item has. No login, no billed turn.
   prompt carried the canvas id. Since the review of 2026-11-14 the spec
   snapshots every call the loopback model has received before closing the
   tab and before pressing Resume, and fails on any later call, whatever its
-  prompt. That stricter check has not yet been run against the packaged
-  apps.
+  prompt. With it, and with the cleanup below, the same pairing command
+  without `--repeat-each` passed 2 of 2 on 2026-11-14 (93.2 s; 51.5 s and
+  41.3 s): no call of any kind followed closing the tab or Resume.
 - When the second direction's two apps share the run's root, its cleanup
   (`stopPackagedAppsThenRemoveProfile` in `packaged-electron-app.ts`)
   removes the root only once both apps and the backend are proven stopped;

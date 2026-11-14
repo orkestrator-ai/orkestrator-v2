@@ -27,7 +27,7 @@ export function reviewPackageArtifactPath(packageId: string, sha256?: string): s
 }
 
 /**
- * The reviewed diff, sealed by the backend beside the package (to-do 0190).
+ * The reviewed diff, sealed by the backend beside the package (to-do 0190 (retired)).
  * Like the package, the digest is in the name, so the bytes a persisted
  * package names can never be replaced.
  */

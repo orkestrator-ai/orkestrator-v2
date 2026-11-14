@@ -1,7 +1,7 @@
 /**
  * A whole Multi Review reviewer turn without Codex's command sandbox, on the
  * **real** pinned `codex app-server` behind the bridge's own runtime: the
- * read-only container canary of to-do 7872, task 1, outside the
+ * read-only container canary of to-do 7872 (retired), task 1, outside the
  * container.
  *
  * The session carries the container execution policy, so the runtime decides

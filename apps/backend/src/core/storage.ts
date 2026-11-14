@@ -307,7 +307,7 @@ export class StorageService {
     return this.repos.scheduledJobs.store();
   }
 
-  /** Orkestrator's own permission rules (todo 0723); per machine. */
+  /** Orkestrator's own permission rules (todo 0723 (retired)); per machine. */
   permissionRuleStore(): PermissionRuleStore {
     return this.repos.permissionRules.store();
   }

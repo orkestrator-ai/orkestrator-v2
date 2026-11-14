@@ -105,7 +105,7 @@ Analysed 2026-11-06 against main at `ee2cc8423`. Task 9 updated 2026-11-13 again
 
 **Problem.** The backend auto-applies a stored Orkestrator "always allow" rule to any request the bridge marks `ruleEligible`. Claude marks some asks as needing a person, and the bridge ignored both markers.
 
-**Context.** `ruleEligible` is the shared, fail-closed gate for both answering with a stored rule and offering to save one (`apps/backend/src/core/permission-rules/request-detail.ts`). [0723](0723-orkestrator-permission-rules.md) owns the rules.
+**Context.** `ruleEligible` is the shared, fail-closed gate for both answering with a stored rule and offering to save one (`apps/backend/src/core/permission-rules/request-detail.ts`). 0723 (retired) owned the rules; [permission-rules.md](../../architecture/permission-rules.md) now describes them.
 
 **Investigation.** `canUseTool` options at 0.3.319: `suppressAlwaysAllowRule` (the rule would grant more than this call, or a plugin started the call, where the CLI saves no rule at all) and `matchedAskRule` (a user ask rule forced the prompt; since 2.1.319 also when it reaches an MCP tool only under another name of its server). The SDK says hosts doing their own auto-approval should treat both as needing a person. Both fields existed before, but this release widens their meaning.
 
@@ -501,7 +501,7 @@ Recorded 2026-11-13 by the worker that ran the Linux sandbox probe and the login
 - 1020 (retired 2026-11-13), the previous upgrade round: `git show 17d28238c:docs/todo/agent-engines/1020-provider-upgrade-2026-10-30.md`
 - [0007-provider-sdk-adoption-backlog.md](0007-provider-sdk-adoption-backlog.md) (candidates)
 - 0008 (retired; `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`)
-- [0723-orkestrator-permission-rules.md](0723-orkestrator-permission-rules.md) (task 4, task 11)
+- 0723 (retired; `git show dc90609bf:docs/todo/agent-engines/0723-orkestrator-permission-rules.md`) (task 4, task 11); now [permission-rules.md](../../architecture/permission-rules.md)
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
 - [upgrade-agents.md](../../development/upgrade-agents.md)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the signed-in part of task 9 with the host firewall rule, and the signed-in checks of tasks 10 to 15) moved there on 2026-11-10.

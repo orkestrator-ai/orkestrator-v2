@@ -1072,7 +1072,7 @@ export function SharedNativeAgentController({
     data.environmentId,
     tabId,
   );
-  // Requests an Orkestrator permission rule answered in this session (todo 0723).
+  // Requests an Orkestrator permission rule answered in this session (todo 0723 (retired)).
   const ruleSession = usePermissionRuleSession(data.environmentId, platform, sessionKey);
   /*
    * A shell command the agent ran here that waits on the user (a sign-in link,

@@ -250,8 +250,9 @@ agent can apply it.
 
 ##### Permission-rule card runs (0723 tasks 1 to 5)
 
-The shared procedure for the five 0723 items below (0723's former tasks 1
-to 5, moved here with them on 2026-11-10). These spend real provider credits.
+The shared procedure for the five 0723 (retired) items below (0723's former
+tasks 1 to 5, moved here with them on 2026-11-10; 0723 was retired on
+2026-11-14 once its last agent task, the managed-network card, was done). These spend real provider credits.
 Run them only on an isolated profile,
 never on the production instance or its ports, and never change the host's
 `~/.claude`, `~/.codex`, `~/.grok` or `~/.pi`.
@@ -322,16 +323,16 @@ never on the production instance or its ports, and never change the host's
     and no card. Then run the removal check (cycle steps 4 and 5).
 
 **Afterwards.** Record the outcome and date in
-[0723](../agent-engines/0723-orkestrator-permission-rules.md), in a dated
-"Live card runs" section after Current state, one line per provider. Stop the
+[permission-rules.md](../../architecture/permission-rules.md#live-card-runs),
+in its dated "Live card runs" section, one line per provider. Stop the
 profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 `mise run dev:reset --profile perm-rules-<agent>`.
 
-- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 1: Claude live card run (billed).** Follow the permission-rule card-run steps above with `mise run dev:test --profile perm-rules-claude --fixture --credential-source claude --agent-platforms claude`. Run the cycle for three kinds: `Bash` `npm run test -- --watch`, an `Edit` inside the worktree, and `WebFetch` `https://example.com/`. Record in 0723, for each kind: the rule saved, the next request answered with the note, the use count in Settings → Permissions, the request asking again after removal, and the Claude `settings.json` hash unchanged. Also record which `Bash` pattern was preselected (expected: Claude's suggested prefix).
-- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 2: Pi live card run (billed).** Follow the permission-rule card-run steps above with `--profile perm-rules-pi --credential-source pi --agent-platforms pi`, and run the cycle for `bash` `git status --short`. Record the cycle's outcome and date in 0723.
-- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 3: Grok live card run.** Follow the permission-rule card-run steps above with a valid Grok login (`--profile perm-rules-grok --credential-source grok --agent-platforms grok`), and run the cycle for one plain command such as `git status --short`. Confirm the card offered `allow_once`, and that the profile's `$GROK_HOME` settings snapshot is unchanged. Record the outcome and date in 0723.
-- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 4: OpenCode live card run (billed).** Follow the permission-rule card-run steps above with `--profile perm-rules-opencode --credential-source opencode --agent-platforms opencode`. Run the cycle for `bash` `git status --short`, a single-file `edit` and `webfetch` `https://example.com/`. Also prompt `cd src && ls` once and confirm it keeps asking with no offer. Record each outcome and the date in 0723.
-- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 5: Codex card and inactive environment (billed).** Follow the Codex steps in the permission-rule card-run steps above (`--profile perm-rules-codex --credential-source codex --agent-platforms codex`). In environment A, queue a second `touch policy-probe.txt` turn, save the rule from the card, and switch to environment B. Look at the "Approve and remember…" panel: the exact pattern is first and Codex's proposal is preselected. While on B, there should be no attention badge for A. Back on A, the second turn shows the "Approved once by your rule" note, and removing the rule asks again. Record the outcome and date in 0723.
+- [ ] **0723 (retired) task 1: Claude live card run (billed).** Follow the permission-rule card-run steps above with `mise run dev:test --profile perm-rules-claude --fixture --credential-source claude --agent-platforms claude`. Run the cycle for three kinds: `Bash` `npm run test -- --watch`, an `Edit` inside the worktree, and `WebFetch` `https://example.com/`. Record in permission-rules.md's Live card runs, for each kind: the rule saved, the next request answered with the note, the use count in Settings → Permissions, the request asking again after removal, and the Claude `settings.json` hash unchanged. Also record which `Bash` pattern was preselected (expected: Claude's suggested prefix).
+- [ ] **0723 (retired) task 2: Pi live card run (billed).** Follow the permission-rule card-run steps above with `--profile perm-rules-pi --credential-source pi --agent-platforms pi`, and run the cycle for `bash` `git status --short`. Record the cycle's outcome and date in permission-rules.md's Live card runs.
+- [ ] **0723 (retired) task 3: Grok live card run.** Follow the permission-rule card-run steps above with a valid Grok login (`--profile perm-rules-grok --credential-source grok --agent-platforms grok`), and run the cycle for one plain command such as `git status --short`. Confirm the card offered `allow_once`, and that the profile's `$GROK_HOME` settings snapshot is unchanged. Record the outcome and date in permission-rules.md's Live card runs.
+- [ ] **0723 (retired) task 4: OpenCode live card run (billed).** Follow the permission-rule card-run steps above with `--profile perm-rules-opencode --credential-source opencode --agent-platforms opencode`. Run the cycle for `bash` `git status --short`, a single-file `edit` and `webfetch` `https://example.com/`. Also prompt `cd src && ls` once and confirm it keeps asking with no offer. Record each outcome and the date in permission-rules.md's Live card runs.
+- [ ] **0723 (retired) task 5: Codex card and inactive environment (billed).** Follow the Codex steps in the permission-rule card-run steps above (`--profile perm-rules-codex --credential-source codex --agent-platforms codex`). In environment A, queue a second `touch policy-probe.txt` turn, save the rule from the card, and switch to environment B. Look at the "Approve and remember…" panel: the exact pattern is first and Codex's proposal is preselected. While on B, there should be no attention badge for A. Back on A, the second turn shows the "Approved once by your rule" note, and removing the rule asks again. Record the outcome and date in permission-rules.md's Live card runs.
 
 #### CLI and slash commands
 

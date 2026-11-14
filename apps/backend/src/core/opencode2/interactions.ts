@@ -11,7 +11,7 @@
  *   `always` reply saves a rule in OpenCode's own database for every later
  *   session, which Orkestrator can neither list nor remove. The card offers no
  *   session grant, and an `approve-for-session` resolution is refused here
- *   before anything is sent. Orkestrator's own permission rules (todo 0723)
+ *   before anything is sent. Orkestrator's own permission rules (todo 0723 (retired))
  *   still apply through {@link OpenCode2InteractionAdapter.permissionRuleDetail}.
  * - **Deny rather than approve.** A malformed or unmappable answer is refused
  *   without a reply; declining, denying or cancelling rejects. OpenCode
@@ -97,7 +97,7 @@ function previewDiff(metadata: Record<string, unknown> | null): string | undefin
 }
 
 /**
- * The structured operation behind one 2.x approval (todo 0723), read through
+ * The structured operation behind one 2.x approval (todo 0723 (retired)), read through
  * the 1.x reader with 2.x's names mapped onto it: `shell` for `bash`, and its
  * one parsed command as the exact command. Anything else — several commands in
  * one call, several files, other actions — is not something a rule answers.

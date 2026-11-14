@@ -3046,7 +3046,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     [scope, identity, refresh],
   );
 
-  // "Approve and remember" (todo 0723): one approval, then the rule is saved
+  // "Approve and remember" (todo 0723 (retired)): one approval, then the rule is saved
   // by the backend. The refresh drops the answered card.
   const approveInteractionAndRemember = useCallback(
     async (

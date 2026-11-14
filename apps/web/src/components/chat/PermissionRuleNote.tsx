@@ -7,7 +7,7 @@ import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * "Approved by rule …": a request an Orkestrator permission rule answered
- * with a one-time approval (todo 0723), with a quick way to remove the rule.
+ * with a one-time approval (todo 0723 (retired)), with a quick way to remove the rule.
  * Removing it makes the next matching request ask again.
  */
 export function PermissionRuleNote({

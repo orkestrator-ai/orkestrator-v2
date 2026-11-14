@@ -1176,7 +1176,13 @@ the pinned binary's parser over the production argument shape.
 
    ```bash
    mise run verify:codex:network-approval
+   mise run verify:codex:network-card
    ```
+
+   The second runs the host request through the real bridge process, the
+   backend's card mapping and the rule enforcer, and checks the card is still
+   "Approve network access" with no amendment
+   ([permission-rules.md](../architecture/permission-rules.md#codex-on-a-managed-network-host)).
 
    Treat a failure in the "live MCP protocol era" block as a release blocker
    rather than a flaky test. Those two contracts stand in for every third-party

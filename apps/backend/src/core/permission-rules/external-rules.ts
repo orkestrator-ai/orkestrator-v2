@@ -11,7 +11,7 @@ import { dockerExec } from "../commands-container-exec.js";
 import type { Environment } from "../models.js";
 
 /**
- * Rules the providers keep themselves (todo 0723, phase 5), listed read-only:
+ * Rules the providers keep themselves (todo 0723 (retired), phase 5), listed read-only:
  * Codex `rules/*.rules` in the host's Codex home, each added account's and
  * each running container's, and Claude `permissions.allow` in its user and
  * project settings. Nothing here writes: neither provider has an API for it

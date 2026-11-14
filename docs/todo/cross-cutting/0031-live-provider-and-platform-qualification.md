@@ -187,7 +187,7 @@ evidence. This file only points at it.
    Evidence: `resolvePathFallbackAgentBinary` in `commands-agent-support.ts`;
    `commands-agent-support.test.ts` covers managed-first, the fallback outside
    agent-test, the refusal (also through `resolveAgentBinary`), and that
-   `checkHostTool` and spawning agree in one profile. `feature-build.ts` now
+   `checkHostTool` and spawning agree in one profile. `features/build.ts` now
    passes the runtime flavour to its Codex naming call. The two Claude
    credential-brokering tests in `apps/backend/tests/commands-integration.test.ts`
    and the agent-test Claude probe in `host-model-catalog-refresh.test.ts`

@@ -52,3 +52,4 @@ What is inferred and not observed: that the new server's `/api/session/active` l
 - [`docs/architecture/suborks.md`](../../architecture/suborks.md) (Lifecycle: "a restart never sends a turn twice").
 - [`docs/development/agent-testing.md`](../../development/agent-testing.md#suborks-on-every-provider-and-across-a-restart-fake-model).
 - 4340 (retired): the subork live qualification that added the restart spec; its final state is in Git history at `14d8ce8db`.
+- [5160](../cross-cutting/5160-silent-failures-live-evidence.md) task 4: a killed `opencode2 serve` whose replacement reads the session idle, with the request's run left unsettled, is now recorded as cut short after `OPENCODE2_UNSETTLED_RUN_GRACE_MS` (`opencode2/environment-provider.ts`, 2026-11-14). It does not cover this to-do's case, where the restarted server still lists the session as active.

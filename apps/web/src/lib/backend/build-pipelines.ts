@@ -46,6 +46,13 @@ export type ConditionalBuildPipeline<T> =
         /** Some history was not retained by the backend's transcript bound. */
         complete?: false;
       }>;
+      /**
+       * The record's current detail fingerprint, when the read named one
+       * (`knownDetailFingerprint`) and the record's detail can be split.
+       */
+      detailFingerprint?: string;
+      /** The record was sent without its detail: the caller holds it (`detailFingerprint`). */
+      detailOmitted?: true;
     }
   | PersistedBuildPipeline<T>
   | null;
@@ -252,19 +259,28 @@ export function createBuildPipelinesApi(client: BackendClient) {
    * caller does not hold at their committed revision. `knownSessions` names the
    * bodies held (revision and count); omitted sessions come back whole, and
    * `prioritySessionKey` is served first when the response budget runs out.
+   * `knownDetailFingerprint` names the detail held (`""` for none); see
+   * `@orkestrator/protocol/build-pipeline-detail`.
    */
   async function getBuildPipelineConditional<T = unknown>(
     pipelineId: string,
     knownRevision?: number,
     knownSessions: Record<string, { revision: number; count: number }> = {},
     prioritySessionKey?: string,
+    knownDetailFingerprint?: string,
   ): Promise<ConditionalBuildPipeline<T>> {
     const response: unknown = await domain().get_build_pipeline({
       pipelineId,
       knownRevision,
       knownSessions,
       ...(prioritySessionKey ? { prioritySessionKey } : {}),
+      ...(knownDetailFingerprint === undefined ? {} : { knownDetailFingerprint }),
     });
+    return conditionalResponse<T>(response);
+  }
+
+  /** Checks a `get_build_pipeline` answer; a pre-contract node's is not decoded. */
+  function conditionalResponse<T>(response: unknown): ConditionalBuildPipeline<T> {
     // A version-1 answer is already decoded; a pre-contract node's answer is
     // checked here as before.
     if (response === null) return null;
@@ -288,6 +304,10 @@ export function createBuildPipelinesApi(client: BackendClient) {
       response.unchanged !== false ||
       !isRecord(response.record) ||
       typeof response.record.id !== "string" ||
+      (response.detailFingerprint !== undefined &&
+        (typeof response.detailFingerprint !== "string" || response.detailFingerprint === "")) ||
+      (response.detailOmitted !== undefined &&
+        (response.detailOmitted !== true || response.detailFingerprint === undefined)) ||
       !Array.isArray(response.messagePatches) ||
       !response.messagePatches.every((value) => {
         if (!isRecord(value)) return false;
@@ -315,16 +335,22 @@ export function createBuildPipelinesApi(client: BackendClient) {
 
   /**
    * Control state only: `unchanged` when the record is still at `knownRevision`,
-   * otherwise the record without any transcript body.
+   * otherwise the record without any transcript body. With
+   * `knownDetailFingerprint` (`""` for none) a current backend answers the
+   * conditional shape, with no transcript patches, and may leave out the
+   * detail the caller holds; an older one ignores it and sends the record.
    */
   async function getBuildPipelineControl<T = unknown>(
     pipelineId: string,
     knownRevision?: number,
-  ): Promise<{ unchanged: true; revision: number } | PersistedBuildPipeline<T> | null> {
+    knownDetailFingerprint?: string,
+  ): Promise<ConditionalBuildPipeline<T>> {
     const response: unknown = await domain().get_build_pipeline({
       pipelineId,
       ...(knownRevision === undefined ? {} : { knownRevision }),
+      ...(knownDetailFingerprint === undefined ? {} : { knownDetailFingerprint }),
     });
+    if (knownDetailFingerprint !== undefined) return conditionalResponse<T>(response);
     if (response === null) return null;
     if (
       isRecord(response) &&

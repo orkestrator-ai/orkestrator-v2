@@ -202,6 +202,7 @@ describe("build pipeline read model", () => {
       knownSessions: {
         "session-1": { revision: 4, count: 1 },
       },
+      knownDetailFingerprint: "",
     });
   });
 
@@ -347,6 +348,7 @@ describe("build pipeline read model", () => {
       pipelineId: "pipeline-1",
       knownRevision: undefined,
       knownSessions: {},
+      knownDetailFingerprint: "",
     });
   });
 
@@ -416,6 +418,7 @@ describe("build pipeline read model", () => {
       knownRevision: 3,
       knownSessions: { "session-1": { revision: 3, count: 2 } },
       prioritySessionKey: "session-1",
+      knownDetailFingerprint: "",
     });
     expect(patched?.sessions[0]?.messages).toEqual([
       { id: "held-1" },
@@ -540,6 +543,7 @@ describe("build pipeline read model", () => {
     expect(invokeMock).toHaveBeenCalledWith("get_build_pipeline", {
       pipelineId: "pipeline-1",
       knownRevision: 2,
+      knownDetailFingerprint: "",
     });
     expect(restored?.backendRevision).toBe(3);
     expect(restored?.sessions[0]?.messages).toBe(held);
@@ -577,6 +581,7 @@ describe("build pipeline read model", () => {
       knownRevision: 1,
       knownSessions: {},
       prioritySessionKey: "session-1",
+      knownDetailFingerprint: "",
     });
     second.resolve({ unchanged: true, revision: 1 });
     expect(await queuedA).toMatchObject({ backendRevision: 1 });
@@ -709,6 +714,7 @@ describe("build pipeline read model", () => {
       knownRevision: 2,
       knownSessions: {},
       prioritySessionKey: "session-1",
+      knownDetailFingerprint: "",
     });
     third.resolve({ unchanged: true, revision: 2 });
     expect(await laterA).toMatchObject({ backendRevision: 2 });

@@ -61,9 +61,13 @@ import { createFeatureBuild, startFeaturePlanBuild } from "./features/index.js";
 import { launchBuildPipeline } from "./build-pipeline-launch.js";
 import {
   conditionalBuildPipelineRead,
+  detailResponseFields,
+  projectRendererRecord,
   withoutTranscriptBodies,
+  type DetailReadInput,
 } from "./build-pipeline-transcript-projection.js";
 import { readPipelineWorkerTranscript } from "./build-pipeline-worker-transcript.js";
+import type { PersistedBuildPipeline } from "./models.js";
 
 export function registerBuildPipelineCommands(
   register: CommandRegistrar,
@@ -266,12 +270,33 @@ export function registerBuildPipelineCommands(
    * a caller that names the transcript revision/count it holds per session in
    * `knownSessions` receives only the windows its stale sessions need, read
    * from the referenced transcript records (plan step 16).
+   *
+   * A caller that names the detail fingerprint it holds
+   * (`knownDetailFingerprint`, `""` for none) gets the conditional shape (or
+   * `unchanged`), with the record's current `detailFingerprint`; when that matches,
+   * the record leaves its heavy, slow-changing fields out (`detailOmitted`)
+   * and the caller merges its own copy back. Every other caller still gets
+   * the whole record (`@orkestrator/protocol/build-pipeline-detail`).
    */
   register(
     getBuildPipelineCommand,
-    async ({ pipelineId, knownRevision, knownSessions, prioritySessionKey }, context) => {
+    async (
+      { pipelineId, knownRevision, knownSessions, prioritySessionKey, knownDetailFingerprint },
+      context,
+    ) => {
       const { storage } = context;
-      const record = await storage.getBuildPipeline(asNonBlankString(pipelineId, "pipelineId"));
+      const id = asNonBlankString(pipelineId, "pipelineId");
+      let record: PersistedBuildPipeline | null;
+      let detail: DetailReadInput | undefined;
+      if (typeof knownDetailFingerprint === "string") {
+        const read = await storage.getBuildPipelineWithDetailFingerprint(id);
+        record = read?.record ?? null;
+        detail = read
+          ? { fingerprint: read.detailFingerprint, known: knownDetailFingerprint }
+          : undefined;
+      } else {
+        record = await storage.getBuildPipeline(id);
+      }
       if (!record) return null;
       if (knownSessions && typeof knownSessions === "object" && !Array.isArray(knownSessions)) {
         // Each stage session's own key owns its artifact publications.
@@ -284,6 +309,7 @@ export function registerBuildPipelineCommands(
             knownRevision,
             knownSessions: knownSessions as Record<string, unknown>,
             prioritySessionKey,
+            detail,
           },
           undefined,
           pipelines && environmentId
@@ -293,6 +319,15 @@ export function registerBuildPipelineCommands(
       }
       if (Number.isSafeInteger(knownRevision) && knownRevision === record.revision) {
         return { unchanged: true as const, revision: record.revision };
+      }
+      if (detail) {
+        // Control state only: no transcript window is asked for.
+        return {
+          unchanged: false as const,
+          record: projectRendererRecord(record, detail),
+          messagePatches: [],
+          ...detailResponseFields(detail),
+        };
       }
       return withoutTranscriptBodies(record);
     },

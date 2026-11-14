@@ -972,6 +972,22 @@ bound and that test fails until the template says the same.
   while the tab is active and the stage is shown, within the existing patch
   budget. The graph adds no polling; the live clock ticks only while a node
   runs and the tab is active.
+- The renderer's point reads (`hydrateBuildPipeline`) name the detail
+  fingerprint they hold (`knownDetailFingerprint`, `""` for none). The detail
+  is the record's heavy, slow-changing fields, listed in
+  `@orkestrator/protocol/build-pipeline-detail` (task snapshot, structured
+  review, validation run, round review reports, key information, per-session
+  review reports and fix results, and so on); measured on 2026-11-14 they were
+  75–85% of six completed records of 122–212 KB, which were rewritten 2,700 to
+  6,700 times each. The backend fingerprints the detail when it saves a record
+  (and on first read of one another process wrote) and, when the caller's
+  fingerprint still matches, answers the record without it (`detailOmitted`).
+  The renderer merges its held copy back, so its store keeps the complete
+  record; any change to a detail field changes the fingerprint, so it arrives
+  whole on the next read. An older backend ignores the argument and sends the
+  whole record. Coordinator tools, node forwarding, scoped snapshots, list
+  summaries and action responses do not send the argument and keep the whole
+  record.
 - New record fields are additive and optional; the pipeline guard accepts
   records without them. Records written before rewinds existed load as before
   and are superseded by their first restart like any other. Sessions written

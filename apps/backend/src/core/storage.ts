@@ -1522,6 +1522,13 @@ export class StorageService {
     return this.repos.buildPipelines.getBuildPipeline(pipelineId);
   }
 
+  /** The record plus its detail fingerprint (`get_build_pipeline`'s renderer reads). */
+  getBuildPipelineWithDetailFingerprint(
+    pipelineId: string,
+  ): Promise<{ record: PersistedBuildPipeline; detailFingerprint: string | null } | null> {
+    return this.repos.buildPipelines.getBuildPipelineWithDetailFingerprint(pipelineId);
+  }
+
   listBuildPipelines(projectId: string): Promise<PersistedBuildPipeline[]> {
     return this.repos.buildPipelines.listBuildPipelines(projectId);
   }

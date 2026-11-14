@@ -127,8 +127,13 @@ export const BuildPipelineMessagePatchSchema = modelRecord<BuildPipelineMessageP
 /**
  * `get_build_pipeline`: `null` for an unknown id; `unchanged` when the caller
  * named the current revision (and, with `knownSessions`, held every body);
- * with `knownSessions`, the record plus the transcript windows it lacks;
- * otherwise the record.
+ * with `knownSessions` or `knownDetailFingerprint`, the record plus the
+ * transcript windows it lacks; otherwise the record.
+ *
+ * With `knownDetailFingerprint`, `detailFingerprint` is the record's current
+ * detail fingerprint (absent when its detail cannot be split), and
+ * `detailOmitted` says the record was sent without its detail because the
+ * caller holds it (`@orkestrator/protocol/build-pipeline-detail`).
  */
 export const GetBuildPipelineResultSchema = Schema.Union([
   Schema.Null,
@@ -137,6 +142,8 @@ export const GetBuildPipelineResultSchema = Schema.Union([
     unchanged: Schema.Literal(false),
     record: BuildPipelineRecordSchema,
     messagePatches: mutableArray(BuildPipelineMessagePatchSchema),
+    detailFingerprint: optionalString,
+    detailOmitted: Schema.optional(Schema.Literal(true)),
   }),
   BuildPipelineRecordSchema,
 ]);

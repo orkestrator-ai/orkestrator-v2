@@ -1,3 +1,8 @@
+import {
+  extractBuildPipelineDetail,
+  mergeBuildPipelineDetail,
+  type BuildPipelineDetail,
+} from "@orkestrator/protocol/build-pipeline-detail";
 import { backfillLegacyTestResults } from "@orkestrator/protocol/structured-review";
 import { canonicalBuildPipeline } from "@orkestrator/protocol/workflow-vocabulary";
 import type { StoreApi } from "zustand/vanilla";
@@ -43,6 +48,18 @@ function pipelineReadsApi(scope: NodeScope) {
 
 const MAX_PIPELINE_HYDRATION_MARKERS = 2_048;
 const MAX_PROJECT_HYDRATION_MARKERS = 512;
+/**
+ * Held details, by pipeline. A miss costs one full record, never a wrong
+ * one. The values are the store's own objects most of the time, so an entry
+ * mostly costs a reference.
+ */
+const MAX_HELD_DETAILS = 256;
+
+/** The detail of the last full record a point read received, and its fingerprint. */
+interface HeldDetail {
+  fingerprint: string;
+  detail: BuildPipelineDetail;
+}
 
 type PipelineRead = {
   /** Settles when the read in flight does. */
@@ -70,6 +87,12 @@ interface BuildPipelinePersistenceState {
   readonly watchedTranscripts: Map<string, string[]>;
   /** Point reads in flight, by pipeline. */
   readonly pipelineReads: Map<string, PipelineRead>;
+  /**
+   * The detail (heavy, slow-changing fields) each pipeline's point reads last
+   * received whole, so the next read can name its fingerprint and be answered
+   * without it (`@orkestrator/protocol/build-pipeline-detail`).
+   */
+  readonly heldDetails: Map<string, HeldDetail>;
 }
 
 const persistenceState = defineScopedSlot<BuildPipelinePersistenceState>(
@@ -82,6 +105,7 @@ const persistenceState = defineScopedSlot<BuildPipelinePersistenceState>(
     unavailablePipelines: new Set(),
     watchedTranscripts: new Map(),
     pipelineReads: new Map(),
+    heldDetails: new Map(),
   }),
 );
 
@@ -291,6 +315,73 @@ function applyMessagePatches(
   };
 }
 
+type PointRead = backend.ConditionalBuildPipeline<BuildPipeline>;
+
+function holdDetail(state: BuildPipelinePersistenceState, pipelineId: string, held: HeldDetail) {
+  const { heldDetails } = state;
+  heldDetails.delete(pipelineId);
+  heldDetails.set(pipelineId, held);
+  while (heldDetails.size > MAX_HELD_DETAILS) {
+    const oldest = heldDetails.keys().next().value;
+    if (oldest === undefined) break;
+    heldDetails.delete(oldest);
+  }
+}
+
+/**
+ * Completes a point read's record with the detail held for it, and records
+ * the detail of a record that arrived whole. `refetch` when the backend left
+ * out detail this renderer does not hold under that fingerprint (it was
+ * evicted, or replaced by a concurrent read): ask again naming none.
+ *
+ * `sent` is the entry whose fingerprint the read named, captured when it was
+ * sent, so a later read replacing the entry cannot change what is merged.
+ */
+function withHeldDetail(
+  state: BuildPipelinePersistenceState,
+  pipelineId: string,
+  loaded: PointRead,
+  sent: HeldDetail | undefined,
+): PointRead | "refetch" {
+  if (loaded === null) {
+    // Deleted: nothing left to hold.
+    state.heldDetails.delete(pipelineId);
+    return loaded;
+  }
+  if ("unchanged" in loaded && loaded.unchanged) return loaded;
+  if (!("unchanged" in loaded)) {
+    // An older backend ignored the fingerprint and sent the whole record
+    // without one: there is nothing to hold it under.
+    state.heldDetails.delete(pipelineId);
+    return loaded;
+  }
+  const fingerprint = loaded.detailFingerprint;
+  if (loaded.detailOmitted) {
+    if (!sent || sent.fingerprint !== fingerprint) return "refetch";
+    const snapshot = mergeBuildPipelineDetail(loaded.record.snapshot, sent.detail);
+    if (!snapshot) return "refetch";
+    holdDetail(state, pipelineId, sent);
+    return {
+      unchanged: false,
+      record: { ...loaded.record, snapshot },
+      messagePatches: loaded.messagePatches,
+      detailFingerprint: fingerprint,
+    };
+  }
+  const detail = fingerprint ? extractBuildPipelineDetail(loaded.record.snapshot) : null;
+  if (fingerprint && detail) holdDetail(state, pipelineId, { fingerprint, detail });
+  else state.heldDetails.delete(pipelineId);
+  return loaded;
+}
+
+/** Test seam: the detail fingerprint `scope`'s point reads hold for `pipelineId`. */
+export function heldBuildPipelineDetailFingerprintForTests(
+  pipelineId: string,
+  scope: NodeScope = appCommandScope(),
+): string | undefined {
+  return persistenceState(scope).heldDetails.get(pipelineId)?.fingerprint;
+}
+
 export interface HydrateBuildPipelineOptions {
   /** Served first when the response budget runs out. */
   prioritySessionKey?: string;
@@ -442,11 +533,14 @@ async function hydrateBuildPipelineOnce(
   const localSessions = new Map<string, CachedSession>(
     localBefore?.sessions.map((session) => [session.sessionKey, session]) ?? [],
   );
-  const loaded = load
-    ? await load(pipelineId)
-    : !options.transcripts
-      ? await reads.getBuildPipelineControl<BuildPipeline>(pipelineId, localBefore?.backendRevision)
-      : await reads.getBuildPipelineConditional<BuildPipeline>(
+  const pointRead = (held: HeldDetail | undefined): Promise<PointRead> =>
+    !options.transcripts
+      ? reads.getBuildPipelineControl<BuildPipeline>(
+          pipelineId,
+          localBefore?.backendRevision,
+          held?.fingerprint ?? "",
+        )
+      : reads.getBuildPipelineConditional<BuildPipeline>(
           pipelineId,
           localBefore?.backendRevision,
           Object.fromEntries(
@@ -456,7 +550,17 @@ async function hydrateBuildPipelineOnce(
             }),
           ),
           options.prioritySessionKey,
+          held?.fingerprint ?? "",
         );
+  const readWithDetail = async (): Promise<PointRead> => {
+    const held = state.heldDetails.get(pipelineId);
+    const first = withHeldDetail(state, pipelineId, await pointRead(held), held);
+    if (first !== "refetch") return first;
+    const whole = withHeldDetail(state, pipelineId, await pointRead(undefined), undefined);
+    if (whole === "refetch") throw new Error("Invalid get_build_pipeline response");
+    return whole;
+  };
+  const loaded = load ? await load(pipelineId) : await readWithDetail();
   if (loaded && "unchanged" in loaded && loaded.unchanged) {
     unavailablePipelines.delete(pipelineId);
     return store.getState().pipelines.get(pipelineId) ?? null;
@@ -476,13 +580,16 @@ async function hydrateBuildPipelineOnce(
       );
     });
     if (invalidPatch) {
-      // Ask again naming no bodies: every stale session comes back whole.
-      const full = await reads.getBuildPipelineConditional<BuildPipeline>(
+      // Ask again naming no bodies (and no detail): every stale session comes back whole.
+      const answer = await reads.getBuildPipelineConditional<BuildPipeline>(
         pipelineId,
         undefined,
         {},
         options.prioritySessionKey,
+        "",
       );
+      const full = withHeldDetail(state, pipelineId, answer, undefined);
+      if (full === "refetch") throw new Error("Invalid get_build_pipeline response");
       if (full && "unchanged" in full && full.unchanged) {
         return store.getState().pipelines.get(pipelineId) ?? null;
       }

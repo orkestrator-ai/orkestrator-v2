@@ -61,6 +61,10 @@ import {
 } from "./restore.js";
 import { ChangeRetentionService, type RetentionReport } from "./retention.js";
 import {
+  reconcileDeletedEnvironments,
+  type DeletedEnvironmentReconcileResult,
+} from "./deleted-environment-reconcile.js";
+import {
   TurnBoundaryService,
   turnIdFor,
   type TurnContext,
@@ -122,6 +126,14 @@ export interface ChangeTrackingServiceOptions {
   requestExplicitEnvironmentRefresh?: (environmentId: string) => void;
   /** The branch an environment's pull request targets (pull-request scope). */
   prBaseBranch?: (environmentId: string) => Promise<string | null>;
+  /**
+   * Every environment id the environment store holds, from a read that throws
+   * rather than answer incompletely (`loadEnvironmentIdsForCleanup`). With it,
+   * the first retention pass after start first requests a purge for each
+   * environment the ledger names but the store no longer holds: ones deleted
+   * before purges were recorded, or whose delete never reached that step.
+   */
+  liveEnvironmentIds?: () => Promise<ReadonlySet<string>>;
   policy?: Partial<ChangeTrackingPolicy>;
   durable?: boolean;
   /** Disable timers (tests drive work explicitly). */
@@ -318,7 +330,7 @@ export class ChangeTrackingService {
     }
     if (!this.options.manualScheduling) {
       const retain = () => this.retainNow();
-      this.firstRetentionTimer = setTimeout(retain, FIRST_RETENTION_DELAY_MS);
+      this.firstRetentionTimer = setTimeout(() => this.firstRetention(), FIRST_RETENTION_DELAY_MS);
       this.firstRetentionTimer.unref?.();
       this.retentionTimer = setInterval(retain, RETENTION_INTERVAL_MS);
       this.retentionTimer.unref?.();
@@ -328,6 +340,53 @@ export class ChangeTrackingService {
   private retainNow(): void {
     void this.runRetentionPass();
     this.registry.sweepIdle();
+  }
+
+  /** The first pass after start, preceded by the one reconcile of deleted environments. */
+  private firstRetention(): void {
+    if (!this.options.liveEnvironmentIds) {
+      this.retainNow();
+      return;
+    }
+    void this.reconcileDeletedEnvironments().finally(() => {
+      if (!this.stopped) this.retainNow();
+    });
+  }
+
+  /**
+   * Requests a purge for every environment the ledger names but `live` does
+   * not hold (to-do 5821 task 5; see `deleted-environment-reconcile.ts`).
+   * `live` defaults to the service's own strict owner read. A failed read
+   * purges nothing more and is logged; the result is null then, and also when
+   * there is no owner read to compare with.
+   */
+  async reconcileDeletedEnvironments(
+    live: (() => Promise<ReadonlySet<string>>) | undefined = this.options.liveEnvironmentIds,
+  ): Promise<DeletedEnvironmentReconcileResult | null> {
+    if (!live) return null;
+    try {
+      const result = await reconcileDeletedEnvironments({
+        ledgerEnvironmentIds: (after) => this.retention.purges.ledgerEnvironmentIdPage(after),
+        liveEnvironmentIds: live,
+        purgePending: (environmentId) => this.deletedEnvironments.has(environmentId),
+        requestPurge: (environmentId) => this.environmentDeleted(environmentId),
+        stopped: () => this.stopped,
+      });
+      if (result.kind === "reconciled" && result.requested.length > 0) {
+        log.info("deleted-environments.purge-requested", {
+          ledgerEnvironments: result.ledgerEnvironments,
+          requested: result.requested.length,
+        });
+      }
+      return result;
+    } catch (error) {
+      if (!this.stopped) {
+        log.warn("deleted-environments.reconcile-failed", {
+          error: formatLogError(error, { message: false }),
+        });
+      }
+      return null;
+    }
   }
 
   /** One pass shortly, for a purge that should not wait for the hourly one. */

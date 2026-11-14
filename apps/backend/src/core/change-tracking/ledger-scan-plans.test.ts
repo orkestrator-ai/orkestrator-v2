@@ -238,6 +238,8 @@ describe("ledger statements at scale", () => {
       await h.service.retention.run();
       await h.service.retention.run(Date.now() + PAST_WINDOW);
       await recordTurn(h, "t2");
+      // The startup reconcile of environments deleted before purges were recorded.
+      await h.service.reconcileDeletedEnvironments(async () => new Set(["env-1"]));
       h.service.environmentDeleted("env-1");
       await h.service.retention.run(Date.now() + PAST_WINDOW);
     });
@@ -260,6 +262,7 @@ describe("ledger statements at scale", () => {
     expect(ran("FROM change_tool_windows WHERE lifecycle = 'open'")).toBe(true);
     expect(ran("owner_kind = 'provider-turn' AND frame_key >= ?")).toBe(true);
     expect(ran("MAX(ingested_seq) AS seq FROM change_evidence")).toBe(true);
+    expect(ran("SELECT MIN(owner_id) AS id FROM change_measurements")).toBe(true);
   });
 });
 

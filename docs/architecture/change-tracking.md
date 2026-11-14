@@ -140,7 +140,7 @@ Backend services (one composition root, `service.ts`):
 | `DiffBodyService` | `diff-bodies.ts` | Immutable bodies, live detail resolution |
 | `ChangeHandoffSerializer` | `handoff.ts` | Agent handoff text |
 | `ChangeRestoreService` | `restore.ts` | Conditional restore |
-| `ChangeRetentionService` | `retention.ts`, `reachability-cache.ts`, `ledger-retirement.ts` | Reachability GC, quotas, per-manifest object ids between passes, environment purges and age-based ledger retention |
+| `ChangeRetentionService` | `retention.ts`, `reachability-cache.ts`, `ledger-retirement.ts`, `deleted-environment-reconcile.ts` | Reachability GC, quotas, per-manifest object ids between passes, environment purges (including the startup reconcile of environments deleted before purges were recorded) and age-based ledger retention |
 | `ChangeTrackingPolicyRegistry` | `policy-registry.ts` | Every budget and cadence |
 | shared physical work | `shared-physical-work.ts` | Alias scan joins, refcounted watchers |
 | `GitScopeService` | `git-scopes.ts` | `uncommitted-net`, `committed-net`, `staged`, `unstaged`, `commit`, `pull-request` |
@@ -831,6 +831,26 @@ checkout (same path, inode and birth time) gets a fresh row instead of colliding
 with it. Source keys of evidence cursors name no environment, so a purge removes
 only the cursors of sources this process saw; the rest age out with the window.
 
+An environment deleted before purges were recorded, or whose delete never reached
+this step, has no entry, so its open segments would keep their baselines and its
+boundary rows would stay. Once after start, just before the first retention pass,
+the service compares the environment ids the ledger names (bindings, turn
+boundaries, thread segments and environment-net measurements, one index seek per
+distinct id) with `loadEnvironmentIdsForCleanup`, and requests the same purge
+for each id the store does not hold (`deleted-environment-reconcile.ts`). That
+read throws on a missing, corrupt or incomplete environment store instead of
+answering empty, and a throw purges nothing (`deleted-environments.reconcile-failed`).
+The ledger is read in pages of up to 4,096 ids to its end, each page before a
+fresh store read, so an environment created while the store is read has no rows
+in that page and cannot be taken for a deleted one, and no number of live ids
+ahead of an orphan keeps it from being reached; coordinator and bug-report
+runtime ids, which the environment store never holds, are never candidates; and
+an id already being purged is not requested again. The backend wiring requires
+the strict read, so omitting it is a type error rather than a reconcile that
+silently never runs. `deleted-environment-reconcile.test.ts` covers
+those cases, and on 2026-11-14 a throwaway profile purged only a made-up
+deleted environment's rows on its first pass (5821 task 5).
+
 `retention-deletion.test.ts` proves these boundaries. Removing a project does not
 touch any of this directly; what happens to a removed project's own stores is
 [5820](../todo/cross-cutting/5820-removed-project-kanban-notes-plans.md).
@@ -859,6 +879,17 @@ order, which is ingestion order, and stops at the first row inside the window. A
 has gone reads as an untracked call. Capture attempts, gaps, restore tokens and
 finished restore operations, cursors with nothing left to acknowledge and bindings
 with nothing left under them go once they are past the window too.
+
+A real renderer was driven against that state on 2026-11-14 (5821 task 4): a
+headless Chromium on a throwaway profile, a Pi turn from a loopback fake model
+whose ledger rows were aged 40 days before a restart's first pass. The turn
+history row then read "changes ? · Unavailable", with "Past the retention
+window, so its details were removed" in its tooltip and no control to open the
+turn's view. The tool card kept the bridge's own list of changed files ("Contents
+were not kept") in place of the measured tool change, and the thread header and
+Thread changes view still showed the thread's net change, because the open
+segment keeps its baseline. Nothing in the renderer depended on the retired
+frames, operations or measurements beyond the turn's own view.
 
 A closed segment goes with its baseline pin once none of its turns is retained. An
 open segment stays whatever its age, because its thread can take another turn and

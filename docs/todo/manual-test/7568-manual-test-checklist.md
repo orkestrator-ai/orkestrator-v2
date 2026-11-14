@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (329 items): run each check under
+1. **Manual tests and live checks** (330 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (63 items): make each call
@@ -154,12 +154,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 28 | 11 |
 | Coordinator and Multi Review | 83 | 8 |
-| Cross-cutting | 84 | 24 |
+| Cross-cutting | 85 | 24 |
 | Design canvas | 5 | 2 |
 | MCP | 10 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 29 | 3 |
-| **Total** | 329 | 63 |
+| **Total** | 330 | 63 |
 
 ## Outstanding work
 
@@ -632,10 +632,11 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[5821](../cross-cutting/5821-ledger-retention-live-evidence.md) task 1: table sizes and growth on a copy of a real ledger.** On the machine it came from, copy a long-lived `change-tracking.sqlite` with the app stopped. Count rows and bytes per table before and after two retention passes on the copy (an agent on that machine can run the passes). Delete the copy afterwards. Record in 5821 task 2's Investigation:
   - per-table counts and sizes, including `change_turn_boundaries`;
   - retained growth against the +70 to 100 MB a day estimate;
-  - how many environment ids in the ledger have no environment in the store (for task 5).
+  - how many environment ids in the ledger have no environment in the store (the rows 5821 task 5's startup reconcile purges; the next item checks it on the live install).
 
   This unblocks 5821 task 2.
 - [ ] **[5821](../cross-cutting/5821-ledger-retention-live-evidence.md) task 3: time a first retention run on an old real ledger.** On a fresh copy of the same long-lived ledger, opened by a throwaway profile, let the first retention pass run with the 30-day window until the backlog is gone. Record: passes and total time to clear the backlog, the longest event-loop stall, and whether requests stayed responsive, against the synthetic 773,000 rows over 8 passes (78 s, worst stall 120 ms). Reply to the coordinator. If a pass or a stall is out of proportion, the recommended follow-up is to spread the work further.
+- [ ] **[5821](../cross-cutting/5821-ledger-retention-live-evidence.md) task 5 (user part): the first deleted-environment reconcile on your real install.** (Background: [deleting an environment](../../architecture/change-tracking.md#deleting-an-environment); built and tested on 2026-11-14, and run on a throwaway profile where it purged only a made-up deleted environment's rows.) Before installing a build carrying 5821 task 5, note the environments you can see in the sidebar and open one older agent thread whose changes you can still see. Install the build and leave the app running for at least five minutes (the reconcile runs with the first retention pass, two minutes after start). Then search that day's essential log for `deleted-environments.purge-requested` and `deleted-environments.reconcile-failed`. Record: whether either line appeared and its `ledgerEnvironments` and `requested` counts, that every environment you noted is still listed, and that the thread you opened still shows its changes. Reply to the coordinator; a live environment that lost its history is a defect to report at once.
 - [ ] **6141 (retired) task 2: health and diagnostics on a long-running real install.** (Background: [health summary and the clean exit marker](../../architecture/logging.md#health-summary-and-the-clean-exit-marker); the to-do is in Git history at `17d28238c`.) After a week on your own install, open Settings → diagnostics, or read `/metrics`. Record: the `health-summary` row bytes, that store's share of the database file, the time of a sample's commit, the top tables (from `dbstat`, including whether `store_rows` swamps them), and the essential log's growth per day. Reply to the coordinator.
 - [ ] **6141 (retired) task 3 (user part): the diagnostics bundle from a release candidate.** (Background: [the diagnostics bundle](../../architecture/logging.md#the-diagnostics-bundle). The agent part passed on 2026-11-13: in a locally packaged unsigned macOS build and a Linux `package:linux:unpacked:test` build, `exit-marker-packaged-electron.spec.ts` read a whole bundle and saw `previous-run` `clean` after a quit and `crashed` after a kill.) In a packaged release candidate, export the diagnostics bundle from Settings. Record: whether the native save dialog appears and the file saves complete, and the `previous-run` line after a normal quit. Reply to the coordinator.
 - [ ] **6141 (retired) task 1 (user part): `dbstat` on an older macOS.** (Background: [snapshots](../../architecture/storage.md#snapshots); only macOS 27.2 was checked, on 2026-11-13, and the app supports macOS 13.0 and later.) Bun on macOS loads the system SQLite, which changes with the macOS release. On a Mac running an older macOS (13 to 26), with the app's Bun 1.4.4, run `bun -e 'const d = new (require("bun:sqlite").Database)(":memory:"); console.log(d.query("select sqlite_version() v").get().v, d.query("PRAGMA compile_options").all().some((r) => r.compile_options === "ENABLE_DBSTAT_VTAB"))'`. Record: the macOS version, the SQLite version and whether `dbstat` is there (`true`). Without it Settings shows no top tables on that Mac, which is expected and needs no fix. Reply to the coordinator.

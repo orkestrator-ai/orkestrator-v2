@@ -284,6 +284,37 @@ describe("agent mail protocol", () => {
     });
   });
 
+  test("keeps the two accounts of an account switch, bounded, and drops half a pair", () => {
+    const resource = { kind: "account-switch" as const, id: "claude", label: "mini" };
+    expect(
+      normalizeAgentMailNotice({
+        resource,
+        accountSwitch: { provider: "Claude Code", from: " a@x.dev ", to: "b@x.dev", extra: 1 },
+        state: "account-switched",
+        tone: "info",
+      }),
+    ).toEqual({
+      resource,
+      accountSwitch: { provider: "Claude Code", from: "a@x.dev", to: "b@x.dev" },
+      state: "account-switched",
+      tone: "info",
+    });
+    for (const accountSwitch of [
+      { provider: "Claude Code", from: "a@x.dev" },
+      { provider: "Claude Code", from: "a@x.dev", to: "t".repeat(121) },
+      "a@x.dev to b@x.dev",
+    ]) {
+      expect(
+        normalizeAgentMailNotice({
+          resource,
+          accountSwitch,
+          state: "account-switched",
+          tone: "info",
+        }),
+      ).not.toHaveProperty("accountSwitch");
+    }
+  });
+
   test("keeps the node a worker runs on, and a notice without one stays local", () => {
     const resource = { kind: "agent-tab", id: "tab", environmentId: "env", tabId: "tab" };
     expect(

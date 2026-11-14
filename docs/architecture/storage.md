@@ -482,7 +482,7 @@ primitives above serialize their writes.
   next waiter reclaims). Before, every leased store write cost three FULL
   syncs, claim, write and release; on btrfs on beelink2 that was 8 ms and
   255 KB of disk writes against 2.5 ms and 95 KB with the lease at NORMAL
-  (to-do 7562).
+  (to-do 7562, retired; [busy-soak disk waits](#busy-soak-disk-waits-by-filesystem)).
 - "Survives a crash" means an application or operating-system crash. Whether a
   commit also survives sudden power loss depends on the platform's sync call.
   On macOS, Bun links the system SQLite (`/usr/lib/libsqlite3.dylib`, 3.54.0
@@ -736,6 +736,71 @@ SQLite writes the pages it touched to the WAL at COMMIT. An INSERT, UPDATE or
 DELETE read through `get`, `all` or `values` (a `RETURNING` statement) reports no
 change count, so it is counted as a commit whatever it returned. Nothing a statement carries is kept: a series is a family or a table name.
 
+#### Busy-soak disk waits by filesystem
+
+To-do 7562 (retired 2026-11-14) found and fixed backend event-loop stalls
+that grew over a long busy soak, then checked whether they depended on the
+filesystem. Its full record of tasks 1 to 4 (runs, samplers, the A/B arms):
+`git show dc90609bf:docs/todo/cross-cutting/7562-busy-soak-event-loop-stall-growth.md`.
+
+- **Cause, on btrfs.** On beelink2 (Linux, `/home` on btrfs), the busy
+  driver's R1 run (`scripts/recurring-live-ab.ts --busy-rounds 50
+  --busy-clients 0,1,2 --busy-environments 10 --busy-burst-files 2500
+  --busy-turn-files 2500`, 150 rounds) logged 110 stall lines growing from
+  none to 10 s medians, longest 13.1 s, at normal host load. The main thread
+  was in btrfs writeback and sync waits, and a stall was 850 to 2,264
+  main-database SQLite calls, each short, each waiting on the disk. With the
+  profile on tmpfs the same rounds had no stall. The calls were public
+  operation updates: each rewrote its whole namespace document in a
+  FULL-synced commit, between a lease claim and release that were FULL
+  commits too.
+- **Fixes.** One row per public operation record (schema version 9,
+  [migrations](#migrations)); lease commits at NORMAL
+  ([durability](#durability-and-deletion)); an ended prompt run stays ended
+  while a later turn runs ([public CLI](public-cli.md)); and the reconciler
+  skips runs that can no longer change (`public-operation-reconcile`,
+  [recurring work](recurring-work.md)). A complete R1-shaped run with all of
+  them (2026-11-12) logged no stall and met every client budget R1 missed.
+- **APFS.** On mini (macOS 27.2, the internal APFS SSD that holds
+  `dev:test` profiles, 2026-11-14 at `dc90609bf`, other worktrees' builds
+  and suites running, load average 2.5 to 28), the same per-commit
+  benchmark, medians of 200 updates of one namespace:
+
+  | Records | Document (pre-fix) | Row | Row with the lease at FULL | Row with the lease at NORMAL |
+  | --- | --- | --- | --- | --- |
+  | 100 | 0.24 ms, 264 KB (btrfs 3.0 ms, 0.27 MB) | 0.05 ms, 14 KB (btrfs 2.6 ms, 85 to 96 KB) | 0.15 ms, 51 KB (btrfs 7.5 to 8.3 ms, 250 to 260 KB) | 0.08 ms, 31 KB (btrfs 2.5 to 2.7 ms, 95 KB) |
+  | 500 | 1.48 ms, 1.4 MB (btrfs 6.2 ms, 1.4 MB) | 0.05 ms, 14 KB | 0.15 ms, 52 KB | 0.08 ms, 32 KB |
+  | 2,000 | 9.81 ms, 9.1 MB (btrfs 18.6 ms, 8.7 MB) | 0.06 ms, 14 KB | 0.17 ms, 52 KB | 0.09 ms, 32 KB |
+
+  A FULL commit costs about a fiftieth of btrfs's time and a sixth of its
+  bytes there, because macOS's SQLite syncs a commit with plain `fsync`
+  (see durability above). Busy runs of the same workload on the current
+  build (about 60 rounds without clients, 2 h 6 min sampled, the last 40
+  rounds a complete 80-minute run) logged one stall line, 1.28 s, whose
+  time was four lease commits (most likely one running the automatic
+  checkpoint's barrier sync) while a 4 KiB `fsync` probe in another
+  directory on the volume took 1.8 s: a host-wide sync wait, not a burst of
+  calls. The probe's median was 0.08 to 0.55 ms and it passed 250 ms in 6
+  of its 759 ten-second windows. Main-thread CPU and busy stretches did not
+  grow over the run, and a stack sample during a 25,000-file burst found
+  the main thread idle in `kevent64` 98.7% of the time.
+- **What that answers.** The disk-wait half of the original growth was
+  btrfs's: at APFS's cost per commit, R1's largest burst would have been
+  0.1 to 0.5 s, under the 1 s stall threshold (an estimate: the pre-fix
+  build was not run on APFS). The other half, rewriting a growing namespace
+  document on every update (9.8 ms at 2,000 records on APFS too), grew on any
+  filesystem and went with the row layout. ext4 and XFS were not measured.
+- **Measuring on macOS.** There is no `/proc` wait channel: the thread
+  state from `libproc` (`PROC_PIDTHREADID64INFO`) reports a thread blocked
+  in a sync as "waiting", like an idle one, so it cannot separate a disk
+  wait from idle. The stall line's `storage*` fields
+  ([logging](logging.md#what-ran-during-a-stall)), an `fsync` probe on the
+  same volume, `proc_pid_rusage` disk bytes and a `sample` of the backend
+  can. The busy driver's rounds took 1.6 to 2.5 minutes on mini against
+  about 22 s on beelink2, mostly burst rescans running out at 60 s
+  ([8171](../todo/cross-cutting/8171-macos-burst-rescans-time-out.md)), so
+  its change-tracking ledger did less work there than on btrfs.
+
 ## Provider secrets at rest
 
 **Accepted risk (2026-11-05, security finding L17):** the stored provider secrets
@@ -934,7 +999,7 @@ rewrites each public operation namespace (`public-operations/ns-…`) from one
 one row per operation keyed by its `operationId`, in admission order. Before
 it, every admission and every state change parsed, re-validated and rewrote the
 whole namespace, which takes admissions for seven days, so each FULL-synced
-commit grew with the run (to-do 7562). `PublicOperationsRepository` now writes
+commit grew with the run (to-do 7562, retired; [busy-soak disk waits](#busy-soak-disk-waits-by-filesystem)). `PublicOperationsRepository` now writes
 one row (`updateSensitiveStoreRow`) under the public operation store lock and
 keeps each namespace's validated rows by serialized value, re-parsing only rows
 whose value changed (`loadStoreSerialized`). A namespace that is unreadable, or

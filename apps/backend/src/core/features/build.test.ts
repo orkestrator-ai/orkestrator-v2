@@ -3,17 +3,17 @@ import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
-import { StorageService } from "./storage.js";
-import { FeatureBuildTasks } from "./feature-build-tasks.js";
+import { StorageService } from "../storage.js";
+import { FeatureBuildTasks } from "./build-tasks.js";
 import {
   createFeatureBuild,
   fallbackFeatureTitle,
   featureTitleFromGeneratedName,
-} from "./feature-build.js";
-import type { Project } from "./models.js";
-import { mimeTypeForImageData } from "./prompt-attachments.js";
+} from "./build.js";
+import type { Project } from "../models.js";
+import { mimeTypeForImageData } from "../prompt-attachments.js";
 import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
-import { KanbanRequestIdConflictError } from "./storage-kanban.js";
+import { KanbanRequestIdConflictError } from "../storage-kanban.js";
 
 interface StartedPipeline {
   id: string;

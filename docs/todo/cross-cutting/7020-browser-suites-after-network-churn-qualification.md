@@ -207,8 +207,9 @@ Runs 1 and 2 also left the Vite fixture server listening on port 14722 after
 `test:logged` terminated them. A probe sent SIGTERM to Playwright with and
 without the wrapper: the server survived both ways, because Playwright's
 runner handles only SIGINT and starts the server in its own process group.
-The wrapper does not cause it; it is to-do
-[8040](8040-playwright-sigterm-orphans-fixture-server.md). The evidence files
+The wrapper does not cause it; it was to-do 8040 (retired 2026-11-14: the
+Playwright configs now stop their `webServer` on SIGTERM; see
+[testing-guide.md](../../development/testing-guide.md#watchdogs-and-stuck-processes)). The evidence files
 are under `output/agent-testing/7020-macos/` in the worktree that ran them
 (not committed).
 
@@ -295,7 +296,8 @@ minutes (run 2).
 Not a failure the wrapper caused (reproduced without it), and the fix belongs
 in the Playwright configs or the test runner rather than in
 `scripts/loopback-network.ts`, so it went to
-[8040](8040-playwright-sigterm-orphans-fixture-server.md) instead of this
+8040 (retired; fixed in the configs, see
+[testing-guide.md](../../development/testing-guide.md#watchdogs-and-stuck-processes)) instead of this
 change. The two orphans this work left were stopped by PID after their
 command line and start time were checked.
 
@@ -326,4 +328,4 @@ command line and start time were checked.
 - Flake [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md), the cause and the run record.
 - [2181](2181-dev-test-electron-opens-on-the-linux-desktop.md), whose qualification found the original failures.
 - [2921](2921-component-browser-failures-on-main.md), other `test:browser` failures.
-- [8040](8040-playwright-sigterm-orphans-fixture-server.md), the fixture server a terminated run leaves behind, found by the macOS qualification.
+- 8040 (retired 2026-11-14), the fixture server a terminated run left behind, found by the macOS qualification; fixed in the Playwright configs ([testing-guide.md](../../development/testing-guide.md#watchdogs-and-stuck-processes)).

@@ -1,5 +1,5 @@
-import { KeyedSingleFlight } from "./keyed-single-flight.js";
-import type { KanbanTask } from "./storage-shared.js";
+import { KeyedSingleFlight } from "../keyed-single-flight.js";
+import type { KanbanTask } from "../storage-shared.js";
 
 /**
  * In-flight feature-build work of one backend: ticket resolution per

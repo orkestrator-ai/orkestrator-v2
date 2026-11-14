@@ -42,7 +42,7 @@ storage half was decided; it is in Git history at `14df96544`. 6260 and
 6680 were retired on 2026-11-11, once their loopback-model measurements
 were done; both are in Git history at `1fd391e3a`. 1020 was retired on
 2026-11-13, once its no-login Claude checks passed (recorded in
-[1031](../agent-engines/1031-provider-upgrade-2026-11-06.md) task 9); it is
+1031 (retired) task 9, and now in [upgrade-agents.md](../../development/upgrade-agents.md#how-to-upgrade-claude)); it is
 in Git history at `17d28238c`. 6141 was retired on
 2026-11-13, once its macOS readings, packaged-app check and two-profile
 export passed; it is in Git history at `17d28238c`. 0023 and 0248 were
@@ -92,6 +92,10 @@ run passed; both are in Git history at `17d28238c`.
 done; both are in Git history at `17d28238c`.
 0223 and 0041 were retired on 2026-11-14, once nothing but these items was
 left in them; both are in Git history at `dc90609bf`.
+1031 was retired on 2026-11-14, once its macOS sandbox live test passed at
+the 2026-11-06 pins and its last open question moved to 8150; it is in Git
+history at `dc90609bf`, and its runs are recorded in
+[upgrade-agents.md](../../development/upgrade-agents.md#how-to-upgrade-claude).
 
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.
@@ -202,26 +206,26 @@ agent can apply it.
   Record: both tick values, both billed amounts, whether the ratios agree within rounding and whether ticks are per turn or cumulative, in 0007 task 11.
 - [ ] **0062 (retired) task 2, with task 3: Pi on a fresh `openai` ChatGPT login with no saved default** ([durable doc](../../development/credentials-and-models.md#default-model)). In a temporary directory run the pinned `pi` with `HOME=<tmp> PI_CODING_AGENT_DIR=<tmp>/agent`, `/login` → OpenAI → "Sign in with ChatGPT"; save no default. Then run the opt-in test from the [testing guide](../../development/testing-guide.md#opt-in-pi-chatgpt-default-model-check) with `ORKESTRATOR_PI_CHATGPT_LIVE=1` and `ORKESTRATOR_PI_CHATGPT_AUTH_FILE=<tmp>/agent/auth.json`. Afterwards revoke the extra ChatGPT OAuth grant on the account and delete the directory. Record: pass/fail, the selected model, the date; it also closes task 3 (the agent-test path) with the caveat that only the bridge-level path ran. Reply to the coordinator.
 - [ ] **0062 (retired) task 4: terminal `pi` on the same `openai` ChatGPT login.** Before revoking the grant in the item above, run the pinned `pi -p` with no `--model` in the same temporary `HOME` and `PI_CODING_AGENT_DIR`. Record: the model it starts on and whether it fails with "not supported when using Codex with a ChatGPT account" (code reading predicts `openai/gpt-5.5`, refused). Reply to the coordinator.
-- [ ] **1020 (retired) task 9 (signed-in part): signed-in checks left from the 2026-10-30 upgrade** ([runbook](../../development/upgrade-agents.md)). The pins have moved since; run these at the current pins in the same throwaway profile as 1031 task 9's item.
+- [ ] **1020 (retired) task 9 (signed-in part): signed-in checks left from the 2026-10-30 upgrade** ([runbook](../../development/upgrade-agents.md)). The pins have moved since; run these at the current pins in the same throwaway profile as 1031 (retired) task 9's item.
   1. Grok, signed in: `session/new`, an edit without an approval card, a `use_tool` match, `/compact` over ACP, `session_info_update`.
   2. Cursor: `close-retention-live.spec.ts` resume; does the original user row show after picking the resume entry (it did not at 1.2.0)?
   3. `slash-command-inactive.spec.ts` for OpenCode, Cursor, Grok and Pi; the billed Codex web-search canary.
   4. The rollout user-segment scan of your real `~/.codex/sessions` (the `find … jq` command in upgrade-agents.md's Codex section).
   5. Claude, signed in: a local and a container native session with the managed CLI, checking streaming, a question, abort, resume, model discovery and a background task (the release check in upgrade-agents.md's Claude section; never run at 2.1.314 or 2.1.319).
   6. Cursor, signed in: sign-in through the bridge's `--login`, then a turn that uses tools and leaves a diff.
-  Record: pass/fail per step with result paths, in [1031](../agent-engines/1031-provider-upgrade-2026-11-06.md) task 9's Investigation (1020 is retired).
-- [ ] **[1031](../agent-engines/1031-provider-upgrade-2026-11-06.md) task 9 (signed-in part): signed-in runs at the 2026-11-06 pins.** Throwaway `dev:test` profile with real logins for every platform, on a host whose firewall lets Docker reach the agent-tools port (see the firewall item below).
+  Record: pass/fail per step with result paths, under the matching provider in [upgrade-agents.md](../../development/upgrade-agents.md) (1020 and 1031 are retired).
+- [ ] **1031 (retired) task 9 (signed-in part): signed-in runs at the 2026-11-06 pins.** Throwaway `dev:test` profile with real logins for every platform, on a host whose firewall lets Docker reach the agent-tools port (see the firewall item below).
   1. The billed coordinator-skills probe: `CLAUDE_CLI_PATH=<managed claude> bun src/services/coordinator-skills.live-probe.ts` from `bridges/claude-bridge`.
   2. Signed-in Pi and Grok sessions; `close-retention-live.spec.ts` for Cursor and OpenCode.
   3. Model and effort switches, compaction and sub-agent cards on every provider.
   4. `mise run test:agent:goals`.
-  Record: pass/fail per step with result paths, in 1031 task 9's Investigation.
-- [ ] **[1031](../agent-engines/1031-provider-upgrade-2026-11-06.md) tasks 10 to 15: signed-in checks of the new cross-provider features.** In the same profile as the item above:
+  Record: pass/fail per step with result paths, under the matching provider in [upgrade-agents.md](../../development/upgrade-agents.md) (1031 is retired).
+- [ ] **1031 (retired) tasks 10 to 15: signed-in checks of the new cross-provider features.** In the same profile as the item above:
   1. Task 10: Claude results carry `credential_expires_at` and `result_index`; the "Sign-in ends" line shows.
   2. Task 11: a Claude ask carrying `suppressAlwaysAllowRule` or `matchedAskRule` shows the "answer this yourself" card.
   3. Task 12: a Codex MCP approval with `tool_annotations`, and a Claude approval for a real configured MCP server, each show the tag.
   4. Task 13: billed OpenRouter, Cursor and ACP USD costs. Task 14: a real full disk for Claude and Pi shows the lost-write notice. Task 15: whether Grok's remote settings can override `GROK_STORAGE_MODE=local`.
-  Record: pass/fail and what was shown per check, in 1031's Needs verification.
+  Record: pass/fail and what was shown per check, under the matching provider in [upgrade-agents.md](../../development/upgrade-agents.md) (1031 is retired; its design notes are in `git show dc90609bf:docs/todo/agent-engines/1031-provider-upgrade-2026-11-06.md`).
 
 - [ ] **0008 (retired) task 5: live coordinator suite on OpenCode 2.x.** On a host signed in to OpenCode with a real provider credential, run `mise run test:agent:coordinator --credential-source opencode` (OpenCode 2 is the only line since 2026-11-11, so no setting is needed). Check that each new coordinator conversation starts its own OpenCode server. Record: pass or fail per scenario, the 2.x pin, and any refusal or error text, under "Maintaining the OpenCode integration" in [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration). The design is in "Task 5: coordinators on 2.x" (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`).
 - [ ] **0008 (retired) Needs verification: OpenCode 2 turns on a real provider.** Every OpenCode 2 qualification so far used a scripted loopback model (host 2026-11-11, container 2026-11-13). On a disposable `mise run dev:test --profile oc2-real --fixture --credential-source opencode --agent-platforms opencode --headless` profile signed in to a real OpenCode provider, run `ORKESTRATOR_AGENT_TEST_PROFILE=oc2-real ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1 ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS=opencode ORKESTRATOR_AGENT_TEST_IDLE_CASES=approval,steer,no-renderer mise run test:agent:browser -- e2e/agent-testing/idle-observation-live.spec.ts` (billed: a few short turns). Record: pass, fail or not-exercised per case, the provider and model, and any error text, under "Maintaining the OpenCode integration" in [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration). Stop and reset the profile afterwards.
@@ -739,7 +743,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[0001](../agent-engines/0001-agent-interactions-and-permissions.md) task 1: ask xAI for a "never trust" switch in Grok.** File an upstream request with xAI for a per-process switch that keeps Grok's folder-trust gate closed: an environment variable or a `session/new` meta key. Cite the 1.0.67 evidence in 0001 item 12: a `git worktree` of a trusted repo inherits trust, and only `GROK_FOLDER_TRUST=0` and `--trust` exist, which open the gate. Record the request's link and date in 0001 task 1.
 
 - [ ] **0062 (retired) task 4: report Pi's terminal default upstream if it fails.** If the terminal check above shows `pi` starting on `openai/gpt-5.5` and being refused, file a report with Pi upstream (its `defaultModelPerProvider` names `gpt-5.5` for `openai`, which a ChatGPT login refuses; `findInitialModel` reaches it before `openai-codex`). Record: the issue link, or "not filed: terminal passed", reply to the coordinator.
-- [ ] **[1031](../agent-engines/1031-provider-upgrade-2026-11-06.md) task 9: apply the host firewall rule for Docker.** On the Linux host that ran `qa-1031-upgrade`, `ufw` drops Docker traffic to the agent-tools port, so the app's "Docker containers can't reach Orkestrator" dialog blocked `close-retention-live.spec.ts`. Apply the rule that dialog shows (or choose another host for 1031 task 9's signed-in item). Record: the rule applied and the host, or the host chosen instead, in 1031 task 9.
+- [ ] **1031 (retired) task 9: apply the host firewall rule for Docker.** On the Linux host that ran `qa-1031-upgrade`, `ufw` drops Docker traffic to the agent-tools port, so the app's "Docker containers can't reach Orkestrator" dialog blocked `close-retention-live.spec.ts`. Apply the rule that dialog shows (or choose another host for 1031 (retired) task 9's signed-in item). Record: the rule applied and the host, or the host chosen instead, with that item's record in [upgrade-agents.md](../../development/upgrade-agents.md) (1031 is retired).
 
 - [ ] **0008 (retired) task 7: review the OpenCode 2 mitigations now that it is the only line.** OpenCode 1.x was retired on 2026-11-11 at your request, so the default question is settled. Read "Task 2: owner decision (2026-11-08)" in 0008 (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`) and accept or reject each mitigation still in force: an exact pin, `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_DISABLE_FILEWATCHER` and an isolated `OPENCODE_DB` for storage; `switchModel`/`switchAgent` and session permissions under the dispatch lock; LSP and the `CLAUDE.md` fallback dropped; the backend-held steer guard; Orkestrator's own bounded steer journal; experimental MCP, instructions and log routes used at the exact pin. Record: your acceptance or rejection per mitigation under "Maintaining the OpenCode integration" in [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration).
 - [ ] **1250 (retired) task 8: the cost of an automatic-switch notice.** After a real week with automatic switching on, count the automatic-switch notices and the main-coordinator turns they woke. Decide: keep waking every main coordinator (recommended), or deliver the notice without a wake so it is read at the coordinator's next turn. Record: the counts and the decision. Reply to the coordinator.

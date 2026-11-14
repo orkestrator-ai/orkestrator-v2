@@ -82,7 +82,21 @@ async function reviewDockerCleanup(page: Page) {
   });
 }
 
+/**
+ * How long the Docker tab may show "Loading Docker stats..." before it must
+ * show the loaded or unavailable state. The tab waits on `get_docker_system_stats`,
+ * whose slowest chain of bounded Docker reads is `docker info` (15 s) then
+ * `docker system df` (60 s), then `docker images` (10 s): 85 s
+ * (`commands-registry-docker.ts`, `container-resources.ts`). On a Mac that
+ * chain took 1.0 s with Docker idle and 3.0 s beside nine concurrent
+ * `docker system df -v` reads (2026-11-14), and more than 5 s while Docker
+ * served nine builds (to-do 8015 (retired)), so a fixed 5 s failed there.
+ */
+const DOCKER_STATS_LOAD_MS = 90_000;
+
 test("Global settings opens the Docker tab and reviewed cleanup", async ({ page }, testInfo) => {
+  // Two loads at most, then two cleanup reviews of up to 60 s each.
+  test.setTimeout(2 * DOCKER_STATS_LOAD_MS + 2 * 60_000 + 60_000);
   await page.setViewportSize({ width: 1280, height: 860 });
   await login(page, testInfo);
   for (const pass of ["first", "after reload"]) {
@@ -91,7 +105,9 @@ test("Global settings opens the Docker tab and reviewed cleanup", async ({ page 
     const unavailable = page.getByText(
       "Docker is not running. Start Docker to see its resources and containers.",
     );
-    await expect(page.getByText("System Resources", { exact: true }).or(unavailable)).toBeVisible();
+    await expect(page.getByText("System Resources", { exact: true }).or(unavailable)).toBeVisible({
+      timeout: DOCKER_STATS_LOAD_MS,
+    });
     if (await unavailable.isVisible()) {
       await expect(page.getByRole("button", { name: /Review cleanup/ })).toHaveCount(0);
       return;

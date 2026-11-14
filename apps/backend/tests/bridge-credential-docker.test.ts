@@ -161,6 +161,22 @@ async function seizeAs(user: "node" | "root", pid: string): Promise<string> {
   return docker(["exec", "-i", "--user", user, containerId, "perl", "-", pid], PTRACE_SEIZE_PROBE);
 }
 
+/** The argv a bridge process starts with (`docker/orkestrator-bridge-launch.sh`). */
+function bridgeArgv(entry: string): string[] {
+  return ["/usr/local/bin/bun", "--config=/dev/null", "--no-env-file", `/opt/${entry}`];
+}
+
+/** A pgrep pattern for the bridge process itself, never its launcher's wrapper shell. */
+function bridgePgrepPattern(entry: string): string {
+  return `^${bridgeArgv(entry).join(" ")}`;
+}
+
+/** Whether a NUL-separated `/proc/<pid>/cmdline` begins with exactly `argv`. */
+function startsWithArgv(cmdline: string, argv: readonly string[]): boolean {
+  const actual = cmdline.split("\0");
+  return argv.every((argument, index) => actual[index] === argument);
+}
+
 /** `ok`, or the error code a host filesystem call failed with. */
 async function outcome(action: () => Promise<unknown>): Promise<string> {
   try {
@@ -180,25 +196,38 @@ async function outcome(action: () => Promise<unknown>): Promise<string> {
  * over it; on a rootful daemon only host root does. Counts entries only and
  * never reads a file or memory.
  */
-async function hostUserReach(): Promise<{ bridgeDirectory: string; bridgeMemory: string }> {
+async function hostUserReach(): Promise<{
+  bridgeDirectory: string;
+  bridgeMemory: string;
+  bridgeHostUid: string;
+}> {
   const hostPid = await docker(["inspect", "--format", "{{.State.Pid}}", containerId]);
   // The pid is the host's only when the daemon shares this host's pid
   // namespace; on Docker Desktop it is the VM's. The cgroup names the container.
   const inContainer = async (pid: string) =>
     (await fs.readFile(`/proc/${pid}/cgroup`, "utf8").catch(() => "")).includes(containerId);
   if (!(await inContainer(hostPid))) {
-    return { bridgeDirectory: "pid-not-on-this-host", bridgeMemory: "pid-not-on-this-host" };
+    return {
+      bridgeDirectory: "pid-not-on-this-host",
+      bridgeMemory: "pid-not-on-this-host",
+      bridgeHostUid: "pid-not-on-this-host",
+    };
   }
   let entries = 0;
   const bridgeDirectory = await outcome(async () => {
     entries = (await fs.readdir(`/proc/${hostPid}/root/run/orkestrator-bridge`)).length;
   });
-  // The Claude bridge as the host numbers it: its command line, in this container.
+  // The Claude bridge as the host numbers it: the bun process itself, in this
+  // container. Its argv begins exactly as the in-container pgrep anchors it;
+  // a substring match would also take the launcher's wrapper shell
+  // (`sh -c … orkestrator-bridge <log> /opt/claude-bridge/dist/index.js`),
+  // which has a lower pid and stays alive for the log pipeline.
+  const argv = bridgeArgv(BRIDGES[0]!.process);
   let bridgePid = "";
   for (const pid of await fs.readdir("/proc")) {
     if (!/^\d+$/.test(pid)) continue;
     const cmdline = await fs.readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "");
-    if (cmdline.includes(`/opt/${BRIDGES[0]!.process}`) && (await inContainer(pid))) {
+    if (startsWithArgv(cmdline, argv) && (await inContainer(pid))) {
       bridgePid = pid;
       break;
     }
@@ -206,9 +235,15 @@ async function hostUserReach(): Promise<{ bridgeDirectory: string; bridgeMemory:
   const bridgeMemory = bridgePid
     ? await outcome(async () => (await fs.open(`/proc/${bridgePid}/mem`, "r")).close())
     : "bridge-not-found";
+  // The host uid of the process opened, so the line shows it was the bridge
+  // (`node` mapped through the uid map), not a root-owned wrapper.
+  const status = bridgePid
+    ? await fs.readFile(`/proc/${bridgePid}/status`, "utf8").catch(() => "")
+    : "";
   return {
     bridgeDirectory: bridgeDirectory === "ok" ? `readable:${entries}` : bridgeDirectory,
     bridgeMemory: bridgeMemory === "ok" ? "opened" : bridgeMemory,
+    bridgeHostUid: /^Uid:\s+(\d+)/m.exec(status)?.[1] ?? "unknown",
   };
 }
 
@@ -374,9 +409,7 @@ describe("bridge credential on a real container", () => {
         const { authToken } = started.get(bridge.kind)!;
         // The bridge, not the wrapper shell that pipes its log: the launcher
         // runs bun by its root-owned path, never through the agent's PATH.
-        const pid = await asAgent(
-          `pgrep -f '^/usr/local/bin/bun --config=/dev/null --no-env-file /opt/${bridge.process}' | head -n 1`,
-        );
+        const pid = await asAgent(`pgrep -f '${bridgePgrepPattern(bridge.process)}' | head -n 1`);
         expect(pid).toMatch(/^\d+$/);
         // The file, its directory, and the old location.
         expect(
@@ -427,9 +460,7 @@ describe("bridge credential on a real container", () => {
       const bridgeUids: Record<string, string> = {};
       const seizedByRoot: Record<string, string> = {};
       for (const bridge of BRIDGES) {
-        const pid = await asAgent(
-          `pgrep -f '^/usr/local/bin/bun --config=/dev/null --no-env-file /opt/${bridge.process}' | head -n 1`,
-        );
+        const pid = await asAgent(`pgrep -f '${bridgePgrepPattern(bridge.process)}' | head -n 1`);
         expect(pid).toMatch(/^\d+$/);
         // The bridge runs as the agent's own uid; being non-dumpable is what
         // keeps that uid out, and tracing a non-dumpable process needs

@@ -365,7 +365,8 @@ socket; the imposter, login-shell plant, checkout and `/opt` plant, policy
 widening, unprefixed-token, older-image, Claude catalogue and both OpenCode
 2.x cases behaved as on rootful.
 
-What the new case measured, identical in all six passing runs:
+What the new case measured, identical in all six passing runs except the
+last row, which a later re-run corrected (below the table):
 
 | Measure | Rootless (this run) | What differs from rootful |
 | --- | --- | --- |
@@ -377,13 +378,14 @@ What the new case measured, identical in all six passing runs:
 | Container root's seize of each bridge | Refused, `EPERM` | Same: no `CAP_SYS_PTRACE` |
 | Container root reads `/run/orkestrator-bridge` | Yes, 15 entries | Same |
 | The host user reaches `/run/orkestrator-bridge` through `/proc/<pid>/root` of the container's init | **Yes**, 15 entries (directory listed, no file read) | Real difference: on rootful this needs host root, because the directory belongs to host root there |
-| The host user opens the Claude bridge's `/proc/<pid>/mem` (opened only, nothing read) | Refused, `EACCES` | Not measured on rootful. The cause of the refusal was not established: the same user could `nsenter --user` the daemon's user namespace (it owns it), so it is not a boundary |
+| The host user opens the Claude bridge's `/proc/<pid>/mem` (opened only, nothing read) | **Opened** (re-run; the bun process at host uid 100999, `node` mapped). Runs 6 to 11 recorded `EACCES`, but their probe matched the first process whose command line merely contained the bridge's entry path, which can be the launcher's wrapper shell (lower pid, alive for the log pipeline), so that value is not evidence about the bridge | Not measured on rootful. Expected: the daemon's user owns the container's user namespace, so it holds `CAP_SYS_PTRACE` over the non-dumpable bridge there |
 
 So inside the container nothing differs: the agent's uid has no way to the
 credential on rootless that it lacks on rootful. The one difference is
 outside it, and it is the expected one: on a rootless daemon the user who
 runs the daemon owns the container's root, so any of that user's host
-processes can read the bridge directory without the Docker socket. That user
+processes can read the bridge directory, and open a bridge's memory, without
+the Docker socket. That user
 is root-equivalent over the daemon's containers on any topology (through the
 socket, `docker exec --user root` reads the same files), and the agent is
 never that user; it is `node`, which maps to an unprivileged subordinate uid.
@@ -401,6 +403,15 @@ never that user; it is `node`, which maps to an unprivileged subordinate uid.
   so a granted probe never leaves a bridge stopped. The Container live
   qualification workflow runs this file on rootful amd64 and arm64 runners,
   but keeps no evidence file, so those runs check the assertions only.
+- **Re-run after review (2026-11-14):** the host-side probe now takes the
+  process whose argv begins exactly `/usr/local/bin/bun --config=/dev/null
+  --no-env-file /opt/claude-bridge/dist/index.js`, as the in-container
+  `pgrep` does, and records that process's host uid (`bridgeHostUid`). Two
+  runs on a fresh disposable daemon (`q4982b`, same host, Engine and image
+  build as above, no older image) passed 13 and skipped the older-image case
+  (63.7 and 62.8 s); both recorded `bridgeMemory: "opened"` with
+  `bridgeHostUid: "100999"`, every other value as in the table. The daemon
+  was stopped and the rebuilt image tag removed afterwards.
 - **Cleanup:** each run's `afterAll` removed its labelled containers; after
   the last run the daemon held no container, network or volume. The daemon
   was then stopped with `docker:disposable -- stop`, and the host image tag

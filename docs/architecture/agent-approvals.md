@@ -125,7 +125,8 @@ Engine 29.9.2) on 2026-11-09 by `apps/backend/tests/bridge-credential-docker.tes
 and on a rootless daemon on 2026-11-14, where the same suite also showed the
 agent's ptrace of every bridge refused and nothing inside the container
 differing from rootful; the one difference, outside it, is that the daemon's
-host user owns the container's root
+host user owns the container's root and its user namespace, so it can list the
+bridge directory and open a bridge's memory without the Docker socket
 ([evidence](../development/container-qualification.md#bridge-credential-suite-on-rootless-docker-2026-11-14)).
 
 An image without `opencode2-launch=1` starts the 2.x server from node's login

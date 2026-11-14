@@ -14,8 +14,11 @@ import {
   packagedAppExecutable,
   packagedLaunchEnvironment,
   packagedLaunchSwitches,
+  packagedAppStop,
   packagedResourcesPath,
   stopPackagedAppThenRemoveProfile,
+  stopPackagedAppsThenRemoveProfile,
+  type PackagedAppStop,
 } from "./packaged-electron-app";
 import packaged from "./playwright.packaged-electron.config";
 import electron from "./playwright.electron.config";
@@ -379,5 +382,171 @@ describe("packaged spec cleanup", () => {
     const run = steps(() => [1]);
     await stopPackagedAppThenRemoveProfile<string>(null, run.steps);
     expect(run.calls).toEqual(["release", "wait ", "remove profile"]);
+  });
+});
+
+// The renderer-pairing spec's second test: this checkout's app (the resumer)
+// and the published app share one root with the backend.
+describe("packaged spec cleanup of apps sharing a root", () => {
+  const twoApps = (
+    overrides: { [name: string]: Partial<PackagedAppStop> } = {},
+    launched: { [name: string]: boolean } = {},
+  ) => {
+    const calls: string[] = [];
+    const app = (name: string, tree: number[]): PackagedAppStop => ({
+      launched: launched[name] ?? true,
+      snapshot: () => {
+        calls.push(`snapshot ${name}`);
+        return tree;
+      },
+      close: async (owned) => {
+        calls.push(`close ${name} ${owned.join(",")}`);
+      },
+      waitForStopped: async (owned) => {
+        calls.push(`wait ${name} ${owned.join(",")}`);
+      },
+      ...overrides[name],
+    });
+    return {
+      calls,
+      apps: [app("resumer", [51, 52]), app("published", [-61, 61])],
+      shared: {
+        release: async () => {
+          calls.push("release");
+        },
+        removeProfile: async () => {
+          calls.push("remove root");
+        },
+      },
+    };
+  };
+
+  test("stops both apps and the backend before removing the root", async () => {
+    const run = twoApps();
+    await stopPackagedAppsThenRemoveProfile(run.apps, run.shared);
+    expect(run.calls).toEqual([
+      "snapshot resumer",
+      "close resumer 51,52",
+      "snapshot published",
+      "close published -61,61",
+      "release",
+      "wait resumer 51,52",
+      "wait published -61,61",
+      "remove root",
+    ]);
+  });
+
+  test("keeps the root when the resumer cannot be snapshotted, still stopping the rest", async () => {
+    const run = twoApps({
+      resumer: {
+        snapshot: () => {
+          run.calls.push("snapshot resumer");
+          throw new Error("ps failed");
+        },
+      },
+    });
+    const failure = await stopPackagedAppsThenRemoveProfile(run.apps, run.shared).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors.map((error: Error) => error.message)).toEqual([
+      "ps failed",
+      "Cannot remove profile without an owned-process snapshot",
+    ]);
+    expect(run.calls).toEqual([
+      "snapshot resumer",
+      "snapshot published",
+      "close published -61,61",
+      "release",
+    ]);
+  });
+
+  test("keeps the root when the resumer is not proven stopped, though the others are", async () => {
+    const run = twoApps({
+      resumer: {
+        waitForStopped: async (owned) => {
+          run.calls.push(`wait resumer ${owned.join(",")}`);
+          throw new Error("Owned processes did not exit");
+        },
+      },
+    });
+    const failure = await stopPackagedAppsThenRemoveProfile(run.apps, run.shared).catch(
+      (error: unknown) => error,
+    );
+    expect((failure as Error).message).toBe("Owned processes did not exit");
+    expect(run.calls).not.toContain("remove root");
+    expect(run.calls).toEqual([
+      "snapshot resumer",
+      "close resumer 51,52",
+      "snapshot published",
+      "close published -61,61",
+      "release",
+      "wait resumer 51,52",
+    ]);
+  });
+
+  test("keeps the root when the published app is not proven stopped", async () => {
+    const run = twoApps({
+      published: {
+        waitForStopped: async () => {
+          run.calls.push("wait published");
+          throw new Error("Owned processes did not exit");
+        },
+      },
+    });
+    const failure = await stopPackagedAppsThenRemoveProfile(run.apps, run.shared).catch(
+      (error: unknown) => error,
+    );
+    expect((failure as Error).message).toBe("Owned processes did not exit");
+    expect(run.calls).not.toContain("remove root");
+  });
+
+  test("closes the published app after the resumer's close failed, and reports both", async () => {
+    const run = twoApps({
+      resumer: {
+        close: async () => {
+          run.calls.push("close resumer");
+          throw new Error("resumer close timed out");
+        },
+      },
+    });
+    const failure = await stopPackagedAppsThenRemoveProfile(run.apps, run.shared).catch(
+      (error: unknown) => error,
+    );
+    expect((failure as Error).message).toBe("resumer close timed out");
+    // Both trees were snapshotted and proven stopped, so the root still goes.
+    expect(run.calls).toEqual([
+      "snapshot resumer",
+      "close resumer",
+      "snapshot published",
+      "close published -61,61",
+      "release",
+      "wait resumer 51,52",
+      "wait published -61,61",
+      "remove root",
+    ]);
+  });
+
+  test("an app that was never launched needs no stop", async () => {
+    const run = twoApps({}, { resumer: false });
+    await stopPackagedAppsThenRemoveProfile(run.apps, run.shared);
+    expect(run.calls).toEqual([
+      "snapshot published",
+      "close published -61,61",
+      "release",
+      "wait resumer ",
+      "wait published -61,61",
+      "remove root",
+    ]);
+  });
+
+  test("packagedAppStop treats a null app as never launched", () => {
+    const steps = {
+      snapshot: () => [1],
+      close: async () => undefined,
+      waitForStopped: async () => undefined,
+    };
+    expect(packagedAppStop<string>(null, steps).launched).toBe(false);
+    expect(packagedAppStop("app", steps).launched).toBe(true);
   });
 });

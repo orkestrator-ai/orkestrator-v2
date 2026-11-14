@@ -2,6 +2,7 @@ import type { DatabaseStats } from "@orkestrator/protocol/backend-diagnostics";
 import { eventLoopDiagnostics } from "@orkestrator/protocol/event-loop-stall-monitor";
 import { boundedConsoleStats } from "../bounded-console.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import { coordinatorEnvironmentRefusals } from "./coordinator-environment-refusals.js";
 import { recurringWorkDiagnostics } from "./recurring-diagnostics.js";
 
 /**
@@ -17,6 +18,9 @@ export function backendMetricsSnapshot(database: DatabaseStats | null) {
     recurringWork: recurringWorkDiagnostics(),
     // Additive: content-free mixed-version compatibility-path usage.
     compatibilityPaths: compatibilityPathUsage.peek().paths,
+    // Additive: content-free counts of coordinators refused an environment
+    // they did not create, by surface, node and tool (to-do 6080 task 6).
+    coordinatorEnvironmentRefusals: coordinatorEnvironmentRefusals.snapshot(),
     // Additive: event-loop stalls and console lines dropped while the log
     // reader was not draining (null outside the backend entrypoint).
     eventLoop: eventLoopDiagnostics(),

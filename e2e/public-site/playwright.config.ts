@@ -1,11 +1,15 @@
 import { defineConfig } from "@playwright/test";
 import path from "node:path";
+import { installPlaywrightRunnerSigterm } from "../../tests/playwright-runner-sigterm";
 import { enterPrivateTestTmpdir } from "../../tests/private-tmpdir";
 
 // Workers inherit a private TMPDIR, so the browser profiles of a worker that is
 // killed land where a later run can remove them (0248). Workers load this file
 // too and reuse the runner's directory.
 process.once("exit", enterPrivateTestTmpdir());
+// A SIGTERM to the runner stops its `webServer` too, which Playwright starts
+// in a process group of its own (to-do 8040, retired). A no-op in workers.
+installPlaywrightRunnerSigterm();
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const port = Number.parseInt(process.env.ORKESTRATOR_PUBLIC_E2E_PORT ?? "4423", 10);

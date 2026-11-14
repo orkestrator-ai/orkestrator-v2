@@ -1045,7 +1045,7 @@ export interface PublicGraphRunActionResult {
   template: { id: string; revision: number; name: string };
 }
 
-/** `permission.rule.list`: this node's Orkestrator permission rules (todo 0723). */
+/** `permission.rule.list`: this node's Orkestrator permission rules (todo 0723 (retired)). */
 export interface PublicPermissionRuleList {
   rules: import("./permission-rules.js").NativeAgentPermissionRule[];
   total: number;

@@ -217,6 +217,48 @@ describe("pipeline worker mailboxes", () => {
     }
   });
 
+  test("a ride-along notice alone is no worker turn, and rides in with the next mail", async () => {
+    const h = await harness();
+    const { build } = await runningBuild(h);
+    const address = worker(h.environmentId, build);
+    const rider = await h.world.storage.sendAgentMail(
+      {
+        kind: "system",
+        projectId: h.world.projectId,
+        source: "workflow",
+        resourceId: "account-auto-switch:codex",
+      },
+      {
+        requestId: "rider-for-worker",
+        toEnvironmentId: address.environmentId,
+        toTabId: address.tabId,
+        subject: "Codex moved to b@example.invalid",
+        body: "Automatic account switching moved Codex.",
+      },
+      {
+        notice: {
+          resource: { kind: "account-switch", id: "codex", label: "mini" },
+          accountSwitch: { provider: "Codex", from: "a@example.invalid", to: "b@example.invalid" },
+          state: "account-switched",
+          tone: "info",
+        },
+        rideAlong: true,
+      },
+    );
+    expect(rider.placement).toBe("pending-inject");
+    expect(
+      await h.world.mail.claimPipelineWorkerMail(address.environmentId, address.tabId, "alone"),
+    ).toBeNull();
+    const main = await h.world.main();
+    const sent = await h.world.delegate(main, address, "the actual work");
+    const claim = await h.world.mail.claimPipelineWorkerMail(
+      address.environmentId,
+      address.tabId,
+      "with-work",
+    );
+    expect(claim?.messageIds.toSorted()).toEqual([rider.id, sent.id].toSorted());
+  });
+
   test("a journaled claim survives restart without returning to the queue", async () => {
     const h = await harness();
     const { build, pipeline } = await runningBuild(h);

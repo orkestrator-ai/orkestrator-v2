@@ -57,9 +57,8 @@ import {
   asRequiredBoolean,
   toClientEnvironment,
 } from "./commands-helpers.js";
-import { createFeatureBuild } from "./feature-build.js";
+import { createFeatureBuild, startFeaturePlanBuild } from "./features/index.js";
 import { launchBuildPipeline } from "./build-pipeline-launch.js";
-import { startFeaturePlanBuild } from "./feature-plan-build.js";
 import {
   conditionalBuildPipelineRead,
   withoutTranscriptBodies,

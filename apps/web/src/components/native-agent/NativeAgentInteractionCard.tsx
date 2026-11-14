@@ -127,7 +127,7 @@ export function NativeAgentInteractionCard({
   /** Pauses or resumes the countdown where the provider enforces it. */
   onHold?: PromptHoldHandler;
   /**
-   * Approves once and saves an Orkestrator permission rule (todo 0723). The
+   * Approves once and saves an Orkestrator permission rule (todo 0723 (retired)). The
    * option shows only when the backend offered it on this request.
    */
   onApproveAndRemember?: (

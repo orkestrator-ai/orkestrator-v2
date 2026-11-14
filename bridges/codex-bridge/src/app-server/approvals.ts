@@ -141,7 +141,7 @@ export interface ApprovalRequest {
   actionable: boolean;
   /**
    * True only when the request is exactly one operation an Orkestrator
-   * permission rule may answer (todo 0723): a v2 command with app-server's own
+   * permission rule may answer (todo 0723 (retired)): a v2 command with app-server's own
    * command string (not input to a running terminal, not rebuilt from
    * `commandActions` or a legacy argv), a file change that asks for no
    * write root, or a managed-network host. The backend auto-answers nothing

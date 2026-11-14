@@ -5,7 +5,7 @@ import { REQUEST_ID_OPTION, submit } from "./common.js";
 
 /**
  * `orkestrator permissions rules …`: the connected node's Orkestrator
- * permission rules (todo 0723). List and remove only; a rule is created only
+ * permission rules (todo 0723 (retired)). List and remove only; a rule is created only
  * from a person's click on an approval card in the app.
  */
 

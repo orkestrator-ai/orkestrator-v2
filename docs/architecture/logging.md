@@ -386,9 +386,9 @@ is not named. An
 attempt's span includes its awaits, so a named job ran around the stall rather
 than necessarily causing it; a kind that keeps coming back is the lead. A stall
 with no `storageMs` was not SQLite holding the loop for 250 ms at a time; its
-`storageCallMs` says whether many shorter calls did (to-do 7562 found stalls
+`storageCallMs` says whether many shorter calls did (to-do 7562, retired, found stalls
 that were mostly the thread waiting on disk with no single call reaching
-250 ms).
+250 ms; [storage](storage.md#busy-soak-disk-waits-by-filesystem)).
 
 The backend and the desktop also pass the monitor a CPU reader
 (`process.cpuUsage()`, one `getrusage` per tick), so both stall lines carry

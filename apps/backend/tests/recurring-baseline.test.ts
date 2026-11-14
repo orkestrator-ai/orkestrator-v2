@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { FeaturePlanningService } from "../src/core/feature-planning.js";
+import { FeaturePlanningService } from "../src/core/features/index.js";
 import { recurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
 import { StorageService } from "../src/core/storage.js";
 import {

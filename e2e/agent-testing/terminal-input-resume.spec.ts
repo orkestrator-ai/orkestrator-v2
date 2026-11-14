@@ -195,7 +195,11 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
 
     // vim is the case the fence exists for: what reached the shell is not
     // simply what the prompt would echo.
-    await page.keyboard.type(`${editor} -u NONE -N -n resume.txt`);
+    // `-u NONE` skips Vim's defaults.vim, which is what turns `ruler` on, so
+    // macOS's system vim would never draw the ruler waited for below (nvim's
+    // built-in defaults have it on). `--cmd` runs before any vimrc handling,
+    // so both editors draw it.
+    await page.keyboard.type(`${editor} -u NONE -N -n --cmd 'set ruler' resume.txt`);
     await page.keyboard.press("Enter");
     // The shell echoes the filename before the editor is ready. Wait for
     // the empty editor's ruler so startup cannot discard the first input.

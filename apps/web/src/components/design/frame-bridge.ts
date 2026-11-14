@@ -17,9 +17,16 @@ let generations = 0;
  * The sandboxed frame's `Window` is cross-origin, so it lives in a true private
  * field: anything that enumerates this object (React's dev-mode prop diffing,
  * loggers, structured clones) must never touch it, or it throws a SecurityError.
+ *
+ * `close()` drops that `Window`. A closed bridge can outlive its iframe: the
+ * previous render of `DesignFrameView` stays reachable from React until the
+ * component renders again, and its closures share the render's scope, which
+ * holds the bridge. Holding the `Window` too kept the culled frame's
+ * RemoteFrame alive, one extra frame the perf harness's leak check counted
+ * (to-do 7820, retired 2026-11-14; `design-canvas.md` → Tests).
  */
 export class DesignFrameBridge {
-  readonly #target: Window;
+  #target: Window | null;
   /** Legacy render marker (frame revision) for v1 backends. */
   renderedRevision: number | null = null;
   /** Content identity currently rendered; null while (re)rendering. */
@@ -52,7 +59,7 @@ export class DesignFrameBridge {
     return this;
   }
   private receive = (event: MessageEvent) => {
-    if (event.source !== this.#target) return;
+    if (!this.#target || event.source !== this.#target) return;
     if (event.data?.channel === "orkestrator-design-shortcuts") {
       const shortcut: unknown = event.data.shortcut;
       if (isAppShortcutId(shortcut)) requestAppShortcut(shortcut);
@@ -74,7 +81,8 @@ export class DesignFrameBridge {
     return this.pending.size;
   }
   ask<T>(operation: DesignOperation): Promise<T> {
-    if (this.closed) return Promise.reject(new Error("Frame closed"));
+    const target = this.#target;
+    if (this.closed || !target) return Promise.reject(new Error("Frame closed"));
     if (!this.opened) return Promise.reject(new Error("Frame bridge not open"));
     if (this.pending.size >= 32) return Promise.reject(new Error("Frame runtime busy"));
     const requestId = String(++this.sequence);
@@ -84,11 +92,12 @@ export class DesignFrameBridge {
         reject(new Error("Frame runtime did not respond"));
       }, this.timeoutMs);
       this.pending.set(requestId, { resolve: (value) => resolve(value as T), reject, timer });
-      this.#target.postMessage({ channel: "orkestrator-design", requestId, operation }, "*");
+      target.postMessage({ channel: "orkestrator-design", requestId, operation }, "*");
     });
   }
   close() {
     this.closed = true;
+    this.#target = null;
     window.removeEventListener("message", this.receive);
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);

@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -56,6 +56,12 @@ type Script = {
   afterCancelTool?: "restart_build_pipeline_step" | "resume_build_pipeline";
   /** The cancelled build's notice never reaches the coordinator. */
   noCancelNotice?: boolean;
+  /** The investigation's launch names an agent and a model nobody asked for. */
+  launchNamesAgent?: boolean;
+  /** The delivery build reuses the first ticket's request id. */
+  reusesRequestId?: boolean;
+  /** The coordinator polls list_agents while the investigation runs. */
+  pollsListAgents?: boolean;
 };
 
 /** An injected notice's carrier row, as the coordinator's transcript shows it. */
@@ -98,6 +104,9 @@ async function fixture(script: Script = {}) {
   let reportReads = -1;
   let next = 0;
   const id = (prefix: string) => `${prefix}-${++next}`;
+  // Its own counter, so adding a request id does not renumber the resources.
+  let nextRequest = 0;
+  const requestId = () => `coordinator-request-${++nextRequest}`;
 
   const startBuild = (taskId: string, args: Record<string, unknown> = {}) => {
     const pipelineId = id("pipeline");
@@ -126,7 +135,11 @@ async function fixture(script: Script = {}) {
     const ticketId = id("ticket");
     tickets.push({ id: ticketId, title, acceptanceCriteria: "- tests pass", sections: {} });
     messages.push(
-      tool("mcp__orkestrator__create_ticket", { title, acceptanceCriteria: "- tests pass" }),
+      tool("mcp__orkestrator__create_ticket", {
+        requestId: script.reusesRequestId ? "request-reused" : requestId(),
+        title,
+        acceptanceCriteria: "- tests pass",
+      }),
     );
     return ticketId;
   };
@@ -139,7 +152,17 @@ async function fixture(script: Script = {}) {
       resourceId: environmentId,
       delegation: { requestedAt: now(), workerTabId: "startup-agent", state: "running" },
     });
-    messages.push(tool("launch_environment", { name: environmentId, prompt: "run it" }));
+    messages.push(
+      tool("launch_environment", {
+        requestId: requestId(),
+        name: environmentId,
+        prompt: "run it",
+        ...(script.launchNamesAgent ? { agent: "codex", modelId: "gpt-5" } : {}),
+      }),
+    );
+    if (script.pollsListAgents) {
+      for (let i = 0; i < 3; i++) messages.push(tool("list_agents", { environmentId }));
+    }
     reportReads = 3;
   };
 
@@ -594,3 +617,51 @@ for (const afterCancelTool of ["restart_build_pipeline_step", "resume_build_pipe
     ).toEqual({ [`build-after-cancel:${afterCancelTool}`]: 1 });
   });
 }
+
+describe("the C4 wording (to-do 4920 task 3)", () => {
+  test("a coordinator that follows it passes every wording check", async () => {
+    const { checks, observed } = await run();
+    const wording = checks.filter(
+      (item) =>
+        item.name.endsWith("-launch-defaults-omitted") ||
+        item.name.endsWith("-list-agents-not-polled") ||
+        item.name === "request-ids-fresh",
+    );
+    expect(wording.map((item) => item.name)).toEqual([
+      "build-launch-defaults-omitted",
+      "build-list-agents-not-polled",
+      "investigate-launch-defaults-omitted",
+      "investigate-list-agents-not-polled",
+      "review-launch-defaults-omitted",
+      "review-list-agents-not-polled",
+      "delivery-launch-defaults-omitted",
+      "delivery-list-agents-not-polled",
+      "request-ids-fresh",
+    ]);
+    expect(wording.filter((item) => !item.passed)).toEqual([]);
+    expect(observed["request-ids:reused"]).toBe(0);
+    expect(observed["request-ids:withRequestId"]).toBeGreaterThan(0);
+  });
+
+  test("a launch that names an agent the user did not ask for fails", async () => {
+    const { checks } = await run({ launchNamesAgent: true });
+    expect(failed(checks)).toEqual(["investigate-launch-defaults-omitted"]);
+    expect(checks.find((item) => item.name === "investigate-launch-defaults-omitted")?.detail).toBe(
+      "1 launches; set agent, modelId though the user named none",
+    );
+  });
+
+  test("one request id for two different calls fails, and no id is recorded", async () => {
+    const { checks, observed } = await run({ reusesRequestId: true });
+    expect(failed(checks)).toEqual(["request-ids-fresh"]);
+    const detail = checks.find((item) => item.name === "request-ids-fresh")?.detail ?? "";
+    expect(detail).toContain("1 ids reused for another call");
+    expect(detail).not.toContain("request-reused");
+    expect(observed["request-ids:reused"]).toBe(1);
+  });
+
+  test("polling list_agents while a worker runs fails that case", async () => {
+    const { checks } = await run({ pollsListAgents: true });
+    expect(failed(checks)).toEqual(["investigate-list-agents-not-polled"]);
+  });
+});

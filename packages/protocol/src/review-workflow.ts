@@ -103,7 +103,7 @@ export const REVIEW_PACKAGE_FORMAT = 2;
  * by the backend from the package's own range (`diffCommand`'s bytes). It is
  * for a reviewer whose session refuses Git: a read-only turn without the
  * command sandbox, whose command hook refuses every Git command because Git
- * configuration can run helpers (to-do 0190).
+ * configuration can run helpers (to-do 0190 (retired)).
  */
 export interface ReviewPackageDiffArtifact {
   /** Workspace-relative path (`reviewDiffArtifactPath`). */

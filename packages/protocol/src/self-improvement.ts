@@ -98,6 +98,12 @@ export interface SelfImprovementTrackedItem {
   kind: "insight" | "diagnostics";
   status: SelfImprovementLedgerStatus;
   ticket: string | null;
+  /**
+   * The project whose board holds `ticket`, which is not always the project
+   * that receives new tickets now. Absent for an entry saved before it was
+   * recorded.
+   */
+  projectId?: string;
   /** The newest verdict, such as `awaiting-deploy` or `improved`. */
   verdict: string | null;
   baseline: number | null;

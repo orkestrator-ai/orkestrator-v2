@@ -10,7 +10,7 @@ Status: Living — `apps/backend/src/core/backend-runtime.ts`,
 `github-cli-login.ts`, `opencode-provider-login-slot.ts`,
 `container-usage-sampler.ts`, `container-oom-events.ts`,
 `container-log-service.ts`,
-`docker-cleanup-grants.ts`, `integration-locks.ts`, `feature-build-tasks.ts`,
+`docker-cleanup-grants.ts`, `integration-locks.ts`, `features/build-tasks.ts`,
 `public-api/reconciliations.ts`, `keyed-single-flight.ts`,
 `coordinator-request-flights.ts`,
 `github-cli-binary.ts`, `host-catalog-seeds.ts`.

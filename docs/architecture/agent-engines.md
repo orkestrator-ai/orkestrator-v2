@@ -1758,7 +1758,7 @@ request id, which is also the result key. Build Pipeline stage sends
 (`build-pipeline-prompt-dispatch.ts`) declare it too; before they did, a
 single Pi reviewer's read-only Review in a pipeline could never submit its
 report (found by the Auto-pipeline fake-model run, to-do 7547 task 4). Feature
-Planning (`feature-planning.ts`) still omits `workflowResultKey`; declaring its
+Planning (`features/planning.ts`) still omits `workflowResultKey`; declaring its
 attempts remains outstanding, and it does not receive this exemption under
 deny/ask or read-only gating.
 The warm-up attach does not declare the pair; the bridges read it from the

@@ -9,8 +9,7 @@ import {
   type BuildPipeline,
 } from "@orkestrator/protocol/build-pipeline";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
-import { createFeatureBuild } from "./feature-build.js";
-import { FeatureBuildTasks } from "./feature-build-tasks.js";
+import { createFeatureBuild, FeatureBuildTasks } from "./features/index.js";
 import { launchBuildPipeline } from "./build-pipeline-launch.js";
 import { pushBranchPrompt } from "./build-pipeline-prompts.js";
 import { readEnvironmentBranchPushState } from "./build-pipeline-branch-push.js";

@@ -185,6 +185,18 @@ const WORKFLOW_RESULT_TOOL_NAMES: Record<WorkflowResultKind, string> = {
 export const WORKFLOW_RESULT_VALIDATION_TOOL_NAME = "validate_workflow_result";
 
 /**
+ * The `_meta` every workflow-result tool lists. Claude Code defers MCP tools
+ * behind ToolSearch when tool search is on, so a consolidation agent had to
+ * look its own submission tool up (and only then saw its schema) before it
+ * could deliver the result. `anthropic/alwaysLoad` puts the tool and its full
+ * input schema in the first request instead; other clients ignore the key.
+ * `claude-mcp-always-load.live.test.ts` pins the behaviour on the real CLI.
+ */
+export const WORKFLOW_RESULT_TOOL_META: Readonly<Record<string, unknown>> = Object.freeze({
+  "anthropic/alwaysLoad": true,
+});
+
+/**
  * A Multi Review reviewer's optional progress channel: one finding at a time,
  * shown to the user as provisional until the reviewer's report is accepted.
  * Only the reviewer's own attempt capability can call it.
@@ -529,11 +541,20 @@ export interface WorkflowResultSlotInstructionInput {
   progress?: string;
 }
 
-/** The result-tool instruction for one slot, as one system-instructions frame. */
+/**
+ * The result-tool instruction for one slot, as one system-instructions frame.
+ *
+ * One submission call is the whole path: the submission tool validates before
+ * it accepts, and its refusal names each field at fault. Telling every agent
+ * to validate first, then commit by digest, made two calls the minimum and
+ * left consolidation agents alternating between the two tools (insight
+ * `review-consolidation-submit-errors`). The validation tool stays available
+ * as an optional, budget-free check.
+ */
 export function workflowResultSlotInstruction(input: WorkflowResultSlotInstructionInput): string {
   const capabilityArgument = workflowResultCapabilityArgument(input.capability);
   return wrapSystemInstructions(
-    `${WORKFLOW_RESULT_INSTRUCTION_PREAMBLE} Never call the submission tool with a probe, placeholder, partial draft, or transport test: the first accepted payload is final and cannot be replaced. If you need to check a completed payload before committing it, call \`${input.validateTool}\` with resultKey ${JSON.stringify(input.resultKey)}${capabilityArgument} and the complete ${input.noun} in \`result\`; validation is read-only. When validation accepts the payload it returns a \`validatedDigest\`: submit that exact payload by calling \`${input.submitTool}\` with the same resultKey${capabilityArgument} and \`validatedDigest\` instead of \`result\`, so the large object is sent only once. Otherwise, when your work is complete, call the Orkestrator \`${input.submitTool}\` tool with the same resultKey${capabilityArgument} and complete result. ${WORKFLOW_RESULT_ARGUMENT_GUIDANCE} ${WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE} If the submission tool rejects the result, correct only the reported contract problems and call it again. Only retry an accepted submission with the exact same payload. If delivery is uncertain, call \`${input.statusTool}\` with the same resultKey${capabilityArgument} before resubmitting.${input.progress ?? ""} After the tool accepts the result, finish with a concise prose response. ${WORKFLOW_RESULT_INSTRUCTION_CLOSING}`,
+    `${WORKFLOW_RESULT_INSTRUCTION_PREAMBLE} Never call the submission tool with a probe, placeholder, partial draft, or transport test: the first accepted payload is final and cannot be replaced. When your work is complete, call the Orkestrator \`${input.submitTool}\` tool once with resultKey ${JSON.stringify(input.resultKey)}${capabilityArgument} and the complete ${input.noun} in \`result\`. That one call validates and submits: an invalid ${input.noun} is not accepted, and the refusal names each field at fault by its path from the result (\`$.field.nested\`). Correct only those fields and call \`${input.submitTool}\` again with the corrected complete ${input.noun}; each distinct rejected payload uses one of ${WORKFLOW_RESULT_MAX_REJECTIONS} correction attempts. You do not need to call \`${input.validateTool}\` first. It is optional and read-only: it checks a payload without using a correction attempt, and when it accepts it returns a \`validatedDigest\` you may pass to \`${input.submitTool}\` with the same resultKey${capabilityArgument} instead of \`result\`, so the payload is not sent twice. ${WORKFLOW_RESULT_ARGUMENT_GUIDANCE} ${WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE} Only retry an accepted submission with the exact same payload. If delivery is uncertain, call \`${input.statusTool}\` with the same resultKey${capabilityArgument} before resubmitting.${input.progress ?? ""} After the tool accepts the result, finish with a concise prose response. ${WORKFLOW_RESULT_INSTRUCTION_CLOSING}`,
   );
 }
 

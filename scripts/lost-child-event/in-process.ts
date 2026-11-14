@@ -12,10 +12,12 @@
  * Each run spawns 77 Git children. On macOS (arktech-mini, Bun 1.4.4) about
  * 1 run in 100 loses one (3 of 350 on 2026-11-13), always the 67th or 68th: the `merge-base` or
  * `config` of the diff scan the service starts in the background as the test
- * resets its override and clones. On Linux (beelink2) 10 to 30 runs in 100
- * lose one, the 65th to 71st. Replaying the same 77 commands with the same
- * file writes, identity and timing (`reduction.ts replay`), standalone or
- * inside `bun test` next to the harness, loses nothing.
+ * resets its override and clones. On Linux (beelink2, 2026-11-14) 3 of 20
+ * runs lost a child when run one at a time, and 9 to 37 of 100 when run four
+ * at a time, always the 64th to 71st (task 3's table in to-do 6900 has each
+ * row). Replaying the same 77 commands with the same file writes, identity
+ * and timing (`reduction.ts replay`), standalone or inside `bun test` next to
+ * the harness, loses nothing.
  *
  * The trigger (task 3, 2026-11-14) is the `await expect(...).rejects` on the
  * `cat-file` after the clone: Bun settles it by running the event loop from

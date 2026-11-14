@@ -23,10 +23,12 @@
  *    `output/agent-testing/lost-child-event-scratch-<time>.jsonl`, and prints
  *    the totals. `--jobs=N` runs N processes at a time (default 1); each run
  *    writes its own file, appended after its `RUN` line when it ends, so a
- *    record still belongs to the run that made it. `--hold=MS` shortens the
- *    probe's 30 s wait after the test (`LOST_CHILD_PROBE_HOLD_MS`): 7000
- *    still records every loss, since a loss is recorded 5 s after it, but no
- *    longer shows whether a late event came. `--no-expect` sets
+ *    record still belongs to the run that made it (`pool.ts`: a failed run
+ *    stops new ones, and the worktree is removed only once every started run
+ *    has ended). `--hold=MS` shortens the probe's 30 s wait after the test
+ *    (`LOST_CHILD_PROBE_HOLD_MS`): 7000 still records every loss, since a
+ *    loss is recorded 5 s after it, but no longer shows whether a late event
+ *    came. `--no-expect` sets
  *    `LOST_CHILD_NO_EXPECT=1`, so `in-process.ts` waits on its `cat-file`
  *    without `expect(...).rejects` (to-do 6900, task 3).
  * 5. Removes the worktree (`--keep` leaves it for a look).
@@ -45,6 +47,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { runPool } from "./pool";
 
 const args = process.argv.slice(2);
 const runs = Number(args.find((arg) => !arg.startsWith("--")) ?? 100);
@@ -133,7 +136,6 @@ try {
   if (hold !== undefined) env.LOST_CHILD_PROBE_HOLD_MS = hold;
   if (noExpect) env.LOST_CHILD_NO_EXPECT = "1";
   let passed = 0;
-  let next = 1;
   const once = (run: number) =>
     new Promise<number>((resolve, reject) => {
       const child = spawn(
@@ -155,20 +157,18 @@ try {
       child.once("error", reject);
       child.once("close", (code) => resolve(code ?? 1));
     });
-  const worker = async () => {
-    while (next <= runs) {
-      const run = next++;
-      const status = await once(run);
-      if (status === 0) passed++;
-      const records = `${out}.${run}`;
-      appendFileSync(out, `${JSON.stringify({ kind: "RUN", run, status })}\n`);
-      if (existsSync(records)) {
-        appendFileSync(out, readFileSync(records));
-        rmSync(records);
-      }
+  // A failed spawn or record write stops new runs, but `runPool` waits for
+  // the runs already started before the `finally` removes their worktree.
+  await runPool(runs, jobs, async (run) => {
+    const status = await once(run);
+    if (status === 0) passed++;
+    const records = `${out}.${run}`;
+    appendFileSync(out, `${JSON.stringify({ kind: "RUN", run, status })}\n`);
+    if (existsSync(records)) {
+      appendFileSync(out, readFileSync(records));
+      rmSync(records);
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(jobs, runs) }, worker));
+  });
   const rows = readFileSync(out, "utf8")
     .split("\n")
     .filter(Boolean)

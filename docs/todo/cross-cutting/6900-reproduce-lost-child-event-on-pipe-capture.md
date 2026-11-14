@@ -27,13 +27,17 @@ or `.rejects` in `bun test` drops the completion of another child finishing
 at the same moment. `scripts/lost-child-event/nested-tick.ts` reproduces it
 with nothing from this repository. Task 4 added: run that on macOS, where the
 same drop should lose an `exit`.
+Updated 2026-11-14 after review: task 4 stays agent work here (see "Task 4:
+the macOS run is agent work, not a checklist item" under "Assumptions and
+decisions"); `scratch.ts --jobs` waits for every started run before removing
+its worktree. Task statuses are unchanged.
 
 ### Tasks
 
 1. **Reproduce on the old pipe capture**: run the real test on a scratch copy of the pipe-based `runCommand` with the strict probe, on macOS and on Linux. Status: done (Linux 2026-11-11: 47 lost `close` events in 100 runs; macOS 2026-11-13: 4 lost `exit` and 3 lost `close` events in 100 runs).
 2. **Reduce it from there**: delete from that test until the loss stops, then rebuild it as a standalone script. Status: done (2026-11-13). Faithful replays of test 1's 98 commands lost nothing: 0 in 98,000 children standalone and 0 in 9,800 inside `bun test` next to the harness. The smallest losing case is test 1 cut after its clone, with the watch host stubbed: `scripts/lost-child-event/in-process.ts`, which `scratch.ts` runs on the old pipe capture: 4 children lost in 3 of 350 runs, every one the 67th or 68th. No standalone form reproduced then; task 3 found one.
 3. **Find the in-process trigger**: find what test 1's service calls do around its 66th to 68th child that a replay of the same commands lacks, then rebuild that ingredient standalone. Status: done (2026-11-14, Linux). The ingredient is the test's `await expect(...).rejects` right after its clone: Bun settles it with a nested event-loop tick, which skips the rest of the outer tick's ready polls. With that one `expect` replaced, the reduction lost 0 children in 100 runs, against 42 in 37 of 100; `nested-tick.ts` loses 91 of 3,000 children standalone, and 0 without `expect`.
-4. **Run the standalone reproduction on macOS**: run `nested-tick.ts` on a macOS host, in its four modes and with no other child, and record whether the dropped event is an `exit` there, as Bun's source predicts. Status: open (needs a macOS host such as arktech-mini; agent work).
+4. **Run the standalone reproduction on macOS**: run `nested-tick.ts` on a macOS fleet node, in its four modes and with no other child, and record whether the dropped event is an `exit` there, as Bun's source predicts. Status: open (agent work in an isolated worktree on a macOS fleet node, as tasks 1 and 2 ran on arktech-mini; no person, login, real data or outside hardware is needed, so it is not a [checklist](../manual-test/7568-manual-test-checklist.md) item).
 
 ### 1. Reproduce on the old pipe capture
 
@@ -280,7 +284,7 @@ What this rules out, beside task 2's list: the commands, their order, overlap an
 
 **Context.** `scripts/lost-child-event/nested-tick.ts` needs only Bun and the probe, which already has a macOS path (`waitid` from `libSystem`, `/dev/fd`). On Linux it lost 91 of 3,000 children with `rejects` and none with `plain` (task 3).
 
-**Investigation.** Not started. Run, from a checkout on a macOS host (arktech-mini): `LOST_CHILD_PROBE_OUT=<abs path> LOST_CHILD_NESTED_MODE=<mode> LOST_CHILD_NESTED_ITERATIONS=1000 bun test ./scripts/lost-child-event/nested-tick.ts` for `rejects`, `resolves`, `sleep` and `plain`, and `rejects` with `LOST_CHILD_NESTED_OTHERS=0`. Record each mode's `SUMMARY` (children, `lostExit`, `lostClose`) and whether the lost children were zombies (`LOST_EXIT`). No real data directory, credentials or Docker are needed.
+**Investigation.** Not started. Run, from an isolated worktree on a macOS fleet node (arktech-mini, where tasks 1 and 2 ran; [Human-only work](../../README.md#human-only-work) counts a macOS node as somewhere an agent works on its own): `LOST_CHILD_PROBE_OUT=<abs path> LOST_CHILD_NESTED_MODE=<mode> LOST_CHILD_NESTED_ITERATIONS=1000 bun test ./scripts/lost-child-event/nested-tick.ts` for `rejects`, `resolves`, `sleep` and `plain`, and `rejects` with `LOST_CHILD_NESTED_OTHERS=0`. Record each mode's `SUMMARY` (children, `lostExit`, `lostClose`) and whether the lost children were zombies (`LOST_EXIT`). No real data directory, credentials or Docker are needed.
 
 **Decisions.**
 
@@ -394,6 +398,42 @@ The mechanism is quoted from Bun 1.4.4's `src/spawn/process.rs`, `src/io/PipeRea
 
 Task 3 is complete for Linux. The macOS run is agent work on another host with a concrete command, and its answer changes the upstream report's macOS claim, so it is a task here rather than a manual item. Filing the report stays the manual-test checklist's item, now pointing at `nested-tick.ts`.
 
+### Task 4: the macOS run is agent work, not a checklist item (2026-11-14, review)
+
+Review read task 4's "needs a macOS host" as a real-hardware check, which
+belongs in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md),
+and asked for a checklist item or the to-do's retirement. Options:
+
+- **Keep task 4 here, worded as agent work on a fleet macOS node (chosen).**
+  - Pros: matches [Human-only work](../../README.md#human-only-work), which
+    defines human-only work as what an agent cannot finish in an isolated
+    worktree "on a headless Linux node … or a macOS node"; tasks 1 and 2 ran
+    their macOS halves on arktech-mini as agent work; the run needs no
+    person, login, real data or outside hardware.
+  - Cons: an agent has to be placed on a macOS node to pick it up.
+- **Move it to the checklist and retire 6900.**
+  - Pros: no open to-do waits on a particular host.
+  - Cons: puts agent work in the list of what only the user can do, which
+    the checklist exists to keep out, and drops the to-do the checklist's
+    report item records its results in.
+
+The task's wording now names the worktree and the fleet node instead of "a
+macOS host", so it no longer reads as a hardware gate. The checklist's
+upstream-report item already says what to cite with and without task 4's
+result, so filing does not wait on it.
+
+### Task 3: `scratch.ts` drains its runs before removing the worktree (2026-11-14, review)
+
+Review found that with `--jobs` above 1 a failed spawn or record write
+rejected the run loop at once, so the `finally` removed the shared worktree
+while other `bun test` children were still using it. The pool is now
+`scripts/lost-child-event/pool.ts`: after a failure it starts no further run,
+waits for every started run to end, then rethrows the first failure.
+`tests/unit/lost-child-event-scripts.test.ts` pins both halves with fake
+tasks, which spawn nothing. Killing the other children instead would end the
+driver sooner but would cut their records short; waiting costs at most one
+run's length.
+
 ### Task 2: the reduction started on Linux before the macOS half of task 1 (2026-11-11)
 
 Task 2 depended on task 1 for a reproduction to reduce from. The Linux half gives one, so the first two reduction steps were taken there rather than waiting for a macOS host.
@@ -402,7 +442,7 @@ Task 2 depended on task 1 for a reproduction to reduce from. The Linux half give
 
 - To-do 4260 (retired 2026-11-10): the defect and the draft upstream report, in `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`; the reaper is in [backend runtime](../../architecture/backend-runtime.md#one-shot-commands), and filing the report is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)
 - [Flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
-- `scripts/lost-child-event/`: the strict probe and its `bun test` preload; the standalone reproduction (`nested-tick.ts`, task 3); the standalone reductions that do not reproduce (`reduction.ts`: `pattern`, `replay`, `--block`, `--fs`); the in-process reduction (`in-process.ts`, with its `LOST_CHILD_NO_EXPECT` contrast) with its pipe runner (`pipe-runner.ts`) and driver (`scratch.ts`)
+- `scripts/lost-child-event/`: the strict probe and its `bun test` preload; the standalone reproduction (`nested-tick.ts`, task 3); the standalone reductions that do not reproduce (`reduction.ts`: `pattern`, `replay`, `--block`, `--fs`); the in-process reduction (`in-process.ts`, with its `LOST_CHILD_NO_EXPECT` contrast) with its pipe runner (`pipe-runner.ts`) and driver (`scratch.ts`, whose run pool is `pool.ts`)
 - Bun 1.4.4's own account of the re-entry: the comment above `PROCESS_POLL_ONE_SHOT` in `src/spawn/process.rs` at the `bun-v1.4.4` tag of <https://github.com/oven-sh/bun>
 
 ## Replaces

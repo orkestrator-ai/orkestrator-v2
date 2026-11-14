@@ -20,6 +20,7 @@ import {
   stdioFdsSince,
   type ScheduleEntry,
 } from "../../scripts/lost-child-event/probe";
+import { runPool } from "../../scripts/lost-child-event/pool";
 import {
   IncompleteScheduleError,
   incompleteWrites,
@@ -255,10 +256,68 @@ describe("lost-child-event probe epoll state", () => {
         const { entries } = epollState(fds);
         expect(entries).toHaveLength(fds.length);
         for (const entry of entries) expect(entry).toMatch(/^\d+:(\d+:[0-9a-f]+|unregistered)$/);
+        // stdout has a data listener and the child has not exited, so Bun is
+        // watching it: an epoll lookup that found no eventpoll descriptor
+        // would report every end unregistered and pass the checks above.
+        expect(entries.filter((entry) => !entry.endsWith(":unregistered")).length).toBeGreaterThan(
+          0,
+        );
       } finally {
         await closed;
       }
     },
     10_000,
   );
+});
+
+describe("lost-child-event scratch worker pool", () => {
+  test("runs every task, at most `jobs` at a time", async () => {
+    const started: number[] = [];
+    let active = 0;
+    let peak = 0;
+    await runPool(7, 3, async (index) => {
+      started.push(index);
+      active++;
+      peak = Math.max(peak, active);
+      await Bun.sleep(5);
+      active--;
+    });
+    expect(started.toSorted((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(peak).toBe(3);
+  });
+
+  test("after a failure it starts nothing new and waits for started tasks", async () => {
+    const started: number[] = [];
+    let releaseHeld!: () => void;
+    const held = new Promise<void>((resolve) => (releaseHeld = resolve));
+    let failing!: () => void;
+    const failed = new Promise<void>((resolve) => (failing = resolve));
+    let heldDone = false;
+    const first = new Error("spawn failed");
+    let settled = false;
+    const pool = runPool(10, 2, async (index) => {
+      started.push(index);
+      if (index === 1) {
+        await held;
+        heldDone = true;
+        return;
+      }
+      if (index === 2) {
+        failing();
+        throw first;
+      }
+      throw new Error("a later failure");
+    }).finally(() => (settled = true));
+    await failed;
+    // A macrotask turn: every microtask the failure queued has run, so a pool
+    // that settled on the first rejection would have settled by now.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // Task 2 failed, task 1 is still running: no new task, and not settled.
+    expect(started).toEqual([1, 2]);
+    expect(settled).toBe(false);
+    releaseHeld();
+    await expect(pool).rejects.toBe(first);
+    expect(heldDone).toBe(true);
+    expect(started).toEqual([1, 2]);
+  });
 });

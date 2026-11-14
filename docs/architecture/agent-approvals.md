@@ -121,7 +121,12 @@ process holds a socket, only which socket listens. Stopping a listener is done
 as `node`, which can read its own dumpable processes' descriptors; a
 non-dumpable imposter is out of reach, and the start then fails with an error
 asking for a restart rather than sending anything. Qualified on beelink (Linux
-Engine 29.9.2) on 2026-11-09 by `apps/backend/tests/bridge-credential-docker.test.ts`.
+Engine 29.9.2) on 2026-11-09 by `apps/backend/tests/bridge-credential-docker.test.ts`,
+and on a rootless daemon on 2026-11-14, where the same suite also showed the
+agent's ptrace of every bridge refused and nothing inside the container
+differing from rootful; the one difference, outside it, is that the daemon's
+host user owns the container's root
+([evidence](../development/container-qualification.md#bridge-credential-suite-on-rootless-docker-2026-11-14)).
 
 An image without `opencode2-launch=1` starts the 2.x server from node's login
 shell, with the password in root's file and the server's environment alone on

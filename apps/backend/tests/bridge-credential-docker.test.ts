@@ -12,6 +12,13 @@
  * package cache is root's, and the checkout's configuration reaches it only as
  * root's filtered copy (#2091). (The OpenCode 1.x cases left with 1.x.)
  *
+ * A ptrace seize of each bridge as the agent is refused, and one case records
+ * the daemon's topology (rootless or not, the uid map, Yama, root's
+ * capabilities, what the test runner's host user reaches) as a JSON line,
+ * appended to ORKESTRATOR_QUALIFICATION_EVIDENCE when that names a file. On a
+ * rootless daemon the fixture chooses its host ports as the backend does
+ * (flake 9804).
+ *
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE=<image>
  * with `bridge-credential=1`, `bridge-launch=1` and `opencode2-launch=1`. No credential is delivered (an agent-test context
  * with no sources) and no agent turn runs, so nothing is billed. Tokens reach
@@ -37,6 +44,7 @@ import {
   type ContainerBridgeKind,
 } from "../src/core/container-bridge-credential";
 import { CODEX_MAX_CONCURRENT_THREADS_ENV, OPENCODE2_SERVER_PORT } from "../src/core/constants";
+import { chooseBackendHostPorts } from "../src/core/container-host-ports";
 import type { CommandContext } from "../src/core/commands-context";
 import { startContainerOpenCode2Server } from "../src/core/opencode2-container-server";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
@@ -132,6 +140,78 @@ async function asRoot(script: string): Promise<string> {
   return docker(["exec", "--user", "root", containerId, "sh", "-c", script]);
 }
 
+/**
+ * `PTRACE_SEIZE` on a pid, or on a child it forks first (`child`), as the
+ * control. Perl's `syscall.ph` names the call number on every architecture;
+ * the request numbers are the same everywhere. A seize sends no stop, and the
+ * tracee is detached when perl exits, so a granted probe leaves no process
+ * stopped. Prints `seized` or `refused:<errno>`.
+ */
+const PTRACE_SEIZE_PROBE = `require "syscall.ph";
+my $target = shift @ARGV;
+my $child;
+if ($target eq "child") { $child = fork(); if (!$child) { sleep 30; exit 0; } $target = $child; }
+my $result = syscall(&SYS_ptrace, 0x4206, 0 + $target, 0, 0);
+print $result == 0 ? "seized" : "refused:" . ($! + 0);
+if ($child) { kill "KILL", $child; waitpid($child, 0); }
+`;
+
+/** What a ptrace seize of `pid` gets from inside the container as `user`. */
+async function seizeAs(user: "node" | "root", pid: string): Promise<string> {
+  return docker(["exec", "-i", "--user", user, containerId, "perl", "-", pid], PTRACE_SEIZE_PROBE);
+}
+
+/** `ok`, or the error code a host filesystem call failed with. */
+async function outcome(action: () => Promise<unknown>): Promise<string> {
+  try {
+    await action();
+    return "ok";
+  } catch (error) {
+    return `refused:${(error as NodeJS.ErrnoException).code ?? "unknown"}`;
+  }
+}
+
+/**
+ * What this test runner's own host user reaches of the container's bridges:
+ * the root-only bridge directory through `/proc/<pid>/root`, and a bridge's
+ * memory (`/proc/<pid>/mem` is opened, which takes the kernel's ptrace attach
+ * check, and closed unread). On a rootless daemon the container's user
+ * namespace belongs to the daemon's user, who therefore holds CAP_SYS_PTRACE
+ * over it; on a rootful daemon only host root does. Counts entries only and
+ * never reads a file or memory.
+ */
+async function hostUserReach(): Promise<{ bridgeDirectory: string; bridgeMemory: string }> {
+  const hostPid = await docker(["inspect", "--format", "{{.State.Pid}}", containerId]);
+  // The pid is the host's only when the daemon shares this host's pid
+  // namespace; on Docker Desktop it is the VM's. The cgroup names the container.
+  const inContainer = async (pid: string) =>
+    (await fs.readFile(`/proc/${pid}/cgroup`, "utf8").catch(() => "")).includes(containerId);
+  if (!(await inContainer(hostPid))) {
+    return { bridgeDirectory: "pid-not-on-this-host", bridgeMemory: "pid-not-on-this-host" };
+  }
+  let entries = 0;
+  const bridgeDirectory = await outcome(async () => {
+    entries = (await fs.readdir(`/proc/${hostPid}/root/run/orkestrator-bridge`)).length;
+  });
+  // The Claude bridge as the host numbers it: its command line, in this container.
+  let bridgePid = "";
+  for (const pid of await fs.readdir("/proc")) {
+    if (!/^\d+$/.test(pid)) continue;
+    const cmdline = await fs.readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "");
+    if (cmdline.includes(`/opt/${BRIDGES[0]!.process}`) && (await inContainer(pid))) {
+      bridgePid = pid;
+      break;
+    }
+  }
+  const bridgeMemory = bridgePid
+    ? await outcome(async () => (await fs.open(`/proc/${bridgePid}/mem`, "r")).close())
+    : "bridge-not-found";
+  return {
+    bridgeDirectory: bridgeDirectory === "ok" ? `readable:${entries}` : bridgeDirectory,
+    bridgeMemory: bridgeMemory === "ok" ? "opened" : bridgeMemory,
+  };
+}
+
 /** What the backend's transport sends, signature included, to a bridge on the host port. */
 function backendFetch(
   kind: ContainerBridgeKind,
@@ -149,6 +229,16 @@ function backendFetch(
 /** A labelled container on `image`'s real entrypoint, with its bridge commands. */
 async function startFixture(image: string, name: string) {
   const owner = dockerOwnerNamespace(dataDir);
+  const automatic = [...BRIDGES.map((bridge) => bridge.port), OPENCODE2_SERVER_PORT].flatMap(
+    (port) => ["-p", `127.0.0.1::${port}/tcp`],
+  );
+  // A rootless daemon draws automatic ports from a range it cannot see the
+  // host using, and RootlessKit's bind then collides with a host socket.
+  // Choose them on the host, as the backend's own create does there.
+  const rootless = (await docker(["info", "--format", "{{json .SecurityOptions}}"])).includes(
+    "name=rootless",
+  );
+  const publish = rootless ? (await chooseBackendHostPorts(automatic)).publishArguments : automatic;
   const id = await docker([
     "run",
     "-d",
@@ -166,9 +256,7 @@ async function startFixture(image: string, name: string) {
     "NETWORK_MODE=full",
     "-e",
     "GIT_URL=https://example.invalid/none.git",
-    ...BRIDGES.flatMap((bridge) => ["-p", `127.0.0.1::${bridge.port}`]),
-    "-p",
-    `127.0.0.1::${OPENCODE2_SERVER_PORT}`,
+    ...publish,
     "-v",
     `${openCodeHostConfig}:/opencode-config:ro`,
     image,
@@ -322,6 +410,57 @@ describe("bridge credential on a real container", () => {
         const control = await asAgent(scan, `${bridgeTokenVerifier(authToken)}\n`);
         expect(Number(control.split("\n").at(-1))).toBeGreaterThan(0);
       }
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "the agent's uid cannot ptrace a bridge, and the daemon's topology is recorded",
+    async () => {
+      // The probe works here: the agent may trace its own child, unless Yama
+      // (not namespaced, so the host's setting) is at 2 or 3 and allows no one.
+      const yamaPtraceScope = await asAgent(
+        "cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo absent",
+      );
+      const ownChild = await seizeAs("node", "child");
+      if (["absent", "0", "1"].includes(yamaPtraceScope)) expect(ownChild).toBe("seized");
+      const bridgeUids: Record<string, string> = {};
+      const seizedByRoot: Record<string, string> = {};
+      for (const bridge of BRIDGES) {
+        const pid = await asAgent(
+          `pgrep -f '^/usr/local/bin/bun --config=/dev/null --no-env-file /opt/${bridge.process}' | head -n 1`,
+        );
+        expect(pid).toMatch(/^\d+$/);
+        // The bridge runs as the agent's own uid; being non-dumpable is what
+        // keeps that uid out, and tracing a non-dumpable process needs
+        // CAP_SYS_PTRACE, which the agent does not have: EPERM.
+        bridgeUids[bridge.kind] = await asAgent(`awk '/^Uid:/ { print $2 }' /proc/${pid}/status`);
+        expect(await seizeAs("node", pid)).toBe("refused:1");
+        // Root in the container is recorded, not asserted: Docker's default
+        // set has no CAP_SYS_PTRACE either.
+        seizedByRoot[bridge.kind] = await seizeAs("root", pid);
+      }
+      // Recorded so a pass on another daemon can be compared with this one.
+      // Ids, capability masks and counts only.
+      const security = await docker(["info", "--format", "{{json .SecurityOptions}}"]);
+      const line = JSON.stringify({
+        run: RUN,
+        scenario: "bridge-credential-topology",
+        at: new Date().toISOString(),
+        daemonRootless: security.includes("name=rootless"),
+        uidMap: (await asAgent("cat /proc/self/uid_map")).split("\n").map((entry) => entry.trim()),
+        yamaPtraceScope,
+        agentSeizesOwnChild: ownChild,
+        agentCapEff: await asAgent("awk '/^CapEff:/ { print $2 }' /proc/self/status"),
+        rootCapEff: await asRoot("awk '/^CapEff:/ { print $2 }' /proc/self/status"),
+        rootReadsBridgeDirectory: (await asRoot("ls /run/orkestrator-bridge | wc -l")) !== "0",
+        bridgeUids,
+        seizedByRoot,
+        hostUserReach: await hostUserReach(),
+      });
+      console.log(`[bridge-credential] ${line}`);
+      const file = process.env.ORKESTRATOR_QUALIFICATION_EVIDENCE;
+      if (file) await fs.appendFile(file, `${line}\n`);
     },
     LIVE_TIMEOUT_MS,
   );

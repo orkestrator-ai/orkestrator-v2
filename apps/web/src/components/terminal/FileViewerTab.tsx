@@ -1,5 +1,5 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
@@ -327,6 +327,21 @@ export function FileViewerTab({
   const hydrateDraft = useFileDirtyStore((state) => state.hydrateDraft);
   const dirtyEntry = useFileDirtyStore((state) => state.dirtyFiles.get(tabId));
   const dirtyContent = useFileDirtyStore((state) => state.dirtyFiles.get(tabId)?.content);
+
+  // An HTML page's own stylesheets are read through the same file reads as the
+  // editor, which keep to the workspace and refuse symlinked folders. Stable, so
+  // the page does not read them again on every render.
+  const readSiblingFile = useMemo(() => {
+    if (isLocalEnvironment && worktreePath) {
+      return async (path: string) =>
+        (await backendForScope(draftScope).readLocalFile(worktreePath, path)).content;
+    }
+    if (containerId) {
+      return async (path: string) =>
+        (await backendForScope(draftScope).readContainerFile(containerId, path)).content;
+    }
+    return undefined;
+  }, [draftScope, isLocalEnvironment, worktreePath, containerId]);
 
   const isMarkdown = isMarkdownFile(filePath);
   const isHtml = isHtmlFile(filePath);
@@ -787,6 +802,7 @@ export function FileViewerTab({
           isActive={isActive}
           isSaving={isSaving}
           onSave={saveFile}
+          readSiblingFile={readSiblingFile}
         />
       </LazyLoadBoundary>
     );

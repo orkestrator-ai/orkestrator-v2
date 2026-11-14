@@ -52,6 +52,51 @@ test("HTML boundary refuses resources, scripts, forms and mutated navigation", a
   expect(page.frames().some((f) => f.url().includes("evil.invalid"))).toBe(false);
 });
 
+test("an inlined sibling stylesheet applies under the CSP and sandbox, and loads nothing", async ({
+  page,
+}) => {
+  await page.goto("/html-preview");
+  await expect(page.locator("iframe")).toBeAttached();
+  const requests: string[] = [];
+  await page.route("**/*", async (route) => {
+    const url = route.request().url();
+    if (url.includes("evil.invalid") || url.includes("site.css") || url.includes("off.css")) {
+      requests.push(url);
+      await route.abort();
+    } else await route.continue();
+  });
+  await page.evaluate(async (url) => {
+    const { buildHtmlPreviewDocument } = await import(url);
+    const frame = document.querySelector("iframe")!;
+    frame.srcdoc = buildHtmlPreviewDocument(
+      `<!doctype html>
+      <link rel="stylesheet" href="assets/site.css">
+      <link REL="StyleSheet" href="assets/site.css">
+      <link rel="stylesheet" disabled href="assets/off.css">
+      <h1 id="styled">Styled</h1><p id="hidden">Hidden</p>`,
+      {
+        filePath: "docs/report.html",
+        stylesheets: new Map([
+          [
+            "docs/assets/site.css",
+            "@import 'https://evil.invalid/import.css';" +
+              "#styled{color:rgb(1, 2, 3)}" +
+              "#hidden{background:url(https://evil.invalid/bg.png)}",
+          ],
+          ["docs/assets/off.css", "#styled{display:none}"],
+        ]),
+      },
+    ).srcDoc;
+  }, moduleUrl);
+  const frame = page.frameLocator("iframe");
+  await expect(frame.locator("#styled")).toBeVisible();
+  await expect(frame.locator("#styled")).toHaveCSS("color", "rgb(1, 2, 3)");
+  await page.waitForTimeout(100);
+  // The inlined text's own imports and remote URLs are still refused by the CSP,
+  // and neither the inlined nor the disabled sheet is ever fetched.
+  expect(requests).toEqual([]);
+});
+
 test("preview releases keyboard focus, saves, and permits divider dragging", async ({
   page,
 }, testInfo) => {

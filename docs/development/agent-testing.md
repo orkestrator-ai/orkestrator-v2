@@ -1098,7 +1098,11 @@ spec, `e2e/agent-testing/steer-missed-live.spec.ts` (todo 0005 task 10), on
 the real Claude, Codex, Cursor and Pi bridges with scripted models and nothing
 billed. Each platform's case finishes a turn and steers after it (one new turn
 must start, on the session's controls), then steers while a second turn runs
-(it joins that turn; to-do 8107 is to queue it instead). The Claude case
+(it joins that turn; to-do 8107 is to queue it instead). Both steers must
+also reach the model exactly once: the Claude, Codex and Pi scripted models
+count a spec's marker in the user-role items of every request they are sent
+(`MARKER_WATCH_PATH` in `idle-observation-fake-claude.ts`, counts only), and
+Cursor's fake SDK records its steers. The Claude case
 starts a background command, sends two follow-ups into the same CLI, stops the
 command, releases the CLI with a launch-only change and requires the stop
 after that to be refused with `no_control_channel`. Codex gets a made-up API

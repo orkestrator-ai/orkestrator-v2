@@ -1,12 +1,19 @@
+import { nativeWebPlatform } from "../../tests/register-dom";
 import { describe, expect, test } from "bun:test";
 import {
   CODEWORD_REPLY_PREFIX,
+  MARKER_WATCH_PATH,
+  MAX_WATCHED_MARKERS,
   NO_SUBAGENT_REPLY,
+  createMarkerWatch,
   finalReply,
+  markerWatchResponse,
   requestState,
   responseContent,
   scriptedStep,
+  startClaudeFakeModel,
   streamFrames,
+  userItemTexts,
 } from "./idle-observation-fake-claude";
 
 // The spec's own prompt shapes (`idle-observation-live.spec.ts`).
@@ -197,5 +204,114 @@ describe("scripted fake Claude model", () => {
       delta: { type: "input_json_delta", partial_json: '{"command":"sleep 1"}' },
     });
     expect(events[4]).toMatchObject({ delta: { stop_reason: "tool_use" } });
+  });
+});
+
+describe("marker watch", () => {
+  const marker = "JOINED-0A1B2C3D";
+  const steer = `Reply with exactly ${marker} and nothing else. Do not use any tools.`;
+
+  test("reads user-role items of every protocol and nothing else", () => {
+    // Messages: a steer the CLI puts beside a tool result.
+    const messages = {
+      system: [{ type: "text", text: `not ${marker}` }],
+      messages: [
+        { role: "user", content: "earlier" },
+        { role: "assistant", content: [{ type: "text", text: marker }] },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "t", content: "LONG-1" },
+            { type: "text", text: steer },
+          ],
+        },
+      ],
+    };
+    const texts = userItemTexts(messages);
+    expect(texts).toHaveLength(2);
+    expect(texts.join("").split(marker)).toHaveLength(2);
+    // Responses input items and chat completions take the same path.
+    expect(
+      userItemTexts({
+        type: "response.create",
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: steer }] }],
+      }),
+    ).toHaveLength(1);
+    expect(userItemTexts({ messages: [{ role: "system", content: steer }] })).toEqual([]);
+  });
+
+  test("counts per request: once, dropped and doubled read apart", () => {
+    const watch = createMarkerWatch();
+    watch.observe({ messages: [{ role: "user", content: steer }] });
+    expect(watch.report(marker)).toBeUndefined();
+    expect(watch.watch(marker)).toBe(true);
+    expect(watch.report(marker)).toEqual({ requests: 0, maxUserOccurrences: 0 });
+    watch.observe({ messages: [{ role: "user", content: "LONG-1" }] });
+    expect(watch.report(marker)).toEqual({ requests: 0, maxUserOccurrences: 0 });
+    // The conversation repeats in later requests; one delivery stays one.
+    for (let index = 0; index < 3; index += 1) {
+      watch.observe({
+        messages: [
+          { role: "user", content: steer },
+          { role: "assistant", content: marker },
+        ],
+      });
+    }
+    expect(watch.report(marker)).toEqual({ requests: 3, maxUserOccurrences: 1 });
+    watch.observe({
+      messages: [
+        { role: "user", content: steer },
+        { role: "user", content: steer },
+      ],
+    });
+    expect(watch.report(marker)).toEqual({ requests: 4, maxUserOccurrences: 2 });
+  });
+
+  test("accepts only marker-shaped words, and forgets the oldest past its bound", () => {
+    const watch = createMarkerWatch();
+    expect(watch.watch("two words")).toBe(false);
+    expect(watch.watch("x")).toBe(false);
+    expect(watch.watch(`A${"B".repeat(64)}`)).toBe(false);
+    for (let index = 0; index <= MAX_WATCHED_MARKERS; index += 1) {
+      expect(watch.watch(`MARK-${index}`)).toBe(true);
+    }
+    expect(watch.report("MARK-0")).toBeUndefined();
+    expect(watch.report(`MARK-${MAX_WATCHED_MARKERS}`)).toBeDefined();
+  });
+
+  test("answers watch, report and anything else", () => {
+    const watch = createMarkerWatch();
+    const query = (value: string) => new URLSearchParams({ marker: value });
+    expect(markerWatchResponse(watch, "GET", query(marker)).status).toBe(404);
+    expect(markerWatchResponse(watch, "POST", query("not a marker")).status).toBe(400);
+    expect(markerWatchResponse(watch, "POST", query(marker))).toEqual({
+      status: 200,
+      body: { watching: marker },
+    });
+    expect(markerWatchResponse(watch, "GET", query(marker))).toEqual({
+      status: 200,
+      body: { requests: 0, maxUserOccurrences: 0 },
+    });
+    expect(markerWatchResponse(watch, "DELETE", query(marker)).status).toBe(405);
+  });
+
+  test("the Messages endpoint counts what it is sent", async () => {
+    let listening: (origin: string) => void = () => undefined;
+    const ready = new Promise<string>((resolve) => (listening = resolve));
+    const server = startClaudeFakeModel(0, 0, (origin) => listening(origin));
+    const fetch = nativeWebPlatform.fetch;
+    try {
+      const origin = await ready;
+      const route = `${origin}${MARKER_WATCH_PATH}?marker=${marker}`;
+      expect((await fetch(route, { method: "POST" })).status).toBe(200);
+      const reply = await fetch(`${origin}/v1/messages`, {
+        method: "POST",
+        body: JSON.stringify({ messages: [{ role: "user", content: steer }] }),
+      });
+      expect((await reply.json()).content).toEqual([{ type: "text", text: marker }]);
+      expect(await (await fetch(route)).json()).toEqual({ requests: 1, maxUserOccurrences: 1 });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });

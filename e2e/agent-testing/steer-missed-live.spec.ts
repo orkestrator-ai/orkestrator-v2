@@ -15,14 +15,19 @@
  *    one user row carrying the steer's text, its reply, nothing left in the
  *    queue, and the session's model, mode and approval mode unchanged. A
  *    second read of the backend's snapshot (what a reload reads) must show
- *    the same.
+ *    the same, and the scripted model must have been sent the steer's text
+ *    exactly once.
  * 2. **Replaced turn.** A second, long turn has replaced the first when the
  *    next steer arrives. The backend reads the running turn just before it
  *    steers, so the steer is sent into the turn that is running now and the
  *    bridge accepts it: `applied` (Pi: `unknown` until its next model step
  *    takes the steer, then reconciled), no `deliveredAs`, no queue row, at
- *    most one copy of the text. This pins today's behaviour; binding a composer steer
- *    to the turn the user saw is to-do 8107.
+ *    most one copy of the text in the transcript. The steer must also have
+ *    reached the model exactly once: Claude, Codex and Pi by their scripted
+ *    model's count of the text in what it was sent (`MARKER_WATCH_PATH` in
+ *    `idle-observation-fake-claude.ts`), Cursor by the fake SDK's own record.
+ *    A receipt alone is not delivery. This pins today's behaviour; binding a
+ *    composer steer to the turn the user saw is to-do 8107.
  *
  * And one Claude case for the stop after several turns: a background task is
  * started, two follow-ups are written into the same warm CLI (its runtime
@@ -66,7 +71,12 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { expect, test, type Page } from "./browser-test";
 import { waitForGatewayRenderer } from "./gateway-renderer-ready";
 import { snapshotFixtureFiles } from "./codex-fixture-files";
-import { startLocalFakeModel } from "./idle-observation-fake-models";
+import {
+  fakeModelMarkerSighting,
+  startLocalFakeModel,
+  watchFakeModelMarker,
+} from "./idle-observation-fake-models";
+import type { MarkerSighting } from "./idle-observation-fake-claude";
 import { PI_FAKE_MODEL_REF } from "./idle-observation-fake-pi";
 import { dispatchProbeTurn, requestErrorMessage } from "./mcp-apply-live-support";
 import {
@@ -200,18 +210,40 @@ function writeEvidence(name: string, evidence: Record<string, unknown>): void {
   writeFileSync(path.join(outputDir, `${name}.json`), `${JSON.stringify(evidence, null, 2)}\n`);
 }
 
-/** The platform's scripted-model wiring; the returned function undoes it. */
-async function prepareEngine(
-  platform: MissedSteerPlatform,
-  dataDir: string,
-): Promise<() => Promise<void>> {
+/**
+ * Write the evidence, then clean up whatever happened: a failed write must
+ * not leave the environment, the scripted model or Cursor's swapped bridge
+ * entry and its lock behind.
+ */
+async function finishCase(
+  name: string,
+  evidence: Record<string, unknown>,
+  harness: Harness,
+): Promise<void> {
+  try {
+    evidence.finishedAt = new Date().toISOString();
+    writeEvidence(name, evidence);
+  } finally {
+    await harness.cleanup();
+  }
+}
+
+interface Engine {
+  /** Undo the wiring. */
+  undo: () => Promise<void>;
+  /** The scripted model's origin, for its marker watch; Cursor has none. */
+  modelOrigin?: string;
+}
+
+/** The platform's scripted-model wiring. */
+async function prepareEngine(platform: MissedSteerPlatform, dataDir: string): Promise<Engine> {
   if (platform === "cursor") {
     const restore = swapBridgeEntry(
       cursorBridgeEntry(repositoryRoot),
       bundleHostFakeCursorBridge(repositoryRoot),
       dataDir,
     );
-    return async () => restore();
+    return { undo: async () => restore() };
   }
   if (platform === "codex") {
     // A made-up API key, so the bridge starts Codex as signed in; only the
@@ -230,12 +262,15 @@ async function prepareEngine(
     );
     try {
       const fake = await startLocalFakeModel("codex", dataDir);
-      return async () => {
-        try {
-          await fake.stop();
-        } finally {
-          restoreAuth();
-        }
+      return {
+        modelOrigin: fake.origin,
+        undo: async () => {
+          try {
+            await fake.stop();
+          } finally {
+            restoreAuth();
+          }
+        },
       };
     } catch (error) {
       restoreAuth();
@@ -243,7 +278,7 @@ async function prepareEngine(
     }
   }
   const fake = await startLocalFakeModel(platform, dataDir);
-  return () => fake.stop();
+  return { modelOrigin: fake.origin, undo: () => fake.stop() };
 }
 
 interface Harness {
@@ -259,6 +294,14 @@ interface Harness {
   promptQueue: () => Promise<{ messages: unknown[]; inFlight?: unknown }>;
   /** Dispatch once; the backend's answer, refusals included. */
   tryDispatch: (prompt: string) => Promise<{ outcome: string; error?: string }>;
+  /**
+   * The scripted model's count of a marker in what it was sent (Claude,
+   * Codex, Pi): `watch` before the turn that delivers it, `sighting` after.
+   */
+  model?: {
+    watch: (marker: string) => Promise<void>;
+    sighting: (marker: string) => Promise<MarkerSighting>;
+  };
   cleanup: () => Promise<void>;
 }
 
@@ -285,7 +328,14 @@ async function openHarness(
   );
   expect(fixture, `the ${profile} fixture project is missing`).toBeTruthy();
   // Before the environment exists, so its bridge's first process reads it.
-  const undoEngine = await prepareEngine(platform, status.dataDir!);
+  const engine = await prepareEngine(platform, status.dataDir!);
+  const modelOrigin = engine.modelOrigin;
+  const model = modelOrigin
+    ? {
+        watch: (marker: string) => watchFakeModelMarker(modelOrigin, marker),
+        sighting: (marker: string) => fakeModelMarkerSighting(modelOrigin, marker),
+      }
+    : undefined;
   let environmentId: string | undefined;
   let identity: Harness["identity"] | undefined;
   const cleanup = async () => {
@@ -296,7 +346,7 @@ async function openHarness(
         await invoke("delete_environment", { environmentId }).catch(() => undefined);
       }
     } finally {
-      await undoEngine();
+      await engine.undo();
     }
   };
   try {
@@ -308,7 +358,7 @@ async function openHarness(
     environmentId = created.id;
     await invoke("start_environment", { environmentId });
     const tabId = `${name}-${platform}-tab`;
-    const model = platform === "pi" ? PI_FAKE_MODEL_REF : undefined;
+    const modelRef = platform === "pi" ? PI_FAKE_MODEL_REF : undefined;
     const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
       environmentId,
     });
@@ -328,7 +378,7 @@ async function openHarness(
               id: tabId,
               type: "agent-native",
               nativeAgentData: { environmentId, platform, isLocal: true },
-              ...(model ? { initialAgentModel: model } : {}),
+              ...(modelRef ? { initialAgentModel: modelRef } : {}),
             },
           ],
         },
@@ -341,7 +391,10 @@ async function openHarness(
     };
     const id = identity;
     // The tab's `initialAgentModel` belongs to the launcher; pin the model here.
-    await invoke("ensure_native_agent_session", { ...id, ...(model ? { model } : {}) });
+    await invoke("ensure_native_agent_session", {
+      ...id,
+      ...(modelRef ? { model: modelRef } : {}),
+    });
     const projection = () =>
       invoke<Projection | null>("get_native_agent_projection", { ...id, messageLimit: 200 });
     // A queue nothing was ever added to reads as null.
@@ -425,6 +478,7 @@ async function openHarness(
       dispatch,
       tryDispatch,
       settled,
+      model,
       cleanup,
     };
   } catch (error) {
@@ -478,6 +532,7 @@ test.describe("missed steer on the real bridges", () => {
         const controlsBefore = composerControls(afterFirst.composer);
         evidence.controls = controlsBefore;
         const missed = word("MISSED");
+        await harness.model?.watch(missed);
         const missedOutcome = await steer(harness, replyPrompt(missed));
         evidence.missedOutcome = {
           outcome: missedOutcome.outcome,
@@ -509,6 +564,12 @@ test.describe("missed steer on the real bridges", () => {
             controls: controlsBefore,
           });
         }
+        if (harness.model) {
+          // What the model itself was sent: the steer's text, once.
+          const sighting = await harness.model.sighting(missed);
+          evidence.missedModelSighting = sighting;
+          expect(sighting.maxUserOccurrences, "the model was sent the missed steer once").toBe(1);
+        }
         if (platform === "cursor") {
           // The vendor's own record: one more run, carrying the steer's text.
           const turns = fakeCursorTurns(profileStatus().dataDir!, harness.identity.environmentId);
@@ -525,6 +586,7 @@ test.describe("missed steer on the real bridges", () => {
           .poll(async () => (await harness.projection())?.turn.phase, { timeout: 60_000 })
           .toBe("running");
         const joined = word("JOINED");
+        await harness.model?.watch(joined);
         const joinedOutcome = await steer(harness, replyPrompt(joined));
         evidence.replacedOutcome = {
           outcome: joinedOutcome.outcome,
@@ -575,11 +637,18 @@ test.describe("missed steer on the real bridges", () => {
         expect(replaced.queued).toBe(0);
         expect(replaced.providerQueue).toBe(0);
         expect(replaced.phase).toBe("idle");
+        if (harness.model) {
+          // Delivery, not just a receipt: the turn's later model request
+          // carried the steer's text, once. A dropped steer reads 0 and a
+          // doubled one 2. (Cursor's delivery is the fake SDK's steer record,
+          // checked above.)
+          const sighting = await harness.model.sighting(joined);
+          evidence.replacedModelSighting = sighting;
+          expect(sighting.maxUserOccurrences, "the model was sent the joined steer once").toBe(1);
+        }
         evidence.passed = true;
       } finally {
-        evidence.finishedAt = new Date().toISOString();
-        writeEvidence(platform, evidence);
-        await harness.cleanup();
+        await finishCase(platform, evidence, harness);
       }
     });
   }
@@ -738,9 +807,7 @@ test.describe("missed steer on the real bridges", () => {
       expect(isNoControlChannelRefusal(refused.text), refused.text.slice(0, 500)).toBe(true);
       evidence.passed = true;
     } finally {
-      evidence.finishedAt = new Date().toISOString();
-      writeEvidence("claude-stop", evidence);
-      await harness.cleanup();
+      await finishCase("claude-stop", evidence, harness);
     }
   });
 });

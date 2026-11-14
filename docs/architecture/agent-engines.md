@@ -472,7 +472,10 @@ the stop request, and CLI 2.1.319 queues the `killed` notification for the
 next prompt rather than starting a turn for it, so the bridge marks the stop
 (`tasks.stopRequested`) and does not wait for a continuation; the CLI is idle
 at once and a launch-only change replaces it. A task the CLI ends by itself
-(its timeout below, or a natural end) still gets the continuation wait.
+(its timeout below, or a natural end) still gets the continuation wait,
+including one that finished on its own while the stop was in flight: a
+`TaskCompleted` or `SubagentStop` hook carries no status, so it defers to the
+`task_notification` that follows, which waits for the continuation.
 `steer-missed-live.spec.ts` checks it on the real CLI (todo 0005 task 10).
 
 Background shell commands are bounded. Since Claude Code 2.1.285 an Agent SDK

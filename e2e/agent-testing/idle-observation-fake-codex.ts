@@ -27,8 +27,17 @@
  * stderr, which is how the shapes above were found. `IDLEQA_FAKE_CODEX_SHAPES=schemas`
  * prints Codex's own tool definitions and their namespace layout instead
  * (still no request content), which is how the multi-agent tools were found.
+ * It serves the Claude fake's marker watch (`MARKER_WATCH_PATH`) over plain
+ * HTTP, counting each `response.create` frame.
  */
-import { NO_SUBAGENT_REPLY, scriptedStep, type ScriptedStep } from "./idle-observation-fake-claude";
+import {
+  MARKER_WATCH_PATH,
+  NO_SUBAGENT_REPLY,
+  createMarkerWatch,
+  markerWatchResponse,
+  scriptedStep,
+  type ScriptedStep,
+} from "./idle-observation-fake-claude";
 
 type ContentPart = { type?: string; text?: string; encrypted_content?: string };
 type Tool = { type?: string; name?: string; tools?: Tool[]; namespace?: string };
@@ -204,8 +213,14 @@ export function codexOutputItem(
   };
 }
 
-export function startCodexFakeModel(onCalls?: (calls: ReadonlyMap<string, string>) => void) {
+/** `platform` supplies `Response`, which a test's DOM preload replaces globally. */
+export function startCodexFakeModel(
+  onCalls?: (calls: ReadonlyMap<string, string>) => void,
+  platform = { Response: globalThis.Response },
+) {
+  const Reply = platform.Response;
   let sampled = 0;
+  const markers = createMarkerWatch();
   const server = Bun.serve<{
     prompt: string;
     tools: Tool[];
@@ -215,13 +230,18 @@ export function startCodexFakeModel(onCalls?: (calls: ReadonlyMap<string, string
     hostname: "127.0.0.1",
     port: 0,
     fetch(request, bun) {
+      const url = new URL(request.url);
+      if (url.pathname === MARKER_WATCH_PATH) {
+        const answer = markerWatchResponse(markers, request.method, url.searchParams);
+        return Reply.json(answer.body, { status: answer.status });
+      }
       if (
         request.headers.get("upgrade")?.toLowerCase() === "websocket" &&
         bun.upgrade(request, { data: { prompt: "", tools: [], calls: new Map(), spawned: 0 } })
       ) {
         return undefined;
       }
-      return new Response("not served", { status: 404 });
+      return new Reply("not served", { status: 404 });
     },
     websocket: {
       message(socket, message) {
@@ -258,6 +278,7 @@ export function startCodexFakeModel(onCalls?: (calls: ReadonlyMap<string, string
           );
         }
         if (frame.type !== "response.create") return;
+        markers.observe(frame);
         // A request continuing an earlier response (`previous_response_id`)
         // does not repeat the tools; the connection's first request offered them.
         const offered = offeredTools(frame);

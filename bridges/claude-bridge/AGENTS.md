@@ -40,7 +40,10 @@ writers on one `.jsonl`. When touching the prompt path:
   (`tasks.stopRequested`): the CLI queues that `killed` notification for the
   next prompt and starts no turn for it, and its `stopped` edge can arrive
   before the stop's own answer, so waiting for one refused every launch-only
-  change until the idle window ended (todo 0005 task 10).
+  change until the idle window ended (todo 0005 task 10). A task that ended on
+  its own while the stop was in flight still owes one: the
+  `TaskCompleted`/`SubagentStop` hook carries no status and releases the task,
+  so the `task_notification` takes its owner from the CLI that held the mark.
 - **A metadata read goes through `controlOnlyQuery`.** The Agent SDK drops
   `maxTurns: 0`, so a `prompt: ""` query sends an empty user message and starts
   a real turn (model calls, tools, an empty session file under

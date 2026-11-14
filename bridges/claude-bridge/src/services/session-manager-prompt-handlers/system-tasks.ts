@@ -209,6 +209,11 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
   // The ending of a task this bridge stopped re-enters nothing: the CLI
   // queues its notification for the next prompt rather than starting a turn
   // (`ClaudeRuntimeTasks.stopRequested`), so no continuation is owed for it.
+  // Marks live on the session's current CLI only (release clears them), so a
+  // marked task is one that CLI owned.
+  const markedRuntime = session.claudeRuntime?.tasks.stopRequested.has(notification.task_id)
+    ? session.claudeRuntime
+    : undefined;
   const stoppedHere = stopRequestedEdge(
     session.claudeRuntime,
     notification.task_id,
@@ -275,7 +280,16 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
     ...session.backgroundTasks,
     [task.id]: task,
   });
-  const owner = backgroundTaskOwner(session, task.id) ?? parked?.owner ?? correlated.owner;
+  // A task that ended on its own while the bridge's stop was in flight: a
+  // `TaskCompleted`/`SubagentStop` hook that came first saw the mark, skipped
+  // the continuation wait and released the task, so the CLI that held the
+  // mark is the only record of its owner, and the continuation the CLI starts
+  // for a natural ending is still owed.
+  const owner =
+    backgroundTaskOwner(session, task.id) ??
+    parked?.owner ??
+    correlated.owner ??
+    (stoppedHere ? undefined : markedRuntime);
   session.claudeRuntime?.tasks.live.delete(task.id);
   // The notification is injected into the same root loop and may be
   // followed by another assistant/result boundary, which a released turn

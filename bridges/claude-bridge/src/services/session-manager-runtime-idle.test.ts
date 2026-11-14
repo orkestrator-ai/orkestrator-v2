@@ -44,6 +44,10 @@ import {
   claudeRuntimeOwesWork,
 } from "./session-manager-runtime.js";
 import { sessionRuntimeHealthBody } from "../routes/runtime-health-body.js";
+import {
+  MAX_SETTLING_BACKGROUND_TASKS,
+  takeQueryControls,
+} from "./session-manager-background-tasks.js";
 
 // The session's CLI stays open after a turn that leaves nothing owed, so the
 // next prompt is written into it, and releases itself once it has been idle
@@ -956,6 +960,222 @@ describe("a stop the bridge issued", () => {
     const { session, call } = await bashTaskAfterTwoFollowUps("stop failed");
     expect((await stopBackgroundTask(session.id, "bg-task")).ok).toBe(false);
     expect(session.claudeRuntime!.tasks.stopRequested.size).toBe(0);
+    call.finish();
+  });
+
+  type Hook = (input: Record<string, unknown>) => Promise<unknown>;
+  const hookOf = (call: QueryCall, name: string): Hook =>
+    (call.options.hooks as Record<string, Array<{ hooks: Hook[] }>>)[name]![0]!.hooks[0]!;
+
+  /**
+   * The CLI's lifecycle hook for one task, fired as the control channel
+   * delivers it: ahead of the `task_notification` the SDK injects into the
+   * root loop. `SubagentStop` for a background sub-agent, `TaskCompleted`
+   * for a background Bash task.
+   */
+  const fireStopHook = (call: QueryCall, kind: "subagent" | "bash", taskId: string) =>
+    kind === "subagent"
+      ? hookOf(
+          call,
+          "SubagentStop",
+        )({
+          hook_event_name: "SubagentStop",
+          agent_id: taskId,
+          agent_type: "general-purpose",
+          stop_hook_active: false,
+          agent_transcript_path: `/tmp/${taskId}.jsonl`,
+        })
+      : hookOf(
+          call,
+          "TaskCompleted",
+        )({
+          hook_event_name: "TaskCompleted",
+          task_id: taskId,
+          task_subject: "Wait",
+        });
+
+  async function released(kind: "subagent" | "bash", name: string) {
+    if (kind === "subagent") {
+      const { session, call, input } = await releaseWithBackgroundWork(name, "agent-bg");
+      return { session, call, input, taskId: "agent-bg", toolUseId: "agent-call" };
+    }
+    const { session, call, input } = await bashTaskAfterTwoFollowUps(name);
+    return { session, call, input, taskId: "bg-task", toolUseId: "toolu_bg" };
+  }
+
+  for (const kind of ["subagent", "bash"] as const) {
+    test(`${kind}: a hook ahead of the stopped edge owes no continuation`, async () => {
+      controlIdleWindow();
+      let stopping: (taskId: string) => Promise<void> = async () => undefined;
+      queryControlOverrides.stopTask = mock((taskId: string) => stopping(taskId));
+      const { session, call, input, taskId, toolUseId } = await released(kind, `hook ${kind}`);
+      stopping = async (id: string) => {
+        await fireStopHook(call, kind, id);
+        // The hook released the task; the mark is still waiting for its edge.
+        expect(session.claudeRuntime!.tasks.stopRequested.has(id)).toBe(true);
+        expect(session.claudeRuntime!.latestTurn.isAwaitingContinuation()).toBe(false);
+        call.push({
+          type: "system",
+          subtype: "task_notification",
+          task_id: id,
+          tool_use_id: toolUseId,
+          status: "stopped",
+        });
+        await waitFor(() => session.backgroundTasks?.[id]?.status === "killed");
+      };
+      expect(await stopBackgroundTask(session.id, taskId)).toEqual({ ok: true });
+      const runtime = session.claudeRuntime!;
+      expect(runtime.latestTurn.isAwaitingContinuation()).toBe(false);
+      expect(claudeRuntimeOwesWork(runtime)).toBe(false);
+      expect(runtime.tasks.stopRequested.size).toBe(0);
+      expect(() =>
+        assertClaudeRuntimeStaticAccepts(session, { promptSuggestions: true }),
+      ).not.toThrow();
+      const replaced = sendPrompt(session.id, "with suggestions", { promptSuggestions: true });
+      expect(await input.next()).toEqual({ done: true, value: undefined });
+      call.finish();
+      const relaunch = await nextQueryCall();
+      relaunch.push({ type: "result", subtype: "success" });
+      await replaced;
+      relaunch.finish();
+    });
+
+    test(`${kind}: a natural ending whose hook beat the stop still owes its continuation`, async () => {
+      controlIdleWindow();
+      let stopping: (taskId: string) => Promise<void> = async () => undefined;
+      queryControlOverrides.stopTask = mock((taskId: string) => stopping(taskId));
+      const { session, call, taskId, toolUseId } = await released(kind, `natural ${kind}`);
+      stopping = async (id: string) => {
+        // The task finished before the stop reached it: the hook sees only
+        // the mark (it carries no status) and releases the task.
+        await fireStopHook(call, kind, id);
+        call.push({
+          type: "system",
+          subtype: "task_notification",
+          task_id: id,
+          tool_use_id: toolUseId,
+          status: "completed",
+        });
+        await waitFor(() => session.claudeRuntime!.tasks.stopRequested.size === 0);
+      };
+      expect(await stopBackgroundTask(session.id, taskId)).toEqual({ ok: true });
+      expect(session.backgroundTasks?.[taskId]?.status).toBe("completed");
+      // The CLI answers a natural ending with a turn; the notification found
+      // no live owner (the hook had released it) and must still wait for it.
+      expect(session.claudeRuntime!.latestTurn.isAwaitingContinuation()).toBe(true);
+      expect(() => assertClaudeRuntimeStaticAccepts(session, { promptSuggestions: true })).toThrow(
+        /background work/,
+      );
+      call.finish();
+    });
+  }
+
+  test("a level signal ahead of the stopped edge owes no continuation", async () => {
+    controlIdleWindow();
+    let stopping: (taskId: string) => Promise<void> = async () => undefined;
+    queryControlOverrides.stopTask = mock((taskId: string) => stopping(taskId));
+    const { session, call } = await bashTaskAfterTwoFollowUps("level first");
+    stopping = async (taskId: string) => {
+      // The live set drops the task before its edge explains why.
+      call.push({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+      await waitFor(() => session.claudeRuntime!.tasks.settling.has(taskId));
+      expect(session.claudeRuntime!.latestTurn.isAwaitingContinuation()).toBe(false);
+      expect(session.claudeRuntime!.tasks.stopRequested.has(taskId)).toBe(true);
+      call.push({
+        type: "system",
+        subtype: "task_notification",
+        task_id: taskId,
+        tool_use_id: "toolu_bg",
+        status: "stopped",
+      });
+      await waitFor(() => session.backgroundTasks?.[taskId]?.status === "killed");
+    };
+    expect(await stopBackgroundTask(session.id, "bg-task")).toEqual({ ok: true });
+    const runtime = session.claudeRuntime!;
+    expect(runtime.latestTurn.isAwaitingContinuation()).toBe(false);
+    expect(claudeRuntimeOwesWork(runtime)).toBe(false);
+    expect(runtime.tasks.stopRequested.size).toBe(0);
+    expect(runtime.tasks.settling.size).toBe(0);
+    expect(() =>
+      assertClaudeRuntimeStaticAccepts(session, { promptSuggestions: true }),
+    ).not.toThrow();
+    call.finish();
+  });
+
+  test("a level signal ahead of a natural ending during the stop keeps its continuation", async () => {
+    controlIdleWindow();
+    let stopping: (taskId: string) => Promise<void> = async () => undefined;
+    queryControlOverrides.stopTask = mock((taskId: string) => stopping(taskId));
+    const { session, call } = await bashTaskAfterTwoFollowUps("level then natural");
+    stopping = async (taskId: string) => {
+      call.push({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+      await waitFor(() => session.claudeRuntime!.tasks.settling.has(taskId));
+      call.push({
+        type: "system",
+        subtype: "task_notification",
+        task_id: taskId,
+        tool_use_id: "toolu_bg",
+        status: "completed",
+      });
+      await waitFor(() => session.backgroundTasks?.[taskId]?.status === "completed");
+    };
+    expect(await stopBackgroundTask(session.id, "bg-task")).toEqual({ ok: true });
+    expect(session.claudeRuntime!.latestTurn.isAwaitingContinuation()).toBe(true);
+    expect(session.claudeRuntime!.tasks.stopRequested.size).toBe(0);
+    call.finish();
+  });
+
+  /** Fill the CLI's marks to their bound, `bg-task` among them when `including`. */
+  async function stopAtTheBound(name: string, including: boolean) {
+    controlIdleWindow();
+    let seen: boolean | undefined;
+    queryControlOverrides.stopTask = mock(async (taskId: string) => {
+      seen = session.claudeRuntime!.tasks.stopRequested.has(taskId);
+    });
+    const { session, call } = await bashTaskAfterTwoFollowUps(name);
+    const marks = session.claudeRuntime!.tasks.stopRequested;
+    if (including) marks.add("bg-task");
+    for (let index = 0; marks.size < MAX_SETTLING_BACKGROUND_TASKS; index += 1) {
+      marks.add(`earlier-stop-${index}`);
+    }
+    expect(await stopBackgroundTask(session.id, "bg-task")).toEqual({ ok: true });
+    expect(marks.size).toBe(MAX_SETTLING_BACKGROUND_TASKS);
+    call.finish();
+    return seen;
+  }
+
+  test("past the bound a new stop is not marked", async () => {
+    // Its edge then waits for a continuation as before: the smaller harm.
+    expect(await stopAtTheBound("mark bound", false)).toBe(false);
+  });
+
+  test("at the bound a stop already marked keeps its mark", async () => {
+    expect(await stopAtTheBound("mark bound, already marked", true)).toBe(true);
+  });
+
+  test("a mark no edge consumed is cleared when the CLI ends", async () => {
+    controlIdleWindow();
+    queryControlOverrides.stopTask = mock(async () => undefined);
+    const { session, call } = await bashTaskAfterTwoFollowUps("mark on exit");
+    expect(await stopBackgroundTask(session.id, "bg-task")).toEqual({ ok: true });
+    const runtime = session.claudeRuntime!;
+    expect(runtime.tasks.stopRequested.has("bg-task")).toBe(true);
+    // The process exits before any edge for the task arrives.
+    call.finish();
+    await waitFor(() => runtime.state === "ended");
+    expect(runtime.tasks.stopRequested.size).toBe(0);
+    expect(session.backgroundTasks?.["bg-task"]?.status).toBe("killed");
+  });
+
+  test("a mark no edge consumed is cleared when the session's controls are taken", async () => {
+    controlIdleWindow();
+    queryControlOverrides.stopTask = mock(async () => undefined);
+    const { session, call } = await bashTaskAfterTwoFollowUps("mark on close");
+    expect(await stopBackgroundTask(session.id, "bg-task")).toEqual({ ok: true });
+    const runtime = session.claudeRuntime!;
+    expect(runtime.tasks.stopRequested.has("bg-task")).toBe(true);
+    expect(takeQueryControls(session).has(runtime.control)).toBe(true);
+    expect(runtime.tasks.stopRequested.size).toBe(0);
     call.finish();
   });
 });

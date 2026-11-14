@@ -32,6 +32,7 @@ import type {
   CreateFeatureBuildResult,
   StartFeaturePlanBuildResult,
 } from "../../../feature-build.js";
+import type { CreateDebugBuildResult } from "../../../debug-build.js";
 import type { WorkflowResultToolsSettings } from "../../../workflow-results.js";
 import type { Mutable } from "effect/Types";
 import {
@@ -241,6 +242,14 @@ export const ImportLegacyBuildPipelinesResultSchema = Schema.Struct({
 export const CreateFeatureBuildResultSchema = modelRecord<CreateFeatureBuildResult>()({
   taskId: Schema.String,
   pipelineId: Schema.String,
+  environmentId: optionalString,
+});
+
+/** `create_debug_build`: the debug button's ticket and pipeline (or a retry's same pair). */
+export const CreateDebugBuildResultSchema = modelRecord<CreateDebugBuildResult>()({
+  taskId: Schema.String,
+  pipelineId: Schema.String,
+  projectId: Schema.String,
   environmentId: optionalString,
 });
 

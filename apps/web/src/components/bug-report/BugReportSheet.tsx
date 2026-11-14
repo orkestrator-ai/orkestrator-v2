@@ -35,6 +35,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { openInBrowser } from "@/lib/backend";
+import { windowCapture } from "@/lib/native/window";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { collectBugReportClientContext } from "@/lib/bug-report/client-context";
 import { openBugReport, ownBugReportMachineId } from "@/lib/bug-report/open-bug-report";
@@ -254,8 +255,8 @@ export function BugReportSheet({ scope }: { scope?: NodeScope | null } = {}) {
   );
 
   const capture = useCallback(async () => {
-    const capturer = window.orkestrator?.bugReport;
-    if (!capturer || !report) return;
+    const captureWindow = windowCapture();
+    if (!captureWindow || !report) return;
     setCapturing(true);
     // Step the sheet aside so the capture shows what the user was looking at.
     closeSheet();
@@ -263,7 +264,7 @@ export function BugReportSheet({ scope }: { scope?: NodeScope | null } = {}) {
       await nextFrame();
       await nextFrame();
       await new Promise((resolve) => setTimeout(resolve, 250));
-      const base64 = await capturer.captureWindow();
+      const base64 = await captureWindow();
       const saved = await mutate(() => api.saveBugReportScreenshot(report.id, base64));
       apply(saved.snapshot);
       const sessionKey = createSessionKey(report.runtimeId, report.tabId);
@@ -371,7 +372,7 @@ export function BugReportSheet({ scope }: { scope?: NodeScope | null } = {}) {
    */
   if (pendingLaunch && report?.providerSessionId) setPendingLaunch(null);
   const launch = pendingLaunch && pendingLaunch.reportId === report?.id ? pendingLaunch : null;
-  const canCapture = Boolean(window.orkestrator?.bugReport) && Boolean(report);
+  const canCapture = windowCapture() !== null && Boolean(report);
 
   return (
     <Sheet

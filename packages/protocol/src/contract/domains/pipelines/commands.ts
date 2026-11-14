@@ -29,6 +29,7 @@ import { pipelinesDomain } from "./domain.js";
 import {
   BuildPipelineSchema,
   CodeRewindPreviewSchema,
+  CreateDebugBuildResultSchema,
   CreateFeatureBuildResultSchema,
   GetBuildPipelineResultSchema,
   ImportLegacyBuildPipelinesResultSchema,
@@ -185,6 +186,30 @@ export const createFeatureBuildCommand = defineCommand({
   }),
   result: CreateFeatureBuildResultSchema,
   critical: ["requestId", "deliveryPolicy"],
+});
+
+/**
+ * The debug button: a ticket written from the user's Problem / objective and
+ * Expected result, with the source environment's details, transcript and an
+ * optional screenshot, and the one pipeline environment that builds it
+ * (`features/debug-build.ts`).
+ */
+export const createDebugBuildCommand = defineCommand({
+  domain: pipelinesDomain,
+  name: "create_debug_build",
+  since: 1,
+  access: "workspace",
+  read: false,
+  // `CreateDebugBuildInput` (debug-build.ts), checked by its guard.
+  args: Schema.Struct({
+    environmentId: checked,
+    problem: checked,
+    expectedResult: checked,
+    screenshot: checked,
+    requestId: checked,
+  }),
+  result: CreateDebugBuildResultSchema,
+  critical: ["requestId"],
 });
 
 export const launchBuildPipelineCommand = defineCommand({
@@ -532,6 +557,7 @@ export const PIPELINES_COMMANDS = [
   saveAutoPipelineEditsCommand,
   startBuildPipelineCommand,
   createFeatureBuildCommand,
+  createDebugBuildCommand,
   launchBuildPipelineCommand,
   startFeaturePlanBuildCommand,
   pauseBuildPipelineCommand,

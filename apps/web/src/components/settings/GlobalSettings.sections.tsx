@@ -7,6 +7,7 @@ import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { AutoSteerSetting } from "./AutoSteerSetting";
 import { DataSavingSetting } from "./DataSavingSetting";
+import { DebugButtonSetting } from "./DebugButtonSetting";
 import { PreviewSettings } from "./PreviewSettings";
 import { TerminalLinkTargetSetting } from "./TerminalLinkTargetSetting";
 import { WebAnnotationSettings } from "./WebAnnotationSettings";
@@ -2275,6 +2276,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderDebug = () => (
     <SettingsPageLayout title="Debug">
+      <DebugButtonSetting />
       <div>
         <SettingsSectionHeader title="App version">
           The Orkestrator client on this machine and the backend it is connected to

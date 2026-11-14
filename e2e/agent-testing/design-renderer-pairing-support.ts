@@ -58,6 +58,45 @@ export const PAIRING_OLD_APP_ENV = "ORKESTRATOR_PAIRING_OLD_APP_EXECUTABLE";
 export const PAIRING_RELEASE_ENV = "ORKESTRATOR_PAIRING_RELEASE";
 
 /**
+ * The first release whose backend serves `design_session_link_states` and
+ * `design_session_resume`: both arrived together in #1218 (2026-10-24), first
+ * tagged in v2.30.0-beta (v2.29.0-beta predates them).
+ */
+export const DESIGN_SESSION_RESUME_SINCE = [2, 30, 0] as const;
+
+/** What a published backend of `version` offers the design Ask agent journey. */
+export interface PairingBackendDesignCapabilities {
+  /** It answers `design_session_link_states`, so a closed link records its session. */
+  linkStates: boolean;
+  /** It serves `design_session_resume`, so this checkout's renderer offers Resume. */
+  resume: boolean;
+}
+
+/**
+ * {@link PairingBackendDesignCapabilities} of a published `version`
+ * (`major.minor.patch`, any pre-release suffix). A pre-release of
+ * {@link DESIGN_SESSION_RESUME_SINCE} counts as having them: v2.30.0-beta is
+ * the first build that did. A version that does not parse is refused rather
+ * than guessed.
+ */
+export function pairingBackendDesignCapabilities(
+  version: string,
+): PairingBackendDesignCapabilities {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(version.trim());
+  if (!match) throw new Error(`Not a release version: ${version}`);
+  const core = match.slice(1, 4).map(Number);
+  let since = true;
+  for (const [index, part] of core.entries()) {
+    const floor = DESIGN_SESSION_RESUME_SINCE[index]!;
+    if (part !== floor) {
+      since = part > floor;
+      break;
+    }
+  }
+  return { linkStates: since, resume: since };
+}
+
+/**
  * The executable {@link PAIRING_OLD_APP_ENV} names, resolved against the
  * repository root as `packagedAppExecutable` resolves its override, so a
  * repository-relative value means the same path when it is checked and when

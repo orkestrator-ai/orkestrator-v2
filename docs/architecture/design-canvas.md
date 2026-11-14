@@ -786,6 +786,23 @@ existing Keychain item has. No login, no billed turn.
   older renderer, resumed after the desktop is upgraded. Neither pure pair
   can press it, because v2.22.3 has it on neither side. No compatibility
   defect was found.
+- What the first direction expects of the backend follows the selected
+  release (`pairingBackendDesignCapabilities` in
+  `design-renderer-pairing-support.ts`): `design_session_link_states` and
+  `design_session_resume` arrived together in v2.30.0-beta, so an
+  `ORKESTRATOR_PAIRING_RELEASE` of v2.30.0-beta or later expects
+  "Closed — can be resumed" and presses Resume in the same window, and an
+  earlier one expects the `unsupported` fallback above.
+- "No model call" in the run above counted only tool-offering calls whose
+  prompt carried the canvas id. Since the review of 2026-11-14 the spec
+  snapshots every call the loopback model has received before closing the
+  tab and before pressing Resume, and fails on any later call, whatever its
+  prompt. That stricter check has not yet been run against the packaged
+  apps.
+- When the second direction's two apps share the run's root, its cleanup
+  (`stopPackagedAppsThenRemoveProfile` in `packaged-electron-app.ts`)
+  removes the root only once both apps and the backend are proven stopped;
+  either app's failed snapshot or stop keeps it.
 - Both renderers open "Claude Code Is Not Logged In" for a CLI with only an
   API key in its settings; the notice is non-blocking and the spec dismisses
   it, as the other fake-model specs do. Both releases retitle the tab after

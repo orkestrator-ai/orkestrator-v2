@@ -26,7 +26,9 @@
  *
  * {@link resumeLinkedConversation} presses **Resume** in this renderer: the
  * conversation reopens in a new `design-resume-…` tab with its transcript,
- * the link moves there, and no model call is made.
+ * the link moves there, and no model call is made. "No model call" counts
+ * every call the loopback model receives, not only those about the canvas,
+ * so a resumed turn with any other prompt fails it too.
  */
 import type { Page } from "@playwright/test";
 import { expect, test } from "./electron-fixtures";
@@ -72,6 +74,18 @@ export interface AskAgentResult {
  */
 function turnCallsAbout(model: FakeAnthropicModel, canvasId: string): FakeModelCall[] {
   return model.calls().filter((call) => call.tools.length > 0 && call.prompt.includes(canvasId));
+}
+
+/**
+ * Every model call after the first `since`, of any kind: a turn about another
+ * prompt, one without tools or one with no prompt at all. Summarized (tool
+ * count and a bounded prompt prefix of fixture text) for the failure message.
+ */
+function callsSince(model: FakeAnthropicModel, since: number) {
+  return model
+    .calls()
+    .slice(since)
+    .map((call) => ({ tools: call.tools.length, prompt: call.prompt.slice(0, 120) }));
 }
 
 async function snapshotOf(invoke: Invoke, environmentId: string, canvasId: string) {
@@ -232,6 +246,8 @@ export async function runAskAgentJourney({
   });
 
   const turnCalls = turnCallsAbout(model, canvasId).length;
+  // Every call so far, whatever it carried: closing and reading the link must add none.
+  const callsBeforeClose = model.calls().length;
 
   await test.step("the canvas lists the link: open, then closed with its tab", async () => {
     await taggedTab(window, "design").click();
@@ -293,7 +309,8 @@ export async function runAskAgentJourney({
     }
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(dialog).toHaveCount(0);
-    // Closing and reading the link made no model call.
+    // Closing and reading the link made no model call of any kind.
+    expect(callsSince(model, callsBeforeClose), "model calls after the turn settled").toEqual([]);
     expect(turnCallsAbout(model, canvasId)).toHaveLength(turnCalls);
   });
 
@@ -334,6 +351,8 @@ export async function resumeLinkedConversation({
     await expect(links.getByText(CLOSED_RESUMABLE, { exact: false })).toBeVisible({
       timeout: 30_000,
     });
+    // Every call before Resume, whatever it carried: Resume must add none.
+    const callsBeforeResume = model.calls().length;
     await links.getByRole("button", { name: `Resume ${CHAT_TITLE}`, exact: true }).click();
     await expect(dialog).toHaveCount(0, { timeout: 30_000 });
 
@@ -354,8 +373,10 @@ export async function resumeLinkedConversation({
     });
     expect(JSON.stringify(layout).match(/"design-resume-[^"]*"/g)?.length ?? 0).toBeGreaterThan(0);
     expect(new Set(JSON.stringify(layout).match(/design-resume-[a-z0-9-]+/g) ?? []).size).toBe(1);
-    // Resume sends nothing: no model call after it settles.
+    // Resume sends nothing: no model call of any kind, with any prompt or
+    // none, from pressing it until it has settled.
     await window.waitForTimeout(QUIET_MS);
+    expect(callsSince(model, callsBeforeResume), "model calls after Resume").toEqual([]);
     expect(turnCallsAbout(model, asked.canvasId)).toHaveLength(asked.turnCalls);
   });
 }

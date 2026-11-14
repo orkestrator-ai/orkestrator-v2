@@ -10,7 +10,8 @@
  *   checkout (`mise run package:mac:unpacked:test` or
  *   `package:linux:unpacked:test`), connected to `orkestrator@2.22.3`
  *   installed from npm with `--ignore-scripts` into the run's root
- *   (`ORKESTRATOR_PAIRING_RELEASE` picks another release).
+ *   (`ORKESTRATOR_PAIRING_RELEASE` picks another release; what the agent
+ *   journey expects of it follows `pairingBackendDesignCapabilities`).
  * - **Published renderer, this backend.** A published desktop build, connected
  *   to `apps/backend/src/main.ts`. It runs only when
  *   `ORKESTRATOR_PAIRING_OLD_APP_EXECUTABLE` names its executable (absolute,
@@ -75,8 +76,10 @@ import {
   packagedAppExecutable,
   packagedLaunchEnvironment,
   packagedLaunchSwitches,
+  packagedAppStop,
   packagedResourcesPath,
   stopPackagedAppThenRemoveProfile,
+  stopPackagedAppsThenRemoveProfile,
 } from "./packaged-electron-app";
 import {
   DEFAULT_PAIRING_RELEASE,
@@ -84,6 +87,7 @@ import {
   PAIRING_RELEASE_ENV,
   installPairingClaude,
   installPublishedBackend,
+  pairingBackendDesignCapabilities,
   pairingOldAppExecutable,
   pairingPorts,
   startPairingBackend,
@@ -313,14 +317,23 @@ test("this checkout's packaged renderer edits, exports and asks an agent on a pu
     await journeyWithEvidence(window, () =>
       runDesignCanvasJourney({ electronApp, window, profile, temporaryRoot }),
     );
+    // v2.22.3 has neither; a later selected release may have both, and then
+    // this renderer must offer Resume and resume the conversation.
+    const capabilities = pairingBackendDesignCapabilities(release);
+    test.info().annotations.push({
+      type: "pairing-backend-capabilities",
+      description: JSON.stringify(capabilities),
+    });
     await journeyWithEvidence(window, async () => {
       const asked = await runAskAgentJourney({
         window,
         profile,
         model: paired.model,
-        backendHasLinkStates: false,
-        resumeOffered: false,
+        backendHasLinkStates: capabilities.linkStates,
+        resumeOffered: capabilities.linkStates && capabilities.resume,
       });
+      if (capabilities.linkStates && capabilities.resume)
+        await resumeLinkedConversation({ window, model: paired.model, asked });
       await removeAskAgentEnvironment(window, asked.environmentId);
     });
   }, [
@@ -504,27 +517,30 @@ test("a published desktop renderer edits, exports and asks an agent on this chec
       await removeAskAgentEnvironment(current, asked.environmentId);
     });
   }, [
-    // This checkout's app first, then, as in the first test, the root goes
-    // only once the published app's whole process group and the backend are
-    // both proven stopped.
+    // Both apps share the root, so it goes only once this checkout's app,
+    // the published app's whole process group and the backend are all
+    // proven stopped: a resumer that cannot be proven stopped keeps it.
     () =>
-      stopPackagedAppThenRemoveProfile(resumer as ElectronApplication | null, {
-        snapshot: (launched) => electronProcessTree(launched),
-        close: (launched, owned) => closeElectron(launched, owned),
-        release: async () => undefined,
-        waitForStopped: (owned) => waitForStopped(owned, 0),
-        removeProfile: async () => undefined,
-      }),
-    () =>
-      stopPackagedAppThenRemoveProfile(child as ChildProcess | null, {
-        snapshot: (launched) => (launched.pid ? [-launched.pid, launched.pid] : []),
-        close: (launched) => stopPublishedApp(launched),
-        release: async () => {
-          await (backend as PairingBackend | null)?.stop();
+      stopPackagedAppsThenRemoveProfile(
+        [
+          packagedAppStop(resumer as ElectronApplication | null, {
+            snapshot: (launched) => electronProcessTree(launched),
+            close: (launched, owned) => closeElectron(launched, owned),
+            waitForStopped: (owned) => waitForStopped(owned, 0),
+          }),
+          packagedAppStop(child as ChildProcess | null, {
+            snapshot: (launched) => (launched.pid ? [-launched.pid, launched.pid] : []),
+            close: (launched) => stopPublishedApp(launched),
+            waitForStopped: (owned) => waitForStopped(owned, 0),
+          }),
+        ],
+        {
+          release: async () => {
+            await (backend as PairingBackend | null)?.stop();
+          },
+          removeProfile: () => rm(temporaryRoot, { recursive: true, force: true }),
         },
-        waitForStopped: (owned) => waitForStopped(owned, 0),
-        removeProfile: () => rm(temporaryRoot, { recursive: true, force: true }),
-      }),
+      ),
     async () => {
       await (model as FakeAnthropicModel | null)?.stop();
     },

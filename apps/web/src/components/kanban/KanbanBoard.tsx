@@ -33,6 +33,7 @@ import { TicketSyncStrip, useTicketSyncLeafStatus, useTicketSyncStatus } from ".
 import { GraphLaunchDialog } from "@/components/graph-launch/GraphLaunchDialog";
 import { openLaunchedGraphRun } from "@/components/graph-launch/open-launched-run";
 import { KanbanTaskDialog } from "./KanbanTaskDialog";
+import { resolveOpenTicketRequest } from "./open-ticket-request";
 import { FeaturesView } from "./FeaturesView";
 import { ProjectPullRequestsView } from "@/components/pull-requests";
 import { LinearTicketsView } from "@/components/linear";
@@ -360,19 +361,20 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   // A ticket opened from outside the board (a tracked ticket in Settings →
   // Self-improvement) is a request in the board's store. Follow the store, so a
   // request made while the board is mounted and one that waits for the board to
-  // load the ticket are handled alike. A ticket that no longer exists never
-  // matches, so its request does no harm and the next request replaces it.
+  // load the ticket are handled alike. Once the board has loaded and the ticket
+  // is not on it (deleted, or on another board), the request is cleared and the
+  // person is told, so a click never ends silently.
   const kanbanScopeStore = launchScope.store(kanbanStore);
   useEffect(() => {
     return kanbanScopeStore.subscribe((state) => {
-      const request = state.openTicketRequest;
-      if (!request || request.projectId !== projectId) return;
-      const task = state.tasks.find(
-        (candidate) => candidate.id === request.ticketId && candidate.projectId === projectId,
-      );
-      if (!task) return;
-      state.clearOpenTicketRequest();
-      handleClickTask(task);
+      const resolution = resolveOpenTicketRequest(state, projectId);
+      if (resolution.kind === "open") {
+        state.clearOpenTicketRequest();
+        handleClickTask(resolution.task);
+      } else if (resolution.kind === "missing") {
+        state.clearOpenTicketRequest();
+        toast.error("That ticket is no longer on this board.");
+      }
     });
   }, [kanbanScopeStore, projectId, handleClickTask]);
 

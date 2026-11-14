@@ -20,7 +20,13 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
-import { formatWhen, LastRunDetails, Themes, TrackedTickets } from "./SelfImprovementLists";
+import {
+  formatWhen,
+  LastRunDetails,
+  Themes,
+  TrackedTickets,
+  type OpenTicket,
+} from "./SelfImprovementLists";
 import {
   SETTINGS_CARD_CLASS,
   SettingsPageLayout,
@@ -56,6 +62,32 @@ const MODEL_NAMES: Record<string, string> = {
 };
 
 const TRIGGER_TEXT = { manual: "Run", daily: "Daily run", "dry-run": "Preview" } as const;
+
+/**
+ * Resolves each ticket's own project from its tracked problem. Last-run
+ * references carry only the problem's signature, so a reference whose problem
+ * has dropped out of the tracked list falls back to the receiving project.
+ */
+function ticketOpener(
+  status: SelfImprovementStatus,
+  projects: Array<{ id: string }>,
+  open: (projectId: string, ticket: string) => void,
+): OpenTicket {
+  const owners = new Map(status.tracked.map((item) => [item.signature, item.projectId]));
+  const known = new Set(projects.map((project) => project.id));
+  const ownerOf = (signature: string | undefined): string | undefined => {
+    const owner = (signature ? owners.get(signature) : undefined) ?? status.project?.id;
+    // Until the project list arrives nothing can be ruled out.
+    return owner && (known.size === 0 || known.has(owner)) ? owner : undefined;
+  };
+  return {
+    canOpen: (signature) => ownerOf(signature) !== undefined,
+    open: (ticket, signature) => {
+      const owner = ownerOf(signature);
+      if (owner) open(owner, ticket);
+    },
+  };
+}
 
 export interface SelfImprovementSettingsProps {
   /** The commands this page uses; tests pass fakes. */
@@ -170,10 +202,12 @@ export function SelfImprovementSettings({
   }
 
   const settings = status?.settings;
-  // Tickets live on the board of the project that receives them.
-  const ticketProjectId = status?.project?.id;
-  const onOpenTicket = ticketProjectId
-    ? (ticket: string) => openTicket(ticketProjectId, ticket)
+  // A ticket lives on the board of the project that held it when it was filed,
+  // which stops being the receiving project once that setting changes. An entry
+  // saved before its project was recorded belongs to the receiving project. A
+  // board whose project was deleted cannot be opened.
+  const onOpenTicket = status
+    ? ticketOpener(status, projects, (projectId, ticket) => openTicket(projectId, ticket))
     : undefined;
   const models = status
     ? `${MODEL_NAMES[status.models.notes] ?? status.models.notes} reads each conversation, ${MODEL_NAMES[status.models.themes] ?? status.models.themes} groups the notes into themes`

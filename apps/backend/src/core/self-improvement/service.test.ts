@@ -146,6 +146,9 @@ describe("starting a run", () => {
         kind: "diagnostics",
         status: "tracking",
         ticket: status.lastRun!.created[0]!.ticket,
+        // The board that holds the ticket, so Settings opens it there even
+        // after the receiving project changes.
+        projectId: "p1",
       }),
     ]);
     expect(h.board.tickets.size).toBe(1);

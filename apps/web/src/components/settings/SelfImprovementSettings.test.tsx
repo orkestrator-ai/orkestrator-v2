@@ -217,7 +217,7 @@ describe("Settings → Self-improvement", () => {
     );
   });
 
-  test("a tracked ticket opens on the board of the project that receives tickets", async () => {
+  test("a tracked ticket opens on the board of the project that holds it", async () => {
     const openTicket = mock((_projectId: string, _ticketId: string) => {});
     render(fakeApi(status()), undefined, openTicket);
     fireEvent.click(
@@ -227,6 +227,49 @@ describe("Settings → Self-improvement", () => {
     // A ticket number in the last run's lists opens it too.
     fireEvent.click(screen.getByRole("button", { name: /^Open ticket 412:/ }));
     expect(openTicket).toHaveBeenLastCalledWith("p1", "412");
+  });
+
+  test("a ticket filed under an earlier project opens there, not on the receiving project", async () => {
+    const openTicket = mock((_projectId: string, _ticketId: string) => {});
+    const current = status();
+    render(
+      fakeApi(
+        status({
+          tracked: current.tracked.map((item) =>
+            item.ticket === "418" ? { ...item, projectId: "p2" } : { ...item, projectId: "p1" },
+          ),
+        }),
+      ),
+      undefined,
+      openTicket,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open ticket: Agents keep reaching for npm" }),
+    );
+    expect(openTicket).toHaveBeenLastCalledWith("p2", "418");
+    // The last run's reference finds its project through the tracked problem.
+    fireEvent.click(screen.getByRole("button", { name: /^Open ticket 418:/ }));
+    expect(openTicket).toHaveBeenLastCalledWith("p2", "418");
+    fireEvent.click(screen.getByRole("button", { name: /^Open ticket 412:/ }));
+    expect(openTicket).toHaveBeenLastCalledWith("p1", "412");
+  });
+
+  test("a ticket whose project no longer exists is plain text", async () => {
+    const current = status();
+    render(
+      fakeApi(
+        status({
+          tracked: current.tracked.map((item) =>
+            item.ticket === "418" ? { ...item, projectId: "deleted" } : item,
+          ),
+        }),
+      ),
+    );
+    await screen.findByRole("button", { name: /^Open ticket 412:/ });
+    expect(
+      screen.queryByRole("button", { name: "Open ticket: Agents keep reaching for npm" }),
+    ).toBe(null);
+    expect(screen.queryByRole("button", { name: /^Open ticket 418:/ })).toBe(null);
   });
 
   test("tracked tickets are plain text while no project receives them", async () => {

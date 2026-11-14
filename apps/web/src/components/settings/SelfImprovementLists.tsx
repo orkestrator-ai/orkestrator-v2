@@ -54,6 +54,16 @@ function KindBadge({ kind }: { kind: SelfImprovementTrackedItem["kind"] }) {
   );
 }
 
+/**
+ * Opens a ticket on its own project's board. `signature` names the tracked
+ * problem the ticket belongs to, which is how its owning project is found.
+ */
+export interface OpenTicket {
+  /** Whether the ticket's board is known and can be opened. */
+  canOpen: (signature: string | undefined) => boolean;
+  open: (ticket: string, signature: string | undefined) => void;
+}
+
 function TicketList({
   title,
   items,
@@ -61,9 +71,9 @@ function TicketList({
   onOpenTicket,
 }: {
   title: string;
-  items: Array<{ ticket: string; label: string }>;
+  items: Array<{ ticket: string; label: string; signature?: string }>;
   tone?: "default" | "good" | "warn";
-  onOpenTicket?: (ticket: string) => void;
+  onOpenTicket?: OpenTicket;
 }) {
   if (items.length === 0) return null;
   return (
@@ -83,11 +93,11 @@ function TicketList({
       <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
         {items.map((item) => (
           <li key={`${item.ticket}-${item.label}`} className="flex gap-2">
-            {onOpenTicket ? (
+            {onOpenTicket?.canOpen(item.signature) ? (
               <button
                 type="button"
-                className="shrink-0 cursor-pointer font-mono text-zinc-400 underline-offset-2 hover:text-foreground hover:underline focus-visible:outline focus-visible:outline-1 focus-visible:outline-ring"
-                onClick={() => onOpenTicket(item.ticket)}
+                className="shrink-0 cursor-pointer font-mono text-zinc-400 underline-offset-2 hover:text-foreground hover:underline focus-hairline"
+                onClick={() => onOpenTicket.open(item.ticket, item.signature)}
                 aria-label={`Open ticket ${item.ticket}: ${item.label}`}
               >
                 #{item.ticket}
@@ -113,11 +123,15 @@ export function LastRunDetails({
   /** Titles of tracked problems by signature, shown in place of the signature. */
   titles?: Record<string, string>;
   /** Makes each listed ticket number open that ticket. */
-  onOpenTicket?: (ticket: string) => void;
+  onOpenTicket?: OpenTicket;
 }) {
   const label = (signature: string) => titles[signature] ?? signature;
   const bySignature = (items: Array<{ ticket: string; signature: string }>) =>
-    items.map((item) => ({ ticket: item.ticket, label: label(item.signature) }));
+    items.map((item) => ({
+      ticket: item.ticket,
+      label: label(item.signature),
+      signature: item.signature,
+    }));
   const conversations = run.conversations;
   const nothing =
     run.created.length +
@@ -138,7 +152,11 @@ export function LastRunDetails({
       <TicketList
         onOpenTicket={onOpenTicket}
         title="New tickets"
-        items={run.created.map((item) => ({ ticket: item.ticket, label: item.title }))}
+        items={run.created.map((item) => ({
+          ticket: item.ticket,
+          label: item.title,
+          signature: item.signature,
+        }))}
       />
       {run.wouldCreate.length > 0 ? (
         <div>
@@ -160,7 +178,11 @@ export function LastRunDetails({
         onOpenTicket={onOpenTicket}
         title="Fix did not work, moved back to the backlog"
         tone="warn"
-        items={run.fixFailed.map((item) => ({ ticket: item.ticket, label: label(item.signature) }))}
+        items={run.fixFailed.map((item) => ({
+          ticket: item.ticket,
+          label: label(item.signature),
+          signature: item.signature,
+        }))}
       />
       <TicketList
         onOpenTicket={onOpenTicket}
@@ -257,7 +279,7 @@ function TrackedTicketRow({
         aria-label={`Open ticket: ${item.title}`}
         className={cn(
           TRACKED_ROW_CLASS,
-          "w-full cursor-pointer text-left transition-colors hover:bg-zinc-800/40 focus-visible:bg-zinc-800/40 focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-ring",
+          "w-full cursor-pointer text-left transition-colors hover:bg-zinc-800/40 focus-visible:bg-zinc-800/40 focus-hairline",
         )}
       >
         {content}
@@ -272,7 +294,7 @@ export function TrackedTickets({
 }: {
   items: SelfImprovementTrackedItem[];
   /** Opens a ticket on its board. Without it the rows are plain text. */
-  onOpenTicket?: (ticket: string) => void;
+  onOpenTicket?: OpenTicket;
 }) {
   return (
     <section className="space-y-3" aria-labelledby="self-improvement-tracked">
@@ -293,7 +315,11 @@ export function TrackedTickets({
                 <TrackedTicketRow
                   key={item.signature}
                   item={item}
-                  onOpen={ticket && onOpenTicket ? () => onOpenTicket(ticket) : null}
+                  onOpen={
+                    ticket && onOpenTicket?.canOpen(item.signature)
+                      ? () => onOpenTicket.open(ticket, item.signature)
+                      : null
+                  }
                 />
               );
             })}

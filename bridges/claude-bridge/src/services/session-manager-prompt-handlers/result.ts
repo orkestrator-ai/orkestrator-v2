@@ -35,6 +35,7 @@ import type { TurnState } from "../session-manager-prompt-turn.js";
 import { reconcileClaudeUsage } from "../session-manager-usage.js";
 import { markTranscriptChanged } from "../transcript-revision.js";
 import { appendTranscriptNotice } from "./transcript-notice.js";
+import { providerStateApiError } from "../claude-api-errors.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.claude");
@@ -359,12 +360,30 @@ export async function handleResultMessage(turn: TurnState, message: SDKMessage):
       resultMsg.subtype === "success" && classifyUsageLimitError(resultMsg.result)
         ? (resultMsg.result as string).trim().slice(0, MAX_USAGE_LIMIT_ERROR_CHARS)
         : undefined;
+    const apiStatus =
+      typeof resultMsg.api_error_status === "number" ? resultMsg.api_error_status : undefined;
+    // An API error is read from this turn's own synthetic reply, and only
+    // when the result says the turn ended on one.
+    const apiErrorCode = resultIsError ? turn.apiErrorCode : undefined;
+    const providerState = startupFailure ? undefined : providerStateApiError(apiErrorCode);
     // A used-up plan allowance is the account's state, not a failed query:
     // the session reports it and the backend acts on it, so it is a warning.
     if (!startupFailure && (usageLimit || turn.rateLimitRejected)) {
       log.warn("query.usage-limited", { subtype: resultMsg.subtype, sessionId });
+    } else if (providerState) {
+      // So is a refused login, an account on hold or a failing API: the
+      // session shows the provider's words, and nothing here went wrong.
+      turn.providerStateFailure = providerState;
+      log.warn("query.provider-refused", { reason: providerState, apiStatus, sessionId });
     } else {
-      log.error("query.failed", { subtype: resultMsg.subtype, sessionId, isError: resultIsError });
+      log.error("query.failed", {
+        subtype: resultMsg.subtype,
+        sessionId,
+        isError: resultIsError,
+        reason: apiErrorCode,
+        apiStatus,
+        startupFailure: resultMsg.startup_failure_reason !== undefined,
+      });
     }
     const resultError =
       startupFailure ||

@@ -136,3 +136,54 @@ for (const withRequestId of [true, false]) {
     }
   });
 }
+
+/**
+ * A turn the provider refused on another account or service state (a failing
+ * API here) is logged by the turn as `prompt.provider-refused`; the route's
+ * completion log must not report it again as a processing failure.
+ */
+for (const withRequestId of [true, false]) {
+  test(`a provider refusal is not a processing failure ${withRequestId ? "with" : "without"} a request id`, async () => {
+    await withTemporaryClaudeHome("claude-provider-refusal-route-", async () => {
+      const session = createSession(`provider-refusal-route-${withRequestId}`);
+      track(session.id);
+
+      const response = app.request(`/session/${session.id}/prompt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: "hello",
+          ...(withRequestId ? { requestId: "provider-refusal-route" } : {}),
+        }),
+      });
+      const call = await nextQueryCall();
+      expect((await response).status).toBe(202);
+      call.push({
+        type: "assistant",
+        uuid: "api-error-server",
+        session_id: "sdk-session",
+        parent_tool_use_id: null,
+        error: "server_error",
+        message: {
+          id: "msg-api-error",
+          role: "assistant",
+          model: "<synthetic>",
+          content: [{ type: "text", text: "API Error: 500 Internal server error." }],
+        },
+      });
+      call.push({ type: "result", subtype: "success", is_error: true, api_error_status: 500 });
+      call.finish();
+
+      await waitFor(() =>
+        lines(debugs).some((line) =>
+          line.startsWith("[bridge.claude] prompt.processing-provider-refused"),
+        ),
+      );
+      expect(session.status).toBe("error");
+      expect(bridgeErrorLines()).toEqual([]);
+      expect(lines(warnings)).toContain(
+        "[bridge.claude] prompt.provider-refused errorClass=Error reason=server_error",
+      );
+    });
+  });
+}

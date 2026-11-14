@@ -11,6 +11,7 @@ import {
   noteClaudeAuthenticationFailure,
   noteClaudeAuthenticationWorked,
 } from "../claude-sign-in.js";
+import { claudeApiErrorCode } from "../claude-api-errors.js";
 import { claudeEvidenceTurnId, claudeToolUses, recordClaudeToolUse } from "../change-evidence.js";
 import { eventEmitter } from "../event-emitter.js";
 import { noteSessionLoginRefused, setSessionAuthNotice } from "../session-auth-notice.js";
@@ -117,6 +118,11 @@ export function handleAssistantMessage(turn: TurnState, message: SDKMessage): vo
   // code ("Not logged in · Please run /login"). Re-read the account so a
   // missing login locks the composer; any real answer proves one works.
   const assistantError = (message as SDKAssistantMessage).error;
+  // Only the root loop's answer ends the turn; a subagent's failed request is
+  // its own tool's outcome. A later real answer means the request recovered.
+  if ((message as SDKAssistantMessage).parent_tool_use_id == null) {
+    turn.apiErrorCode = claudeApiErrorCode(assistantError);
+  }
   if (assistantError === "authentication_failed") {
     noteClaudeAuthenticationFailure();
     noteSessionLoginRefused(

@@ -78,11 +78,19 @@ export function isUsageLimitError(error: unknown): boolean {
  */
 export const USAGE_LIMITED_ERROR_PROPERTY = "usageLimited";
 
-/** Mark a failed turn's rejection as a usage-limit refusal (see above). */
-export function markUsageLimitError(error: unknown): void {
+/**
+ * The plain property a failed turn's rejection carries when the provider
+ * refused it on the account's or the service's state other than a usage limit
+ * (`providerStateApiError`: a refused login, a failing API). The route reads
+ * it the way it reads {@link USAGE_LIMITED_ERROR_PROPERTY}, for the same
+ * reasons; the error's text alone cannot show it.
+ */
+export const PROVIDER_REFUSED_ERROR_PROPERTY = "providerRefused";
+
+function markError(error: unknown, property: string): void {
   if ((typeof error !== "object" && typeof error !== "function") || error === null) return;
   try {
-    Object.defineProperty(error, USAGE_LIMITED_ERROR_PROPERTY, {
+    Object.defineProperty(error, property, {
       value: true,
       configurable: true,
       enumerable: false,
@@ -91,6 +99,16 @@ export function markUsageLimitError(error: unknown): void {
   } catch {
     // A frozen or exotic rejection keeps its text classification only.
   }
+}
+
+/** Mark a failed turn's rejection as a usage-limit refusal (see above). */
+export function markUsageLimitError(error: unknown): void {
+  markError(error, USAGE_LIMITED_ERROR_PROPERTY);
+}
+
+/** Mark a failed turn's rejection as a provider-state refusal (see above). */
+export function markProviderRefusalError(error: unknown): void {
+  markError(error, PROVIDER_REFUSED_ERROR_PROPERTY);
 }
 
 export function ownsActiveTurn(turn: TurnState): boolean {

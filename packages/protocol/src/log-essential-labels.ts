@@ -122,6 +122,30 @@ const BRIDGE_LISTENER_REASONS = new Set([
   "no-listener",
   "launch-exited",
 ]);
+/** The Agent SDK's result subtypes (`SDKResultMessage`). */
+const CLAUDE_RESULT_SUBTYPES = new Set([
+  "success",
+  "error_during_execution",
+  "error_max_turns",
+  "error_max_budget_usd",
+  "error_max_structured_output_retries",
+]);
+/** The Agent SDK's API error codes (`SDKAssistantMessageError`). */
+const CLAUDE_API_ERRORS = new Set([
+  "authentication_failed",
+  "oauth_org_not_allowed",
+  "account_on_hold",
+  "verification_required",
+  "billing_error",
+  "rate_limit",
+  "overloaded",
+  "invalid_request",
+  "model_not_found",
+  "server_error",
+  "unknown",
+  "max_output_tokens",
+  "cloud_credential_error",
+]);
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const SOURCE = new RegExp(`^(?:claude|codex|opencode|cursor|grok|acp|pi):${UUID}$`, "i");
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
@@ -223,6 +247,10 @@ export function isEssentialLabel(
   ) {
     if (field === "provider") return PROVIDERS.has(value);
     if (field === "reason") return BRIDGE_LISTENER_REASONS.has(value);
+  }
+  if (area === "bridge.claude" && event === "query.failed") {
+    if (field === "subtype") return CLAUDE_RESULT_SUBTYPES.has(value);
+    if (field === "reason") return CLAUDE_API_ERRORS.has(value);
   }
   if (area === "logging" && field === "owner") return value === "desktop" || value === "backend";
   if (area === "logging" && event === "entries.dropped" && field === "reason")

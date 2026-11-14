@@ -349,6 +349,32 @@ describe("local-server bridge.orphans-reaped", () => {
   });
 });
 
+describe("bridge.claude query.failed", () => {
+  test("keeps the SDK's subtype and API error code, and refuses any other value", () => {
+    const entry = (subtype: string, reason: string) =>
+      record("bridge.claude", "query.failed", "error", {
+        subtype,
+        isError: true,
+        reason,
+        apiStatus: 400,
+        startupFailure: false,
+        sessionId: "session-client-41e14f6d1cf34347b31f3bc1996d9aa2",
+      });
+    expect(projectEssentialRecord(entry("error_max_turns", "invalid_request"), TS)?.fields).toEqual(
+      {
+        subtype: "error_max_turns",
+        isError: true,
+        reason: "invalid_request",
+        apiStatus: 400,
+        startupFailure: false,
+      },
+    );
+    expect(
+      projectEssentialRecord(entry("Failed to authenticate", "API Error: 403"), TS)?.fields,
+    ).toEqual({ isError: true, apiStatus: 400, startupFailure: false, droppedFields: 2 });
+  });
+});
+
 describe("renderer error entries", () => {
   const fields = {
     errorClass: "TypeError",

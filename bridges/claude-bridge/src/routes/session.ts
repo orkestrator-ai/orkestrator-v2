@@ -201,14 +201,32 @@ function isUsageLimitedRejection(error: unknown): boolean {
 }
 
 /**
+ * Whether the turn marked its rejection as the provider refusing it on the
+ * account's or the service's state (`markProviderRefusalError`). Only the
+ * mark counts: the error text cannot tell a refused login from a bridge fault.
+ */
+function isProviderRefusedRejection(error: unknown): boolean {
+  try {
+    return (error as { providerRefused?: unknown } | null)?.providerRefused === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Log a prompt turn that failed after the route accepted it. A turn the
  * provider refused on a used-up plan allowance was already recorded by the
  * turn as `prompt.usage-limited` and is reported to the session; it is an
  * account state, not a processing fault, so it is not logged again as one.
+ * Nor is one refused on another provider state (`prompt.provider-refused`).
  */
 function logPromptProcessingFailure(error: unknown): void {
   if (isUsageLimitedRejection(error)) {
     log.debug("prompt.processing-usage-limited");
+    return;
+  }
+  if (isProviderRefusedRejection(error)) {
+    log.debug("prompt.processing-provider-refused");
     return;
   }
   log.error("prompt.processing-failed", { error: formatLogError(error) });

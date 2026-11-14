@@ -530,6 +530,7 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `docker` | `writer-lease.acquired-late` | none | This backend won it later, from a holder that stopped refreshing it. |
 | `bridge.pi` | `session.resume-fell-back` | error | A saved conversation could not be reopened, so a new one started. |
 | `bridge.cursor` | `session.resume-fell-back` | error | The same. |
+| `bridge.claude` | `query.failed` | `subtype`, `isError`, `reason`, `apiStatus`, `startupFailure` | A Claude turn ended on an error result the bridge cannot put down to the account or the service. `subtype` is the SDK's result subtype and `reason` its API error code (both allowlisted), so a digest can tell an invalid request from a CLI that never started. A refused login, an account on hold or a failing API logs `query.provider-refused` at `warn` instead, and a used-up plan `query.usage-limited` (`bridges/claude-bridge/src/services/claude-api-errors.ts`). |
 | `storage` | `migration.failed` | `fromVersion`, `toVersion`, `step`, error | The database did not reach this build's schema. |
 | `storage` | `snapshot.failed` | `retryAt`, error | The hourly database snapshot failed. |
 | `storage` | `snapshot.integrity-failed` | none | A snapshot failed its integrity check. |

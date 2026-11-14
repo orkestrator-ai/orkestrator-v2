@@ -432,6 +432,62 @@ that an `ask` policy parks the call until its card is approved. Cleanup
 restores the real entry and stops the bridge. The profile needs Cursor and Pi
 in `--agent-platforms`; otherwise the cases skip.
 
+The steps the cells share (the single-tab layout, the composer send, the
+policy check, the approval card) are in
+`e2e/agent-testing/container-engine-cells-support.ts`.
+
+#### Real-provider variants (opt-in, billed)
+
+`e2e/agent-testing/container-real-engines-live.spec.ts` holds the same two
+cells on the image's own bridge, unchanged, over the real Cursor SDK and a real
+Pi provider (from to-do 7040 (retired)). Its tests are also named "Docker
+fixture", so `mise run test:agent:docker` and the isolated Docker shards list
+them, but they skip unless explicitly opted in, and nothing in the default or
+isolated runs sets their switches:
+
+| Cell | Opt-in | What it checks |
+| --- | --- | --- |
+| Cursor | `ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_CURSOR=1`, optional `ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_CURSOR_MODEL`; profile with `--credential-source cursor` | The model runs `curl` through its Shell tool. The tool card shows `https://example.com/` refused (`http=000`, non-zero exit) and `https://api.github.com/zen` answering; the session reports the container policy. |
+| Pi | `ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_PI_MODEL=<provider/modelId>` on a provider the profile is signed in to (`--credential-source pi`) | The same two `curl` calls through Pi's `bash` tool under `auto-approve`; then, under `ask`, a call parks a card, does not run until the card is approved, and runs after. |
+
+`ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_TURN_TIMEOUT_MS` (default 300000)
+bounds each real turn. The backend stages the platform's credential into the
+container on every bridge start; the spec reads none. A Pi provider's own
+host must be on the container's allowlist: if it is not, the first turn fails
+with the provider's error, which the spec reports. Each assertion records a
+content-free annotation (tool name, HTTP status, curl exit code) in
+`results.json`. For example, for Cursor:
+
+```bash
+mise run dev:test --profile cursor-container-qa --fixture --fixture-environments local,container \
+  --credential-source cursor --agent-platforms cursor --headless
+# In another terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=cursor-container-qa ORKESTRATOR_AGENT_TEST_RUN_ID=cursor-container-qa \
+  ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_CURSOR=1 \
+  mise run test:logged -- --name cursor-container-live -- mise run test:agent:docker -- container-real-engines-live.spec.ts --workers=1
+mise run dev:stop --profile cursor-container-qa
+mise run dev:reset --profile cursor-container-qa
+```
+
+Running them takes a real login and billed turns, so it is a manual-test
+checklist item ([7568](../todo/manual-test/7568-manual-test-checklist.md),
+7040 (retired) tasks 1 and 2). Record each run's results below.
+
+Results:
+
+- 2026-11-14, beelink (Linux x86_64), commit `d96a65078`, no switch set: a
+  disposable rootless daemon (`mise run docker:disposable -- start
+  --host-loopback`, Engine 29.9.2) with the image built inside it
+  (`orkestrator-v2:dev-4b41bc748c56`), and a profile started with `--fixture
+  --fixture-environments local,container --no-agent-credentials
+  --no-host-seed --agent-platforms cursor,pi --headless`.
+  `mise run test:agent:docker -- container-fake-engines.spec.ts
+  container-real-engines-live.spec.ts --workers=1`: 4 passed (the four fake
+  cells), 2 skipped (both real cells), 0 failed, in 127 s. With
+  `ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_PI_MODEL=haiku` the Pi cell failed
+  on its `provider/modelId` check before opening a session. No signed-in run
+  yet.
+
 A restart with `--fixture` reuses the fixture the first start seeded: it keeps
 `test-project` and `origin.git`, reuses the `fixture-local` and
 `fixture-container` environments (starting any that are stopped) and creates
@@ -1092,6 +1148,34 @@ mise run dev:reset --profile steer7
 `ORKESTRATOR_AGENT_TEST_STEER_PLATFORMS` narrows the scripted platforms, and
 `ORKESTRATOR_AGENT_TEST_STEER_REAL_PLATFORMS=claude,cursor` runs them on the
 profile's real logins instead (billed).
+
+A steer that misses its turn, and a stop after several turns, have their own
+spec, `e2e/agent-testing/steer-missed-live.spec.ts` (todo 0005 task 10), on
+the real Claude, Codex, Cursor and Pi bridges with scripted models and nothing
+billed. Each platform's case finishes a turn and steers after it (one new turn
+must start, on the session's controls), then steers while a second turn runs
+(it joins that turn; to-do 8107 is to queue it instead). Both steers must
+also reach the model exactly once: the Claude, Codex and Pi scripted models
+count a spec's marker in the user-role items of every request they are sent
+(`MARKER_WATCH_PATH` in `idle-observation-fake-claude.ts`, counts only), and
+Cursor's fake SDK records its steers. The Claude case
+starts a background command, sends two follow-ups into the same CLI, stops the
+command, releases the CLI with a launch-only change and requires the stop
+after that to be refused with `no_control_channel`. Codex gets a made-up API
+key in the profile's own Codex home for the run, and Cursor uses the same
+entry swap as above. `ORKESTRATOR_AGENT_TEST_MISSED_STEER_PLATFORMS` narrows
+the platforms:
+
+```bash
+mise run dev:test --profile msteer10 --fixture --no-agent-credentials --no-host-seed \
+  --agent-platforms claude,codex,cursor,pi --headless
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=msteer10 ORKESTRATOR_AGENT_TEST_LIVE_MISSED_STEER=1 \
+  mise run test:logged -- --name steer-missed -- mise run test:agent:browser -- \
+  e2e/agent-testing/steer-missed-live.spec.ts
+mise run dev:stop --profile msteer10
+mise run dev:reset --profile msteer10
+```
 
 The live OpenCode spec (`e2e/agent-testing/opencode-live.spec.ts`) has its own
 opt-in and uses the host's OpenCode credentials. No fixed default model ships,
@@ -3508,8 +3592,8 @@ the branch runner, the workspace guard and the mail drain.
   each target turn started and submitted, that a target offered `ask_agents`
   (a Pi subork) tried it and was refused (depth 1), and that the caller was
   woken exactly once.
-- `suborks-restart-live.spec.ts`: an OpenCode tab asks Pi, the fake holds
-  the target's requests open, and the backend is `SIGKILL`ed (after checking
+- `suborks-restart-live.spec.ts`: an OpenCode tab asks Pi and OpenCode, the
+  fake holds the targets' requests open, and the backend is `SIGKILL`ed (after checking
   its command line and start time) and the profile restarted with
   `devTestRestartArgs`. The kill waits until every target's subork reads
   `running` and checks that again just before the signal. After the restart
@@ -3520,13 +3604,14 @@ the branch runner, the workspace guard and the mail drain.
   turn started, the killed backend's held request was abandoned unread (its
   submit is not counted), and the answer was submitted on a request that was
   read.
-  An OpenCode target is left out of the default until
-  [8045](../todo/agent-engines/8045-opencode-turn-cut-by-backend-restart-stays-busy.md)
-  is fixed: its session stays busy in OpenCode's store after the kill, so the
-  subork stays `running` until the 45-minute bound.
-  `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_TARGETS=pi,opencode` reproduces it,
-  and `ORKESTRATOR_AGENT_TEST_SUBORKS_KEEP=1` keeps a failed run's
-  environment for inspection.
+  The OpenCode target covers 8045 (retired): plain `opencode serve` never
+  resumes a run its predecessor was stopped under, and the OpenCode provider
+  reports that run as a restart interruption
+  (`apps/backend/src/core/opencode2/restart-cut.ts`) so the runner gives it
+  its continuation instead of waiting out the 45-minute bound.
+  `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_TARGETS` narrows the targets (for
+  example `pi`), and `ORKESTRATOR_AGENT_TEST_SUBORKS_KEEP=1` keeps a failed
+  run's environment for inspection.
 
 Both specs wait for states rather than for changes since an earlier sample
 (`suborks-live-checks.ts`): a call counts as over only once its delivery has
@@ -3911,6 +3996,17 @@ mise run test:agent:coordinator --credential-source codex --scenario routing
    3600000). Besides case 1's checks it passes when the pipeline ends `complete`
    with delivery `commit-only` and no PR or conflict-resolution session, and
    when the coordinator, woken by the finished build, made no `create_pr` call.
+
+Because no request names an agent, model or effort, the run also checks that a
+real coordinator follows the tool surface's wording unprompted (to-do 4920
+task 3, `coordinator-live-wording.ts`): after each case,
+`<case>-launch-defaults-omitted` passes when every `launch_environment` and
+`launch_job` call leaves `agent`, `modelId` and `reasoningId` out, and
+`<case>-list-agents-not-polled` when the case read `list_agents` at most once;
+at the end, `request-ids-fresh` passes when no request id named two different
+calls across the conversation (an exact retry under its id is allowed and
+counted). The summary records the counts as `request-ids:withRequestId`,
+`distinct`, `retries` and `reused`, never an id.
 
 Saved defaults put every step and reviewer on the platform, with one reviewer.
 Between cases the coordinator must be idle with nothing queued for 20 seconds. A

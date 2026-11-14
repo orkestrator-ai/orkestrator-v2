@@ -132,13 +132,11 @@ describe("deliver-now prompts", () => {
     expect(bodies.correction).toContain(bodies.corrected);
   });
 
-  test("the steering providers run it; Grok, which cannot steer, and OpenCode, whose steer is unqualified, are skipped", () => {
-    for (const platform of ["claude", "codex", "pi", "cursor"] as const) {
+  test("the steering providers run it, OpenCode included; Grok, which cannot steer, is skipped", () => {
+    for (const platform of ["claude", "codex", "pi", "cursor", "opencode"] as const) {
       expect(deliverNowApplies(platform)).toBe(true);
     }
-    for (const platform of ["grok", "opencode"] as const) {
-      expect(deliverNowApplies(platform)).toBe(false);
-    }
+    expect(deliverNowApplies("grok")).toBe(false);
   });
 
   test("the terminal case is Claude's alone and launches claude-tmux", () => {

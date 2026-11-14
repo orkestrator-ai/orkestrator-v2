@@ -50,7 +50,12 @@
  *   the job reaches `awaiting-restart`. The backend must not restart.
  * - update: `host update apply --release <to> --when-idle --wait`. The idle
  *   host goes straight to the countdown, restarts into <to>, and the job settles
- *   `succeeded`; `current` and `previous` move.
+ *   `succeeded`; `current` and `previous` move. Both release directories
+ *   must hold the `package.json` and `bun.lock` their package publishes in
+ *   `resources/release-runtime/`, byte for byte, with every installed package
+ *   at its locked version and none the lockfile does not list (to-do 5022
+ *   task 2, retired 2026-11-14), and `sharp` must load from the release and encode a PNG. The
+ *   report also lists the locked entries a fresh resolution would move today.
  * - rollback: the unit's environment points Bun at a registry served by this
  *   script. It proxies npm and adds <broken>: the <to> tarball with its version
  *   changed and `serve` made to exit at once (`--version` and `toolchain
@@ -70,6 +75,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import {
+  freshResolveDifferences,
+  inspectLockedRelease,
+  installedFromLockfile,
+  type LoadEvidence,
+  type LockedReleaseEvidence,
+  sharpLoads,
+} from "./qualify-locked-release";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const CLI = path.join(ROOT, "packages", "cli", "bin", "orkestrator.js");
@@ -94,6 +107,23 @@ export interface QualificationRuntime {
   }>;
   hostSignals?: () => Promise<string[]>;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** Reads an installed release directory; see `qualify-locked-release.ts`. */
+  inspectRelease?: (
+    releaseDir: string,
+    bun: string,
+    scratch: string,
+  ) => Promise<{
+    evidence: LockedReleaseEvidence;
+    sharp: LoadEvidence;
+    fresh: { name: string; locked: string; fresh: string }[] | { error: string };
+  }>;
+}
+
+async function inspectRelease(releaseDir: string, bun: string, scratch: string) {
+  const evidence = inspectLockedRelease(releaseDir);
+  const sharp = await sharpLoads(bun, releaseDir);
+  const fresh = await freshResolveDifferences(bun, releaseDir, scratch);
+  return { evidence, sharp, fresh };
 }
 
 export async function qualifyStandaloneService(
@@ -633,8 +663,30 @@ export async function qualifyStandaloneService(
       });
     }
 
+    /** Checks that `version`'s release directory was installed from its lockfile. */
+    async function checkLockedRelease(service: Service, version: string) {
+      const releaseDir = path.join(service.dataDir, "backend", "releases", version);
+      const scratch = mkdtempSync(path.join(temporary, `fresh-resolve-${version}-`));
+      const { evidence, sharp, fresh } = await (runtime.inspectRelease ?? inspectRelease)(
+        releaseDir,
+        BUN,
+        scratch,
+      );
+      check(
+        "update",
+        `${version} was installed from its published lockfile`,
+        installedFromLockfile(evidence),
+        {
+          ...evidence,
+          freshResolveDifferences: fresh,
+        },
+      );
+      check("update", `sharp loads from ${version} and encodes a PNG`, sharp.ok, sharp);
+    }
+
     async function phaseUpdate(service: Service) {
       const before = descriptor(service)!;
+      await checkLockedRelease(service, FROM);
       const result = await apply(service, TO, [
         "--when-idle",
         "--max-wait",
@@ -675,6 +727,7 @@ export async function qualifyStandaloneService(
           lastReady: status.lastReadyVersion,
         },
       );
+      await checkLockedRelease(service, TO);
     }
 
     async function brokenTarball(): Promise<{

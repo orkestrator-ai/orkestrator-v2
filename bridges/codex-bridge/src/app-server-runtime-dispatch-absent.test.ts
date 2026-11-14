@@ -1,5 +1,6 @@
 /**
- * `/dispatch` answering `absent`: the runtime half of the proof (todo 0223).
+ * `/dispatch` answering `absent`: the runtime half of the proof (to-do 0223,
+ * retired; see "Dispatch recovery" in docs/architecture/review-preparation.md).
  *
  * The journal's own rules are covered in `sessions/dispatch-journal.test.ts`;
  * these drive the real runtime against a scripted app-server, with the

@@ -120,10 +120,46 @@ export interface ClaudeRuntimeTasks {
    * `MAX_SETTLING_BACKGROUND_TASKS`.
    */
   readonly settling: Map<string, BackgroundTaskSnapshot>;
+  /**
+   * Tasks this bridge asked the CLI to stop (`stopBackgroundTask`) whose
+   * terminal edge has not been read yet.
+   *
+   * The CLI answers a stop with a `stopped` edge, which can arrive before its
+   * answer to the stop request itself, but it starts no model turn for it:
+   * CLI 2.1.319 queues the `killed` notification for the next prompt (seen in
+   * the rollout's queue operations, todo 0005 task 10). So the edge of a task
+   * stopped from here owes no continuation; waiting for one refused every
+   * launch-only change, as "still running background work", until the idle
+   * window closed the CLI. Bounded by `MAX_SETTLING_BACKGROUND_TASKS`.
+   */
+  readonly stopRequested: Set<string>;
 }
 
 export function createClaudeRuntimeTasks(): ClaudeRuntimeTasks {
-  return { live: new Set(), candidates: new Set(), settling: new Map() };
+  return { live: new Set(), candidates: new Set(), settling: new Map(), stopRequested: new Set() };
+}
+
+/**
+ * Whether a terminal edge for `taskId` answers a stop this bridge requested,
+ * and so owes no continuation. `status` is the ending the edge reports, when
+ * it reports one: a task that completed or failed on its own before the stop
+ * reached it keeps the ordinary continuation. Only the `task_notification`
+ * edge consumes the mark (`consume`), since the patch and the level signal
+ * that may precede it describe the same ending.
+ */
+export function stopRequestedEdge(
+  owner: Pick<TaskOwner, "tasks"> | undefined,
+  taskId: string,
+  status: string | undefined,
+  options: { consume?: boolean } = {},
+): boolean {
+  if (!owner?.tasks.stopRequested.has(taskId)) return false;
+  if (status !== undefined && status !== "killed" && status !== "stopped") {
+    owner.tasks.stopRequested.delete(taskId);
+    return false;
+  }
+  if (options.consume) owner.tasks.stopRequested.delete(taskId);
+  return true;
 }
 
 /** What owns background work: the session's CLI. */
@@ -641,6 +677,7 @@ export function releaseClaudeRuntimeTasks(owner: TaskOwner, reason: string): boo
   tasks.candidates.clear();
   // The handle is dead, so no edge can still arrive to claim these.
   tasks.settling.clear();
+  tasks.stopRequested.clear();
   let changed = false;
   for (const task of Object.values(session.backgroundTasks ?? {})) {
     if (!LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) continue;
@@ -670,14 +707,23 @@ export async function stopBackgroundTask(
   // owner exited) to stop a task it never started — it answers `ok` for a task
   // id it has never heard of, so the user would be told the work had stopped
   // when nothing had been reached at all.
-  const control = backgroundTaskOwner(session, taskId)?.control;
+  const owner = backgroundTaskOwner(session, taskId);
+  const control = owner?.control;
   const stopTask = control?.stopTask;
   if (typeof stopTask !== "function") {
     return NO_CONTROL_CHANNEL;
   }
+  // Before the request: the CLI's `stopped` edge can come back ahead of its
+  // answer to it.
+  const { stopRequested } = owner!.tasks;
+  if (stopRequested.has(taskId) || stopRequested.size < MAX_SETTLING_BACKGROUND_TASKS) {
+    stopRequested.add(taskId);
+  }
   try {
     await stopTask.call(control, taskId);
   } catch (error) {
+    // No stop reached the CLI, so a later edge for this task is its own.
+    stopRequested.delete(taskId);
     // A terminal provider notification can win the race with the rejected stop
     // request. That notification is authoritative: the task completed (or
     // failed) naturally, so preserve it and report that the requested outcome
@@ -788,6 +834,7 @@ export function takeQueryControls(
     runtime.tasks.live.clear();
     runtime.tasks.candidates.clear();
     runtime.tasks.settling.clear();
+    runtime.tasks.stopRequested.clear();
     controls.add(runtime.control);
   }
   session.queryControl = undefined;

@@ -1202,7 +1202,7 @@ export interface ClaudeToolApprovalRequest extends ClaudeInteractionRequestBase 
   input?: string;
   /**
    * True only when every detail above is exact (nothing truncated, an absolute
-   * path, a named MCP server), so an Orkestrator permission rule (todo 0723)
+   * path, a named MCP server), so an Orkestrator permission rule (todo 0723 (retired))
    * may answer it. The backend auto-answers nothing without it.
    */
   ruleEligible?: boolean;

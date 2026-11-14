@@ -170,6 +170,23 @@ The server is stateless: it is rebuilt for every request, so it never sends
 `tools/list_changed`. The gateway is how a client with a fixed tool list
 reaches everything else.
 
+**Not built, by decision.** Two options from the voice-surface work were
+deferred and are not tracked as to-dos; open a new to-do when someone asks for
+one:
+
+- **A `delegate` action** that starts a coordinator turn from outside, so a
+  voice agent could hand over a multi-step goal instead of composing every
+  call itself. External messages are inbox-only by design, so this needs its
+  own authenticated path, capability and loop budget. The operator `review.*`,
+  `build.*` and `pr.*` actions already start the common multi-step workflows.
+- **A stateful MCP session** with `tools/list_changed` and resource
+  subscriptions. The gateway reaches every action from a fixed list, realtime
+  voice clients fix their tool list at session start anyway, and a
+  per-request server has no session state to bound or expire.
+
+The reasoning is D13 and D14 of to-do 0041 (retired 2026-11-14;
+`git show dc90609bf:docs/todo/mcp/0041-control-mcp-voice-surface.md`, "Assumptions and decisions").
+
 `run_status` waits up to `waitSeconds` (0 to 20, default 0) with the CLI's
 backoff and returns early on a terminal state, a pending interaction, an
 unknown dispatch or outcome, or a provider whose completion cannot be

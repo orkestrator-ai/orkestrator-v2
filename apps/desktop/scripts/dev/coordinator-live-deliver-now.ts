@@ -53,10 +53,8 @@ export interface DeliverNowProbe {
  * correction is `unsupported, queued` by design, so the case is skipped.
  */
 export function deliverNowApplies(platform: AgentPlatform): boolean {
-  // OpenCode advertises steer, but its mid-turn delivery is not yet qualified
-  // with a live worker (the public CLI refuses it for the same reason, to-do
-  // 7905 task 4), so the platform-wide flag would overstate it here.
-  if (platform === "opencode") return false;
+  // OpenCode included: its mid-turn steer is qualified through the composer,
+  // the public CLI and against a parked card (to-do 7905 tasks 3 and 4).
   return nativeAgentCapabilities(platform).actions?.steer === true;
 }
 

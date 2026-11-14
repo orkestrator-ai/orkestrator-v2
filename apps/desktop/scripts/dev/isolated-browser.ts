@@ -186,12 +186,14 @@ const IMAGE_QUALIFICATION_TIMEOUT_MS = 420_000;
  * that gains a `Docker fixture` test must be added to the browser config and
  * to one shard; `isolated-browser.test.ts` fails while one is in neither, in
  * no shard or in two. The two opt-in Multi Review canaries skip unless their
- * fake-review variable is set, so they cost the shard nothing by default.
+ * fake-review variable is set, and the real Cursor and Pi cells unless their
+ * live switch or model is, so they cost the shard nothing by default.
  */
 export const DOCKER_FIXTURE_SHARDS: readonly (readonly string[])[] = [
   [
     "e2e/agent-testing/container-files-wiring.spec.ts",
     "e2e/agent-testing/container-fake-engines.spec.ts",
+    "e2e/agent-testing/container-real-engines-live.spec.ts",
     "e2e/agent-testing/container-settings.spec.ts",
     "e2e/agent-testing/container-bridge-logs.spec.ts",
     "e2e/agent-testing/grok-container-login.spec.ts",

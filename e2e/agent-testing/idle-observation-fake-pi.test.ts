@@ -9,6 +9,7 @@ import {
   piRequestState,
   piStreamFrames,
 } from "./idle-observation-fake-pi";
+import { MARKER_WATCH_PATH } from "./idle-observation-fake-claude";
 
 const warmup =
   "Run a shell command that sleeps for 5 seconds, then prints IDLEQA-WARM-1. Wait for it to finish, then reply with exactly IDLEQA-WARM-1 and nothing else.";
@@ -190,6 +191,11 @@ test("HTTP routes reject bad requests and return streamed and non-streamed tool 
     const stream = await post(JSON.stringify({ ...request, stream: true }));
     expect(stream.headers.get("content-type")).toBe("text/event-stream");
     expect(await stream.text()).toContain("data: [DONE]");
+    // The marker watch counts what later requests carry.
+    const watch = `http://127.0.0.1:${server.port}${MARKER_WATCH_PATH}?marker=IDLEQA-WARM-1`;
+    expect((await fetch(watch, { method: "POST" })).status).toBe(200);
+    await post(JSON.stringify(request));
+    expect(await (await fetch(watch)).json()).toEqual({ requests: 1, maxUserOccurrences: 2 });
   } finally {
     await server.stop(true);
   }

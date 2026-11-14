@@ -9,7 +9,7 @@ import type { PublicApiHarness } from "./test-support.js";
 
 /**
  * The reconciler's periodic pass skips a run whose turn was seen to end with a
- * later turn in its session (to-do 7562, task 4): its observation cannot
+ * later turn in its session (to-do 7562 (retired), task 4): its observation cannot
  * change while its record and environment stay as they were, and every pass
  * used to re-read the environment, the session and its activity for it.
  */

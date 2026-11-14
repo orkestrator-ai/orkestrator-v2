@@ -1,6 +1,7 @@
 import { readdir } from "node:fs/promises";
 import path from "node:path";
-import { SCENARIOS, type ScenarioDefinition } from "../scenarios/cases.js";
+import { SCENARIOS as MATRIX, type ScenarioDefinition } from "../scenarios/cases.js";
+import { OPENCODE_STEER_SCENARIO } from "../scenarios/opencode-steer.js";
 import {
   CliDriver,
   newScenarioRoot,
@@ -9,6 +10,7 @@ import {
   RunManifest,
   runId,
   ScenarioFailure,
+  scenarioPaths,
   startIsolatedBackend,
   type ScenarioContext,
 } from "../scenarios/harness.js";
@@ -30,6 +32,9 @@ import { formatRunUsage, readRunUsage, type RunUsageRecord } from "../scenarios/
  * Requires `bun run build` first. The exit status is authoritative: 0 when
  * every selected scenario passed and cleaned up.
  */
+
+/** Every scenario; `explicit` ones run only when named with `--scenario`. */
+export const SCENARIOS: ScenarioDefinition[] = [...MATRIX, OPENCODE_STEER_SCENARIO];
 
 export interface Options {
   scenarios: string[];
@@ -86,6 +91,7 @@ function select(options: Options): ScenarioDefinition[] {
   return SCENARIOS.filter((scenario) => {
     if (options.scenarios.length > 0 && !options.scenarios.includes(scenario.name)) return false;
     if (scenario.live && !options.provider) return false;
+    if (scenario.explicit && !options.scenarios.includes(scenario.name)) return false;
     if (scenario.environmentTypes && !scenario.environmentTypes.includes(options.environmentType))
       return false;
     return true;
@@ -136,10 +142,13 @@ export async function runOne(
   let error: string | undefined;
   let context: ScenarioContext | undefined;
   let usage: RunUsageRecord | undefined;
+  let unprepare: (() => Promise<void>) | undefined;
   try {
+    if (definition.prepare) unprepare = await definition.prepare(scenarioPaths(root));
     const backend = await dependencies.startIsolatedBackend({
       root,
       ...(options.provider && definition.live ? { credentialSource: options.provider } : {}),
+      ...(definition.toolchainProvider ? { toolchainProvider: definition.toolchainProvider } : {}),
       extraArgs: options.dockerImage ? ["--docker-image", options.dockerImage] : [],
     });
     backendReadyMs = dependencies.now() - started;
@@ -197,6 +206,15 @@ export async function runOne(
           cleanupErrors.push(`worktrees left behind: ${leftovers.join(", ")}`);
       }
     }
+    if (unprepare) {
+      try {
+        await unprepare();
+      } catch (caught) {
+        cleanupErrors.push(
+          `undo prepare: ${caught instanceof Error ? caught.message : String(caught)}`,
+        );
+      }
+    }
     manifest.cleanupErrors.push(...cleanupErrors.map((entry) => `${definition.name}: ${entry}`));
     if (!(options.keepOnFailure && (!passed || cleanupErrors.length > 0)))
       await dependencies.removeTree(root);
@@ -218,7 +236,9 @@ async function main(): Promise<number> {
   if (options.list) {
     for (const scenario of SCENARIOS) {
       console.log(
-        `${scenario.name.padEnd(20)} ${scenario.live ? "[live] " : ""}${scenario.description}`,
+        `${scenario.name.padEnd(20)} ${scenario.live ? "[live] " : ""}${
+          scenario.explicit ? "[named only] " : ""
+        }${scenario.description}`,
       );
     }
     return 0;

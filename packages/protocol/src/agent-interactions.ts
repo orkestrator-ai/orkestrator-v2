@@ -231,7 +231,7 @@ export interface AgentInteractionPresentation {
   /** Optional broader authorization supported by the provider. */
   approveForSessionLabel?: string;
   /**
-   * "Approve and remember" as an Orkestrator rule (todo 0723): the patterns
+   * "Approve and remember" as an Orkestrator rule (todo 0723 (retired)): the patterns
    * the user may save, or why this request can't be remembered. Absent when
    * the request is not one a rule could answer at all. The backend re-derives
    * the offer before saving; a pattern the client sends that is not in it is

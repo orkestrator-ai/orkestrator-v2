@@ -466,6 +466,18 @@ the projection can show the previous number for up to that long after a
 relaunch. `claude-warm-runtime-live.spec.ts` drives one CLI through the app
 against a loopback model and asserts the number holds (todo 0005 task 8).
 
+A background task the user stops (`POST /session/:id/tasks/:taskId/stop`)
+leaves nothing owed. The CLI's `stopped` edge can arrive before its answer to
+the stop request, and CLI 2.1.319 queues the `killed` notification for the
+next prompt rather than starting a turn for it, so the bridge marks the stop
+(`tasks.stopRequested`) and does not wait for a continuation; the CLI is idle
+at once and a launch-only change replaces it. A task the CLI ends by itself
+(its timeout below, or a natural end) still gets the continuation wait,
+including one that finished on its own while the stop was in flight: a
+`TaskCompleted` or `SubagentStop` hook carries no status, so it defers to the
+`task_notification` that follows, which waits for the continuation.
+`steer-missed-live.spec.ts` checks it on the real CLI (todo 0005 task 10).
+
 Background shell commands are bounded. Since Claude Code 2.1.285 an Agent SDK
 session stops a `run_in_background` command at its `timeout` (30 minutes by
 default, 2 hours at most) and reports a `stopped` task notification saying why;
@@ -874,10 +886,21 @@ the commands):
 
 All three passed at 2.2.6 on Linux x86_64 (host 2026-11-11, container
 2026-11-13, behind an egress gateway); the per-case figures are in
-[agent-testing.md](../development/agent-testing.md). The paths not yet run
-(a runtime without an egress gateway, concurrent sessions, a steer racing a
-card, steer through the public CLI) are to-do
-[7905](../todo/agent-engines/7905-opencode2-untested-paths.md). The
+[agent-testing.md](../development/agent-testing.md). Concurrent sessions on
+one server, a steer racing a permission or question card and steer through
+the public CLI passed on scripted models on 2026-11-14
+(`opencode2-concurrency.live.test.ts`, `opencode2-steer-cards.live.test.ts`,
+the `opencode-steer` CLI scenario); a runtime without an egress gateway is
+still to run, in to-do
+[7905](../todo/agent-engines/7905-opencode2-untested-paths.md). A run whose
+server is stopped under it (a backend restart reaps the server, a crash)
+is never resumed by plain `opencode serve`; the provider reports it as a
+restart interruption (`opencode2/restart-cut.ts`,
+`opencode2-restart.live.test.ts`), naming the open run's newest
+Orkestrator request: 2.2.6 writes no `idle` for the cut run, so a
+continuation joins it, and a second restart that cuts the continuation
+reports the continuation. The backend's host plugin stops a server whose
+backend is gone. The
 mitigations OpenCode 2 runs under (an exact pin, auto-update and file
 watchers off, an isolated database, model, agent and permission switches
 under the dispatch lock, the backend-held steer guard and its bounded
@@ -1758,7 +1781,7 @@ request id, which is also the result key. Build Pipeline stage sends
 (`build-pipeline-prompt-dispatch.ts`) declare it too; before they did, a
 single Pi reviewer's read-only Review in a pipeline could never submit its
 report (found by the Auto-pipeline fake-model run, to-do 7547 task 4). Feature
-Planning (`feature-planning.ts`) still omits `workflowResultKey`; declaring its
+Planning (`features/planning.ts`) still omits `workflowResultKey`; declaring its
 attempts remains outstanding, and it does not receive this exemption under
 deny/ask or read-only gating.
 The warm-up attach does not declare the pair; the bridges read it from the

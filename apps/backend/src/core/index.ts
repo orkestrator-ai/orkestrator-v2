@@ -245,7 +245,7 @@ import {
   recoverMissingMultiReviewAddressFindingsSession,
 } from "./multi-review-address-findings-dispatch.js";
 import { MultiReviewService } from "./multi-review-service.js";
-import { FeaturePlanningService } from "./feature-planning.js";
+import { FeaturePlanningService } from "./features/index.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { AgentMailService } from "./agent-mail-service.js";

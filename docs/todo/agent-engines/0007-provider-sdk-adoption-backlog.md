@@ -1,6 +1,6 @@
 # Provider SDK adoption backlog
 
-Checked against `main` at `cd7bbe3e5` (2026-10-30); pins and candidates rechecked at `6ce02251b` for the 2026-10-30 upgrade (1020 (retired), `git show 17d28238c:docs/todo/agent-engines/1020-provider-upgrade-2026-10-30.md`) and at `ee2cc8423` for the 2026-11-06 upgrade ([1031](1031-provider-upgrade-2026-11-06.md)).
+Checked against `main` at `cd7bbe3e5` (2026-10-30); pins and candidates rechecked at `6ce02251b` for the 2026-10-30 upgrade (1020 (retired), `git show 17d28238c:docs/todo/agent-engines/1020-provider-upgrade-2026-10-30.md`) and at `ee2cc8423` for the 2026-11-06 upgrade (1031 (retired 2026-11-14), `git show dc90609bf:docs/todo/agent-engines/1031-provider-upgrade-2026-11-06.md`).
 
 ## Task analysis
 
@@ -106,7 +106,7 @@ pins undercut one of them is it raised below (task 1).
 
 Rechecked 2026-11-02 at SDK `0.3.314`: all three symbols are still there, and
 `canUseTool`'s third argument carries `mcpServer: { name, source }` for
-`mcp__*` tools. Since the analysis, the permission-rules work (todo 0723)
+`mcp__*` tools. Since the analysis, the permission-rules work (todo 0723 (retired))
 started reading `mcpServer.name` in
 `bridges/claude-bridge/src/services/session-manager-parked-interactions.ts`
 and forwarding it as `mcpServer` (it makes an MCP request rule-eligible), and
@@ -581,7 +581,7 @@ rediscovers the same gaps. It is low priority: nothing here is a defect.
 
 ## Current state
 
-- Pins (upgraded 2026-11-06, [1031](1031-provider-upgrade-2026-11-06.md)):
+- Pins (upgraded 2026-11-06, 1031 (retired)):
   Claude Agent SDK `0.3.319` / CLI `2.1.319`, Codex `0.167.0`, `@cursor/sdk`
   `1.3.1`, Pi `1.5.0`, Grok `1.0.77`, `@agentclientprotocol/sdk` `2.4.0`.
   OpenCode is the 2.x binary `opencode2` `2.2.6` with no SDK
@@ -686,7 +686,7 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     launch-only, which conflicts with restating effort on every join; revisit
     on a user report.
   - `onFailure: 'block'` on hook matchers (2.1.317). The bridge fails its
-    boundary hooks closed itself instead (1031 task 3); adopt once the bridge
+    boundary hooks closed itself instead (1031 (retired) task 3); adopt once the bridge
     knows the CLI version before building the query.
   - `initializationResult()` is adopted: a running CLI's held answer serves the
     model catalogue and the account (`live-claude-control.ts`). `startup()` /
@@ -714,8 +714,8 @@ Unadopted today. Each line says what blocks it or what decision it needs.
   - Declaring `InitializeCapabilities.requiredHumanApproval` (0.167.0,
     experimental only). Without it a host's managed `prompt-user` rule rejects
     matching commands instead of prompting. The bridge already maps a
-    `humanCommand` approval onto the shared `humanRequired` marker (1031 task
-    11); declaring the capability waits for the API to leave experimental.
+    `humanCommand` approval onto the shared `humanRequired` marker (1031
+    (retired) task 11); declaring the capability waits for the API to leave experimental.
   - `features.respect_system_proxy` (0.167.0, experimental, off): only on a
     corporate-proxy report, as a provider-neutral environment setting.
 - Cursor (`bridges/cursor-bridge`):

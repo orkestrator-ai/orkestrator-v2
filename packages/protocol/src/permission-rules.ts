@@ -28,7 +28,7 @@ export const PERMISSION_RULE_KINDS = [
 export type PermissionRuleKind = (typeof PERMISSION_RULE_KINDS)[number];
 
 /**
- * Where a rule applies. There is no host-wide scope (decision 1 of todo 0723):
+ * Where a rule applies. There is no host-wide scope (decision 1 of todo 0723 (retired)):
  * every rule is tied to one project, and optionally narrowed to one of its
  * environments.
  */

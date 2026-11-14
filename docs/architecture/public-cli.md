@@ -473,7 +473,7 @@ logical SQLite store `public-operations/<namespace>` (with the index in
 [storage.md](storage.md). A namespace holds one row per record, keyed by its
 operation id in admission order, so an admission or a state change writes and
 syncs that one row, and a read re-parses and re-checks only the rows that
-changed since the last one (schema version 9; to-do 7562 found the whole
+changed since the last one (schema version 9; to-do 7562 (retired) found the whole
 namespace rewritten on every update, 16 to 20 MiB of WAL a minute on a busy
 run). "Never delete `public-operations/`" below means those
 logical stores.
@@ -667,7 +667,7 @@ later steering input does not end a turn while the session is busy. Missing
 evidence stays `unknown`. A run once observed to have ended (`unknown` because
 its outcome was not recorded, or `unsupported`) stays ended while a later turn
 keeps the session busy: that turn is not this run running again, and
-re-observing it writes nothing (to-do 7562 found every such run flipping to
+re-observing it writes nothing (to-do 7562 (retired) found every such run flipping to
 `running` and back with each later turn, one record write each way). A provider whose status reads idle after a failed
 turn (OpenCode keeps the error on the request's last assistant message) is
 asked for that request's terminal error before an idle turn counts as
@@ -1005,7 +1005,14 @@ after the client's first key lookup and loses the `exec` answer after
 admission; `--wait` must recover by request key and run the command once), `wrong-profile`, `project-cascade` (a started and a
 stopped environment deleted by `project remove --cascade`; checkout and origin
 kept) and `project-init` (local only: no remote, a local environment starts
-from the repository's own `main`). The container matrix adds
+from the repository's own `main`). `opencode-steer` runs only when named
+(`--scenario opencode-steer`), because it installs the pinned OpenCode into its
+data directory: with no credentials, OpenCode's only provider is a scripted
+loopback model (`scripts/opencode2-steer-probe.ts`) that holds the turn's first
+request open while `session steer` redirects it, an exact retry replays the same
+operation, another text under the key is `request-conflict`, and the turn ends
+on the steer's reply once. It is what qualifies OpenCode's `steer: true` here
+(to-do 7905 task 4). The container matrix adds
 `foreign-owner`: a container and two volumes (one mounted, one unmounted)
 carrying every label of the scenario's environment except its owner
 (`orkestrator-owner`) sit beside it while `environment start`, `exec`, `list`,

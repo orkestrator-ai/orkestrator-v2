@@ -13,6 +13,7 @@ import {
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_MESSAGING_OFF_NOTE,
   COORDINATOR_ENVIRONMENT_CHOICE_RULE,
+  COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
   COORDINATOR_REQUEST_ID_RULE,
@@ -34,6 +35,7 @@ import { registerOperatorWorkflowTools } from "./operator-workflow-tools.js";
 import { createNodeTargets, NODE_TOOL_CAPABILITIES, type NodeTarget } from "./nodes.js";
 import { NODE_FILE_TOOL_CAPABILITIES } from "./node-files.js";
 import { COORDINATOR_ENVIRONMENT_ACTIONS } from "./coordinator-environment-scope.js";
+import { coordinatorEnvironmentRefusals } from "../coordinator-environment-refusals.js";
 import { COORDINATOR_SURFACE_TOOL_CAPABILITIES } from "./coordinator-surfaces.js";
 import { COORDINATOR_WORKER_TOOL_CAPABILITIES } from "./coordinator-worker-tools.js";
 import { WORKER_TURN_TOOL_CAPABILITIES } from "./coordinator-worker-turns.js";
@@ -339,16 +341,26 @@ export async function createControlMcp(
             typeof target?.workflowId !== "string"
           )
             return;
-          await invoke("assert_coordinator_environment_scope", {
-            scope: coordinatorScope,
-            // Nested: the invoker's own environment check would look it up again.
-            target: {
-              environmentId: target.environmentId,
-              pipelineId: target.pipelineId,
-              workflowId: target.workflowId,
-              ...(typeof target.nodeId === "string" ? { nodeId: target.nodeId } : {}),
-            },
-          });
+          try {
+            await invoke("assert_coordinator_environment_scope", {
+              scope: coordinatorScope,
+              // Nested: the invoker's own environment check would look it up again.
+              target: {
+                environmentId: target.environmentId,
+                pipelineId: target.pipelineId,
+                workflowId: target.workflowId,
+                ...(typeof target.nodeId === "string" ? { nodeId: target.nodeId } : {}),
+              },
+            });
+          } catch (error) {
+            // The command counted the refusal; this adds which tool it was.
+            if (
+              error instanceof Error &&
+              error.message.includes(COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL)
+            )
+              coordinatorEnvironmentRefusals.recordTool(tool, COORDINATOR_ENVIRONMENT_ACTIONS);
+            throw error;
+          }
         }
       : undefined,
   );

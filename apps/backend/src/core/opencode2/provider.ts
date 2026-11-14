@@ -91,7 +91,17 @@ import {
   type OpenCode2CoordinatorAuthority,
 } from "./coordinator.js";
 import { checkOpenCode2Admission, mintOpenCode2InputId, newestOpenCode2IdleId } from "./steer.js";
-import type { OpenCode2InboxItem, OpenCode2Message, OpenCode2ModelRef } from "./types.js";
+import {
+  OPENCODE2_RESTART_CUT_MESSAGE,
+  openCode2CutRun,
+  openCode2SessionRunUnsettledSince,
+} from "./restart-cut.js";
+import type {
+  OpenCode2InboxItem,
+  OpenCode2Message,
+  OpenCode2ModelRef,
+  OpenCode2Session,
+} from "./types.js";
 
 const log = createLogger("native-agent.opencode2");
 
@@ -163,11 +173,18 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   private readonly grants: OpenCode2TurnGrants;
   /** A coordinator's server: its rules, tools, agent and commands (`coordinator.ts`). */
   readonly coordinator: OpenCode2CoordinatorSessions | undefined;
+  /**
+   * When this provider, and so this server generation's view, began. A run
+   * busy since before it that the server no longer lists as active was cut
+   * short by a server stop (`restart-cut.ts`).
+   */
+  private readonly startedAt: number;
 
   constructor(
     private readonly client: OpenCode2Client,
     private readonly dependencies: OpenCode2ProviderDependencies = {},
   ) {
+    this.startedAt = this.now();
     this.reads = new OpenCode2SessionReads(client, () => this.streamConnected);
     this.interactions = this.reads.interactions;
     const mcp = new OpenCode2McpServers(client, dependencies.mcp);
@@ -358,11 +375,37 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
       throw error;
     });
     if (!session) return "missing";
+    // Checked before the outcome, which still names the run before the cut one.
+    const cut = await this.restartCut(sessionId, session);
+    if (cut) {
+      throw new ProviderSessionFailedError("opencode", OPENCODE2_RESTART_CUT_MESSAGE, {
+        interruption: "restart",
+        ...(cut.requestId ? { interruptedRequestId: cut.requestId } : {}),
+      });
+    }
     if (session.outcome === "failed" || session.outcome === "interrupted") {
       const state = await this.reads.sessionState(sessionId, "idle");
       throw new ProviderSessionFailedError("opencode", state.error ?? TURN_STOPPED_BY_USER_MESSAGE);
     }
     return "idle";
+  }
+
+  /**
+   * The session's newest run, when a stop of the server cut it short and
+   * plain `opencode serve` will never resume it (`restart-cut.ts`); its
+   * newest Orkestrator request id when it has one. Costs nothing beyond the
+   * session read unless the session record already says so.
+   */
+  private async restartCut(
+    sessionId: string,
+    session: OpenCode2Session,
+  ): Promise<{ requestId?: string } | undefined> {
+    if (!openCode2SessionRunUnsettledSince(session, this.startedAt)) return undefined;
+    if ((await this.runningSessions([sessionId], true)).has(sessionId)) return undefined;
+    return openCode2CutRun(
+      await this.history(sessionId, OPENCODE2_EVIDENCE_SCAN_LIMIT),
+      this.startedAt,
+    );
   }
 
   private async lifecycleStatus(sessionId: string): Promise<ProviderStatus> {
@@ -439,10 +482,21 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     );
   }
 
-  /** Restores a finished request's turn grant; false while its run is still going. */
+  /**
+   * Restores a finished request's turn grant; false while its run is still
+   * going. A run a server stop cut short has finished: nothing will resume it.
+   */
   settleTurn(sessionId: string, requestId: string): Promise<boolean> {
-    return this.workflow.settleTurn(sessionId, requestId, () =>
-      this.history(sessionId, OPENCODE2_EVIDENCE_SCAN_LIMIT),
+    return this.workflow.settleTurn(
+      sessionId,
+      requestId,
+      () => this.history(sessionId, OPENCODE2_EVIDENCE_SCAN_LIMIT),
+      // An unreadable session is not evidence that its run is over.
+      async () => {
+        const session = await this.client.getSession(sessionId).catch(() => undefined);
+        if (!session) return false;
+        return (await this.restartCut(sessionId, session).catch(() => undefined)) !== undefined;
+      },
     );
   }
 

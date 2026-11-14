@@ -4,6 +4,7 @@ import {
   type AgentInteractionRequest,
 } from "@orkestrator/protocol/agent-interactions";
 import { permissionRuleOffer } from "@orkestrator/protocol/permission-rules";
+import { codexManagedNetworkCard } from "@orkestrator/protocol/testing/codex-managed-network-card";
 import { codexRuleDetail } from "../../apps/backend/src/core/permission-rules/request-detail";
 import { NativeAgentInteractionCard } from "../../apps/web/src/components/native-agent/NativeAgentInteractionCard";
 import type { PermissionRuleChoiceInput } from "../../apps/web/src/lib/backend/permission-rules";
@@ -112,12 +113,25 @@ function projected(entry: (typeof BRIDGE_APPROVALS)[number]): AgentInteractionRe
   };
 }
 
+/**
+ * The managed-network card exactly as the backend projected it from the
+ * pinned Codex on a disposable managed host
+ * (`codex-managed-network-card-live.test.ts`, to-do 0723 (retired) task 7).
+ */
+const MANAGED_NETWORK_CARD = {
+  id: "codex-network",
+  interaction: { ...codexManagedNetworkCard(1), id: "codex-network" },
+};
+
 export function RememberRulePanelFixture() {
   const [saved, setSaved] = useState<Record<string, PermissionRuleChoiceInput>>({});
   return (
     <main className="mx-auto max-w-2xl space-y-4 p-4">
-      {BRIDGE_APPROVALS.map((entry) => {
-        const interaction = projected(entry);
+      {[
+        ...BRIDGE_APPROVALS.map((entry) => ({ id: entry.id, interaction: projected(entry) })),
+        MANAGED_NETWORK_CARD,
+      ].map((entry) => {
+        const { interaction } = entry;
         return (
           <section key={entry.id} data-testid={`card-${entry.id}`}>
             <NativeAgentInteractionCard

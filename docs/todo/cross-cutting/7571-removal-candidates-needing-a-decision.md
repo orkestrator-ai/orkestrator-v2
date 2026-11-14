@@ -2,7 +2,8 @@
 
 ## Task analysis
 
-Analysed 2026-11-13 against main at `17d28238c`, first written on
+Analysed 2026-11-14 against main at `dc90609bf` (task 3), before that
+2026-11-13 against `17d28238c`, first written on
 2026-11-10 against `53340356c` from the dead-code and fallback
 investigation of that day. The same branch removed everything that was safe
 under the support window
@@ -16,13 +17,14 @@ candidate or part of one that needs a person (tasks 4, 5, 6, 7, 11, 13 and
 15, the two remaining task 9 items and task 1's live check) moved to the
 [manual-test checklist](../manual-test/7568-manual-test-checklist.md),
 which carries each one's context, options and the agent work that follows
-the answer. What is left here is agent work only: tasks 3 and 10.
+the answer. Task 3 was done on 2026-11-14. What is left here is agent work
+only: task 10.
 
 ### Tasks
 
 1. **Bridge full-payload SSE mode**: removed from the Claude and Codex bridges, with the replay ring only it kept. Status: done.
 2. **Claude bridge delete-tombstone machinery**: writer and reader removed; no tombstone was ever stored. Status: done.
-3. **Image readiness markers**: stop writing `/tmp/.environment-ready` and `/tmp/.entrypoint-complete`, validated with an image build. Status: open.
+3. **Image readiness markers**: the image no longer writes or reads `/tmp/.environment-ready` and `/tmp/.entrypoint-complete`; it and its smoke and live checks use boot status, validated with an image build and the final-image smoke on a disposable daemon. Status: done.
 4. `envFilePatterns` setting (Settings offers it, but the backend never reads it): moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-13.
 5. Interaction observer switches (`ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY` and `..._MONITOR_KILL_SWITCH`): moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-13.
 6. Artifact rollout flags (the four `ORKESTRATOR_RICH_MARKDOWN`/`ARTIFACT_*` flags): moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-13.
@@ -84,29 +86,34 @@ the recommended "keep the reader" option had nothing to read.
 
 ### 3. Image readiness markers
 
-**Problem.** `docker/entrypoint.sh` (about line 1662) and
-`docker/workspace-setup.sh` (about line 120) write
-`/tmp/.environment-ready` and `/tmp/.entrypoint-complete`. No backend from
-v2.21.0 onward reads them; it reads boot status.
+**Problem.** `docker/entrypoint.sh` (lines 1721-1722 at `dc90609bf`) wrote
+`/tmp/.environment-ready` and `/tmp/.entrypoint-complete`, and
+`docker/network-policy-entrypoint.sh` and the entrypoint deleted them at
+boot. No backend from v2.21.0 onward reads them; it reads boot status
+(`/run/orkestrator/boot-status.json`).
 
-**Context.** The image still uses them itself: `workspace-setup.sh:120`
-reads the marker, and `docker/tests/final-image-smoke.sh:57` and
-`docker/tests/root-boundary-smoke.sh:47` check it, as do three live backend
-tests (`portable-inputs-container.test.ts`,
-`container-live-qualification.test.ts`). Read docker/AGENTS.md first.
+**Context.** Done 2026-11-14. The image used them itself:
+`docker/workspace-setup.sh` fell back to the marker when `/run/orkestrator`
+was missing, and `docker/tests/final-image-smoke.sh`,
+`docker/tests/root-boundary-smoke.sh`,
+`apps/backend/tests/portable-inputs-container.test.ts`,
+`apps/backend/tests/container-live-qualification.test.ts` and
+`e2e/agent-testing/browser-gateway.spec.ts` checked it.
 
-**Investigation.** Replace the image's own use and the smoke checks with
-boot status, then validate with an image build and
-`bash docker/tests/final-image-smoke.sh <image>`.
+**Investigation.** Every write, delete and read of both markers is gone.
+`workspace-setup.sh` waits only for the current boot's record (the image
+creates `/run/orkestrator`, and the script ships in the same image as the
+entrypoint, so its pre-boot-status branch could never run). The root-boundary
+smoke and the portable-inputs test wait for a `ready` record naming PID 1's
+start time; the final-image smoke and the live restart test now assert both
+markers are absent; the gateway spec already waited for boot status and
+only lost its marker line. `container-lifecycle.md`'s Readiness section and
+a `container-readiness.ts` comment no longer mention the markers. The
+backend's `kind: "legacy"` readiness path is untouched: it is the task 9
+decision on the manual-test checklist.
 
-**Decisions.**
-
-- **Remove with an image build and smoke run (recommended).**
-  - Pros: proves the image still boots.
-  - Cons: needs Docker and a build.
-- **Leave them.**
-  - Pros: no risk.
-  - Cons: two unread files on every boot.
+**Decisions.** Removed, with an image build and smoke run (the recommended
+option; results in Assumptions and decisions).
 
 ### 8. Old browser-held and stored state readers
 
@@ -226,6 +233,35 @@ The recommended option kept the reader for stored tombstones, but the
 history shows none was ever stored and no supported backend ever sent the
 DELETE that wrote one, so nothing could be left half done.
 
+### Task 3: removed the markers, and the image's pre-boot-status branch with them
+
+Chose the recommended removal. `workspace-setup.sh`'s fallback to the
+marker when `/run/orkestrator` was missing went too: the script is baked into
+the same image as the entrypoint, which always writes boot status, and the
+image creates `/run/orkestrator`, so the branch could not run. The backend's
+`kind: "legacy"` path, which serves images built before boot status, was left
+alone; it is the task 9 decision on the manual-test checklist. The checks that
+used to require the marker now require its absence (final-image smoke, live
+restart test), so a regression that brings a marker back fails them.
+
+Validated on beelink on 2026-11-14, on a disposable rootless daemon
+(`mise run docker:disposable -- start --name markers`, Docker 29.9.2):
+
+- `docker build $(bun scripts/docker-image-build-args.ts) -f docker/Dockerfile .`
+  from commit `fd475d741`: exit 0.
+- `bash docker/tests/final-image-smoke.sh <image>`: passed (24 s).
+- `bash docker/tests/root-boundary-smoke.sh <image>`: passed (15 s).
+- `container-live-qualification.test.ts` (`RUN_LIVE_DOCKER_TESTS=1`): 8 pass.
+- `portable-inputs-container.test.ts` (`RUN_PORTABLE_INPUTS_DOCKER=1`): 1 pass,
+  with `TMPDIR` on the home filesystem. Under the default `/tmp` (`nosuid`,
+  `nodev`) the rootless daemon refused the staged inputs' read-only bind
+  (`remount-ro … operation not permitted`) before the test reached readiness,
+  the known rootless limitation in
+  [container-lifecycle.md](../../architecture/container-lifecycle.md).
+
+`e2e/agent-testing/browser-gateway.spec.ts` lost only its marker line (it
+already waited for boot status) and was not run: it is a real-stack suite.
+
 ### Task 8: kept `import_legacy_build_pipelines` on the backend
 
 The renderer readers went as recommended. The backend command is the
@@ -267,7 +303,7 @@ to-do task waiting on the user is neither backlog nor blocked
 item now holds the context, the options with their pros and cons, the
 recommendation and the agent work that follows the answer, and asks for the
 answer as a reply to the coordinator rather than in this file, which is
-retired once tasks 3 and 10 are done. The numbering is kept so the
+retired once task 10 is done. The numbering is kept so the
 checklist's "7571 task N" references stay correct.
 
 ## Related

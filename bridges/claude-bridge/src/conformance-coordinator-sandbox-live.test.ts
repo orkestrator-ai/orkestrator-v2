@@ -32,7 +32,7 @@ describe("Claude coordinator sandbox qualification", () => {
 /**
  * A `readOnly` review turn in an ordinary bridge (Multi Review's reports) on a
  * host without bubblewrap or socat, staged by hiding both on `PATH` the way
- * the original evidence was gathered (todo 0190). The required case is the
+ * the original evidence was gathered (todo 0190 (retired)). The required case is the
  * behaviour before the fix, so it is pinned only on Linux, where it was seen.
  */
 describe("Claude read-only turn without a working sandbox", () => {

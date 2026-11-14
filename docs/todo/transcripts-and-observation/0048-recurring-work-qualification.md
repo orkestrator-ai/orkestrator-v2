@@ -108,7 +108,7 @@ phase in `recurring-live-ab.ts`). No real provider or login is needed.
 
 **Outcome (2026-11-06).** Rechecked on `ee2cc8423`: the driver still had no
 client, approval or workflow phase, and the keyed domains are switched at
-`build-pipeline-context.ts:241`, `feature-planning.ts:265`,
+`build-pipeline-context.ts:241`, `features/planning.ts:265`,
 `multi-review-service.ts:751`, `native-agent-service.ts:1438`, `index.ts:525`
 and, since graph runs, `graph-run-service.ts:241` (looped review is retired).
 The recommendation was taken, with every turn on a fake model: a busy phase
@@ -2849,14 +2849,18 @@ collide with other tasks' decisions.
 - 7745 (retired 2026-11-11): an interactive tmux terminal no client detached
   kept capturing (task 12, decision C5); now leased, row B19 of
   [recurring-work.md](../../architecture/recurring-work.md).
-- 7202 (retired 2026-11-14; `git show dc90609bf:docs/todo/transcripts-and-observation/7202-busy-profile-follow-ups.md`): what
+- 7202 (retired 2026-11-14; `git show 0c1120560:docs/todo/transcripts-and-observation/7202-busy-profile-follow-ups.md`): what
   task 1's busy profile found. Task 1, approving from the CLI, was fixed on
   2026-11-10. Task 2, one review that waited 210 s after its validation
   plan, was closed on 2026-11-14 as a wait in the host-wide test queue: in
   its 2026-11-11 recurrence (150 busy rounds on beelink2 at `83731af28`,
   during 7562's reproduction) the waiting validation run spent 623,450 ms
   of 624,533 ms queued and 16 ms running its command, and the profile's
-  backend log had nothing about the review. A missed wake cannot hide
+  backend log had nothing about the review. It recurred again on
+  2026-11-14 on macOS (40 busy rounds on mini at `dc90609bf`, during
+  7562's APFS run): one of 40 validation runs spent 520,285 ms queued and
+  18 ms running its command, with no slow command or stall line in the
+  backend log. A missed wake cannot hide
   there: the review validation worker polls the scheduler every 100 ms,
   and each poll reaps finished and dead jobs and re-runs admission
   (`review-validation-worker.ts`, `host-test-scheduler.ts`), so a queued

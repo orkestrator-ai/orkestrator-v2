@@ -17,6 +17,7 @@ import {
   expectThat,
   type CliResult,
   type ScenarioContext,
+  type ScenarioPaths,
 } from "./harness.js";
 import { readRunUsage } from "./usage.js";
 
@@ -33,16 +34,32 @@ export interface ScenarioDefinition {
   live?: boolean;
   /** Runs only for this environment type unless unspecified. */
   environmentTypes?: Array<"local" | "container">;
+  /**
+   * Runs only when named with `--scenario`: it downloads a pinned agent
+   * binary into its own data directory, which the default matrix should not.
+   */
+  explicit?: boolean;
+  /**
+   * A provider whose pinned binaries the backend gets without its
+   * credentials (a scripted-model scenario); `--provider` live runs use
+   * `credentialSource` instead.
+   */
+  toolchainProvider?: string;
+  /**
+   * Runs before the backend starts, with the scenario's own directories, and
+   * returns what to undo after it stops (a loopback model, for example).
+   */
+  prepare?(paths: ScenarioPaths): Promise<() => Promise<void>>;
   run(context: ScenarioContext): Promise<void>;
 }
 
-function receiptOf(result: CliResult): PublicReceipt {
+export function receiptOf(result: CliResult): PublicReceipt {
   const receipt = result.envelope?.receipt;
   expectThat(receipt, `${result.argv.slice(0, 3).join(" ")} returned no receipt`);
   return receipt;
 }
 
-async function addFixtureProject(
+export async function addFixtureProject(
   context: ScenarioContext,
   name: string,
   files?: Record<string, string>,
@@ -64,7 +81,7 @@ async function addFixtureProject(
   return { ...fixture, projectId };
 }
 
-async function createEnvironment(
+export async function createEnvironment(
   context: ScenarioContext,
   projectId: string,
   name: string,

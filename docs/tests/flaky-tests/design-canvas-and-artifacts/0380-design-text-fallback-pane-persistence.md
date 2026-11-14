@@ -128,3 +128,40 @@ flaky:recurrence 0380 --base 17d28238c` answered "open. Record the failure as a
 recurrence". No assertion, timeout or skip was changed; the cause is still
 unconfirmed, though this snapshot (no environment row after reload) is a more
 specific lead than the earlier missing-pane-layout observations.
+
+## `UPPER.ORKDES` missing from the tree on macOS: cause and fix — 2026-11-14
+
+From to-do 8015 (retired 2026-11-14) task 4, on `arktech-mini` (macOS 27.2),
+base `dc90609bf`, credential-free profile `t8015-mac` started with
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile t8015-mac
+--fixture --no-agent-credentials --no-host-seed --headless --agent-platforms codex`;
+each run below is
+`ORKESTRATOR_AGENT_TEST_PROFILE=t8015-mac ORKESTRATOR_AGENT_TEST_RUN_ID=<run> mise run test:logged -- --name <name> -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts design-canvas.spec.ts -g "real gateway saves a design" --workers=1 --repeat-each=<n>`.
+
+- **Cause.** The case writes its text-fallback files with `write_local_file`,
+  reloads and looks for them in the environment's tree. A tracked local tree
+  stays valid until a watcher hint, and `write_local_file` was the one local
+  file mutation that did not invalidate it (delete, move, rename, revert and
+  create folder all call `invalidateChanges`). On this Mac `fseventsd` was
+  saturated (about 160% CPU) and a fresh `fs.watch` delivered no event within
+  60 s, so no hint came either and the tree kept its pre-write listing until the
+  120 s safety tick.
+- **Not the cause.** The failure screenshot and page snapshot show the project's
+  Coordinator and its checkout's files with the environment row greyed. Both are
+  captured after the test body's `finally` has asked for the environment's
+  deletion, so that is the cleanup reselecting the project, not the state at the
+  failed click. The 2026-11-13 macOS snapshot above ("no environment row yet")
+  is most likely the same artefact.
+- **Fix.** `write_local_file` now calls `invalidateChanges` and requests a
+  refresh after every write it attempts, a refused one included
+  (`commands-registry-terminal.ts`, unit-tested in
+  `file-write-precondition.test.ts`). The spec is unchanged.
+- **Evidence.** Before the fix: failed alone on a fresh profile (1 of 1), then
+  `--repeat-each=2` and `--repeat-each=3` on a backend without the fix: 1 passed,
+  3 failed at the `UPPER.ORKDES` click, 1 failed later at the guided design's
+  "Mock up the sidebar" brief (`design-canvas.spec.ts:297`). With the fix:
+  `--repeat-each=3` and `--repeat-each=5`, 8 of 8 passed (121.7 s and 178.8 s).
+- **Still open.** The guided-brief miss above and this case's earlier
+  missing-pane-layout observations are not explained by the tree, so the case
+  stays open.
+

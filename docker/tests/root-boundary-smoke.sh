@@ -43,9 +43,15 @@ fail() {
 docker run -d --name "$RUN" --label "orkestrator-image-smoke=$RUN" --network none \
     -e NETWORK_MODE=full "$IMAGE" >/dev/null
 
+# Ready means this boot's status record says so (it names PID 1's start time).
 ready=0
 for _ in $(seq 1 120); do
-    if docker exec "$RUN" test -f /tmp/.entrypoint-complete 2>/dev/null; then
+    if docker exec -i "$RUN" bash 2>/dev/null <<'READY'
+start=$(awk '{print $22}' /proc/1/stat)
+jq -e --arg start "$start" '.phase == "ready" and .pid1Start == $start' \
+    /run/orkestrator/boot-status.json >/dev/null 2>&1
+READY
+    then
         ready=1
         break
     fi

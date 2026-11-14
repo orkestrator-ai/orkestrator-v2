@@ -271,7 +271,7 @@ export function publicApprovals(state: SessionState): JsonObject {
         kind: "command",
         command: command || pending.toolName,
         cwd: workingDirectory,
-        // An Orkestrator permission rule (todo 0723) may answer a POSIX shell
+        // An Orkestrator permission rule (todo 0723 (retired)) may answer a POSIX shell
         // command only: its matcher parses `sh` syntax, not PowerShell. A
         // custom tool below is reported as a command too, and never is.
         ...(pending.toolName === "bash" && command ? { ruleEligible: true } : {}),

@@ -19,8 +19,13 @@
  * Self-contained, `node:http` only, so the spec can copy this one file into a
  * container and start it with the image's own `bun`. It keeps no request
  * body and logs nothing else.
+ *
+ * A spec that must know what the model was sent asks it to watch a marker
+ * (`MARKER_WATCH_PATH`, `createMarkerWatch`): the model then counts, per
+ * request, how often the marker appears in user-role items, and keeps only
+ * those counts. The Codex and Pi fakes serve the same route.
  */
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 
 export type ScriptedStep =
   | { kind: "text"; text: string }
@@ -45,6 +50,114 @@ type MessagesBody = {
 };
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Where a scripted model reports what it saw of a marker: `POST ?marker=M`
+ * starts counting `M`, `GET ?marker=M` answers its {@link MarkerSighting}.
+ */
+export const MARKER_WATCH_PATH = "/__orkestrator-qa/marker-watch";
+/** At most this many markers are counted; the oldest is forgotten first. */
+export const MAX_WATCHED_MARKERS = 32;
+/** A spec's own random word (`word()` in the specs), never prompt text. */
+const MARKER_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
+
+/** What the model saw of one marker, counts only. */
+export interface MarkerSighting {
+  /** Requests whose user-role items carried the marker. */
+  requests: number;
+  /**
+   * The most copies of the marker any one request carried in user-role
+   * items. A request that repeats the conversation (Messages, chat
+   * completions) carries a message delivered once exactly once; a request
+   * that continues an earlier response (Codex's `previous_response_id`)
+   * carries it only in the request that delivered it.
+   */
+  maxUserOccurrences: number;
+}
+
+/**
+ * The JSON text of every user-role item in a request, whatever its protocol:
+ * a Messages or chat-completions `messages[]` entry, or a Responses input
+ * item. Nested items are not visited twice.
+ */
+export function userItemTexts(body: unknown): string[] {
+  const texts: string[] = [];
+  const visit = (value: unknown, depth: number) => {
+    if (depth > 32 || value === null || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    if (record.role === "user") {
+      texts.push(JSON.stringify(record));
+      return;
+    }
+    for (const child of Object.values(record)) visit(child, depth + 1);
+  };
+  visit(body, 0);
+  return texts;
+}
+
+function occurrences(texts: readonly string[], marker: string): number {
+  return texts.reduce((count, text) => count + text.split(marker).length - 1, 0);
+}
+
+export interface MarkerWatch {
+  /** Start counting `marker`; false when it is not a marker this accepts. */
+  watch(marker: string): boolean;
+  /** Count every watched marker in one request body. */
+  observe(body: unknown): void;
+  report(marker: string): MarkerSighting | undefined;
+}
+
+/** Counts only, bounded by {@link MAX_WATCHED_MARKERS}; no body is kept. */
+export function createMarkerWatch(): MarkerWatch {
+  const sightings = new Map<string, MarkerSighting>();
+  return {
+    watch(marker) {
+      if (!MARKER_PATTERN.test(marker)) return false;
+      if (sightings.has(marker)) return true;
+      if (sightings.size >= MAX_WATCHED_MARKERS) {
+        sightings.delete(sightings.keys().next().value!);
+      }
+      sightings.set(marker, { requests: 0, maxUserOccurrences: 0 });
+      return true;
+    },
+    observe(body) {
+      if (sightings.size === 0) return;
+      const texts = userItemTexts(body);
+      for (const [marker, sighting] of sightings) {
+        const seen = occurrences(texts, marker);
+        if (seen === 0) continue;
+        sighting.requests += 1;
+        sighting.maxUserOccurrences = Math.max(sighting.maxUserOccurrences, seen);
+      }
+    },
+    report: (marker) => sightings.get(marker),
+  };
+}
+
+/** The answer to one {@link MARKER_WATCH_PATH} request. */
+export function markerWatchResponse(
+  watch: MarkerWatch,
+  method: string | undefined,
+  search: URLSearchParams,
+): { status: number; body: unknown } {
+  const marker = search.get("marker") ?? "";
+  if (method === "POST") {
+    return watch.watch(marker)
+      ? { status: 200, body: { watching: marker } }
+      : { status: 400, body: { error: "not a marker" } };
+  }
+  if (method === "GET") {
+    const sighting = watch.report(marker);
+    return sighting
+      ? { status: 200, body: sighting }
+      : { status: 404, body: { error: "not watched" } };
+  }
+  return { status: 405, body: { error: "method not allowed" } };
+}
 
 /** What the reply of a prompt is, once any command it asked for has run. */
 export function finalReply(prompt: string): string {
@@ -248,11 +361,25 @@ function argument(name: string, fallback: number): number {
   return Number.isSafeInteger(value) && value >= 0 ? value : fallback;
 }
 
-function serve(port: number, replyDelayMs: number): void {
+/** The scripted endpoint, listening on `port` (0: any free port) of the loopback. */
+export function startClaudeFakeModel(
+  port = 0,
+  replyDelayMs = 0,
+  onListening: (origin: string) => void = () => undefined,
+): Server {
   let counter = 0;
+  const markers = createMarkerWatch();
   const server = createServer(async (request, response) => {
-    const pathname = new URL(request.url ?? "/", "http://fake").pathname;
+    const url = new URL(request.url ?? "/", "http://fake");
+    const pathname = url.pathname;
     try {
+      if (pathname === MARKER_WATCH_PATH) {
+        const answer = markerWatchResponse(markers, request.method, url.searchParams);
+        response
+          .writeHead(answer.status, { "content-type": "application/json" })
+          .end(JSON.stringify(answer.body));
+        return;
+      }
       if (request.method !== "POST") {
         response.writeHead(200, { "content-type": "application/json" }).end("{}");
         return;
@@ -268,6 +395,7 @@ function serve(port: number, replyDelayMs: number): void {
         response.writeHead(200, { "content-type": "application/json" }).end("{}");
         return;
       }
+      markers.observe(body);
       counter += 1;
       const id = `msg_idleqa_${counter}`;
       const model = String(body.model ?? "claude-haiku-4-5");
@@ -300,10 +428,13 @@ function serve(port: number, replyDelayMs: number): void {
   server.listen(port, "127.0.0.1", () => {
     const address = server.address();
     const bound = typeof address === "object" && address ? address.port : port;
-    console.log(`http://127.0.0.1:${bound}`);
+    onListening(`http://127.0.0.1:${bound}`);
   });
+  return server;
 }
 
 if ((import.meta as { main?: boolean }).main) {
-  serve(argument("--port", 0), argument("--reply-delay-ms", 0));
+  startClaudeFakeModel(argument("--port", 0), argument("--reply-delay-ms", 0), (origin) =>
+    console.log(origin),
+  );
 }

@@ -18,6 +18,7 @@ import {
   recordShellCommand,
   recordShellResult,
   settleBackgroundTask,
+  stopRequestedEdge,
 } from "./session-manager-background-tasks.js";
 import { sessions } from "./session-manager-core.js";
 import { refreshSettledToolRows } from "./session-manager-messages.js";
@@ -150,10 +151,13 @@ export async function recordBackgroundTaskHook(
     // writes the authoritative terminal status over this one. A stop landing
     // while the result is still settling follows that result too, so it owes
     // the same continuation.
+    // A task this bridge stopped is the exception: the CLI starts no turn
+    // for its ending (`ClaudeRuntimeTasks.stopRequested`).
     const settlesReleasedTurn =
       (turn.turnReleasedToBackgroundTasks || turn.settlingResult) &&
       backgroundTaskOwner(session, taskId) === turn.runtime &&
-      LIVE_BACKGROUND_TASK_STATUSES.has(session.backgroundTasks?.[taskId]?.status ?? "completed");
+      LIVE_BACKGROUND_TASK_STATUSES.has(session.backgroundTasks?.[taskId]?.status ?? "completed") &&
+      !stopRequestedEdge(turn.runtime, taskId, undefined);
     if (settlesReleasedTurn) {
       turn.receivedResult = false;
       waitForContinuationAfterNotification(turn);

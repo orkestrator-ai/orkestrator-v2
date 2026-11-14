@@ -1,5 +1,6 @@
+import { nativeWebPlatform } from "../../tests/register-dom";
 import { describe, expect, test } from "bun:test";
-import { NO_SUBAGENT_REPLY } from "./idle-observation-fake-claude";
+import { MARKER_WATCH_PATH, NO_SUBAGENT_REPLY } from "./idle-observation-fake-claude";
 import {
   startCodexFakeModel,
   codexFollowUp,
@@ -191,7 +192,7 @@ test("websocket wiring remembers calls, waits once, caps spawns per connection a
   let calls = new Map<string, string>();
   const server = startCodexFakeModel((current) => {
     calls = new Map(current);
-  });
+  }, nativeWebPlatform);
   const socket = new WebSocket(`ws://127.0.0.1:${server.port}/v1`);
   try {
     await new Promise<void>((resolve, reject) => {
@@ -246,6 +247,16 @@ test("websocket wiring remembers calls, waits once, caps spawns per connection a
     expect(calls.size).toBe(64);
     expect(calls.has(first.call_id)).toBe(false);
     expect([...calls.values()].every((name) => name === "exec_command")).toBe(true);
+    // The marker watch answers over plain HTTP and counts each request frame.
+    const fetch = nativeWebPlatform.fetch;
+    const watch = `http://127.0.0.1:${server.port}${MARKER_WATCH_PATH}?marker=IDLEQA-SUB-2`;
+    expect((await fetch(watch)).status).toBe(404);
+    expect((await fetch(watch, { method: "POST" })).status).toBe(200);
+    await exchange([
+      { type: "message", role: "user", content: [{ type: "input_text", text: prompt }] },
+    ]);
+    await exchange([{ type: "function_call_output", call_id: "unrelated" }]);
+    expect(await (await fetch(watch)).json()).toEqual({ requests: 1, maxUserOccurrences: 1 });
   } finally {
     socket.close();
     await server.stop(true);

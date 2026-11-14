@@ -17,6 +17,7 @@ import {
   takeProvisionalBackgroundTask,
   takeSettlingBackgroundTask,
   taskMessageMetadata,
+  stopRequestedEdge,
 } from "../session-manager-background-tasks.js";
 import {
   persistedBackgroundTaskMessage,
@@ -180,7 +181,9 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
       owner === turn.runtime &&
       turn.turnReleasedToBackgroundTasks &&
       previous !== undefined &&
-      LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)
+      LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) &&
+      // A task this bridge stopped: the CLI starts no turn for its ending.
+      !stopRequestedEdge(owner, task.id, task.status)
     ) {
       turn.receivedResult = false;
       waitForContinuationAfterNotification(turn);
@@ -203,13 +206,27 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
   if (isHookRunningBackgroundTask(session.backgroundTasks?.[notification.task_id])) {
     return "stop";
   }
+  // The ending of a task this bridge stopped re-enters nothing: the CLI
+  // queues its notification for the next prompt rather than starting a turn
+  // (`ClaudeRuntimeTasks.stopRequested`), so no continuation is owed for it.
+  // Marks live on the session's current CLI only (release clears them), so a
+  // marked task is one that CLI owned.
+  const markedRuntime = session.claudeRuntime?.tasks.stopRequested.has(notification.task_id)
+    ? session.claudeRuntime
+    : undefined;
+  const stoppedHere = stopRequestedEdge(
+    session.claudeRuntime,
+    notification.task_id,
+    notification.status,
+    { consume: true },
+  );
   // A task notification can re-enter the root agent loop after an
   // earlier result. That earlier result is only the response boundary
   // before the notification, not permission to close streaming input.
   // Wait for the resumed loop's own result; otherwise stdin EOF lands
   // between its final tool result and final assistant message and the
   // rollout records `[Request interrupted by user]`.
-  turn.receivedResult = false;
+  if (!stoppedHere) turn.receivedResult = false;
   // The terminal edge. Without it nothing ever leaves `running`, so
   // `GET /session/:id` reported a finished task as live indefinitely.
   const correlated = takeProvisionalBackgroundTask(session, notification.tool_use_id);
@@ -263,12 +280,21 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
     ...session.backgroundTasks,
     [task.id]: task,
   });
-  const owner = backgroundTaskOwner(session, task.id) ?? parked?.owner ?? correlated.owner;
+  // A task that ended on its own while the bridge's stop was in flight: a
+  // `TaskCompleted`/`SubagentStop` hook that came first saw the mark, skipped
+  // the continuation wait and released the task, so the CLI that held the
+  // mark is the only record of its owner, and the continuation the CLI starts
+  // for a natural ending is still owed.
+  const owner =
+    backgroundTaskOwner(session, task.id) ??
+    parked?.owner ??
+    correlated.owner ??
+    (stoppedHere ? undefined : markedRuntime);
   session.claudeRuntime?.tasks.live.delete(task.id);
   // The notification is injected into the same root loop and may be
   // followed by another assistant/result boundary, which a released turn
   // waits for before it ends.
-  if (owner === turn.runtime && turn.turnReleasedToBackgroundTasks) {
+  if (!stoppedHere && owner === turn.runtime && turn.turnReleasedToBackgroundTasks) {
     waitForContinuationAfterNotification(turn);
   }
   emitBackgroundTasks(turn);
@@ -376,6 +402,12 @@ export function handleBackgroundTasksChanged(turn: TurnState, message: SDKMessag
     for (const task of droppedByThisQuery) {
       parkSettlingBackgroundTask(runtime, task);
     }
+  }
+  // A task this bridge stopped owes no continuation; anything else dropped does.
+  if (
+    turn.turnReleasedToBackgroundTasks &&
+    droppedByThisQuery.some((task) => !stopRequestedEdge(runtime, task.id, undefined))
+  ) {
     // Mirrors the `task_notification` branch: the earlier result is
     // only the boundary before this transition, not the end of the turn.
     turn.receivedResult = false;

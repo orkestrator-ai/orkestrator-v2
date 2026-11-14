@@ -1149,6 +1149,34 @@ mise run dev:reset --profile steer7
 `ORKESTRATOR_AGENT_TEST_STEER_REAL_PLATFORMS=claude,cursor` runs them on the
 profile's real logins instead (billed).
 
+A steer that misses its turn, and a stop after several turns, have their own
+spec, `e2e/agent-testing/steer-missed-live.spec.ts` (todo 0005 task 10), on
+the real Claude, Codex, Cursor and Pi bridges with scripted models and nothing
+billed. Each platform's case finishes a turn and steers after it (one new turn
+must start, on the session's controls), then steers while a second turn runs
+(it joins that turn; to-do 8107 is to queue it instead). Both steers must
+also reach the model exactly once: the Claude, Codex and Pi scripted models
+count a spec's marker in the user-role items of every request they are sent
+(`MARKER_WATCH_PATH` in `idle-observation-fake-claude.ts`, counts only), and
+Cursor's fake SDK records its steers. The Claude case
+starts a background command, sends two follow-ups into the same CLI, stops the
+command, releases the CLI with a launch-only change and requires the stop
+after that to be refused with `no_control_channel`. Codex gets a made-up API
+key in the profile's own Codex home for the run, and Cursor uses the same
+entry swap as above. `ORKESTRATOR_AGENT_TEST_MISSED_STEER_PLATFORMS` narrows
+the platforms:
+
+```bash
+mise run dev:test --profile msteer10 --fixture --no-agent-credentials --no-host-seed \
+  --agent-platforms claude,codex,cursor,pi --headless
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=msteer10 ORKESTRATOR_AGENT_TEST_LIVE_MISSED_STEER=1 \
+  mise run test:logged -- --name steer-missed -- mise run test:agent:browser -- \
+  e2e/agent-testing/steer-missed-live.spec.ts
+mise run dev:stop --profile msteer10
+mise run dev:reset --profile msteer10
+```
+
 The live OpenCode spec (`e2e/agent-testing/opencode-live.spec.ts`) has its own
 opt-in and uses the host's OpenCode credentials. No fixed default model ships,
 so without a pin the native-tab case starts on the default your connected

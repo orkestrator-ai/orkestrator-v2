@@ -15,6 +15,7 @@ import { createInterface } from "node:readline";
 import { snapshotFixtureFiles } from "./codex-fixture-files";
 import { installFakeClaudeApiFixture } from "./container-fake-claude-install";
 import { profilePiAgentDirectory } from "../../scripts/pi-fake-model-shared";
+import { MARKER_WATCH_PATH, type MarkerSighting } from "./idle-observation-fake-claude";
 import { PI_FAKE_MODEL, PI_FAKE_PROVIDER, piFakeModelsConfig } from "./idle-observation-fake-pi";
 import { mergeOpenCodeFakeProvider, profileOpenCodeConfigFile } from "./opencode-fake-provider";
 
@@ -198,6 +199,38 @@ export async function startLocalFakeModel(
       }
     },
   };
+}
+
+/** The marker-watch route of a model {@link startLocalFakeModel} started, for `marker`. */
+function markerWatchUrl(origin: string, marker: string): string {
+  const url = new URL(MARKER_WATCH_PATH, origin);
+  url.searchParams.set("marker", marker);
+  return url.href;
+}
+
+/**
+ * Have a host-local scripted model count `marker` in the user-role items of
+ * every request it is sent from now on. Call before the turn that delivers it.
+ */
+export async function watchFakeModelMarker(
+  origin: string,
+  marker: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  const reply = await fetcher(markerWatchUrl(origin, marker), { method: "POST" });
+  if (!reply.ok) throw new Error(`the scripted model refused to watch a marker (${reply.status})`);
+}
+
+/** What the scripted model saw of a marker it was asked to watch. */
+export async function fakeModelMarkerSighting(
+  origin: string,
+  marker: string,
+  fetcher: typeof fetch = fetch,
+): Promise<MarkerSighting> {
+  const reply = await fetcher(markerWatchUrl(origin, marker));
+  if (!reply.ok)
+    throw new Error(`the scripted model has no count for the marker (${reply.status})`);
+  return (await reply.json()) as MarkerSighting;
 }
 
 /**

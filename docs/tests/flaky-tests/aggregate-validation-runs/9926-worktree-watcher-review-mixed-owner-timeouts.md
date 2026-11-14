@@ -83,3 +83,20 @@ Every owner ran once with `--parallel=1 --only-failures --reporter=junit`; backe
   passed (3 tests, 10.7 s). One earlier alone run at the same load failed
   the same way: the test spawns the benchmark six times, and one spawn took
   about 1.8 s on that host.
+
+## Recurrence 2026-11-14: agent mail store size benchmark
+
+- **Test:** `agent mail store size benchmark > rejects malformed, empty, missing and nonpositive sizes`
+  (`apps/backend/tests/agent-mail-store-size-bench.test.ts`).
+- **Base:** `dc90609bfd46ee0302d3c1a2841e0faa99482c64`; head `b392ecead` on
+  `missed-steer-turn-ecbcaaf15aa3-r1`, which changes neither the test nor its
+  script nor anything under `apps/backend`. `mise run flaky:recurrence -- 9926 --base dc90609bfd46ee0302d3c1a2841e0faa99482c64`
+  answered open: record as a recurrence.
+- **Host:** beelink2, Linux x86_64, Bun 1.4.4.
+- **Aggregate:** review preparation's `mise run test:all`; backend
+  `test:workspace` 21807 pass, 295 skip, 4 fail, 1 error across 1519 files in
+  1296.64 s. This test exceeded its 5,000 ms deadline (5001.59 ms); the other
+  backend failures were the three WebKit engine cases, whose host lacks the
+  browser's system libraries.
+- **Alone:** `mise run test:logged -- --name agent-mail-bench -- bun test --cwd apps/backend ./tests/agent-mail-store-size-bench.test.ts --parallel=1 --only-failures`
+  passed (3.7 s), load average 0.35.

@@ -67,7 +67,7 @@ export type Scenario =
   | "unavailable-hook-refuses-glob"
   | "unavailable-hook-refuses-abbreviation"
   /**
-   * A `readOnly` review turn in an ordinary bridge (todo 0190), on a host
+   * A `readOnly` review turn in an ordinary bridge (todo 0190 (retired)), on a host
    * staged without bubblewrap and socat (`PATH` holds only the reading
    * programs): the bridge's own probe finds no sandbox, so the CLI is not
    * asked for one, and a reading command runs.
@@ -79,7 +79,7 @@ export type Scenario =
   | "read-only-host-reads"
   | "read-only-host-hook-refuses"
   /**
-   * Linux only: the block such a turn had before todo 0190 (the sandbox
+   * Linux only: the block such a turn had before todo 0190 (retired) (the sandbox
    * required) on the same staged host. The CLI refuses the whole turn.
    */
   | "read-only-required-refused";

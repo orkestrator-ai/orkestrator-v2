@@ -1433,16 +1433,19 @@ on the image's real `claude` against a scripted Messages API, is
 `container-multi-review-read-only.spec.ts` (passed 2026-11-10; see
 [container qualification](../development/container-qualification.md)). Since
 2026-11-13 that spec also holds each reviewer's submission until it has read
-Reviewer 1's Agent Info during the running turn ("No sandbox, approvals
-denied" and the container reason); that part has not run yet, because the
-host it was written on could not run Docker, and the display is pinned by
-`AgentInfoButton.reviewers.test.tsx`. Stock Ubuntu with AppArmor's
+Reviewer 1's Agent Info during the running turn; on 2026-11-14 it passed on
+beelink (Arch Linux) on a disposable rootless daemon with RootlessKit's host
+loopback, Claude CLI 2.1.319 in the image: Agent Info showed "No sandbox,
+approvals denied" and "Claude's command sandbox cannot run commands in this
+container" while the reviewer turn was held, and the reviewers and
+consolidation then settled with the note on each. The display is also
+pinned by `AgentInfoButton.reviewers.test.tsx`. Stock Ubuntu with AppArmor's
 `bwrap-userns-restrict` passed in CI's restricted AppArmor phase
-(`conformance-apparmor-live.test.ts`, 2026-11-11). The Agent Info run is the
-open part of to-do
-[0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)
-task 3, and Windows is a live check in the
-[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+(`conformance-apparmor-live.test.ts`, 2026-11-11). Windows is a live check in
+the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+The decisions behind this behaviour (A1 to A22) and every run are in to-do
+0190 (retired), on 2026-11-14 (
+`git show dc90609bf:docs/todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md`).
 
 Orkestrator never changes AppArmor policy and does not ship a profile. To get
 `enforced` on such a host, an administrator chooses one of:
@@ -1581,10 +1584,21 @@ reviewers, consolidation and preparation on the image's `codex` and that
 scripted reviewer on the container's loopback, is
 `container-multi-review-codex-read-only.spec.ts` (opt-in,
 `ORKESTRATOR_AGENT_TEST_FAKE_CODEX_REVIEW=1`; see
-[container qualification](../development/container-qualification.md)). It has
-not run yet: its run on a Docker host whose containers reach the profile's
-agent tools server is the open part of to-do
-[7872](../todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md).
+[container qualification](../development/container-qualification.md)). It
+passed on 2026-11-14 on beelink's disposable rootless daemon with Codex
+0.167.0 in the image: preparation submitted its plan; in each reviewer turn
+`cat` of the package and `ls` ran, the package's `git diff` was declined, the
+sealed diff file was read instead, `touch` and `apply_patch` were declined,
+and `submit_review_report` was accepted with no approval asked;
+consolidation ran its reads, was declined the write and the patch and
+submitted; nothing reached the checkout, and both inspectors showed the
+container note. The scripted reviewer speaks only code mode, so the spec
+uses Codex's default model (`DEFAULT_CODEX_MODEL_ID`): in 0.167.0's bundled
+catalogue every listed model is `code_mode_only` except `gpt-5.5`, whose
+turns get the direct `exec_command` tool, and the spec's first run on
+`gpt-5.5` failed at preparation for that reason. The canary's decisions are
+in to-do 7872 (retired), on 2026-11-14 (
+`git show dc90609bf:docs/todo/coordinator-and-multi-review/7872-codex-read-only-container-canary.md`).
 
 ### Changing qualification
 

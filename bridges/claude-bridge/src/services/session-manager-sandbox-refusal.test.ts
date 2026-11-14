@@ -66,7 +66,7 @@ const nestedRefused: ClaudeLinuxSandboxStatus = {
   reason,
 };
 
-describe("a read-only turn where the command sandbox cannot run (todo 0190)", () => {
+describe("a read-only turn where the command sandbox cannot run (todo 0190 (retired))", () => {
   for (const [host, status] of [
     ["without bubblewrap or socat (every container)", missingPrograms],
     ["whose bubblewrap cannot nest the CLI's namespace (AppArmor)", nestedRefused],

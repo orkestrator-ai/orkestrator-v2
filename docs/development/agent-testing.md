@@ -3968,6 +3968,17 @@ mise run test:agent:coordinator --credential-source codex --scenario routing
    with delivery `commit-only` and no PR or conflict-resolution session, and
    when the coordinator, woken by the finished build, made no `create_pr` call.
 
+Because no request names an agent, model or effort, the run also checks that a
+real coordinator follows the tool surface's wording unprompted (to-do 4920
+task 3, `coordinator-live-wording.ts`): after each case,
+`<case>-launch-defaults-omitted` passes when every `launch_environment` and
+`launch_job` call leaves `agent`, `modelId` and `reasoningId` out, and
+`<case>-list-agents-not-polled` when the case read `list_agents` at most once;
+at the end, `request-ids-fresh` passes when no request id named two different
+calls across the conversation (an exact retry under its id is allowed and
+counted). The summary records the counts as `request-ids:withRequestId`,
+`distinct`, `retries` and `reused`, never an id.
+
 Saved defaults put every step and reviewer on the platform, with one reviewer.
 Between cases the coordinator must be idle with nothing queued for 20 seconds. A
 case that fails records its checks and the next case still runs, unless the

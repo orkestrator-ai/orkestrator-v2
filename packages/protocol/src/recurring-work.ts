@@ -345,7 +345,7 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   // pass, and a pass for the runs of an environment that changed. A request
   // during a pass queues one trailing pass. A run whose turn was seen to end
   // with a later turn in its session is skipped by the periodic pass until
-  // its record changes or the 10 min full pass comes round (to-do 7562).
+  // its record changes or the 10 min full pass comes round (to-do 7562 (retired)).
   "public-operation-reconcile": backend(
     "B31",
     "interval",

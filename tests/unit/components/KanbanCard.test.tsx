@@ -383,3 +383,25 @@ test.each([undefined, "current"])(
     }
   },
 );
+
+describe("KanbanCard labels", () => {
+  afterEach(cleanup);
+
+  test("shows each label of the ticket, folding the rest into a count", () => {
+    renderCard(makeTask({ title: "Recurring job fails", labels: ["improvement"] }));
+    expect(screen.getByTestId("kanban-card-label").textContent).toBe("improvement");
+    cleanup();
+    renderCard(makeTask({ labels: ["a", "b", "c", "d", "e"] }));
+    expect(screen.getAllByTestId("kanban-card-label").map((el) => el.textContent)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+    expect(within(screen.getByTestId("kanban-card-labels")).getByText("+2")).toBeTruthy();
+  });
+
+  test("shows no label row for a ticket without labels", () => {
+    renderCard(makeTask());
+    expect(screen.queryByTestId("kanban-card-labels") === null).toBe(true);
+  });
+});

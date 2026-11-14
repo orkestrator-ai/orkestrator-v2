@@ -249,7 +249,7 @@ export function SelfImprovementSettings({ api = backend }: SelfImprovementSettin
               <SettingsRow
                 label="Project for tickets"
                 htmlFor="self-improvement-project"
-                description="The board that receives [improvement] and [insight] tickets, labelled improvement and insight."
+                description="The board that receives the tickets, labelled improvement (from diagnostics) or insight (from conversations)."
               >
                 <Select
                   value={settings?.projectId ?? ""}

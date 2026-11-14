@@ -35,6 +35,10 @@ import {
 import { cn } from "@/lib/utils";
 import { useMinuteClock } from "@/hooks/useMinuteClock";
 import { ticketCardTime } from "./ticket-view/ticket-times";
+import { ticketLabelClassName } from "./ticket-label-style";
+
+/** Labels a card names before folding the rest into "+N". */
+const CARD_LABEL_LIMIT = 3;
 
 /**
  * Left accent stripe, matching the dot colour of the column the card sits in so
@@ -189,6 +193,7 @@ export function KanbanCard({
     : null;
   const isActivelyBuilding = buildPhase ? isActiveBuildPhase(buildPhase) : false;
   const commentCount = task.comments.length;
+  const labels = task.labels ?? [];
   const { sections } = ticketContentOf(task);
   // The first prose section, not the description mirror, which for a
   // structured ticket starts with section headings.
@@ -222,6 +227,7 @@ export function KanbanCard({
           <div className="min-w-0 pb-8">
             <h4 className="truncate text-sm font-medium">{task.title}</h4>
             {blurb && <p className="mt-1 text-xs line-clamp-2">{blurb}</p>}
+            {labels.length > 0 && <div className="mt-2 h-4" />}
             {hasFooter && <div className="mt-2 h-4" />}
           </div>
         </div>
@@ -312,6 +318,31 @@ export function KanbanCard({
           </div>
         </div>
         {blurb && <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{blurb}</p>}
+        {labels.length > 0 && (
+          <div data-testid="kanban-card-labels" className="mt-2 flex flex-wrap items-center gap-1">
+            {labels.slice(0, CARD_LABEL_LIMIT).map((label) => (
+              <span
+                key={label}
+                data-testid="kanban-card-label"
+                title={label}
+                className={cn(
+                  "max-w-[9rem] truncate rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none",
+                  ticketLabelClassName(label),
+                )}
+              >
+                {label}
+              </span>
+            ))}
+            {labels.length > CARD_LABEL_LIMIT && (
+              <span
+                className="px-0.5 text-[10px] text-muted-foreground"
+                title={labels.slice(CARD_LABEL_LIMIT).join(", ")}
+              >
+                +{labels.length - CARD_LABEL_LIMIT}
+              </span>
+            )}
+          </div>
+        )}
         {hasFooter && (
           <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
             {showTally && (

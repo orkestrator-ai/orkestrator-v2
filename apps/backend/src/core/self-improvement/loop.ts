@@ -62,7 +62,6 @@ export const MIN_INSIGHT_CONVERSATIONS = 2;
 /** …or in one, when it blocked the work (severity 3). */
 const BLOCKING_SEVERITY = 3;
 const TICKET_WINDOW_MS = 24 * 60 * 60 * 1000;
-const TICKET_TITLE_PREFIX = "[improvement]";
 
 export interface BoardTicket {
   id: string;
@@ -155,7 +154,7 @@ export function ticketFor(
     .filter((line) => line !== null)
     .join("\n");
   const criteria = `On the release that carries the fix, \`${signal.signature}\` is ${target} over at least a day of use (self-improvement checks this).`;
-  return { title: `${TICKET_TITLE_PREFIX} ${signal.title}`.slice(0, 140), description, criteria };
+  return { title: signal.title.slice(0, 140), description, criteria };
 }
 
 function verdictComment(judgement: Judgement, outcome: string): string {

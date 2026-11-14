@@ -106,7 +106,7 @@ async function fixture(status: Partial<SelfImprovementStatus>): Promise<ClientSa
 describe("orkestrator self-improvement run --wait", () => {
   test("prints the summary of the run it started", async () => {
     const box = await fixture({
-      lastRun: lastRun({ created: [{ ticket: "7", signature: "s", title: "[improvement] x" }] }),
+      lastRun: lastRun({ created: [{ ticket: "7", signature: "s", title: "x" }] }),
     });
     const run = await box.run(["self-improvement", "run", "--wait", "--request-id", "si-1"]);
     expect(run.code).toBe(0);

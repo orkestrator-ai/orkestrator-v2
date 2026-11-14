@@ -25,7 +25,7 @@ const RUN: SelfImprovementRunSummary = {
     {
       ticket: "418",
       signature: "insight:use-mise-not-npm",
-      title: "[insight] Agents keep reaching for npm",
+      title: "Agents keep reaching for npm",
     },
   ],
   linked: [],
@@ -146,7 +146,7 @@ function render(api: ReturnType<typeof fakeApi>, machine?: string | null) {
 describe("Settings → Self-improvement", () => {
   test("shows the last run, tracked tickets and themes", async () => {
     render(fakeApi(status()));
-    expect(await screen.findByText("[insight] Agents keep reaching for npm")).toBeTruthy();
+    expect((await screen.findAllByText("Agents keep reaching for npm")).length).toBeGreaterThan(0);
     expect(screen.getByText("Fixed and confirmed")).toBeTruthy();
     // Tracked problems appear by title, not by signature.
     expect(screen.getAllByText("local-server bridge.exited (codex): SIGKILL").length).toBe(2);

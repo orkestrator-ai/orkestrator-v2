@@ -87,7 +87,7 @@ describe("a self-improvement run", () => {
     expect(steps).toEqual(["board", "digesting", "filing"]);
     expect(summary.created.map((item) => item.signature)).toEqual([KILLS, DISK]);
     const ticket = board.ticketFor(KILLS);
-    expect(ticket.title).toBe("[improvement] local-server bridge.exited (codex): SIGKILL");
+    expect(ticket.title).toBe("local-server bridge.exited (codex): SIGKILL");
     expect(ticket.labels).toEqual(["improvement"]);
     expect(board.labels).toEqual(new Set(["insight", "improvement"]));
     expect(ticket.description).not.toContain(ENV);
@@ -172,7 +172,7 @@ describe("a self-improvement run", () => {
     }
     board.tickets.set("7", {
       id: "7",
-      title: "[improvement] storage snapshot.failed: EIO",
+      title: "storage snapshot.failed: EIO",
       status: "in-progress",
       comments: [],
       description: "",

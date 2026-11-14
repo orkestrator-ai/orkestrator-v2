@@ -151,6 +151,46 @@ export class LedgerRetirement {
     return rows.map((row) => row.id).filter((id) => this.ledger.worktree(id) !== null);
   }
 
+  /**
+   * Every environment id the ledger's environment-keyed rows name, up to
+   * `limit`: bindings, turn boundaries, thread segments and environment-net
+   * measurements. Each table is read as a skip scan of its environment index,
+   * one seek per distinct id, so the cost follows the number of environments
+   * rather than the number of rows. The reconcile of environments deleted
+   * before purges were recorded (to-do 5821 task 5) is its only caller.
+   */
+  ledgerEnvironmentIds(limit = 4_096): string[] {
+    this.ensureIndexes();
+    const sources = [
+      this.db.query(
+        "SELECT MIN(environment_id) AS id FROM change_bindings WHERE environment_id > ?",
+      ),
+      this.db.query(
+        `SELECT MIN(environment_id) AS id FROM change_turn_boundaries INDEXED BY change_turn_boundaries_environment
+         WHERE environment_id > ?`,
+      ),
+      this.db.query(
+        `SELECT MIN(environment_id) AS id FROM change_thread_segments INDEXED BY change_thread_segments_environment
+         WHERE environment_id > ?`,
+      ),
+      this.db.query(
+        `SELECT MIN(owner_id) AS id FROM change_measurements
+         WHERE owner_kind = 'environment' AND owner_id > ?`,
+      ),
+    ];
+    const ids = new Set<string>();
+    for (const next of sources) {
+      let after = "";
+      while (ids.size < limit) {
+        const row = next.get(after) as { id: string | null } | null;
+        if (!row?.id) break;
+        ids.add(row.id);
+        after = row.id;
+      }
+    }
+    return Array.from(ids);
+  }
+
   /** One checkout can serve several environments; their rows keep it alive. */
   worktreeUsedElsewhere(worktreeId: string, environmentId: string): boolean {
     return (

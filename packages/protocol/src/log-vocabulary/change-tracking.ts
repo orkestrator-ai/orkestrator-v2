@@ -12,6 +12,10 @@ export const CHANGE_TRACKING_LOG_AREAS = defineLogAreas({
         "A retention pass failed partway; what it deleted stands and the next pass goes on.",
       "projection.failed": "Projecting a change event onto its environment failed.",
       "startup.reconcile-failed": "Reconciling change tracking at startup failed.",
+      "deleted-environments.purge-requested":
+        "The startup reconcile found ledger rows of environments the environment store no longer holds and requested their purge.",
+      "deleted-environments.reconcile-failed":
+        "The startup reconcile of deleted environments could not read the environment store, so it requested no purge.",
       "turn-start.capture-failed": "Capturing a turn's start failed, so the turn is untracked.",
       "dispatch.record-failed": "Recording a turn's dispatch outcome failed.",
       "turn.finalize-failed": "Finalizing a turn failed.",

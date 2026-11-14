@@ -20,7 +20,8 @@ const log = createLogger("change-tracking");
 
 export function createBackendChangeTracking(input: {
   dataDir: string;
-  storage: Pick<StorageService, "getEnvironment" | "loadConfig">;
+  storage: Pick<StorageService, "getEnvironment" | "loadConfig"> &
+    Partial<Pick<StorageService, "loadEnvironmentIdsForCleanup">>;
   emit: BackendEmit;
   /** Pass the scan owner so production cannot omit the explicit-refresh path. */
   diffStats: Pick<DiffStatsTracking, "refreshExplicitly"> & {
@@ -57,6 +58,11 @@ export function createBackendChangeTracking(input: {
     },
     requestEnvironmentRefresh: (id) => input.diffStats.service.refresh(id),
     requestExplicitEnvironmentRefresh: (id) => input.diffStats.refreshExplicitly(id),
+    // The strict owner read: it throws on a missing or invalid store rather
+    // than answer empty, which would request a purge for every environment.
+    liveEnvironmentIds: input.storage.loadEnvironmentIdsForCleanup
+      ? () => input.storage.loadEnvironmentIdsForCleanup!()
+      : undefined,
     prBaseBranch: async (environmentId) => {
       const environment = await input.storage.getEnvironment(environmentId).catch(() => null);
       if (!environment) return null;

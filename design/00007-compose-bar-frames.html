@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00007 · Unify the compose bar frame across tabs</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00007</p>
+      <h1>00007 · Unify the compose bar frame across tabs</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-high">High</span>
+        <span class="pill">Components</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 18 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        <code>NativeComposeBar.tsx:193</code> is <code>rounded-xl</code> on
+        <code>bg-compose-surface</code>. <code>PipelineMessageComposer.tsx:381</code>,
+        <code>ClaudeTmuxChatTab.parts.tsx:1204</code> and <code>FeaturesView.tsx:998</code> are
+        <code>rounded-2xl</code> on <code>bg-input-surface</code>: a 16px modal radius on a
+        translucent surface the spec rejects for this bar. The same composer looks different in each
+        tab, and transcript text can show through the translucent ones.
+      </p>
+      <div class="rule">
+        <div>
+          Frame: a 12px-radius card on the opaque <code>compose-surface</code> (not the translucent
+          <code>input-surface</code>), 1px <code>border</code> at 70%, 12px padding, compose-dock
+          shadow.
+        </div>
+        <div class="src">DESIGN.md, Components → Compose Bar</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx "rounded-2xl[^\"]*bg-input-surface[^\"]*p-3" apps/web/src</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src/components/chat/NativeComposeBar.tsx:193</code></td>
+            <td>reference implementation; do not change its look</td>
+          </tr>
+          <tr>
+            <td>
+              <code>apps/web/src/components/build-pipeline/PipelineMessageComposer.tsx:381</code>
+            </td>
+            <td>pipeline message composer</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/claude/ClaudeTmuxChatTab.parts.tsx:1204</code></td>
+            <td>Claude tmux composer</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/kanban/FeaturesView.tsx:998</code></td>
+            <td>features composer</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/terminal/ComposeBar.tsx</code></td>
+            <td>terminal composer: check against the same spec</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Capture the native composer first. It is the reference, and its before and after images
+          should be identical.
+        </li>
+        <li>
+          Bring each other composer to <code>rounded-xl</code>, <code>bg-compose-surface</code>, 1px
+          border at 70%, 12px padding, the compose-dock shadow and the focus border step (one
+          neutral shade up, never blue).
+        </li>
+        <li>
+          Check the dock background fade and width formula (<code
+            >min(calc(100% - 2rem), 56rem)</code
+          >) on each.
+        </li>
+        <li>Check the input limits (one to twelve 20px lines) where an input is shared.</li>
+      </ol>
+
+      <h2>Decisions</h2>
+      <p class="note">One option is marked recommended. Record the option you chose in Notes.</p>
+
+      <div class="decision">
+        <h3>How to keep them aligned afterwards</h3>
+        <div class="opt rec">
+          <span class="name"
+            >Export one frame class constant from the native compose bar module</span
+          ><span class="tag">recommended</span>
+          <div class="pros">Smallest change; one place to edit.</div>
+          <div class="cons">Still copy-by-reference; a new composer can forget it.</div>
+        </div>
+        <div class="opt">
+          <span class="name">Extract a ComposeFrame component</span>
+          <div class="pros">Enforces the frame, focus step and dock fade.</div>
+          <div class="cons">Larger refactor across four owners; more test churn.</div>
+        </div>
+        <div class="opt">
+          <span class="name">Edit each file only</span>
+          <div class="pros">Fastest.</div>
+          <div class="cons">Drift will return.</div>
+        </div>
+      </div>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00007/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-native-composer-reference-desktop">
+        <h3>
+          Native agent tab composer (reference, unchanged)
+          <span class="pill">desktop 1440×900</span>
+        </h3>
+        <p class="how">Open any native agent tab with the composer idle.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file"
+                >images/00007/before-native-composer-reference-desktop.png</span
+              >
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/before-native-composer-reference-desktop.png"
+                alt="Before: Native agent tab composer (reference, unchanged) (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file"
+                >images/00007/after-native-composer-reference-desktop.png</span
+              >
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/after-native-composer-reference-desktop.png"
+                alt="After: Native agent tab composer (reference, unchanged) (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-native-composer-reference-narrow">
+        <h3>
+          Native agent tab composer (reference, unchanged) <span class="pill">narrow 390×844</span>
+        </h3>
+        <p class="how">Open any native agent tab with the composer idle.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file"
+                >images/00007/before-native-composer-reference-narrow.png</span
+              >
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/before-native-composer-reference-narrow.png"
+                alt="Before: Native agent tab composer (reference, unchanged) (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00007/after-native-composer-reference-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/after-native-composer-reference-narrow.png"
+                alt="After: Native agent tab composer (reference, unchanged) (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-pipeline-composer-desktop">
+        <h3>Build pipeline message composer <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open a pipeline environment’s message composer.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00007/before-pipeline-composer-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/before-pipeline-composer-desktop.png"
+                alt="Before: Build pipeline message composer (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00007/after-pipeline-composer-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/after-pipeline-composer-desktop.png"
+                alt="After: Build pipeline message composer (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-pipeline-composer-narrow">
+        <h3>Build pipeline message composer <span class="pill">narrow 390×844</span></h3>
+        <p class="how">Open a pipeline environment’s message composer.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00007/before-pipeline-composer-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/before-pipeline-composer-narrow.png"
+                alt="Before: Build pipeline message composer (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00007/after-pipeline-composer-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/after-pipeline-composer-narrow.png"
+                alt="After: Build pipeline message composer (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-tmux-composer-desktop">
+        <h3>Claude tmux composer <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open a Claude tab in tmux mode.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00007/before-tmux-composer-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/before-tmux-composer-desktop.png"
+                alt="Before: Claude tmux composer (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00007/after-tmux-composer-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/after-tmux-composer-desktop.png"
+                alt="After: Claude tmux composer (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-tmux-composer-narrow">
+        <h3>Claude tmux composer <span class="pill">narrow 390×844</span></h3>
+        <p class="how">Open a Claude tab in tmux mode.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00007/before-tmux-composer-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/before-tmux-composer-narrow.png"
+                alt="Before: Claude tmux composer (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00007/after-tmux-composer-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/after-tmux-composer-narrow.png"
+                alt="After: Claude tmux composer (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-features-composer-desktop">
+        <h3>Features view composer <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open the features view.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00007/before-features-composer-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/before-features-composer-desktop.png"
+                alt="Before: Features view composer (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00007/after-features-composer-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/after-features-composer-desktop.png"
+                alt="After: Features view composer (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-features-composer-narrow">
+        <h3>Features view composer <span class="pill">narrow 390×844</span></h3>
+        <p class="how">Open the features view.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00007/before-features-composer-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/before-features-composer-narrow.png"
+                alt="Before: Features view composer (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00007/after-features-composer-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/after-features-composer-narrow.png"
+                alt="After: Features view composer (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-composer-focused-desktop">
+        <h3>Any one composer focused <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">
+          Click into the input; the border should step one neutral shade up, with no blue.
+        </p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00007/before-composer-focused-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/before-composer-focused-desktop.png"
+                alt="Before: Any one composer focused (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00007/after-composer-focused-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00007/after-composer-focused-desktop.png"
+                alt="After: Any one composer focused (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Changing the compose bar’s toolbar contents or the model picker.</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name composers -- bun --cwd=apps/web test src/components/chat src/components/build-pipeline --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00007</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00007/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “18 /
+            18”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

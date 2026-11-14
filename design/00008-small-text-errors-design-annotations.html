@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>
+      00008 · Raise error and state text to 11px in the design inspector and annotations
+    </title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00008</p>
+      <h1>00008 · Raise error and state text to 11px in the design inspector and annotations</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-medium">Medium</span>
+        <span class="pill">Typography</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 8 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        There are 165 uses of <code>text-[10px]</code>. Many are legitimate metadata or counts
+        inside filled pills, but error lines and state text are not:
+        <code>DesignFrameInspector.tsx:202</code>, <code>DesignInspector.tsx:622</code> and
+        <code>DesignStyleField.tsx:282</code> set errors at 10px in the destructive red; the
+        annotation panels use the same size for result and state lines.
+      </p>
+      <div class="rule">
+        <div>
+          The Readable Floor Rule. Status text is never below 11px and never fainter than
+          <code>muted-foreground</code>. The one deliberate exception is message metadata (model
+          name and time), which stays 10px and faded by design.
+        </div>
+        <div class="src">DESIGN.md, Typography → Named Rules</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx "text-\[10px\]" apps/web/src/components/design apps/web/src/components/browser/annotations</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src/components/design/DesignFrameInspector.tsx:202</code></td>
+            <td>error line</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/design/DesignInspector.tsx:622</code></td>
+            <td>error line</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/design/DesignStyleField.tsx:276,282</code></td>
+            <td>computed-value and error lines</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/browser/annotations/ResultReview.tsx</code></td>
+            <td>9 uses</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/browser/annotations/AnnotationThread.tsx</code></td>
+            <td>5 uses</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/browser/annotations/AnnotationEntries.tsx</code></td>
+            <td>4 uses</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          For each 10px use in these files, classify it in Notes: <b>metadata</b> (keep),
+          <b>count in a filled pill</b> (keep) or <b>state or error</b> (raise).
+        </li>
+        <li>
+          Raise <b>state or error</b> text to <code>text-[11px]</code> in
+          <code>muted-foreground</code> or its semantic color. Remove any alpha fade on it.
+        </li>
+        <li>
+          Check the inspector’s 8px grid and row heights after the change so it does not wrap
+          awkwardly.
+        </li>
+      </ol>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00008/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-design-inspector-error-desktop">
+        <h3>Design inspector with a property error <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Enter an invalid value in a design style field.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00008/before-design-inspector-error-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00008/before-design-inspector-error-desktop.png"
+                alt="Before: Design inspector with a property error (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00008/after-design-inspector-error-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00008/after-design-inspector-error-desktop.png"
+                alt="After: Design inspector with a property error (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-design-inspector-error-narrow">
+        <h3>Design inspector with a property error <span class="pill">narrow 390×844</span></h3>
+        <p class="how">Enter an invalid value in a design style field.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00008/before-design-inspector-error-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00008/before-design-inspector-error-narrow.png"
+                alt="Before: Design inspector with a property error (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00008/after-design-inspector-error-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00008/after-design-inspector-error-narrow.png"
+                alt="After: Design inspector with a property error (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-annotation-result-review-desktop">
+        <h3>Annotation result review <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open a completed annotation request’s result review.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file"
+                >images/00008/before-annotation-result-review-desktop.png</span
+              >
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00008/before-annotation-result-review-desktop.png"
+                alt="Before: Annotation result review (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00008/after-annotation-result-review-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00008/after-annotation-result-review-desktop.png"
+                alt="After: Annotation result review (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-annotation-thread-desktop">
+        <h3>Annotation thread <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open a thread with a few replies and a failed reply.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00008/before-annotation-thread-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00008/before-annotation-thread-desktop.png"
+                alt="Before: Annotation thread (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00008/after-annotation-thread-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00008/after-annotation-thread-desktop.png"
+                alt="After: Annotation thread (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Agent info panels and other 10px text (task 00009).</li>
+        <li>9px badges (task 00010).</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name design-annotations -- bun --cwd=apps/web test src/components/design src/components/browser/annotations --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00008</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00008/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: If a new exception is accepted (for example
+            a count in an outlined pill), add it to Typography.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

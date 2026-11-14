@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00021 · Use one casing for the named product terms</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00021</p>
+      <h1>00021 · Use one casing for the named product terms</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-low">Low</span>
+        <span class="pill">Copy</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 6 images</span
+        >
+      </div>
+      <p class="note">Depends on <a href="00020-label-casing.html">00020</a>.</p>
+
+      <h2>Problem</h2>
+      <p>
+        In visible text “Build Pipeline” appears 5 times and “Build pipeline” 11; “Project Home” 5
+        and “Project home” 6; “Agent mail” 28. <code>PRODUCT.md</code> lists the canonical
+        lower-case forms, with <b>Coordinator</b> and <b>Multi Review</b> capitalized. “Multi
+        Review” is already consistent (151 uses).
+      </p>
+      <div class="rule">
+        <div>
+          Terminology to keep: project home, prompt environment, pipeline environment, Coordinator,
+          side agent, worker, Multi Review, build pipeline, execution policy, agent mail, subork.
+        </div>
+        <div class="src">PRODUCT.md, Capabilities and Constraints</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx "[&gt;\"'][^&lt;&gt;\"']*\b(Build Pipeline|Project Home|Agent Mail|Pipeline Environment|Prompt Environment|Sub-?ork)\b" apps/web/src | grep -v "\.test\."</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src (JSX text, labels, titles, toasts)</code></td>
+            <td>run the grep; sentence-initial and heading uses follow task 00020</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>Do this after task 00020 so heading and button casing is already decided.</li>
+        <li>
+          Use the lower-case forms from PRODUCT.md mid-sentence; capitalize only at the start of a
+          sentence or label, per the casing rule.
+        </li>
+        <li>
+          Check that the product terms are spelled the same in the Coordinator copy, the pipeline
+          views and settings.
+        </li>
+      </ol>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00021/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-build-pipeline-header-desktop">
+        <h3>Build pipeline header and tabs <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open a pipeline environment.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00021/before-build-pipeline-header-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00021/before-build-pipeline-header-desktop.png"
+                alt="Before: Build pipeline header and tabs (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00021/after-build-pipeline-header-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00021/after-build-pipeline-header-desktop.png"
+                alt="After: Build pipeline header and tabs (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-project-home-row-desktop">
+        <h3>Project home row in the sidebar <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Use a project with a visible home row.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00021/before-project-home-row-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00021/before-project-home-row-desktop.png"
+                alt="Before: Project home row in the sidebar (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00021/after-project-home-row-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00021/after-project-home-row-desktop.png"
+                alt="After: Project home row in the sidebar (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-agent-mail-panel-desktop">
+        <h3>Agent mail panel title and empty state <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open the agent mail panel.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00021/before-agent-mail-panel-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00021/before-agent-mail-panel-desktop.png"
+                alt="Before: Agent mail panel title and empty state (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00021/after-agent-mail-panel-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00021/after-agent-mail-panel-desktop.png"
+                alt="After: Agent mail panel title and empty state (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Renaming the terms themselves.</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name term-copy -- bun --cwd=apps/web test src/components/build-pipeline src/components/sidebar --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00021</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00021/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “6 / 6”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

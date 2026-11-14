@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00017 · Use the blue hover tokens beside blue selections</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00017</p>
+      <h1>00017 · Use the blue hover tokens beside blue selections</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-low">Low</span>
+        <span class="pill">Interaction</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 6 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        <code>hover:bg-zinc-*</code> (27), <code>hover:bg-foreground/[…]</code> (10),
+        <code>hover:bg-muted</code> (63) and <code>hover:bg-accent</code> (19) outnumber the
+        documented <code>hover:bg-hover</code> (5) and <code>hover:bg-environment-hover</code> (2).
+        Menus and selects use <code>focus:bg-zinc-800/80</code>.
+      </p>
+      <div class="rule">
+        <div>
+          Don't use a grey hover beside a blue selection; hover is a weaker shade of the selection
+          blue.
+        </div>
+        <div class="src">DESIGN.md, Don’ts and Colors → Neutral → Selection</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx "hover:bg-(zinc-[0-9]+|foreground/|muted|accent)" apps/web/src | grep -v "\.test\."</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <code
+                >apps/web/src/components/ui/dropdown-menu.tsx, select.tsx, context-menu.tsx</code
+              >
+            </td>
+            <td>menu item highlight</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/chat/SuborkGroup.tsx:81,159,204</code></td>
+            <td>foreground wash rows</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/agent-mail/AgentMailPanel.tsx:263</code></td>
+            <td>foreground wash row</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/projects/GitHubRepositoryPicker.tsx:122</code></td>
+            <td>muted wash row</td>
+          </tr>
+          <tr>
+            <td><code>sidebar, files panel and any list that shows a blue selected row</code></td>
+            <td>the cases the rule actually targets</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Find rows and lists that can show a blue selected state and give them
+          <code>hover:bg-hover</code> (or <code>environment-hover</code> for environment rows).
+        </li>
+        <li>Decide the menu question below before touching <code>ui/</code>.</li>
+        <li>
+          Leave toolbar ghost buttons on <code>hover:bg-elevated</code>; that is the documented
+          ghost behavior.
+        </li>
+      </ol>
+
+      <h2>Decisions</h2>
+      <p class="note">One option is marked recommended. Record the option you chose in Notes.</p>
+
+      <div class="decision">
+        <h3>Menus and selects (no selected row inside them)</h3>
+        <div class="opt rec">
+          <span class="name"
+            >Keep grey in menus; migrate only lists beside a blue selection; document the
+            exception</span
+          ><span class="tag">recommended</span>
+          <div class="pros">Targets the rule’s real intent with a small diff.</div>
+          <div class="cons">Two hover looks exist, by design.</div>
+        </div>
+        <div class="opt">
+          <span class="name">Move menus to bg-hover too</span>
+          <div class="pros">One hover color everywhere.</div>
+          <div class="cons">Blue-tinted menus on a neutral popover; wide visual change.</div>
+        </div>
+      </div>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00017/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-sidebar-hover-selected-desktop">
+        <h3>
+          Sidebar with one row selected and another hovered
+          <span class="pill">desktop 1440×900</span>
+        </h3>
+        <p class="how">Select an environment and hover its neighbor.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00017/before-sidebar-hover-selected-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00017/before-sidebar-hover-selected-desktop.png"
+                alt="Before: Sidebar with one row selected and another hovered (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00017/after-sidebar-hover-selected-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00017/after-sidebar-hover-selected-desktop.png"
+                alt="After: Sidebar with one row selected and another hovered (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-list-row-hover-desktop">
+        <h3>A foreground-wash list row on hover <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Hover a subork group row or a mail panel row.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00017/before-list-row-hover-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00017/before-list-row-hover-desktop.png"
+                alt="Before: A foreground-wash list row on hover (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00017/after-list-row-hover-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00017/after-list-row-hover-desktop.png"
+                alt="After: A foreground-wash list row on hover (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-menu-open-desktop">
+        <h3>
+          Open dropdown menu with a highlighted item <span class="pill">desktop 1440×900</span>
+        </h3>
+        <p class="how">Open any dropdown and hover an item.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00017/before-menu-open-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00017/before-menu-open-desktop.png"
+                alt="Before: Open dropdown menu with a highlighted item (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00017/after-menu-open-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00017/after-menu-open-desktop.png"
+                alt="After: Open dropdown menu with a highlighted item (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Ghost toolbar buttons.</li>
+        <li>Selection color tokens.</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name ui-menus -- bun --cwd=apps/web test src/components/ui --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00017</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00017/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “6 / 6”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: Add the menu exception to Colors → Selection
+            if kept.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

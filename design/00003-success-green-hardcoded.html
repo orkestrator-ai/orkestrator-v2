@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00003 · Replace hard-coded green and emerald classes with the success token</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00003</p>
+      <h1>00003 · Replace hard-coded green and emerald classes with the success token</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-high">High</span>
+        <span class="pill">Color tokens</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 8 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        Success text appears as <code>emerald-400</code> (31), <code>emerald-300</code> (27),
+        <code>green-500</code> (21), <code>emerald-500</code> (16), <code>green-400</code> (13) and
+        more. Diff additions in <code>AgentsMdApprovalDialog.tsx:383</code> and
+        <code>GraphTemplateReviewPanel.tsx:63</code> use <code>emerald</code> rather than
+        <code>text-success</code>, so the same diff line is a different green depending on the
+        screen.
+      </p>
+      <div class="rule">
+        <div>
+          The Platform Hue Exception. <code>emerald</code> and other accent hues that distinguish
+          agent platforms in the model picker are identity, not status. Never use them to mean
+          success.
+        </div>
+        <div class="src">DESIGN.md, Colors → Named Rules (with the One Pair Rule)</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx "(text|bg|border)-(green|emerald|lime)-[0-9]{2,3}" apps/web/src | grep -v "\.test\."</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src/components/federation/AgentsMdApprovalDialog.tsx:383</code></td>
+            <td>diff addition line</td>
+          </tr>
+          <tr>
+            <td>
+              <code>apps/web/src/components/graph-designer/GraphTemplateReviewPanel.tsx:63</code>
+            </td>
+            <td>diff addition line</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/bug-report/BugReportSheet.tsx:401,660</code></td>
+            <td>success chip and band</td>
+          </tr>
+          <tr>
+            <td>
+              <code>apps/web/src/components/browser/annotations/AnnotationThread.tsx:603</code>
+            </td>
+            <td>result block</td>
+          </tr>
+          <tr>
+            <td>
+              <code>apps/web/src/components/build-pipeline/PipelineKeyInformation.tsx:339</code>
+            </td>
+            <td>chosen-option frame</td>
+          </tr>
+          <tr>
+            <td>
+              <code
+                >apps/web/src/components/build-pipeline/key-information-tab-sections.tsx:116,161</code
+              >
+            </td>
+            <td>chosen-option frame and callout</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/chat/GoalPill.tsx:34</code></td>
+            <td>goal-complete frame</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/chat/MailTile.tsx:106</code></td>
+            <td>“Status: finished” frame</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/chat/AgentModelPicker.tsx:1061</code></td>
+            <td><b>Check:</b> platform identity, probably keep</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/chat/rich/RichCallout.tsx:27</code></td>
+            <td><b>Check:</b> callout kind hue, probably keep</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Run the grep and classify each hit in Notes: <b>success</b>, <b>identity</b> (platform hue
+          in the model picker) or <b>kind</b> (a callout or graph category).
+        </li>
+        <li>
+          Replace <b>success</b> hits with <code>text-success</code>,
+          <code>border-success/NN</code> and <code>bg-success/NN</code>.
+        </li>
+        <li>Keep <b>identity</b> and <b>kind</b> hits, and write down in Notes why each stays.</li>
+        <li>
+          Check that diff additions read the same on the agents.md approval dialog, the graph
+          template review and the file diff.
+        </li>
+      </ol>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00003/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-agents-md-diff-desktop">
+        <h3>agents.md approval dialog with additions <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Trigger an agents.md change approval in a fixture environment.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00003/before-agents-md-diff-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00003/before-agents-md-diff-desktop.png"
+                alt="Before: agents.md approval dialog with additions (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00003/after-agents-md-diff-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00003/after-agents-md-diff-desktop.png"
+                alt="After: agents.md approval dialog with additions (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-graph-template-diff-desktop">
+        <h3>Graph template review panel <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open a graph template review with added lines.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00003/before-graph-template-diff-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00003/before-graph-template-diff-desktop.png"
+                alt="Before: Graph template review panel (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00003/after-graph-template-diff-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00003/after-graph-template-diff-desktop.png"
+                alt="After: Graph template review panel (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-bug-report-success-desktop">
+        <h3>Bug report sheet success state <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Reach the success band in the bug report sheet (a fixture submission).</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00003/before-bug-report-success-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00003/before-bug-report-success-desktop.png"
+                alt="Before: Bug report sheet success state (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00003/after-bug-report-success-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00003/after-bug-report-success-desktop.png"
+                alt="After: Bug report sheet success state (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-goal-complete-pill-desktop">
+        <h3>Goal pill in the complete state <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Run a short goal to completion in a fixture session.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00003/before-goal-complete-pill-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00003/before-goal-complete-pill-desktop.png"
+                alt="Before: Goal pill in the complete state (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00003/after-goal-complete-pill-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00003/after-goal-complete-pill-desktop.png"
+                alt="After: Goal pill in the complete state (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Platform hues in the model picker.</li>
+        <li>Status dots (task 00004).</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name build-pipeline -- bun --cwd=apps/web test src/components/build-pipeline --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00003</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00003/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00015 · Remove resting and hover shadows from cards in the work</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00015</p>
+      <h1>00015 · Remove resting and hover shadows from cards in the work</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-medium">Medium</span>
+        <span class="pill">Elevation</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 10 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        <code>hover:shadow-md</code> on Kanban cards, Linear issue cards and GitHub issue cards,
+        <code>shadow-sm</code> plus <code>hover:shadow-md</code> on feature cards, and
+        <code>shadow-xl</code> or <code>shadow-lg</code> on inline error cards and the design frame.
+        There are 92 shadow classes in total; most are legitimate (inputs, menus, toasts).
+      </p>
+      <div class="rule">
+        <div>
+          The Flat Floor Rule. Anything that sits *in* the work is flat and separated by tone or a
+          hairline. Only what floats *over* the work casts a shadow.
+        </div>
+        <div class="src">DESIGN.md, Elevation &amp; Depth</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx "\bshadow-(md|lg|xl|2xl)\b" apps/web/src | grep -v "\.test\."</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src/components/kanban/KanbanCard.tsx:278</code></td>
+            <td>hover:shadow-md</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/linear/LinearIssueBoard.tsx:141</code></td>
+            <td>hover:shadow-md; :154 is a dragged card, which floats and may keep its shadow</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/github/GitHubIssueCard.tsx:85</code></td>
+            <td>hover:shadow-md</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/kanban/FeaturesView.tsx:1061</code></td>
+            <td>shadow-sm and hover:shadow-md on cards</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/LazyLoadBoundary.tsx:144,183,243</code></td>
+            <td>inline error and loading cards</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/design/DesignFrameView.tsx:394,409</code></td>
+            <td>frame shadows on the design canvas</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/graph-designer/GraphPalette.tsx:58</code></td>
+            <td>palette: floats over the canvas, probably keep</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/settings/machines/MachinesSettings.tsx:717</code></td>
+            <td>dragging row: floats, keep</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Classify each hit in Notes: <b>floats</b> (menu, toast, dock, dragged item: keep), or
+          <b>in the work</b> (remove).
+        </li>
+        <li>
+          Replace card hover shadows with a border-color or tone change (<code
+            >hover:border-primary/50</code
+          >
+          is already present on the Kanban and Linear cards).
+        </li>
+        <li>Decide the full-page load-failure cards (below).</li>
+      </ol>
+
+      <h2>Decisions</h2>
+      <p class="note">One option is marked recommended. Record the option you chose in Notes.</p>
+
+      <div class="decision">
+        <h3>Design frames on the design canvas</h3>
+        <div class="opt rec">
+          <span class="name"
+            >Keep the shadow and document the canvas as a floating-windows surface</span
+          ><span class="tag">recommended</span>
+          <div class="pros">Frames read as separate pages on the canvas.</div>
+          <div class="cons">Adds an exception to the Flat Floor Rule.</div>
+        </div>
+        <div class="opt">
+          <span class="name">Remove the shadow and use a hairline</span>
+          <div class="pros">Strictly flat.</div>
+          <div class="cons">White frames on the dark canvas lose separation.</div>
+        </div>
+      </div>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00015/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-kanban-card-hover-desktop">
+        <h3>Kanban card on hover <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Hover a card on the project board.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00015/before-kanban-card-hover-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00015/before-kanban-card-hover-desktop.png"
+                alt="Before: Kanban card on hover (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00015/after-kanban-card-hover-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00015/after-kanban-card-hover-desktop.png"
+                alt="After: Kanban card on hover (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-linear-card-hover-desktop">
+        <h3>Linear issue card on hover <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">
+          Open the Linear board with fixture issues if available; otherwise capture a GitHub issue
+          card.
+        </p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00015/before-linear-card-hover-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00015/before-linear-card-hover-desktop.png"
+                alt="Before: Linear issue card on hover (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00015/after-linear-card-hover-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00015/after-linear-card-hover-desktop.png"
+                alt="After: Linear issue card on hover (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-features-cards-desktop">
+        <h3>Features view cards <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Open the features view with some cards.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00015/before-features-cards-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00015/before-features-cards-desktop.png"
+                alt="Before: Features view cards (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00015/after-features-cards-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00015/after-features-cards-desktop.png"
+                alt="After: Features view cards (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-load-failure-card-desktop">
+        <h3>Load-failure card <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Force a lazy import failure.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00015/before-load-failure-card-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00015/before-load-failure-card-desktop.png"
+                alt="Before: Load-failure card (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00015/after-load-failure-card-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00015/after-load-failure-card-desktop.png"
+                alt="After: Load-failure card (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-load-failure-card-narrow">
+        <h3>Load-failure card <span class="pill">narrow 390×844</span></h3>
+        <p class="how">Force a lazy import failure.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00015/before-load-failure-card-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00015/before-load-failure-card-narrow.png"
+                alt="Before: Load-failure card (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00015/after-load-failure-card-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00015/after-load-failure-card-narrow.png"
+                alt="After: Load-failure card (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Modals, menus, popovers, toasts, the compose dock and floating notices.</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name kanban -- bun --cwd=apps/web test src/components/kanban --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00015</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00015/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “10 /
+            10”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: Record any accepted exception (design canvas
+            frames) in Elevation &amp; Depth.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

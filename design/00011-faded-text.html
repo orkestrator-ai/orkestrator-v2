@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00011 · Remove alpha fades from status text</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00011</p>
+      <h1>00011 · Remove alpha fades from status text</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-low">Low</span>
+        <span class="pill">Typography</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 4 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        <code>text-muted-foreground/40</code> to <code>/60</code> appears 21 times (for example
+        <code>TodoToolPart.tsx:153</code>, a todo item’s state). Disabled controls may drop to 50%
+        opacity, but readable state text may not.
+      </p>
+      <div class="rule">
+        <div>
+          Status text is never below 11px and never fainter than <code>muted-foreground</code>. 11px
+          in <code>muted-foreground</code> (6.1:1) … never fade it further with an alpha.
+        </div>
+        <div class="src">DESIGN.md, Typography → Label and The Readable Floor Rule</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx "text-muted-foreground/(30|40|50|60)" apps/web/src | grep -v "\.test\."</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src/components/todo/TodoToolPart.tsx:153</code></td>
+            <td>todo state text</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/claude/ClaudeTmuxChatTab.parts.tsx:1361</code></td>
+            <td>disabled control, likely keep</td>
+          </tr>
+          <tr>
+            <td><code>every other hit of the grep above</code></td>
+            <td>classify and fix</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Classify each hit in Notes: <b>disabled</b> (keep, 50% is the spec),
+          <b>placeholder</b> (keep if it is a placeholder), <b>message metadata</b> (keep) or
+          <b>state text</b> (fix).
+        </li>
+        <li>For <b>state text</b>, use plain <code>text-muted-foreground</code>.</li>
+      </ol>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00011/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-todo-list-desktop">
+        <h3>
+          Todo tool part with done, active and pending items
+          <span class="pill">desktop 1440×900</span>
+        </h3>
+        <p class="how">Run a fixture session that writes a todo list.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00011/before-todo-list-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00011/before-todo-list-desktop.png"
+                alt="Before: Todo tool part with done, active and pending items (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00011/after-todo-list-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00011/after-todo-list-desktop.png"
+                alt="After: Todo tool part with done, active and pending items (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-faded-state-example-desktop">
+        <h3>One more fixed surface from the grep <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Pick the most visible hit in the grep results.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00011/before-faded-state-example-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00011/before-faded-state-example-desktop.png"
+                alt="Before: One more fixed surface from the grep (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00011/after-faded-state-example-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00011/after-faded-state-example-desktop.png"
+                alt="After: One more fixed surface from the grep (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Message metadata.</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name todo -- bun --cwd=apps/web test src/components/todo --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00011</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00011/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “4 / 4”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00020 · Settle label casing: sentence case for buttons, menus and headings</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00020</p>
+      <h1>00020 · Settle label casing: sentence case for buttons, menus and headings</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-low">Low</span>
+        <span class="pill">Copy</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 6 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        Examples of Title Case: “Use Global Defaults”, “Resume Session”, “Restricted Network
+        Access”, “Full Network Access”, “Connect Linear”, “Push Changes”, “New Terminal Tab”, “New
+        Root Terminal”, “New Browser Tab”, “Merge Pull Request”. Sentence case: “New terminal”, “New
+        folder”, “Remove machine”, “Open pipeline”, “Open design”. The same action can be spelled
+        both ways in different places.
+      </p>
+      <div class="rule">
+        <div>
+          Voice: plain, precise, factual … Terminology to keep: project home, prompt environment,
+          pipeline environment, Coordinator, side agent, worker, Multi Review, build pipeline,
+          execution policy, agent mail, subork.
+        </div>
+        <div class="src">
+          PRODUCT.md, Brand Commitments and Capabilities and Constraints. The documents are silent
+          on label casing.
+        </div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnoE --include=*.tsx "&gt;[A-Z][a-z]+ [A-Z][a-z]+( [A-Z][a-z]+)?&lt;" apps/web/src | grep -v "\.test\."</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src (all JSX labels, aria-labels, toasts, dialog titles)</code></td>
+            <td>
+              run the grep; then also look at <code>title=</code>, <code>label=</code> and
+              <code>toast.*(</code> strings
+            </td>
+          </tr>
+          <tr>
+            <td><code>Proper nouns and product terms</code></td>
+            <td>keep capitalized: Multi Review, Coordinator, Claude Code, GitHub, Linear</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Write the casing rule into DESIGN.md first (Do’s), with the proper-noun and product-term
+          exceptions.
+        </li>
+        <li>
+          Convert labels, buttons, menu items, tab names and dialog titles to the rule. Work area by
+          area (settings, sidebar, dialogs, toolbar) so each PR is reviewable.
+        </li>
+        <li>Update tests and e2e selectors that match the old strings.</li>
+      </ol>
+
+      <h2>Decisions</h2>
+      <p class="note">One option is marked recommended. Record the option you chose in Notes.</p>
+
+      <div class="decision">
+        <h3>Casing convention</h3>
+        <div class="opt rec">
+          <span class="name"
+            >Sentence case for everything except proper nouns and the product terms</span
+          ><span class="tag">recommended</span>
+          <div class="pros">
+            Plain and dense, matches the product voice; fewer capitalization judgment calls.
+          </div>
+          <div class="cons">A large copy sweep; some e2e selectors change.</div>
+        </div>
+        <div class="opt">
+          <span class="name"
+            >Title Case for buttons and dialog titles, sentence case elsewhere</span
+          >
+          <div class="pros">Familiar from desktop apps.</div>
+          <div class="cons">More rules to apply; today’s code mostly leans the other way.</div>
+        </div>
+      </div>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00020/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-network-settings-desktop">
+        <h3>Environment network settings <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">
+          Open an environment’s network settings (Restricted / Full Network Access).
+        </p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00020/before-network-settings-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00020/before-network-settings-desktop.png"
+                alt="Before: Environment network settings (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00020/after-network-settings-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00020/after-network-settings-desktop.png"
+                alt="After: Environment network settings (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-new-tab-menu-desktop">
+        <h3>New tab menu <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">
+          Open the menu with New Terminal Tab, New Root Terminal and New Browser Tab.
+        </p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00020/before-new-tab-menu-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00020/before-new-tab-menu-desktop.png"
+                alt="Before: New tab menu (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00020/after-new-tab-menu-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00020/after-new-tab-menu-desktop.png"
+                alt="After: New tab menu (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-settings-global-defaults-desktop">
+        <h3>
+          A settings page with “Use Global Defaults” <span class="pill">desktop 1440×900</span>
+        </h3>
+        <p class="how">Open an environment’s agent settings.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file"
+                >images/00020/before-settings-global-defaults-desktop.png</span
+              >
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00020/before-settings-global-defaults-desktop.png"
+                alt="Before: A settings page with “Use Global Defaults” (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00020/after-settings-global-defaults-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00020/after-settings-global-defaults-desktop.png"
+                alt="After: A settings page with “Use Global Defaults” (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Rewording copy beyond casing.</li>
+        <li>Spelling (task 00019).</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name settings-copy -- bun --cwd=apps/web test src/components/settings src/components/environments --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00020</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00020/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “6 / 6”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: Add the casing rule to DESIGN.md Do’s.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00006 · Bring the transcript annotation layer onto tokens</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00006</p>
+      <h1>00006 · Bring the transcript annotation layer onto tokens</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-medium">Medium</span>
+        <span class="pill">Color tokens</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 4 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        <code>TranscriptAnnotationLayer.tsx</code> builds its action pill (:290) and its numbered
+        pins (:346, :358) from <code>bg-blue-600</code> and <code>bg-blue-500</code> with white
+        text, a white 2px border and a bespoke shadow. They float over the transcript, so a shadow
+        is allowed, but the fill should still be <code>primary-fill</code> and the white border is a
+        one-off.
+      </p>
+      <div class="rule">
+        <div>
+          Do reach for semantic tokens (<code>elevated</code>, <code>divider</code>,
+          <code>selected</code>, <code>success</code>, <code>failure</code>) before any raw ramp
+          step or hex.
+        </div>
+        <div class="src">DESIGN.md, Do’s; and the Fill Rule</div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -n "blue-\|border-white\|shadow" apps/web/src/components/chat/TranscriptAnnotationLayer.tsx</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src/components/chat/TranscriptAnnotationLayer.tsx:290</code></td>
+            <td>action pill</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/chat/TranscriptAnnotationLayer.tsx:346,358</code></td>
+            <td>numbered pins and their tail</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Move the pill and the pins to <code>bg-primary-fill</code> with
+          <code>text-primary-foreground</code>; hover to <code>bg-primary-fill/85</code>.
+        </li>
+        <li>
+          Keep the shadow (these float over the work). Decide whether the white border stays as a
+          legibility ring over arbitrary transcript content.
+        </li>
+        <li>Update the pin tail so it uses the same fill as the pin.</li>
+      </ol>
+
+      <h2>Decisions</h2>
+      <p class="note">One option is marked recommended. Record the option you chose in Notes.</p>
+
+      <div class="decision">
+        <h3>White ring around pins</h3>
+        <div class="opt rec">
+          <span class="name"
+            >Keep the ring, document it as a legibility edge for floating marks</span
+          ><span class="tag">recommended</span>
+          <div class="pros">Pins stay readable over any transcript content.</div>
+          <div class="cons">A white edge is not in the palette.</div>
+        </div>
+        <div class="opt">
+          <span class="name">Replace with a 1px border using the background color</span>
+          <div class="pros">On palette.</div>
+          <div class="cons">Pins lose separation over blue-tinted rows.</div>
+        </div>
+      </div>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00006/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-annotation-pill-desktop">
+        <h3>
+          Annotation action pill over selected transcript text
+          <span class="pill">desktop 1440×900</span>
+        </h3>
+        <p class="how">Select text in a transcript with annotations enabled.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00006/before-annotation-pill-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00006/before-annotation-pill-desktop.png"
+                alt="Before: Annotation action pill over selected transcript text (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00006/after-annotation-pill-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00006/after-annotation-pill-desktop.png"
+                alt="After: Annotation action pill over selected transcript text (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-annotation-pins-desktop">
+        <h3>Numbered pins beside transcript rows <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Create two or more annotations on one transcript.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00006/before-annotation-pins-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00006/before-annotation-pins-desktop.png"
+                alt="Before: Numbered pins beside transcript rows (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00006/after-annotation-pins-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00006/after-annotation-pins-desktop.png"
+                alt="After: Numbered pins beside transcript rows (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Browser annotation editor (task 00001 covers its errors).</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name annotation-layer -- bun --cwd=apps/web test src/components/chat/TranscriptAnnotationLayer --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00006</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00006/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “4 / 4”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: If the white ring stays, add it to DESIGN.md
+            under Elevation or Components.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00019 · Switch the product voice to American English</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00019</p>
+      <h1>00019 · Switch the product voice to American English</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-medium">Medium</span>
+        <span class="pill">Copy</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 8 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        The decision is American English. The UI is already mostly American (Favorite, Color,
+        Initializing, Customize), so the work is in the documents and a few display strings:
+        <code>PRODUCT.md</code> states British English, <code>DESIGN.md</code> spells “colour” 21
+        times (including rule names such as the Outcome and Mode color rules), and a handful of
+        strings say “cancelled” or “cancelling”. The <code>cancelled</code> value used as a status
+        in code (500+ occurrences) is data, not copy.
+      </p>
+      <div class="rule">
+        <div>Voice: plain, precise, factual British English.</div>
+        <div class="src">
+          PRODUCT.md, Brand Commitments. Decision: use American English (user, 2026-11-14).
+        </div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx --include=*.ts --include=*.html --include=*.swift "[\"'&gt;][^\"'&lt;]*\b(cancell(ed|ing)|colour|behaviour|catalogue|favourite|centre|grey|licence)\b" apps packages/cli/src | grep -vE "\.test\.|node_modules"</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>PRODUCT.md:46</code></td>
+            <td>voice line</td>
+          </tr>
+          <tr>
+            <td><code>DESIGN.md</code></td>
+            <td>
+              21 uses of “colour”, “Colour”, “greys” in prose and in the names of the Mode and
+              Outcome rules; update the names and every reference to them
+            </td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/browser/annotations/RequestCard.tsx:233</code></td>
+            <td>“Request cancelled…”</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/browser/annotations/request-labels.ts:40</code></td>
+            <td>“Cancelled from the note”</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/review/MultiReviewTab.tsx:192</code></td>
+            <td>“Multi Review cancelled”</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/settings/HostUpdatesPanel.tsx:119</code></td>
+            <td>“The update was cancelled.”</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/settings/mcp-servers/McpApplyStatus.tsx:31</code></td>
+            <td>“applying was cancelled”</td>
+          </tr>
+          <tr>
+            <td>
+              <code>apps/web/src/components/environments/EnvironmentRebuildSection.tsx:210</code>
+            </td>
+            <td>“can no longer be cancelled”</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/chat/QueuedPromptsDialog.tsx:350</code></td>
+            <td>aria-label “Confirm cancelling…”</td>
+          </tr>
+          <tr>
+            <td><code>apps/web-public, apps/ios, packages/cli/src</code></td>
+            <td>
+              3, 17 and 17 hits for British spellings; most are comments or test enums, so check
+              which are user-visible
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Edit the voice line in <code>PRODUCT.md</code> to American English and re-read the whole
+          file for British spellings.
+        </li>
+        <li>
+          Rewrite British spellings in <code>DESIGN.md</code> prose and rule names (for example
+          “Colour” becomes “Color”, “greys” becomes “grays”). Keep the front-matter token names
+          unchanged.
+        </li>
+        <li>
+          Change displayed “cancelled/cancelling” to “canceled/canceling”. Do <b>not</b> rename the
+          status values, type names, test ids or persisted data that use <code>cancelled</code>.
+        </li>
+        <li>
+          Check each changed string against tests that assert on it (<code
+            >grep -rn "was cancelled" apps/web/src</code
+          >
+          and similar) and update the tests with the string.
+        </li>
+        <li>
+          Check the public site (<code>apps/web-public</code>) and the CLI’s help and output for
+          user-visible British spellings.
+        </li>
+        <li>Leave code comments alone unless a file is already being edited.</li>
+      </ol>
+
+      <h2>Decisions</h2>
+      <p class="note">One option is marked recommended. Record the option you chose in Notes.</p>
+
+      <div class="decision">
+        <h3>“canceled” or “cancelled”</h3>
+        <div class="opt rec">
+          <span class="name">canceled / canceling (Merriam-Webster’s preferred US form)</span
+          ><span class="tag">recommended</span>
+          <div class="pros">
+            Consistent with the stated decision; matches the rest of the US-spelled UI.
+          </div>
+          <div class="cons">Tests and snapshots that assert on the old string change.</div>
+        </div>
+        <div class="opt">
+          <span class="name">cancelled / cancelling (also acceptable US usage)</span>
+          <div class="pros">No string changes; already consistent across the UI.</div>
+          <div class="cons">
+            Reads as British to many US readers and to spell checkers set to en-US.
+          </div>
+        </div>
+      </div>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00019/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-request-cancelled-desktop">
+        <h3>Annotation request in the canceled state <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Cancel a queued annotation request.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00019/before-request-cancelled-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00019/before-request-cancelled-desktop.png"
+                alt="Before: Annotation request in the canceled state (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00019/after-request-cancelled-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00019/after-request-cancelled-desktop.png"
+                alt="After: Annotation request in the canceled state (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-multi-review-canceled-desktop">
+        <h3>Multi Review tab in the canceled state <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Cancel a Multi Review run.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00019/before-multi-review-canceled-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00019/before-multi-review-canceled-desktop.png"
+                alt="Before: Multi Review tab in the canceled state (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00019/after-multi-review-canceled-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00019/after-multi-review-canceled-desktop.png"
+                alt="After: Multi Review tab in the canceled state (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-mcp-apply-canceled-desktop">
+        <h3>
+          MCP apply status when applying was canceled <span class="pill">desktop 1440×900</span>
+        </h3>
+        <p class="how">Cancel an MCP settings apply.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00019/before-mcp-apply-canceled-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00019/before-mcp-apply-canceled-desktop.png"
+                alt="Before: MCP apply status when applying was canceled (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00019/after-mcp-apply-canceled-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00019/after-mcp-apply-canceled-desktop.png"
+                alt="After: MCP apply status when applying was canceled (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-rebuild-cannot-cancel-toast-desktop">
+        <h3>Rebuild toast <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">Try to cancel a rebuild that has passed the point of no return.</p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file"
+                >images/00019/before-rebuild-cannot-cancel-toast-desktop.png</span
+              >
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00019/before-rebuild-cannot-cancel-toast-desktop.png"
+                alt="Before: Rebuild toast (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file"
+                >images/00019/after-rebuild-cannot-cancel-toast-desktop.png</span
+              >
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00019/after-rebuild-cannot-cancel-toast-desktop.png"
+                alt="After: Rebuild toast (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>
+          Renaming the persisted <code>cancelled</code> status value or any type or identifier.
+        </li>
+        <li>Rewriting documents under <code>docs/</code> and code comments.</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name copy-strings -- bun --cwd=apps/web test src/components/browser src/components/review src/components/settings --parallel=2 --only-failures
+mise run test:logged -- --name docs-links -- bun test ./tests/unit/docs --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00019</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00019/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: This task is the documentation update:
+            PRODUCT.md and DESIGN.md.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

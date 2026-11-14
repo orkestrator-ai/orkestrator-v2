@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>00001 · Use the failure token for error text, not destructive</title>
+    <link rel="stylesheet" href="assets/design.css" />
+  </head>
+  <body>
+    <main>
+      <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00001</p>
+      <h1>00001 · Use the failure token for error text, not destructive</h1>
+      <div class="meta">
+        <span class="status" data-status="todo">To do</span>
+        <span class="pill sev-high">High</span>
+        <span class="pill">Color tokens</span>
+        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
+          >Evidence 0 / 10 images</span
+        >
+      </div>
+
+      <h2>Problem</h2>
+      <p>
+        <code>text-destructive</code> is used about 305 times as a text color, against about 119
+        uses of <code>text-failure</code>. The same kind of message (an error banner, a failed
+        check, an <code>role="alert"</code> line) therefore renders in two different reds depending
+        on who wrote it. <code>destructive</code> is deliberately the fill for destructive buttons;
+        <code>failure</code> is the text-weight red.
+      </p>
+      <div class="rule">
+        <div>
+          Don't use <code>failure</code> as a button fill or <code>destructive</code> as text
+          colour; they are tuned for different jobs.
+        </div>
+        <div class="src">
+          DESIGN.md, Do’s and Don’ts, and Colors → Fault Red / Destructive Coral
+        </div>
+      </div>
+
+      <h2>Find every instance</h2>
+      <pre><code>grep -rnE --include=*.tsx "\btext-destructive\b" apps/web/src | grep -v "\.test\."</code></pre>
+
+      <h2>Scope</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apps/web/src/components/LazyLoadBoundary.tsx:146,185</code></td>
+            <td>icon color on the load-failure cards</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/browser/BrowserTab.tsx:857</code></td>
+            <td>error banner text</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/browser/ServiceBrowserTab.tsx:1027,1255</code></td>
+            <td>error banner and alert line</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/browser/PreviewDiagnostics.tsx:89</code></td>
+            <td>diagnostic tone</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/browser/PreviewServiceDialog.tsx:269</code></td>
+            <td>dialog alert line</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/browser/annotations/*</code></td>
+            <td>
+              AnnotationEditor:321, AnnotationEntries:157, AnnotationPanel:265,
+              AnnotationReply:132,347, AnnotationThread:567,742, DestinationPicker:245,
+              RequestCard:328,374,590, RequestComposer:343,404, RequestFollowUp:160,
+              ResultReview:160, SavedImageControls:242
+            </td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/bug-report/BugReportSheet.tsx:579</code></td>
+            <td>empty-state error text</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/build-pipeline/BuildChatTab.tsx:260</code></td>
+            <td>alert icon</td>
+          </tr>
+          <tr>
+            <td><code>apps/web/src/components/ui/dropdown-menu.tsx:66</code></td>
+            <td>destructive menu item variant</td>
+          </tr>
+          <tr>
+            <td><code>…and the rest of the grep above</code></td>
+            <td>work through it directory by directory</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Approach</h2>
+      <ol>
+        <li>
+          Run the grep and list every hit in the Notes section of this page with a one-word class:
+          <b>text</b> (an outcome or error message), <b>action</b> (a destructive action label) or
+          <b>other</b>.
+        </li>
+        <li>
+          Replace <code>text-destructive</code> with <code>text-failure</code> for every
+          <b>text</b> and <b>action</b> hit. Keep <code>border-destructive/*</code> and
+          <code>bg-destructive/*</code> tints and fills as they are: they are the destructive
+          family.
+        </li>
+        <li>
+          Check each swap on the dark ground. <code>failure</code> (#ff7b72) is lighter than
+          <code>destructive</code> (#e5534b), so contrast improves; confirm small 11px text still
+          reads.
+        </li>
+        <li>
+          Where an element has both a tint (<code>bg-destructive/10</code>) and text, keep the tint
+          and change only the text.
+        </li>
+      </ol>
+
+      <h2>Decisions</h2>
+      <p class="note">One option is marked recommended. Record the option you chose in Notes.</p>
+
+      <div class="decision">
+        <h3>What to do with destructive action labels (menu items, ghost buttons)</h3>
+        <div class="opt rec">
+          <span class="name">Use failure for the text, keep destructive for fills and washes</span
+          ><span class="tag">recommended</span>
+          <div class="pros">
+            Matches DESIGN.md exactly, which names <code>hover:text-failure</code> on a
+            <code>destructive</code> wash for toolbar destructive actions. One red for all red text.
+          </div>
+          <div class="cons">Destructive menu items change from a deeper to a lighter red.</div>
+        </div>
+        <div class="opt">
+          <span class="name">Keep text-destructive for action labels only</span>
+          <div class="pros">No visible change on menus.</div>
+          <div class="cons">
+            Contradicts the rule and leaves two reds on screen. Requires a new documented exception.
+          </div>
+        </div>
+      </div>
+
+      <h2>Required evidence: before and after</h2>
+      <p>
+        Every slot needs a <b>before</b> image (captured first, before editing any code) and an
+        <b>after</b> image. Use the same profile, fixture data, theme, viewport and zoom for both.
+        Save PNGs under <code>design/images/00001/</code> using the exact file names shown. See
+        <a href="00000-index.html#capture">How to capture</a>.
+      </p>
+
+      <section class="capture" id="cap-browser-error-banner-desktop">
+        <h3>Browser tab with a failed preview load <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">
+          Open a fixture environment, open the Browser tab and load an unreachable port so the red
+          banner appears.
+        </p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00001/before-browser-error-banner-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00001/before-browser-error-banner-desktop.png"
+                alt="Before: Browser tab with a failed preview load (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00001/after-browser-error-banner-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00001/after-browser-error-banner-desktop.png"
+                alt="After: Browser tab with a failed preview load (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-annotation-error-desktop">
+        <h3>Annotation panel with a failed request <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">
+          Create an annotation request and force a failure (stop the backend call or use an invalid
+          destination).
+        </p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00001/before-annotation-error-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00001/before-annotation-error-desktop.png"
+                alt="Before: Annotation panel with a failed request (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00001/after-annotation-error-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00001/after-annotation-error-desktop.png"
+                alt="After: Annotation panel with a failed request (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-destructive-menu-item-desktop">
+        <h3>Environment context menu showing Delete <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">
+          Right-click an environment row in the sidebar and capture the open menu with the Delete
+          item visible.
+        </p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00001/before-destructive-menu-item-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00001/before-destructive-menu-item-desktop.png"
+                alt="Before: Environment context menu showing Delete (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00001/after-destructive-menu-item-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00001/after-destructive-menu-item-desktop.png"
+                alt="After: Environment context menu showing Delete (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-lazy-load-failure-desktop">
+        <h3>Load-failure card <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">
+          Force a lazy import failure (block the chunk request in Playwright) to show the card.
+        </p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00001/before-lazy-load-failure-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00001/before-lazy-load-failure-desktop.png"
+                alt="Before: Load-failure card (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00001/after-lazy-load-failure-desktop.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00001/after-lazy-load-failure-desktop.png"
+                alt="After: Load-failure card (desktop)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="capture" id="cap-lazy-load-failure-narrow">
+        <h3>Load-failure card <span class="pill">narrow 390×844</span></h3>
+        <p class="how">
+          Force a lazy import failure (block the chunk request in Playwright) to show the card.
+        </p>
+        <div class="pair">
+          <figure class="shot">
+            <figcaption>
+              Before<span class="file">images/00001/before-lazy-load-failure-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00001/before-lazy-load-failure-narrow.png"
+                alt="Before: Load-failure card (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+          <figure class="shot">
+            <figcaption>
+              After<span class="file">images/00001/after-lazy-load-failure-narrow.png</span>
+            </figcaption>
+            <div class="frame">
+              <img
+                src="images/00001/after-lazy-load-failure-narrow.png"
+                alt="After: Load-failure card (narrow)"
+                loading="lazy"
+              />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <h2>Out of scope</h2>
+      <ul>
+        <li>Changing any fill: <code>bg-destructive</code> on confirm buttons stays.</li>
+        <li>Hard-coded <code>text-red-*</code> classes (that is task 00002).</li>
+      </ul>
+
+      <h2>Verification</h2>
+      <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name annotations -- bun --cwd=apps/web test src/components/browser --parallel=2 --only-failures
+mise run format:check
+mise run lint</code></pre>
+      <p class="note">
+        React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
+        check: use a throwaway <code>dev:test</code> profile named <code>design-00001</code>, never
+        a production instance.
+      </p>
+
+      <h2>Acceptance checklist</h2>
+      <ul class="check">
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+            under <code>design/images/00001/</code>.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >After images captured after the change, with the same profile, data, theme, viewport
+            and file names, and committed beside the before images.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Every image slot on this page shows a picture (the evidence badge reads “10 /
+            10”).</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >I have looked at each pair and written what changed, and anything that did
+            <b>not</b> change that should have, in Notes.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision below is recorded with the option
+            chosen.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands below);
+            <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >The browser check includes a page reload and, for layout-affecting changes, the narrow
+            viewport.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >DESIGN.md or PRODUCT.md updated if needed: None expected. If an action-label exception
+            is kept, add it to the Colors section of DESIGN.md.</span
+          >
+        </li>
+        <li>
+          <input type="checkbox" aria-label="Done" /><span
+            >Status set to <b>Done</b> on this page and in
+            <a href="00000-index.html">the index</a>.</span
+          >
+        </li>
+      </ul>
+
+      <h2>Notes</h2>
+      <p class="note">
+        Fill in as you work: classification of each hit, the options chosen, what changed in each
+        image pair, anything deferred.
+      </p>
+      <ul>
+        <li>Hit classification: <span class="muted">not started</span></li>
+        <li>Decisions chosen: <span class="muted">not started</span></li>
+        <li>What changed per image pair: <span class="muted">not started</span></li>
+      </ul>
+
+      <footer>
+        Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and
+        <a href="../PRODUCT.md">PRODUCT.md</a>. Tasks may be batched into one pull request; each
+        keeps its own evidence.
+      </footer>
+    </main>
+    <script src="assets/design.js"></script>
+  </body>
+</html>

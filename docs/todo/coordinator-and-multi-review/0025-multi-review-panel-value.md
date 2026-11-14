@@ -228,7 +228,7 @@ providers, and a cache measurement of real reviewer panels.
    `multi-review-evaluation.test.ts` ("panel overlap": position attribution of
    a late unique finding, configured positions with failed reviewers, invalid
    and dropped citations, no text in the output). Persistence is covered by
-   `multi-review-service.test.ts` ("derives all provenance labels from cited
+   `multi-review-service-part-2.test.ts` ("derives all provenance labels from cited
    source IDs") and `build-pipeline-review-fanout.test.ts` (Consolidation
    session `reviewOverlap`). The validator is covered by
    `packages/protocol/src/review-fanout.test.ts`.

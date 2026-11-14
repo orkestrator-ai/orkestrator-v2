@@ -159,13 +159,13 @@ describe("app-server engine over HTTP", () => {
 
   test("reports a bounded, actionable error when the handshake never completes", async () => {
     const output = await run({
-      CODEX_BRIDGE_HTTP_HARNESS_READY_TIMEOUT_MS: "5000",
+      CODEX_BRIDGE_HTTP_HARNESS_READY_TIMEOUT_MS: "500",
       FAKE_CODEX_SCRIPT: "no-initialize",
     });
 
     expect(output.results).toBeUndefined();
     expect(output.error).toMatch(
-      /app-server did not become ready within 5 seconds \(last state: (starting|recovering)\)/,
+      /app-server did not become ready within 0\.5 seconds \(last state: (starting|recovering)\)/,
     );
   }, 60_000);
 });

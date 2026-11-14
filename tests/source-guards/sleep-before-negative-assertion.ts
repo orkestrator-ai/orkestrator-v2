@@ -10,7 +10,10 @@ import {
   unwrap,
   type AnyNode,
 } from "./ast";
-import type { GuardVisitor, SourceGuard } from "./guard";
+import path from "node:path";
+import { parseSync } from "oxc-parser";
+import type { GuardVisitor, ScannedFile, SourceGuard } from "./guard";
+import { isTestSource } from "./paths";
 
 /** Imported or global helpers assumed to sleep for their first argument in milliseconds. */
 const SLEEP_NAMES: ReadonlySet<string> = new Set([
@@ -206,9 +209,81 @@ function sleepsBeforeNegativeAssertions(
   return findings;
 }
 
-function visitSleeps(): GuardVisitor {
+/** The function definitions a top-level statement makes, exported or not. */
+function topLevelDefinitions(statement: AnyNode): Definition[] {
+  const declaration =
+    statement.type === "ExportNamedDeclaration" || statement.type === "ExportDefaultDeclaration"
+      ? statement.declaration
+      : statement;
+  if (!declaration) return [];
+  if (declaration.type === "FunctionDeclaration" && declaration.id)
+    return [{ name: declaration.id.name, fn: declaration }];
+  if (declaration.type !== "VariableDeclaration") return [];
+  return declaration.declarations.flatMap((declarator: AnyNode) =>
+    declarator.id.type === "Identifier" && declarator.init && isFunction(unwrap(declarator.init))
+      ? [{ name: declarator.id.name, fn: unwrap(declarator.init) }]
+      : [],
+  );
+}
+
+/** Sleep helpers a support module defines at top level, keyed by path and checked against its text. */
+const supportHelperCache = new Map<string, { source: string; helpers: Map<string, LocalSleep> }>();
+
+function supportModuleHelpers(relative: string, source: string): Map<string, LocalSleep> {
+  const cached = supportHelperCache.get(relative);
+  if (cached && cached.source === source) return cached.helpers;
+  const { program, errors } = parseSync(relative, source, {
+    preserveParens: false,
+    astType: "js",
+  });
+  // An unparsable support module contributes nothing; its own scan reports the error.
+  const helpers =
+    errors.length > 0
+      ? new Map<string, LocalSleep>()
+      : buildContext((program as unknown as AnyNode).body.flatMap(topLevelDefinitions), new Set())
+          .helpers;
+  supportHelperCache.set(relative, { source, helpers });
+  return helpers;
+}
+
+/** Candidate files for a relative module specifier, as Bun resolves `./x.js` to `./x.ts`. */
+function resolutionCandidates(importer: string, specifier: string): string[] {
+  const base = path.posix.normalize(path.posix.join(path.posix.dirname(importer), specifier));
+  const stem = base.replace(/\.[cm]?js$/, "");
+  return [base, `${stem}.ts`, `${stem}.tsx`, `${stem}.js`, `${stem}/index.ts`, `${stem}/index.tsx`];
+}
+
+/**
+ * Sleep helpers a file imports from a relative test-support module, keyed by
+ * their local name. Moving `settle` into a `*-test-support` module must not hide
+ * the windows it creates in the files that call it.
+ */
+function importedHelpers(node: AnyNode, file: ScannedFile): Map<string, LocalSleep> {
+  const found = new Map<string, LocalSleep>();
+  const specifier = node.source?.value;
+  if (!file.readSource || typeof specifier !== "string" || !specifier.startsWith(".")) return found;
+  if (node.importKind === "type") return found;
+  for (const candidate of resolutionCandidates(file.path, specifier)) {
+    if (!isTestSource(candidate)) continue;
+    const source = file.readSource(candidate);
+    if (source === null) continue;
+    const helpers = supportModuleHelpers(candidate, source);
+    for (const specifierNode of node.specifiers ?? []) {
+      if (specifierNode.type !== "ImportSpecifier" || specifierNode.importKind === "type") continue;
+      const imported = specifierNode.imported;
+      const importedName = imported.type === "Identifier" ? imported.name : imported.value;
+      const helper = helpers.get(importedName);
+      if (helper) found.set(specifierNode.local.name, helper);
+    }
+    break;
+  }
+  return found;
+}
+
+function visitSleeps(file: ScannedFile): GuardVisitor {
   const definitions: Definition[] = [];
   const declared = new Set<string>();
+  const imported = new Map<string, LocalSleep>();
   const lists: AnyNode[][] = [];
   const collectStatements = (statements: AnyNode[]): void => {
     // A sleep and a later assertion need two statements.
@@ -216,6 +291,9 @@ function visitSleeps(): GuardVisitor {
   };
   return {
     handlers: {
+      ImportDeclaration(node) {
+        for (const [name, helper] of importedHelpers(node, file)) imported.set(name, helper);
+      },
       FunctionDeclaration(node) {
         if (!node.id) return;
         definitions.push({ name: node.id.name, fn: node });
@@ -234,6 +312,10 @@ function visitSleeps(): GuardVisitor {
     },
     finish() {
       const context = buildContext(definitions, declared);
+      for (const [name, helper] of imported) {
+        if (declared.has(name) || context.helpers.has(name)) continue;
+        context.helpers.set(name, helper);
+      }
       return lists.flatMap((statements) => sleepsBeforeNegativeAssertions(statements, context));
     },
   };
@@ -246,6 +328,9 @@ const FIXED_SLEEP_TEXT =
 const SLEEP_HELPER_TEXT = /setTimeout\(\s*\w+\s*,\s*[a-zA-Z_]|\b[sS]leep\(\s*[a-zA-Z_]/;
 /** An awaited call with a positive literal argument, such as `await realTick(50)`. */
 const AWAITED_LITERAL_CALL_TEXT = /await\s+[\w.$]+\(\s*(?:[\w.]+\s*,\s*)?[1-9]/;
+/** A relative import of a test-support module, which may define the file's sleep helpers. */
+const SUPPORT_IMPORT_TEXT =
+  /from\s+["']\.{1,2}\/[^"']*(?:test-harness|test-support|fixture)[^"']*["']/i;
 const NEGATIVE_MATCHER_TEXT =
   /\.not\.|\.to(?:Be\((?:0|false)\)|HaveLength\(0\)|(?:Strict)?Equal\(\[\]\)|(?:HaveBeen|Be)CalledTimes|BeUndefined|BeNull|BeFalsy)/;
 
@@ -260,7 +345,8 @@ export const sleepBeforeNegativeAssertion: SourceGuard = {
   appliesTo: () => true,
   mayOffend: (source) =>
     (FIXED_SLEEP_TEXT.test(source) ||
-      (SLEEP_HELPER_TEXT.test(source) && AWAITED_LITERAL_CALL_TEXT.test(source))) &&
+      ((SLEEP_HELPER_TEXT.test(source) || SUPPORT_IMPORT_TEXT.test(source)) &&
+        AWAITED_LITERAL_CALL_TEXT.test(source))) &&
     NEGATIVE_MATCHER_TEXT.test(source),
-  visit: () => visitSleeps(),
+  visit: (_program, file) => visitSleeps(file),
 };

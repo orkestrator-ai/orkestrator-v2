@@ -35,7 +35,9 @@ export function installBoundedTestDiagnostics(): void {
   globalWithMark[INSTALL_MARK] = true;
 
   process.env.DEBUG_PRINT_LIMIT ??= String(TEST_DIAGNOSTIC_DOM_BYTES);
+  // waitFor polls at this interval (patched into @testing-library/dom; its own default is 50 ms).
   configure({
+    asyncUtilInterval: 10,
     getElementError(message, container) {
       const rendered = prettyDOM(container, TEST_DIAGNOSTIC_DOM_BYTES, { highlight: false }) ?? "";
       const error = new Error(

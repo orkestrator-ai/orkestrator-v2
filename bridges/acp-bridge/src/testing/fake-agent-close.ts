@@ -17,6 +17,9 @@
  * - `CRASH`: the process exits mid-turn.
  * - anything else: recorded as the conversation's turn, answered, `end_turn`.
  *
+ * `FAKE_CLOSE_CANCEL_HOLD_FILE` answers the cancelled turn once that file
+ * exists, instead of after `FAKE_CLOSE_CANCEL_DELAY_MS`: the test decides when.
+ *
  * `session/load` waits for `FAKE_CLOSE_LOAD_HOLD_FILE` to exist when set.
  *
  * `FAKE_CLOSE_SESSION_CAPABILITY=1` advertises `sessionCapabilities.close`
@@ -24,6 +27,8 @@
  * and answered, or left unanswered with `FAKE_CLOSE_SESSION_HANG=1`. Like
  * Grok's, it releases the session but keeps it listed and loadable.
  */
+// First: applies a shared bridge's per-test switches before the constants below read them.
+import "./fake-agent-env-file.js";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
@@ -32,6 +37,7 @@ type JsonObject = Record<string, unknown>;
 const log = process.env.FAKE_CLOSE_LOG;
 const store = process.env.FAKE_CLOSE_STORE;
 const cancelDelayMs = Number(process.env.FAKE_CLOSE_CANCEL_DELAY_MS ?? "0");
+const cancelHoldFile = process.env.FAKE_CLOSE_CANCEL_HOLD_FILE;
 const ignoreCancel = process.env.FAKE_CLOSE_IGNORE_CANCEL === "1";
 const loadHoldFile = process.env.FAKE_CLOSE_LOAD_HOLD_FILE;
 const sessionCloseCapability = process.env.FAKE_CLOSE_SESSION_CAPABILITY === "1";
@@ -99,11 +105,13 @@ createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", (line)
     record("cancel");
     const held = heldPrompt;
     if (!held || ignoreCancel) return;
-    setTimeout(() => {
+    const answer = (): void => {
       heldPrompt = null;
       record("answered-cancelled");
       write({ jsonrpc: "2.0", id: held.id, result: { stopReason: "cancelled" } });
-    }, cancelDelayMs);
+    };
+    if (cancelHoldFile) whenFileExists(cancelHoldFile, answer);
+    else setTimeout(answer, cancelDelayMs);
     return;
   }
   if (typeof id !== "number") return;

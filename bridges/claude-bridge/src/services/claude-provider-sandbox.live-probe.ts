@@ -16,6 +16,7 @@
 // test creates and removes, the API key is a fixture string, and
 // non-essential traffic is off. Nothing is billed.
 import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 
@@ -335,7 +336,8 @@ function bundledCli(): string {
   );
 }
 
-async function main(): Promise<void> {
+/** Runs `scenarios` one after another, in this process, in the workspace `CWD` names. */
+async function runScenarios(scenarios: SandboxScenario[]): Promise<SandboxReport> {
   const workspace = process.env.CWD;
   const outside = process.env.SANDBOX_PROBE_OUTSIDE;
   if (!workspace || !outside || !process.env.CLAUDE_CONFIG_DIR) {
@@ -433,7 +435,7 @@ async function main(): Promise<void> {
 
   const observations: SandboxObservation[] = [];
   try {
-    for (const scenario of SCENARIOS) {
+    for (const scenario of scenarios) {
       const created = await call("POST", "/session/create", {
         title: `sandbox ${scenario.name}`,
         policy: scenario.policy,
@@ -501,11 +503,111 @@ async function main(): Promise<void> {
     model.stop(true);
     unlisted.stop(true);
   }
-  const report: SandboxReport = {
-    platform: process.platform,
-    cliVersion: version,
-    observations,
+  return { platform: process.platform, cliVersion: version, observations };
+}
+
+/**
+ * Child lanes this probe splits the scenarios across. A lane is a process with
+ * a workspace, scratch directory, home and bridge of its own: sessions that
+ * share one workspace race on the files the CLI keeps in its `.claude`
+ * directory, which bubblewrap binds, so the lanes cannot be sessions of one
+ * bridge. `SANDBOX_PROBE_LANES=1` runs every scenario in this process.
+ */
+const DEFAULT_LANES = 4;
+const ONLY_ENV = "SANDBOX_PROBE_ONLY";
+
+/** Runs the scenarios in `DEFAULT_LANES` child probes at once and merges their reports. */
+async function runLanes(lanes: number): Promise<SandboxReport> {
+  const workspace = process.env.CWD;
+  const outside = process.env.SANDBOX_PROBE_OUTSIDE;
+  const home = process.env.HOME;
+  if (!workspace || !outside || !home) {
+    throw new Error("The probe needs CWD, SANDBOX_PROBE_OUTSIDE and HOME");
+  }
+  // Round robin keeps the slow turns (approvals) from landing in one lane.
+  const assigned = Array.from({ length: lanes }, (): SandboxScenario[] => []);
+  SCENARIOS.forEach((scenario, index) => assigned[index % lanes]!.push(scenario));
+  const children = new Set<Bun.Subprocess>();
+  const stop = () => {
+    for (const child of children) child.kill();
   };
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.once(signal, () => {
+      stop();
+      process.exit(signal === "SIGTERM" ? 143 : 130);
+    });
+  }
+  const laneReports = await Promise.allSettled(
+    assigned.map(async (scenarios, lane) => {
+      // Siblings of the test's directories, so its cleanup removes them too.
+      const laneHome = `${home}-lane${lane}`;
+      await Promise.all(
+        [
+          join(laneHome, ".claude"),
+          join(laneHome, "gh"),
+          join(laneHome, "tmp"),
+          `${workspace}-lane${lane}`,
+          `${outside}-lane${lane}`,
+        ].map((path) => mkdir(path, { recursive: true, mode: 0o700 })),
+      );
+      const child = Bun.spawn([process.execPath, import.meta.path], {
+        env: {
+          ...process.env,
+          HOME: laneHome,
+          CLAUDE_CONFIG_DIR: join(laneHome, ".claude"),
+          GH_CONFIG_DIR: join(laneHome, "gh"),
+          // The CLI keeps content-named files (its sandbox settings) in a
+          // per-user directory under /tmp and deletes them as it exits,
+          // which another running CLI's bubblewrap would then miss.
+          CLAUDE_CODE_TMPDIR: join(laneHome, "tmp"),
+          CWD: `${workspace}-lane${lane}`,
+          SANDBOX_PROBE_OUTSIDE: `${outside}-lane${lane}`,
+          [ONLY_ENV]: scenarios.map((scenario) => scenario.name).join(","),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      children.add(child);
+      try {
+        const [stdout, stderr, exitCode] = await Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+          child.exited,
+        ]);
+        if (exitCode !== 0)
+          throw new Error(`lane ${lane} exited ${exitCode}: ${stderr.slice(-4_000)}`);
+        const line = stdout.split("\n").find((candidate) => candidate.startsWith(RESULT_SENTINEL));
+        if (!line) throw new Error(`lane ${lane} printed no ${RESULT_SENTINEL} line`);
+        return JSON.parse(line.slice(RESULT_SENTINEL.length)) as SandboxReport;
+      } finally {
+        children.delete(child);
+        if (child.exitCode === null) child.kill();
+      }
+    }),
+  );
+  const failed = laneReports.find((entry) => entry.status === "rejected");
+  if (failed) throw (failed as PromiseRejectedResult).reason;
+  const reports = laneReports.map(
+    (entry) => (entry as PromiseFulfilledResult<SandboxReport>).value,
+  );
+  const order = new Map(SCENARIOS.map((scenario, index) => [scenario.name, index]));
+  return {
+    platform: reports[0]!.platform,
+    cliVersion: reports[0]!.cliVersion,
+    observations: reports
+      .flatMap((report) => report.observations)
+      .sort((a, b) => order.get(a.name)! - order.get(b.name)!),
+  };
+}
+
+async function main(): Promise<void> {
+  const only = process.env[ONLY_ENV];
+  const lanes = Number(process.env.SANDBOX_PROBE_LANES ?? DEFAULT_LANES);
+  const report = only
+    ? await runScenarios(SCENARIOS.filter((scenario) => only.split(",").includes(scenario.name)))
+    : lanes > 1
+      ? await runLanes(Math.min(lanes, SCENARIOS.length))
+      : await runScenarios(SCENARIOS);
   process.stdout.write(`${RESULT_SENTINEL}${JSON.stringify(report)}\n`);
 }
 

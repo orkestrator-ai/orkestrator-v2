@@ -229,6 +229,25 @@ describe("returning a detached reader to their semantic place", () => {
 
 type ViewProps = { isActive: boolean; visible: boolean; viewKey?: string };
 
+/**
+ * Waits until a return has settled at the newest message, then checks the reader follows.
+ * The navigation writes the end position a frame before it settles, and follow is
+ * granted only once no operation is in flight, so checking follow on the first poll
+ * that sees the position races that frame (more often with a short poll interval).
+ * The wait reads the rendered `followEnabled`: `followOutput` records growth when
+ * follow is paused, so polling it could change what is being observed.
+ */
+async function waitForFollowingAtEnd(
+  view: { result: { current: ReturnType<typeof useVirtuosoScrollState> } },
+  scroller: HTMLElement,
+): Promise<void> {
+  await waitFor(() => {
+    expect(scroller.scrollTop).toBe(4400);
+    expect(view.result.current.scrollProps.followEnabled).toBe(true);
+  });
+  expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+}
+
 /** A detached reader at 1920 (k5 80px below the top) in a view with `activation`. */
 function detachedView(activation: ActivationPolicy, viewKey?: string) {
   const view = renderHook(
@@ -287,8 +306,7 @@ describe("a `latest` view hidden inside an active host", () => {
     // Output arrived while hidden and left the hidden offset short of the end.
     scroller.scrollTop = 3000;
     view.rerender({ isActive: true, visible: true });
-    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
-    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    await waitForFollowingAtEnd(view, scroller);
     scroller.remove();
   });
 
@@ -296,8 +314,7 @@ describe("a `latest` view hidden inside an active host", () => {
     const { view, scroller } = detachedLatestView();
     view.rerender({ isActive: false, visible: true });
     view.rerender({ isActive: true, visible: true });
-    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
-    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    await waitForFollowingAtEnd(view, scroller);
     scroller.remove();
   });
 
@@ -343,8 +360,7 @@ describe("a `latest` view hidden inside an active host", () => {
     const { view, scroller } = detachedView("latest", "stage-a");
     view.rerender({ isActive: true, visible: false, viewKey: "stage-a" });
     view.rerender({ isActive: true, visible: true, viewKey: "stage-b" });
-    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
-    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    await waitForFollowingAtEnd(view, scroller);
     scroller.remove();
   });
 
@@ -404,8 +420,7 @@ describe("a `respect-intent` view hidden inside an active host", () => {
     view.rerender({ isActive: true, visible: false });
     scroller.scrollTop = 3000;
     view.rerender({ isActive: true, visible: true });
-    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
-    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    await waitForFollowingAtEnd(view, scroller);
     scroller.remove();
   });
 
@@ -425,8 +440,7 @@ describe("a `respect-intent` view hidden inside an active host", () => {
     const { view, scroller } = detachedView("respect-intent", "session-a");
     view.rerender({ isActive: true, visible: false, viewKey: "session-a" });
     view.rerender({ isActive: true, visible: true, viewKey: "session-b" });
-    await waitFor(() => expect(scroller.scrollTop).toBe(4400));
-    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    await waitForFollowingAtEnd(view, scroller);
     scroller.remove();
   });
 });

@@ -95,7 +95,9 @@ holds the host at a time. Its groups share a host-wide scheduler resource, so
 another worktree's complete run queues until the first finishes; overlapping
 suites made every run slower and pushed subprocess tests into timeouts.
 `test:changed` is exempt, and `ORKESTRATOR_TEST_ALLOW_CONCURRENT=1` opts a run
-out.
+out of that lock (it still queues for host capacity like any other run). An
+experimental, default-off alternative that admits a second complete run when the
+host is calm is described under [Host capacity queue](#host-capacity-queue).
 
 `test:changed` is an optimization, not final proof. It uses Turbo's affected
 package graph and Bun's changes from the local `main` ref. Configuration files,
@@ -342,7 +344,9 @@ groups instead of spawning extra workers.
 The per-suite plan includes the protocol slot in its eight-slot ceiling.
 Each ordinary group reserves an estimated 1 GiB per worker (bounded by the host
 memory budget). These are admission estimates, not operating-system CPU or
-memory limits; measure peak use before increasing concurrency.
+memory limits; measure peak use before increasing concurrency. On Linux each
+group's finish line also reports the cores it actually used, so over-reservation
+is visible (see [Learned group CPU](#learned-group-cpu-and-adaptive-reservation)).
 
 `ORKESTRATOR_TEST_GROUPS` runs only some groups: a comma-separated list of
 `backend`, `workspace`, `root`, `bridges` and `codex-protocol`. `backend` and
@@ -1686,7 +1690,8 @@ SQLite queue is shared by local worktrees, repositories, agent platforms, and
 terminals for the same OS user. Transactions own admission; no UI or central
 daemon must remain mounted or connected.
 
-Worker and memory reservations are fixed for each running group. Worktrees
+Aggregate groups reserve a fixed worker count and memory for as long as they
+run (unless adaptive reservation is switched on, below). Worktrees
 take fair turns, with FIFO ordering within a worktree. When the next eligible
 request is too large for the remaining capacity, it holds its place rather
 than allowing a stream of smaller jobs to starve it. A bounded exception allows
@@ -1707,26 +1712,109 @@ Configuration (use the same settings in all participating launchers):
 
 | Environment variable | Purpose |
 | --- | --- |
-| `ORKESTRATOR_TEST_HOST_WORKERS` | Set the host ceiling (default 8; capped at logical CPUs minus 2, minimum 1, maximum 64) |
-| `ORKESTRATOR_TEST_HOST_MEMORY_MIB` | Lower the estimated host memory budget |
+| `ORKESTRATOR_TEST_HOST_WORKERS` | Set the host ceiling in slots. Default: one slot per logical core (at most 256). A positive integer is accepted up to four slots per logical core (at most 256), so values above the core count deliberately oversubscribe; anything else (zero, negative, non-numeric) selects the default |
+| `ORKESTRATOR_TEST_HOST_MEMORY_MIB` | Lower the estimated host memory budget (default and ceiling: 65% of physical memory, at least 512 MiB) |
 | `ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS` | Wait deadline, from 1 second to 2 hours |
 | `ORKESTRATOR_TEST_SCHEDULER_DIR` | Private same-user SQLite directory; normally leave unset |
 | `ORKESTRATOR_COOPERATIVE_STARTUP_MS` | First-publish allowance before a cooperative runner is treated as stalled |
 | `ORKESTRATOR_COOPERATIVE_STALE_MS` | Silence after its last channel read before a cooperative runner is treated as stalled |
+| `ORKESTRATOR_TEST_ADAPTIVE_RESERVATION` | `1` sizes each aggregate group's reservation from its measured CPU use (default off; see below) |
+| `ORKESTRATOR_TEST_AGGREGATE_PRESSURE_GATE` | `1` lets a queued complete run start beside another when the host is calm (default off, **experimental**; see below) |
+| `ORKESTRATOR_TEST_AGGREGATE_PRESSURE_MAX_PERCENT` | Gate: CPU pressure (`some avg10`) must stay below this percentage (default 20) |
+| `ORKESTRATOR_TEST_AGGREGATE_PRESSURE_SETTLE_MS` | Gate: how long calm must hold without one hot or unreadable sample (default 15000; 0 disables the wait) |
+| `ORKESTRATOR_TEST_AGGREGATE_PRESSURE_MIN_MEMORY_AVAILABLE_PERCENT` | Gate: `MemAvailable` must be at least this percentage of `MemTotal` (default 25) |
 
-The host ceiling and per-suite ceiling are separate. To evaluate more host
-parallelism, set `ORKESTRATOR_TEST_HOST_WORKERS=10` (or 12 on a sufficiently large
-host) consistently in all launchers, keeping the per-suite layout bounded. Compare
-cold and warm multi-worktree completion times, memory pressure/swap, process-tree
-peak memory, responsiveness, and test failures before adopting a higher setting.
-CPU percentage alone does not measure safe available capacity.
+The host ceiling and per-suite ceiling are separate. The ceiling already
+defaults to every logical core; slots are admission estimates of average CPU use,
+not operating-system limits, so to evaluate more host parallelism than that,
+oversubscribe it deliberately (for example `ORKESTRATOR_TEST_HOST_WORKERS` at
+1.5 times the core count) consistently in all launchers, keeping the per-suite
+layout bounded. Compare cold and warm multi-worktree completion times, memory
+pressure/swap, process-tree peak memory, responsiveness, and test failures before
+adopting a higher setting. CPU percentage alone does not measure safe available
+capacity.
 
 An active queue keeps its original budget; changed settings apply when idle.
-The old `ORKESTRATOR_TEST_ALLOW_CONCURRENT` override no longer bypasses admission.
+The old `ORKESTRATOR_TEST_ALLOW_CONCURRENT` override no longer bypasses admission:
+it only drops the complete-run lock, and every group still queues for slots and
+memory.
 Older worktrees that still use the fail-fast lease must be updated to participate
 in the new queue. Direct focused tests and unrelated dev servers do not reserve
 capacity automatically. A Docker container is a separate scheduler namespace;
 this is not a distributed scheduler or a physical-host container quota manager.
+
+### Learned group CPU and adaptive reservation
+
+A slot reservation is only an estimate, and a group that mostly waits on
+processes, ports or timers holds slots it does not use. So on Linux the
+aggregate runner now measures each group it admits: while the group runs it
+samples `/proc` every half second for every live process of the group's process
+group, summing user, system and already-reaped-children CPU. When an undisturbed
+group finishes (status 0, no timeout, output limit or infrastructure error, not
+cancelled, and sampled for at least one second) it records the group's average
+parallelism (CPU time over the sampled span) in the same host `usage` table that
+review validation uses, under an opaque digest of the repository's Git common
+directory, tier, group name, directory, command line, extra environment and
+planned worker count. A worktree-specific timings path is not part of the digest,
+so every worktree of the repository shares the history. The group's finish line
+then reads, for example,
+`PASS bridges finished (3/4, 41.2s, observed 1.4 cores of 2 slots)`, which is how
+to see over- and under-reservation by eye. Groups that were not measured print
+the finish line unchanged.
+
+Limits: macOS has no per-process counter for reaped descendants, so only Linux
+measures (elsewhere nothing is recorded and nothing changes). Processes that
+leave the group with `setsid` are not counted, and a process reaped between two
+reads can be counted twice in one sample, so a figure errs high rather than low.
+Clock ticks are assumed to be 100 per second, as on every mainstream Linux.
+Average cores is not peak cores: a group at 0.3 average can still burst.
+
+`ORKESTRATOR_TEST_ADAPTIVE_RESERVATION=1` (default off) uses that history. A
+group's reservation becomes the busiest of its last five recorded runs, rounded
+up and at least one slot, never above the planned worker count, with an elastic
+floor of a quarter of it, so a wait-bound group can start on a busy host with
+what is free instead of waiting for its whole plan. The `RUNNING` line says
+`adaptive: learned 3 of 6 planned` and shows the slots actually granted. The
+group still runs its planned number of Bun workers: only the CPU-slot estimate
+shrinks. Its memory reservation stays that of the plan (1 GiB per planned
+worker, within the host budget), because memory is not elastic and every
+planned worker still starts. Enable it only after reading a few finish lines. Without history, with
+the variable unset or set to anything but `1`, and for the exclusive iOS group,
+the reservation, its queue request and the `RUNNING` line are exactly the static
+plan's. Rationale: the measured per-file data in
+measurements of the slowest test files show about half their wall time is idle, so the plan over-reserves
+for the backend and bridges groups; the learned figure is what lets a second
+worktree's groups run beside them.
+
+### Experimental: CPU-pressure gate for the complete-run lock
+
+`ORKESTRATOR_TEST_AGGREGATE_PRESSURE_GATE=1` (default off) is **experimental and
+has not been validated under real concurrent runs**: nobody has yet compared two
+overlapping complete runs against the serial baseline, and the lock exists
+because overlapping suites once pushed subprocess tests into timeouts. Leave it
+off for any run whose result you rely on.
+
+When on, a complete run that is queued behind another worktree's complete run
+(the lock above) is admitted alongside it if, on Linux, `/proc/pressure/cpu`
+`some avg10` has stayed below `ORKESTRATOR_TEST_AGGREGATE_PRESSURE_MAX_PERCENT`
+(default 20) for `ORKESTRATOR_TEST_AGGREGATE_PRESSURE_SETTLE_MS` (default 15 s),
+memory `some avg10` is below 5%, and `MemAvailable` is at least
+`ORKESTRATOR_TEST_AGGREGATE_PRESSURE_MIN_MEMORY_AVAILABLE_PERCENT` (default 25)
+of `MemTotal`. The settle window exists because `avg10` lags the load a second
+run adds; a single hot or unreadable sample restarts it. A run admitted this way
+holds a second lock (`host:aggregate-test-suite-overflow`) instead of the first,
+so at most two complete runs overlap and overflow runs still exclude each other.
+Host slots and the memory budget still apply to every group. It fails closed: if
+`/proc/pressure` or `/proc/meminfo` is missing, unreadable or malformed (not
+Linux, a kernel without PSI, a container that hides it), the lock behaves exactly
+as without the variable. Known limits: the pressure signal is host-wide, so a
+busy unrelated workload also blocks it; a run already waiting on the overflow
+lock does not move back to the first when that frees; and only a wait on another
+complete run's lock is excused. The scheduler reports which of a queued job's
+resources running jobs hold, and the gate opens only when that is the
+complete-run lock alone: a wait on an inherited host resource, a whole-host
+(`*`) reservation, or the lock together with anything else stays queued on the
+first lock without reading pressure.
 
 ### Multi Review validation
 

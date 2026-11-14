@@ -970,7 +970,7 @@ file passed in containers at low load earlier the same day.
     the three `commandRevision` mappings (`commandCatalogueRevisionField`).
   - `executable document policy in firefox > popups, new-window links and top
     navigation reach the sink zero times`
-    (`content-server.engines.test.ts`) fails alone too: this host's Firefox
+    (now `content-server.engines-firefox-2.test.ts`) fails alone too: this host's Firefox
     fetches `/favicon.ico` from the sink origin. The branch changes nothing
     under `transcript-artifacts`; not checked on `main`.
 - The backend suite run on its own afterwards: 10,155 pass, 5 fail, the four

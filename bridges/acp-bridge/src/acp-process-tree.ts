@@ -16,6 +16,21 @@ async function processes(): Promise<Identity[]> {
   });
 }
 
+/** How long an agent tree gets to exit on SIGTERM before it is killed. */
+export const DEFAULT_TERM_GRACE_MS = 2_000;
+
+/**
+ * `ACP_TERM_GRACE_MS` shortens the grace for tests that close a TERM-resistant
+ * descendant on purpose. It can only shorten it: anything unset, invalid or
+ * below 10 ms keeps the default, and a value above the default is capped at it.
+ */
+export function termGraceMs(env: NodeJS.ProcessEnv = process.env): number {
+  const parsed = Number(env.ACP_TERM_GRACE_MS);
+  return env.ACP_TERM_GRACE_MS !== undefined && Number.isSafeInteger(parsed) && parsed >= 10
+    ? Math.min(DEFAULT_TERM_GRACE_MS, parsed)
+    : DEFAULT_TERM_GRACE_MS;
+}
+
 /** Close one agent without signalling the bridge's shared process group. */
 export async function terminateAcpProcessTree(
   child: ChildProcessWithoutNullStreams,
@@ -78,7 +93,7 @@ export async function terminateAcpProcessTree(
   signal("SIGTERM", table);
   // The leader can exit first. Its exit must not cancel escalation for an MCP
   // server or terminal that ignored SIGTERM and has since been reparented.
-  if (await wait(2_000)) return;
+  if (await wait(termGraceMs())) return;
   signal("SIGKILL", await processes().catch(() => []));
   await wait(1_000);
 }

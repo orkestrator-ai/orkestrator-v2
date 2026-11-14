@@ -320,7 +320,7 @@ The 1.2.0 reading gives no capacity code and no field that separates a capacity 
     - shutdown during a wait.
   - `sessions/capacity-retry.test.ts` covers the policy.
   - `history/rollout-rows.test.ts` covers the replay.
-  - `multi-review-service.test.ts` ("an unattended Fix survives a Codex capacity retry", "an unattended Fix waits out an OpenCode capacity retry") covers the backend side of the contract.
+  - `multi-review-service-part-2.test.ts` ("an unattended Fix survives a Codex capacity retry", "an unattended Fix waits out an OpenCode capacity retry") covers the backend side of the contract.
   - `opencode-capacity-retry.test.ts` covered the 1.x classification, continuation, backoff, exhaustion, Stop, and rejected and ambiguous sends (removed with OpenCode 1.x on 2026-11-11: `git show 5f4e27b1c:apps/backend/src/core/opencode-capacity-retry.test.ts`).
   - `acp-prompt.test.ts` and `acp-reconciliation.test.ts` cover the ACP retry, its card, Stop during a long wait, and errors that name a limit.
   - `runtime-env.test.ts` and `session-manager-prompt.test.ts` cover which Claude sessions get the longer backoff.

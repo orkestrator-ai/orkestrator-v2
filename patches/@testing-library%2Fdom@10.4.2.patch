@@ -1,0 +1,61 @@
+diff --git a/dist/@testing-library/dom.esm.js b/dist/@testing-library/dom.esm.js
+index 90108edc90619e5b4efceb121c7ec319a1ebf9d8..e0ef27e0faa302b10af1418f863de861bb4cc5d2 100644
+--- a/dist/@testing-library/dom.esm.js
++++ b/dist/@testing-library/dom.esm.js
+@@ -314,6 +314,8 @@ const logDOM = function () {
+ let config = {
+   testIdAttribute: 'data-testid',
+   asyncUtilTimeout: 1000,
++  // How often waitFor/findBy* re-run their check when no DOM mutation prompts one.
++  asyncUtilInterval: 50,
+   // asyncWrapper and advanceTimersWrapper is to support React's async `act` function.
+   // forcing react-testing-library to wrap all async functions would've been
+   // a total nightmare (consider wrapping every findBy* query and then also
+@@ -981,7 +983,7 @@ function waitFor(callback, _ref) {
+     showOriginalStackTrace = _ref$showOriginalStac === void 0 ? getConfig().showOriginalStackTrace : _ref$showOriginalStac,
+     stackTraceError = _ref.stackTraceError,
+     _ref$interval = _ref.interval,
+-    interval = _ref$interval === void 0 ? 50 : _ref$interval,
++    interval = _ref$interval === void 0 ? getConfig().asyncUtilInterval : _ref$interval,
+     _ref$onTimeout = _ref.onTimeout,
+     onTimeout = _ref$onTimeout === void 0 ? error => {
+       Object.defineProperty(error, 'message', {
+diff --git a/dist/config.js b/dist/config.js
+index 89c83d6b9885af0fe45c951ed3564039c2b25fe9..1ba3107c17a023a80efcb799964dfbb16a63db74 100644
+--- a/dist/config.js
++++ b/dist/config.js
+@@ -13,6 +13,8 @@ var _prettyDom = require("./pretty-dom");
+ let config = {
+   testIdAttribute: 'data-testid',
+   asyncUtilTimeout: 1000,
++  // How often waitFor/findBy* re-run their check when no DOM mutation prompts one.
++  asyncUtilInterval: 50,
+   // asyncWrapper and advanceTimersWrapper is to support React's async `act` function.
+   // forcing react-testing-library to wrap all async functions would've been
+   // a total nightmare (consider wrapping every findBy* query and then also
+diff --git a/dist/wait-for.js b/dist/wait-for.js
+index 4c0de3d7dbaa8725d0c137453b1f3bdffbdfca82..5476c8e24318e037de26624994a8f3592fbf923a 100644
+--- a/dist/wait-for.js
++++ b/dist/wait-for.js
+@@ -16,7 +16,7 @@ function waitFor(callback, {
+   timeout = (0, _config.getConfig)().asyncUtilTimeout,
+   showOriginalStackTrace = (0, _config.getConfig)().showOriginalStackTrace,
+   stackTraceError,
+-  interval = 50,
++  interval = (0, _config.getConfig)().asyncUtilInterval,
+   onTimeout = error => {
+     Object.defineProperty(error, 'message', {
+       value: (0, _config.getConfig)().getElementError(error.message, container).message
+diff --git a/types/config.d.ts b/types/config.d.ts
+index c3617ef087f1fadf67f964e3afb9754f50b058cf..474f31c20eb6aaca28f7d135d3082cb35293026b 100644
+--- a/types/config.d.ts
++++ b/types/config.d.ts
+@@ -10,6 +10,8 @@ export interface Config {
+   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   eventWrapper(cb: (...args: any[]) => any): void
+   asyncUtilTimeout: number
++  /** How often `waitFor` and `findBy*` re-run their check between DOM mutations. Defaults to 50. */
++  asyncUtilInterval: number
+   computedStyleSupportsPseudoElements: boolean
+   defaultHidden: boolean
+   /** default value for the `ignore` option in `ByText` queries */

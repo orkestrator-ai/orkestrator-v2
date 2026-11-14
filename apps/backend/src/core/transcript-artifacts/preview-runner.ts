@@ -745,10 +745,19 @@ export class TranscriptPreviewRunner implements PreviewRunner {
         exits.push(this.probeJob.exited);
         owned.push(this.probeJob);
       }
-      await Promise.race([
-        Promise.allSettled(exits),
-        new Promise((resolve) => setTimeout(resolve, 10_000)),
-      ]);
+      // Cleared once the exits settle: a pending timer would keep the backend
+      // process alive for the full bound even when every worker is already gone.
+      let boundTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          Promise.allSettled(exits),
+          new Promise((resolve) => {
+            boundTimer = setTimeout(resolve, 10_000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(boundTimer);
+      }
       // A worker whose exit was never verified keeps its scratch until the
       // next backend's startup recovery. Counted, never named, so the logs can
       // show whether production previews are what leaves scratch behind.

@@ -17,6 +17,8 @@ export GIT_TERMINAL_PROMPT=0
 host="$(hostname)"
 # How often follow checks for the result; tests shorten it.
 poll="${ORKESTRATOR_RELEASE_POLL_SECONDS:-5}"
+# How long follow lets tail print the last lines once the result is recorded.
+flush="${ORKESTRATOR_RELEASE_FLUSH_SECONDS:-1}"
 say() { printf '[%s] %s\n' "$host" "$*"; }
 die() { say "$*" >&2; exit 1; }
 
@@ -129,7 +131,7 @@ follow() {
     sleep "$poll"
   done
   # Let tail print the last lines before it is stopped.
-  sleep 1
+  sleep "$flush"
   local code
   code="$(cat "$status")"
   say "release-desktop build exited with $code"

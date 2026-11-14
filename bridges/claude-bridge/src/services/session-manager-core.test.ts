@@ -314,6 +314,9 @@ describe("getClaudeRuntimeVersions", () => {
     await writeFile(executable, "#!/bin/sh\nexec /bin/sleep 30\n");
     await chmod(executable, 0o755);
     mockExecFile.mockImplementation(originalExecFile);
+    // Short probe timeout: the executable sleeps far past it, so only the
+    // timeout (not the sleep) can end the probe.
+    const probeTimeoutMs = 400;
 
     try {
       await withClaudeCliPath(executable, async () => {
@@ -322,15 +325,15 @@ describe("getClaudeRuntimeVersions", () => {
           timerFired = true;
         }, 25);
         const startedAt = Date.now();
-        const versionsPromise = getClaudeRuntimeVersions();
+        const versionsPromise = getClaudeRuntimeVersions(probeTimeoutMs);
 
-        await waitFor(() => timerFired, 500);
+        await waitFor(() => timerFired, 300);
         expect(timerFired).toBe(true);
 
         const manifest = await readBundledManifest();
         const versions = await versionsPromise;
         const elapsedMs = Date.now() - startedAt;
-        expect(elapsedMs).toBeGreaterThanOrEqual(4_500);
+        expect(elapsedMs).toBeGreaterThanOrEqual(probeTimeoutMs * 0.9);
         expect(elapsedMs).toBeLessThan(10_000);
         expect(versions.cliVersion).toBe(manifest.claudeCodeVersion);
       });

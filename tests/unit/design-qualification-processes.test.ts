@@ -97,7 +97,10 @@ describe("design qualification process ownership", () => {
   test("a nonresponsive owned server times out and is killed, even when it ignores SIGTERM", async () => {
     const f = await fixture();
     try {
-      await expect(startOwnedPreview(f.options("hang", 500))).rejects.toThrow("did not start");
+      // The server ignores SIGTERM, so cleanup waits out one grace before SIGKILL.
+      await expect(
+        startOwnedPreview({ ...f.options("hang", 500), stopTimeoutMs: 500 }),
+      ).rejects.toThrow("did not start");
       expect(processAlive(Number(await readFile(path.join(f.root, "pid"), "utf8")))).toBe(false);
     } finally {
       await f.cleanup();

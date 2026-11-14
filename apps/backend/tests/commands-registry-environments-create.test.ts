@@ -12,7 +12,7 @@ function renameEntries(logs: LogCapture) {
 
 const {
   ASYNC_TEST_BUDGET_MS,
-  LOCAL_PROJECT_FOR_CREATE,
+  getLocalProjectForCreate,
   codexSlugScript,
   commandTesting,
   configuredGitPushBehaviour,
@@ -69,7 +69,7 @@ describe("Electron backend command registry", () => {
   });
 
   test("creates unnamed environments with a default timestamp while storing the initial prompt", async () => {
-    const { context } = createContext([], { project: LOCAL_PROJECT_FOR_CREATE });
+    const { context } = createContext([], { project: await getLocalProjectForCreate() });
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
 
@@ -139,7 +139,7 @@ exit 42
   });
 
   test("does not persist a naming prompt when an explicit environment name is provided", async () => {
-    const { context } = createContext([], { project: LOCAL_PROJECT_FOR_CREATE });
+    const { context } = createContext([], { project: await getLocalProjectForCreate() });
     const commands = createCommandRegistry();
 
     const result = (await commands.get("create_environment")?.(
@@ -157,7 +157,7 @@ exit 42
   });
 
   test("persists the originating build pipeline on a created environment", async () => {
-    const { context } = createContext([], { project: LOCAL_PROJECT_FOR_CREATE });
+    const { context } = createContext([], { project: await getLocalProjectForCreate() });
     const commands = createCommandRegistry();
 
     const result = (await commands.get("create_environment")?.(
@@ -743,7 +743,7 @@ exit 1
   });
 
   test("does not run codex exec for initial-prompt-only environment naming", async () => {
-    const { context } = createContext([], { project: LOCAL_PROJECT_FOR_CREATE });
+    const { context } = createContext([], { project: await getLocalProjectForCreate() });
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
 
@@ -776,7 +776,7 @@ exit 1
   });
 
   test("falls back to the default timestamp name when an initial prompt cannot form a slug", async () => {
-    const { context } = createContext([], { project: LOCAL_PROJECT_FOR_CREATE });
+    const { context } = createContext([], { project: await getLocalProjectForCreate() });
     const commands = createCommandRegistry();
 
     const result = await withFixedDate(
@@ -803,7 +803,7 @@ exit 1
       name: "20260415-123456",
       branch: "20260415-123456",
     });
-    const { context } = createContext(existing, { project: LOCAL_PROJECT_FOR_CREATE });
+    const { context } = createContext(existing, { project: await getLocalProjectForCreate() });
     const commands = createCommandRegistry();
 
     const result = await withFixedDate(
@@ -828,7 +828,7 @@ exit 1
       name: "custom-name",
       branch: "custom-name",
     });
-    const { context } = createContext(existing, { project: LOCAL_PROJECT_FOR_CREATE });
+    const { context } = createContext(existing, { project: await getLocalProjectForCreate() });
     const commands = createCommandRegistry();
 
     const result = (await commands.get("create_environment")?.(

@@ -820,7 +820,8 @@ packaged `.app`.
 
 ### Browser engine qualification (2026-10-20)
 
-`content-server.engines.test.ts` serves prepared documents from the real
+`content-server.engines-*.test.ts` (one file per engine and lane; each lane's tests are defined once in
+`content-server.engines-lane-<n>-test-support.ts`) serves prepared documents from the real
 `LoopbackArtifactContentServer` (content on `localhost`, the test
 "application" on `127.0.0.1`) and drives each engine through playwright-core
 1.64.0: Chromium is the design renderer's resolved browser (Google Chrome
@@ -884,7 +885,7 @@ differences were cosmetic (WebKit made one sink request per control
 navigation where Chromium and Firefox made two).
 
 Viewer shell qualification (same engines and versions, 2026-10-20; four more
-tests per engine in `content-server.engines.test.ts`; the full file then ran
+tests per engine in `content-server.engines-*.test.ts`; the full file then ran
 39 passed, 0 skipped, 0 failed). Each attack runs three ways: the
 unrestricted control (same bytes, no policy, same origin as the page,
 `allow-popups allow-top-navigation allow-forms`), the document framed

@@ -112,6 +112,7 @@ async function setup(options: {
       ORKESTRATOR_LAUNCHER_RETRY_DELAY_MS: "20",
       ORKESTRATOR_LAUNCHER_CRASH_DELAY_MS: "20",
       ORKESTRATOR_LAUNCHER_READY_TIMEOUT_MS: "1000",
+      ORKESTRATOR_LAUNCHER_READY_POLL_MS: "20",
       ORKESTRATOR_LAUNCHER_STOP_TIMEOUT_MS: "50",
     },
   });
@@ -273,3 +274,29 @@ test("a corrected reinstall gets fresh boot attempts despite persisted old failu
   expect(state?.rollback).toBeNull();
   expect(state?.bootFailure).toBeNull();
 }, 30_000);
+
+test("the ready-poll override only shortens the 500 ms poll and ignores anything else", async () => {
+  // An empty data directory: the launcher reads its settings, finds no
+  // release and exits, so no backend is started.
+  dataDir = await mkdtemp(path.join(tmpdir(), "ork-launcher-poll-"));
+  const run = (value: string | undefined) => {
+    const env: Record<string, string | undefined> = { ...process.env };
+    delete env.ORKESTRATOR_LAUNCHER_READY_POLL_MS;
+    if (value !== undefined) env.ORKESTRATOR_LAUNCHER_READY_POLL_MS = value;
+    const result = Bun.spawnSync([process.execPath, LAUNCHER, dataDir], {
+      env,
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(1);
+    return result.stderr.toString();
+  };
+  for (const valid of [undefined, "20", "1", "500"]) {
+    expect(run(valid), String(valid)).not.toContain("ignoring ORKESTRATOR_LAUNCHER_READY_POLL_MS");
+  }
+  for (const invalid of ["", " ", "soon", "0", "-5", "1.5", "501", "60000", "Infinity"]) {
+    expect(run(invalid), invalid).toContain(
+      `ignoring ORKESTRATOR_LAUNCHER_READY_POLL_MS=${JSON.stringify(invalid)}: it must be a positive integer of at most 500; using 500 ms`,
+    );
+  }
+});

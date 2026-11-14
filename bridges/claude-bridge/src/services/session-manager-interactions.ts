@@ -217,7 +217,12 @@ export function getSessionInitData(sessionId: string): SessionInitData | undefin
   return session?.initData;
 }
 
-export async function getClaudeRuntimeVersions(): Promise<{
+/** How long the managed CLI's `--version` probe may run before the bundled version answers. */
+const CLAUDE_CLI_VERSION_PROBE_TIMEOUT_MS = 5_000;
+
+export async function getClaudeRuntimeVersions(
+  probeTimeoutMs = CLAUDE_CLI_VERSION_PROBE_TIMEOUT_MS,
+): Promise<{
   sdkVersion?: string;
   cliVersion?: string;
 }> {
@@ -241,7 +246,7 @@ export async function getClaudeRuntimeVersions(): Promise<{
   }
 
   try {
-    const output = await execFileText(executable, ["--version"], 5_000);
+    const output = await execFileText(executable, ["--version"], probeTimeoutMs);
     return {
       sdkVersion,
       cliVersion: output.match(/\d+\.\d+\.\d+/)?.[0] ?? bundledCliVersion,

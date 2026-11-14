@@ -252,7 +252,7 @@ describe("package tier wrapper", () => {
     const files = {
       "src/kept.test.ts": "kept",
       "tests/kept.test.ts": "tests",
-      "src/core/review-validation-worker.test.ts": "slow",
+      "src/core/review-validation-worker.queue.test.ts": "slow",
       "src/nested/example.live.test.ts": "live",
     };
     for (const [file, name] of Object.entries(files))

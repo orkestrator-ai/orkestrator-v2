@@ -2,7 +2,7 @@
  * Service-level coverage for the Multi Review efficiency work: evidence
  * permits across service lifetimes, one snapshot drift check per admission
  * pass, conditional reviewer transcripts, and content-free measurement. The broad behavioural suite lives in
- * `multi-review-service.test.ts`.
+ * `multi-review-service-part-*.test.ts`.
  */
 import { expect, jest, test } from "bun:test";
 import { promises as fs } from "node:fs";

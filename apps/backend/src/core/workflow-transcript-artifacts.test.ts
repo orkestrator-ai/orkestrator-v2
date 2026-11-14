@@ -2,7 +2,7 @@
  * Published transcript artifacts on workflow transcripts that read their
  * providers directly: build-pipeline stage transcripts (the `get_build_pipeline`
  * read) and Multi Review reviewer reads (conditional tokens). The reviewer
- * service read itself is covered in `multi-review-service.test.ts`.
+ * service read itself is covered in `multi-review-service-part-*.test.ts`.
  */
 import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";

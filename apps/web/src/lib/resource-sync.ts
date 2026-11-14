@@ -75,7 +75,7 @@ export const RESOURCE_MANIFEST_INTERVAL_MS = 5 * 60_000;
 export const RESOURCE_RESYNC_INTERVAL_MS = RESOURCE_MANIFEST_INTERVAL_MS;
 
 /** Coalescing window for bursts. Reorders announce once per moved record. */
-const COALESCE_MS = 50;
+export const RESOURCE_COALESCE_MS = 50;
 
 /**
  * How long the attach-time resync covers a connection announcement that lands
@@ -303,7 +303,7 @@ function dispatchInFeed(feed: ResourceFeed, change: ResourceChange): void {
   const timer = setTimeout(() => {
     pending.delete(key);
     if (trailing) void deliverIn(feed, trailing);
-  }, COALESCE_MS);
+  }, RESOURCE_COALESCE_MS);
   pending.set(key, { change: trailing, latest: change, timer });
 }
 

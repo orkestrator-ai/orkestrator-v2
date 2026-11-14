@@ -43,7 +43,7 @@ import {
   type TmuxSelectionPrompt,
 } from "../../../packages/protocol/src/tmux-observation";
 import { spawnSync } from "node:child_process";
-import { existsSync, promises as fs } from "node:fs";
+import { existsSync, promises as fs, realpathSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { localClaudeAccountPrefix } from "../src/core/tmux-session-manager";
 import type { ExecOutput } from "../src/core/tmux-shared";
@@ -161,11 +161,32 @@ test("Claude tmux agent MCP config uses Claude's mcpServers document shape", () 
   });
 });
 
+/**
+ * The installed `claude` executable, resolved with this process's own
+ * environment. A mise shim or command wrapper is mise itself; run under the
+ * parser test's replaced HOME it reads the user's global config but cannot
+ * find its trust records, and prints mise's refusal instead of running Claude.
+ */
+function installedClaudeExecutable(): string {
+  const found = Bun.which("claude");
+  if (!found) return "claude";
+  const mise = realpathSync(found);
+  if (path.basename(mise) !== "mise") return found;
+  const resolved = spawnSync(mise, ["which", "claude"], { encoding: "utf8", timeout: 10_000 });
+  if (resolved.error) throw resolved.error;
+  const executable = resolved.stdout.trim();
+  if (resolved.status !== 0 || !executable) {
+    throw new Error(`mise could not resolve claude: ${resolved.stderr.trim()}`);
+  }
+  return executable;
+}
+
 test("Claude's installed parser accepts the generated agent MCP config", async () => {
   const isolatedHome = await createTempDir("ork-claude-mcp-parser-");
+  const claude = installedClaudeExecutable();
   const parse = (config: string) => {
     const result = spawnSync(
-      "claude",
+      claude,
       ["--mcp-config", config, "--strict-mcp-config", "--print", ""],
       {
         encoding: "utf8",

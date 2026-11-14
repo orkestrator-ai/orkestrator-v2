@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   ALLOW_MISSING_PROTOCOL_BINARY_ENV,
@@ -13,6 +14,8 @@ import {
   FAILURE_REPORT_CONTEXT_LINES,
   FailureReportCollector,
   finalizeTestLogs,
+  sampleGroupCpuMs,
+  startGroupCpuSampler,
   GUARD_STAGE,
   GUARD_STAGE_TEST_FILES,
   INCLUDE_IOS_TESTS_ENV,
@@ -1767,4 +1770,148 @@ describe("FailureReportCollector", () => {
     collector.finish();
     expect(collector.reports).toEqual([]);
   });
+});
+
+describe("group CPU observation", () => {
+  const finishLines = (logs: string[]) => logs.filter((line) => line.includes(" finished ("));
+
+  test("the finish line names observed cores and slots only for groups admission measured", async () => {
+    const { dependencies, logs } = createDependencies();
+    const baseRunGroup = dependencies.runGroup;
+    dependencies.runGroup = async (group, env) => ({
+      ...(await baseRunGroup(group, env)),
+      ...(group.name === BRIDGES ? { observedCores: 1.44, reservedSlots: 6 } : {}),
+    });
+
+    expect(await runAllTests(dependencies)).toBe(0);
+    const lines = finishLines(logs);
+    expect(lines).toHaveLength(4);
+    expect(lines.filter((line) => line.includes("observed"))).toHaveLength(1);
+    expect(lines.find((line) => line.includes(BRIDGES))).toMatch(
+      /^PASS bridges finished \(\d\/4, [\d.]+m?s, observed 1\.4 cores of 6 slots\)$/,
+    );
+    // Everything else keeps today's exact format.
+    for (const line of lines.filter((entry) => !entry.includes(BRIDGES)))
+      expect(line).toMatch(/^PASS .+ finished \(\d\/4, [\d.]+m?s\)$/);
+  });
+
+  test("a half-measured result adds nothing to the finish line", async () => {
+    const { dependencies, logs } = createDependencies();
+    const baseRunGroup = dependencies.runGroup;
+    dependencies.runGroup = async (group, env) => ({
+      ...(await baseRunGroup(group, env)),
+      observedCores: 1,
+    });
+
+    expect(await runAllTests(dependencies)).toBe(0);
+    expect(finishLines(logs).every((line) => !line.includes("observed"))).toBe(true);
+  });
+
+  test("sums CPU of every live process in the group, including reaped children", () => {
+    const proc = path.join(os.tmpdir(), `ork-proc-${process.pid}-${Date.now()}`);
+    const entry = (pid: string, comm: string, pgrp: number, ticks: number[]) => {
+      mkdirSync(path.join(proc, pid), { recursive: true });
+      // pid (comm) state ppid pgrp session tty tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime
+      writeFileSync(
+        path.join(proc, pid, "stat"),
+        `${pid} (${comm}) S 1 ${pgrp} ${pgrp} 0 -1 0 0 0 0 0 ${ticks.join(" ")} 20 0`,
+      );
+    };
+    try {
+      entry("100", "bun", 100, [100, 50, 400, 50]); // 6 s
+      entry("101", "bun (worker) x", 100, [10, 0, 0, 0]); // parentheses in the name: 0.1 s
+      entry("200", "other", 200, [9999, 0, 0, 0]); // another group
+      mkdirSync(path.join(proc, "self"));
+      mkdirSync(path.join(proc, "300")); // exited: no stat file
+      expect(sampleGroupCpuMs(100, proc, "linux")).toBe(6_100);
+      expect(sampleGroupCpuMs(4242, proc, "linux")).toBeUndefined();
+      expect(sampleGroupCpuMs(100, proc, "darwin")).toBeUndefined();
+      expect(sampleGroupCpuMs(100, path.join(proc, "missing"), "linux")).toBeUndefined();
+    } finally {
+      rmSync(proc, { recursive: true, force: true });
+    }
+  });
+
+  test("the sampler reports CPU over the span of its highest reading, not the full wall time", () => {
+    let clock = 0;
+    let cpu: number | undefined = 0;
+    const timers: Array<() => void> = [];
+    const realSetInterval = globalThis.setInterval;
+    globalThis.setInterval = ((callback: () => void) => {
+      timers.push(callback);
+      return { unref() {} } as unknown as ReturnType<typeof setInterval>;
+    }) as unknown as typeof setInterval;
+    try {
+      const sampler = startGroupCpuSampler(7, { read: () => cpu, now: () => clock });
+      clock = 500;
+      cpu = 1_000;
+      timers[0]!();
+      clock = 1_000;
+      cpu = 3_000;
+      timers[0]!();
+      // The leader exits: its subtree vanishes, so later readings are lower or absent.
+      clock = 1_500;
+      cpu = 200;
+      timers[0]!();
+      clock = 2_000;
+      cpu = undefined;
+      timers[0]!();
+      expect(sampler.stop()).toEqual({ ms: 3_000, spanMs: 1_000 });
+    } finally {
+      globalThis.setInterval = realSetInterval;
+    }
+  });
+
+  test("a sampler that never read anything reports no measurement", () => {
+    const sampler = startGroupCpuSampler(7, { read: () => undefined, now: () => 0 });
+    expect(sampler.stop()).toBeUndefined();
+  });
+
+  test("measureCpu reports the CPU a real busy group used, descendants included; without it nothing is measured", async () => {
+    const busy = `
+      const end = Date.now() + 1_800;
+      while (Date.now() < end) {}
+    `;
+    const measured = await defaultRunGroup(
+      { name: "cpu fixture", command: process.execPath, args: ["-e", busy], measureCpu: true },
+      isolatedRunnerEnvironment(),
+    );
+    // The leader only waits; the spinning is done by a descendant in its process group,
+    // which is what a group's Bun or Turbo workers are.
+    const tree = `
+      const worker = Bun.spawn([process.execPath, "-e", ${JSON.stringify(busy)}]);
+      process.exitCode = await worker.exited;
+    `;
+    const measuredTree = await defaultRunGroup(
+      { name: "cpu fixture tree", command: process.execPath, args: ["-e", tree], measureCpu: true },
+      isolatedRunnerEnvironment(),
+    );
+    const unmeasured = await defaultRunGroup(
+      { name: "cpu fixture off", command: process.execPath, args: ["-e", busy] },
+      isolatedRunnerEnvironment(),
+    );
+    try {
+      expect(measured.status).toBe(0);
+      expect(measuredTree.status).toBe(0);
+      expect(unmeasured.status).toBe(0);
+      expect(unmeasured.cpu).toBeUndefined();
+      if (process.platform === "linux") {
+        // A single spinning thread: roughly one core, far from zero or from many,
+        // even if a loaded host steals some of it.
+        for (const result of [measured, measuredTree]) {
+          expect(result.cpu).toBeDefined();
+          const cores = result.cpu!.ms / result.cpu!.spanMs;
+          expect(cores).toBeGreaterThan(0.2);
+          expect(cores).toBeLessThan(2.5);
+        }
+      } else {
+        expect(measured.cpu).toBeUndefined();
+        expect(measuredTree.cpu).toBeUndefined();
+      }
+    } finally {
+      for (const result of [measured, measuredTree, unmeasured])
+        if (result.logPath)
+          await rm(path.dirname(result.logPath), { recursive: true, force: true });
+    }
+  }, 30_000);
 });

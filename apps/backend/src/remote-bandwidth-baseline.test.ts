@@ -23,6 +23,27 @@ afterEach(async () => {
 });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Resolves once `read()` stays unchanged for `quietMs`; throws after `timeoutMs`. */
+async function waitForQuietCounter(
+  read: () => number,
+  { quietMs, timeoutMs }: { quietMs: number; timeoutMs: number },
+) {
+  const deadline = performance.now() + timeoutMs;
+  let last = read();
+  let quietSince = performance.now();
+  while (performance.now() - quietSince < quietMs) {
+    if (performance.now() > deadline) {
+      throw new Error(`counter still changing after ${timeoutMs} ms (last ${read()})`);
+    }
+    await sleep(10);
+    const current = read();
+    if (current !== last) {
+      last = current;
+      quietSince = performance.now();
+    }
+  }
+}
+
 async function protocolServer(
   handler: (
     ws: import("ws").WebSocket,
@@ -429,7 +450,11 @@ describe("raw socket and link", () => {
     const client = connect(throttle.port, "127.0.0.1");
     client.pause();
     cleanups.push(() => client.destroy());
-    await sleep(500);
+    // Backpressure engages once the throttle's queue and both sockets' kernel
+    // buffers are full. How long filling them takes depends on host load, so
+    // wait for the producer to go quiet (bounded) instead of a fixed 500 ms;
+    // a producer that is never backpressured never goes quiet and fails here.
+    await waitForQuietCounter(() => produced, { quietMs: 100, timeoutMs: 4_000 });
     const before = produced;
     await sleep(200);
     expect(produced).toBe(before);

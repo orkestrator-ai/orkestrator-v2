@@ -115,6 +115,56 @@ async function withCommands<T>(
 
 const KEY = "claude env-e1:tab-1";
 
+// Captured before any test fakes timers: the clock helpers below need a real
+// macrotask yield so storage and command continuations run between steps.
+const realSetImmediate = globalThis.setImmediate;
+const flushContinuations = () => new Promise<void>((resolve) => realSetImmediate(resolve));
+
+/**
+ * Runs `body` on a fake clock. `await_bridge_ready` accepts nothing below one
+ * second and polls every 500 ms, so its scenarios would otherwise spend real
+ * seconds waiting on timers whose values are the subject of the assertions.
+ */
+async function withFakeClock<T>(body: () => Promise<T>): Promise<T> {
+  jest.useFakeTimers();
+  try {
+    return await body();
+  } finally {
+    jest.useRealTimers();
+  }
+}
+
+/**
+ * Advances the fake clock in small steps, flushing promise continuations
+ * between steps. Timers are re-armed only after the awaited storage read
+ * resolves, so a single large jump would skip every poll after the first.
+ */
+async function advanceFakeClock(ms: number, stepMs = 50): Promise<void> {
+  for (let elapsed = 0; elapsed < ms; elapsed += stepMs) {
+    await flushContinuations();
+    jest.advanceTimersByTime(Math.min(stepMs, ms - elapsed));
+  }
+  await flushContinuations();
+}
+
+/** Advances the fake clock until every promise settled; a bounded loop, never a hang. */
+async function advanceFakeClockUntilSettled(
+  promises: Array<Promise<unknown>>,
+  limitMs = 10_000,
+): Promise<void> {
+  let settled = 0;
+  for (const promise of promises) {
+    void promise.then(
+      () => (settled += 1),
+      () => (settled += 1),
+    );
+  }
+  for (let elapsed = 0; settled < promises.length; elapsed += 50) {
+    if (elapsed >= limitMs) throw new Error(`promises still pending after ${limitMs} fake ms`);
+    await advanceFakeClock(50);
+  }
+}
+
 describe("scoped resource snapshot commands", () => {
   test("batches allowlisted reads with stable revisions and bounded input", async () => {
     await withCommands(async (invoke) => {
@@ -1288,30 +1338,33 @@ describe("bridge readiness command", () => {
   test("coalesces waiters and returns the authoritative ready endpoint", async () => {
     await withCommands(
       async (invoke, storage, _dataDir, commands) => {
-        const start = mock(async () => ({ port: 4321, authToken: "bridge-token" }));
-        commands.set("start_local_codex_server_cmd", start);
-        const first = invoke("await_bridge_ready", {
-          environmentId: "e1",
-          agent: "codex",
-          timeoutMs: 2_000,
-        });
-        const second = invoke("await_bridge_ready", {
-          environmentId: "e1",
-          agent: "codex",
-          timeoutMs: 2_000,
-        });
-        setTimeout(() => {
-          void storage.updateEnvironment("e1", {
-            status: "running",
-            setupPhase: "ready",
+        await withFakeClock(async () => {
+          const start = mock(async () => ({ port: 4321, authToken: "bridge-token" }));
+          commands.set("start_local_codex_server_cmd", start);
+          const first = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 2_000,
           });
-        }, 10);
+          const second = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 2_000,
+          });
+          setTimeout(() => {
+            void storage.updateEnvironment("e1", {
+              status: "running",
+              setupPhase: "ready",
+            });
+          }, 10);
 
-        await expect(Promise.all([first, second])).resolves.toEqual([
-          { status: "ready", port: 4321, authToken: "bridge-token" },
-          { status: "ready", port: 4321, authToken: "bridge-token" },
-        ]);
-        expect(start).toHaveBeenCalledTimes(1);
+          await advanceFakeClockUntilSettled([first, second]);
+          await expect(Promise.all([first, second])).resolves.toEqual([
+            { status: "ready", port: 4321, authToken: "bridge-token" },
+            { status: "ready", port: 4321, authToken: "bridge-token" },
+          ]);
+          expect(start).toHaveBeenCalledTimes(1);
+        });
       },
       {
         environment: {
@@ -1327,36 +1380,39 @@ describe("bridge readiness command", () => {
   test("gives coalesced callers independent deadlines while sharing startup", async () => {
     await withCommands(
       async (invoke, storage, _dataDir, commands) => {
-        const start = mock(async () => ({ port: 4321, authToken: "bridge-token" }));
-        commands.set("start_local_codex_server_cmd", start);
-        const short = invoke("await_bridge_ready", {
-          environmentId: "e1",
-          agent: "codex",
-          timeoutMs: 1_000,
-        });
-        const long = invoke("await_bridge_ready", {
-          environmentId: "e1",
-          agent: "codex",
-          timeoutMs: 2_500,
-        });
-        setTimeout(() => {
-          void storage.updateEnvironment("e1", { status: "running", setupPhase: "ready" });
-        }, 1_200);
+        await withFakeClock(async () => {
+          const start = mock(async () => ({ port: 4321, authToken: "bridge-token" }));
+          commands.set("start_local_codex_server_cmd", start);
+          const short = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 1_000,
+          });
+          const long = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 2_500,
+          });
+          setTimeout(() => {
+            void storage.updateEnvironment("e1", { status: "running", setupPhase: "ready" });
+          }, 1_200);
+          await advanceFakeClockUntilSettled([short, long]);
 
-        await expect(short).resolves.toEqual({
-          status: "timed-out",
-          error: {
-            message: "codex bridge did not become ready before the caller deadline",
-            retryable: true,
-            retryAfterMs: 1_000,
-          },
+          await expect(short).resolves.toEqual({
+            status: "timed-out",
+            error: {
+              message: "codex bridge did not become ready before the caller deadline",
+              retryable: true,
+              retryAfterMs: 1_000,
+            },
+          });
+          await expect(long).resolves.toEqual({
+            status: "ready",
+            port: 4321,
+            authToken: "bridge-token",
+          });
+          expect(start).toHaveBeenCalledTimes(1);
         });
-        await expect(long).resolves.toEqual({
-          status: "ready",
-          port: 4321,
-          authToken: "bridge-token",
-        });
-        expect(start).toHaveBeenCalledTimes(1);
       },
       {
         environment: {
@@ -1371,38 +1427,41 @@ describe("bridge readiness command", () => {
   test("extends the shared probe so a late caller receives its full deadline", async () => {
     await withCommands(
       async (invoke, storage, _dataDir, commands) => {
-        const start = mock(async () => ({ port: 4321, authToken: "bridge-token" }));
-        commands.set("start_local_codex_server_cmd", start);
+        await withFakeClock(async () => {
+          const start = mock(async () => ({ port: 4321, authToken: "bridge-token" }));
+          commands.set("start_local_codex_server_cmd", start);
 
-        const first = invoke("await_bridge_ready", {
-          environmentId: "e1",
-          agent: "codex",
-          timeoutMs: 1_000,
-        });
-        await new Promise((resolve) => setTimeout(resolve, 750));
-        const late = invoke("await_bridge_ready", {
-          environmentId: "e1",
-          agent: "codex",
-          timeoutMs: 1_000,
-        });
-        setTimeout(() => {
-          void storage.updateEnvironment("e1", { status: "running", setupPhase: "ready" });
-        }, 450);
+          const first = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 1_000,
+          });
+          await advanceFakeClock(750);
+          const late = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 1_000,
+          });
+          setTimeout(() => {
+            void storage.updateEnvironment("e1", { status: "running", setupPhase: "ready" });
+          }, 450);
+          await advanceFakeClockUntilSettled([first, late]);
 
-        await expect(first).resolves.toEqual({
-          status: "timed-out",
-          error: {
-            message: "codex bridge did not become ready before the caller deadline",
-            retryable: true,
-            retryAfterMs: 1_000,
-          },
+          await expect(first).resolves.toEqual({
+            status: "timed-out",
+            error: {
+              message: "codex bridge did not become ready before the caller deadline",
+              retryable: true,
+              retryAfterMs: 1_000,
+            },
+          });
+          await expect(late).resolves.toEqual({
+            status: "ready",
+            port: 4321,
+            authToken: "bridge-token",
+          });
+          expect(start).toHaveBeenCalledTimes(1);
         });
-        await expect(late).resolves.toEqual({
-          status: "ready",
-          port: 4321,
-          authToken: "bridge-token",
-        });
-        expect(start).toHaveBeenCalledTimes(1);
       },
       {
         environment: {
@@ -1470,17 +1529,20 @@ describe("bridge readiness command", () => {
   test("observes deletion while an environment is still starting", async () => {
     await withCommands(
       async (invoke, storage) => {
-        const waiting = invoke("await_bridge_ready", {
-          environmentId: "e1",
-          agent: "codex",
-          timeoutMs: 2_000,
-        });
-        setTimeout(() => {
-          void storage.removeEnvironment("e1");
-        }, 10);
-        await expect(waiting).resolves.toEqual({
-          status: "failed",
-          error: { message: "Environment was deleted", retryable: false },
+        await withFakeClock(async () => {
+          const waiting = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 2_000,
+          });
+          setTimeout(() => {
+            void storage.removeEnvironment("e1");
+          }, 10);
+          await advanceFakeClockUntilSettled([waiting]);
+          await expect(waiting).resolves.toEqual({
+            status: "failed",
+            error: { message: "Environment was deleted", retryable: false },
+          });
         });
       },
       {
@@ -1496,19 +1558,21 @@ describe("bridge readiness command", () => {
   test("returns a structured durable-window timeout instead of an error string", async () => {
     await withCommands(
       async (invoke) => {
-        await expect(
-          invoke("await_bridge_ready", {
+        await withFakeClock(async () => {
+          const waiting = invoke("await_bridge_ready", {
             environmentId: "e1",
             agent: "codex",
             timeoutMs: 1_000,
-          }),
-        ).resolves.toEqual({
-          status: "timed-out",
-          error: {
-            message: "codex bridge did not become ready before the caller deadline",
-            retryable: true,
-            retryAfterMs: 1_000,
-          },
+          });
+          await advanceFakeClockUntilSettled([waiting]);
+          await expect(waiting).resolves.toEqual({
+            status: "timed-out",
+            error: {
+              message: "codex bridge did not become ready before the caller deadline",
+              retryable: true,
+              retryAfterMs: 1_000,
+            },
+          });
         });
       },
       {

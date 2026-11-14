@@ -595,7 +595,10 @@ const COPY_REFUSED = { ok: false, reason: "source-copy-refused" } as const;
 const HELPER_REMOVE_FAILED = { ok: false, reason: "helper-remove-failed" } as const;
 
 /** Classify a failed copy before rollback, including a stream cut without daemon wording. */
-export async function replacementCopyFailure(reason: string): Promise<ContainerLifecycleError> {
+export async function replacementCopyFailure(
+  reason: string,
+  probeTimeoutMs?: number,
+): Promise<ContainerLifecycleError> {
   // The daemon said why: no outage probe.
   if (reason === COPY_REFUSED.reason) {
     return lifecycleError(
@@ -603,7 +606,10 @@ export async function replacementCopyFailure(reason: string): Promise<ContainerL
       `Docker refused to copy the environment's files out of its container (operation not permitted while remounting a read-only bind). The original container was kept unchanged. ${COPY_REFUSED_REMEDY}`,
     );
   }
-  if (reason === DAEMON_UNAVAILABLE_COPY.reason || (await dockerDaemonUnreachableNow())) {
+  if (
+    reason === DAEMON_UNAVAILABLE_COPY.reason ||
+    (await dockerDaemonUnreachableNow(probeTimeoutMs))
+  ) {
     return lifecycleError(
       "daemon-unavailable",
       "Docker stopped responding while the environment's files were being copied. The original container was kept unchanged; rebuild again once Docker is running.",

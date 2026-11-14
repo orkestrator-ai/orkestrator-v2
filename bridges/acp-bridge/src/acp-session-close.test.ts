@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { join, resolve } from "node:path";
-import { here, nativeFetch, spawnBridge, temporaryDirectory, waitFor } from "./acp-test-harness.js";
+import {
+  here,
+  nativeFetch,
+  sharedBridge,
+  spawnBridge,
+  temporaryDirectory,
+  waitFor,
+} from "./acp-test-harness.js";
 
 type Body = Record<string, unknown>;
 
@@ -21,25 +28,48 @@ const PENDING = {
 };
 const CLOSING = { status: 409, body: { error: "Session is closing" } };
 
+const CLOSE_AGENT_ENV = {
+  ACP_PROVIDER: "grok",
+  ACP_AGENT_PATH: resolve(here, "testing/fake-agent-close.ts"),
+};
+
+// One bridge for every close test that needs neither a bridge-level setting
+// nor its state file; each runs its own session and its own agent switches.
+const sharedCloseBridge = sharedBridge(CLOSE_AGENT_ENV);
+
 /**
  * A Grok bridge over `testing/fake-agent-close.ts`, whose sessions are real
  * (distinct ids, listed and loaded from its own store) and whose lifecycle
  * events land in `log` for ordering assertions.
+ *
+ * `env` holds the agent's `FAKE_CLOSE_*` switches. Pass `bridgeEnv` (`{}` if
+ * there is nothing to set) for a setting the bridge itself reads
+ * (`ACP_CLOSE_*_WAIT_MS`) or when the test reads the state file: that test gets
+ * a bridge of its own. Every other test shares one, so its switches go through
+ * the shared agent environment.
  */
-async function closeFixture(env: Record<string, string> = {}) {
+async function closeFixture(env: Record<string, string> = {}, bridgeEnv?: Record<string, string>) {
   const directory = await temporaryDirectory();
   const log = resolve(directory, "close.log");
   const stateDirectory = resolve(directory, "state");
-  const { base, headers } = await spawnBridge({
-    stateDirectory,
-    env: {
-      ACP_PROVIDER: "grok",
-      ACP_AGENT_PATH: resolve(here, "testing/fake-agent-close.ts"),
-      FAKE_CLOSE_LOG: log,
-      FAKE_CLOSE_STORE: resolve(directory, "store.jsonl"),
-      ...env,
-    },
-  });
+  const agentEnv = {
+    FAKE_CLOSE_LOG: log,
+    FAKE_CLOSE_STORE: resolve(directory, "store.jsonl"),
+    ...env,
+  };
+  let base: string;
+  let headers: Record<string, string>;
+  let stateFile: string | undefined;
+  if (bridgeEnv !== undefined) {
+    ({ base, headers } = await spawnBridge({
+      stateDirectory,
+      env: { ...CLOSE_AGENT_ENV, ...agentEnv, ...bridgeEnv },
+    }));
+    stateFile = join(stateDirectory, "state.json");
+  } else {
+    await sharedCloseBridge.agentEnv(agentEnv);
+    ({ base, headers } = sharedCloseBridge);
+  }
   const request = async (path: string, init: { method?: string; body?: unknown } = {}) => {
     const response = await nativeFetch(`${base}${path}`, {
       method: init.method ?? "GET",
@@ -63,6 +93,8 @@ async function closeFixture(env: Record<string, string> = {}) {
   const create = async (body: Body = {}) => {
     const created = await request("/session/create", { method: "POST", body });
     expect(created.status).toBe(201);
+    // A shared bridge closes what a test leaves open, so the next one starts clean.
+    if (stateFile === undefined) sharedCloseBridge.track(String(created.body.id));
     return String(created.body.id);
   };
   const prompt = (id: string, text: string) =>
@@ -76,7 +108,10 @@ async function closeFixture(env: Record<string, string> = {}) {
     base,
     headers,
     directory,
-    stateFile: join(stateDirectory, "state.json"),
+    get stateFile(): string {
+      if (!stateFile) throw new Error("This close fixture shares a bridge; pass bridgeEnv");
+      return stateFile;
+    },
     request,
     events,
     waitForEvent,
@@ -124,12 +159,15 @@ describe("POST /session/:id/close", () => {
   });
 
   test("answers an unknown session in band rather than 404", async () => {
-    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
-    expect(await close(base, headers, "never-existed")).toEqual(MISSING);
+    // Any bridge answers this the same way; no session is involved.
+    expect(await close(sharedCloseBridge.base, sharedCloseBridge.headers, "never-existed")).toEqual(
+      MISSING,
+    );
   });
 
   test("lists and resumes the conversation that was actually closed", async () => {
-    const bridge = await closeFixture();
+    // Its own bridge: the listing must hold only this test's conversation.
+    const bridge = await closeFixture({}, {});
     const id = await bridge.create();
     expect((await bridge.prompt(id, "Remember the lighthouse")).status).toBe(202);
     await bridge.waitForStatus(id, "idle");
@@ -200,6 +238,10 @@ describe("POST /session/:id/close", () => {
   });
 
   test("waits for the cancelled turn to answer before terminating the agent", async () => {
+    // A clock, not a gate: the bridge starts terminating the agent (a `ps`
+    // scan, then SIGTERM) tens of milliseconds after it gives up waiting, so a
+    // test-driven release could land before a close that never waited and
+    // still pass. The delay is longer than that, which is what makes this fail.
     const bridge = await closeFixture({ FAKE_CLOSE_CANCEL_DELAY_MS: "300" });
     const id = await bridge.create();
     expect((await bridge.prompt(id, "HOLD")).status).toBe(202);
@@ -217,10 +259,10 @@ describe("POST /session/:id/close", () => {
   });
 
   test("terminates the agent once the cancel budget elapses without an answer", async () => {
-    const bridge = await closeFixture({
-      FAKE_CLOSE_IGNORE_CANCEL: "1",
-      ACP_CLOSE_CANCEL_WAIT_MS: "200",
-    });
+    const bridge = await closeFixture(
+      { FAKE_CLOSE_IGNORE_CANCEL: "1" },
+      { ACP_CLOSE_CANCEL_WAIT_MS: "200" },
+    );
     const id = await bridge.create();
     expect((await bridge.prompt(id, "HOLD")).status).toBe(202);
     await bridge.waitForEvent("held");
@@ -276,11 +318,10 @@ describe("POST /session/:id/close", () => {
   });
 
   test("an unanswered session/close does not hold the close past its budget", async () => {
-    const bridge = await closeFixture({
-      FAKE_CLOSE_SESSION_CAPABILITY: "1",
-      FAKE_CLOSE_SESSION_HANG: "1",
-      ACP_CLOSE_SESSION_WAIT_MS: "200",
-    });
+    const bridge = await closeFixture(
+      { FAKE_CLOSE_SESSION_CAPABILITY: "1", FAKE_CLOSE_SESSION_HANG: "1" },
+      { ACP_CLOSE_SESSION_WAIT_MS: "200" },
+    );
     const id = await bridge.create();
     expect((await bridge.prompt(id, "Hello")).status).toBe(202);
     await bridge.waitForStatus(id, "idle");
@@ -297,12 +338,17 @@ describe("POST /session/:id/close", () => {
   });
 
   test("concurrent closes of one session share one operation", async () => {
-    const bridge = await closeFixture({ FAKE_CLOSE_CANCEL_DELAY_MS: "400" });
+    const release = resolve(await temporaryDirectory(), "release-cancel");
+    const bridge = await closeFixture({ FAKE_CLOSE_CANCEL_HOLD_FILE: release });
     const id = await bridge.create();
     expect((await bridge.prompt(id, "HOLD")).status).toBe(202);
     await bridge.waitForEvent("held");
 
-    const [first, second] = await Promise.all([bridge.close(id), bridge.close(id)]);
+    const closes = Promise.all([bridge.close(id), bridge.close(id)]);
+    // Both closes are in flight while the cancelled turn is still unanswered.
+    await bridge.waitForEvent("cancel");
+    await fs.writeFile(release, "");
+    const [first, second] = await closes;
     // The second close joined the first: neither answered `missing`.
     expect(first).toEqual(CLOSED);
     expect(second).toEqual(CLOSED);
@@ -313,7 +359,8 @@ describe("POST /session/:id/close", () => {
   });
 
   test("refuses new work on a session while it is closing", async () => {
-    const bridge = await closeFixture({ FAKE_CLOSE_CANCEL_DELAY_MS: "1500" });
+    const release = resolve(await temporaryDirectory(), "release-cancel");
+    const bridge = await closeFixture({ FAKE_CLOSE_CANCEL_HOLD_FILE: release });
     const id = await bridge.create({ clientSessionKey: "tab-closing" });
     expect((await bridge.prompt(id, "HOLD")).status).toBe(202);
     await bridge.waitForEvent("held");
@@ -340,6 +387,8 @@ describe("POST /session/:id/close", () => {
     // Still registered and readable: a lookup never reads as missing mid-close.
     expect((await bridge.request(`/session/${id}`)).status).toBe(200);
 
+    // The cancelled turn answers only now, after every refusal above.
+    await fs.writeFile(release, "");
     expect(await closing).toEqual(CLOSED);
     expect((await bridge.request(`/session/${id}`)).status).toBe(404);
     // Only the one agent child ever ran: nothing re-attached during the close.
@@ -349,10 +398,10 @@ describe("POST /session/:id/close", () => {
 
   test("a close that outlives its attach budget stays pending and registered until retried", async () => {
     const hold = resolve(await temporaryDirectory(), "release-load");
-    const bridge = await closeFixture({
-      ACP_CLOSE_ATTACH_WAIT_MS: "200",
-      FAKE_CLOSE_LOAD_HOLD_FILE: hold,
-    });
+    const bridge = await closeFixture(
+      { FAKE_CLOSE_LOAD_HOLD_FILE: hold },
+      { ACP_CLOSE_ATTACH_WAIT_MS: "200" },
+    );
     const id = await bridge.create();
     // Lose the child so the next attach has to spawn and `session/load`.
     expect((await bridge.prompt(id, "CRASH")).status).toBe(202);
@@ -407,7 +456,7 @@ describe("POST /session/:id/close", () => {
   });
 
   test("a failed state-file write answers pending and keeps the session registered", async () => {
-    const bridge = await closeFixture();
+    const bridge = await closeFixture({}, {});
     const id = await bridge.create();
     expect((await bridge.prompt(id, "Keep this one")).status).toBe(202);
     await bridge.waitForStatus(id, "idle");

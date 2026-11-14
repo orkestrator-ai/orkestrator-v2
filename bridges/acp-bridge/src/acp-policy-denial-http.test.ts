@@ -1,23 +1,23 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { nativeFetch, spawnBridge, temporaryDirectory, waitFor } from "./acp-test-harness.js";
+import { nativeFetch, sharedBridge, temporaryDirectory, waitFor } from "./acp-test-harness.js";
+
+// One Grok bridge for the file; each test opens its own session.
+const shared = sharedBridge({ ACP_PROVIDER: "grok" });
 
 describe("policy continuation through HTTP completion", () => {
   test.each([false, true])(
     "structured recovery and terminal journal (exhausted=%s)",
     async (exhausted) => {
-      const { base, headers } = await spawnBridge({
-        env: {
-          ACP_PROVIDER: "grok",
-          FAKE_ACP_POLICY_EXHAUST: exhausted ? "1" : "0",
-        },
-      });
+      await shared.agentEnv({ FAKE_ACP_POLICY_EXHAUST: exhausted ? "1" : "0" });
+      const { base, headers } = shared;
       const { id } = (await nativeFetch(`${base}/session/create`, {
         method: "POST",
         headers,
         body: JSON.stringify({ readOnly: true }),
       }).then((r) => r.json())) as { id: string };
+      shared.track(id);
       const requestId = "policy-structured";
       const response = await nativeFetch(`${base}/session/${id}/prompt`, {
         method: "POST",
@@ -66,9 +66,8 @@ describe("policy continuation through HTTP completion", () => {
 
 test("Grok tool profile follows read-only create and reattach, and is removed on close", async () => {
   const argsFile = join(await temporaryDirectory(), "args.jsonl");
-  const { base, headers } = await spawnBridge({
-    env: { ACP_PROVIDER: "grok", FAKE_ACP_ARGS_FILE: argsFile },
-  });
+  await shared.agentEnv({ FAKE_ACP_ARGS_FILE: argsFile });
+  const { base, headers } = shared;
   const { id } = (await nativeFetch(`${base}/session/create`, {
     method: "POST",
     headers,

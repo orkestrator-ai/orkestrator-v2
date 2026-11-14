@@ -50,7 +50,7 @@ Item 1's evidence, items 2 to 6 and 8 to 10, and the flake triage are done; 0145
 
 **Problem.** The triage named owners with recurring failures but created no case for them, so their next recurrence has nowhere to be recorded.
 
-**Context.** Named: `media-stream.browser.test.ts`, `cursor-bridge/src/initial-run.test.ts`, `RemoteWorkspaceRegion.test.tsx`, `workspace-setup-preserve.test.ts`, the two desktop shutdown-deadline cases in 0720, and the `review-validation-worker.test.ts` runner-slot case. No numbers were free on that branch (D12).
+**Context.** Named: `media-stream.browser.test.ts`, `cursor-bridge/src/initial-run.test.ts`, `RemoteWorkspaceRegion.test.tsx`, `workspace-setup-preserve.test.ts`, the two desktop shutdown-deadline cases in 0720, and the `review-validation-worker.cooperative.test.ts` runner-slot case. No numbers were free on that branch (D12).
 
 **Investigation.** Searching the group indexes: the first three appear only inside aggregate-run rows in `aggregate-validation-runs/0000-index.md`, not as their own cases; `workspace-setup-preserve` and "does not hold the local runner slot" appear in no index. None of the six has its own case.
 
@@ -395,7 +395,7 @@ one live check (an Electron spec with a hung `close()`).
    - Both files passed 5 runs in a row, and the web package passed (9,660
      pass, 10 skip).
 4. **Done (2026-10-25): backend slow owners.** Measured alone, macOS.
-   - Done: `review-validation-worker.test.ts`. The worker already honours
+   - Done: `review-validation-worker.queue.test.ts`. The worker already honours
      `ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS`; `a command that expires while queued
      keeps no stale queue explanation` now uses 3 s instead of 6 s and watches
      the worker's state file instead of starting a control process per check
@@ -465,7 +465,7 @@ one live check (an Electron spec with a hung `close()`).
      (five `postMessage` calls instead of zero), `workspace-setup-preserve.test.ts`
      and the two desktop shutdown-deadline cases in 0720. One more: `a
      cooperative command queued on the host does not hold the local runner slot`
-     (`review-validation-worker.test.ts`) failed once in a baseline run and
+     (`review-validation-worker.cooperative.test.ts`) failed once in a baseline run and
      passed alone and in three full runs; its message was not captured.
    - Not flakes, found by the triage: `workspace-realm-electron.spec.ts:409`
      (spec deleted with realms by 6003, 2026-11-07) and the annotation Notes focus check fail alone too (0740, 0772, 0789,

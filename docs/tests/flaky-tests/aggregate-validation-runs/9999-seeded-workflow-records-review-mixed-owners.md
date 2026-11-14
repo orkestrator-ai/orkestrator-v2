@@ -29,3 +29,18 @@ bandwidth-meter case `undetermined` (`dependency-graph-incomplete`) and listed
 no other owner because the command did not finish. Host contention is a
 hypothesis consistent with the 5 s timeout and the queued rerun, not a
 confirmed cause. No assertion, timeout or skip was changed.
+
+## Recurrence 2026-11-14 (base dc90609bf)
+
+The silent-failure-notices review (`mise run test:logged -- --name
+review-default-tests -- mise run test`, default worker plan, 1,137 s of test
+groups) failed the store-size bench's
+`rejects malformed, empty, missing and nonpositive sizes` on its 5 s deadline
+with an empty child stderr, while 16 of 16 host slots were reserved. The
+runner's own rerun alone also timed out (21.4 s file, same queue). The owner
+then passed alone on the same branch:
+`mise run test:logged -- --name bench-alone -- bun --cwd=apps/backend test ./tests/agent-mail-store-size-bench.test.ts --parallel=1`,
+exit 0, 3.7 s. The branch changes the writer lease, the OpenCode provider and
+agent-testing helpers; the bench imports none of them.
+`mise run flaky:recurrence -- 9999 --base dc90609bf` answered open.
+

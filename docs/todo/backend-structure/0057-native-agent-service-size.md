@@ -2,15 +2,16 @@
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`; task statuses re-checked
+2026-11-14 against `main` at `dc90609bf`.
 
 ### Tasks
 
 1. **Session-control collaborator**: move Stop, resume, fork, actions, controls and sign-in out of `NativeAgentService`. Status: done (`NativeAgentSessionOperations`; steer stays for task 2).
-2. **Dispatch and mail injection collaborator**: move the dispatch path and mail injection out only if the lease and fence ordering stays in one place; includes the open question about sharing a collaborator with Stop. Status: open.
+2. **Dispatch and mail injection collaborator**: move the dispatch path and mail injection out only if the lease and fence ordering stays in one place; includes the open question about sharing a collaborator with Stop. Status: done (`NativeAgentPromptDispatch` and `NativeAgentMailInjection`; Stop stays separate).
 3. **Split the transcript projection by read model**: progressive reads apart from the legacy full projection, with shared caches under one owner. Status: open.
 4. **Move the projection's free helpers into a module**. Status: done (`native-agent-projection-helpers.ts`).
-5. **Qualification per split**: direct tests for each new class, `forTesting()` reads moved with the state, end-to-end suites unchanged. Status: done for tasks 1 and 4; open for tasks 2 and 3.
+5. **Qualification per split**: direct tests for each new class, `forTesting()` reads moved with the state, end-to-end suites unchanged. Status: done for tasks 1, 2 and 4; open (depends on 3).
 
 ### 1. Session-control collaborator
 
@@ -219,6 +220,102 @@ The new class owns no state, so no `forTesting()` reads moved;
 `collaborators(service)` lists it as `sessionOperations`. The
 `native-agent-service-*.test.ts` oracle suites are unchanged.
 
+Task 2 done 2026-11-14 on `refactor-agent-service-bbe78956a4e9-r1`.
+`native-agent-service.ts` went from 4,940 to 3,088 lines. The move is
+verbatim: apart from `this.` becoming `this.host.` (and, in mail injection,
+`this.host.dispatch.` for the four dispatch entry points) and the formatter
+re-wrapping lines that grew, the moved method bodies match the originals.
+
+### Task 2: dispatch and Stop stay separate (the open question)
+
+Recommended option taken. The fence state already lives in
+`NativeAgentPromptQueueDispatcher`, so dispatch and Stop share it without
+sharing a class; a combined class would be about 2,600 lines. The class
+comment on `NativeAgentPromptDispatch` and the "Dispatch fence order" section
+of [`native-agent-service.md`](../../architecture/native-agent-service.md#dispatch-fence-order)
+name the order both follow, and `native-agent-prompt-dispatch.test.ts` pins
+it. The open question is closed and its section removed.
+
+### Task 2: two modules rather than one dispatch collaborator
+
+The recommendation was one collaborator for dispatch and mail injection,
+sized at about 1,300 lines when this file was written. The code has grown:
+the moved methods are about 1,920 lines, so one class with its imports and
+host would be about 2,200, over the 2,000-line guideline. The ticket also
+asks for their own modules. The split keeps the recommendation's condition:
+
+- `NativeAgentPromptDispatch` takes every fence and lease (intent path,
+  internal prompt path, the at-most-once window, the steer lease, the
+  work-fence reacquire in `clearRefusedDispatch`).
+- `NativeAgentMailInjection` takes none. It calls the dispatch's public entry
+  points (`dispatchPromptInternal`, `dispatchPersistedSteer` and the two
+  settles) through a `dispatch` member on its host, and its admission check
+  runs as that dispatch's `prepare`, under the same storage lease. The
+  rejected "mail injection first" option would have put `dispatchPromptInternal`
+  on a service callback with its fences split across two files; here the
+  fences stay in the dispatch file.
+
+### Task 2: what moved and what stayed
+
+Moved to the dispatch: `dispatchIntent`, `promptReadiness`, the intent path,
+`attemptDispatch`, `clearRefusedDispatch`, discard, the parked-dispatch and
+parked-steer settles, retry, steer (`steerQueuedPrompt`,
+`performProjectionSteer`, the missed-steer hand-off, `steerProjectionOnce`,
+`dispatchQueuedAsyncQuestionAnswer`, `dispatchPersistedSteer`),
+`dispatchPrompt` and `dispatchAdmittedPrompt` with their helpers (first-prompt
+naming, the persisted pending record, command planning, the `/compact`
+session action, the artifact-turn start) and `hasPendingTabTeardown`. Moved
+to mail injection: `mailInjectPresence`, `reconcileMailInject`,
+`dispatchMailInject`, `steerMailInject`, `reconcileMailSteer`.
+
+Stayed on the service, as host callbacks: `tabMailFor` and
+`settleArtifactTurn` (turn outcomes settle artifact turns too),
+`applySessionHeldDispatchModel` (shares `resolveDefaultModel` with
+`ensureSession`), `sessionTurnIsBusy` (the goal commands use it), and
+`recordObservedTurnOutcome` with the rest of the turn outcomes, which task 2
+did not name.
+
+### Task 2: delegates and the host
+
+The 11 public methods stay on the service as one-line delegates, as task 1
+did, so `commands-registry-native.ts`, `agent-mail-service.ts` and the
+public-API fakes are unchanged. `dispatchPromptInternal` stays as a private
+delegate: turn recovery, the usage-limit and sign-in resends and the launch
+reconciler call it, and so does `native-agent-service-base.test.ts`.
+
+The dispatch host has 29 members: 14 shared references (the ten
+collaborators among them typed as a `Pick` of only the methods the moved code
+calls, so the direct tests fake no more than that) and 15 callbacks over the
+service. Callbacks are arrow functions, so suites that patch a service seam
+(`provider`, `trustedSessionInput`, `ensureSession`) still reach the moved
+code. Mail injection's host has eight.
+
+### Task 2: the dispatch is built on first use
+
+`native-agent-bridge-replacement.test.ts` builds a service with
+`Object.create(NativeAgentService.prototype)`, so the constructor never runs,
+and calls `dispatchIntent` and `dispatchPrompt` to prove the bridge
+reservation refuses them. To keep that suite unchanged, `promptDispatch` is a
+getter that builds the collaborator on first use (`??=`); the constructor
+builds it when it wires mail injection, after every collaborator it shares
+exists. The alternative, editing the suite to construct a full service, was
+ruled out because the ticket requires the existing tests unchanged.
+
+### Task 5: qualification for task 2
+
+`native-agent-prompt-dispatch.test.ts` drives the dispatch through its public
+interface with a fake host that records every fence, lease and provider call:
+the prompt and intent fence orders and their reverse release, a refused
+environment fence, pending tab teardown, the steer lease, a steer for a
+replaced provider session, the parked-dispatch settle outcomes, discard and
+`hasPendingTabTeardown`. `native-agent-mail-injection.test.ts` covers
+idle injection as literal mail, holds for a queue, a parked dispatch and a
+busy turn, a stale observation, presence, the steer refusals and path, and
+both reconciliations. Neither class owns state, so no `forTesting()` reads
+moved; `collaborators(service)` lists them as `promptDispatch` and
+`mailInjection`. The `native-agent-service-*.test.ts` oracle suites and the
+mail suites are unchanged.
+
 Opened 2026-10-23 from todo 0010 (decision 11; retired on 2026-10-29, see
 [`native-agent-service.md`](../../architecture/native-agent-service.md#collaborators)),
 which removed the six-layer `extends` chain but left two files
@@ -226,25 +323,23 @@ well over the repository's 2,000-line guideline.
 
 ## Current state
 
-- `apps/backend/src/core/native-agent-service.ts` is 3,880 lines. Its state
-  now lives in collaborators; what remains is session work with little state
-  of its own:
-  - trusted session input, `ensureSession` / `adoptSession` /
-    `inspectSession`, bridge start and peek (about 900 lines);
-  - the dispatch path: `dispatchIntent`, `attemptDispatch`,
-    `dispatchAdmittedPrompt` (which holds the storage lease across provider
-    I/O), the parked-dispatch settles, retry and discard (about 900 lines);
-  - session controls: Stop, resume, fork, session and MCP actions, steer,
-    controls, interactions, sign-in (about 1,000 lines);
-  - mail injection and turn outcomes, including `turnOutcomeAttempts`
-    (about 600 lines);
-  - provider teardown, moves and MCP evidence (about 400 lines).
-- `apps/backend/src/core/native-agent-transcript-projection.ts` is 5,303 lines:
-  module helpers (about 450 lines), the legacy full projection with sync and
-  history (`refreshProjectionOnce` alone is about 600), the progressive
-  transcript/state/discovery reads, tool details and display tails.
-- Both are covered end to end by the `native-agent-service-*.test.ts` suites
-  and directly by `native-agent-transcript-projection.test.ts`.
+Measured 2026-11-14 after task 2.
+
+- `apps/backend/src/core/native-agent-service.ts` is 3,088 lines (4,940
+  before task 2). Its state lives in collaborators; what remains is trusted
+  session input, `ensureSession` / `adoptSession` / `inspectSession`, bridge
+  start and peek, turn outcomes (including `turnOutcomeAttempts`), provider
+  teardown, moves and MCP evidence, and one-line delegates.
+- `native-agent-prompt-dispatch.ts` (1,771 lines) holds the dispatch path,
+  steer and the parked-dispatch recovery, and is the one place the fence and
+  lease order is taken; `native-agent-mail-injection.ts` (448 lines) holds
+  mail injection, which calls the dispatch's entry points.
+- `apps/backend/src/core/native-agent-transcript-projection.ts` is 6,347
+  lines, the subject of task 3: the legacy full projection with sync and
+  history, the progressive transcript/state/discovery reads, tool details and
+  display tails.
+- All of it is covered end to end by the `native-agent-service-*.test.ts`
+  suites and directly by each collaborator's own `native-agent-*.test.ts`.
 
 ## Outstanding work
 
@@ -254,9 +349,8 @@ well over the repository's 2,000-line guideline.
    controls, sign-in) out of `NativeAgentService` into a collaborator taking a
    host, as 0010 did for the stateful clusters. Keep the public methods as
    delegates.
-2. Move the dispatch path and mail injection into their own collaborator only
-   if it can keep `dispatchAdmittedPrompt`'s lease and fence ordering in one
-   place; otherwise record why it stays.
+2. Done: move the dispatch path and mail injection out of the service, keeping
+   `dispatchAdmittedPrompt`'s lease and fence ordering in one place.
 3. Split `NativeAgentTranscriptProjection` along its two read models: the
    progressive transcript/state/discovery reads and the legacy full
    projection with sync and history, sharing the tool-detail and
@@ -279,12 +373,6 @@ service suites unchanged as the oracle.
 - No `extends` layers: `tests/unit/inheritance-chains.test.ts` rejects them.
 - This is size and readability work; nothing here changes behaviour or removes
   an ordering risk, which is why it rates low.
-
-## Open questions
-
-- Whether `dispatchAdmittedPrompt` and the Stop path should share one
-  collaborator, since both take the session work fence and the interrupt
-  fences in a fixed order.
 
 ## Related
 

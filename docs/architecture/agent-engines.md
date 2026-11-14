@@ -419,6 +419,16 @@ policy:
 
 A wakeup only makes a stably idle group due; the sweep's no-touch read stays
 the source of truth, and a group without a live wakeup is read on every sweep.
+OpenCode keeps a turn's failure on its answer rather than on the session, so
+on the idle edge the backend reads the request's run boundary
+(`turnTerminalError`); while the run has none the read is retried. A run that
+stays without one for `OPENCODE2_UNSETTLED_RUN_GRACE_MS` (60 s) while the
+server reads idle belonged to a server that died (killed, or replaced by the
+backend), and is recorded as cut short, so the bell rings "Agent stopped with
+an error" instead of the tab reading working for good (to-do 5160, measured
+live at 80 s from the kill). The verdict is kept for the request, so a later
+turn-outcome read (the CLI, a pipeline) gets the same answer at once rather
+than starting a second grace; a boundary row or a busy read replaces it.
 Client backoff also needs a backend that advertises stamped announcements. The
 announcements and the client side are in
 [event-snapshot-recovery.md](event-snapshot-recovery.md#native-observation-invalidations);
@@ -465,6 +475,18 @@ restarts at 1 with the bridge. The backend caches that read for 30 seconds
 the projection can show the previous number for up to that long after a
 relaunch. `claude-warm-runtime-live.spec.ts` drives one CLI through the app
 against a loopback model and asserts the number holds (todo 0005 task 8).
+
+A background task the user stops (`POST /session/:id/tasks/:taskId/stop`)
+leaves nothing owed. The CLI's `stopped` edge can arrive before its answer to
+the stop request, and CLI 2.1.319 queues the `killed` notification for the
+next prompt rather than starting a turn for it, so the bridge marks the stop
+(`tasks.stopRequested`) and does not wait for a continuation; the CLI is idle
+at once and a launch-only change replaces it. A task the CLI ends by itself
+(its timeout below, or a natural end) still gets the continuation wait,
+including one that finished on its own while the stop was in flight: a
+`TaskCompleted` or `SubagentStop` hook carries no status, so it defers to the
+`task_notification` that follows, which waits for the continuation.
+`steer-missed-live.spec.ts` checks it on the real CLI (todo 0005 task 10).
 
 Background shell commands are bounded. Since Claude Code 2.1.285 an Agent SDK
 session stops a `run_in_background` command at its `timeout` (30 minutes by

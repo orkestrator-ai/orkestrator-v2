@@ -19,11 +19,17 @@ import { piCompletionChunk, piProviderConfig } from "../../scripts/pi-fake-model
  * offers `background`, which a background step sets (todo 0049 task 8). Pi has no sub-agent,
  * background or question tool, so those steps reply in text or run in the
  * foreground. It keeps no request body and logs
- * nothing. A container OpenCode run (todo 0008 (retired) task 7) bundles it into one
+ * nothing; it serves the Claude fake's marker watch (`MARKER_WATCH_PATH`). A container OpenCode run (todo 0008 (retired) task 7) bundles it into one
  * file and serves it on the container's loopback on a fixed `--port`
  * (`installContainerFakeOpenCode`).
  */
-import { finalReply, scriptedStep } from "./idle-observation-fake-claude";
+import {
+  MARKER_WATCH_PATH,
+  createMarkerWatch,
+  finalReply,
+  markerWatchResponse,
+  scriptedStep,
+} from "./idle-observation-fake-claude";
 
 export const PI_FAKE_PROVIDER = "idleqa-fake";
 export const PI_FAKE_MODEL = "idleqa-1";
@@ -131,11 +137,16 @@ export function piFakeModelsConfig(baseUrl: string) {
 export function startPiFakeModel(platform = { Response: globalThis.Response }, port = 0) {
   const Reply = platform.Response;
   let counter = 0;
+  const markers = createMarkerWatch();
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port,
     async fetch(request) {
       const url = new URL(request.url);
+      if (url.pathname === MARKER_WATCH_PATH) {
+        const answer = markerWatchResponse(markers, request.method, url.searchParams);
+        return Reply.json(answer.body, { status: answer.status });
+      }
       if (request.method === "GET" && url.pathname.endsWith("/models")) {
         return Reply.json({ object: "list", data: [{ id: PI_FAKE_MODEL, object: "model" }] });
       }
@@ -152,6 +163,7 @@ export function startPiFakeModel(platform = { Response: globalThis.Response }, p
       } catch {
         return new Reply("bad request", { status: 400 });
       }
+      markers.observe(body);
       counter += 1;
       const id = `chatcmpl-idleqa-${counter}`;
       const message = piAssistantMessage(body, counter);

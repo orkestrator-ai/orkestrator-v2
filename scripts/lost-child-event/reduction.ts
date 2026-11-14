@@ -7,7 +7,9 @@
  *   bun scripts/lost-child-event/reduction.ts pattern [iterations=1000] [--host] [--abort=MS]
  *   bun scripts/lost-child-event/reduction.ts replay <schedule.json> [iterations=100]
  *
- * Either mode takes `--block=MS` (`startBlocking`).
+ * Either mode takes `--block=MS` (`startBlocking`) and `--fs=MS`
+ * (`startFsTraffic`). Neither loses events: the trigger is a nested event-loop
+ * tick (`nested-tick.ts`, to-do 6900 task 3), which these modes never make.
  *
  * `pattern`: each iteration dirties a Git repository and runs `status`,
  * `rev-parse`, `merge-base`, `for-each-ref` and `diff` at once, then
@@ -45,7 +47,15 @@
  * summary. See to-do 6900 for the counts.
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  promises as fsPromises,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -405,9 +415,38 @@ function startBlocking(): () => void {
   return () => clearTimeout(timer);
 }
 
+const fsMs = Number(
+  [...flags].find((flag) => flag.startsWith("--fs="))?.slice("--fs=".length) ?? 0,
+);
+
+/**
+ * `--fs=MS`: every 0 to MS ms, one `fs.promises` call (`stat`, `lstat` or
+ * `access`) on the run's root, as the diff-stats service makes between its
+ * commands. Each runs on Bun's thread pool and completes through the event
+ * loop's wakeup, which the replay's commands alone never use.
+ */
+function startFsTraffic(): () => void {
+  if (fsMs <= 0) return () => undefined;
+  let stopped = false;
+  const calls = [fsPromises.stat, fsPromises.lstat, fsPromises.access] as const;
+  const tick = () => {
+    if (stopped) return;
+    const call = calls[Math.floor(Math.random() * calls.length)]!;
+    (call as (target: string) => Promise<unknown>)(root).then(
+      () => setTimeout(tick, Math.random() * fsMs),
+      () => setTimeout(tick, Math.random() * fsMs),
+    );
+  };
+  tick();
+  return () => {
+    stopped = true;
+  };
+}
+
 if (import.meta.main) {
   root = mkdtempSync(path.join(os.tmpdir(), "bun-lost-child-event-"));
   const stopBlocking = startBlocking();
+  const stopFsTraffic = startFsTraffic();
   let failures = 0;
   try {
     if (mode === "pattern") failures = await pattern(Number(positional[0] ?? 1000));
@@ -415,6 +454,7 @@ if (import.meta.main) {
       failures = await replay(positional[0]!, Number(positional[1] ?? 100));
     else throw new Error(`unknown mode ${mode}: use pattern or replay`);
     stopBlocking();
+    stopFsTraffic();
     await holdUntilClosed(30_000);
   } finally {
     rmSync(root, { recursive: true, force: true });

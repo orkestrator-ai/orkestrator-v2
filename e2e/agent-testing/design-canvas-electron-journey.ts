@@ -30,7 +30,6 @@ const HOST_DESIGN_NAME = "Host fixture design";
 const HOST_FRAME_NAME = "Host screen";
 const HOST_MARKER = "Opened from the host";
 
-type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type CommandResult<T> = { ok: true; value: T } | { ok: false; failure: { message: string } };
 type DownloadRecord = {
   filename: string;
@@ -142,6 +141,79 @@ export async function openDesignWindow(
   return window;
 }
 
+export type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+
+/** `command` through the page's own preload, so it reaches the window's active connection. */
+export function pageInvoke(window: Page): Invoke {
+  return (command, args = {}) =>
+    window.evaluate(({ command, args }) => (globalThis as any).orkestrator.invoke(command, args), {
+      command,
+      args,
+    });
+}
+
+/**
+ * A started local environment of the profile's fixture project, selected in
+ * the sidebar. The fixture repository is prepared and added on first use; a
+ * later journey in the same window reuses the project.
+ */
+export async function openFixtureEnvironment(
+  window: Page,
+  profile: RuntimeProfile,
+  name: string,
+): Promise<{
+  invoke: Invoke;
+  project: { id: string; name: string };
+  environment: { id: string; name: string };
+  worktreePath: string;
+}> {
+  const invoke = pageInvoke(window);
+  const fixturePath = path.join(profile.fixtureDir, "test-project");
+  const existing = (
+    await invoke<Array<{ id: string; name: string; localPath?: string | null }>>("get_projects")
+  ).find((candidate) => candidate.localPath === fixturePath);
+  const project =
+    existing ??
+    (await invoke<{ id: string; name: string }>("add_project", {
+      gitUrl: path.join(profile.fixtureDir, "origin.git"),
+      localPath: await prepareFixtureRepository(profile, templateRoot),
+    }));
+  const environment = await invoke<{ id: string; name: string }>("create_environment", {
+    projectId: project.id,
+    name,
+    networkAccessMode: "restricted",
+    environmentType: "local",
+  });
+  await invoke("start_environment", { environmentId: environment.id });
+  const { worktreePath } = await invoke<{ worktreePath: string | null }>("get_environment", {
+    environmentId: environment.id,
+  });
+  expect(worktreePath).toBeTruthy();
+  await selectEnvironment(window, project.name, environment.name);
+  return { invoke, project, environment, worktreePath: worktreePath! };
+}
+
+/** Reload, then select `environmentName` in the sidebar, expanding its project first. */
+export async function selectEnvironment(
+  window: Page,
+  projectName: string,
+  environmentName: string,
+): Promise<void> {
+  await window.reload();
+  const expand = window.getByRole("button", { name: `Expand project ${projectName}` });
+  const entry = window.getByText(environmentName, { exact: true }).first();
+  await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+  // A startup dialog (Docker, GitHub CLI) that opens just as Expand is
+  // clicked takes the click; its locator handler then closes it and the
+  // project stays collapsed. Expand until the environment shows (flake 9969).
+  await expect(async () => {
+    if (await expand.isVisible()) await expand.click();
+    await expect(entry).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
+  await window.mouse.move(0, 0);
+  await entry.click();
+}
+
 /**
  * Open, edit, keyboard, export, download and host import, through `window`.
  * Downloads and the host fixture go under `temporaryRoot`; the environment is
@@ -194,28 +266,11 @@ export async function runDesignCanvasJourney({
       () => (globalThis as { __designDownloads?: DownloadRecord[] }).__designDownloads ?? [],
     );
 
-  const invoke: Invoke = (command, args = {}) =>
-    window.evaluate(({ command, args }) => (globalThis as any).orkestrator.invoke(command, args), {
-      command,
-      args,
-    });
-
-  const projectPath = await prepareFixtureRepository(profile, templateRoot);
-  const project = await invoke<{ id: string; name: string }>("add_project", {
-    gitUrl: path.join(profile.fixtureDir, "origin.git"),
-    localPath: projectPath,
-  });
-  const environment = await invoke<{ id: string; name: string }>("create_environment", {
-    projectId: project.id,
-    name: "design-electron",
-    networkAccessMode: "restricted",
-    environmentType: "local",
-  });
-  await invoke("start_environment", { environmentId: environment.id });
-  const { worktreePath } = await invoke<{ worktreePath: string | null }>("get_environment", {
-    environmentId: environment.id,
-  });
-  expect(worktreePath).toBeTruthy();
+  const { invoke, environment, worktreePath } = await openFixtureEnvironment(
+    window,
+    profile,
+    "design-electron",
+  );
   const action = <T>(name: string, input: Record<string, unknown>) =>
     invoke<T>("design_action", { environmentId: environment.id, action: name, input });
   const snapshot = async (canvasId: string) => {
@@ -234,20 +289,6 @@ export async function runDesignCanvasJourney({
         query: { search },
       })
     ).value.entries;
-
-  await window.reload();
-  const expand = window.getByRole("button", { name: `Expand project ${project.name}` });
-  const entry = window.getByText(environment.name, { exact: true }).first();
-  await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
-  // A startup dialog (Docker, GitHub CLI) that opens just as Expand is
-  // clicked takes the click; its locator handler then closes it and the
-  // project stays collapsed. Expand until the environment shows (flake 9969).
-  await expect(async () => {
-    if (await expand.isVisible()) await expand.click();
-    await expect(entry).toBeVisible({ timeout: 2_000 });
-  }).toPass({ timeout: 30_000 });
-  await window.mouse.move(0, 0);
-  await entry.click();
 
   let canvasId = "";
   let frameId = "";

@@ -19,14 +19,29 @@
  * install does; with none, every renderer opens its blocking "AI CLI
  * Required" dialog over the workspace. The stub cannot run a turn, and the
  * isolated HOME has no Pi login or model catalogue.
+ *
+ * With a {@link PairingAgent} (to-do 8011 (retired), Ask agent and Resume), the
+ * directory also holds this checkout's pinned Claude Code
+ * ({@link installPairingClaude}), and the backend's `CLAUDE_CONFIG_DIR` is a
+ * directory of the run's own whose `settings.json` sends every model call to
+ * a loopback Anthropic endpoint (`fake-anthropic-model.ts`) with a fixture
+ * key, so a real Claude conversation runs with no login and nothing billed.
+ * The directory is named explicitly on purpose: Claude then looks for a
+ * macOS Keychain login only under a service named after that run-unique path,
+ * which no existing Keychain item has, never the plain "Claude Code"
+ * entry. Session-title generation is off
+ * (`ORKESTRATOR_SESSION_TITLE_GENERATION=0`), so nothing but the
+ * conversation reaches the model.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 
+import { installPinnedToolchains } from "../../packages/toolchain/src/install";
 import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
+import { fakeModelClaudeSettings } from "./fake-anthropic-model";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
@@ -41,6 +56,45 @@ export const PAIRING_OLD_APP_ENV = "ORKESTRATOR_PAIRING_OLD_APP_EXECUTABLE";
 
 /** Overrides {@link DEFAULT_PAIRING_RELEASE} for the old-backend half. */
 export const PAIRING_RELEASE_ENV = "ORKESTRATOR_PAIRING_RELEASE";
+
+/**
+ * The first release whose backend serves `design_session_link_states` and
+ * `design_session_resume`: both arrived together in #1218 (2026-10-24), first
+ * tagged in v2.30.0-beta (v2.29.0-beta predates them).
+ */
+export const DESIGN_SESSION_RESUME_SINCE = [2, 30, 0] as const;
+
+/** What a published backend of `version` offers the design Ask agent journey. */
+export interface PairingBackendDesignCapabilities {
+  /** It answers `design_session_link_states`, so a closed link records its session. */
+  linkStates: boolean;
+  /** It serves `design_session_resume`, so this checkout's renderer offers Resume. */
+  resume: boolean;
+}
+
+/**
+ * {@link PairingBackendDesignCapabilities} of a published `version`
+ * (`major.minor.patch`, any pre-release suffix). A pre-release of
+ * {@link DESIGN_SESSION_RESUME_SINCE} counts as having them: v2.30.0-beta is
+ * the first build that did. A version that does not parse is refused rather
+ * than guessed.
+ */
+export function pairingBackendDesignCapabilities(
+  version: string,
+): PairingBackendDesignCapabilities {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(version.trim());
+  if (!match) throw new Error(`Not a release version: ${version}`);
+  const core = match.slice(1, 4).map(Number);
+  let since = true;
+  for (const [index, part] of core.entries()) {
+    const floor = DESIGN_SESSION_RESUME_SINCE[index]!;
+    if (part !== floor) {
+      since = part > floor;
+      break;
+    }
+  }
+  return { linkStates: since, resume: since };
+}
 
 /**
  * The executable {@link PAIRING_OLD_APP_ENV} names, resolved against the
@@ -138,6 +192,9 @@ function directoryOf(executable: string): string | null {
  * gateway token, no fixed Control MCP port and no boot-time reachability
  * probe.
  *
+ * `claudeConfigDir`, when given, is the backend's `CLAUDE_CONFIG_DIR` (see
+ * the module comment), and session-title generation is always off.
+ *
  * Git's fsmonitor is forced off through Git's environment config, which
  * overrides a worktree's own config. Releases before #1386 (2.22.3 among them)
  * write `core.fsmonitor=true` into every environment worktree, and on macOS
@@ -148,7 +205,7 @@ function directoryOf(executable: string): string | null {
  */
 export function pairingBackendEnvironment(
   base: Readonly<Record<string, string | undefined>>,
-  node: { home: string; tmp: string; token: string },
+  node: { home: string; tmp: string; token: string; claudeConfigDir?: string },
   pathDirectories: readonly string[] = [directoryOf("bun"), directoryOf("git")].filter(
     (entry): entry is string => entry !== null,
   ),
@@ -174,7 +231,43 @@ export function pairingBackendEnvironment(
     ORKESTRATOR_GATEWAY_TOKEN: node.token,
     ORKESTRATOR_CONTROL_MCP_PORT: "0",
     ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
+    ORKESTRATOR_SESSION_TITLE_GENERATION: "0",
+    ...(node.claudeConfigDir ? { CLAUDE_CONFIG_DIR: node.claudeConfigDir } : {}),
   };
+}
+
+/**
+ * Where {@link installPairingClaude} keeps its download between runs: inside
+ * this checkout (`output/` is ignored by Git), never the real data directory.
+ */
+export const PAIRING_TOOLCHAIN_CACHE = path.join(
+  repositoryRoot,
+  "output",
+  "agent-testing",
+  "design-pairing-toolchain",
+);
+
+/**
+ * This checkout's pinned Claude Code, downloaded and hash-verified by the
+ * toolchain installer into `cacheDir` as its own data directory, so it is
+ * reused on the next run. Returns the executable.
+ */
+export async function installPairingClaude(
+  cacheDir: string = PAIRING_TOOLCHAIN_CACHE,
+): Promise<string> {
+  await mkdir(cacheDir, { recursive: true, mode: 0o700 });
+  const installed = await installPinnedToolchains({ dataDir: cacheDir, tools: ["claude"] });
+  const executable = installed.executables.claude;
+  if (!executable) throw new Error("the toolchain installer returned no claude executable");
+  return executable;
+}
+
+/** What a pairing backend needs to run a real Claude conversation on a loopback model. */
+export interface PairingAgent {
+  /** A Claude Code executable ({@link installPairingClaude}), linked into the toolchain directory. */
+  claudeExecutable: string;
+  /** The loopback Anthropic endpoint every model call goes to. */
+  modelOrigin: string;
 }
 
 /**
@@ -221,6 +314,7 @@ export interface PairingBackend {
 export async function startPairingBackend(
   build: PairingBuild,
   dir: string,
+  agent?: PairingAgent,
 ): Promise<PairingBackend> {
   const home = path.join(dir, "home");
   const tmp = path.join(dir, "tmp");
@@ -231,6 +325,16 @@ export async function startPairingBackend(
   await mkdir(toolchain, { recursive: true, mode: 0o700 });
   await writeFile(path.join(toolchain, "pi"), "#!/bin/sh\nexit 1\n");
   await chmod(path.join(toolchain, "pi"), 0o700);
+  let claudeConfigDir: string | undefined;
+  if (agent) {
+    await symlink(agent.claudeExecutable, path.join(toolchain, "claude"));
+    claudeConfigDir = path.join(home, ".claude-pairing");
+    await mkdir(claudeConfigDir, { recursive: true, mode: 0o700 });
+    await writeFile(
+      path.join(claudeConfigDir, "settings.json"),
+      JSON.stringify(fakeModelClaudeSettings(agent.modelOrigin)),
+    );
+  }
   const [port, controlPort] = (await pairingPorts(2)) as [number, number];
   const token = randomBytes(24).toString("base64url");
   const service = [
@@ -259,7 +363,12 @@ export async function startPairingBackend(
     spawn("bun", [entry, ...args], {
       cwd,
       detached: true,
-      env: pairingBackendEnvironment(process.env, { home, tmp, token }),
+      env: pairingBackendEnvironment(process.env, {
+        home,
+        tmp,
+        token,
+        ...(claudeConfigDir ? { claudeConfigDir } : {}),
+      }),
       stdio: ["ignore", "ignore", "pipe"],
     }),
   );

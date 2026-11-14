@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
 import {
+  DEFAULT_PAIRING_RELEASE,
   FORBIDDEN_PORTS,
   PAIRING_OLD_APP_ENV,
   loopbackPairingPortProbe,
+  pairingBackendDesignCapabilities,
   pairingBackendEnvironment,
   pairingOldAppExecutable,
   pairingPorts,
@@ -124,10 +126,31 @@ describe("pairing backend environment", () => {
       "ORKESTRATOR_CONTROL_MCP_PORT",
       "ORKESTRATOR_GATEWAY_TOKEN",
       "ORKESTRATOR_HOST_REACHABILITY_CHECK",
+      "ORKESTRATOR_SESSION_TITLE_GENERATION",
     ]);
     expect(env.ORKESTRATOR_GATEWAY_TOKEN).toBe("pairing-token");
     expect(env.ORKESTRATOR_CONTROL_MCP_PORT).toBe("0");
     expect(env.ORKESTRATOR_HOST_REACHABILITY_CHECK).toBe("off");
+    // Nothing but the conversation reaches the model.
+    expect(env.ORKESTRATOR_SESSION_TITLE_GENERATION).toBe("0");
+  });
+
+  test("names Claude's configuration directory only when the backend runs an agent", () => {
+    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    const claudeConfigDir = path.join(home, ".claude-pairing");
+    const withAgent = pairingBackendEnvironment(
+      { CLAUDE_CONFIG_DIR: "/Users/someone/.claude" },
+      { home, tmp: "/run/root/backend/tmp", token: "pairing-token", claudeConfigDir },
+      ["/tools/bun/bin"],
+    );
+    // Explicit, so Claude's Keychain lookup is named after this run's path.
+    expect(withAgent.CLAUDE_CONFIG_DIR).toBe(claudeConfigDir);
+    const inherited = pairingBackendEnvironment(
+      { CLAUDE_CONFIG_DIR: "/Users/someone/.claude" },
+      { home, tmp: "/run/root/backend/tmp", token: "pairing-token" },
+      ["/tools/bun/bin"],
+    );
+    expect(inherited.CLAUDE_CONFIG_DIR).toBeUndefined();
   });
 
   test("puts HOME, the XDG roots and TMPDIR under the run root, and builds PATH", () => {
@@ -155,5 +178,35 @@ describe("pairing backend environment", () => {
       ]),
     );
     expect(settings).toEqual({ "core.fsmonitor": "false" });
+  });
+});
+
+describe("pairing backend design capabilities", () => {
+  test("the default release has neither link states nor Resume", () => {
+    expect(pairingBackendDesignCapabilities(DEFAULT_PAIRING_RELEASE)).toEqual({
+      linkStates: false,
+      resume: false,
+    });
+  });
+
+  test("releases before v2.30.0-beta have neither", () => {
+    for (const version of ["2.21.1", "2.23.0", "2.29.0-beta", "1.99.99"])
+      expect(pairingBackendDesignCapabilities(version)).toEqual({
+        linkStates: false,
+        resume: false,
+      });
+  });
+
+  test("v2.30.0-beta and later have both", () => {
+    for (const version of ["2.30.0-beta", "2.30.0", "2.36.1", "2.38.2-beta", "3.0.0"])
+      expect(pairingBackendDesignCapabilities(version)).toEqual({
+        linkStates: true,
+        resume: true,
+      });
+  });
+
+  test("a version that does not parse is refused, not guessed", () => {
+    for (const version of ["", "latest", "2.30", "v2.30.0"])
+      expect(() => pairingBackendDesignCapabilities(version)).toThrow("Not a release version");
   });
 });

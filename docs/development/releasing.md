@@ -248,8 +248,14 @@ the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)):
   deployment to the `main` branch.
 - **npm:** on the `orkestrator` package's Settings → Trusted publisher, add
   GitHub Actions with organization `orkestrator-ai`, repository
-  `orkestrator-v2`, workflow filename `publish-npm.yml` and environment name
-  `npm-publish`. Once a release has published this way, also set the package's
+  `orkestrator-v2`, workflow filename `publish-npm.yml`, environment name
+  `npm-publish`, and the permission to publish. The same from a terminal,
+  logged in with `npm login` (npm 11.15 or newer; a token that bypasses
+  two-factor authentication does not work for this):
+  `npm trust github orkestrator --file publish-npm.yml --repo orkestrator-ai/orkestrator-v2 --env npm-publish --allow-publish`,
+  then `npm trust list orkestrator` to check it. npm allows one trusted
+  publisher per package; `npm trust revoke` removes one. Once a release has
+  published this way, also set the package's
   publishing access to require two-factor authentication and disallow tokens,
   so only the workflow can publish.
 

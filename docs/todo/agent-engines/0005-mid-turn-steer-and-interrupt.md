@@ -1,8 +1,9 @@
 # Mid-turn steer and interrupt
 
 Checked against `main` at `0658de646` (2026-11-01) for tasks 1, 2, 3 and 9,
-at `c98b20e6f` (2026-11-10) for task 8, and at `17d28238c` (2026-11-13) for
-task 7; the other tasks were last checked at `863b5782` (2026-10-27).
+at `c98b20e6f` (2026-11-10) for task 8, at `17d28238c` (2026-11-13) for
+task 7, and at `dc90609bf` (2026-11-14) for task 10; the other tasks were last
+checked at `863b5782` (2026-10-27).
 
 ## Task analysis
 
@@ -10,19 +11,20 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 2, 3 and 9 rechecked
 2026-11-01 against `0658de646` at Agent SDK and CLI `0.3.314` / `2.1.314`;
 task 10 added and built 2026-11-08 against `02f55ea9b`; task 8 built and run
 2026-11-10 against `c98b20e6f` at Agent SDK and CLI `0.3.319` / `2.1.319`;
-task 7 built and run 2026-11-13 against `17d28238c`.
+task 7 built and run 2026-11-13 against `17d28238c`; task 10 checked live on
+the real bridges 2026-11-14 against `dc90609bf`.
 
 ### Tasks
 
 1. **Collapse Claude task-to-process maps**: move `backgroundTaskControls`, `backgroundTaskCandidates` and `settlingBackgroundTasks` into runtime state. Status: done (landed in #1331; rechecked 2026-11-01).
 2. **Live Claude model catalogue**: read models from the live runtime instead of a separate control-only probe. Status: done (live read landed in #1331; the probe cache and its bound added 2026-11-01).
 3. **Warm first Claude turn**: avoid the cold spawn on an environment's first turn, then measure. Status: closed, not adopted (measured 2026-11-01; see "`prewarm()` not adopted").
-4. **Cursor `SendOptions.local.force`**: use it for a wedged agent. Status: deferred (until wedged agents are seen).
+4. **Cursor `SendOptions.local.force`**: use it for a wedged agent. Status: blocked (deferred until a wedged agent is seen).
 5. **OpenCode steer**: needs OpenCode 2.x. Status: done for OpenCode 2.x sessions (built by 0008 (retired) task 5 behind its opt-in preview, merged in #2009 on 2026-11-09; 0008 task 10, the steer spike, was done on 2026-11-08). OpenCode 1.x never could steer, and was retired on 2026-11-11, so every OpenCode session is a 2.x session and can steer (see 0008 "OpenCode 1.x retired (2026-11-11)"). Live qualification of 2.x steer belongs to 0008 task 7, done for host environments on 2026-11-11 (a composer steer through the app on a scripted model, and the live provider and steer tests on Linux). Since task 10 below, an expected-turn precondition is no longer needed: OpenCode 2.x starts a new run for a steer that reaches an idle session, which is the behaviour the owner wants everywhere.
 6. **Grok steer**: ACP has no mid-turn input; interjection stays behind its unsafe flag. Status: blocked (ACP / Grok).
 7. **Inactive-path steer qualification on Claude and Cursor**: parameterise the Codex inactive-path steer spec by platform for Claude and Cursor (steer, switch away, return, reload). Status: done (2026-11-13: `e2e/agent-testing/steer-inactive-live.spec.ts` runs it for Codex on a real model and for Claude and Cursor on scripted models; both passed; see "Inactive-path steer on scripted models"). The runs with real Claude and Cursor logins are in 7568.
 8. **Warm Claude CLI app-path qualification**: follow-up, mode and permission changes, parked approval and MCP change on one CLI through the app. Status: done (2026-11-10, loopback model; see "One warm CLI through the app"). The same reads with a real login moved to 7568 (2026-11-10).
-10. **A steer that misses its turn starts a new turn, on every provider**: the owner's rule (2026-11-08). Status: built (2026-11-08 against `main` at `02f55ea9b`; see "A missed steer becomes the next turn"); open for its live check on real bridges, which an agent can run with scripted models (see "Needs verification").
+10. **A steer that misses its turn starts a new turn, on every provider**: the owner's rule (2026-11-08). Status: done (built 2026-11-08 against `main` at `02f55ea9b`, see "A missed steer becomes the next turn"; checked live on the real Claude, Codex, Cursor and Pi bridges with scripted models on 2026-11-14, with the stop after several turns, which found and fixed a Claude bridge defect; see "Missed steer and a stop after several turns on real bridges"). A steer that meets a turn other than the one the user saw still joins it; that is [8107](8107-steer-bound-to-the-turn-it-was-written-for.md).
 
 ### 1. Collapse Claude task-to-process maps
 
@@ -199,9 +201,9 @@ between turns and releases itself after an idle window, so a follow-up is
 written into the running process. Background-task ownership is that
 process's own state, and bridge-wide reads (models, account, plan usage) ask a
 running CLI before spawning a probe. The inactive-path steer is proved
-through the app for Codex, Claude and Cursor (task 7). What is left for
-agents is the live check of the missed-steer rule and of a stop after several
-turns, on real bridges with scripted models. OpenCode steer works on every OpenCode
+through the app for Codex, Claude and Cursor (task 7), and the missed-steer
+rule and a stop after several turns on the real Claude, Codex, Cursor and Pi
+bridges with scripted models (task 10, 2026-11-14). OpenCode steer works on every OpenCode
 session (OpenCode 2, the only line since 1.x was retired on 2026-11-11). Grok steer is
 blocked upstream and is recorded here; the Cursor `force` send is deferred
 until a wedged agent is seen.
@@ -233,6 +235,14 @@ row now delivers the text: the direct `/steer`, the Agent Info box, the CLI
 and the recovery retry of a parked steer send it as a new turn on `idle` and
 queue it on `mismatch`; the queue paths were checked and left as they were.
 The rest of this section is the decision record it was built from.
+
+**Checked live, 2026-11-14.** On the real Claude, Codex, Cursor and Pi
+bridges with scripted models (`e2e/agent-testing/steer-missed-live.spec.ts`):
+a steer after its turn ended started exactly one new turn on the session's
+controls, and a reread of the snapshot agreed. The stop after several turns
+found a Claude bridge defect, fixed in the same change. See "Missed steer and
+a stop after several turns on real bridges" under "Assumptions and
+decisions".
 
 **Investigation.** All the refusals come from one backend function,
 `performProjectionSteer` (`native-agent-service.ts`), and from the recovery
@@ -336,6 +346,11 @@ at-most-once dispatch.
     counter. `/session/:id/runtime-health` serves it as
     `summary.runtimeGeneration` beside `attached`/`detached`, and Agent Info
     shows it as "process N" (task 8).
+  - A stop the bridge issued owes no continuation
+    (`tasks.stopRequested` in `session-manager-background-tasks.ts`): CLI
+    2.1.319 queues the `killed` notification for the next prompt and starts
+    no turn for it, so the CLI is idle once the stop lands and a launch-only
+    change replaces it (task 10, 2026-11-14).
   - Bridge tests cover an idle steer reading back as `absent` and the
     interrupt receipt (`session-manager-catalog-steer.test.ts`,
     `routes/session.test.ts`), the warm runtime's join, window, cap,
@@ -401,10 +416,11 @@ at-most-once dispatch.
   server added and removed between turns.~~ Done 2026-11-10 on a loopback model
   (task 8, `claude-warm-runtime-live.spec.ts`): one CLI took every step, and
   each change was seen where it acts.
-- Through one warm CLI: stopping a background task started two turns earlier
-  reaches it (see "Needs verification"). The real-login reads (model picker,
-  account card, plan-usage panel) moved to the manual-test checklist on
-  2026-11-10.
+- ~~Through one warm CLI: stopping a background task started two turns earlier
+  reaches it.~~ Done 2026-11-14 on a scripted model (task 10,
+  `steer-missed-live.spec.ts`), after the fix it found. The real-login reads
+  (model picker, account card, plan-usage panel) moved to the manual-test
+  checklist on 2026-11-10.
 
 ## Constraints and rationale
 
@@ -929,6 +945,99 @@ steer must have reached the agent exactly once.
   environment, and Cursor's real SDK steer path, which the fake answers with
   `complete_delivered`.
 
+### Missed steer and a stop after several turns on real bridges (2026-11-14, task 10)
+
+Checked against `main` at `dc90609bf`, both items of the old "Needs
+verification" section, with a new opt-in spec,
+`e2e/agent-testing/steer-missed-live.spec.ts`, on a credential-free
+`dev:test` profile and scripted models: the real Claude CLI and bridge on the
+loopback Anthropic endpoint, the real Codex app-server and bridge on the
+loopback Responses endpoint (a made-up API key in the profile's own Codex
+home), the real Pi bridge and SDK on the loopback chat-completions endpoint,
+and the real Cursor bridge over its fake SDK (the task 7 entry swap).
+
+- **How the steer is sent.** Through `perform_native_agent_session_action`
+  with `{ kind: "steer", text }`, the route the composer's `/steer` and the
+  Agent Info box use, not through the composer itself. A composer that shows
+  no running turn answers `/steer` locally (`idleSteerPromptReply`), so "a
+  stale composer" is the backend call that composer would have made. Options:
+  (a) the backend route; (b) the composer in the browser, which would need a
+  view held stale on purpose. Chose (a): it is the code the rule lives in, and
+  the renderer's handling of `deliveredAs` is unit-tested.
+- **Missed turn: passed on all four.** After the first turn ended, the steer
+  came back `applied` with `deliveredAs: "new-turn"`, and the transcript held
+  exactly one user row and one reply for it, with nothing in the backend's
+  prompt queue and the model, mode and approval mode unchanged; a second read
+  of the snapshot agreed. Cursor's vendor store showed one new run carrying
+  the text and no steer.
+- **Replaced turn: the steer joins the running turn.** With a second, long
+  turn running when the steer arrived, Claude, Codex and Cursor answered
+  `applied` with no `deliveredAs`; Pi answered `unknown`, because it holds a
+  steer in its own in-memory queue until the run's next model step, and the
+  backend reconciled it once the turn ended. Every platform delivered the text
+  once and queued nothing. That is how the backend is built: it reads the
+  running run itself just before it steers, so it never sees a `mismatch`
+  unless the run changes inside that one request. It does not meet the
+  owner's rule for a steer written for an earlier turn ("never steered into a
+  turn it was not written for"), because the composer sends no run. Recorded
+  as [8107](8107-steer-bound-to-the-turn-it-was-written-for.md) rather than
+  built here: it needs a run id in the session projection and a new optional
+  field on the steer action, a contract change beyond this check. The spec
+  pins today's behaviour so 8107 has to change it deliberately.
+- **Pi's queue in the projection.** While Pi holds the steer, the projection's
+  `queue` lists it (Pi's `providerQueue` is merged in). The checks read the
+  backend's own prompt queue (`get_prompt_queue`) for "queued as the next
+  turn", and require Pi's to be empty once the turn ends.
+- **Stop after several turns: a Claude bridge defect, fixed.** A background
+  Bash command started in the first turn, two follow-ups went into the same
+  CLI (generation 1 throughout), and the stop answered `ok` with the snapshot
+  settling `killed`. But the next prompt, which left bypass mode (launch-only),
+  was refused for over seven minutes with "Claude is still running background
+  work in this session". The CLI's own rollout showed why: on the stop it
+  enqueued a `<task-notification>` with `<status>killed</status>` and did not
+  dequeue it until the bridge closed its input when the idle window ended (ten
+  minutes, in two runs). Its `stopped` edge reached the bridge before its
+  answer to the stop request, while the task still counted as live, so the
+  bridge waited for a continuation that CLI 2.1.319 never sends, and counted
+  the CLI as owing work for the whole window. Options: (a) mark the tasks the
+  bridge itself asked to stop and let their ending owe no continuation; (b)
+  shorten the continuation window after any `stopped` edge; (c) leave it and
+  document the wait. Chose (a) (`tasks.stopRequested` in
+  `session-manager-background-tasks.ts`, read by the `task_updated`,
+  `task_notification`, `background_tasks_changed` and `TaskCompleted` paths):
+  it changes nothing for a task the CLI ends by itself (its own timeout also
+  reports `stopped`, and a natural end still gets its continuation), and the
+  mark is bounded, consumed by the edge and cleared when the stop fails or the
+  CLI ends. (b) would also cut short a continuation the CLI does owe. If a
+  later CLI does answer a stopped task with a turn, the bridge already adopts
+  a root turn the CLI starts on its own. After the fix the launch-only change
+  was taken in 0.6 s, the next turn ran on generation 2, and a stop for the
+  task the old CLI owned was refused with the bridge's `no_control_channel`
+  (HTTP 409).
+- **Tests.** Bridge: three cases in `session-manager-runtime-idle.test.ts` ("a
+  stop the bridge issued": an edge ahead of the stop's answer owes nothing and
+  a launch-only change replaces the CLI; a task that completed on its own
+  during the stop keeps its continuation; a stop that never reached the CLI
+  leaves no mark). Spec helpers: `steer-missed-live-support.test.ts`.
+- **Runs.** beelink2 (Linux), profile `msteer10` (`--fixture
+  --no-agent-credentials --no-host-seed --agent-platforms
+  claude,codex,cursor,pi --headless`), 2026-11-14. Before the fix: the missed
+  and replaced steps passed on Codex, Cursor and Pi (after Pi's two expectations
+  above were corrected) and on Claude, and the stop case failed as described.
+  After the fix, with the profile restarted on the rebuilt bridge: Claude's two
+  cases passed; then, with `--repeat-each=2`, Codex, Cursor and Pi passed 2/2
+  and the Claude stop case 2/2 (the release taken in 0.4 to 0.6 s), while
+  Claude's missed-steer case failed 2/2 only on the scripted model's wording:
+  when the CLI puts the steer beside the command's result, the fake answers
+  its default `Done.`, a reply the spec had not accepted. With that accepted,
+  Claude's missed-steer case passed 3/3, and a last run of all five cases
+  passed. The profile was stopped and reset afterwards, and the Cursor bridge
+  entry was back in place with no lock left.
+- **Not covered.** Real logins and models (billed), container environments,
+  and the composer's own `/steer` path in the browser. A stop of a sub-agent
+  task (rather than a Bash command) on the real CLI was not run; the bridge
+  test covers the same edges for any task.
+
 ### Task 5: OpenCode steer recorded as built for 2.x (2026-11-10 housekeeping)
 
 Checked against `main` at `04639b12b`. Task 5 still said it was blocked on
@@ -941,17 +1050,11 @@ to-do rules forbid. Grok steer stays blocked.
 
 ## Needs verification
 
-- **A missed steer on a real bridge (task 10).** Built and tested against
-  scripted providers only. On a throwaway profile, per provider with steer
-  (Claude, Codex, Cursor, Pi): finish a turn, then `/steer` from a stale
-  composer, and steer while a second turn has replaced the first; confirm one
-  new turn or one queued row, with the session's model and mode, and that a
-  reload shows the same.
-
-- **Stop after several turns on a real CLI.** Start a background agent,
-  send two follow-ups into the same warm CLI, then stop the agent: it must stop
-  (`ok`) and its snapshot settle; after the CLI is released, a stop for a task
-  it owned must answer `no_control_channel`.
+Nothing open for agents: both checks of task 10 ran on 2026-11-14 (see
+"Missed steer and a stop after several turns on real bridges"). The real-login
+reads of task 8 are an item in the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md), which
+records its result here.
 
 ## Related
 
@@ -964,6 +1067,9 @@ to-do rules forbid. Grok steer stays blocked.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the Claude and Cursor runs.
 - [platform-inconsistencies.md](../../architecture/platform-inconsistencies.md).
+- [8107](8107-steer-bound-to-the-turn-it-was-written-for.md): a steer that
+  meets a turn other than the one the user saw is queued instead of joining it
+  (found by task 10's live check).
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the real-login part of task 7, the real-login reads of task 8, task 9) moved there on 2026-11-10.
 
 ## Replaces

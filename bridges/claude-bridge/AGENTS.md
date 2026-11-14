@@ -36,6 +36,11 @@ writers on one `.jsonl`. When touching the prompt path:
   process ends. A stop reaches only the CLI that owns the task
   (`backgroundTaskOwner`): a CLI asked to stop an id it never started answers
   `ok` without reaching anything. Never keep task ownership on the session.
+  The ending of a task the bridge stopped owes no continuation
+  (`tasks.stopRequested`): the CLI queues that `killed` notification for the
+  next prompt and starts no turn for it, and its `stopped` edge can arrive
+  before the stop's own answer, so waiting for one refused every launch-only
+  change until the idle window ended (todo 0005 task 10).
 - **A metadata read goes through `controlOnlyQuery`.** The Agent SDK drops
   `maxTurns: 0`, so a `prompt: ""` query sends an empty user message and starts
   a real turn (model calls, tools, an empty session file under

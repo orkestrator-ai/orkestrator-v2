@@ -23,6 +23,7 @@ import {
   respondToInteraction,
   releaseWithBackgroundWork,
   sendPrompt,
+  stopBackgroundTask,
   track,
   waitFor,
   withTemporaryClaudeHome,
@@ -38,7 +39,10 @@ import {
   setClaudeRuntimeIdleTimingForTesting,
 } from "./session-manager-runtime-idle.js";
 import { admitPrompt, applyPromptPlanMode } from "./session-manager-prompt-admission.js";
-import { assertClaudeRuntimeStaticAccepts } from "./session-manager-runtime.js";
+import {
+  assertClaudeRuntimeStaticAccepts,
+  claudeRuntimeOwesWork,
+} from "./session-manager-runtime.js";
 import { sessionRuntimeHealthBody } from "../routes/runtime-health-body.js";
 
 // The session's CLI stays open after a turn that leaves nothing owed, so the
@@ -800,5 +804,158 @@ describe("idle environment settings", () => {
       cap,
     );
     for (const { call } of turns) call.finish();
+  });
+});
+
+/**
+ * A background Bash command started by the first turn, then two follow-ups
+ * written into the same CLI, the shape of the live run in todo 0005 task 10.
+ */
+async function bashTaskAfterTwoFollowUps(name: string) {
+  const session = createSession(name);
+  track(session.id);
+  void sendPrompt(session.id, "start it in the background").catch(() => undefined);
+  const call = await nextQueryCall();
+  const input = inputOf(call);
+  expect((await input.next()).done).toBe(false);
+  call.push({
+    type: "assistant",
+    message: {
+      id: "msg-bash",
+      model: "claude-sonnet-4-6",
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_bg",
+          name: "Bash",
+          input: { command: "sleep 900", description: "Wait", run_in_background: true },
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+  });
+  call.push({
+    type: "user",
+    message: {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "toolu_bg",
+          content:
+            "Command running in background with ID: bg-task. Output is being written to: /tmp/bg-task.output",
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+  });
+  call.push({
+    type: "system",
+    subtype: "task_started",
+    task_id: "bg-task",
+    tool_use_id: "toolu_bg",
+    description: "Wait",
+  });
+  call.push({ type: "result", subtype: "success" });
+  await waitFor(() => session.status === "idle");
+  for (const index of [1, 2]) {
+    void sendPrompt(session.id, `follow-up ${index}`).catch(() => undefined);
+    const next = await input.next();
+    expect(next.done).toBe(false);
+    call.push({
+      type: "result",
+      subtype: "success",
+      user_message_uuid: (next.value as SDKUserMessage).uuid,
+      result_index: index,
+    });
+    await waitFor(() => session.status === "idle");
+  }
+  expect(session.backgroundTasks?.["bg-task"]?.status).toBe("running");
+  return { session, call, input };
+}
+
+// 0005 task 10: CLI 2.1.319 answers a stop with a `stopped` edge that can beat
+// its answer to the stop request, and queues the `killed` notification for the
+// next prompt instead of starting a turn. Waiting for that turn refused every
+// launch-only change for the whole idle window.
+describe("a stop the bridge issued", () => {
+  test("owes no continuation when its edge arrives before the stop's answer", async () => {
+    const window = controlIdleWindow();
+    // Installed before the CLI starts, which is when its control is built.
+    let stopping: (taskId: string) => Promise<void> = async () => undefined;
+    queryControlOverrides.stopTask = mock((taskId: string) => stopping(taskId));
+    const { session, call, input } = await bashTaskAfterTwoFollowUps("stopped ahead");
+    stopping = async (taskId: string) => {
+      call.push({
+        type: "system",
+        subtype: "task_updated",
+        task_id: taskId,
+        patch: { status: "killed" },
+      });
+      call.push({
+        type: "system",
+        subtype: "task_notification",
+        task_id: taskId,
+        tool_use_id: "toolu_bg",
+        status: "stopped",
+      });
+      await waitFor(() => session.backgroundTasks?.[taskId]?.status === "killed");
+    };
+    expect(await stopBackgroundTask(session.id, "bg-task")).toEqual({ ok: true });
+    const runtime = session.claudeRuntime!;
+    expect(runtime.latestTurn.isAwaitingContinuation()).toBe(false);
+    expect(claudeRuntimeOwesWork(runtime)).toBe(false);
+    expect(runtime.tasks.stopRequested.size).toBe(0);
+    // The ordinary idle window, not the continuation bound.
+    expect(window.armed().map((entry) => entry.delayMs)).toEqual([IDLE_MS]);
+
+    // A launch-only change replaces the idle CLI rather than being refused.
+    expect(() =>
+      assertClaudeRuntimeStaticAccepts(session, { promptSuggestions: true }),
+    ).not.toThrow();
+    const replaced = sendPrompt(session.id, "with suggestions", { promptSuggestions: true });
+    expect(await input.next()).toEqual({ done: true, value: undefined });
+    call.finish();
+    const relaunch = await nextQueryCall();
+    relaunch.push({ type: "result", subtype: "success" });
+    await replaced;
+    relaunch.finish();
+  });
+
+  test("a task that completed on its own during the stop keeps its continuation", async () => {
+    controlIdleWindow();
+    let stopping: (taskId: string) => Promise<void> = async () => undefined;
+    queryControlOverrides.stopTask = mock((taskId: string) => stopping(taskId));
+    const { session, call } = await bashTaskAfterTwoFollowUps("completed during stop");
+    stopping = async (taskId: string) => {
+      call.push({
+        type: "system",
+        subtype: "task_notification",
+        task_id: taskId,
+        tool_use_id: "toolu_bg",
+        status: "completed",
+      });
+      await waitFor(() => session.backgroundTasks?.[taskId]?.status === "completed");
+    };
+    expect(await stopBackgroundTask(session.id, "bg-task")).toEqual({ ok: true });
+    expect(session.backgroundTasks?.["bg-task"]?.status).toBe("completed");
+    // The CLI answers a natural ending with a turn, so it is still owed.
+    expect(session.claudeRuntime!.latestTurn.isAwaitingContinuation()).toBe(true);
+    expect(session.claudeRuntime!.tasks.stopRequested.size).toBe(0);
+    expect(() => assertClaudeRuntimeStaticAccepts(session, { promptSuggestions: true })).toThrow(
+      /background work/,
+    );
+    call.finish();
+  });
+
+  test("a stop that never reached the CLI leaves no mark", async () => {
+    controlIdleWindow();
+    queryControlOverrides.stopTask = mock(async () => {
+      throw new Error("Query closed before response received");
+    });
+    const { session, call } = await bashTaskAfterTwoFollowUps("stop failed");
+    expect((await stopBackgroundTask(session.id, "bg-task")).ok).toBe(false);
+    expect(session.claudeRuntime!.tasks.stopRequested.size).toBe(0);
+    call.finish();
   });
 });

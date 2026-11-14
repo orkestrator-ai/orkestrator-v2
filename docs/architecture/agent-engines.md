@@ -466,6 +466,15 @@ the projection can show the previous number for up to that long after a
 relaunch. `claude-warm-runtime-live.spec.ts` drives one CLI through the app
 against a loopback model and asserts the number holds (todo 0005 task 8).
 
+A background task the user stops (`POST /session/:id/tasks/:taskId/stop`)
+leaves nothing owed. The CLI's `stopped` edge can arrive before its answer to
+the stop request, and CLI 2.1.319 queues the `killed` notification for the
+next prompt rather than starting a turn for it, so the bridge marks the stop
+(`tasks.stopRequested`) and does not wait for a continuation; the CLI is idle
+at once and a launch-only change replaces it. A task the CLI ends by itself
+(its timeout below, or a natural end) still gets the continuation wait.
+`steer-missed-live.spec.ts` checks it on the real CLI (todo 0005 task 10).
+
 Background shell commands are bounded. Since Claude Code 2.1.285 an Agent SDK
 session stops a `run_in_background` command at its `timeout` (30 minutes by
 default, 2 hours at most) and reports a `stopped` task notification saying why;

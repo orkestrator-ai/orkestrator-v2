@@ -10,7 +10,7 @@ Analysed 2026-11-10 against `main` at `04639b12b` (first analysed 2026-11-06 at
 ### Tasks
 
 1. **Approve a command from the CLI**: `orkestrator session interactions resolve` cannot approve an approval that has no questions. Status: done (2026-11-10).
-2. **One Multi Review stalled 3.5 minutes after its plan was accepted**: seen once in the smoke run, not in 33 later reviews nor in 18 more on 2026-11-10; recurred on 2026-11-11 (see Assumptions and decisions). Status: open (evidence recorded; read it and close or keep).
+2. **One Multi Review stalled 3.5 minutes after its plan was accepted**: seen once in the smoke run, not in 33 later reviews nor in 18 more on 2026-11-10; recurred on 2026-11-11 and on 2026-11-14 on macOS (see Assumptions and decisions). Status: open (evidence recorded; read it and close or keep).
 
 ### 1. Approve a command from the CLI
 
@@ -162,7 +162,7 @@ means a missed wake.
 
 ### Task 2: a recurrence on 2026-11-11
 
-Recorded during to-do 7562's reproduction run, not a run for this task:
+Recorded during to-do 7562 (retired)'s reproduction run, not a run for this task:
 150 busy rounds (0 to 2 clients, 10 environments, 2,500-file bursts) on
 beelink2 at `83731af28`, with `--keep-profiles`, on a host shared with other
 worktrees' builds. Two of its 150 reviews waited: one review's validation
@@ -176,6 +176,20 @@ criterion, a large `queuedMs` means the host test queue: the command waited
 behind other worktrees' suites in the host-wide scheduler, and no missed
 wake shows. What is left is that judgement: close the task as the host
 queue, or keep it for a wake that the queue would hide.
+
+### Task 2: a second recurrence on 2026-11-14 (macOS)
+
+Recorded during to-do 7562 task 5's APFS run (retired 2026-11-14; its
+results are in [storage](../../architecture/storage.md#busy-soak-disk-waits-by-filesystem)),
+not a run for this task: 40 busy rounds without clients (10 environments,
+2,500-file bursts) on mini (macOS 27.2) at `dc90609bf`, while other
+worktrees' `bun test` suites ran on the same host. One of its 40 reviews
+waited: launch to `ready` 526,638 ms, its validation plan to `reviewing`
+524,162 ms, with that validation run at 520,285 ms queued, 18 ms of command
+and 521,405 ms in all. The other 39 runs queued 15 to 33 ms (median 17 ms).
+The backend log had no slow command and no stall line around it. By this
+task's criterion that is the host test queue again, now on a second host and
+platform.
 
 ## Related
 

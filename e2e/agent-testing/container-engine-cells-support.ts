@@ -145,13 +145,19 @@ export async function restoreLayout(
 
 export function tabSession(environment: Environment, platform: Platform, tabId: string) {
   const label = PLATFORMS[platform].label;
-  const projection = () =>
-    invoke<Projection>("get_native_agent_projection", {
-      environmentId: environment.id,
-      agent: platform,
-      logicalSessionKey: `env-${environment.id}:${tabId}`,
+  const identity = {
+    environmentId: environment.id,
+    agent: platform,
+    logicalSessionKey: `env-${environment.id}:${tabId}`,
+  };
+  const projection = () => invoke<Projection>("get_native_agent_projection", identity);
+  /** A projection's tool card carries `detailRef`; its output is read here. */
+  const toolDetails = (detailRef: string) =>
+    invoke<{ toolOutput?: string; toolError?: string } | null>("get_native_agent_tool_details", {
+      ...identity,
+      detailRef,
     });
-  return { label, projection };
+  return { label, projection, toolDetails };
 }
 
 /** The composer of the only native tab on screen, as a user reaches it. */

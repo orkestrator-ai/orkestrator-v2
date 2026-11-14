@@ -66,9 +66,18 @@ export function liveContainerCellSettings(
 export type ShellToolCall = {
   toolName: string;
   command: string;
-  /** The card's output and error text together: a failing command has both. */
+  /**
+   * The card's output and error text together: a failing command has both.
+   * Empty on a projection's card until `resolveShellToolOutputs` reads its
+   * `detailRef`.
+   */
   output: string;
   state?: string;
+  /**
+   * The backend projection keeps a card's `toolOutput`/`toolError` behind
+   * this reference (`get_native_agent_tool_details`) instead of inline.
+   */
+  detailRef?: string;
 };
 
 const MAX_TOOL_PARTS = 200;
@@ -113,6 +122,9 @@ export function shellToolCalls(
           command,
           output,
           ...(typeof record.toolState === "string" ? { state: record.toolState } : {}),
+          ...(typeof record.detailRef === "string" && record.detailRef
+            ? { detailRef: record.detailRef }
+            : {}),
         });
       }
     }
@@ -120,6 +132,34 @@ export function shellToolCalls(
   };
   for (const message of messages) visit(message.parts, 0);
   return calls;
+}
+
+export type ToolDetails = { toolOutput?: string; toolError?: string };
+
+/**
+ * Fills each call's `output` from its deferred details. The projection the
+ * cells read (`get_native_agent_projection`) strips `toolOutput` and
+ * `toolError` from every tool card and leaves a `detailRef`, so a call read
+ * from it has no output until this runs. Inline output, when a card has any,
+ * is kept and the deferred text is added after it.
+ */
+export async function resolveShellToolOutputs(
+  calls: readonly ShellToolCall[],
+  readDetails: (detailRef: string) => Promise<ToolDetails | null | undefined>,
+): Promise<ShellToolCall[]> {
+  const resolved: ShellToolCall[] = [];
+  for (const call of calls) {
+    if (!call.detailRef) {
+      resolved.push(call);
+      continue;
+    }
+    const details = await readDetails(call.detailRef);
+    const output = [call.output, details?.toolOutput, details?.toolError]
+      .filter((text): text is string => typeof text === "string" && text.length > 0)
+      .join("\n");
+    resolved.push({ ...call, output });
+  }
+  return resolved;
 }
 
 export type CurlOutcome = { http: string; exit: number };

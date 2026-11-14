@@ -35,6 +35,7 @@ import {
   isReached,
   isRefused,
   liveContainerCellSettings,
+  resolveShellToolOutputs,
   shellToolCalls,
   shellToolPrompt,
 } from "./container-real-engines-live-support";
@@ -184,7 +185,11 @@ async function curlThroughShellTool(
     shellToolPrompt(tool.prompted, curlCommand(url)),
   );
   const rows = await waitForTurnEnd(session, previous);
-  const calls = shellToolCalls(rows, tool.names);
+  // The projection keeps each card's output behind its detailRef.
+  const calls = await resolveShellToolOutputs(
+    shellToolCalls(rows, tool.names),
+    session.toolDetails,
+  );
   const call = curlCallFor(calls, url);
   // Content-free evidence: the tool, the HTTP status and curl's exit code.
   testInfo.annotations.push({
@@ -291,9 +296,14 @@ test("Docker fixture real Pi cell runs its bash tool under the container firewal
         );
         await approveFromCard(page, pending);
         const rows = await waitForTurnEnd(asking, previous);
-        const call = shellToolCalls(rows, SHELL_TOOLS.pi.names).find((candidate) =>
-          candidate.command.includes(marker),
-        );
+        const call = (
+          await resolveShellToolOutputs(
+            shellToolCalls(rows, SHELL_TOOLS.pi.names).filter((candidate) =>
+              candidate.command.includes(marker),
+            ),
+            asking.toolDetails,
+          )
+        )[0];
         testInfo.annotations.push({
           type: "pi-ask",
           description: JSON.stringify({

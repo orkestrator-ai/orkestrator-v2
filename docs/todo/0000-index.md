@@ -27,7 +27,7 @@ any row's status.
 | [CLI and slash commands](cli-and-slash-commands/0000-index.md) | 1 | 1 | 0 | 0 | 2 | The public `orkestrator` CLI and the slash-command catalogue: live qualification. |
 | [Containers and environments](containers-and-environments/0000-index.md) | 2 | 12 | 0 | 0 | 14 | Docker environment containers: platform qualification, rebuild state, network and credential isolation, resource budgets, state observation and cleanup. |
 | [Coordinator and Multi Review](coordinator-and-multi-review/0000-index.md) | 2 | 11 | 0 | 0 | 13 | The two multi-agent features: the Coordinator (read-only enforcement, async delegation, agent mail) and Multi Review (reviewer panels, consolidation, the flow graph). |
-| [Cross-cutting](cross-cutting/0000-index.md) | 10 | 25 | 0 | 0 | 35 | Work that spans the product: CI and test health, live provider and platform qualification, mixed-version support, dependency upgrades, and release-chain evidence. |
+| [Cross-cutting](cross-cutting/0000-index.md) | 9 | 25 | 0 | 0 | 34 | Work that spans the product: CI and test health, live provider and platform qualification, mixed-version support, dependency upgrades, and release-chain evidence. |
 | [Design canvas](design-canvas/0000-index.md) | 0 | 1 | 0 | 0 | 1 | The design canvas and its agent tools: the optimisations deferred until a measurement shows their cost. |
 | [MCP](mcp/0000-index.md) | 0 | 1 | 0 | 0 | 1 | MCP server management across providers and MCP delivery into environments. |
 | [Service previews and web annotations](previews-and-annotations/0000-index.md) | 2 | 3 | 0 | 0 | 5 | Service previews (desktop tunnel, private origins, relay, embedded and discovered services) and web-page annotations (qualification, known limitations, extensions). |

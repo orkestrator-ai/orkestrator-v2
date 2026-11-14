@@ -14,7 +14,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 
 **Problem.** A workstation compromise could publish a malicious package, and nothing shows where a version came from.
 
-**Context.** `docs/development/releasing.md` describes `release:publish` running `publish:cli` locally, with web authentication approved in a browser. The image publish already attests provenance (`.github/workflows/publish-container.yml`, step "Attest build provenance"). Since the same batch, `install.sh` runs a pinned Stable release, and standalone updates install dependencies from a lockfile published in the package ([5022](5022-release-chain-live-evidence.md)). Neither shows where the package itself came from.
+**Context.** `docs/development/releasing.md` describes `release:publish` running `publish:cli` locally, with web authentication approved in a browser. The image publish already attests provenance (`.github/workflows/publish-container.yml`, step "Attest build provenance"). Since the same batch, `install.sh` runs a pinned Stable release, and standalone updates install dependencies from a lockfile published in the package (5022 (retired 2026-11-14), recorded in [host-updates.md](../../architecture/host-updates.md#qualification)). Neither shows where the package itself came from.
 
 **Investigation.** `scripts/publish-cli.ts:22-39` still builds `bun publish` with no provenance option, and `mise.toml:185-187` still runs it. No workflow publishes to npm: the `publish` matches under `.github/workflows` are the container and validation jobs. The report left open whether `bun publish` supports provenance. On Bun 1.4.4, `bun publish --help` lists `--tag`, `--otp` and `--auth-type` and no provenance option, so this step would need `npm publish` unless a later Bun adds one. Nothing was published to check this further.
 
@@ -32,6 +32,6 @@ This changes how the package is published and needs npm settings changed, so it 
 
 - [Releasing the desktop app](../../development/releasing.md)
 - `publish:cli` can now publish with a stored npm token (`~/.config/orkestrator-release/npm-token`, see "npm authentication" in the releasing guide), added 2026-11-10 so a release needs no browser approval. That token is the kind of long-lived workstation credential task 1 would retire; once CI publishing lands, remove the token path or limit it to CI.
-- [5022](5022-release-chain-live-evidence.md)
+- 5022 (retired 2026-11-14; `git show $(git log -1 --diff-filter=D --format=%h -- docs/todo/cross-cutting/5022-release-chain-live-evidence.md)^:docs/todo/cross-cutting/5022-release-chain-live-evidence.md`): the lockfile install and the pinned `install.sh`; its Linux run is in [host-updates.md](../../architecture/host-updates.md#qualification)
 - Security report, §5 Low severity (`git show 413bd6219:docs/reports/2-26-10-27-security.md`) (L6)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the approval and npm setting for task 1) moved there on 2026-11-10.

@@ -11,6 +11,7 @@ import {
   snapshotWithoutInlineTranscripts,
 } from "./build-pipeline-transcripts.js";
 import { normalizeOpenCodeDisplayEntry } from "./opencode-display-transcript.js";
+import { omitBuildPipelineDetail } from "@orkestrator/protocol/build-pipeline-detail";
 
 /**
  * Transcript-aware projections for the build-pipeline read commands.
@@ -79,6 +80,48 @@ export function withoutTranscriptBodies(record: PersistedBuildPipeline): Persist
   return snapshot === record.snapshot ? record : { ...record, snapshot };
 }
 
+/**
+ * The detail a renderer read asked about (`knownDetailFingerprint`): the
+ * record's current detail fingerprint, and whether the caller already holds
+ * that detail. `null` fingerprint: the detail cannot be split, never omitted.
+ */
+export interface DetailReadInput {
+  fingerprint: string | null;
+  known: string;
+}
+
+/** Whether a read that named `detail` may leave the record's detail out. */
+export function detailOmittable(detail: DetailReadInput | undefined): boolean {
+  return detail !== undefined && detail.fingerprint !== null && detail.known === detail.fingerprint;
+}
+
+/** `record` for a renderer read: without transcript bodies, and without its detail when held. */
+export function projectRendererRecord(
+  record: PersistedBuildPipeline,
+  detail: DetailReadInput | undefined,
+): PersistedBuildPipeline {
+  const projected = withoutTranscriptBodies(record);
+  return detailOmittable(detail)
+    ? { ...projected, snapshot: omitBuildPipelineDetail(projected.snapshot) }
+    : projected;
+}
+
+/**
+ * The detail fields of a renderer read's answer: present only when the read
+ * named a fingerprint. `detailFingerprint` is absent when the detail cannot
+ * be split, which tells the caller to drop what it holds.
+ */
+export function detailResponseFields(detail: DetailReadInput | undefined): {
+  detailFingerprint?: string;
+  detailOmitted?: true;
+} {
+  if (!detail || detail.fingerprint === null) return {};
+  return {
+    detailFingerprint: detail.fingerprint,
+    ...(detailOmittable(detail) ? { detailOmitted: true as const } : {}),
+  };
+}
+
 function sessionNeedsPatch(session: PipelineSession, cursor: Cursor | undefined): boolean {
   const committed = committedTranscriptCursor(session);
   if (committed.revision === 0 && committed.count === 0) return false;
@@ -108,6 +151,8 @@ export async function conditionalBuildPipelineRead(
     knownRevision?: unknown;
     knownSessions: Record<string, unknown>;
     prioritySessionKey?: unknown;
+    /** Present when the caller named the detail fingerprint it holds. */
+    detail?: DetailReadInput;
   },
   budgetBytes = BUILD_PIPELINE_PATCH_BUDGET_BYTES,
   /**
@@ -122,6 +167,8 @@ export async function conditionalBuildPipelineRead(
       unchanged: false;
       record: PersistedBuildPipeline;
       messagePatches: BuildPipelineMessagePatch[];
+      detailFingerprint?: string;
+      detailOmitted?: true;
     }
 > {
   const sessions = validSessions(record.snapshot);
@@ -150,11 +197,17 @@ export async function conditionalBuildPipelineRead(
   const ordered = stale
     .map((session, index) => ({ session, index }))
     .sort((left, right) => rank(left.session) - rank(right.session) || right.index - left.index);
-  const projectedRecord = withoutTranscriptBodies(record);
+  const projectedRecord = projectRendererRecord(record, input.detail);
+  const detailFields = detailResponseFields(input.detail);
   const responseAllowance =
     budgetBytes -
     Buffer.byteLength(
-      JSON.stringify({ unchanged: false, record: projectedRecord, messagePatches: [] }),
+      JSON.stringify({
+        unchanged: false,
+        record: projectedRecord,
+        messagePatches: [],
+        ...detailFields,
+      }),
       "utf8",
     );
   let remaining = responseAllowance;
@@ -347,5 +400,6 @@ export async function conditionalBuildPipelineRead(
     unchanged: false,
     record: projectedRecord,
     messagePatches,
+    ...detailFields,
   };
 }

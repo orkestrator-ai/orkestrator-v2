@@ -378,6 +378,13 @@ export const getBuildPipelineCommand = defineCommand({
     knownRevision: checked,
     knownSessions: checked,
     prioritySessionKey: checked,
+    /**
+     * The detail fingerprint the caller holds (`""` for none). Its presence
+     * asks for the conditional shape with `detailFingerprint`, and the record
+     * without its detail when the fingerprint still matches. An older backend
+     * ignores it and returns the whole record.
+     */
+    knownDetailFingerprint: checked,
   }),
   result: GetBuildPipelineResultSchema,
   critical: [],

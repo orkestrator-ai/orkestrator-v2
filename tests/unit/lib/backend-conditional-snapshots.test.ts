@@ -3,6 +3,7 @@ import { invoke } from "@/lib/native/backend";
 import {
   getFileTreeSnapshot,
   getBuildPipelineConditional,
+  getBuildPipelineControl,
   getGitStatusSnapshot,
   getLocalFileTreeSnapshot,
   getLocalGitStatusSnapshot,
@@ -174,6 +175,67 @@ describe("conditional backend wrappers", () => {
     await expect(getBuildPipelineConditional("pipeline-1")).rejects.toThrow(
       "Invalid get_build_pipeline response",
     );
+  });
+
+  test("validates the detail fields of a fingerprinted point read", async () => {
+    const record = pipelineRecord("pipeline-1");
+    const omitted = {
+      unchanged: false,
+      record,
+      messagePatches: [],
+      detailFingerprint: "d1-held",
+      detailOmitted: true,
+    };
+    const full = { unchanged: false, record, messagePatches: [], detailFingerprint: "d1-new" };
+    const malformed = [
+      // Detail left out with no fingerprint naming what the caller must hold.
+      { unchanged: false, record, messagePatches: [], detailOmitted: true },
+      // An empty fingerprint names nothing.
+      { unchanged: false, record, messagePatches: [], detailFingerprint: "" },
+      {
+        unchanged: false,
+        record,
+        messagePatches: [],
+        detailFingerprint: "",
+        detailOmitted: true,
+      },
+      { unchanged: false, record, messagePatches: [], detailFingerprint: 42 },
+      {
+        unchanged: false,
+        record,
+        messagePatches: [],
+        detailFingerprint: "d1-held",
+        detailOmitted: false,
+      },
+    ];
+
+    // Both point-read wrappers accept the well-formed shapes and forward the fingerprint.
+    invokeMock.mockResolvedValueOnce(omitted).mockResolvedValueOnce(full);
+    await expect(
+      getBuildPipelineConditional("pipeline-1", 3, {}, undefined, "d1-held"),
+    ).resolves.toBe(omitted);
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "get_build_pipeline", {
+      pipelineId: "pipeline-1",
+      knownRevision: 3,
+      knownSessions: {},
+      knownDetailFingerprint: "d1-held",
+    });
+    await expect(getBuildPipelineControl("pipeline-1", 3, "d1-held")).resolves.toBe(full);
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "get_build_pipeline", {
+      pipelineId: "pipeline-1",
+      knownRevision: 3,
+      knownDetailFingerprint: "d1-held",
+    });
+
+    for (const response of malformed) {
+      invokeMock.mockResolvedValueOnce(response).mockResolvedValueOnce(response);
+      await expect(
+        getBuildPipelineConditional("pipeline-1", 3, {}, undefined, "d1-held"),
+      ).rejects.toThrow("Invalid get_build_pipeline response");
+      await expect(getBuildPipelineControl("pipeline-1", 3, "d1-held")).rejects.toThrow(
+        "Invalid get_build_pipeline response",
+      );
+    }
   });
 
   test("forwards a refresh request and validates the additive owner stamp", async () => {

@@ -206,6 +206,8 @@ describe("BuildChatTab referenced transcripts", () => {
       8,
       {},
       "verify-key",
+      // No detail held yet: the first read names none.
+      "",
     ]);
   });
 

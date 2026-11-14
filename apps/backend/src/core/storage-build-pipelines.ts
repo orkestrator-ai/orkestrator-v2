@@ -41,6 +41,7 @@ import {
   type InlineImportBatchOutcome,
 } from "./build-pipeline-transcript-migration.js";
 import { StoreCorruptError } from "./storage-database.js";
+import { buildPipelineDetailFingerprint } from "./build-pipeline-detail-fingerprint.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
@@ -150,6 +151,14 @@ export class BuildPipelinesRepository {
     fingerprint: string;
     records: Readonly<Record<string, PersistedBuildPipeline>>;
   } | null = null;
+  /**
+   * Detail fingerprints of committed records, keyed by the cached record
+   * object. Cached records never alias a caller's live object and are
+   * replaced, not mutated, by the next write, so an entry can never describe
+   * other content. Primed by the save path; a record another process wrote is
+   * fingerprinted on its first read.
+   */
+  private readonly detailFingerprints = new WeakMap<PersistedBuildPipeline, string | null>();
   private buildPipelineTranscriptStoreInstance: BuildPipelineTranscriptStore | null = null;
   private buildPipelineTranscriptFaultHooks: BuildPipelineTranscriptFaults | null = null;
   private buildPipelineTranscriptLimitOverrides: Partial<BuildPipelineTranscriptLimits> | null =
@@ -384,6 +393,8 @@ export class BuildPipelinesRepository {
           result: undefined,
           value: record,
         }));
+        // After `commitSessionTranscripts`: its adjustments are part of what is stored.
+        this.detailFingerprints.set(record, buildPipelineDetailFingerprint(record.snapshot));
         if (primed) primed[record.id] = record;
       }
       const revision = this.context.database.storeRevision(store);
@@ -476,6 +487,27 @@ export class BuildPipelinesRepository {
     }
     const record = (await this.loadBuildPipelines())[pipelineId];
     return record ? structuredClone(record) : null;
+  }
+
+  /**
+   * One record plus the fingerprint of its detail, both from the same
+   * committed revision. `detailFingerprint` is `null` when the record's detail
+   * cannot be split exactly (it is then never omitted from a read).
+   */
+  async getBuildPipelineWithDetailFingerprint(
+    pipelineId: string,
+  ): Promise<{ record: PersistedBuildPipeline; detailFingerprint: string | null } | null> {
+    if (!isNonBlankString(pipelineId)) {
+      throw new Error("Build pipeline ID must not be blank");
+    }
+    const record = (await this.loadBuildPipelines())[pipelineId];
+    if (!record) return null;
+    let detailFingerprint = this.detailFingerprints.get(record);
+    if (detailFingerprint === undefined) {
+      detailFingerprint = buildPipelineDetailFingerprint(record.snapshot);
+      this.detailFingerprints.set(record, detailFingerprint);
+    }
+    return { record: structuredClone(record), detailFingerprint };
   }
 
   /**

@@ -124,10 +124,31 @@ describe("pairing backend environment", () => {
       "ORKESTRATOR_CONTROL_MCP_PORT",
       "ORKESTRATOR_GATEWAY_TOKEN",
       "ORKESTRATOR_HOST_REACHABILITY_CHECK",
+      "ORKESTRATOR_SESSION_TITLE_GENERATION",
     ]);
     expect(env.ORKESTRATOR_GATEWAY_TOKEN).toBe("pairing-token");
     expect(env.ORKESTRATOR_CONTROL_MCP_PORT).toBe("0");
     expect(env.ORKESTRATOR_HOST_REACHABILITY_CHECK).toBe("off");
+    // Nothing but the conversation reaches the model.
+    expect(env.ORKESTRATOR_SESSION_TITLE_GENERATION).toBe("0");
+  });
+
+  test("names Claude's configuration directory only when the backend runs an agent", () => {
+    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    const claudeConfigDir = path.join(home, ".claude-pairing");
+    const withAgent = pairingBackendEnvironment(
+      { CLAUDE_CONFIG_DIR: "/Users/someone/.claude" },
+      { home, tmp: "/run/root/backend/tmp", token: "pairing-token", claudeConfigDir },
+      ["/tools/bun/bin"],
+    );
+    // Explicit, so Claude's Keychain lookup is named after this run's path.
+    expect(withAgent.CLAUDE_CONFIG_DIR).toBe(claudeConfigDir);
+    const inherited = pairingBackendEnvironment(
+      { CLAUDE_CONFIG_DIR: "/Users/someone/.claude" },
+      { home, tmp: "/run/root/backend/tmp", token: "pairing-token" },
+      ["/tools/bun/bin"],
+    );
+    expect(inherited.CLAUDE_CONFIG_DIR).toBeUndefined();
   });
 
   test("puts HOME, the XDG roots and TMPDIR under the run root, and builds PATH", () => {

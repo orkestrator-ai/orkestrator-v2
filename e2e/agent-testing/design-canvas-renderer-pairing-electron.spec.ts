@@ -25,13 +25,29 @@
  *   the desktop for the length of the run; on Linux it gets the same headless
  *   switches as the packaged app (`packagedLaunchSwitches`).
  *
+ * After the canvas journey each half runs Ask agent and Resume
+ * (design-agent-pairing-journey.ts, to-do 8011 (retired)) on a real Claude Code whose
+ * every model call goes to a loopback Anthropic endpoint in this process
+ * (`fake-anthropic-model.ts`), with a fixture key: no login, nothing billed.
+ * v2.22.3 predates Resume in both halves, so neither pair can press it: this
+ * renderer on the old backend must show the closed link as ended (the old
+ * backend refuses `design_session_link_states`, the `unsupported` fallback),
+ * and the old renderer shows it as ended from its own layout. The second half
+ * then connects this checkout's packaged renderer to the same new backend and
+ * resumes the conversation the old renderer made: the upgrade path, and the
+ * only place in the pairing where Resume runs.
+ *
  * Both apps run on a disposable agent-test profile under a temporary root,
  * with HOME, the XDG roots and an allowlisted environment
  * (`packagedLaunchEnvironment`), as design-canvas-packaged-electron.spec.ts
  * does. Both backends are this run's own, on loopback, on ports other than the
- * production ones, with their own data directories and no agent toolchain, so
- * no provider turn can start. The gateway token is passed only to
- * `connections.connect`; tracing is off so it is not recorded.
+ * production ones, with their own data directories. Their toolchain holds
+ * only this checkout's pinned Claude Code (downloaded once into
+ * `output/agent-testing/design-pairing-toolchain`, never the real data
+ * directory) and a stub `pi`, and their Claude configuration directory is the
+ * run's own, so the only provider turns are against the loopback model. The
+ * gateway token is passed only to `connections.connect`; tracing is off so it
+ * is not recorded.
  */
 import { expect, test } from "./electron-fixtures";
 import { _electron as electron, chromium, type Browser, type Page } from "playwright";
@@ -66,12 +82,19 @@ import {
   DEFAULT_PAIRING_RELEASE,
   PAIRING_OLD_APP_ENV,
   PAIRING_RELEASE_ENV,
+  installPairingClaude,
   installPublishedBackend,
   pairingOldAppExecutable,
   pairingPorts,
   startPairingBackend,
   type PairingBackend,
 } from "./design-renderer-pairing-support";
+import {
+  removeAskAgentEnvironment,
+  resumeLinkedConversation,
+  runAskAgentJourney,
+} from "./design-agent-pairing-journey";
+import { startFakeAnthropicModel, type FakeAnthropicModel } from "./fake-anthropic-model";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
@@ -110,12 +133,40 @@ async function pairingProfile(temporaryRoot: string, id: string) {
  * commands now reach it: `get_app_version` answers the backend's version, not
  * the app's own bundled backend's. That proof needs the two versions to
  * differ, so a pairing of a version with itself fails here rather than
- * passing against the bundled backend.
+ * passing against the bundled backend. A same-version connection names
+ * `knownEnvironmentId` instead, an environment only `backend` has: the proof
+ * is then that `get_environment` finds it.
  */
-async function connectWindow(window: Page, backend: PairingBackend): Promise<void> {
+async function connectWindow(
+  window: Page,
+  backend: PairingBackend,
+  knownEnvironmentId?: string,
+): Promise<void> {
   const invokeVersion = (): Promise<string> =>
     window.evaluate(() => (globalThis as any).orkestrator.invoke("get_app_version", {}));
   const localVersion = await invokeVersion();
+  if (knownEnvironmentId) {
+    await connectAndProve(window, backend, async () =>
+      window
+        .evaluate(
+          (environmentId) =>
+            (globalThis as any).orkestrator
+              .invoke("get_environment", { environmentId })
+              .then((environment: { id?: string } | null) => environment?.id === environmentId),
+          knownEnvironmentId,
+        )
+        .catch(() => false),
+    );
+    test.info().annotations.push({
+      type: "pairing",
+      description: JSON.stringify({
+        renderer: localVersion,
+        backend: backend.version,
+        proof: "environment",
+      }),
+    });
+    return;
+  }
   expect(
     localVersion,
     "the paired backend must report another version than the app's bundled one",
@@ -147,7 +198,84 @@ async function connectWindow(window: Page, backend: PairingBackend): Promise<voi
   });
 }
 
-test("this checkout's packaged renderer edits and exports a canvas on a published backend", async () => {
+/** Connect to `backend` and reload until `proved` holds (see {@link connectWindow}). */
+async function connectAndProve(
+  window: Page,
+  backend: PairingBackend,
+  proved: () => Promise<boolean>,
+): Promise<void> {
+  const active = await window.evaluate(
+    ({ address, token }) =>
+      (
+        globalThis as unknown as { orkestrator: { connections: Connections } }
+      ).orkestrator.connections.connect({ address, token, nickname: "Pairing" }),
+    { address: backend.origin, token: backend.token },
+  );
+  expect(active.activeConnectionId).toBeTruthy();
+  await expect
+    .poll(
+      async () => {
+        const ok = await proved();
+        if (!ok) await window.reload().catch(() => undefined);
+        return ok;
+      },
+      { timeout: 90_000, intervals: [2_000] },
+    )
+    .toBe(true);
+}
+
+/**
+ * The loopback model and the Claude Code the pairing backends run (to-do
+ * 8011 (retired)). The model stops with the test's other cleanups.
+ */
+async function pairingAgent(): Promise<{
+  model: FakeAnthropicModel;
+  agent: { claudeExecutable: string; modelOrigin: string };
+}> {
+  const claudeExecutable = await installPairingClaude();
+  const model = await startFakeAnthropicModel();
+  return { model, agent: { claudeExecutable, modelOrigin: model.origin } };
+}
+
+/**
+ * The backends' Claude Code has no login, only the loopback model's fixture
+ * key in its settings, so both renderers open "Claude Code Is Not Logged In".
+ * The notice is non-blocking, and sessions still run on that key; it is
+ * dismissed for this run only, as the other fake-model specs do.
+ */
+function dismissClaudeLoginNotice(window: Page): void {
+  window
+    .addLocatorHandler(
+      window.getByRole("button", { name: "Continue Without Claude", exact: true }),
+      async (button) => {
+        await button.click({ timeout: 5_000 }).catch(() => undefined);
+      },
+    )
+    .catch(() => undefined);
+}
+
+/** Launch this checkout's packaged app on a fresh profile and open its first window. */
+async function launchPackagedApp(temporaryRoot: string, profileId: string) {
+  const executablePath = packagedAppExecutable(repositoryRoot, process.env);
+  expect(
+    existsSync(executablePath),
+    `No packaged app at ${executablePath}. Run \`mise run package:${process.platform === "darwin" ? "mac" : "linux"}:unpacked:test\` first.`,
+  ).toBe(true);
+  const { profile, profilePath, home } = await pairingProfile(temporaryRoot, profileId);
+  const app = await electron.launch({
+    executablePath,
+    args: [...ELECTRON_TEST_SWITCHES, ...packagedLaunchSwitches(process.platform)],
+    cwd: temporaryRoot,
+    env: {
+      ...packagedLaunchEnvironment(process.env, { home, profilePath }),
+      ...(process.platform === "darwin" ? { [AGENT_TEST_HIDDEN_WINDOWS_ENV]: "1" } : {}),
+    },
+  });
+  recordElectronDiagnostics(app);
+  return { app, profile };
+}
+
+test("this checkout's packaged renderer edits, exports and asks an agent on a published backend", async () => {
   test.skip(
     process.platform !== "linux" &&
       process.platform !== "darwin" &&
@@ -164,33 +292,37 @@ test("this checkout's packaged renderer edits and exports a canvas on a publishe
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-design-pairing-"));
   let app: ElectronApplication | null = null;
   let backend: PairingBackend | null = null;
+  let model: FakeAnthropicModel | null = null;
   await withCleanup(async () => {
     const packageRoot = await installPublishedBackend(release, path.join(temporaryRoot, "npm"));
+    const paired = await pairingAgent();
+    model = paired.model;
     backend = await startPairingBackend(
       { kind: "published", packageRoot },
       path.join(temporaryRoot, "backend"),
+      paired.agent,
     );
     expect(backend.version).toBe(release);
-    const { profile, profilePath, home } = await pairingProfile(
-      temporaryRoot,
-      "design-pairing-new",
-    );
-    app = await electron.launch({
-      executablePath,
-      args: [...ELECTRON_TEST_SWITCHES, ...packagedLaunchSwitches(process.platform)],
-      cwd: temporaryRoot,
-      env: {
-        ...packagedLaunchEnvironment(process.env, { home, profilePath }),
-        ...(process.platform === "darwin" ? { [AGENT_TEST_HIDDEN_WINDOWS_ENV]: "1" } : {}),
-      },
-    });
-    recordElectronDiagnostics(app);
+    const launched = await launchPackagedApp(temporaryRoot, "design-pairing-new");
+    app = launched.app;
+    const { profile } = launched;
     const window = await openDesignWindow(app, profile, { title: "native", timeoutMs: 60_000 });
+    dismissClaudeLoginNotice(window);
     await connectWindow(window, backend);
     const electronApp = app;
     await journeyWithEvidence(window, () =>
       runDesignCanvasJourney({ electronApp, window, profile, temporaryRoot }),
     );
+    await journeyWithEvidence(window, async () => {
+      const asked = await runAskAgentJourney({
+        window,
+        profile,
+        model: paired.model,
+        backendHasLinkStates: false,
+        resumeOffered: false,
+      });
+      await removeAskAgentEnvironment(window, asked.environmentId);
+    });
   }, [
     // The root holds the backend's data directory and worktrees as well as
     // the app's profile: it is removed only once both are proven stopped.
@@ -204,17 +336,20 @@ test("this checkout's packaged renderer edits and exports a canvas on a publishe
         waitForStopped: (owned) => waitForStopped(owned, 0),
         removeProfile: () => rm(temporaryRoot, { recursive: true, force: true }),
       }),
+    async () => {
+      await (model as FakeAnthropicModel | null)?.stop();
+    },
   ]);
 });
 
 /**
- * Run the journey, attaching a screenshot and the page's accessibility tree
- * when it fails: Playwright takes no failure screenshot of an Electron window.
+ * Run the journey, attaching a screenshot, the page's accessibility tree and
+ * the text of any open dialog when it fails: Playwright takes no failure screenshot of an Electron window.
  * Neither shows the gateway token.
  */
-async function journeyWithEvidence(window: Page, run: () => Promise<void>): Promise<void> {
+async function journeyWithEvidence<T>(window: Page, run: () => Promise<T>): Promise<T> {
   try {
-    await run();
+    return await run();
   } catch (error) {
     const screenshot = await window.screenshot().catch(() => null);
     if (screenshot)
@@ -224,6 +359,17 @@ async function journeyWithEvidence(window: Page, run: () => Promise<void>): Prom
       .ariaSnapshot()
       .catch(() => null);
     if (tree) await test.info().attach("failure-aria", { body: tree, contentType: "text/plain" });
+    // An open modal hides the rest of the window from the tree above.
+    const dialogs = await window
+      .evaluate(() =>
+        Array.from(document.querySelectorAll('[role="dialog"],[role="alertdialog"]'))
+          .filter((element) => element.getAttribute("aria-hidden") !== "true")
+          .map((element) => (element as HTMLElement).innerText)
+          .join("\n----\n"),
+      )
+      .catch(() => null);
+    if (dialogs)
+      await test.info().attach("failure-dialogs", { body: dialogs, contentType: "text/plain" });
     throw error;
   }
 }
@@ -259,7 +405,7 @@ async function publishedRendererPage(
   return page;
 }
 
-test("a published desktop renderer edits and exports a canvas on this checkout's backend", async () => {
+test("a published desktop renderer edits, exports and asks an agent on this checkout's backend", async () => {
   const executable = pairingOldAppExecutable(repositoryRoot, process.env);
   test.skip(!executable, `Set ${PAIRING_OLD_APP_ENV} to a published desktop build's executable`);
   test.setTimeout(600_000);
@@ -268,8 +414,20 @@ test("a published desktop renderer edits and exports a canvas on this checkout's
   let child: ChildProcess | null = null;
   let browser: Browser | null = null;
   let backend: PairingBackend | null = null;
+  let model: FakeAnthropicModel | null = null;
+  let resumer: ElectronApplication | null = null;
+  const stopPublishedApp = (launched: ChildProcess) =>
+    withCleanup(async () => {
+      await (browser as Browser | null)?.close();
+    }, [() => stopProcessGroup(launched, 15_000)]);
   await withCleanup(async () => {
-    backend = await startPairingBackend({ kind: "current" }, path.join(temporaryRoot, "backend"));
+    const paired = await pairingAgent();
+    model = paired.model;
+    backend = await startPairingBackend(
+      { kind: "current" },
+      path.join(temporaryRoot, "backend"),
+      paired.agent,
+    );
     const { profile, profilePath, home } = await pairingProfile(
       temporaryRoot,
       "design-pairing-old",
@@ -308,6 +466,7 @@ test("a published desktop renderer edits and exports a canvas on this checkout's
       .toBeTruthy();
     browser = await chromium.connectOverCDP(devtools.exec(stderr)![1]!);
     const window = await publishedRendererPage(browser, executable!, profile);
+    dismissClaudeLoginNotice(window);
     await window.setViewportSize({ width: 1440, height: 900 });
     await connectWindow(window, backend);
     await journeyWithEvidence(window, () =>
@@ -319,21 +478,55 @@ test("a published desktop renderer edits and exports a canvas on this checkout's
         olderRenderer: true,
       }),
     );
+    const asked = await journeyWithEvidence(window, () =>
+      runAskAgentJourney({
+        window,
+        profile,
+        model: paired.model,
+        backendHasLinkStates: true,
+        resumeOffered: false,
+        olderRenderer: true,
+      }),
+    );
+    // The upgrade path: the published app closes, and this checkout's
+    // renderer, on the same backend, resumes what the old one linked.
+    await stopPublishedApp(launched);
+    const next = await launchPackagedApp(temporaryRoot, "design-pairing-resume");
+    resumer = next.app;
+    const current = await openDesignWindow(next.app, next.profile, {
+      title: "native",
+      timeoutMs: 60_000,
+    });
+    dismissClaudeLoginNotice(current);
+    await connectWindow(current, backend, asked.environmentId);
+    await journeyWithEvidence(current, async () => {
+      await resumeLinkedConversation({ window: current, model: paired.model, asked });
+      await removeAskAgentEnvironment(current, asked.environmentId);
+    });
   }, [
-    // As in the first test: the root goes only once the published app's whole
-    // process group and the backend are both proven stopped.
+    // This checkout's app first, then, as in the first test, the root goes
+    // only once the published app's whole process group and the backend are
+    // both proven stopped.
+    () =>
+      stopPackagedAppThenRemoveProfile(resumer as ElectronApplication | null, {
+        snapshot: (launched) => electronProcessTree(launched),
+        close: (launched, owned) => closeElectron(launched, owned),
+        release: async () => undefined,
+        waitForStopped: (owned) => waitForStopped(owned, 0),
+        removeProfile: async () => undefined,
+      }),
     () =>
       stopPackagedAppThenRemoveProfile(child as ChildProcess | null, {
         snapshot: (launched) => (launched.pid ? [-launched.pid, launched.pid] : []),
-        close: (launched) =>
-          withCleanup(async () => {
-            await (browser as Browser | null)?.close();
-          }, [() => stopProcessGroup(launched, 15_000)]),
+        close: (launched) => stopPublishedApp(launched),
         release: async () => {
           await (backend as PairingBackend | null)?.stop();
         },
         waitForStopped: (owned) => waitForStopped(owned, 0),
         removeProfile: () => rm(temporaryRoot, { recursive: true, force: true }),
       }),
+    async () => {
+      await (model as FakeAnthropicModel | null)?.stop();
+    },
   ]);
 });

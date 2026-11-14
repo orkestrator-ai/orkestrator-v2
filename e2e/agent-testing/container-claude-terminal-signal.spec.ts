@@ -1,4 +1,5 @@
 import { installFakeClaudeApiFixture } from "./container-fake-claude-install";
+import { REFUSE_MARKER } from "./container-fake-claude-api";
 import { expect, test, type Page, type TestInfo } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -43,6 +44,14 @@ import { terminalVisibleText } from "./terminal-visible-text";
  *   and the sidebar are all real; only the model is not. Use it with a
  *   credential-free profile (`--no-agent-credentials --agent-platforms claude`).
  *
+ * `ORKESTRATOR_AGENT_TEST_CLAUDE_TERMINAL_FAILED_TURN=1` (fake API only) adds
+ * a third turn in the background that the fake refuses with a 401, as a wrong
+ * key would be (to-do 5160 task 4): the sidebar must leave working, the
+ * environment must ring `agent_failed` and opening it must show "Agent
+ * stopped with an error". The next prompt in that session is recorded: the
+ * CLI then answers "Not logged in" locally, with no hook (to-do 8092).
+ * Screenshots go to `output/visual-previews/5160-container-claude-*.png`.
+ *
  * Nothing at module scope spawns `mise` or `docker`, so the file stays inert
  * without the opt-ins. The report is content-free: timings and counts only.
  */
@@ -53,6 +62,8 @@ type Environment = {
   id: string;
   name: string;
   containerId?: string | null;
+  hasUnreadWork?: boolean;
+  unreadReason?: string;
   agentActivityState?: string;
   agentActivityUpdatedAt?: string;
 };
@@ -78,6 +89,8 @@ const containerName =
   process.env.ORKESTRATOR_AGENT_TEST_ROOT_TERMINAL_ENVIRONMENT ?? "fixture-container";
 const localName = "fixture-local";
 const FAKE_API = process.env.ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API === "1";
+const FAILED_TURN =
+  FAKE_API && process.env.ORKESTRATOR_AGENT_TEST_CLAUDE_TERMINAL_FAILED_TURN === "1";
 const ENABLED =
   process.env.ORKESTRATOR_AGENT_TEST_DOCKER === "1" &&
   (process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL === "1" || FAKE_API);
@@ -224,10 +237,12 @@ test.skip(!ENABLED, "Docker fixture profile and live Claude terminal opt-in requ
 test("Docker fixture live terminal Claude turn rings the state signal within budget", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(10 * 60_000);
+  test.setTimeout((FAILED_TURN ? 20 : 10) * 60_000);
   const status = profileCommand<Status>("dev:status");
   expect(status.status).toBe("ready");
   await page.setViewportSize({ width: 1280, height: 860 });
+  // A control that never becomes actionable fails the run instead of hanging it.
+  page.setDefaultTimeout(60_000);
   if (FAKE_API) {
     // The fake-API profile has no host Claude login by design. The container's
     // CLI gets its fixture token from settings, so the host notice is moot.
@@ -253,15 +268,17 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
   const containerId = container!.containerId!;
   // The client projection carries the aggregate activity; this fixture has no
   // other agent, so it is the terminal Claude source.
-  const backendState = async (): Promise<string | undefined> => {
+  const backendEnvironment = async (): Promise<Environment | undefined> => {
     for (const project of await invoke<Array<{ id: string }>>("get_projects")) {
       const found = (
         await invoke<Environment[]>("get_environments", { projectId: project.id })
       ).find((entry) => entry.id === container!.id);
-      if (found) return found.agentActivityState;
+      if (found) return found;
     }
     return undefined;
   };
+  const backendState = async (): Promise<string | undefined> =>
+    (await backendEnvironment())?.agentActivityState;
   const signal = async (): Promise<SignalStatus> => {
     const diagnostics = await invoke<{ signals: Array<{ name: string; status: SignalStatus }> }>(
       "get_recurring_work_diagnostics",
@@ -472,9 +489,108 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
       });
     }
 
+    let failedTurn: Record<string, unknown> | undefined;
+    if (FAILED_TURN) {
+      /** Content-free step names; they also feed the logged runner's watchdog. */
+      const step = (name: string) =>
+        process.stderr.write(`[claude-terminal-failed-turn] ${name}\n`);
+      step("good turns done");
+      const unreadReason = async () => {
+        const environment = await backendEnvironment();
+        return environment?.hasUnreadWork ? (environment.unreadReason ?? "?") : null;
+      };
+      const shot = async (name: string) =>
+        page.screenshot({
+          path: path.join(repositoryRoot, "output", "visual-previews", `5160-${name}.png`),
+        });
+      // Read the bell the good turns left, then fail a turn in the background.
+      await containerItem.click();
+      await expect.poll(unreadReason, { timeout: 30_000 }).toBeNull();
+      await focusTerminal();
+      await page.keyboard.type(`Reply with only the word ${REFUSE_MARKER}. No tools.`);
+      await page.waitForTimeout(1_000);
+      const enter = Date.now();
+      await page.keyboard.press("Enter");
+      await localItem.click();
+      step("refused turn sent");
+      await firstTimeTrue(
+        async () => (await backendState()) === "working",
+        "the refused turn's working state",
+        30_000,
+      );
+      step("refused turn working");
+      // The CLI retries a refused request with backoff before it gives up: 179 s
+      // for `claude -p` in the image on 2026-11-14 (to-do 5160 task 4).
+      const left = await firstTimeTrue(
+        async () => (await backendState()) !== "working",
+        "the refused turn to leave working",
+        360_000,
+      );
+      await firstTimeTrue(
+        async () => (await sidebarActivity(page, containerName)) !== "working",
+        "the sidebar to leave working",
+        30_000,
+      );
+      await expect.poll(unreadReason, { timeout: 60_000 }).toBe("agent_failed");
+      step("refused turn rang");
+      failedTurn = {
+        enterToLeftWorkingMs: left - enter,
+        backendStateAfter: (await backendState()) ?? null,
+        sidebarAfter: await sidebarActivity(page, containerName),
+        unreadReason: "agent_failed",
+      };
+      await containerItem.click();
+      await expect(page.getByText("Agent stopped with an error", { exact: true })).toBeVisible({
+        timeout: 10_000,
+      });
+      await page.waitForTimeout(800);
+      await shot("container-claude-failed-turn");
+      step("toast shown");
+      // The next prompt in the same session. After a refused login the CLI
+      // says "Not logged in" and answers nothing locally. An answer must ring
+      // waiting; a local refusal is recorded, not asserted: the CLI fires no
+      // Stop or StopFailure hook for it, so the tab reads working until the
+      // next hook (to-do 8092).
+      await focusTerminal();
+      await page.keyboard.type(
+        "Reply with only the word PONG and then 60 plus 6 as digits. No tools.",
+      );
+      await page.waitForTimeout(1_000);
+      await page.keyboard.press("Enter");
+      await localItem.click();
+      await firstTimeTrue(
+        async () =>
+          /PONG\s*66/.test(await output()) || (await screen(4_000)).includes("notloggedin"),
+        "the next prompt's answer or the CLI's sign-in notice",
+        360_000,
+      );
+      const answered = /PONG\s*66/.test(await output());
+      step(answered ? "next prompt answered" : "next prompt refused locally");
+      // Long enough for a working ring, and a Stop or StopFailure ring, to land.
+      await page.waitForTimeout(15_000);
+      failedTurn.followingTurn = answered ? "answered" : "not-logged-in";
+      failedTurn.followingTurnBackendState = (await backendState()) ?? null;
+      failedTurn.followingTurnSidebar = await sidebarActivity(page, containerName);
+      failedTurn.followingTurnUnreadReason = await unreadReason();
+      process.stderr.write(`[claude-terminal-failed-turn] ${JSON.stringify(failedTurn)}\n`);
+      if (answered) {
+        expect(failedTurn.followingTurnBackendState).not.toBe("working");
+        expect(failedTurn.followingTurnUnreadReason).toBe("agent_waiting");
+      } else {
+        testInfo.annotations.push({
+          type: "known gap",
+          description: `after a refused login the next prompt reads ${String(failedTurn.followingTurnBackendState)} (to-do 8092)`,
+        });
+      }
+      await containerItem.click();
+      await page.waitForTimeout(1_000);
+      await shot("container-claude-following-turn");
+    }
+
     const signalAfter = await signal();
     const report = {
       api: FAKE_API ? "fake" : "live",
+      ...(failedTurn ? { failedTurn } : {}),
       clockOffsetMs: Math.round(offsetMs),
       turns: turns.map((turn) =>
         Object.fromEntries(

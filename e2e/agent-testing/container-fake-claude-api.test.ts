@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { fakeReply, handleFakeClaudeApi, messageStream } from "./container-fake-claude-api";
+import {
+  fakeReply,
+  handleFakeClaudeApi,
+  messageStream,
+  REFUSE_MARKER,
+} from "./container-fake-claude-api";
 
 const PROMPT = "Reply with only the word PONG and then 41 plus 1 as digits. No tools.";
 
@@ -79,6 +84,25 @@ describe("container fake Claude API", () => {
     expect(
       (await handleFakeClaudeApi(new Request("http://127.0.0.1:47123/v1/messages"))).status,
     ).toBe(404);
+  });
+
+  test("refuses a marked prompt as a wrong key, and only while it is the latest", async () => {
+    const refused = await post("/v1/messages", {
+      stream: true,
+      messages: [{ role: "user", content: [{ type: "text", text: `Say ${REFUSE_MARKER}` }] }],
+    });
+    expect(refused.status).toBe(401);
+    expect(await refused.json()).toEqual({
+      type: "error",
+      error: { type: "authentication_error", message: "invalid x-api-key" },
+    });
+    const after = await post("/v1/messages", {
+      messages: [
+        { role: "user", content: `Say ${REFUSE_MARKER}` },
+        { role: "user", content: PROMPT },
+      ],
+    });
+    expect(after.status).toBe(200);
   });
 
   test("holds a reply back by the configured delay", async () => {

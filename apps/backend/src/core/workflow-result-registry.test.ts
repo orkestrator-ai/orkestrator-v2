@@ -73,7 +73,13 @@ describe("workflow result kind registry", () => {
     expect(workflowResultJsonSchema(kind)).toEqual({});
     expect(
       validateWorkflowResult(kind, { a: 1 }, { type: "object", additionalProperties: false }),
-    ).toEqual([{ path: "$.a", code: "unknown_field", message: "Field is not allowed" }]);
+    ).toEqual([
+      {
+        path: "$.a",
+        code: "unknown_field",
+        message: "Field is not allowed. No fields are allowed here.",
+      },
+    ]);
     expect(validateWorkflowResult(kind, { a: "probe" })).toEqual([]);
   });
 });

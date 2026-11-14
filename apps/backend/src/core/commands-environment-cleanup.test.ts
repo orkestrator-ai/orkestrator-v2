@@ -885,6 +885,43 @@ else if (args[1] === "inspect") console.log(JSON.stringify({ app: "orkestrator-v
     );
   });
 
+  test("stops polling the pull request before it takes the worktree apart", async () => {
+    let seededWorktree = "";
+    await withDeleteCommand(
+      async (storage) => {
+        seededWorktree = path.join(storage.getDataDir(), "workspaces", "project-e1");
+        await fs.mkdir(path.join(seededWorktree, "bridges"), { recursive: true });
+        await storage.addEnvironment(
+          environment({
+            worktreePath: seededWorktree,
+            branch: "feature",
+            prUrl: "https://github.com/acme/repo/pull/7",
+            prState: "open",
+          }),
+        );
+      },
+      async (invokeDelete, _storage, context) => {
+        await context.runtime.prMonitor.sync(context);
+        const service = context.runtime.prMonitor.service;
+        expect(service.observationPolicy("e1")).toBe("open");
+        let worktreeAtPause = null as boolean | null;
+        let policyAfterPause = null as string | null;
+        const pause = service.pause.bind(service);
+        spyOn(service, "pause").mockImplementation((environmentId) => {
+          pause(environmentId);
+          if (environmentId === "e1" && worktreeAtPause === null) {
+            worktreeAtPause = existsSync(seededWorktree);
+            policyAfterPause = service.observationPolicy("e1");
+          }
+        });
+        await invokeDelete();
+        expect(worktreeAtPause).toBe(true);
+        expect(policyAfterPause).toBe("paused");
+        expect(service.trackedIds()).not.toContain("e1");
+      },
+    );
+  });
+
   test("nothing re-creates the worktree after it is removed", async () => {
     let worktreePath = "";
     await withDeleteCommand(

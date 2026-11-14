@@ -92,6 +92,12 @@ export async function deleteEnvironment(
         lifecycleOperation: "deleting",
         lifecycleOperationStartedAt: new Date().toISOString(),
       });
+      // PR polling stops with the tombstone, not at the end: every step below
+      // takes the worktree or container apart, and a check that ran in between
+      // failed against what was left. Storage now reports the environment as
+      // not ready, so a later sync keeps it paused; `untrack` below removes it.
+      context.runtime.prMonitor.invalidatePendingSync();
+      context.runtime.prMonitor.service.pause(environmentId);
       // Each step is recorded as it is reached, so a slow delete can say what
       // it is waiting for. Steps that run child processes have a deadline.
       const steps = environmentDeletionSteps({

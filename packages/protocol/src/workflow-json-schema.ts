@@ -27,6 +27,24 @@ function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** The JSON type of a value, as a refusal names it. */
+function describeJsonType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  if (typeof value === "number" && !Number.isFinite(value)) return "non-finite number";
+  return typeof value;
+}
+
+/** Allowed field names listed in one unknown-field refusal. */
+const MAX_LISTED_FIELDS = 24;
+
+function allowedFieldsText(properties: Record<string, unknown>): string {
+  const names = Object.keys(properties);
+  if (names.length === 0) return "No fields are allowed here.";
+  const listed = names.slice(0, MAX_LISTED_FIELDS).join(", ");
+  return `Allowed fields here: ${listed}${names.length > MAX_LISTED_FIELDS ? ", …" : ""}.`;
+}
+
 function schemaTypeMatches(type: unknown, value: unknown): boolean {
   if (type === "object") return record(value);
   if (type === "array") return Array.isArray(value);
@@ -86,7 +104,13 @@ export function validateWorkflowJsonSchema(
       return;
     }
     if (!schemaTypeMatches(candidateSchema.type, candidate)) {
-      issues.push(issue(path, "invalid_type", `Expected ${String(candidateSchema.type)}`));
+      issues.push(
+        issue(
+          path,
+          "invalid_type",
+          `Expected ${String(candidateSchema.type)}, received ${describeJsonType(candidate)}`,
+        ),
+      );
       return;
     }
     if (typeof candidate === "number") {
@@ -163,7 +187,13 @@ export function validateWorkflowJsonSchema(
     if (candidateSchema.additionalProperties === false) {
       for (const key of Object.keys(candidate)) {
         if (!Object.hasOwn(properties, key))
-          issues.push(issue(`${path}.${key}`, "unknown_field", "Field is not allowed"));
+          issues.push(
+            issue(
+              `${path}.${key}`,
+              "unknown_field",
+              `Field is not allowed. ${allowedFieldsText(properties)}`,
+            ),
+          );
       }
     }
     for (const [key, propertySchema] of Object.entries(properties)) {

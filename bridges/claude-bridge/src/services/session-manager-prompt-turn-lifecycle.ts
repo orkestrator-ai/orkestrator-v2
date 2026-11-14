@@ -87,7 +87,21 @@ export const USAGE_LIMITED_ERROR_PROPERTY = "usageLimited";
  */
 export const PROVIDER_REFUSED_ERROR_PROPERTY = "providerRefused";
 
-function markError(error: unknown, property: string): void {
+/**
+ * The plain property a failed turn's rejection carries once the turn has
+ * logged the failure itself (`prompt.failed`, `prompt.usage-limited` or
+ * `prompt.provider-refused`). The prompt route logs every rejection again when
+ * it settles; without this it reported each failed turn a second time at
+ * error level, as `prompt.processing-failed`, so one broken turn counted twice
+ * in the diagnostics. A rejection without it never reached the turn's own report
+ * (a turn that failed before its query started, or a fault outside the turn)
+ * and the route still logs it as an error.
+ *
+ * A plain string key for the same reason as {@link USAGE_LIMITED_ERROR_PROPERTY}.
+ */
+export const TURN_FAILURE_REPORTED_PROPERTY = "turnFailureReported";
+
+function markErrorProperty(error: unknown, property: string): void {
   if ((typeof error !== "object" && typeof error !== "function") || error === null) return;
   try {
     Object.defineProperty(error, property, {
@@ -97,18 +111,23 @@ function markError(error: unknown, property: string): void {
       writable: false,
     });
   } catch {
-    // A frozen or exotic rejection keeps its text classification only.
+    // A frozen or exotic rejection keeps the route's text classification only.
   }
 }
 
 /** Mark a failed turn's rejection as a usage-limit refusal (see above). */
 export function markUsageLimitError(error: unknown): void {
-  markError(error, USAGE_LIMITED_ERROR_PROPERTY);
+  markErrorProperty(error, USAGE_LIMITED_ERROR_PROPERTY);
+}
+
+/** Mark a failed turn's rejection as already logged by the turn (see above). */
+export function markTurnFailureReported(error: unknown): void {
+  markErrorProperty(error, TURN_FAILURE_REPORTED_PROPERTY);
 }
 
 /** Mark a failed turn's rejection as a provider-state refusal (see above). */
 export function markProviderRefusalError(error: unknown): void {
-  markError(error, PROVIDER_REFUSED_ERROR_PROPERTY);
+  markErrorProperty(error, PROVIDER_REFUSED_ERROR_PROPERTY);
 }
 
 export function ownsActiveTurn(turn: TurnState): boolean {

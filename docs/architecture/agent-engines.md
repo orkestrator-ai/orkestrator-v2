@@ -1550,6 +1550,28 @@ agents can publish artifacts into their own transcript; see
 [rich-transcripts.md](rich-transcripts.md#workflow-transcripts). The turn carries no provider final-output schema, and the prompt states
 that the tool instruction supersedes any earlier "final JSON only" guidance.
 
+**One submission call, with its schema up front.** Consolidation agents used
+to find their tools with ToolSearch, then alternate between validation and
+submission two to four times before a result was accepted. Four things keep
+the first submission the normal path:
+
+- Every result tool lists `_meta["anthropic/alwaysLoad"]: true`
+  (`WORKFLOW_RESULT_TOOL_META`), so Claude Code puts the tool and its full input
+  schema in the first request instead of deferring it behind ToolSearch. Other
+  clients ignore the key. `claude-mcp-always-load.live.test.ts` pins this on
+  the real CLI.
+- The instruction (`workflowResultSlotInstruction`) says one submission call
+  validates and submits, that a refusal names each field at fault, and how many
+  corrections the attempt allows. The validation tool is optional, a check that
+  spends no correction.
+- A result the tool's input schema refuses never reaches the backend, and the
+  MCP SDK's own text (`data must NOT have additional properties`) does not say
+  which field. `jsonSchemaField` reports the contract walker's issues instead:
+  each path, the fields allowed beside an unknown one, and the type received.
+- The consolidation prompt carries a complete shape template of the report
+  (`review-consolidation-example.ts`), checked against the contract by its
+  test, and names the misses that most often cost a resend.
+
 **Legacy mode.** Review and pipeline attempts fall back to
 `structured-output-v1`, the provider-enforced final-output schema. Feature
 planning falls back to `planner-block-v1`, its tagged state block. Records

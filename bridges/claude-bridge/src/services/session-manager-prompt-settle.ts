@@ -16,6 +16,7 @@ import {
   diagnosticErrorClass,
   isUsageLimitError,
   markProviderRefusalError,
+  markTurnFailureReported,
   markUsageLimitError,
   ownsActiveTurn,
   recordInterruptedStructuredOutputIfCurrent,
@@ -269,6 +270,9 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
   } else {
     log.error("prompt.failed", { errorClass: diagnosticErrorClass(error) });
   }
+  // Whichever it was, the failure is now on record; the route's own completion log
+  // must not report it a second time as an error.
+  markTurnFailureReported(error);
 
   if (session.abortController === abortController) {
     const failure = killedBy

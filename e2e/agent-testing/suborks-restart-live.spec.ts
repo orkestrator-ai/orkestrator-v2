@@ -18,13 +18,16 @@
  * - the `/subork` turn ran once, and nothing after the restart re-sent it.
  *
  * Scripted (`ORKESTRATOR_AGENT_TEST_SUBORKS_FAKE=1`, how
- * `mise run test:agent:suborks` runs it): an OpenCode caller asks a Pi
- * target, both on `suborks-fake-model.ts`, which holds every target request
+ * `mise run test:agent:suborks` runs it): an OpenCode caller asks a Pi and
+ * an OpenCode target, all on `suborks-fake-model.ts`, which holds every target request
  * of this call open until the restarted profile is ready, so the kill always
- * lands mid-turn. The target's session is resumed by the runner's
+ * lands mid-turn. Each target's session is resumed by the runner's
  * continuation and the answer wakes the caller on the restarted OpenCode
- * server. `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_TARGETS=pi,opencode` adds an
- * OpenCode target, which fails until to-do 8045 is fixed. The fake also proves
+ * server. An OpenCode target runs beside the Pi one by default: the
+ * restarted server never resumes a run its predecessor was stopped under, and
+ * the OpenCode provider reports that run as a restart interruption
+ * (`apps/backend/src/core/opencode2/restart-cut.ts`, to-do 8045 (retired)).
+ * `ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_TARGETS` narrows the targets. The fake also proves
  * the caller was woken exactly once and that each target finished on the
  * runner's continuation: every target started a second turn after the
  * restart, the held request the killed backend sent was abandoned unanswered,
@@ -91,17 +94,16 @@ const LIVE_PLATFORM = (process.env.ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_PLATFOR
   "claude") as Platform;
 const CALLER: Platform = SCRIPTED ? "opencode" : LIVE_PLATFORM;
 /**
- * Scripted, the target is Pi. An OpenCode target is left out until to-do 8045:
- * its session stays busy in OpenCode's store after the server is killed
- * mid-turn, so the restarted backend reads the subork as running until the
- * 45-minute bound. `pi,opencode` here reproduces it.
+ * Scripted, the targets are Pi and OpenCode. Before to-do 8045 (retired) an
+ * OpenCode target stayed `running` until the 45-minute bound: the restarted
+ * backend read its cut-short run as unsettled.
  */
 const requestedTargets = (process.env.ORKESTRATOR_AGENT_TEST_SUBORK_RESTART_TARGETS ?? "")
   .split(",")
   .map((name) => name.trim())
   .filter((name): name is Platform => (ALL_PLATFORMS as readonly string[]).includes(name));
 const TARGETS: Platform[] =
-  requestedTargets.length > 0 ? requestedTargets : SCRIPTED ? ["pi"] : [LIVE_PLATFORM];
+  requestedTargets.length > 0 ? requestedTargets : SCRIPTED ? ["pi", "opencode"] : [LIVE_PLATFORM];
 const TIMEOUT_MS = SCRIPTED ? 300_000 : 900_000;
 
 const outputDirectory = path.join(repositoryRoot, "output", "agent-testing", runId, "suborks");

@@ -57,4 +57,4 @@ under a lifetime wrapper that ends the bridge when its stdin closes.
 ## Related
 
 - [5160](../cross-cutting/5160-silent-failures-live-evidence.md) task 4, where this was found.
-- [8045](../agent-engines/8045-opencode-turn-cut-by-backend-restart-stays-busy.md), whose run saw the reaper work on macOS.
+- 8045 (retired; fixed by `opencode2/restart-cut.ts`), whose run saw the reaper work on macOS.

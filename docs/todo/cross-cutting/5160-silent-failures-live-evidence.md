@@ -264,7 +264,7 @@ needs a choice (screen reading, a ceiling, or a CLI change), so it is to-do
 ## Related
 
 - [0002 session lifecycle consistency](../agent-engines/0002-session-lifecycle-consistency.md), which covers resume behaviour itself
-- [8045](../agent-engines/8045-opencode-turn-cut-by-backend-restart-stays-busy.md): an OpenCode turn whose restarted server still lists it as active, which the grace in task 4 does not cover.
+- 8045 (retired; fixed by `opencode2/restart-cut.ts`): an OpenCode turn whose restarted server still lists it as active, which the grace in task 4 does not cover.
 - [8092](../containers-and-environments/8092-claude-cli-prompt-after-refused-login-reads-working.md): found by task 4.
 - [8093](../containers-and-environments/8093-reaper-skips-orphans-under-a-subreaper.md): found by task 4's OpenCode restart case, which left an `opencode2 serve` running after the profile was reset.
 - [Application logging](../../architecture/logging.md#failures-that-would-otherwise-leave-no-trace)

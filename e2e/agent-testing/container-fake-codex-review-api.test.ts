@@ -6,6 +6,7 @@ import { reviewReport as claudeReviewReport } from "./container-fake-claude-revi
 import {
   HEAD_COMMAND,
   LIST_COMMAND,
+  NO_CODE_MODE_STEP,
   PATCH_PROBE,
   RESULT_MARKER,
   WRITE_PROBE,
@@ -13,6 +14,7 @@ import {
   createReviewScript,
   frameOutcomes,
   frameSlot,
+  offersCodeMode,
   outputItem,
   reviewReport,
   reviewSlot,
@@ -356,6 +358,41 @@ describe("the scripted conversation", () => {
       { kind: "review-report", step: "package", answered: [] },
       { kind: "review-report", step: "list", answered: [{ step: "package", error: false }] },
     ]);
+  });
+
+  test("a turn without code mode's exec tool is told so and logged, never sent a cell", () => {
+    // The direct tools Codex 0.167.0 offered a `gpt-5.5` preparation turn
+    // (2026-11-14), and the code-mode tool its catalogue's other models get.
+    const direct = [
+      { type: "function", name: "exec_command" },
+      { type: "custom", name: "apply_patch" },
+      { type: "tool_search" },
+    ];
+    expect(offersCodeMode({ tools: direct })).toBe(false);
+    expect(offersCodeMode({ tools: [{ type: "custom", name: "exec" }] })).toBe(true);
+    expect(
+      offersCodeMode({ tools: [{ type: "namespace", tools: [{ type: "custom", name: "exec" }] }] }),
+    ).toBe(true);
+    expect(offersCodeMode({})).toBe(true);
+
+    const lines: string[] = [];
+    const script = createReviewScript((line) => lines.push(line));
+    const message = {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: reviewerPrompt }],
+    };
+    expect(
+      script.respond({ type: "response.create", input: [message], tools: direct }, "socket-1"),
+    ).toMatchObject({ type: "message" });
+    expect(lines.map((line) => JSON.parse(line))).toEqual([
+      { kind: "review-report", step: NO_CODE_MODE_STEP, answered: [] },
+    ]);
+    // An ordinary request without a slot is still answered quietly.
+    expect(script.respond({ type: "response.create", tools: direct }, "socket-2")).toMatchObject({
+      type: "message",
+    });
+    expect(lines).toHaveLength(1);
   });
 
   test("reads outcomes only from its own calls, and logs no content", () => {

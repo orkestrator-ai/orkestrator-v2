@@ -330,6 +330,8 @@ export function reviewReport(baseRef: string, readDiff: boolean): Record<string,
           ? "QA fixture model: the diff was read, but no finding was looked for."
           : "QA fixture model: the diff could not be read and no finding was looked for.",
       ],
+      outcome: "reviewed",
+      blockedReason: null,
     },
     whatChanged: {
       overview: "The fixture model reviewed the package without judging its content.",
@@ -457,6 +459,26 @@ export function outputItem(step: ReviewStep, id: number): Record<string, unknown
   };
 }
 
+/** The step a scripted request is logged under when it offers no code-mode `exec` tool. */
+export const NO_CODE_MODE_STEP = "no-code-mode";
+const NO_CODE_MODE_TEXT =
+  "This fixture model only scripts Codex code mode, and this turn has no exec tool.";
+
+/**
+ * Whether a request lets the model call code mode's `exec` tool. Codex offers
+ * it only for a model its catalogue marks `tool_mode = "code_mode_only"`; the
+ * pinned 0.167.0 catalogue marks every listed model so except `gpt-5.5`,
+ * whose turns get the direct `exec_command` and `apply_patch` tools instead
+ * (seen on 2026-11-14, to-do 7872). A request that lists no tools is taken
+ * at its word, as the unit tests' frames are.
+ */
+export function offersCodeMode(frame: ResponsesFrame): boolean {
+  if (!Array.isArray(frame.tools)) return true;
+  return frame.tools.some(
+    (tool) => tool.name === "exec" || (tool.tools ?? []).some((inner) => inner.name === "exec"),
+  );
+}
+
 type Conversation = { slot: ReviewSlot | null; outcomes: Map<StepLabel, StepOutcome> };
 
 /** Bounded: a review has a handful of conversations, each told apart by its cache key. */
@@ -496,6 +518,19 @@ export function createReviewScript(log?: (line: string) => void) {
       }
       if (frame.generate === false) return null;
       sampled += 1;
+      if (conversation.slot && !offersCodeMode(frame)) {
+        // Every cell below is an `exec` call; a turn without it would answer
+        // "unsupported custom tool call" and the review would fail with a
+        // missing submission rather than say why.
+        const step: ReviewStep = { kind: "text", text: NO_CODE_MODE_TEXT };
+        log?.(
+          JSON.stringify({
+            ...stepRecord(conversation.slot, conversation.outcomes, step),
+            step: NO_CODE_MODE_STEP,
+          }),
+        );
+        return outputItem(step, sampled);
+      }
       const step = reviewStep(conversation.slot, conversation.outcomes);
       if (log && conversation.slot) {
         log(JSON.stringify(stepRecord(conversation.slot, conversation.outcomes, step)));

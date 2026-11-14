@@ -412,8 +412,8 @@ a graphical desktop inspection remains in the checklist above.
 - **Chosen:** (c), for provider-sandbox sessions and coordinators launched as
   `required` (any launcher value but `unavailable`); Linux only. Read-only
   review turns in an ordinary bridge (no launcher value) are left as they
-  were and moved to
-  [0190](0190-claude-read-only-turns-without-working-sandbox.md).
+  were and moved to 0190 (retired 2026-11-14; the behaviour is
+  [Read-only review turns without a working sandbox](../../architecture/coordinator.md#read-only-review-turns-without-a-working-sandbox)).
 - **Why.** The bridge runs where the CLI runs, which for a container
   environment is inside the container, where the backend's host probe says
   nothing. (d) would silently drop a boundary the user asked for. Read-only
@@ -555,9 +555,9 @@ Two review findings on phase `stock`.
   where this was found, the CI probe runs and the workflow change.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md):
   where the stock-host run is batched.
-- [0190-claude-read-only-turns-without-working-sandbox.md](0190-claude-read-only-turns-without-working-sandbox.md):
-  read-only review turns on such hosts, split out of item 3. Its container
-  question can reuse task 4's run.
+- 0190 (retired 2026-11-14): read-only review turns on such hosts, split out
+  of item 3; the behaviour and its qualification are in
+  [coordinator.md](../../architecture/coordinator.md#read-only-review-turns-without-a-working-sandbox).
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md)
   task 9: the provider sandbox on a real CLI, Linux half run on a host where
   this probe answers `available`.

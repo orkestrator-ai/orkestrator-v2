@@ -1,9 +1,11 @@
 import { REVIEW_QUALIFICATION_COMMIT } from "./container-fake-claude-install";
+import { NO_CODE_MODE_STEP } from "./container-fake-codex-review-api";
 import { expect, test, type TestInfo, type Page } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import { DEFAULT_CODEX_MODEL_ID } from "@orkestrator/protocol/codex-model-catalog";
 import { loadAppWithDevRetry } from "./dev-startup-retry";
 
 /**
@@ -64,7 +66,13 @@ const FAKE_SCRIPT = "/tmp/orkestrator-qa-fake-codex-review-api.ts";
 const STEP_LOG = "/tmp/orkestrator-qa-codex-review-steps.jsonl";
 const BACKUP_DIR = "/tmp/orkestrator-qa-codex-home-backup";
 const SETTLED = new Set(["ready", "interactive", "completed", "failed", "cancelled"]);
-const MODEL = "gpt-5.5";
+/**
+ * The fake scripts code mode's `exec` cells only, and Codex offers `exec` only
+ * for a model its catalogue marks `code_mode_only`. Codex's own default is
+ * one; `gpt-5.5`, which this spec used first, is not, so its preparation turn
+ * answered "unsupported custom tool call: exec" (2026-11-14, to-do 7872).
+ */
+const MODEL = DEFAULT_CODEX_MODEL_ID;
 
 type StepRecord = {
   kind: string;
@@ -256,6 +264,10 @@ test("Docker fixture Multi Review with Codex read-only reviewers runs without Co
       )
       .toBe(true);
 
+    expect(
+      stepLog(containerId).filter((record) => record.step === NO_CODE_MODE_STEP),
+      `a scripted turn offered no code-mode exec tool: ${MODEL} is not code_mode_only in this Codex's catalogue`,
+    ).toEqual([]);
     expect(workflow.phase, workflow.error ?? "").toBe("ready");
     const offNote = /^Codex's command sandbox cannot run commands in this container: /;
     for (const entry of workflow.reviewers) {

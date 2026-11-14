@@ -12,3 +12,14 @@
 - **Isolated rerun:** `mise run test:logged -- --name public-api-test-support-alone-N -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/public-api/test-support.test.ts --parallel=1`, four times: passed, failed, failed, passed. Both failures were this test with the same `watched: 0` (362.90 ms, 387.58 ms); the other three tests in the file passed every time.
 - **Changed code:** the branch changes iOS Swift sources, the web sidebar switcher and its test, docs and `tests/unit/ios-mobile-contracts.test.ts`; nothing under `apps/backend` or `packages/`, so nothing this test imports.
 - **Hypothesis:** `watched` counts worktrees whose file watcher is armed, and the gauge is read straight after `trackedHarness()` resolves. If arming the watcher completes asynchronously after tracking reports the entry, a busy host lets the read land first. It fails alone as well as in the aggregate, so this may be an ordering defect in the harness or the tracker rather than load alone. Unproven; not investigated beyond the runs above.
+
+## Recurrences
+
+- **2026-11-14**, base `dc90609bf` (`git merge-base HEAD origin/main` on branch
+  `account-change-display-e4af8012c5df-r1`, at `91c60c92b`; `mise run flaky:recurrence -- 9993
+  --base dc90609bf` answered open). `mise run test:logged -- --name review-default-tests -- mise run
+  test` on the same host while two other worktrees held most of the scheduler's slots; the run took
+  792.5 s against 148 s for the same suite an hour earlier. The same assertion received `watched: 0`
+  (294.09 ms); every other gauge matched. The aggregate runner's isolated rerun passed (4 pass,
+  2.06 s). The branch changes agent-mail scheduling, the coordinator transcript and docs; nothing
+  this test imports.

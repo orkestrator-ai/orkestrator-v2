@@ -1597,7 +1597,10 @@ finished, so Playwright's `exit` handler SIGKILLs the server's group by the PID
 it recorded at spawn, inside the one-second grace. Add the call to any new
 config with a `webServer`. `tests/unit/playwright-sigterm-webserver.integration.test.ts`
 (slow tier) runs both configs through the real `terminate` and checks that the
-server's process group is gone.
+server's process group is gone, once through Playwright's `SIGINT` teardown
+(runner exit 130) and once with a global teardown that never settles, so only
+the 500 ms exit (status 143) can stop the server. Its server is a grandchild of
+a shell that leads the group, as the production `bunx vite` commands are.
 
 Because each group runs in its own process group, the terminal's Ctrl+C reaches
 the runner and nothing else. The runner relays it: on `SIGINT`, `SIGTERM`, or

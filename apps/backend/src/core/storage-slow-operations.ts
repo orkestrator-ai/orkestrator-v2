@@ -44,7 +44,7 @@ export const MAX_SLOW_STORAGE_SERIES = 64;
 /**
  * Every call's time, slow or not, is summed into buckets of this width by the
  * monotonic time it ended, so a stall line can say how much of its window
- * SQLite took in calls each under the threshold (to-do 7562: a busy run's
+ * SQLite took in calls each under the threshold (to-do 7562 (retired): a busy run's
  * stalls were the event-loop thread waiting on disk with no call reaching
  * 250 ms). A window's sum is exact to one bucket at either edge.
  */
@@ -305,7 +305,7 @@ export class SlowStorageOperations {
 
   /**
    * Counts one outermost statement or transaction of any length, under the
-   * caller `series` that made it (to-do 7562: a stall's calls were many short
+   * caller `series` that made it (to-do 7562 (retired): a stall's calls were many short
    * ones, so a stall line has to say whose they were). A slot check, two
    * additions and one map update: this runs for every SQLite call the backend
    * makes.

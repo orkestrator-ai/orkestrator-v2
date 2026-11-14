@@ -442,7 +442,7 @@ queue retries its own in-flight id, which the bridge then refuses), so it keeps
 the 410 path. OpenCode has no `lost`; older bridges answer `unknown` and keep
 the Retry card.
 
-`absent` is the one negative answer (0223): the bridge proves the id never
+`absent` is the one negative answer (to-do 0223, retired): the bridge proves the id never
 reached it, so a send under it now is its first delivery. All five HTTP bridges
 answer it, and only while the session's journal is complete: the session was
 created by this bridge (never adopted or resumed), every claim reached disk

@@ -30,7 +30,10 @@ import type {
   MailboxPresence,
 } from "@orkestrator/protocol/agent-mail";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { AGENT_MAIL_MAX_VERIFY_ATTEMPTS } from "./storage-agent-mail-injects.js";
+import {
+  AGENT_MAIL_MAX_VERIFY_ATTEMPTS,
+  isRideAlongMessage,
+} from "./storage-agent-mail-injects.js";
 import type { PipelineWorkerMailPort } from "./build-pipeline-worker-mail.js";
 import { pipelineWorkerEnded } from "@orkestrator/protocol/pipeline-worker-mail";
 
@@ -617,7 +620,8 @@ export class AgentMailService {
           mayInjectMessage(entry.mailbox, entry.message, settings),
       )
       .sort((a, b) => a.message.createdAt.localeCompare(b.message.createdAt));
-    if (mine.length === 0) return null;
+    // Awareness notices only ride along with a turn other mail starts.
+    if (!mine.some((entry) => !entry.rideAlong)) return null;
     const mailbox = mine[0]!.mailbox;
     // The turn boundary is the moment this mail waited for: earlier backoff
     // from the drain's busy holds no longer applies.
@@ -738,6 +742,8 @@ export class AgentMailService {
     if (Date.now() - this.lastHourlyReleaseAt >= HOURLY_RELEASE_INTERVAL_MS) {
       this.lastHourlyReleaseAt = Date.now();
       await this.applyInjectorMutation(() => this.storage.releaseHourlyHeldAgentMail());
+      // A lapsed ride-along notice leaves the queue even if no later one sweeps it.
+      await this.applyInjectorMutation(() => this.storage.expireStaleAgentMailRiders());
     }
     const pending = await this.storage.listPendingAgentMailInjects(100, {
       includeDeferred,
@@ -774,11 +780,14 @@ export class AgentMailService {
       verifyRequestId,
       verificationAttempts,
       coalescingUntil,
+      rideAlong,
       steerRequested,
       steerRequestId: verifySteerRequestId,
     } of pending) {
-      // Still gathering other notices: it may ride along, not start a turn.
-      if (coalescingUntil) continue;
+      // Still gathering other notices, or awareness only: it may ride along,
+      // not start a turn. (The listing reports an unconfirmed rider's dispatch
+      // as an ordinary entry, so the journal check below still runs for it.)
+      if (coalescingUntil || rideAlong) continue;
       if (!mayInjectMessage(mailbox, message, settings)) {
         this.noteSkip(message, mailbox, "not-eligible");
         continue;
@@ -846,6 +855,8 @@ export class AgentMailService {
         );
         continue;
       }
+      // A rider confirmed above is never sent on its own.
+      if (isRideAlongMessage(message)) continue;
       // Deliver now, while a turn may be running: offer the mail to that turn.
       let steerRequestId: string | undefined;
       // What the tmux presence read answered, handed to its dispatch so the
@@ -1029,7 +1040,7 @@ export class AgentMailService {
             mailbox.incarnationId,
             undefined,
             {
-              joinCoalescing: Boolean(sibling.coalescingUntil),
+              joinCoalescing: Boolean(sibling.coalescingUntil || sibling.rideAlong),
               ...(steerRequestId ? { steerRequestId } : {}),
             },
           ),

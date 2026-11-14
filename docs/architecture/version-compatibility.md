@@ -719,7 +719,7 @@ each of a bounded kind: `text` (at most 64 characters), `range` (`min-max`) or
 | Code | Thrown by | Details | Read by |
 | --- | --- | --- | --- |
 | The three incompatibility codes | [Typed errors](#typed-errors) | as above | `incompatibility()` |
-| `kanban-request-id-conflict` | `KanbanRequestIdConflictError` (`storage-kanban.ts`): a ticket, comment or image `requestId` reused with different arguments | `record` | `feature-build.ts`, which returns the existing ticket on a retry |
+| `kanban-request-id-conflict` | `KanbanRequestIdConflictError` (`storage-kanban.ts`): a ticket, comment or image `requestId` reused with different arguments | `record` | `features/build.ts`, which returns the existing ticket on a retry |
 | `native-job-receipt-capacity` | `NativeJobReceiptCapacityError` (`storage-prompts.ts`): the job queue holds its 256 receipts | `limit` | `native-agent-job-tab-reuse.ts`, which rethrows it rather than falling back |
 | `native-agent-provider-session-missing` | `NativeAgentProviderSessionMissingError` (`native-agent-service-shared.ts`): a provider probe proved the session gone | none | the renderer (`isProviderSessionMissingError` in `useNativeAgentSession.ts`), the only answer that may replace a restored session |
 | `container-lifecycle` | `ContainerLifecycleError` (`container-lifecycle.ts`) and the backend errors that carry its marker: a container lifecycle refusal; message `ContainerLifecycleError:<reason>: text` | `reason` (a `CONTAINER_LIFECYCLE_ERROR_CODES` member) | `parseContainerLifecycleError` (backend operation records, environment settings, rebuild, recovery copies, cleanup review) |

@@ -15,7 +15,7 @@ import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
  * An image with the `boot-status` capability writes one status record per
  * boot. A record counts only when its `pid1Start` equals the start time of the
  * container's current PID 1, which changes on every container start, so a
- * record (or legacy marker) left by an earlier boot can never release setup or
+ * record left by an earlier boot can never release setup or
  * an agent launch. Readiness is orchestration evidence, not a security
  * boundary against the container user.
  */

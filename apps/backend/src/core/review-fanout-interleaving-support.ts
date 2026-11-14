@@ -180,7 +180,7 @@ export interface Scenario {
   reviewerMode: "plan" | "build";
   disruptions: Disruption[];
   /**
-   * The provider's journal is complete (0223): it answers `absent` for an id
+   * The provider's journal is complete (to-do 0223, retired): it answers `absent` for an id
    * it never took, so a recovered `dispatching` request is re-sent under the
    * same id, and a send a crash left on the wire may land late, where the
    * provider deduplicates it. Set by the suite, not by `planScenario`, so the

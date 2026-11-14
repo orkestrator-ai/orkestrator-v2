@@ -117,7 +117,7 @@ test.skipIf(process.env.RUN_PORTABLE_INPUTS_DOCKER !== "1")(
           container,
           "sh",
           "-c",
-          "if [ -f /tmp/.entrypoint-complete ]; then echo ready; fi",
+          "jq -r --arg start \"$(awk '{print $22}' /proc/1/stat)\" 'select(.pid1Start == $start) | .phase' /run/orkestrator/boot-status.json 2>/dev/null || true",
         )) !== "ready"
       ) {
         if (Date.now() > deadline) throw new Error("Fixture entrypoint did not finish");

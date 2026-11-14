@@ -233,6 +233,36 @@ describe("NativeMessage peer mail", () => {
     expect(row.textContent).toContain("PR #12updated· Add the watch· checks failing");
   });
 
+  test("draws an automatic account switch as one line, not a tile", () => {
+    const { container } = renderInAppCommandScope(
+      <NativeMessage
+        message={createPeerMailNativeMessage({
+          id: "mail-switch",
+          from: {
+            kind: "system",
+            projectId: "project",
+            source: "workflow",
+            resourceId: "account-auto-switch:claude",
+          },
+          trust: "same-project",
+          subject: "Claude Code moved to b@example.com on mini",
+          body: "Automatic account switching moved Claude Code on mini from a@example.com to b@example.com.",
+          notice: {
+            resource: { kind: "account-switch", id: "claude", label: "mini" },
+            accountSwitch: { provider: "Claude Code", from: "a@example.com", to: "b@example.com" },
+            state: "account-switched",
+            tone: "info",
+          },
+          createdAt: "2026-09-26T23:36:00.000Z",
+        })}
+      />,
+    );
+    expect(container.querySelector("[data-mail-tile]") === null).toBe(true);
+    const row = container.querySelector<HTMLElement>("[data-account-switch-notice]")!;
+    expect(row.textContent).toContain("Claude Code· mini");
+    expect(row.textContent).toContain("a@example.comb@example.com");
+  });
+
   test("renders a collapsed tile with the sender, subject and Markdown body", () => {
     const { container } = renderInAppCommandScope(
       <NativeMessage

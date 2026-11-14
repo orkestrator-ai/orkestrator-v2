@@ -46,7 +46,10 @@
  *    `--listener-census` (a diagnostic, never for measured numbers) adds a
  *    census of the page's listeners to each sample and names the ones that
  *    differ between the lowest and highest `jsEventListeners` sample, a second
- *    `jsEventListeners` reading after more collection and idle time, and with
+ *    `jsEventListeners` and `Frames` reading after more collection and idle
+ *    time, a census of where the frames `cdpFrames` counts are (the attached
+ *    frame tree, the iframe elements owning one, the out-of-process iframe
+ *    targets; to-do 7820 (retired)), and with
  *    `--heap-snapshots <dir>` a heap snapshot at cycle 1 and at the first
  *    sample whose count differs from it (snapshots hold page strings: keep
  *    them out of commits).
@@ -841,17 +844,92 @@ async function listenerCensus(page: Page, cdp: CDPSession) {
 
 type Census = Awaited<ReturnType<typeof listenerCensus>>;
 
+type FrameTreeNode = { frame: { id: string; url: string }; childFrames?: FrameTreeNode[] };
+type DomNode = {
+  nodeName: string;
+  frameId?: string;
+  children?: DomNode[];
+  shadowRoots?: DomNode[];
+  contentDocument?: DomNode;
+};
+
+/** A URL reduced to its scheme, so no fixture path or query reaches the report. */
+function schemeOf(url: string): string {
+  const match = /^([a-z][a-z0-9+.-]*):/i.exec(url);
+  return match ? match[1]!.toLowerCase() : url ? "other" : "empty";
+}
+
 /**
- * `--listener-census`: `jsEventListeners` read again after two more forced
- * collections with a second of idle time after each, long enough for Blink to
- * finalize listener objects the earlier collection found dead.
+ * `--listener-census` (to-do 7820 (retired)): where the frames `Performance.getMetrics`
+ * counts as `Frames` are. That counter counts Blink frame objects alive in the
+ * page's renderer (the main frame, plus a remote frame for each
+ * out-of-process design iframe), so a frame object that is detached but not
+ * yet destroyed counts too. Beside it: the renderer's own frame tree
+ * (`Page.getFrameTree`, which holds the main frame and in-process children,
+ * not out-of-process iframes), the iframe elements in the page's DOM that own
+ * a frame, and the browser's out-of-process iframe targets. A child frame or
+ * a target that no element owns is named by its URL scheme only; nothing else
+ * about a frame is kept.
+ */
+async function frameCensus(cdp: CDPSession, browserCdp: CDPSession) {
+  const { frameTree } = (await cdp.send("Page.getFrameTree")) as { frameTree: FrameTreeNode };
+  const tree: Array<{ id: string; scheme: string; depth: number }> = [];
+  const walk = (node: FrameTreeNode, depth: number) => {
+    tree.push({ id: node.frame.id, scheme: schemeOf(node.frame.url), depth });
+    for (const child of node.childFrames ?? []) walk(child, depth + 1);
+  };
+  walk(frameTree, 0);
+  const owned = new Set<string>();
+  try {
+    const { root } = (await cdp.send("DOM.getDocument", { depth: -1, pierce: false })) as {
+      root: DomNode;
+    };
+    const visit = (node: DomNode) => {
+      if (node.frameId && (node.nodeName === "IFRAME" || node.nodeName === "FRAME"))
+        owned.add(node.frameId);
+      for (const child of node.children ?? []) visit(child);
+      for (const shadow of node.shadowRoots ?? []) visit(shadow);
+      if (node.contentDocument) visit(node.contentDocument);
+    };
+    visit(root);
+  } finally {
+    // getDocument enables the DOM agent, which tracks nodes from then on.
+    await cdp.send("DOM.disable").catch(() => undefined);
+  }
+  const { targetInfos } = (await browserCdp.send("Target.getTargets")) as {
+    targetInfos: Array<{ targetId: string; type: string; url: string; attached: boolean }>;
+  };
+  const iframeTargets = targetInfos.filter((target) => target.type === "iframe");
+  return {
+    inProcessFrames: tree.length,
+    ownedFrames: owned.size,
+    iframeTargets: iframeTargets.length,
+    /** In-process child frames that no iframe element owns. */
+    unownedInProcess: tree
+      .filter((frame) => frame.depth > 0 && !owned.has(frame.id))
+      .map((frame) => ({ scheme: frame.scheme, depth: frame.depth })),
+    /** Out-of-process iframe targets that no iframe element owns: the browser still holds them. */
+    unownedTargets: iframeTargets
+      .filter((target) => !owned.has(target.targetId))
+      .map((target) => ({ scheme: schemeOf(target.url), attached: target.attached })),
+  };
+}
+
+type FrameCensus = Awaited<ReturnType<typeof frameCensus>>;
+
+/**
+ * `--listener-census`: `jsEventListeners` and `Frames` read again after two
+ * more forced collections with a second of idle time after each, long enough
+ * for Blink to finalize listener objects the earlier collection found dead
+ * and for a detaching frame to finish (to-do 7820 (retired)).
  */
 async function settledListeners(cdp: CDPSession) {
   for (let round = 0; round < 2; round++) {
     await cdp.send("HeapProfiler.collectGarbage");
     await sleep(1_000);
   }
-  return (await cdpMetrics(cdp)).jsEventListeners;
+  const metrics = await cdpMetrics(cdp);
+  return { jsEventListeners: metrics.jsEventListeners, frames: metrics.frames };
 }
 
 /** `--heap-snapshots` (with `--listener-census`): one V8 heap snapshot (Blink objects included) to `file`. */
@@ -1212,7 +1290,8 @@ async function leakCycles(
   // `--listener-census` only: a census beside every sample, and a second
   // `jsEventListeners` reading right after each reactivation (before the cull).
   const censuses: Census[] = [];
-  const settledReadings: number[] = [];
+  const frameCensuses: FrameCensus[] = [];
+  const settledReadings: Array<{ jsEventListeners: number; frames: number }> = [];
   let snapshotPair = false;
   const afterReactivate: number[] = [];
   const sample = async (cycle: number) => {
@@ -1239,6 +1318,7 @@ async function leakCycles(
   type Sample = Awaited<ReturnType<typeof sample>>;
   const samples: Sample[] = [await sample(0)];
   if (census) {
+    frameCensuses.push(await frameCensus(cdp, browserCdp));
     censuses.push(await listenerCensus(page, cdp));
     settledReadings.push(await settledListeners(cdp));
   }
@@ -1263,6 +1343,7 @@ async function leakCycles(
     await sleep(1_500);
     samples.push(await sample(cycle));
     if (census) {
+      frameCensuses.push(await frameCensus(cdp, browserCdp));
       censuses.push(await listenerCensus(page, cdp));
       settledReadings.push(await settledListeners(cdp));
       // One snapshot at cycle 1 and one at the first sample that differs from it.
@@ -1359,7 +1440,10 @@ async function leakCycles(
       ? { listenerFloorConfirmations: listenerFloor.confirmations }
       : {}),
     ...(census
-      ? { listenerCensus: summarizeCensus(samples, censuses, afterReactivate, settledReadings) }
+      ? {
+          listenerCensus: summarizeCensus(samples, censuses, afterReactivate, settledReadings),
+          frameCensus: summarizeFrameCensus(samples, frameCensuses, settledReadings),
+        }
       : {}),
   };
 }
@@ -1373,13 +1457,13 @@ function summarizeCensus(
   samples: Array<{ cycle: number; jsEventListeners: number }>,
   censuses: Census[],
   afterReactivate: number[],
-  settledReadings: number[],
+  settledReadings: Array<{ jsEventListeners: number }>,
 ) {
   const perSample = samples.map((entry, index) => ({
     cycle: entry.cycle,
     jsEventListeners: entry.jsEventListeners,
     afterReactivate: entry.cycle === 0 ? null : (afterReactivate[entry.cycle - 1] ?? null),
-    settled: settledReadings[index] ?? -1,
+    settled: settledReadings[index]?.jsEventListeners ?? -1,
     tracked: censuses[index]?.trackedTotal ?? -1,
     domListeners: censuses[index]?.dom ?? -1,
   }));
@@ -1396,6 +1480,52 @@ function summarizeCensus(
     diff: censusDiff(lowCensus.tracked, highCensus.tracked),
     domDiff: censusDiff(lowCensus.domByType, highCensus.domByType),
   };
+}
+
+/**
+ * `--listener-census` (to-do 7820 (retired)): per sample, `cdpFrames` beside where the
+ * frames are (`frameCensus`) and `Frames` read again once settled, and the
+ * samples whose count exceeds the main frame plus the owned iframes: what
+ * each extra frame was, by where it was found.
+ */
+function summarizeFrameCensus(
+  samples: Array<{ cycle: number; cdpFrames: number; iframes: number }>,
+  frameCensuses: FrameCensus[],
+  settledReadings: Array<{ frames: number }>,
+) {
+  const perSample = samples.map((entry, index) => {
+    const census = frameCensuses[index];
+    return {
+      cycle: entry.cycle,
+      cdpFrames: entry.cdpFrames,
+      liveIframes: entry.iframes,
+      inProcessFrames: census?.inProcessFrames ?? -1,
+      ownedFrames: census?.ownedFrames ?? -1,
+      iframeTargets: census?.iframeTargets ?? -1,
+      settledFrames: settledReadings[index]?.frames ?? -1,
+      unownedInProcess: census?.unownedInProcess ?? [],
+      unownedTargets: census?.unownedTargets ?? [],
+    };
+  });
+  const extra = perSample
+    .filter((entry) => entry.ownedFrames >= 0 && entry.cdpFrames > entry.ownedFrames + 1)
+    .map((entry) => {
+      const extraFrames = entry.cdpFrames - entry.ownedFrames - 1;
+      const browserHeld = entry.unownedInProcess.length + entry.unownedTargets.length;
+      return {
+        cycle: entry.cycle,
+        extraFrames,
+        // Frames no element owns that the renderer's tree or the browser still holds.
+        browserHeld,
+        // Counted, but held by no element, no tree and no target: a frame
+        // object that is detached and not yet destroyed.
+        detachedNotDestroyed: Math.max(0, extraFrames - browserHeld),
+        unownedInProcess: entry.unownedInProcess,
+        unownedTargets: entry.unownedTargets,
+        settledFrames: entry.settledFrames,
+      };
+    });
+  return { perSample, extra };
 }
 
 function restSummary(snapshot: Awaited<ReturnType<typeof memory>>) {

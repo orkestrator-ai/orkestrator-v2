@@ -306,7 +306,7 @@ files on a large page show `changes.body.batch-limit`.
 
 ## Turn and thread boundaries
 
-`NativeAgentService.dispatchAdmittedPrompt` captures the turn start inside the
+`NativeAgentPromptDispatch.dispatchAdmittedPrompt` (`native-agent-prompt-dispatch.ts`) captures the turn start inside the
 at-most-once dispatch window, immediately before `provider.send`, bounded by
 `foregroundBoundaryDeadlineMs` (10 s, a cutoff not a target). A failed
 capture is recorded before dispatch; by default the turn proceeds with an

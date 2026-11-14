@@ -235,7 +235,7 @@ queue it on `mismatch`; the queue paths were checked and left as they were.
 The rest of this section is the decision record it was built from.
 
 **Investigation.** All the refusals come from one backend function,
-`performProjectionSteer` (`native-agent-service.ts`), and from the recovery
+`performProjectionSteer` (`native-agent-prompt-dispatch.ts`), and from the recovery
 retry. That makes a backend-owned fix possible, which the renderer, Agent Info
 and the CLI then share. `idle` and `mismatch` are both proven "not sent"
 answers: the bridge clears its steer record before answering, and the
@@ -657,7 +657,7 @@ Decisions, each the option built:
 - **Why not the recommendation.** Against `claudeQueryOptions`:
   - Every reopened conversation resumes, and a spare cannot.
   - The first turn's `agentMcp` URL and bearer token are resolved per dispatch
-    (`resolveAgentMcp` in `native-agent-service.ts`) and `mcpServers` is fixed at
+    (`resolveAgentMcp` in `native-agent-prompt-dispatch.ts`) and `mcpServers` is fixed at
     prewarm, so an ordinary first turn would miss the spare or start without the
     Orkestrator tools a workflow result needs.
   - `allowedTools`, `disallowedTools`, the read-only hook, the sandbox and
@@ -707,7 +707,7 @@ Built as the four recommended options above. What follows is each choice the
 build had to make inside them.
 
 - **Where the fallback lives.** In the backend, as the recommendation said.
-  `performProjectionSteer` (`native-agent-service.ts`) now calls the
+  `performProjectionSteer` (`native-agent-prompt-dispatch.ts`) now calls the
   unchanged steer (`steerProjectionOnce`) and hands an `idle` or `mismatch`
   answer to `deliverMissedSteer`, a collaborator in
   `native-agent-missed-steer.ts`. It is a new file because the service is

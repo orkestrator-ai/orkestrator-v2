@@ -34,7 +34,7 @@
 
 - **Root cause:** a product race between the dispatch path and the background
   settle of a parked dispatch. When the first dispatch's acknowledgement is
-  lost, `attemptDispatch` (`apps/backend/src/core/native-agent-service.ts`)
+  lost, `attemptDispatch` (then in `native-agent-service.ts`, now `apps/backend/src/core/native-agent-prompt-dispatch.ts`)
   parks it and fires `refreshProjectionState` without awaiting it. That
   projection read calls `scheduleAmbiguousDispatchSettle`, which asks the
   provider about the parked id in the background. The next prompt is refused

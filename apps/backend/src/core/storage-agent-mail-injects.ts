@@ -36,11 +36,43 @@ export type PendingAgentMailInject = {
    * for: it may join a batch going to the same mailbox, never start one.
    */
   coalescingUntil?: string;
+  /**
+   * An awareness-only notice, listed only when asked for: it may join a batch
+   * going to the same mailbox, never start one.
+   */
+  rideAlong?: true;
   /** The person pressed Deliver now: steer into a running turn rather than wait for it. */
   steerRequested?: true;
   /** The steer this claim or verification belongs to, when it was one. */
   steerRequestId?: string;
 };
+
+/**
+ * How long a notice that only rides along waits for a batch to ride in. Awareness
+ * of an account switch is stale after a day, and a coordinator that never wakes
+ * must not collect them without bound.
+ */
+export const RIDE_ALONG_MAX_AGE_MS = 24 * 60 * 60_000;
+
+function rideAlongExpired(createdAt: string | undefined, now: number): boolean {
+  const created = createdAt ? Date.parse(createdAt) : Number.NaN;
+  return Number.isFinite(created) && now - created > RIDE_ALONG_MAX_AGE_MS;
+}
+
+/** Drop this mailbox's ride-along notices that outlived their wait, as `expired`. */
+export function expireStaleRiders(store: PersistedAgentMailStore, mailboxId: string): void {
+  const now = Date.now();
+  const mailbox = store.mailboxes[mailboxId];
+  store.pendingInject = store.pendingInject.filter((entry) => {
+    if (entry.mailboxId !== mailboxId || !entry.rideAlong) return true;
+    const message = mailbox?.messages.find((candidate) => candidate.id === entry.messageId);
+    if (!message || message.placement !== "pending-inject") return true;
+    if (!rideAlongExpired(message.createdAt, now)) return true;
+    message.placement = "expired";
+    message.discardedAt = new Date(now).toISOString();
+    return false;
+  });
+}
 
 /**
  * Delay before retrying a failed delivery: quick at first, then settling at a
@@ -530,16 +562,19 @@ export class AgentMailInjects {
       verificationAttempts,
       verifyRequestId,
       coalescing,
+      rideAlong,
       steerRequested,
       steerRequestId,
     } of entries) {
       const held = Boolean(retryAt && Date.parse(retryAt) > now);
       if (held && !(coalescing && options.includeCoalescing)) continue;
+      if (rideAlong && !options.includeCoalescing) continue;
       const deferred = Boolean(nextAttemptAt && Date.parse(nextAttemptAt) > now);
       if (deferred && !options.includeDeferred) continue;
       const mailbox = store.mailboxes[mailboxId];
       const message = mailbox?.messages.find((candidate) => candidate.id === messageId);
       if (!mailbox || !message || message.placement !== "pending-inject") continue;
+      if (rideAlong && rideAlongExpired(message.createdAt, now)) continue;
       pending.push({
         mailbox: this.repos.agentMailboxes.descriptor(mailbox, settings.defaultInjectPolicy),
         message,
@@ -548,6 +583,7 @@ export class AgentMailInjects {
         ...(retryAttempts ? { retryAttempts } : {}),
         ...(verificationAttempts ? { verificationAttempts } : {}),
         ...(held && retryAt ? { coalescingUntil: retryAt } : {}),
+        ...(rideAlong ? { rideAlong } : {}),
         ...(steerRequested ? { steerRequested } : {}),
         ...(steerRequestId ? { steerRequestId } : {}),
       });
@@ -684,6 +720,7 @@ export class AgentMailInjects {
       );
       if (
         pendingEntry?.verifyRequestId !== verificationRequestId ||
+        (pendingEntry?.rideAlong && !options.joinCoalescing) ||
         (pendingEntry?.retryAt &&
           Date.parse(pendingEntry.retryAt) > Date.now() &&
           !(options.joinCoalescing && pendingEntry.coalescing)) ||
@@ -780,6 +817,8 @@ export class AgentMailInjects {
           attempts,
           nextAttemptAt: new Date(Date.now() + delayMs).toISOString(),
           lastHoldReason: reason,
+          // Held again, still only a rider: it must not become a wake of its own.
+          ...(pendingEntry?.rideAlong ? { rideAlong: true as const } : {}),
           ...(pendingEntry?.coalescing &&
           pendingEntry.retryAt &&
           Date.parse(pendingEntry.retryAt) > Date.now()

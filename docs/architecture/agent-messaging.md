@@ -252,6 +252,16 @@ retried notice keeps its request id at both ends.
 placement reason: its coordinator could not be moved off the limited account, or the
 window already had its wake.
 
+`sendAgentMail`'s `rideAlong` (system senders only) is for awareness that must not cost a
+turn: an automatic account switch. The message is `pending-inject` like any waking
+notice, but its pending entry is marked `rideAlong`, so it is listed only to join a batch
+another message starts (`joinCoalescing`), never to start one, and it is never held by a
+coalescing window. The coordinator's next wake for any reason (a worker's report, a
+usage-limit stop) carries it, so the transcript shows its one line without a turn that
+only acknowledges it. A rider that finds no batch lapses after
+`RIDE_ALONG_MAX_AGE_MS` (24 hours): it is skipped, and the next rider for that mailbox
+marks it `expired`. A person's own prompt does not carry it.
+
 A waking route ignores the default inject policy and inject depth. Only an
 explicit per-tab **Off**, a mute, or the pair hop budget stops it; per-tab
 `idle` and `inherit` both count as on. Mail sent before routes existed keeps
@@ -418,7 +428,10 @@ sender and trust, so a tab cannot make its mail look like a workflow notice. A
 workflow notice (`from.kind === "system"`) may also carry `notice`: the
 resource it reports on (`agent-tab`, `multi-review`, `build-pipeline`, with
 ids and a label), a lower-case `state` (`completed`, `failed`, `waiting`,
-`ready`…) and a `tone` (`success`, `failure`, `attention`, `info`). The store
+`ready`…) and a `tone` (`success`, `failure`, `attention`, `info`). An
+`account-switch` notice also carries `accountSwitch` (`provider`, `from`, `to`,
+each at most 120 characters), which the transcript draws as one line,
+`Claude Code · mini · old → new`, instead of a tile. The store
 persists it on the message (`AgentMailMessage.notice`, only for system senders,
 checked by `normalizeAgentMailNotice`), so `read_messages` and `get_message`
 return it too.

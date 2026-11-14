@@ -1910,6 +1910,8 @@ export class StorageService {
       coalesceMs?: number;
       /** File it for its reader without a wake, under this placement reason. */
       keepWithoutWake?: string;
+      /** Deliver it with the next batch another message starts; never a wake of its own. */
+      rideAlong?: boolean;
       /** A notice a leaf sent up the coordinator hierarchy: no pair budget. */
       relayedNotice?: boolean;
       /**

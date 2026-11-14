@@ -490,6 +490,11 @@ export const AGENT_MAIL_NOTICE_RESOURCES = [
   "watched-pull-request",
   /** One `ask_agents` call's answers; `id` is its batch id. */
   "subork",
+  /**
+   * An automatic account switch on a machine; `id` is the provider id, `label`
+   * the machine, and `accountSwitch` the accounts. Drawn as a one-line notice.
+   */
+  "account-switch",
 ] as const;
 export type AgentMailNoticeResource = (typeof AGENT_MAIL_NOTICE_RESOURCES)[number];
 
@@ -510,9 +515,19 @@ export interface AgentMailPullRequest {
   title?: string;
 }
 
+/** The accounts an `account-switch` notice moved between, as the user knows them. */
+export interface AgentMailAccountSwitch {
+  /** The provider's display name, such as `Claude Code`. */
+  provider: string;
+  from: string;
+  to: string;
+}
+
 export interface AgentMailNotice {
   /** PR identity independent of the workflow label or status subject. */
   pullRequest?: AgentMailPullRequest;
+  /** Present on an `account-switch` notice. */
+  accountSwitch?: AgentMailAccountSwitch;
   resource: {
     kind: AgentMailNoticeResource;
     id: string;
@@ -578,8 +593,14 @@ export function normalizeAgentMailNotice(value: unknown): AgentMailNotice | null
     prUrl.endsWith(`/pull/${pr!.number}`)
       ? { url: prUrl, number: pr!.number!, ...(prTitle ? { title: prTitle } : {}) }
       : undefined;
+  const switched = record.accountSwitch as Partial<AgentMailAccountSwitch> | undefined;
+  const provider = boundedNoticeString(switched?.provider, AGENT_MAIL_NOTICE_MAX_LABEL_LENGTH);
+  const from = boundedNoticeString(switched?.from, AGENT_MAIL_NOTICE_MAX_LABEL_LENGTH);
+  const to = boundedNoticeString(switched?.to, AGENT_MAIL_NOTICE_MAX_LABEL_LENGTH);
+  const accountSwitch = provider && from && to ? { provider, from, to } : undefined;
   return {
     ...(pullRequest ? { pullRequest } : {}),
+    ...(accountSwitch ? { accountSwitch } : {}),
     resource: {
       kind,
       id,

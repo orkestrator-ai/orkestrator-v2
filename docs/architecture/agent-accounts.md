@@ -1349,7 +1349,10 @@ drop, and the leaf's only for repositories the command node lacks. An older comm
 node still hears through `AGENT_ACCOUNT_AUTO_SWITCHED_EVENT`, where a link that is
 down loses the notice and `lastSwitch` still records the move. A notice never delays
 a switch, and an automatic switch notice starts no coordinator, because it belongs to
-no repository.
+no repository. Nor does it wake one: it rides along with the coordinator's next
+delivery (`rideAlong`, [agent-messaging.md](agent-messaging.md#scheduling)) and the
+transcript draws it as one line, old account to new, rather than a mail tile and a
+reply.
 
 A session stopping on a usage limit is a separate notice
 ([Usage-limit stop notices](coordinator.md#usage-limit-stop-notices)), and it can

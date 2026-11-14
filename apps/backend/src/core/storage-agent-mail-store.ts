@@ -94,6 +94,12 @@ export type PersistedAgentMailStore = {
     /** `retryAt` is a coalescing window other notices may join, not a failure backoff. */
     coalescing?: true;
     /**
+     * Awareness only: delivered inside a batch some other message starts, never
+     * as a wake of its own (`sendAgentMail`'s `rideAlong`). Ignored once it is
+     * older than `RIDE_ALONG_MAX_AGE_MS`.
+     */
+    rideAlong?: true;
+    /**
      * The person pressed Deliver now: if the recipient is mid-turn, the next
      * dispatch steers into that turn rather than waiting for it to end. One
      * attempt; any settlement clears it.

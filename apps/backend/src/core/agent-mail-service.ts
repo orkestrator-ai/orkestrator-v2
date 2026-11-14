@@ -774,11 +774,13 @@ export class AgentMailService {
       verifyRequestId,
       verificationAttempts,
       coalescingUntil,
+      rideAlong,
       steerRequested,
       steerRequestId: verifySteerRequestId,
     } of pending) {
-      // Still gathering other notices: it may ride along, not start a turn.
-      if (coalescingUntil) continue;
+      // Still gathering other notices, or awareness only: it may ride along,
+      // not start a turn.
+      if (coalescingUntil || rideAlong) continue;
       if (!mayInjectMessage(mailbox, message, settings)) {
         this.noteSkip(message, mailbox, "not-eligible");
         continue;
@@ -1029,7 +1031,7 @@ export class AgentMailService {
             mailbox.incarnationId,
             undefined,
             {
-              joinCoalescing: Boolean(sibling.coalescingUntil),
+              joinCoalescing: Boolean(sibling.coalescingUntil || sibling.rideAlong),
               ...(steerRequestId ? { steerRequestId } : {}),
             },
           ),

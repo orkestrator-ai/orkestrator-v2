@@ -33,7 +33,7 @@ Linear integration stays. What is left here is agent work only: task 10.
 5. Interaction observer switches (`ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY` and `..._MONITOR_KILL_SWITCH`): the user chose on 2026-11-14 to remove the observe-only monitor, its adoption and both switches; the removal is [8109](8109-decided-removal-candidates.md) task 1. Status: done here (moved to 8109).
 6. Artifact rollout flags (the four `ORKESTRATOR_RICH_MARKDOWN`/`ARTIFACT_*` flags): the user chose on 2026-11-14 to remove them and their gate checks; the removal is [8109](8109-decided-removal-candidates.md) task 2. Status: done here (moved to 8109).
 7. Unmounted and uncalled surfaces (`NetworkWhitelistDialog.tsx`, `set_workflow_result_tools_rollout`, `graph_capability_ceiling_set`): the user chose on 2026-11-14 to delete all three, with no older-version adapter; the removal is [8109](8109-decided-removal-candidates.md) task 3. Status: done here (moved to 8109).
-8. **Old browser-held and stored state readers**: the localStorage build-pipeline import, `migrateLegacyClaudeTmuxState` and single-`pipelineId` handoff records removed from the renderer. Status: done (the backend command is task 15, on the manual-test checklist).
+8. **Old browser-held and stored state readers**: the localStorage build-pipeline import, `migrateLegacyClaudeTmuxState` and single-`pipelineId` handoff records removed from the renderer. Status: done (the backend command is task 15, now [8109](8109-decided-removal-candidates.md) task 5).
 9. **Small probable leftovers needing one check each**: four of six items checked (two removed, two kept with the reason in a code comment). Status: done (the `bypassPermissionsModeAccepted` live check is on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md); the user chose on 2026-11-14 to remove the `kind: "legacy"` readiness path, which is [8108](8108-legacy-retirement-sweep.md) task 2).
 10. **Remaining retired to-do numbers in source comments**: about 39 numbers on about 80 comment lines. Status: open.
 11. Root `conductor.json`: nobody uses Conductor (the user, 2026-11-14); the deletion is [8109](8109-decided-removal-candidates.md) task 4. Status: done here (moved to 8109).
@@ -113,8 +113,9 @@ start time; the final-image smoke and the live restart test now assert both
 markers are absent; the gateway spec already waited for boot status and
 only lost its marker line. `container-lifecycle.md`'s Readiness section and
 a `container-readiness.ts` comment no longer mention the markers. The
-backend's `kind: "legacy"` readiness path is untouched: it is the task 9
-decision on the manual-test checklist.
+backend's `kind: "legacy"` readiness path is untouched: it was the task 9
+decision, which the user answered on 2026-11-14; its removal is
+[8108](8108-legacy-retirement-sweep.md) task 2.
 
 **Decisions.** Removed, with an image build and smoke run (the recommended
 option; results in Assumptions and decisions).
@@ -136,8 +137,9 @@ old shape is ignored.
 sets `messageQueue` and never creates a tab entry, the tmux store was never
 persisted, and every store write in `ClaudeTmuxChatTab.tsx` uses the scoped
 key, so the tmux migration could not fire. The backend command stays for
-now; whether to port its callers and remove it (task 15) is a decision on
-the manual-test checklist.
+now; whether to port its callers and remove it (task 15) was a decision,
+which the user answered on 2026-11-14; the build is
+[8109](8109-decided-removal-candidates.md) task 5.
 
 **Decisions.** The recommended "retire all three" for the renderer readers.
 
@@ -154,8 +156,9 @@ the manual-test checklist.
 - `bypassPermissionsModeAccepted` in `docker/entrypoint.sh` (about lines 1271-1343): **moved to the manual-test checklist**. The pinned Claude CLI may ignore it; confirming that needs one live container start with a Claude login.
 - The `kind: "legacy"` readiness path for images without boot status (`container-readiness.ts`, `parseBootProbe` and `observeContainerBoot`): **moved to the manual-test checklist**. It serves only images from before v2.21.0, but images are unmigrated user state, so the container-lifecycle owner decides. Decided 2026-11-14 by the user: remove it with its tests and add a Retired row; the removal is [8108](8108-legacy-retirement-sweep.md) task 2.
 
-**Investigation.** The checklist items for the two moved items say what an
-agent does once they are answered.
+**Investigation.** The checklist item for `bypassPermissionsModeAccepted`
+says what an agent does once it is answered; the readiness-path item was
+answered on 2026-11-14 and left the checklist.
 
 **Decisions.** For each item, remove it when its check passes
 (recommended); otherwise record why it stays in a code comment.
@@ -244,7 +247,8 @@ marker when `/run/orkestrator` was missing went too: the script is baked into
 the same image as the entrypoint, which always writes boot status, and the
 image creates `/run/orkestrator`, so the branch could not run. The backend's
 `kind: "legacy"` path, which serves images built before boot status, was left
-alone; it is the task 9 decision on the manual-test checklist. The checks that
+alone; it was the task 9 decision on the manual-test checklist (answered
+2026-11-14; the removal is [8108](8108-legacy-retirement-sweep.md) task 2). The checks that
 used to require the marker now require its absence (final-image smoke, live
 restart test), so a regression that brings a marker back fails them.
 
@@ -272,14 +276,17 @@ The renderer readers went as recommended. The backend command is the
 seeding entry point of two e2e specs and a mixed-version scenario, which
 this change could not run, so its removal is task 15 rather than an
 unverified edit. Task 15 is a choice between a public test-only command
-and porting its callers, so it is on the manual-test checklist.
+and porting its callers, so it went to the manual-test checklist (answered
+2026-11-14; the build is [8109](8109-decided-removal-candidates.md) task 5).
 
 ### Task 9: two items kept with a comment, two left for a person
 
 The CLI fallback and the Cursor usage fallback failed their checks and stay,
 each with the reason in a comment. The entrypoint item needs a live
 container start and the legacy readiness path a decision; both moved to the
-manual-test checklist, so task 9 holds no agent work and is done.
+manual-test checklist, so task 9 holds no agent work and is done. The user
+answered the readiness-path decision on 2026-11-14; its removal is
+[8108](8108-legacy-retirement-sweep.md) task 2.
 
 ### Task 12: bumped `pull-requests` and `git`
 

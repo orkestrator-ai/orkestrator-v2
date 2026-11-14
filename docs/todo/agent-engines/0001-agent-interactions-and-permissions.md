@@ -43,7 +43,7 @@ repeated as tasks; their live checks are. The open questions and the
   - **Qualify a throwaway `GROK_HOME` with `GROK_AUTH_PATH` pointing at the real login, resume included, and ship it for policy-off sessions.**
     - Pros: closes the leak now.
     - Cons: loses user-level config and skills; resume depends on a session store in the throwaway home; the very qualification decision 14 found too costly.
-- **Ask xAI?** Filing is an outward action; the report is ready in [`docs/upstream-issues/grok-never-trust-switch.md`](../../upstream-issues/grok-never-trust-switch.md), and filing it is the manual-test checklist's "File the upstream reports" item.
+- **Ask xAI?** Filing is an outward action; the report is drafted in [`docs/upstream-issues/grok-never-trust-switch.md`](../../upstream-issues/grok-never-trust-switch.md) (Status `draft` until its "Before filing" checks pass), and filing it once it is marked ready is the manual-test checklist's "File the upstream reports" item.
   - **File an upstream request for a per-process "never trust" switch (recommended).**
     - Pros: the only clean fix; small for xAI.
     - Cons: no control over timing.

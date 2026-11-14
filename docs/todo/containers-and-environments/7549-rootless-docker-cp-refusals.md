@@ -458,9 +458,10 @@ turn a slower boot into no boot.
 ### Task 1: the Moby report lives in `docs/upstream-issues/` (2026-11-14)
 
 The user decided on 2026-11-14 that upstream reports are not to-dos. The
-draft above is now kept, ready to paste, in
-[`docs/upstream-issues/moby-rootless-docker-cp-readonly-bind.md`](../../upstream-issues/moby-rootless-docker-cp-readonly-bind.md);
-the user files it, and its URL is recorded there.
+draft above is now kept, in paste-ready form, in
+[`docs/upstream-issues/moby-rootless-docker-cp-readonly-bind.md`](../../upstream-issues/moby-rootless-docker-cp-readonly-bind.md)
+(Status `draft` until its "Before filing" checks pass); the user files it
+once it is marked ready, and its URL is recorded there.
 
 ### Three retries (task 3)
 

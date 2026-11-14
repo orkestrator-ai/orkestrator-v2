@@ -3229,14 +3229,15 @@ session writes.
 
 `mise run test:agent:auto-pipeline` qualifies the manual Auto-pipeline flow
 (the toolbar's **To pipeline** button) end to end (to-do 7547 task 4) without a login or a billed turn. It starts a
-disposable `dev:test --fixture --headless --no-agent-credentials
+disposable `dev:test --fixture --headless --no-agent-credentials --no-host-seed
 --agent-platforms pi` profile, runs `e2e/agent-testing/auto-pipeline-live.spec.ts`,
 then stops and resets the profile. The real backend, Pi bridge, Pi SDK
 sessions, Git worktree, ticket store and renderer all run; only the model is
 fake. The spec points the profile's isolated Pi `models.json` at a loopback
 model (`auto-pipeline-fake-model.ts`, script in
 `auto-pipeline-fake-model-script.ts`) and saves the fixture project's Build
-defaults as Pi on that model with one reviewer. The fake answers each stage's
+defaults as Pi on that model with one reviewer (`--reviewers <1-4>` sets
+another panel size). The fake answers each stage's
 result tool with a fixed, valid, finding-free result, answers the drafting
 request by calling `convert_to_pipeline` with a fixed draft, keeps only counts,
 and parks Verify until the spec releases it.
@@ -3261,6 +3262,34 @@ ORKESTRATOR_AGENT_TEST_AUTO_PIPELINE=1` to `bunx playwright test --config
 e2e/agent-testing/playwright.auto-pipeline.config.ts`. It changes the
 fixture project's Build defaults and leaves its environments behind, so reset
 the profile afterwards.
+
+**Review prompt reads (BG-11).** The runner also starts the profile with
+`ORKESTRATOR_LOG_LEVEL=build-pipeline=debug` (an isolated backend keeps that
+variable; `AGENT_TEST_SAFE_ENV_NAMES` in `apps/desktop/electron/backend-process.ts`).
+Each review fan-out pass that builds, or tries to build, reviewer prompts then
+logs one content-free line, `[build-pipeline] review.prompt-reads prompts=<n>
+instructionReads=<n> notesReads=<n>`: the prompts it built (a request whose
+shared build failed is not counted as one) and how often building them read
+the review instruction and the project notes, failed reads included, so a pass
+whose build failed shows `prompts=0` with its reads. Once the
+pipeline completes, and before its UI checks, the spec reads those lines from
+the profile's `electron.log` (`auto-pipeline-prompt-reads.ts`, unit-tested
+against both log formats), writes them to
+`output/agent-testing/<profile>/auto-pipeline/prompt-reads.json` and requires
+one read of each input per pass. Only a panel of two or more reviewers uses
+the fan-out (`usesReviewFanout`); the default single reviewer runs as one stage
+session and logs no line, so the spec requires the lines only for
+`--reviewers 2` and above. `build-pipeline-review-fanout-prompts.test.ts`
+guards the same line in the unit suite, and
+`apps/desktop/scripts/dev/auto-pipeline-arguments.test.ts` the runner's
+`--reviewers` parsing and log-level merge. The live count, taken on beelink2 on
+2026-11-14 with `mise run test:agent:auto-pipeline -- --reviewers 4`
+(to-do 7566 (retired)): the one pass that dispatched the panel built 4
+prompts with 1 review-instruction read and 1 project-notes read. The unit
+count is the before side (the same four-reviewer pass read the notes 5 times
+on `0bd214ee` and 2 times after BG-11; the second read is the pass's own,
+outside the fan-out, which the line does not count). No live before side was
+taken: `0bd214ee` predates the Auto-pipeline flow this driver uses.
 
 ### Coordinator routing cancel (fake model)
 

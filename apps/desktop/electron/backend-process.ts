@@ -157,6 +157,10 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   // profile can qualify the previous drivers. Policy only, never credentials.
   "ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK",
   "ORKESTRATOR_RECURRING_METRICS",
+  // Log levels (`area=level` names only), so a qualification run can read an
+  // area's debug lines, such as the review fan-out's per-pass prompt reads
+  // (`test:agent:auto-pipeline`). Levels only, never a credential.
+  "ORKESTRATOR_LOG_LEVEL",
   // Service-preview transport overrides (`PreviewRuntime.effectiveSettings`),
   // so an isolated profile can qualify the tunnel and relay. Policy only.
   "ORKESTRATOR_PREVIEW_RELAY",

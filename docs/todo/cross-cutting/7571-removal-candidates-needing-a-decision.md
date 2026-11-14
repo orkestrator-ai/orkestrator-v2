@@ -233,6 +233,35 @@ The recommended option kept the reader for stored tombstones, but the
 history shows none was ever stored and no supported backend ever sent the
 DELETE that wrote one, so nothing could be left half done.
 
+### Task 3: removed the markers, and the image's pre-boot-status branch with them
+
+Chose the recommended removal. `workspace-setup.sh`'s fallback to the
+marker when `/run/orkestrator` was missing went too: the script is baked into
+the same image as the entrypoint, which always writes boot status, and the
+image creates `/run/orkestrator`, so the branch could not run. The backend's
+`kind: "legacy"` path, which serves images built before boot status, was left
+alone; it is the task 9 decision on the manual-test checklist. The checks that
+used to require the marker now require its absence (final-image smoke, live
+restart test), so a regression that brings a marker back fails them.
+
+Validated on beelink on 2026-11-14, on a disposable rootless daemon
+(`mise run docker:disposable -- start --name markers`, Docker 29.9.2):
+
+- `docker build $(bun scripts/docker-image-build-args.ts) -f docker/Dockerfile .`
+  from commit `fd475d741`: exit 0.
+- `bash docker/tests/final-image-smoke.sh <image>`: passed (24 s).
+- `bash docker/tests/root-boundary-smoke.sh <image>`: passed (15 s).
+- `container-live-qualification.test.ts` (`RUN_LIVE_DOCKER_TESTS=1`): 8 pass.
+- `portable-inputs-container.test.ts` (`RUN_PORTABLE_INPUTS_DOCKER=1`): 1 pass,
+  with `TMPDIR` on the home filesystem. Under the default `/tmp` (`nosuid`,
+  `nodev`) the rootless daemon refused the staged inputs' read-only bind
+  (`remount-ro … operation not permitted`) before the test reached readiness,
+  the known rootless limitation in
+  [container-lifecycle.md](../../architecture/container-lifecycle.md).
+
+`e2e/agent-testing/browser-gateway.spec.ts` lost only its marker line (it
+already waited for boot status) and was not run: it is a real-stack suite.
+
 ### Task 8: kept `import_legacy_build_pipelines` on the backend
 
 The renderer readers went as recommended. The backend command is the

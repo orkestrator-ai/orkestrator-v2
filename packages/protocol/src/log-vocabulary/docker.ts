@@ -95,10 +95,18 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
         fields: { staleForMs: "number" },
       },
       "writer-lease.listener-failed":
-        "The callback told about a lost registry writer lease threw, so the schedules settings learn of the loss only at their next read.",
+        "The callback told about a lost, or a late-won, registry writer lease threw, so the schedules settings learn of the change only at their next read.",
+      "writer-lease.acquired-late": {
+        description:
+          "A backend that started without the registry writer lease won it later, because its holder stopped refreshing it (most often a crash just before this backend started). Schedules fire and container changes are allowed from now on; the `writer-lease.regained` line before it gives the stale lease's age.",
+        essential: true,
+        fields: {},
+      },
+      "writer-lease.retry-failed":
+        "A backend without the registry writer lease could not try for it again for a reason other than the lease being held (an unreadable data directory, say). It tries again on its next tick.",
       "writer-lease.not-acquired": {
         description:
-          "This backend started without the registry writer lease, for the fixed `reason` given. A second backend on one data directory is normal: it serves reads, runs no schedules and refuses container changes.",
+          "This backend started without the registry writer lease, for the fixed `reason` given. A second backend on one data directory is normal: it serves reads, runs no schedules and refuses container changes. A `busy` one keeps trying and writes `writer-lease.acquired-late` if it wins the lease once its holder stops refreshing it.",
         essential: true,
         fields: { reason: "label" },
       },

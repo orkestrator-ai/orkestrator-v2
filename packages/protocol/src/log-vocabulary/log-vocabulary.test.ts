@@ -34,6 +34,7 @@ const CURATED_ESSENTIAL_EVENTS = [
   "docker bridge.launched",
   "docker bridge.listener-refused",
   "docker bridge.listener-unrecorded",
+  "docker writer-lease.acquired-late",
   "docker writer-lease.lost",
   "docker writer-lease.not-acquired",
   "docker writer-lease.regained",

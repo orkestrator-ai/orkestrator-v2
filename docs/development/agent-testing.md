@@ -245,6 +245,93 @@ mise run dev:stop --profile codex-refused-qa
 mise run dev:reset --profile codex-refused-qa
 ```
 
+## Failed-turn bell (refused-login model)
+
+`e2e/agent-testing/failed-turn-bell-live.spec.ts` checks that a failed native
+turn rings "Agent stopped with an error" (`agent_failed`) on the real stack,
+with no login and nothing billed. The profile's own Claude settings, Codex
+config, Pi `models.json` and OpenCode `opencode.json` are pointed at
+`refused-login-model.ts`, a loopback model that answers every request with
+the 401 a wrong key gets (Anthropic's shape for `/v1/messages`, OpenAI's for
+everything else, and a refused WebSocket upgrade), and restored afterwards;
+Codex also gets a made-up API key in the profile's own Codex home for the
+run. `POST /__qa/hold` parks requests, so a turn can be held at "the provider
+is working". Per platform (`ORKESTRATOR_AGENT_TEST_BELL_PLATFORMS`, default
+Claude, Codex, Pi and OpenCode) one environment holds one native tab while
+the page sits on a second environment, and the cases
+(`ORKESTRATOR_AGENT_TEST_BELL_CASES`) are:
+
+- `refused`: a turn dispatched from outside the view is refused; the
+  environment rings `agent_failed` and opening it shows the toast.
+- `stop`: a held turn is stopped (the Stop button's command); it rings
+  `agent_finished`, never `agent_failed`. Only a goal's own Stop rings nothing.
+- `bridge-kill`: the environment's own bridge (from the backend's
+  `bridge.started` log line; for OpenCode its `opencode2 serve`) is
+  SIGKILLed under a held turn; it rings `agent_failed`.
+- `restart`: the profile's backend is SIGKILLed under a held turn and the
+  profile restarted (the local bridge goes with it); it rings `agent_failed`.
+  The case first samples the environment for 6 s, so a sweep checkpoints the
+  turn as active; a backend that dies inside its first sweep interval after
+  a dispatch keeps `agent_finished`, by design (`hasUnsettledTurn`).
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile ork-bell --fixture --no-agent-credentials --no-host-seed \
+  --headless --agent-platforms claude,codex,pi,opencode
+# In another terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=ork-bell ORKESTRATOR_AGENT_TEST_LIVE_FAILED_TURN_BELL=1 \
+  mise run test:logged -- --name failed-turn-bell -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts failed-turn-bell-live.spec.ts
+mise run dev:stop --profile ork-bell
+mise run dev:reset --profile ork-bell
+```
+
+Each platform writes `output/agent-testing/<run>/failed-turn-bell/<platform>.json`
+and the toasts are saved as `output/visual-previews/5160-bell-<platform>-<case>.png`.
+On beelink on 2026-11-14 (to-do 5160 task 4) all sixteen cases passed:
+the refused turn rang within 4 to 16 s on every platform, the bridge kill
+within 13 to 14 s for Claude, Codex and Pi and 80 s for OpenCode (its
+unsettled-run grace), and the restart within 18 to 25 s. Cursor and Grok have
+no loopback seam, so their refused logins are a manual-test item.
+
+The container **Claude CLI** tab is covered by
+`container-claude-terminal-signal.spec.ts` with
+`ORKESTRATOR_AGENT_TEST_CLAUDE_TERMINAL_FAILED_TURN=1` (see
+[container-qualification.md](container-qualification.md)): its in-container
+fake refuses a prompt carrying `REFUSE_QA_401`. The image's CLI retries the
+401 ten times before its `StopFailure` hook rings, so allow about three
+minutes.
+
+## Schedules notice with two backends on one data directory
+
+`e2e/agent-testing/schedules-two-backends-live.spec.ts` shows Settings →
+Schedules on two real backends sharing one profile's data directory (to-do
+5160 task 3). It turns scheduling on, saves an operator schedule due in 2099,
+starts a second backend with the profile backend's own arguments and only
+another gateway port and gateway token, then overwrites the writer lease
+under a token neither backend holds. It checks, without reloads: no notice
+on the first backend; the `another-backend` notice on the second; the
+`writer-lease-lost` notice on the first once its lease is taken; and, once
+that written lease goes stale, the second backend winning it and dropping
+its notice. The profile's backend has then lost its lease for good, so stop
+and reset the profile afterwards.
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile ork-sched --fixture --no-agent-credentials --no-host-seed \
+  --headless --agent-platforms pi
+ORKESTRATOR_AGENT_TEST_PROFILE=ork-sched ORKESTRATOR_AGENT_TEST_LIVE_TWO_BACKENDS=1 \
+  mise run test:logged -- --name two-backends -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts schedules-two-backends-live.spec.ts
+mise run dev:stop --profile ork-sched
+mise run dev:reset --profile ork-sched
+```
+
+It writes `output/agent-testing/<run>/schedules-two-backends.json` and
+`output/visual-previews/5160-schedules-*.png`. On beelink on 2026-11-14 it
+passed in 72 s: the first backend's open view reread 4.6 s after the
+takeover, and the second backend won the stale lease 37 s after it.
+
 ## Report a bug qualification
 
 `e2e/agent-testing/bug-report-live.spec.ts` opens the sidebar's Report a bug

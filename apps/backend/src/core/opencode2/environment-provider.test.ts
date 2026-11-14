@@ -8,6 +8,8 @@ import { FakeOpenCode2Server, fakeOpenCode2Model } from "./fake-server.test-supp
 import { OpenCode2Provider } from "./provider.js";
 import {
   OPENCODE2_CAPABILITY_LIMITS,
+  OPENCODE2_RUN_CUT_SHORT_MESSAGE,
+  OPENCODE2_UNSETTLED_RUN_GRACE_MS,
   OpenCodeEnvironmentProvider,
   openCode2TurnTerminalError,
   type OpenCode2ServerConnection,
@@ -434,6 +436,90 @@ describe("openCode2TurnTerminalError", () => {
       ProviderUnavailableError,
     );
     expect(openCode2TurnTerminalError([user("a", "other")], "r")).toBeNull();
+  });
+});
+
+describe("a run its server never settled", () => {
+  const user = (id: string, requestId: string): OpenCode2Message => ({
+    id,
+    type: "user",
+    text: "x",
+    time: { created: 1 },
+    metadata: { orkestrator: { requestId } },
+  });
+  const idle = (id: string): OpenCode2Message =>
+    ({ id, type: "idle", outcome: "succeeded", time: { created: 1 } }) as OpenCode2Message;
+
+  function unsettled(activity: { value: "idle" | "working" }, rows: OpenCode2Message[]) {
+    let now = 1_000_000;
+    // Only what `turnTerminalError` reads of the server's provider.
+    const stub = {
+      messages: async () => rows,
+      activity: async () => activity.value,
+      registerSession: () => {},
+      dispose: async () => {},
+    } as unknown as OpenCode2Provider;
+    const provider = new OpenCodeEnvironmentProvider({
+      connection: async () => ({
+        baseUrl: "http://127.0.0.1:1",
+        password: "pw",
+        directory: "/work",
+        generation: "g1",
+      }),
+      createProvider: () => stub,
+      now: () => now,
+    });
+    peers.push(provider);
+    return { provider, advance: (ms: number) => (now += ms) };
+  }
+
+  test("an idle server's unsettled run is cut short once the grace has passed", async () => {
+    const { provider, advance } = unsettled({ value: "idle" }, [user("a", "r")]);
+    await expect(provider.turnTerminalError("s", "r")).rejects.toThrow(ProviderUnavailableError);
+    advance(OPENCODE2_UNSETTLED_RUN_GRACE_MS - 1);
+    await expect(provider.turnTerminalError("s", "r")).rejects.toThrow(ProviderUnavailableError);
+    advance(1);
+    expect(await provider.turnTerminalError("s", "r")).toBe(OPENCODE2_RUN_CUT_SHORT_MESSAGE);
+  });
+
+  test("a run given up on reads cut short for every later reader", async () => {
+    const rows = [user("a", "r")];
+    const { provider, advance } = unsettled({ value: "idle" }, rows);
+    await expect(provider.turnTerminalError("s", "r")).rejects.toThrow(ProviderUnavailableError);
+    advance(OPENCODE2_UNSETTLED_RUN_GRACE_MS);
+    // The bell's reconcile and a turn-outcome read share the one verdict.
+    expect(await provider.turnTerminalError("s", "r")).toBe(OPENCODE2_RUN_CUT_SHORT_MESSAGE);
+    expect(await provider.turnTerminalError("s", "r")).toBe(OPENCODE2_RUN_CUT_SHORT_MESSAGE);
+    // A boundary row written after all is still read as written.
+    rows.push(idle("b"));
+    expect(await provider.turnTerminalError("s", "r")).toBeNull();
+  });
+
+  test("a server still running the turn is never given up on", async () => {
+    const activity = { value: "working" as "idle" | "working" };
+    const { provider, advance } = unsettled(activity, [user("a", "r")]);
+    for (let read = 0; read < 3; read += 1) {
+      await expect(provider.turnTerminalError("s", "r")).rejects.toThrow(ProviderUnavailableError);
+      advance(OPENCODE2_UNSETTLED_RUN_GRACE_MS);
+    }
+    // Idle from here on: the grace starts again rather than counting the busy time.
+    activity.value = "idle";
+    await expect(provider.turnTerminalError("s", "r")).rejects.toThrow(ProviderUnavailableError);
+    advance(OPENCODE2_UNSETTLED_RUN_GRACE_MS);
+    expect(await provider.turnTerminalError("s", "r")).toBe(OPENCODE2_RUN_CUT_SHORT_MESSAGE);
+  });
+
+  test("a boundary row that arrives within the grace is read as written", async () => {
+    const rows = [user("a", "r")];
+    const { provider, advance } = unsettled({ value: "idle" }, rows);
+    await expect(provider.turnTerminalError("s", "r")).rejects.toThrow(ProviderUnavailableError);
+    advance(1_000);
+    rows.push(idle("b"));
+    expect(await provider.turnTerminalError("s", "r")).toBeNull();
+    // Settled requests are forgotten, so a later unsettled read starts afresh.
+    rows.pop();
+    advance(OPENCODE2_UNSETTLED_RUN_GRACE_MS);
+    await expect(provider.turnTerminalError("s", "r")).rejects.toThrow(ProviderUnavailableError);
   });
 });
 

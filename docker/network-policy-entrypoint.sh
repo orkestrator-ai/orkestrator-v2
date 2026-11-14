@@ -92,7 +92,7 @@ FIREWALL_RESULT_DIR=/run/orkestrator-network
 install -d -o root -g root -m 0755 "$FIREWALL_RESULT_DIR"
 BOOT_STATUS_DIR=/run/orkestrator
 if [ -d "$BOOT_STATUS_DIR" ] && setpriv --reuid=node --regid=node --init-groups test -w "$BOOT_STATUS_DIR"; then
-    rm -f /tmp/.environment-ready /tmp/.entrypoint-complete "$BOOT_STATUS_DIR/boot-status.json"
+    rm -f "$BOOT_STATUS_DIR/boot-status.json"
     ORKESTRATOR_BOOT_ID="$(cat /proc/sys/kernel/random/uuid)"
     # Exclusively create in root's directory. Never open or chmod a path
     # planted by node, including a symlink or a directory at the destination.

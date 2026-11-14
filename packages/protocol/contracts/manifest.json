@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1009,
-    "defined": 1009,
+    "commands": 1010,
+    "defined": 1010,
     "untyped": 0,
     "events": 45
   },
@@ -1557,6 +1557,15 @@
       "critical": [],
       "argsDigest": "sha256:9397dd4c7560923d7b2d93de605926c568dc9df2d047ac07f52acc9ee97e72f5",
       "resultDigest": "sha256:04e68c837f2356031413e8b6f6282b10d248fe419558a8ec366c36041ae9e050"
+    },
+    "create_debug_build": {
+      "domain": "pipelines",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["requestId"],
+      "argsDigest": "sha256:04789b72a80401e3d990b2eca41974a85905972adf90034447a00b300de45f29",
+      "resultDigest": "sha256:d520ba255dc986e1373b1fb40cc7f300ad17021b1ca9c66237ca782bb4da8ee8"
     },
     "create_environment": {
       "domain": "environments",

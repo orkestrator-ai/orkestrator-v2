@@ -28,6 +28,10 @@ import type { PaneNode } from "@/types/paneLayout";
 import type { LinearIssueDetail } from "@/types/linear";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { createLaunchesApi } from "@/lib/backend/launches";
+import { machineBackendClient, scopeBackendClient } from "@/lib/backend/client";
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import type { BuildLaunchMachineChoice } from "@/components/build/build-machines";
 
 const log = createLogger("web.build-pipeline");
 
@@ -48,6 +52,11 @@ type StartBuildOptions = {
   deliveryPolicy?: DeliveryPolicy;
   /** The container's network access, when the launcher asked. */
   networkAccessMode?: NetworkAccessMode;
+  /**
+   * Run the pipeline on another machine that holds this repository's project,
+   * instead of this tab's own. The pipeline then lives on that machine.
+   */
+  machine?: BuildLaunchMachineChoice;
 };
 
 function findBuildTabInTree(
@@ -87,9 +96,11 @@ export function useBuildPipeline() {
         // Only what this launch explicitly chose. The backend fills everything
         // else from the saved Build defaults, in one implementation every
         // client shares (`launch_build_pipeline`).
+        const target = options.machine;
         const request: LaunchBuildPipelineInput = {
           taskId: ticket.id,
-          projectId: ticket.projectId,
+          // The other machine's own project for the same repository.
+          projectId: target?.projectId ?? ticket.projectId,
           environmentType,
           ...(agentOverride ? { agentType: agentOverride } : {}),
           ...(options.steps ? { steps: options.steps } : {}),
@@ -103,11 +114,34 @@ export function useBuildPipeline() {
             : {}),
           taskTitle: ticket.title,
           taskSnapshot: ticket.taskSnapshot,
+          // Tickets sync between machines under one id, so the other machine
+          // links the build to its copy and its lifecycle reaches this board.
           source: ticket.source,
           namingPrompt: ticket.namingPrompt,
-          existingEnvironmentId: options.existingEnvironmentId ?? undefined,
-          featurePlanId: options.featurePlanId,
+          existingEnvironmentId: target ? undefined : (options.existingEnvironmentId ?? undefined),
+          featurePlanId: target ? undefined : options.featurePlanId,
         };
+        if (target) {
+          const remote = await createLaunchesApi(
+            machineBackendClient(scopeBackendClient(scope), target.machine),
+          ).launchBuildPipeline(request);
+          // The pipeline is that machine's: it is not added to this tab's store.
+          toast.success(`Build pipeline started on ${target.name}`, {
+            action: target.nodeId
+              ? {
+                  label: `Open on ${target.name}`,
+                  onClick: () =>
+                    openMachineWorkspace({
+                      connectionId: target.nodeId!,
+                      projectId: target.projectId,
+                      ...(remote.environmentId ? { environmentId: remote.environmentId } : {}),
+                      title: ticket.title,
+                    }),
+                }
+              : undefined,
+          });
+          return remote.id;
+        }
         const authoritative = await nodeBackend
           .launchBuildPipeline(request)
           .catch((error: unknown) => {

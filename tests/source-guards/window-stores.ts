@@ -23,6 +23,7 @@ export const WINDOW_STORES: readonly WindowStore[] = [
   { store: "artifact-live-host", module: "stores/artifactLiveHostStore" },
   { store: "bug-report", module: "stores/bugReportStore" },
   { store: "conversation-scroll-target", module: "stores/conversationScrollTargetStore" },
+  { store: "debug-build", module: "stores/debugBuildStore" },
   { store: "error-dialog", module: "stores/errorDialogStore" },
   { store: "files-panel-chrome", module: "stores/filesPanelChromeStore" },
   { store: "flow-graph-view", module: "stores/flowGraphViewStore" },

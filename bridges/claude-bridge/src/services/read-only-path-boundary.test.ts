@@ -295,6 +295,23 @@ describe("createCoordinatorReadOnlyHook", () => {
     }
   });
 
+  test("every pipeline stage is held to the boundary on its own", async () => {
+    // The boundary reads a command's program from its first word, so a stage
+    // after a pipe has to be judged as a command of its own.
+    const credentials = join(dataDir, "control-mcp.json");
+    for (const command of [`ls . | cat ${credentials}`, "echo x | grep -R fixture ."]) {
+      const answer = await run("Bash", { command }, "unavailable");
+      expect({ command, decision: answer?.permissionDecision }).toEqual({
+        command,
+        decision: "deny",
+      });
+      expect(answer?.permissionDecisionReason).toContain("data directory");
+    }
+    expect(await run("Bash", { command: "ls . | grep -n checkout" }, "unavailable")).toBe(
+      undefined,
+    );
+  });
+
   test("hook-only commands refuse symlink traversal and keep safe searches", async () => {
     for (const command of [
       "grep -R fixture .",
@@ -332,7 +349,7 @@ describe("createCoordinatorReadOnlyHook", () => {
 
   test("hook-only filename lists are refused before a protected fixture can be read", async () => {
     writeFileSync(join(checkout, "paths.list"), `${join(dataDir, "control-mcp.json")}\0`);
-    for (const program of ["sort", "wc"]) {
+    for (const program of ["sort", "wc", "du"]) {
       for (let length = 3; length <= "--files0-from".length; length++) {
         const flag = "--files0-from".slice(0, length);
         for (const argument of [`${flag}=paths.list`, `${flag} paths.list`]) {
@@ -349,12 +366,39 @@ describe("createCoordinatorReadOnlyHook", () => {
       "sha256sum -bc paths.list",
       "md5sum --chec=paths.list",
       "cksum --check paths.list",
+      "find -files0-from paths.list",
+      "find . -files0-from=paths.list",
     ]) {
       expect((await run("Bash", { command }, "unavailable"))?.permissionDecision).toBe("deny");
     }
     expect(await run("Bash", { command: "sort paths.list" }, "unavailable")).toBeUndefined();
+    expect(await run("Bash", { command: "du -a ." }, "unavailable")).toBeUndefined();
+    expect(await run("Bash", { command: "find . -name x" }, "unavailable")).toBeUndefined();
     const result = join(home, "projects", "p", "s", "tool-results", "big.txt");
     expect(await run("Bash", { command: `sort ${result}` }, "unavailable")).toBeUndefined();
+  });
+
+  test("hook-only pipes cannot feed a constructed path to a program that reads names from stdin", async () => {
+    // The hex never names the data directory as a token, so only the
+    // indirect-name rule can stop it once a pipe makes stdin the model's.
+    const hex = Buffer.from(`${join(dataDir, "control-mcp.json")}\0`).toString("hex");
+    for (const command of [
+      `echo ${hex} | xxd -r -p | du -a --files0-from=-`,
+      `echo ${hex} | xxd -r -p | du -a --files0 -`,
+      `echo ${hex} | xxd -r -p | find -files0-from -`,
+      `echo ${hex} | xxd -r -p | wc --files0-from=-`,
+      "echo 2f | xxd -r -p | du -a --files0-from=-",
+    ]) {
+      const answer = await run("Bash", { command }, "unavailable");
+      expect({ command, decision: answer?.permissionDecision }).toEqual({
+        command,
+        decision: "deny",
+      });
+      expect(answer?.permissionDecisionReason).toContain("data directory");
+    }
+    expect(await run("Bash", { command: `echo ${hex} | xxd -r -p | wc -c` }, "unavailable")).toBe(
+      undefined,
+    );
   });
 
   test("hook-only commands deny clustered path operands before reading a credential fixture", async () => {

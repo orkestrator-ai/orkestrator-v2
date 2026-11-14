@@ -32,6 +32,7 @@ import { HostPark, HostSlot } from "./HostSlot";
 import { AppDialogHost } from "./AppDialogHost";
 import { GlobalSettingsHost } from "./GlobalSettingsHost";
 import { BugReportSheetHost } from "@/components/bug-report/BugReportSheet";
+import { DebugBuildDialogHost } from "@/components/debug-build/DebugBuildDialog";
 import { MachineCpuReadings } from "@/components/federation/MachineCpuReadings";
 import { RemoteWorkspaceRegion } from "@/components/federation/RemoteWorkspaceRegion";
 import { NodeTitleBarAgentInfo, NodeTitleBarUsage, useShownInTreeNode } from "./ShownNodeTitleBar";
@@ -197,6 +198,8 @@ export function AppShell({ children }: AppShellProps) {
       <GlobalSettingsHost />
       {/* This node's sheet, and an in-tree node's on its scope (plan item 5003). */}
       <BugReportSheetHost />
+      {/* The debug button's dialog, on the scope of the environment's node. */}
+      <DebugBuildDialogHost />
       <AgentMailPanel />
       <HostPark parkRef={contentParkRef} />
       {isMobile ? (

@@ -34,6 +34,12 @@ export interface LinearMachineTarget {
   current: boolean;
   /** The command node can reach it now (a summary says it is available). */
   available: boolean;
+  /**
+   * That project has a checkout on its machine, so it can own local
+   * worktrees. A peer's summary says so through `pathName`; one read before
+   * `pathName` existed reports none, so the answer is "no" rather than a guess.
+   */
+  hasCheckout: boolean;
 }
 
 interface TargetInput {
@@ -43,8 +49,10 @@ interface TargetInput {
   gitUrl: string | undefined;
   commandNodeId: string | null;
   commandName: string;
-  commandProjects: readonly Pick<Project, "id" | "gitUrl">[];
+  commandProjects: readonly (Pick<Project, "id" | "gitUrl"> & { localPath?: string | null })[];
   nodes: readonly NodeSummary[];
+  /** Whether this tab's own project has a checkout; true when unknown. */
+  currentHasCheckout?: boolean;
 }
 
 export function linearMachineTargets(input: TargetInput): LinearMachineTarget[] {
@@ -61,6 +69,7 @@ export function linearMachineTargets(input: TargetInput): LinearMachineTarget[] 
     projectId: input.projectId,
     current: true,
     available: true,
+    hasCheckout: input.currentHasCheckout ?? true,
   };
   if (!hint) return [current];
 
@@ -78,6 +87,7 @@ export function linearMachineTargets(input: TargetInput): LinearMachineTarget[] 
         projectId: commandProject.id,
         current: false,
         available: true,
+        hasCheckout: Boolean(commandProject.localPath),
       });
     }
   }
@@ -93,6 +103,7 @@ export function linearMachineTargets(input: TargetInput): LinearMachineTarget[] 
       projectId: project.ref.projectId,
       current: false,
       available: node.available,
+      hasCheckout: Boolean(project.pathName),
     });
   }
   return targets;
@@ -108,7 +119,10 @@ export function useLinearMachineTargets(projectId: string): LinearMachineTarget[
   const selfId = useStore(portalStore.store, (state) => state.selfId);
   const { boundMachine } = useFederation();
   const commandName = boundMachine?.name ?? "This machine";
-  const gitUrl = projects.find((project) => project.id === projectId)?.gitUrl;
+  const currentProject = projects.find((project) => project.id === projectId);
+  const gitUrl = currentProject?.gitUrl;
+  // As `useLocalEnvironmentAvailable`: an unknown project is not refused here.
+  const currentHasCheckout = currentProject ? Boolean(currentProject.localPath) : true;
   return useMemo(
     () =>
       linearMachineTargets({
@@ -120,8 +134,9 @@ export function useLinearMachineTargets(projectId: string): LinearMachineTarget[
         commandName,
         commandProjects,
         nodes,
+        currentHasCheckout,
       }),
-    [commandName, commandProjects, gitUrl, nodes, projectId, scope, selfId],
+    [commandName, commandProjects, currentHasCheckout, gitUrl, nodes, projectId, scope, selfId],
   );
 }
 

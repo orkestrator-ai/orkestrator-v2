@@ -13,6 +13,7 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import {
   cancelBuildPipelineCommand,
   clearTaskBuildStatusCommand,
+  createDebugBuildCommand,
   createFeatureBuildCommand,
   deleteBuildPipelineCommand,
   getBuildPipelineCommand,
@@ -57,7 +58,14 @@ import {
   asRequiredBoolean,
   toClientEnvironment,
 } from "./commands-helpers.js";
-import { createFeatureBuild, startFeaturePlanBuild } from "./features/index.js";
+import {
+  createDebugBuild,
+  createFeatureBuild,
+  debugSourceTabs,
+  readDebugTabTranscript,
+  startFeaturePlanBuild,
+} from "./features/index.js";
+import { createPublicActionContext } from "./public-api/dispatch.js";
 import { launchBuildPipeline } from "./build-pipeline-launch.js";
 import {
   conditionalBuildPipelineRead,
@@ -119,6 +127,24 @@ export function registerBuildPipelineCommands(
    * renderer that navigates away mid-flight cannot leave one without the other.
    */
   register(createFeatureBuildCommand, (args, context) => createFeatureBuild(args, context));
+  /**
+   * The debug button: a ticket from the user's text plus the source
+   * environment's details, transcript and screenshot, and one pipeline
+   * environment on the saved Build defaults. Transcripts are read through the
+   * public CLI's bounded reader.
+   */
+  register(createDebugBuildCommand, (args, context) =>
+    createDebugBuild(args, context, {
+      sourceTabs: (environmentId) => debugSourceTabs(context.storage, environmentId),
+      readTranscript: (environmentId, tabId, stopAfterChars) =>
+        readDebugTabTranscript(
+          createPublicActionContext(context, dependencies, { installationId: "", generation: "" }),
+          environmentId,
+          tabId,
+          stopAfterChars,
+        ),
+    }),
+  );
   /**
    * The Build button: a ticket plus only the choices the user made; every
    * omitted step, reviewer and model comes from the saved Build defaults here,

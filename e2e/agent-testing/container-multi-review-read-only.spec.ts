@@ -19,9 +19,9 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
  * without the CLI's command sandbox, on the read-only command hook alone. The
  * fake (`container-fake-claude-review-api.ts`) follows a reviewer's
  * instructions: it reads the package, runs `ls`, runs the package's
- * `diffCommand` (which the hook must refuse: Git without the sandbox can run
- * repository helpers), reads the sealed diff file instead, tries a write
- * (refused) and submits. The case checks that the review settles with every
+ * `diffCommand` (which the hook admits hardened: without the sandbox a
+ * reviewer's Git gets `--no-ext-diff --no-textconv --submodule=short` inserted, so the
+ * checkout's diff helpers cannot run), tries a write (refused) and submits. The case checks that the review settles with every
  * report, that the reviewers and consolidation carry the sandbox-off note in
  * the snapshot and in their inspectors, that the diff file holds what
  * `diffCommand` prints, and that no write reached the checkout.
@@ -329,9 +329,10 @@ test("Docker fixture Multi Review with Claude read-only reviewers runs without t
     }
     expect(workflow.stepRuntimes?.consolidate?.commandSandboxOff).toMatch(offNote);
 
-    // Every read-only turn: a plain command ran, Git and the write were
-    // refused by the hook, and the submission was accepted. A reviewer read
-    // the sealed diff instead of the refused diffCommand.
+    // Every read-only turn: a plain command and Git ran (hardened, without
+    // the sandbox), the write was refused by the hook, and the submission was
+    // accepted. A reviewer read the diff through the package's diffCommand,
+    // so it never needed the sealed diff file.
     const records = stepLog(containerId);
     const reviews = finishedTurns(records, "review-report");
     expect(reviews).toHaveLength(2);
@@ -339,17 +340,17 @@ test("Docker fixture Multi Review with Claude read-only reviewers runs without t
       expect(turn).toMatchObject({
         package: false,
         list: false,
-        git: true,
-        "diff-file": false,
+        git: false,
         "write-probe": true,
         submit: false,
       });
+      expect(turn).not.toHaveProperty("diff-file");
     }
     const consolidations = finishedTurns(records, "consolidated-review");
     expect(consolidations).toHaveLength(1);
     expect(consolidations[0]).toMatchObject({
       list: false,
-      git: true,
+      git: false,
       "write-probe": true,
       submit: false,
     });

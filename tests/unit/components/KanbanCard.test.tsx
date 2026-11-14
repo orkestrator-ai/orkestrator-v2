@@ -336,6 +336,18 @@ describe("KanbanCard", () => {
     expect(screen.queryByTestId("kanban-card-drop-placeholder") === null).toBe(true);
   });
 
+  test("the drag placeholder keeps the same wrapping label row as the card", () => {
+    const labels = ["x".repeat(50), "y".repeat(50), "z".repeat(50), "extra"];
+    draggableState.isDragging = true;
+    renderCard(makeTask({ labels }));
+    const placeholder = screen.getByTestId("kanban-card-drop-placeholder");
+    const row = within(placeholder).getByTestId("kanban-card-labels");
+    expect(row.className).toContain("flex-wrap");
+    expect(within(row).getAllByTestId("kanban-card-label")).toHaveLength(3);
+    expect(within(row).getByText("+1")).toBeTruthy();
+    expect(placeholder.querySelector(".invisible")?.contains(row)).toBe(true);
+  });
+
   test("the drag overlay copy carries no interactive controls", () => {
     renderCard(makeTask({ environmentId: "env-1" }), {
       isDragOverlay: true,
@@ -383,3 +395,25 @@ test.each([undefined, "current"])(
     }
   },
 );
+
+describe("KanbanCard labels", () => {
+  afterEach(cleanup);
+
+  test("shows each label of the ticket, folding the rest into a count", () => {
+    renderCard(makeTask({ title: "Recurring job fails", labels: ["improvement"] }));
+    expect(screen.getByTestId("kanban-card-label").textContent).toBe("improvement");
+    cleanup();
+    renderCard(makeTask({ labels: ["a", "b", "c", "d", "e"] }));
+    expect(screen.getAllByTestId("kanban-card-label").map((el) => el.textContent)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+    expect(within(screen.getByTestId("kanban-card-labels")).getByText("+2")).toBeTruthy();
+  });
+
+  test("shows no label row for a ticket without labels", () => {
+    renderCard(makeTask());
+    expect(screen.queryByTestId("kanban-card-labels") === null).toBe(true);
+  });
+});

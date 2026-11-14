@@ -134,7 +134,7 @@ function fitPage(
   return { kept: kept.reverse(), truncated: false };
 }
 
-const sessionTranscript: ReadActionHandler<{
+export const sessionTranscript: ReadActionHandler<{
   sessionId: string;
   environmentId: string;
   tabId: string;

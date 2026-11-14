@@ -53,6 +53,15 @@ export interface KanbanState {
   /** Why the last notes load failed, including background refresh failures. */
   notesError: string | null;
   currentNotesProjectId: string | null;
+  /**
+   * A ticket something outside the board (Settings → Self-improvement) asked
+   * to open. The board opens it once it is mounted and has loaded the ticket,
+   * then clears the request, so the board need not be on screen when it is set.
+   */
+  openTicketRequest: { projectId: string; ticketId: string } | null;
+
+  requestOpenTicket: (projectId: string, ticketId: string) => void;
+  clearOpenTicketRequest: () => void;
 
   // Task actions
   loadTasks: (projectId: string) => Promise<void>;
@@ -133,6 +142,10 @@ export const kanbanStore = defineScopedStore<KanbanState>("kanban", (scope) => (
     notesLoaded: false,
     notesError: null,
     currentNotesProjectId: null,
+    openTicketRequest: null,
+
+    requestOpenTicket: (projectId, ticketId) => set({ openTicketRequest: { projectId, ticketId } }),
+    clearOpenTicketRequest: () => set({ openTicketRequest: null }),
 
     loadTasks: async (projectId) => {
       set({ isLoading: true, currentProjectId: projectId });

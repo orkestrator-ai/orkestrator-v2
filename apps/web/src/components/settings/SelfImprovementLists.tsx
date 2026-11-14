@@ -54,14 +54,26 @@ function KindBadge({ kind }: { kind: SelfImprovementTrackedItem["kind"] }) {
   );
 }
 
+/**
+ * Opens a ticket on its own project's board. `signature` names the tracked
+ * problem the ticket belongs to, which is how its owning project is found.
+ */
+export interface OpenTicket {
+  /** Whether the ticket's board is known and can be opened. */
+  canOpen: (signature: string | undefined) => boolean;
+  open: (ticket: string, signature: string | undefined) => void;
+}
+
 function TicketList({
   title,
   items,
   tone = "default",
+  onOpenTicket,
 }: {
   title: string;
-  items: Array<{ ticket: string; label: string }>;
+  items: Array<{ ticket: string; label: string; signature?: string }>;
   tone?: "default" | "good" | "warn";
+  onOpenTicket?: OpenTicket;
 }) {
   if (items.length === 0) return null;
   return (
@@ -81,7 +93,18 @@ function TicketList({
       <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
         {items.map((item) => (
           <li key={`${item.ticket}-${item.label}`} className="flex gap-2">
-            <span className="shrink-0 font-mono text-zinc-400">#{item.ticket}</span>
+            {onOpenTicket?.canOpen(item.signature) ? (
+              <button
+                type="button"
+                className="shrink-0 cursor-pointer font-mono text-zinc-400 underline-offset-2 hover:text-foreground hover:underline focus-hairline"
+                onClick={() => onOpenTicket.open(item.ticket, item.signature)}
+                aria-label={`Open ticket ${item.ticket}: ${item.label}`}
+              >
+                #{item.ticket}
+              </button>
+            ) : (
+              <span className="shrink-0 font-mono text-zinc-400">#{item.ticket}</span>
+            )}
             <span className="min-w-0 break-words">{item.label}</span>
           </li>
         ))}
@@ -94,14 +117,21 @@ function TicketList({
 export function LastRunDetails({
   run,
   titles = {},
+  onOpenTicket,
 }: {
   run: SelfImprovementRunSummary;
   /** Titles of tracked problems by signature, shown in place of the signature. */
   titles?: Record<string, string>;
+  /** Makes each listed ticket number open that ticket. */
+  onOpenTicket?: OpenTicket;
 }) {
   const label = (signature: string) => titles[signature] ?? signature;
   const bySignature = (items: Array<{ ticket: string; signature: string }>) =>
-    items.map((item) => ({ ticket: item.ticket, label: label(item.signature) }));
+    items.map((item) => ({
+      ticket: item.ticket,
+      label: label(item.signature),
+      signature: item.signature,
+    }));
   const conversations = run.conversations;
   const nothing =
     run.created.length +
@@ -120,8 +150,13 @@ export function LastRunDetails({
         <p className="text-xs text-red-400">{run.error ?? "The run stopped before it finished."}</p>
       ) : null}
       <TicketList
+        onOpenTicket={onOpenTicket}
         title="New tickets"
-        items={run.created.map((item) => ({ ticket: item.ticket, label: item.title }))}
+        items={run.created.map((item) => ({
+          ticket: item.ticket,
+          label: item.title,
+          signature: item.signature,
+        }))}
       />
       {run.wouldCreate.length > 0 ? (
         <div>
@@ -133,23 +168,47 @@ export function LastRunDetails({
           </ul>
         </div>
       ) : null}
-      <TicketList title="Fixed and confirmed" tone="good" items={bySignature(run.verified)} />
       <TicketList
+        onOpenTicket={onOpenTicket}
+        title="Fixed and confirmed"
+        tone="good"
+        items={bySignature(run.verified)}
+      />
+      <TicketList
+        onOpenTicket={onOpenTicket}
         title="Fix did not work, moved back to the backlog"
         tone="warn"
-        items={run.fixFailed.map((item) => ({ ticket: item.ticket, label: label(item.signature) }))}
+        items={run.fixFailed.map((item) => ({
+          ticket: item.ticket,
+          label: label(item.signature),
+          signature: item.signature,
+        }))}
       />
-      <TicketList title="Partly better: your call" tone="warn" items={bySignature(run.partly)} />
       <TicketList
+        onOpenTicket={onOpenTicket}
+        title="Partly better: your call"
+        tone="warn"
+        items={bySignature(run.partly)}
+      />
+      <TicketList
+        onOpenTicket={onOpenTicket}
         title="Done on the board, now checking newer versions"
         items={bySignature(run.markedFixed)}
       />
-      <TicketList title="Reopened on the board" items={bySignature(run.reopenedFromBoard)} />
+      <TicketList
+        onOpenTicket={onOpenTicket}
+        title="Reopened on the board"
+        items={bySignature(run.reopenedFromBoard)}
+      />
       <TicketList
         title="Ticket deleted, ignored from now on"
         items={bySignature(run.ignoredDeleted)}
       />
-      <TicketList title="Linked to existing tickets" items={bySignature(run.linked)} />
+      <TicketList
+        onOpenTicket={onOpenTicket}
+        title="Linked to existing tickets"
+        items={bySignature(run.linked)}
+      />
       {run.outcome === "succeeded" && nothing ? (
         <p className="text-xs text-muted-foreground">Nothing new to file and no fix to judge.</p>
       ) : null}
@@ -187,12 +246,61 @@ export function LastRunDetails({
   );
 }
 
-export function TrackedTickets({ items }: { items: SelfImprovementTrackedItem[] }) {
+const TRACKED_ROW_CLASS = "flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5";
+
+function TrackedTicketRow({
+  item,
+  onOpen,
+}: {
+  item: SelfImprovementTrackedItem;
+  onOpen: (() => void) | null;
+}) {
+  const content = (
+    <>
+      <KindBadge kind={item.kind} />
+      <span className="min-w-0 flex-[1_1_14rem] break-words text-sm text-foreground">
+        {item.title}
+      </span>
+      {item.ticket ? <span className="font-mono text-xs text-zinc-400">#{item.ticket}</span> : null}
+      <span className="text-xs text-muted-foreground">{STATUS_TEXT[item.status]}</span>
+      {item.verdict && item.verdict !== item.status ? (
+        <span className="text-xs text-muted-foreground">
+          · {VERDICT_TEXT[item.verdict] ?? item.verdict}
+        </span>
+      ) : null}
+    </>
+  );
+  if (!onOpen) return <li className={TRACKED_ROW_CLASS}>{content}</li>;
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`Open ticket: ${item.title}`}
+        className={cn(
+          TRACKED_ROW_CLASS,
+          "w-full cursor-pointer text-left transition-colors hover:bg-zinc-800/40 focus-visible:bg-zinc-800/40 focus-hairline",
+        )}
+      >
+        {content}
+      </button>
+    </li>
+  );
+}
+
+export function TrackedTickets({
+  items,
+  onOpenTicket,
+}: {
+  items: SelfImprovementTrackedItem[];
+  /** Opens a ticket on its board. Without it the rows are plain text. */
+  onOpenTicket?: OpenTicket;
+}) {
   return (
     <section className="space-y-3" aria-labelledby="self-improvement-tracked">
       <SettingsSectionHeader title="Tracked tickets" headingId="self-improvement-tracked">
-        Every problem with a ticket, and where its fix stands. Move a ticket to Done when its fix
-        merges; delete it to ignore that problem from now on.
+        Every problem with a ticket, and where its fix stands. Select one to open it on the board.
+        Move a ticket to Done when its fix merges; delete it to ignore that problem from now on.
       </SettingsSectionHeader>
       <div className={SETTINGS_CARD_CLASS}>
         {items.length === 0 ? (
@@ -201,26 +309,20 @@ export function TrackedTickets({ items }: { items: SelfImprovementTrackedItem[] 
           </p>
         ) : (
           <ul className="divide-y divide-zinc-800">
-            {items.map((item) => (
-              <li
-                key={item.signature}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5"
-              >
-                <KindBadge kind={item.kind} />
-                <span className="min-w-0 flex-[1_1_14rem] break-words text-sm text-foreground">
-                  {item.title}
-                </span>
-                {item.ticket ? (
-                  <span className="font-mono text-xs text-zinc-400">#{item.ticket}</span>
-                ) : null}
-                <span className="text-xs text-muted-foreground">{STATUS_TEXT[item.status]}</span>
-                {item.verdict && item.verdict !== item.status ? (
-                  <span className="text-xs text-muted-foreground">
-                    · {VERDICT_TEXT[item.verdict] ?? item.verdict}
-                  </span>
-                ) : null}
-              </li>
-            ))}
+            {items.map((item) => {
+              const ticket = item.ticket;
+              return (
+                <TrackedTicketRow
+                  key={item.signature}
+                  item={item}
+                  onOpen={
+                    ticket && onOpenTicket?.canOpen(item.signature)
+                      ? () => onOpenTicket.open(ticket, item.signature)
+                      : null
+                  }
+                />
+              );
+            })}
           </ul>
         )}
       </div>

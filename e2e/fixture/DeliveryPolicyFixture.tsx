@@ -20,7 +20,11 @@ const catalog: AgentModelCatalog = {
   pi: [],
 };
 
-/** `?machines`: the launcher's Machine choice, as a project present on a second machine gives it. */
+/**
+ * `?machines`: the launcher's Machine choice, as a project present on a second
+ * machine gives it. `&remote-only` makes the other machines' projects
+ * remote-only (no checkout there).
+ */
 const MACHINES: BuildLaunchMachine[] = [
   {
     key: "node:own",
@@ -122,7 +126,15 @@ export function DeliveryPolicyFixture() {
             defaultAgent="claude"
             defaultEnvironmentType="local"
             deliveryPolicy={policy}
-            machines={params.has("machines") ? MACHINES : undefined}
+            machines={
+              params.has("machines")
+                ? params.has("remote-only")
+                  ? MACHINES.map((entry) =>
+                      entry.current ? entry : { ...entry, hasCheckout: false },
+                    )
+                  : MACHINES
+                : undefined
+            }
             onConfirm={(selection) => {
               setConfirmed(selection.deliveryPolicy);
               setConfirmedMachine(selection.machine?.name ?? null);

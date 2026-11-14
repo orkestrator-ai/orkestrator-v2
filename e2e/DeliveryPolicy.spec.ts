@@ -37,6 +37,25 @@ test.describe("When verified", () => {
     await expect(page.getByTestId("confirmed-machine")).toHaveText("Builder");
   });
 
+  test("the launcher offers no Local build on a machine without a checkout", async ({ page }) => {
+    await page.goto("/delivery-policy?launch&machines&remote-only");
+    const machines = page.getByRole("radiogroup", { name: "Machine" });
+    await machines.getByText("Builder").click();
+    const where = page.getByRole("radiogroup", { name: "Where it runs" });
+    await expect(where.getByRole("radio", { name: /^Local/ })).toBeDisabled();
+    await expect(where.getByText("No project checkout on Builder")).toBeVisible();
+    // The fixture cannot reach Builder's Docker either, so nothing can start.
+    await expect(where.getByRole("radio", { name: /^Container/ })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Start build" })).toBeDisabled();
+    await mkdir(path.join(process.cwd(), "output/visual-previews"), { recursive: true });
+    await page.screenshot({
+      path: path.join(
+        process.cwd(),
+        `output/visual-previews/build-machine-remote-only-${test.info().project.name}.png`,
+      ),
+    });
+  });
+
   test("the launcher has no machine choice for a single machine", async ({ page }) => {
     await page.goto("/delivery-policy?launch");
     await expect(page.getByRole("radiogroup", { name: "Machine" })).toHaveCount(0);

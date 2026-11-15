@@ -91,5 +91,5 @@ Analysed 2026-11-14 against `main` at `dc90609bf`.
 - 0008 (retired), the OpenCode 2.x migration: its history is in `git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`; the container qualification it ended with is summarised in [agent-testing.md](../../development/agent-testing.md).
 - 8045 (retired), the turn a backend restart cut short: settled by the OpenCode 2 provider since 2026-11-14 (`apps/backend/src/core/opencode2/restart-cut.ts`); its final state is in Git history at `dc90609bf`.
 - [8100](8100-opencode-stop-keeps-pending-steer.md): a stop leaves a held steer for the next turn.
-- [8101](8101-linux-reaper-skips-orphans-under-subreaper.md): the reaper skips an orphan a subreaper adopted.
+- 8101 (retired 2026-11-15, with 8093), the reaper skipping an orphan a subreaper adopted: fixed in `apps/backend/src/core/local-server-reaper.ts` (`liveParentRole`); its final state is in Git history at `a8b89f154`.
 - Real-provider OpenCode 2 checks, including this to-do's tasks 3 and 4 on a real provider, are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).

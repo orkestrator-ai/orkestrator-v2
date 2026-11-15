@@ -1,4 +1,4 @@
-# Two Electron specs fail every time on mbp3's macOS display
+# Two Electron specs fail on mbp3's macOS display, one of them almost always
 
 ## Task analysis
 
@@ -6,14 +6,14 @@ Analysed 2026-11-15 against `main` at `0cc406750`. Found while working to-do
 7062 (retired) on mbp3's own display: the full `mise run test:agent:electron`
 run passed 66 of 85 cases and skipped 15. Two of its four failures failed
 again when their spec was rerun alone. The other two passed alone and are
-flakes [9800](../../tests/flaky-tests/electron-and-desktop/9800-terminal-resume-vite-start-settypeofservice.md)
-and [9801](../../tests/flaky-tests/previews-annotations-and-gateway/9801-seeded-preview-check-2-b-preview-not-visible.md).
+flakes [9937](../../tests/flaky-tests/electron-and-desktop/9937-terminal-resume-vite-start-settypeofservice.md)
+and [9977](../../tests/flaky-tests/previews-annotations-and-gateway/9977-seeded-preview-check-2-b-preview-not-visible.md).
 
 ### Tasks
 
 1. **Find why the renderer permission spec hangs on a macOS display**:
    `real renderer sessions grant writes/fullscreen and deny other permissions and subframes`
-   times out. Status: open.
+   times out in five of six runs. Status: open.
 2. **Find why the remote terminal link case cannot connect on mbp3**:
    `a remote terminal link opens the native localhost forward in a separate browser`
    fails with `Failed to fetch`. Status: open.
@@ -21,9 +21,12 @@ and [9801](../../tests/flaky-tests/previews-annotations-and-gateway/9801-seeded-
 ### 1. Find why the renderer permission spec hangs on a macOS display
 
 **Problem.** `e2e/agent-testing/renderer-permissions-electron.spec.ts:14`
-reached the test's 120 s timeout in the full suite and again alone, so the
-real permission policy (`apps/desktop/electron/renderer-permissions.ts`) is
-not being checked on macOS.
+reached the test's 120 s timeout in five of the six runs recorded below and
+passed once, so the real permission policy
+(`apps/desktop/electron/renderer-permissions.ts`) is not being checked on
+macOS reliably. It fails far more often than it passes, so it is tracked
+here rather than as a flake case: the flake register is for failures that
+pass when their owning file is rerun alone, and this one fails alone.
 
 **Context.** The spec opens two windows on their own sessions, installs the
 real policy and runs one in-page script per window. The script writes to the
@@ -37,7 +40,19 @@ Playwright 1.65.0, one worker):
 
 - full suite: timed out (120 s);
 - `ORKESTRATOR_AGENT_TEST_RUN_ID=7062-rerun-renderer-permissions-electron mise run test:logged -- --name rerun-renderer-permissions-electron -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts renderer-permissions-electron.spec.ts`:
-  timed out again.
+  timed out again;
+- the review's full `mise run test:agent:electron` run of the same branch at
+  `d58f114a7` (one worker, other worktrees' runs active on the host):
+  **passed** (case 31 of 85; the suite's only failures were two
+  service-preview cases);
+- `ORKESTRATOR_AGENT_TEST_RUN_ID=8300-renderer-permissions-repeat mise run test:logged -- --name renderer-permissions-repeat -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts renderer-permissions-electron.spec.ts --repeat-each=3`:
+  three of three timed out (120 s each).
+
+Totals: two full-suite runs (one pass, one timeout) and four runs of the
+spec alone (four timeouts). Its one pass came inside the full suite, after
+30 other Electron cases. Whether something an earlier spec leaves behind
+(window focus, a Space or fullscreen state) lets it pass was not
+established.
 
 Both windows were found: the trace's last action is the in-page `Evaluate`,
 so one of the script's awaits never settles. Which one was not established.
@@ -97,7 +112,11 @@ moment, was not established. It is not known whether this case passes on
 
 ## Current state
 
-Both cases fail deterministically on mbp3's display. Nothing in to-do 7062's
+On mbp3's display the renderer permission case timed out in five of six runs
+(it passed once, inside a full suite run) and the remote terminal link case
+failed in both runs recorded. Neither result is deterministic on the
+evidence so far: rerun each one several times before treating a single pass
+as a fix. Nothing in to-do 7062's
 change reaches them: it added `startup-recovery-electron.spec.ts` and one
 line to the Electron config's spec list.
 
@@ -105,6 +124,6 @@ line to the Electron config's spec list.
 
 - [agent-testing.md](../../development/agent-testing.md#electron-specs-and-their-display),
   which describes how the Electron specs run and what they need.
-- [9800](../../tests/flaky-tests/electron-and-desktop/9800-terminal-resume-vite-start-settypeofservice.md)
-  and [9801](../../tests/flaky-tests/previews-annotations-and-gateway/9801-seeded-preview-check-2-b-preview-not-visible.md),
+- [9937](../../tests/flaky-tests/electron-and-desktop/9937-terminal-resume-vite-start-settypeofservice.md)
+  and [9977](../../tests/flaky-tests/previews-annotations-and-gateway/9977-seeded-preview-check-2-b-preview-not-visible.md),
   the flakes from the same run.

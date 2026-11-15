@@ -1,6 +1,6 @@
 # Seeded preview check 2 never sees environment B's preview (`e2e/agent-testing/service-preview-seeded-electron.spec.ts`)
 
-- **ID:** 9801
+- **ID:** 9977
 - **Status:** open
 - **Date observed:** 2026-11-15
 - **Test:** `2. with both servers running each environment opens only its own, and a moved server is offered as a move`

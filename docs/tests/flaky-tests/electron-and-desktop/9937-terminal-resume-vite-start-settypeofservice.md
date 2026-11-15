@@ -1,6 +1,6 @@
 # Terminal input resume spec fails with `setTypeOfService EINVAL` while Vite starts (`e2e/agent-testing/terminal-input-resume-electron.spec.ts`)
 
-- **ID:** 9800
+- **ID:** 9937
 - **Status:** open
 - **Date observed:** 2026-11-15
 - **Test:** `Electron keeps a lost terminal write fenced until Resume, without restarting the PTY`

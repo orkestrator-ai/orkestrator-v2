@@ -2,7 +2,9 @@
 
 ## Task analysis
 
-Analysed 2026-11-06 against `main` at `c1724ab74`. Left by to-do 6100, which
+Analysed 2026-11-06 against `main` at `c1724ab74`; re-analysed 2026-11-15
+against `main` at `a8b89f154`, when task 2 was done with a loopback Cursor
+backend. Left by to-do 6100, which
 removed `sentry.io`, `statsig.anthropic.com` and `statsig.com` from the
 default allowlist after Claude Code, Codex, OpenCode and Pi each finished
 turns against a fake provider without them
@@ -11,7 +13,7 @@ turns against a fake provider without them
 ### Tasks
 
 1. **Run a Grok turn without the telemetry hosts**: a Grok Build turn in a restricted container with the three hosts refused, against a fake provider. Status: done. (Review follow-up, 2026-11-06.)
-2. **Settle Cursor without a turn or with a real one**: decide whether the static evidence is enough for the Cursor SDK, or run one real turn. Status: open.
+2. **Settle Cursor without a turn or with a real one**: decide whether the static evidence is enough for the Cursor SDK, or run one real turn. Status: done (2026-11-15, a Cursor SDK turn against a loopback fake Cursor backend in a restricted container).
 4. **Record native arm64 qualification**: capture the telemetry-host suite result on the workflow's linux-arm64 runner. Status: blocked (waits on a Container live qualification run on linux-arm64).
 
 ### 1. Run a Grok turn without the telemetry hosts
@@ -52,8 +54,8 @@ activity was recorded during that turn. No login was staged.
 ### 2. Settle Cursor without a turn or with a real one
 
 **Problem.** The Cursor SDK (`@cursor/sdk`, in the Cursor bridge) has no CLI
-and talks only to Cursor's own API, so the suite cannot give it a fake
-provider.
+and talks only to Cursor's own API, so the suite could not give it a fake
+provider the way it does the CLIs.
 
 **Context.** The SDK bundles Statsig's client. A search of the bridge's
 bundle finds its hosts are `featureassets.org`, `prodregistryv2.org`,
@@ -61,17 +63,58 @@ bundle finds its hosts are `featureassets.org`, `prodregistryv2.org`,
 `statsig.com` appears only in documentation links. None of Cursor's required
 hosts (`AGENT_NETWORK_DOMAINS_BY_PLATFORM.cursor`) were changed.
 
-**Investigation.** Static only. No Cursor turn was run.
+The SDK (1.3.1) reads `CURSOR_BACKEND_URL` (default `https://api2.cursor.sh`)
+for every backend call, and switches to HTTP/1.1 for an `http:` URL. The two
+other places a search of the bundle finds `sentry.io` and `statsig.com` are a
+list of known MCP providers (beside `slack.com`, `stripe.com` and others,
+used by its MCP network admin check) and a documentation link; neither is a
+host the SDK contacts.
+
+**Investigation.** Static at first (2026-11-06). On 2026-11-15 a loopback
+fake Cursor backend was built and the SDK pointed at it, first in a
+`--network none` container of the qualification image, then in the live
+suite. A local agent's turn makes these calls, all to the backend URL:
+`POST /auth/exchange_user_api_key` (JSON `{ accessToken }`), `GET /v1/models`
+(JSON `{ items: [...] }`, checked against the requested model), unary Connect
+RPCs (`DashboardService/GetUserPrivacyMode`,
+`GetTeamAdminSettingsOrEmptyIfNotInTeam`, `GetTeamReposOrEmptyIfNotInTeam`,
+`ServerConfigService/GetServerConfig`, `AnalyticsService/BootstrapStatsig`,
+`AnalyticsService/TrackEvents`), which all accept an empty protobuf message,
+then `AgentService/RunSSE` (a Connect server stream) with the run request
+sent alongside through `BidiService/BidiAppend` (hex-encoded protobuf in its
+field 1). The fake streams two `AgentServerMessage` frames, an
+`InteractionUpdate.text_delta` "ok" and `turn_ended`, and the run finishes
+with result `ok`. The SDK's Statsig bootstrap and its analytics both go to
+the Cursor backend, not to any Statsig host. A run the backend fails with a
+Connect `internal` error is retried by the SDK (four attempts, about 16 s)
+and then ends in status `error`.
+
+In the live suite (`container-live-telemetry-hosts.test.ts`, restricted
+runtime behind its egress gateway with name checks, allowlist
+`registry.npmjs.org` only, all three removed hosts and the Sentry ingest
+hosts answering `REFUSED`) on omarchy-hp (x86_64, rootful Docker Engine
+29.9.1, the test-only network shim) with image
+`orkestrator-v2:dev-ca9f88454633` (`sha256:462a044c85be…`, amd64; Cursor SDK
+1.3.1, the versions `docker/Dockerfile` pins today for every CLI): the Cursor
+turn finished `ok` in 1.8 s, and the failing one ended in `error` in 16.9 s.
+The packet trace recorded no DNS lookup and no outside connection during
+either Cursor turn (nor during the Pi and Grok turns before them). The suite
+passed with the trace (77.0 s) and again without it (73.0 s). No login, no
+credential and no real Cursor request was used. Details are in
+[container qualification](../../development/container-qualification.md#cursor-sdk-turn-against-a-loopback-cursor-backend-2026-11-15).
 
 **Decisions.**
 
 - **Is a live Cursor turn needed?**
-  - **Accept the static evidence and close the task (recommended).**
+  - **Accept the static evidence and close the task.**
     - Pros: the SDK names none of the removed hosts, and its own Statsig hosts were never on the default list, so the change cannot have removed anything it used.
     - Cons: no observed turn; a future SDK could start using one of them.
   - **One real Cursor turn on an isolated profile, with a packet trace.**
     - Pros: observed behaviour.
     - Cons: a billed turn and the user's Cursor login.
+  - **A Cursor SDK turn against a loopback fake Cursor backend in the live suite (recommended; done 2026-11-15).**
+    - Pros: an observed turn through the image's own SDK copy with the hosts refused, no login and nothing billed; repeatable in CI beside the other CLIs, and an SDK bump that changes the protocol fails the suite instead of passing silently.
+    - Cons: the fake depends on Cursor's undocumented RPC names and field numbers, so an SDK bump may need the fake updated; it exercises the local agent's turn, not cloud agents or tool calls.
 
 ### 4. Record native arm64 qualification
 
@@ -100,21 +143,38 @@ if it fails, inspect and repair the failure before claiming qualification.
 
 ## Assumptions and decisions
 
-### Tasks 1 and 2: retain the live qualification gaps
+### Task 1: Grok through its loopback URL variables
 
 The review fix names Claude Code, Codex, OpenCode, Pi and Grok after the
 extended suite passed. Grok uses its loopback API and model-discovery URL
 variables with fake keys and an isolated home; the count assertion establishes
-that it reached the provider. The Cursor SDK has no fake-provider route in
-this suite and is not claimed as a live pass. The original no-real-logins and no-billed-turns constraints still apply;
-this review request does not waive them. Static evidence stays recorded above,
-and Cursor live coverage remains open.
+that it reached the provider.
 
-### Task 4: require observed native execution
+### Task 2: a loopback Cursor backend instead of a real turn (2026-11-15)
+
+The no-real-logins and no-billed-turns constraints rule out the real turn,
+and the static evidence alone left no observed turn. `CURSOR_BACKEND_URL`
+lets the SDK reach a fake backend, so the suite's fake provider now also
+serves the Cursor RPCs a local agent's turn makes, under `/cursor`. The test
+runs the Cursor bridge's own vendored SDK
+(`/opt/cursor-bridge/dist/node_modules/@cursor/sdk`) from a small script
+rather than the bridge's HTTP server: the bridge adds nothing that talks to
+the network, and the other CLIs are run the same way, directly. It disposes
+the agent inside the timed turn so the SDK's analytics flush is part of it.
+The fake hand-encodes the few protobuf messages it sends with field numbers
+read from the SDK's bundled descriptors, instead of importing the SDK's
+private generated classes. The turn asserts the result text and that the
+fake served a run, and the error turn asserts the SDK's own error status;
+the SDK's retry of a failed run (about 16 s) is inside the 90 s bound.
+
+### Task 4: require observed native execution (unchanged 2026-11-15)
 
 Keep arm64 qualification open until the existing native CI job supplies a
 result. The current host and image are amd64; neither the previous amd64 pass
-nor CI configuration is substituted for an observed arm64 pass.
+nor CI configuration is substituted for an observed arm64 pass. The
+2026-11-15 change edits the suite, which is in the workflow's pull-request
+paths, so its pull request schedules the linux-arm64 job too; that run, now
+with the Cursor turns, is the evidence this task waits on.
 
 ## Related
 

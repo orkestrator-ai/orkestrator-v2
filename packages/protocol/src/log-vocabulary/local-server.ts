@@ -41,8 +41,11 @@ export const LOCAL_SERVER_LOG_AREAS = defineLogAreas({
         "A claude-tmux runtime root could not be removed; it stays for a retry.",
       "reaper.server-unidentified":
         "An orphan candidate could not be identified, so its record is kept.",
+      "reaper.server-parent-unidentified":
+        "An orphan candidate's live parent could not be identified as a backend or a subreaper, so its record is kept.",
       "reaper.server-refused": "An orphan candidate leads no process group, so it was not reaped.",
-      "reaper.server-reaping": "An orphaned server is being stopped.",
+      "reaper.server-reaping":
+        "An orphaned server is being stopped; `adoptedBySubreaper` says a Linux subreaper, not PID 1, had adopted it.",
       "reaper.server-kill-failed": "An orphaned server did not exit.",
       ...THROTTLE_LOG_EVENTS,
     },

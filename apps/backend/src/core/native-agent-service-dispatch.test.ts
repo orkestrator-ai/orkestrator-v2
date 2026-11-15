@@ -189,15 +189,7 @@ async function withService(
     invoke?: Invoke;
     now?: NativeAgentServiceOptions["now"];
     delay?: NativeAgentServiceOptions["delay"];
-    interactionMonitorMode?: NativeAgentServiceOptions["interactionMonitorMode"];
-    interactionMonitorAdoptionEnabled?: boolean;
-    interactionMonitorIntervalMs?: number;
-    interactionMonitorMaxConcurrency?: number;
-    interactionMonitorMaxSessionsPerEnvironment?: number;
-    interactionMonitorRetryBaseMs?: number;
-    interactionMonitorMaxRetries?: number;
     onActivityTransition?: NativeAgentServiceOptions["onActivityTransition"];
-    onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
     abortGraceMs?: number;
@@ -214,34 +206,7 @@ async function withService(
     ...(setup.provider ? { provider: setup.provider } : {}),
     ...(setup.now ? { now: setup.now } : {}),
     ...(setup.delay ? { delay: setup.delay } : {}),
-    ...(setup.interactionMonitorMode
-      ? { interactionMonitorMode: setup.interactionMonitorMode }
-      : {}),
-    ...(setup.interactionMonitorAdoptionEnabled === undefined
-      ? {}
-      : { interactionMonitorAdoptionEnabled: setup.interactionMonitorAdoptionEnabled }),
-    ...(setup.interactionMonitorIntervalMs === undefined
-      ? {}
-      : { interactionMonitorIntervalMs: setup.interactionMonitorIntervalMs }),
-    ...(setup.interactionMonitorMaxConcurrency === undefined
-      ? {}
-      : { interactionMonitorMaxConcurrency: setup.interactionMonitorMaxConcurrency }),
-    ...(setup.interactionMonitorMaxSessionsPerEnvironment === undefined
-      ? {}
-      : {
-          interactionMonitorMaxSessionsPerEnvironment:
-            setup.interactionMonitorMaxSessionsPerEnvironment,
-        }),
-    ...(setup.interactionMonitorRetryBaseMs === undefined
-      ? {}
-      : { interactionMonitorRetryBaseMs: setup.interactionMonitorRetryBaseMs }),
-    ...(setup.interactionMonitorMaxRetries === undefined
-      ? {}
-      : { interactionMonitorMaxRetries: setup.interactionMonitorMaxRetries }),
     ...(setup.onActivityTransition ? { onActivityTransition: setup.onActivityTransition } : {}),
-    ...(setup.onInteractionObservation
-      ? { onInteractionObservation: setup.onInteractionObservation }
-      : {}),
     ...(setup.toolDetailCacheMaxEntries === undefined
       ? {}
       : { toolDetailCacheMaxEntries: setup.toolDetailCacheMaxEntries }),

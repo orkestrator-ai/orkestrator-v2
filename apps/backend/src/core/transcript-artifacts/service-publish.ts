@@ -80,13 +80,6 @@ export class ArtifactPublisher {
     }
     let published: { response: ArtifactResponse; created?: StoredPublication } | null = null;
     try {
-      if (!this.ctx.rollout().artifactPublication) {
-        throw new ArtifactFailure(
-          artifactError("policy_denied", "Artifact publication is disabled on this backend", {
-            retryClass: "never",
-          }),
-        );
-      }
       if (typeof args.artifactId !== "string") throw notFound();
       if (typeof args.receiptId !== "string") throw notFound("Receipt");
       const artifactId = args.artifactId;

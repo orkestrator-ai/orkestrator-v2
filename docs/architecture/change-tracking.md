@@ -852,8 +852,9 @@ those cases, and on 2026-11-14 a throwaway profile purged only a made-up
 deleted environment's rows on its first pass (5821 task 5).
 
 `retention-deletion.test.ts` proves these boundaries. Removing a project does not
-touch any of this directly; what happens to a removed project's own stores is
-[5820](../todo/cross-cutting/5820-removed-project-kanban-notes-plans.md).
+touch any of this directly; a removed project's own tickets, notes and plans
+are deleted with it ([tickets.md](tickets.md#sync-across-machines), to-do
+5820, retired).
 
 ### Age-based retention
 

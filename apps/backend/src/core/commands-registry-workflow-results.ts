@@ -1,14 +1,8 @@
-import {
-  normalizeWorkflowResultToolsSettings,
-  STRUCTURED_OUTPUT_PROVIDER_VALUES,
-  WORKFLOW_RESULT_KINDS,
-  type WorkflowResultToolsSettings,
-} from "@orkestrator/protocol/workflow-results";
+import { normalizeWorkflowResultToolsSettings } from "@orkestrator/protocol/workflow-results";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
   getWorkflowResultMetricsCommand,
   getWorkflowResultToolsRolloutCommand,
-  setWorkflowResultToolsRolloutCommand,
 } from "@orkestrator/protocol/contract/domains/pipelines";
 
 /**
@@ -16,10 +10,12 @@ import {
  *
  * Metrics are bounded and content-free: no payloads, prompts, diagnostics,
  * digests, receipt ids, or result keys are recorded or returned. The rollout
- * setting is deliberately backend-owned rather than a user-facing transport
- * choice, and a change applies to attempts admitted after it. In-flight
- * tool-mode slots keep their tools and receipts, which is what makes disabling
- * a combination a safe rollback.
+ * setting (`global.workflowResultTools` in `config.json`) is deliberately
+ * backend-owned rather than a user-facing transport choice; this surface only
+ * reads it. A change applies to attempts admitted after it
+ * (`WorkflowResultRollout` re-reads it before admission). In-flight tool-mode
+ * slots keep their tools and receipts, which is what makes disabling a
+ * combination a safe rollback.
  */
 export function registerWorkflowResultCommands(register: CommandRegistrar): void {
   register(
@@ -38,43 +34,4 @@ export function registerWorkflowResultCommands(register: CommandRegistrar): void
       (await storage.loadConfig()).global.workflowResultTools,
     );
   });
-
-  register(
-    setWorkflowResultToolsRolloutCommand,
-    async ({ enabled, providers, kinds }, { storage, workflowResultRollout }) => {
-      if (enabled !== undefined && typeof enabled !== "boolean") {
-        throw new Error("enabled must be a boolean");
-      }
-      if (providers !== undefined && !Array.isArray(providers)) {
-        throw new Error("providers must be an array");
-      }
-      if (Array.isArray(providers)) {
-        const unknown = providers.filter(
-          (provider) =>
-            !(STRUCTURED_OUTPUT_PROVIDER_VALUES as readonly unknown[]).includes(provider),
-        );
-        if (unknown.length > 0)
-          throw new Error("providers contains an unknown structured output provider");
-      }
-      if (kinds !== undefined && !Array.isArray(kinds)) {
-        throw new Error("kinds must be an array");
-      }
-      if (Array.isArray(kinds)) {
-        const unknown = kinds.filter(
-          (kind) => !(WORKFLOW_RESULT_KINDS as readonly unknown[]).includes(kind),
-        );
-        if (unknown.length > 0) throw new Error("kinds contains an unknown workflow result kind");
-      }
-      const current = await storage.loadConfig();
-      const existing = normalizeWorkflowResultToolsSettings(current.global.workflowResultTools);
-      const next: WorkflowResultToolsSettings = normalizeWorkflowResultToolsSettings({
-        enabled: enabled ?? existing.enabled,
-        providers: providers ?? existing.providers,
-        kinds: kinds ?? existing.kinds,
-      });
-      await storage.patchGlobalConfig({ workflowResultTools: next });
-      await workflowResultRollout?.refresh();
-      return next;
-    },
-  );
 }

@@ -40,11 +40,7 @@ import {
 } from "./index.js";
 
 /** Operational commands no client calls: the workflow result rollout. */
-const ADMIN = new Set([
-  "get_workflow_result_metrics",
-  "get_workflow_result_tools_rollout",
-  "set_workflow_result_tools_rollout",
-]);
+const ADMIN = new Set(["get_workflow_result_metrics", "get_workflow_result_tools_rollout"]);
 
 /** Driven in-process by the supervisors (`invoke`), never by a client. */
 const INTERNAL = new Set([
@@ -54,17 +50,17 @@ const INTERNAL = new Set([
 ]);
 
 const DOMAINS = [
-  { domain: pipelinesDomain, commands: PIPELINES_COMMANDS, count: 42 },
-  { domain: multiReviewDomain, commands: MULTI_REVIEW_COMMANDS, count: 30 },
+  { domain: pipelinesDomain, commands: PIPELINES_COMMANDS, count: 40, version: 2 },
+  { domain: multiReviewDomain, commands: MULTI_REVIEW_COMMANDS, count: 30, version: 1 },
 ] as const;
 
 describe("pipelines and multi-review definitions", () => {
-  it.each(DOMAINS)("defines $domain.name's $count commands once each, at version 1", (entry) => {
+  it.each(DOMAINS)("defines $domain.name's $count commands once each, since version 1", (entry) => {
     const commands: readonly AnyCommandDef[] = entry.commands;
     const names = commands.map((def) => def.name);
     expect(names).toHaveLength(entry.count);
     expect(new Set(names).size).toBe(entry.count);
-    expect(entry.domain).toMatchObject({ version: 1, min: 1 });
+    expect(entry.domain).toMatchObject({ version: entry.version, min: 1 });
     for (const def of commands) {
       expect(def.domain).toBe(entry.domain);
       expect(def.since).toBe(1);
@@ -250,17 +246,17 @@ const feature = {
 };
 
 describe("pipelines and multi-review clients", () => {
-  it("version 1: typed calls carry the envelope and the critical keys sent, results decode", async () => {
+  it("version 2: typed calls carry the envelope and the critical keys sent, results decode", async () => {
     const created = { taskId: "t1", pipelineId: "p1", later: true };
-    const node = fakeNode({ pipelines: { min: 1, max: 1 } }, () => created);
+    const node = fakeNode({ pipelines: { min: 1, max: 2 } }, () => created);
     const client = createDomainClient(pipelinesClient, node.options);
-    expect(client.version()).toBe(1);
+    expect(client.version()).toBe(2);
     await expect(client.api().create_feature_build(feature)).resolves.toEqual(created as never);
     expect(node.sent).toEqual([
       {
         command: "create_feature_build",
         args: feature,
-        envelope: { domain: "pipelines", version: 1, critical: ["requestId"] },
+        envelope: { domain: "pipelines", version: 2, critical: ["requestId"] },
       },
     ]);
     expect(node.invoked).toEqual([]);

@@ -43,7 +43,6 @@ export const RECURRING_JOB_KINDS = [
   "native-activity-sweep",
   "native-launch-scan",
   "native-queue-scan",
-  "native-interaction-observe",
   "claude-state-reconcile",
   "tmux-poll",
   "tmux-tab-loop",
@@ -242,15 +241,6 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     2_000,
     "per-key-serial",
     "storage-reconcile",
-  ),
-  // Only while the observe-only interaction monitor is enabled.
-  "native-interaction-observe": backend(
-    "B08",
-    "interval",
-    "progress",
-    2_000,
-    "join",
-    "snapshot-rehydrate",
   ),
   // Step 08 named due job: fixed rate, never overlapping.
   "claude-state-reconcile": backend(

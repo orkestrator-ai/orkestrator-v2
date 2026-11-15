@@ -183,13 +183,6 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
     return this.lifecycle.start(input, undefined, attempt);
   }
 
-  importLegacy(
-    projectId: string,
-    snapshots: unknown[],
-  ): Promise<{ importedIds: string[]; skipped: number }> {
-    return this.lifecycle.importLegacy(projectId, snapshots);
-  }
-
   pause(pipelineId: string): Promise<BuildPipeline> {
     return this.lifecycle.pause(pipelineId);
   }

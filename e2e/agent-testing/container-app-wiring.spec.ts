@@ -20,6 +20,7 @@ import {
   openSecondWindow,
   profileStatus,
   reloadApp,
+  seedBuildPipeline,
   selectEnvironment,
   setDocumentHidden,
   type Environment,
@@ -312,39 +313,34 @@ test("Docker fixture container validation output reads real command output in th
     });
 
     await test.step("a pipeline naming the run opens in the container's Build tab", async () => {
-      const imported = await invoke<{ importedIds: string[] }>("import_legacy_build_pipelines", {
+      const seeded = seedBuildPipeline({
+        id: pipelineId,
+        taskId,
         projectId: container.projectId,
-        snapshots: [
-          {
-            id: pipelineId,
-            taskId,
-            projectId: container.projectId,
-            environmentId: container.id,
-            environmentType: "containerized",
-            agentType: "codex",
-            // A finished phase: no supervisor pass, so nothing starts a turn.
-            phase: "failed",
-            error: "QA validation fixture",
-            sessions: [],
-            currentSessionIndex: -1,
-            iteration: 0,
-            maxIterations: 1,
-            backendRevision: 0,
-            controller: "backend",
-            createdAt: new Date().toISOString(),
-            taskTitle: `QA validation ${run}`,
-            taskSnapshot: {
-              title: `QA validation ${run}`,
-              description: "",
-              acceptanceCriteria: "",
-              comments: [],
-              images: [],
-            },
-            validationRun: validation,
-          },
-        ],
+        environmentId: container.id,
+        environmentType: "containerized",
+        agentType: "codex",
+        // A finished phase: no supervisor pass, so nothing starts a turn.
+        phase: "failed",
+        error: "QA validation fixture",
+        sessions: [],
+        currentSessionIndex: -1,
+        iteration: 0,
+        maxIterations: 1,
+        backendRevision: 0,
+        controller: "backend",
+        createdAt: new Date().toISOString(),
+        taskTitle: `QA validation ${run}`,
+        taskSnapshot: {
+          title: `QA validation ${run}`,
+          description: "",
+          acceptanceCriteria: "",
+          comments: [],
+          images: [],
+        },
+        validationRun: validation,
       });
-      expect(imported.importedIds).toEqual([pipelineId]);
+      expect(seeded).toBe(pipelineId);
       // A container whose tabs were never rearranged has no persisted layout
       // (a renderer persists one only on a change). Start from that state:
       // `ensureBuildPipelineTab` then writes a layout holding only the build

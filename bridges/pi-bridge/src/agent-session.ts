@@ -81,6 +81,11 @@ import {
 } from "./models.js";
 import { modelRuntime } from "./runtime.js";
 import { cachedSessionList, rememberSessionList, sessionFilesStamp } from "./session-list-cache.js";
+import {
+  listSessionsFromHeaders,
+  UnrecognisedSessionFormat,
+  type ListedSession,
+} from "./session-headers.js";
 import { TimeoutError, withTimeout } from "./timeout.js";
 import {
   appendLostWriteNotice,
@@ -1473,14 +1478,14 @@ async function readResumableSessions(signal: AbortSignal): Promise<NativeAgentRe
   // must not go on to parse every session file with nobody waiting for it.
   signal.throwIfAborted();
 
-  const listed = await SessionManager.list(workingDirectory, sessionDirectory(), undefined, signal);
-  const entries = listed.slice(0, MAX_RESUME_ENTRIES).map((info) => ({
+  const listed = await listNewestSessions(directory, signal);
+  const entries = listed.map((info) => ({
     // The *path* is the resume handle: two sessions can share an id across
     // session directories, and `SessionManager.open` takes a path.
     sessionId: info.path,
     ...(info.name?.trim() ? { title: info.name.trim() } : {}),
-    ...(info.created ? { createdAt: new Date(info.created).toISOString() } : {}),
-    ...(info.modified ? { updatedAt: new Date(info.modified).toISOString() } : {}),
+    ...(isDate(info.created) ? { createdAt: info.created.toISOString() } : {}),
+    ...(isDate(info.modified) ? { updatedAt: info.modified.toISOString() } : {}),
     status: "idle" as const,
     ...(info.firstMessage?.trim() ? { detail: info.firstMessage.trim().slice(0, 200) } : {}),
     ...(info.parentSessionPath ? { parentId: info.parentSessionPath } : {}),
@@ -1492,11 +1497,45 @@ async function readResumableSessions(signal: AbortSignal): Promise<NativeAgentRe
   return entries;
 }
 
+function isDate(value: Date | undefined): value is Date {
+  return value !== undefined && Number.isFinite(value.getTime());
+}
+
+/**
+ * The newest `MAX_RESUME_ENTRIES` sessions, read from each file's header and
+ * tail (`session-headers.ts`) rather than through `SessionManager.list`, which
+ * reads every file in full. A file in a format the header reader does not
+ * recognise hands the whole list to Pi's own reader.
+ */
+async function listNewestSessions(
+  directory: string,
+  signal: AbortSignal,
+): Promise<ListedSession[]> {
+  // Pi filters by working directory only for a session directory it was given.
+  const cwd = sessionDirectory() === undefined ? undefined : workingDirectory;
+  try {
+    const listed = await listSessionsFromHeaders({
+      directory,
+      cwd,
+      limit: MAX_RESUME_ENTRIES,
+      signal,
+    });
+    return listed.sessions.slice(0, MAX_RESUME_ENTRIES);
+  } catch (error) {
+    if (!(error instanceof UnrecognisedSessionFormat)) throw error;
+    log.info("session-list.read-by-pi", { reason: error.reason });
+  }
+  signal.throwIfAborted();
+  const listed = await SessionManager.list(workingDirectory, sessionDirectory(), undefined, signal);
+  return listed.slice(0, MAX_RESUME_ENTRIES);
+}
+
 /**
  * The directory a resume handle is allowed to name.
  *
- * `SessionManager.list` only ever hands out paths from here, so this is where
- * every legitimate handle comes from.
+ * The session list (`session-headers.ts`, or `SessionManager.list` as its
+ * fallback) only ever hands out paths from here, so this is where every
+ * legitimate handle comes from.
  */
 function resumableSessionRoot(): string {
   return sessionDirectory() ?? join(agentDirectory() ?? getAgentDir(), "sessions");

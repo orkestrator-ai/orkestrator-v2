@@ -3,7 +3,10 @@ import {
   SYNC_OPENCODE2_CONTAINER_CREDENTIALS,
   openCode2ContainerCredentialPayload,
 } from "./opencode2/container-credentials.js";
-import { prepareEgressGatewayForStart } from "./egress-gateway.js";
+import {
+  deliverRuntimeSeedBeforeBoot,
+  prepareEgressGatewayWithSeed,
+} from "./github-ranges-seed-delivery.js";
 import { startDockerContainer } from "./container-start.js";
 import { createHash } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
@@ -563,8 +566,14 @@ export async function startContainerWithAgentAccounts(
 ): Promise<void> {
   // A runtime behind an egress gateway starts only once the gateway's
   // firewall is applied; one left on a gateway's earlier boot is stopped here
-  // and started below like any stopped runtime.
-  await prepareEgressGatewayForStart(containerId);
+  // and started below like any stopped runtime. Whichever container runs the
+  // firewall gets a fresh GitHub ranges seed just before it boots, so a
+  // restart days after creation does not spend GitHub's anonymous allowance
+  // (to-do 7549 task 2).
+  // Only the container that runs the firewall is inspected for it, so a
+  // runtime behind a gateway or in full mode adds no Docker call.
+  const dataDir = context.storage.getDataDir();
+  const gateway = await prepareEgressGatewayWithSeed(dataDir, containerId);
   const state = await runCommand("docker", [
     "inspect",
     "--format",
@@ -574,6 +583,12 @@ export async function startContainerWithAgentAccounts(
   const wasRunning = state.stdout.trim() === "true";
   if (!wasRunning && environment) {
     await refreshStagedAgentAccountLogins(context, environment, containerId, runners);
+  }
+  if (!wasRunning) {
+    await deliverRuntimeSeedBeforeBoot(dataDir, containerId, {
+      gateway,
+      networkAccessMode: environment?.networkAccessMode,
+    });
   }
   try {
     await startDockerContainer(containerId);

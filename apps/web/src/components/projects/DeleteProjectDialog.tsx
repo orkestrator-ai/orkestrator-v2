@@ -9,7 +9,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-/** Confirms removing a project and, with it, its environments. */
+/**
+ * Confirms removing a project and, with it, its environments, tickets,
+ * project notes and feature plans (to-do 5820, retired).
+ */
 export function DeleteProjectDialog({
   open,
   onOpenChange,
@@ -45,6 +48,10 @@ export function DeleteProjectDialog({
           <AlertDialogTitle>Delete Project</AlertDialogTitle>
           <AlertDialogDescription>
             Are you sure you want to remove <strong>{projectName}</strong> from your projects?
+            <span className="block mt-2">
+              Its tickets and their images, project notes and feature plans on this machine are
+              deleted too. This cannot be undone. The checkout on disk is kept.
+            </span>
             {environmentCount > 0 && (
               <span className="block mt-2 text-orange-500">
                 Warning: This project has {environmentCount} environment

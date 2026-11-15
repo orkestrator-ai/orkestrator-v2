@@ -124,7 +124,7 @@ that starts a message. When no kept row can name one (an OpenCode view left
 with only an error row), the view pages from the window's end
 (`historyCursorAtEnd`). Rows between the view's start and that position come
 back on the first page too, and the renderer drops them by id. A provider
-cursor too long to wrap travels as a backend-held handle (8110). Byte bounding happens to ordinary
+cursor too long to wrap travels as a backend-held handle (to-do 8110, retired 2026-11-15). Byte bounding happens to ordinary
 sessions: a tool call's detail reference is larger than a short output the
 bridge summary kept inline, so a window of edits and short commands is
 larger once projected than the bridge measured it. Before 0232 such a view
@@ -576,8 +576,7 @@ removal condition, which is met (checked 2026-11-15).
   task 4 owns removing it.
 
 The `/messages` fallback of progressive reads retired on 2026-11-15
-([0050](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md)
-task 1). Every bridge serves `/transcript`, and the Claude summary route loads
+(to-do 0050 task 1; the to-do retired the same day: `git show a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`). Every bridge serves `/transcript`, and the Claude summary route loads
 a persisted session before answering, so a 404 there means the session is
 missing and the read is an empty, complete window. A 405 fails the read: only
 a bridge that predates the route answers it. `/messages` stays for bounded

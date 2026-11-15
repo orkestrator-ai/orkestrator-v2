@@ -16,14 +16,16 @@ items 1 to 3 landed. Its line numbers are stale. Re-checked against
 recommended options were followed and where they were not. Task 4
 re-checked against `cbe0f9a5b` on 2026-11-05 for efficiency finding TX-10;
 see **TX-10's interim map (task 4)**.
-Updated 2026-11-14 for the user's legacy-retirement decision.
+Updated 2026-11-14 for the user's legacy-retirement decision, and on
+2026-11-15 when task 4's two prerequisites were built (see Assumptions and
+decisions).
 
 ### Tasks
 
 1. **Direct cursor wherever the provider pages**: keep a direct cursor through a backend byte bound, or add a direct mint from the summary window, chosen by a measurement of the no-cursor cases. Status: done (2026-10-27, #1323: a direct cursor through the byte bound).
 2. **`loadEarlierMessages` pages directly**: stop calling the `sync-v1` projection to mint a cursor, with tests for a byte-bounded view, an OpenCode window, a prefix collapse and a held place. Status: done (2026-10-27, #1323; the mint remains only as the fallback for a view without a direct cursor).
 3. **Keep v1 cursors for older renderers and record the condition**: keep serving v1 cursors, counted by `history.joined-v1-page`, with the retirement condition in the register. Status: done (condition 2026-10-27; counter split by cause 2026-10-29).
-4. **Remove joined paging**: delete joined paging, the v1 cursor namespace and `projectionHistory` once the floor passes the renderer from task 2. Status: blocked (2026-11-14: no longer waits on the floor or on the 7568 counter reading, under the user's legacy-retirement decision; still waits on 0050 task 1, the `/messages` fallback removal, and on direct recovery for the first-message byte-bound, cursor-boundary and cursor-length cases, now to-do [8110](8110-direct-history-recovery-without-a-cursor.md); see Assumptions and decisions). Reading the three joined-page counters on the maintainer's machines moved to 7568 on 2026-11-10 and is no longer needed. Holds TX-10's interim id-to-index map, to build only if removal stays blocked for long.
+4. **Remove joined paging**: delete joined paging, the v1 cursor namespace and `projectionHistory`. Status: open (2026-11-15: no longer blocked. Both prerequisites are done: 0050 task 1 removed the `/messages` fallback, and direct recovery for the first-message byte-bound, cursor-boundary and cursor-length cases was built under to-do 8110; both to-dos are retired. The floor and the 7568 counter reading stopped gating it on 2026-11-14). Holds TX-10's interim id-to-index map, which should not be built now that removal can proceed.
 
 ### 1. Direct cursor wherever the provider pages
 
@@ -106,6 +108,11 @@ Updated 2026-11-14 for the user's legacy-retirement decision.
 - The rest of the register condition is open too: the `/messages` fallback row has not retired (0050), and the first-message byte-bound, cursor-boundary and cursor-length cases have no direct recovery yet. No task in this file builds that recovery; it has to exist before the path can go.
 - Nothing to remove yet. Removing this does not affect the `sync-v1` live-update protocol.
 - Updated 2026-11-14: under the user's legacy-retirement decision the floor no longer gates this task, and neither do older renderers (those before 0232) or bridges without page routes, since every machine and client is updated together. What still holds it is current-version work: the `/messages` fallback removal (0050 task 1, open since the same decision) and direct recovery for the first-message byte-bound, cursor-boundary and cursor-length cases, which the current renderer still reaches joined paging through.
+- Updated 2026-11-15: both of those are done. 0050 task 1 removed the
+  `/messages` fallback, and 8110 gave the three cases a direct cursor (both
+  to-dos retired; see Assumptions and decisions). Nothing in the current
+  renderer reaches joined paging for a provider that pages, so the removal
+  can start.
 
 **Decisions.**
 
@@ -127,7 +134,7 @@ Updated 2026-11-14 for the user's legacy-retirement decision.
     - Cons: splits the history of one path across two files.
 
 Found while closing
-[0050](0050-transcript-history-efficiency.md) item 3, which was meant to
+0050 (retired 2026-11-15; `git show a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`) item 3, which was meant to
 retire joined `sync-v1` history paging once the support window passed
 bridges without the v2 transcript contract. It could not retire: the path
 was not only an older-bridge path. The renderer itself minted its first
@@ -183,9 +190,12 @@ cursor, and that cost a whole transcript read on bridges that page directly.
 - The sync-v1 mint in `loadEarlierMessages` is now a compatibility path. On a
   backend with this change it runs only for a view without a direct cursor:
   a source with no direct pages (the Claude bridge's `/messages` fallback,
-  [0050](0050-transcript-history-efficiency.md), or a bridge without page
-  routes) or a provider cursor too long to wrap. Against a backend before
-  this change it still serves byte-bounded views.
+  retired 2026-11-15 with 0050 task 1, or a bridge without page routes) or
+  a provider cursor too long to wrap. Against a backend before this change
+  it still serves byte-bounded views. Since 2026-11-15 (8110) the
+  first-message byte-bound, cursor-boundary and cursor-length cases have a
+  direct cursor too, so on a current backend it runs only for a source with
+  no direct pages.
 - `getProjectionUpdate` still mints only v1 cursors, and `getMessagePage`
   still serves them (`history.joined-v1-page`), for those callers. Pinned by
   `a pageable provider's sync-v1 projection still mints a joined v1 cursor`
@@ -249,20 +259,17 @@ cursor, and that cost a whole transcript read on bridges that page directly.
    view or direct cursor clears an earlier cause; projection-history capacity
    eviction and missing-session sync-v1 invalidation clear it too. These paths
    are covered in the summary-transcripts and transcript-projection owners.
-4. Open; blocked on the support window until 2026-11-14, and since the
-   user's legacy-retirement decision that day only on 0050 task 1 and direct
-   recovery for the three cases below (see Assumptions and decisions). Once the register condition holds
-   and the counter is quiet on the machines you can reach, remove joined
-   paging, the v1 cursor namespace, `projectionHistory` and the renderer's
-   mint in `loadEarlierMessages` (the counter reading on the maintainer's
-   machines is in the manual-test checklist, 7568) (a view without a direct cursor then has
-   nothing older to load, and the control retires). Re-checked 2026-11-05:
-   the floor reaches v2.36.0, the first Stable release with tasks 1 to 3, on
-   2027-01-02; the `/messages` fallback row and direct recovery for the
-   first-message byte-bound, cursor-boundary and cursor-length cases are
-   still open. Efficiency finding TX-10 closes with this task. Its interim
-   id-to-index map is not built; task 4's decision says when it would be
-   and how to read the counters.
+4. Open, and no longer blocked (2026-11-15): 0050 task 1 removed the
+   `/messages` fallback and 8110 built direct recovery for the
+   first-message byte-bound, cursor-boundary and cursor-length cases (see
+   Assumptions and decisions). Remove joined paging, the v1 cursor
+   namespace, `projectionHistory`, the `history.joined-v1-page*` counters
+   and the renderer's mint in `loadEarlierMessages`; a view without a direct
+   cursor then has nothing older to load, and the control retires. Neither
+   the floor nor a counter reading gates it (2026-11-14). The real-provider
+   check of the three cases is on the manual-test checklist (8110 (retired)
+   task 1) and does not gate the removal. Efficiency finding TX-10 closes
+   with this task; its interim id-to-index map should not be built.
 
 ## Assumptions and decisions
 
@@ -461,21 +468,66 @@ counter's cause is now cured by code rather than by waiting out older peers.
 `unnamed-cursor` when direct recovery exists, and the base id is quiet on a
 current backend. So the reading is unnecessary and its 7568 item goes.
 
-Task 4 stays blocked, on two things that are not version waits:
+Task 4 stayed blocked, on two things that are not version waits (both done
+on 2026-11-15; see the next subsection):
 
 - 0050 task 1, the `/messages` fallback removal, which is agent work open
   since the same decision.
 - Direct recovery for the first-message byte-bound, cursor-boundary and
   cursor-length cases. The current renderer still pages those through the
   joined path, so removing it first would leave them with nothing older to
-  load. No task in this file builds that recovery; it is to-do
-  [8110](8110-direct-history-recovery-without-a-cursor.md), opened on
-  2026-11-14.
+  load. No task in this file builds that recovery; it was to-do 8110,
+  opened on 2026-11-14 and retired on 2026-11-15 (`git show a8b89f154:docs/todo/transcripts-and-observation/8110-direct-history-recovery-without-a-cursor.md`).
 
 TX-10's interim map keeps its recommended answer (do not build it). Its
 trigger now reads: build it only if removal stays blocked for long while a
 current session pages through the joined path often; an isolated profile is
 enough to see that, so no reading on the maintainer's machines is needed.
+
+### Task 4: unblocked by 0050 task 1 and 8110 (2026-11-15)
+
+Both prerequisites were built in one change, and both to-dos retired with
+it. What task 4's removal can now rely on:
+
+- **The `/messages` fallback is gone (0050 task 1).** A `/transcript` 404 is
+  a missing session, answered as an empty, complete window as OpenCode does;
+  a 405 fails the read. The `bridge-transcript.messages-fallback` counter and
+  its register row went (Retired table in version-compatibility.md).
+- **Every view whose provider pages carries a direct cursor (8110).** A
+  bridge window at the first message names positions from its own generation
+  and content epoch (`bridgeTranscriptPageCursorFor`), and OpenCode names its
+  kept rows even with no older history. When no kept row can name one (the
+  OpenCode error-row case), the view pages from the window's end
+  (`historyCursorAtEnd`, OpenCode's head cursor); the renderer drops the rows
+  it already holds by id. A provider cursor too long to wrap travels as a
+  backend-held handle (`DirectHistoryCursorHandles`), bounded by count and
+  bytes, which reads as an expired cursor once evicted or after a restart.
+  Covered by the summary-transcripts, OpenCode history, OpenCode transcript
+  snapshot, transcript-v2, direct-history and protocol tests, each failing
+  without the change where it pins a projection behaviour.
+
+Decisions made there, as engineering records:
+
+- **Where the recovery lives: in the backend, so every view carries a direct
+  cursor (recommended in 8110, chosen).** Rejected: re-reading a smaller
+  window from the renderer, which would add reads per page and a second
+  paging path. The `unnamed-cursor` counter is quiet by construction for the
+  three known causes.
+- **First-message case: the backend names the bridge position from the
+  snapshot's generation and content epoch (chosen),** rather than changing
+  every bridge to send a cursor for position 0, which the page cursor format
+  forbids (`b` must be positive) and which would need a bridge release.
+  Every bridge's page route is the shared helper's, and the bridge still
+  checks generation, epoch and position.
+- **Boundary case: a cursor at the window's end (chosen),** rather than the
+  nearest earlier row that names one: a cursor before the error row's own
+  response pages strictly before that response, so its dropped main row
+  would never come back. The end cursor repeats the view's rows on the first
+  page, which the renderer already deduplicates.
+- **Cursor-length case: a bounded in-memory handle (chosen),** rather than
+  raising the page command's 1,024-character cursor ceiling, a contract
+  change for every client. A handle lost to a restart costs one view
+  re-read, the same as any expired cursor.
 
 ### Measurement data (tasks 1 and 3)
 
@@ -503,9 +555,10 @@ collecting with the first release that carries them.
 
 ## Related
 
-- [0050-transcript-history-efficiency.md](0050-transcript-history-efficiency.md)
-  item 3: the check that found this, and the `/messages` fallback this
-  file's item 4 waits on.
+- 0050 (retired 2026-11-15; `git show a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`) item 3: the check that found this; its
+  task 1 removed the `/messages` fallback item 4 waited on.
+- 8110 (retired 2026-11-15; `git show a8b89f154:docs/todo/transcripts-and-observation/8110-direct-history-recovery-without-a-cursor.md`): direct recovery for the three
+  joined-page cases item 4 waited on.
 - [native-transcripts.md](../../architecture/native-transcripts.md#history-pages-and-cursors).
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window):
   the support window.

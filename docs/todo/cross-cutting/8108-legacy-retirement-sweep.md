@@ -38,7 +38,7 @@ contracts keep client adapters for older domain versions
 (`packages/protocol/src/contract/client-adapters.ts`; see
 [Client adapters](../../architecture/version-compatibility.md#client-adapters)).
 To-dos that already own a removal and were unblocked on 2026-11-14:
-[0050](../transcripts-and-observation/0050-transcript-history-efficiency.md),
+0050 (task 1 done and the file retired on 2026-11-15),
 [0232](../transcripts-and-observation/0232-direct-history-cursor-minting.md),
 [7570](7570-compatibility-paths-waiting-on-the-floor.md),
 [0078](0078-legacy-prompt-queue-claim-state.md),

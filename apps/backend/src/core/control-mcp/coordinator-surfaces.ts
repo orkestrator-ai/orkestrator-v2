@@ -165,7 +165,7 @@ export function registerCoordinatorSurfaceTools(
     {
       title: "Ask the user to copy uncommitted checkout changes into a worker",
       description:
-        "Ask the user to apply some of the project checkout's uncommitted changes (edits, new and deleted files) to a worker environment, for when the user wants a worker to start from work they have not committed. The user picks the files in Orkestrator; files you name are only pre-selected. Nothing is read or copied until they approve. The patch applies whole or not at all, and you are woken by mail with the outcome. Pass nodeId for a worker on another connected node: the patch is built from this node's checkout and sent there, and one over 16 MiB is refused before anything is sent. If that node's answer is lost, the outcome mail says so; check the worker's files before asking again.",
+        "Ask the user to copy the checkout's uncommitted edits, new and deleted files into a worker. They pick files; yours are pre-selected. Nothing is read before approval; it applies all or nothing; the outcome comes by mail. With nodeId, over 16 MiB is refused; if the answer is lost, check the worker before retrying.",
       inputSchema: toolInput(
         strictObject({
           requestId,

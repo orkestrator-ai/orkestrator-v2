@@ -1,5 +1,4 @@
 import {
-  applyControllerRootPatchCommand,
   controllerMultiReviewSurfaceCommand,
   createControllerEnvironmentCommand,
   createControllerPrCommand,
@@ -53,7 +52,6 @@ import {
 } from "./coordinator-review-actions.js";
 import { launchWorkerPr, launchWorkerResolve } from "./coordinator-pr.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
-import { applyControllerRootPatch } from "./root-changes-node.js";
 import { openMultiReviewTab } from "./workflow-tab-actions.js";
 import {
   editWorkerTabWithTeardown,
@@ -173,17 +171,6 @@ export function registerControllerWorkflowCommands(
     const environment = await worker(args, context);
     return editWorkerTabWithTeardown(context, run, environment.id, parseTabEdit(args));
   });
-
-  // A patch of the command node's checkout the user approved there; the
-  // worker gets all of it or none (to-do 0395 (retired) task 2).
-  register(applyControllerRootPatchCommand, async (args, context) =>
-    applyControllerRootPatch(context, {
-      projectId: asNonBlankString(args.projectId, "projectId"),
-      environmentId: asNonBlankString(args.environmentId, "environmentId"),
-      patch: args.patch,
-      sha256: args.sha256,
-    }),
-  );
 
   register(createControllerPrCommand, async (args, context) => {
     const targetBranch = args.targetBranch;

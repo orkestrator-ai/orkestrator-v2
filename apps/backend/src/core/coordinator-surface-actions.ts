@@ -1,4 +1,5 @@
 import {
+  applyControllerRootPatchCommand,
   applyProjectRootChangesCommand,
   createCoordinatorPrCommand,
   editCoordinatorWorkerTabCommand,
@@ -34,7 +35,7 @@ import {
 import type { Environment } from "./models.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
 import { applyRootChanges, listRootChanges } from "./root-changes.js";
-import { applyRootChangesOnNode } from "./root-changes-node.js";
+import { applyControllerRootPatch, applyRootChangesOnNode } from "./root-changes-node.js";
 import {
   editWorkerTabWithTeardown,
   launchWorkerTerminal,
@@ -624,4 +625,18 @@ export function registerCoordinatorSurfaceActions(
       });
     return applyRootChanges(context, input);
   });
+
+  /**
+   * The other half on the worker's node: a patch of the command node's
+   * checkout the user approved there; the worker gets all of it or none
+   * (to-do 0395 (retired) task 2).
+   */
+  register(applyControllerRootPatchCommand, async (args, context) =>
+    applyControllerRootPatch(context, {
+      projectId: asNonBlankString(args.projectId, "projectId"),
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      patch: args.patch,
+      sha256: args.sha256,
+    }),
+  );
 }

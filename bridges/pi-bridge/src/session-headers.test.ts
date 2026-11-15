@@ -7,7 +7,17 @@
  * silently changing the resume dialog.
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { appendFile, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  unlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -22,6 +32,7 @@ import {
   KNOWN_SESSION_VERSIONS,
   listSessionsFromHeaders,
   SESSION_HEAD_WINDOW_BYTES,
+  SESSION_LIST_MAX_FILES_FACTOR,
   SESSION_TAIL_WINDOW_BYTES,
   UnrecognisedSessionFormat,
   type ListedSession,
@@ -215,6 +226,67 @@ describe("the format Pi writes", () => {
     expect(listed.sessions).toEqual(
       (await SessionManager.list(CWD, directory)).slice(0, 2).map(fromPi),
     );
+  });
+
+  test("modification times that bound nothing stop the read at the file cap", async () => {
+    // Every file was touched after all of its messages (copied without its
+    // times), so no file's mtime ever falls below the newest messages and only
+    // the cap ends the read.
+    const limit = 2;
+    const cap = limit * SESSION_LIST_MAX_FILES_FACTOR;
+    const total = cap + 12;
+    const byMtime: string[] = [];
+    for (let index = 0; index < total; index += 1) {
+      const manager = SessionManager.create(CWD, directory);
+      // The oldest-modified file holds the newest message of all; it is beyond
+      // the cap, so it is never read.
+      const activity = index === 0 ? 900_000 : 10_000 + ((index * 7) % total) * 1_000;
+      manager.appendMessage(user(`prompt ${index}`, activity));
+      const modified = new Date(1_000_000_000 + index * 1_000);
+      await utimes(manager.getSessionFile()!, modified, modified);
+      byMtime.unshift(manager.getSessionFile()!);
+    }
+    const scanned = new Set(byMtime.slice(0, cap));
+
+    const listed = await headerList(limit);
+
+    expect(listed.filesRead).toBe(cap);
+    expect(listed.sessions).toHaveLength(limit);
+    expect(listed.sessions.map((session) => session.firstMessage)).not.toContain("prompt 0");
+    // Within the files it read, it ranks the way Pi ranks.
+    expect(listed.sessions).toEqual(
+      (await SessionManager.list(CWD, directory))
+        .filter((info) => scanned.has(info.path))
+        .slice(0, limit)
+        .map(fromPi),
+    );
+  });
+
+  test("files Pi could not read either are skipped, and the rest are listed", async () => {
+    SessionManager.create(CWD, directory).appendMessage(user("readable", 1_000));
+    const removed = SessionManager.create(CWD, directory);
+    removed.appendMessage(user("removed while listing", 2_000));
+    const removedPath = removed.getSessionFile()!;
+    // A file stat cannot reach, and one that is not a file at all.
+    await symlink(join(directory, "missing-target"), join(directory, "dangling.jsonl"));
+    await mkdir(join(directory, "directory.jsonl"));
+    const realStat = fsPromises.stat;
+    const stat = spyOn(fsPromises, "stat").mockImplementation((async (
+      ...args: Parameters<typeof realStat>
+    ) => {
+      const result = await realStat(...args);
+      // Stat succeeds, then the file goes before its windows are read.
+      if (args[0] === removedPath) await unlink(removedPath);
+      return result;
+    }) as typeof realStat);
+    try {
+      const listed = await headerList();
+
+      expect(listed.sessions.map((session) => session.firstMessage)).toEqual(["readable"]);
+      expect(listed.filesRead).toBe(1);
+    } finally {
+      stat.mockRestore();
+    }
   });
 });
 
@@ -413,6 +485,38 @@ describe("a format the reader does not recognise", () => {
       }
     });
   });
+});
+
+test("a read abandoned during a batch opens no further batch", async () => {
+  for (let index = 0; index < 20; index += 1) {
+    SessionManager.create(CWD, directory).appendMessage(user(`prompt ${index}`, 1_000 + index));
+  }
+  const read = new AbortController();
+  const realOpen = fsPromises.open;
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const open = spyOn(fsPromises, "open").mockImplementation((async (
+    ...args: Parameters<typeof realOpen>
+  ) => {
+    // The first batch's files are all being opened: give up now, then let
+    // their reads finish.
+    if (open.mock.calls.length === 8) {
+      read.abort(new Error("gave up"));
+      release();
+    }
+    await released;
+    return realOpen(...args);
+  }) as typeof realOpen);
+  try {
+    await expect(
+      listSessionsFromHeaders({ directory, cwd: CWD, limit: 200, signal: read.signal }),
+    ).rejects.toThrow("gave up");
+    expect(open).toHaveBeenCalledTimes(8);
+  } finally {
+    open.mockRestore();
+  }
 });
 
 test("an abandoned read stops before reading files", async () => {

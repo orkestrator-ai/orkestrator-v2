@@ -31,7 +31,7 @@ been removed, and 8110 (retired) task 1's real-provider paging check came in.
 
 ### Tasks
 
-1. **Manual tests and live checks** (331 items): run each check under
+1. **Manual tests and live checks** (333 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (24 items): make each call
@@ -176,14 +176,14 @@ agent can apply it.
 | --- | --- | --- |
 | Agent engines and provider SDKs | 68 | 3 |
 | CLI and slash commands | 6 | 0 |
-| Containers and environments | 28 | 6 |
+| Containers and environments | 29 | 6 |
 | Coordinator and Multi Review | 84 | 3 |
-| Cross-cutting | 87 | 8 |
+| Cross-cutting | 88 | 8 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 16 | 1 |
 | Transcripts, observation and bandwidth | 27 | 2 |
-| **Total** | 331 | 24 |
+| **Total** | 333 | 24 |
 
 ## Outstanding work
 
@@ -432,6 +432,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **4730 (retired) task 4: the disposable daemon's nested rootful mode on a rootful host daemon.** (Background: [Nested rootful mode](../../development/container-qualification.md#nested-rootful-mode).) Needs a Linux host whose rootful Docker daemon you let this run use (beelink, where the agent account can reach it, or a host where you grant access; do not add an account to the `docker` group without deciding to, since that is root-equivalent). Run `mise run docker:disposable -- start --mode rootful --ipv6 --name r4730 --image <image>` with the host daemon as the outer daemon (`--outer-host unix:///var/run/docker.sock`), then the egress-conditions suite (`apps/backend/tests/container-live-egress-conditions.test.ts`, with the printed `DOCKER_HOST` and `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND`, through `mise run test:logged`), then `mise run docker:disposable -- stop --name r4730`. Check afterwards that `docker ps -a`, `docker volume ls` and `docker network ls` on the host daemon show nothing labelled `orkestrator-disposable-docker`, and that the instance's runtime and shared directories held no root-owned file after `stop`. Record: host, Engine version, `start` output (`outerRootless: false`), the suite's pass count and assertions, the restart generations, `stop` time and the leftover check, as a dated section in [container qualification](../../development/container-qualification.md) (or reply to the coordinator; 4730 is retired).
 - [ ] **[7390](../containers-and-environments/7390-rootless-restart-remaining-settings.md) task 3: rootless daemon restart on arm64.** On a self-managed arm64 Linux host, start a rootless daemon with `mise run docker:disposable -- start` (it pins aarch64 rootless extras and slirp4netns) and run `apps/backend/tests/container-live-egress-conditions.test.ts` with the printed `DOCKER_HOST` and `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND`, then `mise run docker:disposable -- stop`. Record: host, kernel and the pass/fail counts per case (and whether `ip_set`, `xt_set`, `nf_tables` loaded), in 7390 or a reply to the coordinator.
 - [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 9: does the pinned Claude CLI ignore `bypassPermissionsModeAccepted`?** `docker/entrypoint.sh` (about lines 1271-1343) still writes `bypassPermissionsModeAccepted` into the container's `~/.claude/settings.json`. Build the image from current `main` (or use a disposable `dev:test` profile with `--fixture-environments local,container`), then, with the pinned Claude CLI and a disposable Claude login (never your own), start one container environment with that key removed from the generated settings (edit the container's copy before the first Claude launch) and open a Claude terminal tab in bypass-permissions mode. Expected if the key is dead: no bypass-permissions acceptance prompt appears and the session runs exactly as with the key. Record: the CLI version and whether the prompt appeared with and without the key, as a reply to the coordinator. An agent then deletes the block (validated with an image build and `bash docker/tests/final-image-smoke.sh <image>`), or keeps it with a comment saying why.
+- [ ] **8093 (retired) task 1 and 8101 (retired) task 1: a crashed backend's servers are reaped under `systemd --user`.** (Background: the reaper's rule in the header of `apps/backend/src/core/local-server-reaper.ts`; a real-process test, `local-server-reaper-subreaper.integration.test.ts`, passes with a stand-in subreaper, backend and bridge, but no run has yet killed a real backend on a desktop session.) On a Linux desktop logged in through a systemd user session (beelink or beelink2), start a throwaway profile, `mise run dev:test --profile reaper-subreaper-qa --fixture --headless` (left running in its own terminal), and in its fixture project start a local OpenCode environment and a local Codex (or Claude) environment, each with one tab open; let the OpenCode one stay idle (no turn). Note the two server PIDs (`ps -o pid,ppid,args` filtered to the profile's toolchain and `bridges/*/dist/index.js`). SIGKILL only that profile's backend, by the PID its `dev:status --json` liveness block names, then `mise run dev:stop` and start the same profile again. Check with `ps -o pid,ppid,args -p <pid>` that both old PIDs are gone, and that the backend log under the profile's `logDir` has `reaper.server-reaping` with `adoptedBySubreaper` true for any server still alive at startup. Finish with `dev:stop` and `dev:reset`. Record: for each server, whether it was gone, its parent before the restart (`systemd --user` or PID 1), and the reaper log line, in a reply to the coordinator; a survivor whose parent was `systemd --user` or PID 1 opens a new to-do (one under any other live parent is left alone by design: the reaper treats only `systemd` as positive evidence of adoption).
 
 #### Coordinator and Multi Review
 

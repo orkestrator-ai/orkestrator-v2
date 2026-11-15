@@ -297,6 +297,8 @@ function createSpawn(outcomes: SpawnOutcome[]): typeof spawn {
         if (outcome.stdout) child.stdout.write(outcome.stdout);
         if (outcome.stderr) child.stderr.write(outcome.stderr);
         child.emit("exit", outcome.code, outcome.signal ?? null);
+        // A real child emits `close` once its stdio streams have ended.
+        child.emit("close", outcome.code, outcome.signal ?? null);
       } else if (outcome.type === "error") {
         child.emit("error", outcome.error);
       }

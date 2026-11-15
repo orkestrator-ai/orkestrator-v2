@@ -50,3 +50,7 @@
 - **Isolated rerun:** `ORKESTRATOR_E2E_PORT=1458 mise run test:logged -- --name streaming-isolated -- bunx playwright test --config e2e/playwright.config.ts StreamingTranscript.spec.ts --workers=1 --output output/playwright/streaming-results` passed all 14 cases (39.4 seconds including fixture startup).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.e3CStO/transcript-browser.log.gz`.
 - **Observation:** The same existing scroll-release setup failed intermittently; the isolated owning-file pass does not establish a root cause or a fix.
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. `releaseStickyScroll` sets `scrollTop` synchronously, yet the polled distance stayed at 1 for the whole 5 s: the follower re-pinned the list, or the scroll was lost. That is wrong state, not a late signal, so the 2026-11-15 `expect: { timeout: 30_000 }` change in `e2e/playwright.config.ts` is not claimed as a fix.

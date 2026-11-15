@@ -459,8 +459,19 @@ fails it.
 
 ### Controlled time
 
-Wait for an explicit signal, not wall time. To skip an application delay,
-capture it with `installControlledTimeout` (`tests/helpers/controlled-timeout.ts`,
+Wait for an explicit signal, not wall time. A slow host must never be able to
+fail a test that is still making progress, so the shared preloads
+(`tests/setup.ts`, `tests/setup-node.ts`) raise Bun's default per-test and
+hook budget from five seconds to 60 through `tests/default-test-timeout.ts`.
+That budget is a hang watchdog, not an assertion: do not add a shorter test,
+hook, poll or `waitFor` deadline to a wait that ends on a real signal. Bun
+applies a preload's default only to the first file of a non-isolated process,
+so pass `--isolate` to an ad hoc multi-file or `--rerun-each` run (every suite
+script already runs `--parallel`, which isolates). A file that needs a
+different budget sets it with `setDefaultTimeout`; `--timeout` on the command
+line is overridden by the preload.
+
+To skip an application delay, capture it with `installControlledTimeout` (`tests/helpers/controlled-timeout.ts`,
 tested by `tests/unit/controlled-timeout.test.ts`). It intercepts only timers
 scheduled at one exact delay, leaving Testing Library, promises and unrelated
 timers real, and it throws when more timers are pending at that delay than
@@ -485,8 +496,10 @@ says whether one is armed, and `restore()` reports any it drops. The
 
 The `sleep-before-negative-assertion` source guard
 (`tests/unit/source-guards.test.ts`) refuses a new fixed sleep followed by a
-negative or exact-count assertion, and its siblings refuse released ports,
-real subprocesses without a time budget and small fake pids. Existing offenders
+negative or exact-count assertion, and its siblings refuse released ports
+and small fake pids. (A `subprocess-without-budget` guard used to require a
+per-file budget on tests that start processes; the shared 60 s default
+replaced it.) Existing offenders
 sit in a baseline that only shrinks; see
 [linting.md](linting.md#source-guards).
 
@@ -2279,7 +2292,7 @@ unchanged code would have passed it too. Work in this order:
      ```bash
      mise run test:logged -- --name repro -- \
        bun scripts/test-under-contention.ts --burners 6 -- \
-       bun test path/to/owner.test.ts --rerun-each=5
+       bun test path/to/owner.test.ts --isolate --rerun-each=5
      ```
 
      `mise run test:contention -- [--core N] [--burners K] [--duration S] -- <command>`
@@ -2293,7 +2306,10 @@ unchanged code would have passed it too. Work in this order:
    contention when load was the trigger. `--rerun-each` reruns the file's tests
    in one process, so a file that is not rerun-safe (module-level state, a
    fixture created once, a server bound at import) can fail for that reason
-   alone. For such a file, loop fresh processes instead:
+   alone. Keep `--isolate` on such runs: without it Bun resets the per-test
+   budget after the first pass, so later passes fall back to five seconds
+   (see [Controlled time](#controlled-time)). For a file that is not
+   rerun-safe, loop fresh processes instead:
 
    ```bash
    mise run test:logged -- --name stress -- bash -c \

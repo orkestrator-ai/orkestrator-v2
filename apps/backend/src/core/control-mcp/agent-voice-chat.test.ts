@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { AGENT_VOICE_CHAT_INTERRUPT_OPEN_TAG } from "@orkestrator/protocol/agent-voice-chat";
+import {
+  AGENT_VOICE_CHAT_INTERRUPT_OPEN_TAG,
+  AGENT_VOICE_CHAT_LIMITS,
+} from "@orkestrator/protocol/agent-voice-chat";
+
+/**
+ * `listen` returns as soon as the reply settles; its wait is only a bound. Give
+ * it the longest one the tool accepts so a starved host cannot turn "the reply
+ * has not been written yet" into a failed assertion (flake 9927).
+ */
+const LISTEN_UNTIL_SETTLED_MS = AGENT_VOICE_CHAT_LIMITS.waitMaxMs;
 import { readStoredValue, seedStore } from "../storage-test-support.js";
 import { adapterError } from "./results.js";
 import { AGENT_VOICE_CHAT_TOOL_NAMES } from "./agent-voice-chat.js";
@@ -274,7 +284,12 @@ describe("agent voice chat tools", () => {
     ).toStartWith("Still thinking.");
     (await started.promise)(new Error("private"));
     expect(
-      spoken(await harness.call(voice.token, "agent_voice_chat_listen", { chatId, waitMs: 1000 })),
+      spoken(
+        await harness.call(voice.token, "agent_voice_chat_listen", {
+          chatId,
+          waitMs: LISTEN_UNTIL_SETTLED_MS,
+        }),
+      ),
     ).toStartWith("No reply:");
   });
 
@@ -320,7 +335,7 @@ describe("agent voice chat tools", () => {
     const heard = await harness.call(voice.token, "agent_voice_chat_listen", {
       chatId: result.chatId,
       afterTurnId: turnId,
-      waitMs: 1_000,
+      waitMs: LISTEN_UNTIL_SETTLED_MS,
     });
     expect(spoken(heard)).toStartWith("Nothing is failing.");
     expect((structured(heard).result!.turns as unknown[]).length).toBe(1);

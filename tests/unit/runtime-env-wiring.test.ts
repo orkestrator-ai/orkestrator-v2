@@ -2255,7 +2255,7 @@ printf "continued"
         expect(() => statSync(join(nonNumeric.destination, "skills"))).toThrow();
       }
     });
-  }, 15_000);
+  });
 
   test("Codex setup copies the complete allowlist, secures auth, and excludes plugin runtime state", () => {
     withTempDir((dir) => {
@@ -2506,10 +2506,10 @@ eval "$claude_setup"
       // The per-entry skip is surfaced in the consolidated summary.
       expect(result.stdout).toContain("commands/linked.md");
     });
-    // The block runs the whole copy-helper set, dozens of short processes, as
-    // the Codex copy-helper case above does. On a four-core CI runner under
-    // aggregate load that passed the default five seconds (flake 0160).
-  }, 15_000);
+    // The block runs the whole copy-helper set, dozens of short processes. It
+    // takes the shared default budget (tests/default-test-timeout.ts), a hang
+    // watchdog, so a starved runner cannot fail it (flake 0160).
+  });
 
   test("OpenCode setup block merges user config and copies only the login", () => {
     withTempDir((dir) => {
@@ -2974,7 +2974,7 @@ eval "$opencode_setup"
       expect(result.stderr).toBe("");
       expect(result.stdout).toBe(`FOUND\nbun=${overrideBunInstall}\n${overrideBun}\nOVERRIDE_BUN`);
     });
-  }, 30_000);
+  });
 
   test("runtime helper migrates old snapshots without clobbering caller PATH", () => {
     withTempDir((dir) => {

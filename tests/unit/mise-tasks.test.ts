@@ -366,9 +366,12 @@ test("the live coordinator suite runs only when asked for", () => {
   // The component suite's `*.spec.ts` would otherwise sweep it in.
   expect(read("e2e/playwright.config.ts")).toContain('"agent-testing/**"');
   expect(JSON.stringify(policy)).not.toContain("test:agent:coordinator");
-  // The live spec stays out of the aggregate run; its fixture support test
-  // (`coordinator-live-account-fixtures.integration.test.ts`) belongs there.
-  expect(read("scripts/test-all.ts")).not.toContain("coordinator-live.spec");
+  // The aggregate may run the live suite's own deterministic support tests
+  // (`coordinator-live-account-fixtures.integration.test.ts`), never its spec
+  // or runner.
+  const aggregate = read("scripts/test-all.ts");
+  expect(aggregate).not.toContain("coordinator-live.spec");
+  expect(aggregate).not.toContain("test-agent-coordinator-live");
   for (const workflow of workflowFiles()) {
     expect(read(workflow)).not.toContain("test:agent:coordinator");
   }

@@ -192,6 +192,8 @@ describe("waiting through a lost submission response", () => {
       lookupFailures?: number;
       successfulSubmission?: boolean;
       onLookup?: () => void;
+      /** Runs when the gateway receives the submission, before it answers. */
+      onSubmit?: () => void;
       /** Cases whose subject is real elapsed time keep the real clock. */
       realClock?: boolean;
     } = {},
@@ -204,6 +206,7 @@ describe("waiting through a lost submission response", () => {
       const input = request.body.args.input as Record<string, unknown>;
       if (action === (options.action ?? "session.start")) {
         starts += 1;
+        options.onSubmit?.();
         if (options.mutationDelay) await Bun.sleep(options.mutationDelay);
         if (options.successfulSubmission)
           return envelope(
@@ -355,12 +358,28 @@ describe("waiting through a lost submission response", () => {
   });
 
   test("submission and an absent-key lookup share one deadline", async () => {
-    const { box, lookups } = await lostStart([], [], { mutationDelay: 180, realClock: true });
-    const started = Date.now();
-    const result = await box.run([...START, "--wait", "--timeout", "300ms"]);
+    // The submission spends 4.25 s of a 10 s budget on a virtual clock that the
+    // gateway advances when it answers, so the lookups have exactly 5.75 s left
+    // however slow the host is. Poll delays are 250, 500, 1000, 2000, then the
+    // remainder, and each lookup's own request budget is at least 1 s.
+    let time = 1_790_000_000_000;
+    const polls: number[] = [];
+    const { box, lookups } = await lostStart([], [], {
+      realClock: true,
+      onSubmit: () => {
+        time += 4_250;
+      },
+    });
+    const io = captureIo(box.env);
+    io.now = () => time;
+    io.sleep = async (ms) => {
+      polls.push(ms);
+      time += ms;
+    };
+    const result = await box.run([...START, "--wait", "--timeout", "10s"], io);
     expect(JSON.parse(result.out).error.code).toBe("transport-uncertain");
-    expect(lookups).toHaveLength(1);
-    expect(Date.now() - started).toBeLessThan(450);
+    expect(polls).toEqual([250, 500, 1_000, 2_000, 2_000]);
+    expect(lookups).toHaveLength(polls.length);
   });
 
   test("a stalled lookup is bounded by the remaining deadline", async () => {

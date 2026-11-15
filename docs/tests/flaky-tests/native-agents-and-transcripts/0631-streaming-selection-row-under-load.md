@@ -22,3 +22,7 @@
 - **Owning-file rerun:** `mise run test:logged -- --name merge-streaming-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts --workers=1` passed the complete unchanged owner, exit 0 after 22.1 seconds.
 - **Evidence:** `orkestrator-test-run.nS7rpL/merge-browser.log.gz` under the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence. Concurrent validation may contribute, but the cause is unproven. No assertion, timeout, retry or skip changed.
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. In the first observation row 0 had already passed its visibility assertion and then left the DOM before `elementHandle()`, so the 30 s test timeout expired on an unmounted row (wrong state); the hypothesis is a virtualized render-window change. The 2026-11-15 budget change in `e2e/playwright.config.ts` is not claimed as a fix.

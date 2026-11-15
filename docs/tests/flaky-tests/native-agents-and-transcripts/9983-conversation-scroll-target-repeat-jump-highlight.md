@@ -1,7 +1,7 @@
 # Conversation scroll target: repeat-jump highlight gone after a fixed sleep
 
 - **ID:** 9983
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-11 (twice)
 - **Test:** `useConversationScrollTarget > a repeat jump to the same message restarts the highlight; another moves it`
 - **File:** `apps/web/src/components/native-agent/useConversationScrollTarget.test.tsx`
@@ -47,3 +47,11 @@ Reproduce under CPU load (for example `--rerun-each` with a busy host) before
 changing anything. The likely fix is to drive the highlight timer with
 `installControlledTimeout` (`tests/helpers/controlled-timeout.ts`) instead of
 fixed sleeps, as the `sleep-before-negative-assertion` guard advises.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** The test slept a fixed 120 ms twice against a real 200 ms highlight timer and asserted the highlight was still on; when the host stalled past the remaining period the timer had already cleared it (`undefined`).
+- **Fix:** `apps/web/src/components/native-agent/useConversationScrollTarget.test.tsx` controls the period's clock (`performance.now` spy) and its timer (`installControlledTimeout(200)`): it asserts the repeat restarted the period (new `startedAt`, one full-length timer pending) and ends the period by advancing the timer, with no sleeps.
+- **Reproduced:** yes — `mise run test:logged -- --name repro-9983-before -- bash -c 'cd apps/web && ... bun ../../scripts/test-under-contention.ts --burners 6 -- bun test <HEAD copy> --rerun-each=10'` failed this test once (`Expected: "u-2" / Received: undefined`, 392.85 ms); the fixed file passed the same command 10 of 10.
+- **Stress:** `mise run test:logged -- --name repro-9983-after -- bash -c 'cd apps/web && bun ../../scripts/test-under-contention.ts --burners 6 -- bun test ./src/components/native-agent/useConversationScrollTarget.test.tsx --rerun-each=10'` passed 10 of 10.
+- **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).

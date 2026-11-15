@@ -1,7 +1,7 @@
 # CLI lost-submission lookup misses the shared deadline under load
 
 - **ID:** 9880
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-22
 - **Test:** `waiting through a lost submission response > submission and an absent-key lookup share one deadline`
 - **File:** `packages/cli/tests/client-waits.test.ts:351`
@@ -29,3 +29,10 @@ Full failure names, counts, evidence paths and unresolved limitations are in [98
 - **Assessment:** confirmed recurrence; no CLI code, assertion, deadline or skip changed. The original aggregate remains failed.
 
 - **Final aggregate result for this recurrence:** incomplete after the outer 30-minute watchdog stopped the remaining backend run, with observed failures preserved.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** the test measured real wall time: a 180 ms delayed submission inside a 300 ms `--timeout`, then asserted exactly one lookup and an elapsed bound. On a starved host the submission alone used the whole budget, so no lookup ran. `submitForWait` (`packages/cli/src/client/commands/common.ts`) also read `Date.now()` directly, so a test could not put the shared deadline on a controlled clock even though `observe` already accepted one.
+- **Fix:** `submitForWait` takes its clock from `observationClock(context.io)`: in the executable that is still `Date.now` (its IO has no `sleep`), so production behaviour is unchanged; a test IO that supplies `now`/`sleep` governs the submission, the lookups and the poll delays with one clock. The returned `deadline` is translated back to `Date.now()` for callers. The test (`packages/cli/tests/client-waits.test.ts`) now advances a virtual clock by 4.25 s when the fake gateway receives the submission (`onSubmit`), uses a 10 s `--timeout`, and asserts the exact poll schedule (250, 500, 1000, 2000, 2000 ms) and one lookup per poll. No wall-clock bound remains.
+- **Reproduced:** yes. The unchanged test under `bun scripts/test-under-contention.ts --core 10 --burners 6 -- bun --cwd=packages/cli test --preload ../../tests/setup-node.ts <copy of HEAD's test> -t "share one deadline" --rerun-each=10` failed 10 of 10 with zero lookups. The rewritten test passed 10 of 10 under the same command. Base `a8b89f1541e7abb6af36d45121593ae14640a3ca`.
+- **Stress:** `mise run test:logged -- --name f3-fix-new -- bun scripts/test-under-contention.ts --burners 6 -- bun --cwd=packages/cli test --preload ../../tests/setup-node.ts ./tests/client-waits.test.ts -t "share one deadline" --rerun-each=10` passed (10/10). The complete owner passed alone. Sibling cases in the same `describe` (`a stalled lookup is bounded…`, `recovery and final observation share…`) still assert real elapsed bounds; they are not part of this case.

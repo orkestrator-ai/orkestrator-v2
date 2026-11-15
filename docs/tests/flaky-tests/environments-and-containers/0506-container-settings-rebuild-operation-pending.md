@@ -49,3 +49,7 @@
 - **Evidence:** `orkestrator-test-run.tLYllM/merge-docker.log.gz` below the host temporary directory; the original aggregate remains failed.
 - **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip changed, and this observation does not establish a cause.
 - **Cleanup:** `dev:stop` and `dev:reset` completed for `merge-main-validation`, removing two exact-owner containers, four volumes, one network and disposable profile state.
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. The first observation is an explicit 30 s wait in the spec that met `Another container operation is running`, a wrong state; the later 5 s Resources misses showed the section still on "Checking recovery copies…". The 2026-11-15 `expect: { timeout: 30_000 }` change in `e2e/agent-testing/playwright.browser.config.ts` may cover the latter but not the former.

@@ -1,7 +1,7 @@
 # Public exec restart fixture cleanup EPERM
 
 - **ID:** 0341
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-17
 - **Test:** `environment.exec > the worker survives a backend restart and its result is reconciled, not re-run`
   in `apps/backend/src/core/public-api/public-api-exec.test.ts`.
@@ -112,3 +112,10 @@ error across 655 files (501.24 s). The groups finished in 1010.2 s; exit 1.
 - **Owning-file rerun:** `mise run test:logged -- --name env-exec-alone -- bun test --cwd apps/backend ./src/core/public-api/public-api-exec.test.ts --parallel=1` passed (exit 0, 13.1 s).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.SdxKj0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Assessment:** recurrence of the existing intermittent failure. Nothing changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** not established; the evidence is only `EPERM` (about 1.1 s into the restart test) from `fs.rm(root, { recursive: true })` in the harness `cleanup()` on macOS after the test's assertions had passed. A recursive removal can lose to a file created or released inside the tree just before it, and the permission error then clears on its own.
+- **Fix:** `apps/backend/src/core/public-api/test-support.ts` removes the fixture root through `removeFixtureRoot`, which retries `EPERM`, `EBUSY` and `ENOTEMPTY` (up to 10 attempts, linear backoff) and throws any other error, or the last one, unchanged. No assertion, timeout or production code changed.
+- **Reproduced:** no, and it cannot be on this Linux host (the failure is macOS `EPERM`). The fix is a retry on the recorded transient error, so it is weaker evidence than a reproduction: if a recurrence names an `EPERM` that persists through ten attempts, reopen this case.
+- **Stress:** the owner passes unchanged (one `bun test --parallel=3` run with the other changed owners).

@@ -116,16 +116,14 @@ export function pushingGraphTemplate(id = "pushing-review"): GraphTemplateV1 {
   return template;
 }
 
-/** Polls `condition` (each turn of the event loop) until it holds; fails after `timeoutMs`. */
-export async function waitForGraphCondition(
-  condition: () => boolean,
-  timeoutMs = 2_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error("Condition not reached");
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
+/**
+ * Polls `condition` (each turn of the event loop) until it holds. It has no
+ * wall-clock deadline of its own: how long a loaded host takes to reach the
+ * condition is not what the tests assert, and the test's budget
+ * (tests/default-test-timeout.ts) is the hang watchdog.
+ */
+export async function waitForGraphCondition(condition: () => boolean): Promise<void> {
+  while (!condition()) await new Promise((resolve) => setTimeout(resolve, 1));
 }
 
 /** Collects `graph-template` announcements. */

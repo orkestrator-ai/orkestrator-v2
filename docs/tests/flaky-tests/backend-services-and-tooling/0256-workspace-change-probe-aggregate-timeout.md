@@ -1,7 +1,7 @@
 # Workspace change probe exceeds its aggregate deadline
 
 - **ID:** 0256
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-16
 - **Test:** `WorkspaceChangeProbe > measures tracked edits, new files and deletions made during the window`
 - **Owning file:** `packages/protocol/src/node/workspace-change-probe.test.ts`
@@ -34,3 +34,10 @@
 - **Isolated rerun:** `mise run test:logged -- --name workspace-change-probe-isolated -- bun test --cwd=packages/protocol ./src/node/workspace-change-probe.test.ts --parallel=1 --only-failures` passed unchanged (exit 0; 7.0 seconds).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Ulh9Q7/fix-protocol-mail.log.gz`.
 - **Changes:** recurrence recorded; probe implementation and tests are unchanged. Host contention remains a hypothesis.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** the recorded failures were Bun's 5 s default budget spent by a starved Git fixture. The same file also held two timed checks that contention could break: `settles at git's exit…` asserted `< 4000 ms` elapsed, and `discarded fresh windows…` polled at most 50 times 1 ms before a negative assertion.
+- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup.ts`, `tests/setup-node.ts`), raises Bun's default per-test and hook budget from 5 s to 60 s (a hang watchdog only); the file sets no smaller budget. In `packages/protocol/src/node/workspace-change-probe.test.ts` the runGit case's background child now holds the pipe for 30 s, longer than the runner's own 20 s git timeout, so a runner that waited for the pipe would time out instead of returning `output`; the elapsed bound is gone. The release poll now runs until the directory empties, behind a 30 s hang watchdog.
+- **Reproduced:** no. The 5 s budget failure was not provoked before the change. Base `a8b89f1541e7abb6af36d45121593ae14640a3ca`.
+- **Stress:** `mise run test:logged -- --name f3-a3b -- bun scripts/test-under-contention.ts --core 10 --burners 6 -- bun --cwd=packages/protocol test --preload ../../tests/setup-node.ts ./src/node/workspace-change-probe.test.ts --rerun-each=3` passed (81 tests × 3). An intermediate version that checked the background child with `kill(pid, 0)` failed there with ESRCH, because the runner reaps the process group, and was replaced.

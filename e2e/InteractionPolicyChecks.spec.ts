@@ -45,6 +45,15 @@ const coordinator = () => host("claude-interactions-host.ts", { CLAUDE_FIXTURE_C
 let codexInstance = 0;
 const codex = () =>
   host("codex-elicitation-host.ts", { CODEX_FIXTURE_INSTANCE: String(++codexInstance) });
+// The fixture page keeps polling `/__claude-test/` until it closes, and each call
+// is forwarded through this test's `request` context. At teardown that context
+// (or the page) goes away under a handler still in flight, which failed the test
+// with "Fetch response has been disposed" or "Target page ... closed" (case 9913).
+// Stop the forwarding before teardown and drop what is still in flight.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 test.afterAll(async () => {
   const started = await Promise.allSettled(hosts.values());
   hosts.clear();

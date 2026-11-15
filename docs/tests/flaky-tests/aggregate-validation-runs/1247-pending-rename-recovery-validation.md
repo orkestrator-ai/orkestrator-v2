@@ -29,3 +29,7 @@ transaction, without changing retention assertions.
 
 Originally numbered 1245; renumbered to 1247 while merging `main`
 to preserve both cases after parallel branches reused the number.
+
+## Triage (2026-11-15)
+
+Left open. Bridges never ran because the 1,800 s host capacity wait expired, a host-capacity condition, not a test budget. The native-commands failure is an assertion mismatch (0722) and `storage-writer-guards.test.ts` is diagnosed in [1309](../backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md).

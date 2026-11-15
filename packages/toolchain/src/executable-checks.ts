@@ -31,7 +31,11 @@ export async function probeExecutable(
         ),
       );
     });
-    child.once("exit", (code, signal) => {
+    // `close`, not `exit`: `exit` can fire before the child's last stdout and
+    // stderr chunks have been read, so a version printed just before exit could
+    // be judged empty ("no output") on a slow host. `close` follows the end of
+    // both streams; the timeout above still bounds a child that never ends.
+    child.once("close", (code, signal) => {
       clearTimeout(timeout);
       const output = Buffer.concat(chunks).toString("utf8");
       if (code !== 0) {

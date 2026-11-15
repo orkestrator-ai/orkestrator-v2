@@ -26,7 +26,9 @@ async function runOnce(args: string[]): Promise<{
   };
 }
 
-function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+// The deadline is a hang watchdog on a message the fake process will send; it
+// must not decide the outcome on a host too busy to start a child quickly.
+function waitFor(predicate: () => boolean, timeoutMs = 30_000): Promise<void> {
   const startedAt = Date.now();
   return new Promise((resolve, reject) => {
     const check = () => {

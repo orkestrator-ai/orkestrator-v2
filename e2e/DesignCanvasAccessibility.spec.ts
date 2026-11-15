@@ -488,7 +488,6 @@ async function attachSnapshot(testInfo: TestInfo, name: string, locator: Locator
 test("layer tree, frame list, inspector and status regions expose stable roles and names", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(90_000);
   await withCanvas(page, async ({ canvasId }) => {
     await openCanvas(page, canvasId);
     const narrow = await narrowPane(page);
@@ -594,7 +593,6 @@ test("layer tree, frame list, inspector and status regions expose stable roles a
 test("Enter on a layer of an unrendered frame announces the wait and selects once it renders", async ({
   page,
 }) => {
-  test.setTimeout(90_000);
   await withCanvas(page, async ({ canvasId }) => {
     await openCanvas(page, canvasId);
     await watchFocus(page);
@@ -700,7 +698,6 @@ test("prefers-reduced-motion disables canvas, dialog and popup animation", async
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "motion is width-independent");
-  test.setTimeout(90_000);
   await withCanvas(page, async ({ canvasId }) => {
     const exportButton = page.getByRole("button", { name: "Export design to repository" });
     const dialog = page.getByRole("dialog", { name: "Export design to repository" });

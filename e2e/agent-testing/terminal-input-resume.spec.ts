@@ -570,11 +570,13 @@ for (const transport of ["http-sse", "websocket"] as const) {
       await openEnvironment(other.name);
       await invoke(TERMINAL_WRITE, { sessionId: replacement, data: "echo recovered-background\n" });
       await expect.poll(() => output(replacement!)).toMatch(/recovered-background\r?\n/);
+      // Hang watchdogs on the rendered terminal buffer receiving output the
+      // backend already holds; the 5 s default failed here on a loaded host.
       await openEnvironment(target.name);
-      await expect.poll(renderedOutput).toContain("recovered-background");
+      await expect.poll(renderedOutput, { timeout: 30_000 }).toContain("recovered-background");
       await page.reload();
       await openEnvironment(target.name);
-      await expect.poll(renderedOutput).toContain("recovered-background");
+      await expect.poll(renderedOutput, { timeout: 30_000 }).toContain("recovered-background");
       await terminal.click();
       await page.keyboard.type("echo after-reload");
       await page.keyboard.press("Enter");

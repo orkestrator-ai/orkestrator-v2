@@ -1,7 +1,7 @@
 # 0187 — Workspace artifact Git excludes aggregate timeout
 
 - **ID:** 0187
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-11
 
 ## Observation — 2026-10-11
@@ -302,3 +302,11 @@ on a newly created worktree`), and on the unchanged base twice of three
 (this case, 5,016 ms and 5,496 ms). The branch does not touch the owner or
 anything it imports. See
 [1170](../aggregate-validation-runs/1170-codex-saved-rules-0160-validation.md).
+
+## Resolution (2026-11-15)
+
+- **Root cause:** The case runs real Git and a background scan; it missed Bun's 5 s budget (and once its hook budget) on a loaded host, and failed alone at load about 150 with the same 5 s deadline.
+- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup-node.ts`, `tests/setup.ts`), makes 60 s the default per-test and hook budget, a hang watchdog only. The file's own `setDefaultTimeout(30_000)`, which undercut the preload, now sets `DEFAULT_TEST_TIMEOUT_MS` (60 s) explicitly, because in a run without `--parallel`/`--isolate` Bun applies a preload's `setDefaultTimeout` to the first test file only. The shared `afterEach` uses `ASYNC_TEST_BUDGET_MS`, now 60 s.
+- **Reproduced:** no — the recorded deadline was Bun's default budget on a loaded host; the failing body is fast alone, and a 5 s exhaustion was not re-created per case here.
+- **Stress:** `mise run test:logged -- --name ec-stress-a -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --core 15 --burners 6 -- bun test --preload ../../tests/setup-node.ts <the twelve commands-* owners, this one included> --rerun-each=2 --parallel=1'` at host load about 80: 736 passed, 2 failed, both `serves the Files panel from the scan the badge already ran`, which stays open in [9854](9854-electron-diff-statistics-aggregate-timeout.md); no other case failed.
+- **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).

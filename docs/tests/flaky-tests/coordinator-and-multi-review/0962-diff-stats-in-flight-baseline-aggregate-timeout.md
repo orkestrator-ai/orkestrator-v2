@@ -1,7 +1,7 @@
 # Diff-stats in-flight baseline fence exceeds the aggregate deadline
 
 - **ID:** 0962
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-26
 - **Test:** `an in-flight baseline is fenced after prBaseBranch changes`
 - **Owning file:** `apps/backend/src/core/diff-stats-tracking.test.ts`.
@@ -88,3 +88,12 @@ formatting, lint and typechecking. The run does not establish that every
 aggregate failure is pre-existing. Browser, Electron, Docker and iOS scenario
 suites were outside this backend-only follow-up's scope; production-scale
 maintenance timing and packaged/cross-platform copy behavior remain unmeasured.
+
+## Resolution (2026-11-15)
+
+- **Class:** the test's own deadlines, not the product.
+- **Root cause:** `apps/backend/src/core/diff-stats-tracking.test.ts` set `setDefaultTimeout(30_000)` for the whole file, and every baseline race waited on `idleBaseline`, which polled the baseline owner's map for at most five wall-clock seconds and then asserted it was empty. The fixture runs real Git; on a saturated host a check legitimately took longer than that window, so the assertion saw the entry still in flight (this case, 1110, and the sibling timeouts). The unhandled SIGTERM'd `git` after the test ended is the same slow fixture torn down mid-flight by the timeout cascade, not a separate product fault.
+- **Fix:** `idleBaseline` now waits for the owner's own completion signal (the map empties when each check finishes, including its rerun) with no deadline of its own, and the file's `setDefaultTimeout(30_000)` is removed so it inherits `tests/default-test-timeout.ts` (imported by `tests/setup.ts` and `tests/setup-node.ts`), which sets Bun's default per-test and hook budget to 60 s as its hang watchdog. No assertion changed.
+- **Reproduced:** no. Six burners pinned with the command's one core (`bun scripts/test-under-contention.ts --core 14 --burners 6 -- bun test ... --rerun-each=2`) did not make the unchanged deadline fail on this host, so the 5 s window was not shown failing; the explanation is read from the code, not observed.
+- **Verified after the fix:** `mise run test:logged -- --name a2-ds -- bun scripts/test-under-contention.ts --core 14 --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/diff-stats-tracking.test.ts --rerun-each=2` passed (80.9 s).
+- **Not verified:** the sibling failures that were recorded in the owner's slow `newer target history` and `runtime isolation` cases (hook deadlines of 13 to 15 s with a removed fixture) were not reproduced; they now run under the 60 s default instead of 30 s.

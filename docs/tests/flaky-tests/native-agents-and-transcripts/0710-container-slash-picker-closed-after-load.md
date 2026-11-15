@@ -77,3 +77,7 @@ invalidates the progressive discovery snapshot as well as the catalogue cache.
 - **Disposition:** open.
 - **Evidence:** #1215 (0014505ca) and #1223 (d723429d5) changed the slash catalogue on 2026-10-24, but nobody has rerun the container variant under load since, so a fix is not shown.
 - **Next step:** as recorded above: time `get_native_agent_discovery_update` for a container session against a local one at the same load, then rerun the container variant.
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. The primary failure is an explicit 30 s picker wait in the spec where the listbox never rendered, and a later run saw a stale discovery snapshot served for about a minute. Neither is a default deadline, so the 2026-11-15 `expect: { timeout: 30_000 }` change does not address it.

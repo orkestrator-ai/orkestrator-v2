@@ -1,7 +1,7 @@
 # Public API harness: worktree cache gauges report no watched worktree
 
 - **ID:** 9993
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-13
 - **Test:** `worktree cache gauges follow the tracked environment and leave diagnostics on cleanup`
 - **File:** `apps/backend/src/core/public-api/test-support.test.ts:89`
@@ -23,3 +23,10 @@
   (294.09 ms); every other gauge matched. The aggregate runner's isolated rerun passed (4 pass,
   2.06 s). The branch changes agent-mail scheduling, the coordinator transcript and docs; nothing
   this test imports.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** a test race, found by reading the code. `isWatching()` (what the first test in the file asserts) is true once the watcher is established, but the `watched` cache gauge counts *qualified* coverage (`isQualified`: the Git metadata locations of the worktree resolved and watched, via an asynchronous subprocess, plus the tree). `trackedHarness()` resolves before that, so reading `cacheGauges()` straight after it lands first whenever the metadata resolution is slow, and sees `watched: 0`. That also fits it failing alone and not only in the aggregate.
+- **Fix:** `apps/backend/src/core/public-api/test-support.test.ts` waits for the service's own signal. `trackedHarness()` now returns `awaitQualifiedCoverage()`, which resolves as soon as `service.status().watched >= 1`, re-checked on every emitted event (the service publishes a `worktree-snapshot-changed` event carrying `watched` the moment coverage qualifies, from `onCoverageChange`), and checks before waiting so an already-published coverage cannot be missed. The gauge case awaits it before reading the gauges. The assertions are unchanged; a coverage that never qualifies still fails at the 60 s watchdog.
+- **Reproduced:** no. The unchanged test passed 15 of 15 here (`-t "worktree cache gauges" --rerun-each=15`) on a very loaded host, so the recorded alone-failures (2 of 4) did not recur; the race is established from the code, not observed here.
+- **Stress:** `bun test --rerun-each=10` on `test-support.test.ts` (under `mise run test:logged -- --name f1-stress`) passed, and a `--rerun-each=6` run before it. No contention run.

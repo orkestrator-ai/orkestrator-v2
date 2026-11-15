@@ -28,12 +28,15 @@ function commonBinDirs(): string[] {
   ];
 }
 
+/** How long a login shell may take to print its PATH before it is abandoned. */
+export const LOGIN_SHELL_TIMEOUT_MS = 5_000;
+
 /**
  * Ask the user's login shell for its PATH. GUI apps don't run the user's shell
  * profile, so this recovers entries added by .zshrc/.bashrc (nvm, asdf, custom
  * Docker installs, etc.). Best-effort: returns null on any failure.
  */
-function loginShellPath(): string | null {
+function loginShellPath(timeoutMs: number): string | null {
   const shell = process.env.SHELL;
   if (!shell) return null;
   try {
@@ -42,7 +45,7 @@ function loginShellPath(): string | null {
       ["-ilc", 'command -v node >/dev/null 2>&1; printf %s "$PATH"'],
       {
         encoding: "utf8",
-        timeout: 5_000,
+        timeout: timeoutMs,
         stdio: ["ignore", "pipe", "ignore"],
       },
     );
@@ -60,12 +63,17 @@ function loginShellPath(): string | null {
  *
  * No-op on Windows, where GUI apps inherit the full system PATH.
  */
-export function fixPath(): void {
+export function fixPath(
+  options: {
+    /** Tests replace the login-shell deadline; the backend uses the default. */
+    loginShellTimeoutMs?: number;
+  } = {},
+): void {
   if (process.platform === "win32") return;
 
   const separator = path.delimiter;
   const existing = (process.env.PATH ?? "").split(separator).filter(Boolean);
-  const loginPath = loginShellPath();
+  const loginPath = loginShellPath(options.loginShellTimeoutMs ?? LOGIN_SHELL_TIMEOUT_MS);
   const fromShell = (loginPath ?? "").split(separator).filter(Boolean);
 
   const merged: string[] = [];

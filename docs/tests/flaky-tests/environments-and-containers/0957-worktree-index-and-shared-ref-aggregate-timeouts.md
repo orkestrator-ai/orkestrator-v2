@@ -1,7 +1,7 @@
 # Linked-worktree index and shared-ref watcher tests timed out in the aggregate
 
 - **ID:** 0957
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-26
 - **Tests:** `real Git through the shared owner > staging in a linked worktree (index outside the root) is detected`; `real Git through the shared owner > a shared ref moving the baseline outside the worktree is detected`.
 - **File:** `apps/backend/src/core/worktree-snapshots-git.test.ts` (unchanged).
@@ -61,3 +61,11 @@ for all groups and owning-file results. Evidence:
 under the host temporary directory.
 
 The file reported an `(unnamed)` beforeEach/afterEach hook timeout at 5000.79 ms, after `killed 4 dangling processes`. The complete unchanged owner passed, exit 0 in 6.1 s, with `mise run test:logged -- --name merge-worktree-snapshots-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`. This records the hook-timeout recurrence already described above, without assigning it to an individual watcher case. Cause remains unconfirmed; no assertion, timeout, skip or implementation changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** The linked-worktree staging and shared-ref detections, and once a hook, exceeded Bun's 5 s default on a loaded macOS host.
+- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup-node.ts`, `tests/setup.ts`), makes 60 s the default per-test and hook budget, a hang watchdog only. Same change as [9892](9892-worktree-git-aggregate-timeouts.md): the Linux budget is the preload's 60 s, the detection deadlines are 45 s hang watchdogs on real scan revisions, and macOS keeps its 360 s budget. macOS event loss stays in [5061](5061-real-git-owner-saturated-fseventsd.md).
+- **Reproduced:** no — the recorded deadline was Bun's default budget on a loaded host; the failing body is fast alone, and a 5 s exhaustion was not re-created per case here.
+- **Stress:** `mise run test:logged -- --name ec-stress-b -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --core 13 --burners 6 -- bun test --preload ../../tests/setup-node.ts <seventeen container, pipeline, move, worktree and native-agent owners, this one included> --rerun-each=2 --parallel=1'` at host load about 80: 1,139 passed, 1 failed — `git fsmonitor > fixture repositories inherit fsmonitor off from the test preload` on its second rerun, which fails the same way without contention and with the unchanged file (`git-fsmonitor.test.ts` is not rerun-safe).
+- **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).

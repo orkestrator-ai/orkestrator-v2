@@ -10,3 +10,7 @@
 - **Failure:** `expect(locator('#app')).toHaveText("preview-vite v2")` timed out after 5 s; `#app` still read `preview-vite v1`. 44 passed, one failed (the second repetition) in 44.3 s.
 - **Reruns:** the case alone on Chromium and Firefox, `--repeat-each=6`: 12 passed. The complete owner in file order on Chromium, `--repeat-each=3`: 45 passed. The full `test:preview:browser` run on Chromium and Firefox passed this case on both engines.
 - **Assessment:** intermittent by the registry's rule. Same symptom as the Electron HMR case [1303](1303-vite-hmr-preview-fails-alone.md) (slow HMR delivery on a loaded host). The HMR socket is an upgrade and never pooled, but the follow-up `label.js` fetch does use the pool; nothing observed ties the failure to it. No implementation, assertion, timeout or skip changed.
+
+## Triage note (2026-11-15)
+
+Not changed. Recorded failure: HMR v2 applied within 5 s. The specs run through `e2e/preview/playwright.preview.config.ts` or `e2e/agent-testing/playwright.browser.config.ts`, which this pass did not change (shared configs; a global assertion budget could loosen latency rules like the banner delay). Not run. Stays `open`.

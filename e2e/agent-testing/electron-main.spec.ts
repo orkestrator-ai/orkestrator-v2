@@ -171,13 +171,15 @@ test("real invoke rejections keep only the handler message across the context br
     `,
     );
     app = await electron.launch({
+      // A watchdog on launch, not a startup budget: a loaded host can take longer than 30 s.
+      timeout: 60_000,
       executablePath: electronExecutable,
       args: [...ELECTRON_TEST_SWITCHES, main],
       cwd: root,
       env: electronSpecEnvironment(process.env, { ELECTRON_RUN_AS_NODE: undefined }),
     });
     recordElectronDiagnostics(app);
-    const window = await app.firstWindow();
+    const window = await app.firstWindow({ timeout: 60_000 });
     const results = await window.evaluate(async () => {
       const api = (globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi })
         .orkestrator;
@@ -247,6 +249,8 @@ async function testIndependentWindows(
     recordProcessOutput("vite", vite);
     await waitForUrl(rendererUrl);
     const app = await electron.launch({
+      // A watchdog on launch, not a startup budget: a loaded host can take longer than 30 s.
+      timeout: 60_000,
       executablePath: electronExecutable,
       args: [
         ...ELECTRON_TEST_SWITCHES,
@@ -800,14 +804,27 @@ print("public.tiff")
       await assertRemoteLabels("Workstation");
       // Reload the other renderer: its list must rehydrate the shared nickname.
       await secondWindow.reload();
+      // A freshly reloaded renderer's first evaluate can take longer than
+      // expect's 5 s default to answer on a loaded host (flakes 0515, 9863),
+      // so the poll would never see a value. Wait for the renderer to expose
+      // its bridge again, then poll the shared list; the deadline only guards
+      // a hang.
+      await secondWindow.waitForFunction(
+        () => Boolean((globalThis as { orkestrator?: unknown }).orkestrator),
+        undefined,
+        { timeout: 60_000 },
+      );
       await expect
-        .poll(() =>
-          secondWindow.evaluate(async (id) => {
-            const api = (globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi })
-              .orkestrator;
-            return (await api.connections.list()).connections.find((entry) => entry.id === id)
-              ?.name;
-          }, remoteId),
+        .poll(
+          () =>
+            secondWindow.evaluate(async (id) => {
+              const api = (
+                globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi }
+              ).orkestrator;
+              return (await api.connections.list()).connections.find((entry) => entry.id === id)
+                ?.name;
+            }, remoteId),
+          { timeout: 60_000 },
         )
         .toBe("Workstation");
       for (const page of [window, secondWindow]) {
@@ -987,6 +1004,8 @@ test("a real window with a missing preload reaches recovery without mounting the
     );
 
     const app = await electron.launch({
+      // A watchdog on launch, not a startup budget: a loaded host can take longer than 30 s.
+      timeout: 60_000,
       executablePath: electronExecutable,
       args: [...ELECTRON_TEST_SWITCHES, entrypoint],
       cwd: repositoryRoot,
@@ -994,9 +1013,9 @@ test("a real window with a missing preload reaches recovery without mounting the
     });
     recordElectronDiagnostics(app);
     launchedApp = app;
-    const window = await app.firstWindow();
+    const window = await app.firstWindow({ timeout: 60_000 });
     await expect(window.getByRole("alert")).toContainText("Orkestrator couldn’t connect", {
-      timeout: 15_000,
+      timeout: 60_000,
     });
     await expect(window.getByRole("button", { name: "Reload window" })).toBeVisible();
     await expect(window.getByRole("button", { name: "Global settings" })).toHaveCount(0);
@@ -1052,6 +1071,8 @@ test("bootstrap window repaints a resized native Wayland surface at fractional s
       ].join("\n"),
     );
     const app = await electron.launch({
+      // A watchdog on launch, not a startup budget: a loaded host can take longer than 30 s.
+      timeout: 60_000,
       executablePath: electronExecutable,
       args: [
         ...ELECTRON_TEST_SWITCHES,
@@ -1064,7 +1085,7 @@ test("bootstrap window repaints a resized native Wayland surface at fractional s
     });
     recordElectronDiagnostics(app);
     launchedApp = app;
-    await app.firstWindow();
+    await app.firstWindow({ timeout: 60_000 });
 
     const rendering = await captureBootstrapRendering(app);
     expectResponsiveBootstrapRendering(rendering);

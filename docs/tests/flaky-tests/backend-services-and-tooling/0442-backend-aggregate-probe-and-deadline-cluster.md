@@ -1,7 +1,7 @@
 # Backend aggregate capability probe, retaining close and startup deadline
 
 - **ID:** 0442
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Original command:** `mise run test:logged -- --name merge2-tests -- mise run test`, macOS arm64 and Bun 1.4.3, merging `c85ab60a` into `9467f965`; workspace/root/bridges/protocol reservations 4/1/2/1 alongside component and isolated browser validation.
 - **Aggregate counts:** backend 9081 passed, 41 skipped and 11 failed across 9133 tests in 485 files (1118.57 seconds); the full command exited 1 after 1132.1 seconds. Other backend failures have their own cases. Every other workspace package passed.
@@ -19,3 +19,10 @@ Commands:
 - `mise run test:logged -- --name merge2-standalone-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/standalone-ready.test.ts --parallel=1 --only-failures`
 
 Evidence: `orkestrator-test-run.0J1rem/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.ihuIVF/merge2-late-backend-owners.log.gz` below the host temporary directory. The unchanged rerun passes establish intermittence; shared-host scheduling/I/O contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** three different causes. (1) `capabilities reports the package version without launcher metadata` hit the default five-second test budget under load. (2) `a bridge close can finish after the legacy request budget` used a real 200 ms close deadline against a bridge that slept 70 ms, so a loaded host could spend the whole deadline before the response arrived and the teardown rejected (419.92 ms and 313.13 ms observed). (3) `times out with a named diagnostic without waiting for stdout to close` bounded elapsed time below 200 ms; the later commit `ee2cc8423` already replaced that with a held kill-grace timer, but the sibling `fails immediately when the auth file has no token instead of waiting for the deadline` still bounded elapsed time below 500 ms.
+- **Fix:** (1) `tests/default-test-timeout.ts` (imported by `tests/setup.ts` and `tests/setup-node.ts`) sets a 60 s default; `public-api-projects.test.ts` has no smaller budget. (2) `apps/backend/src/core/commands-registry-teardown.test.ts` now holds the close deadline with `installControlledTimeout` (a delay no other timer uses) and never advances it, and the bridge asserts inside the request that the deadline is armed; the bridge still sleeps 70 ms, which outlasts the 20 ms legacy budget by construction. (3) `apps/backend/tests/standalone-ready.test.ts` holds the five-second ready deadline instead of timing the rejection, and asserts it was cleared, not fired. No assertion was loosened.
+- **Reproduced:** no. No contention run completed (host load average 100 to 180 from other workers). (2) and (3) are removed by construction: the deadline in question cannot fire.
+- **Stress:** `bun test --rerun-each=10` on the teardown and standalone-ready owners passed.

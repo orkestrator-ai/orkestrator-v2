@@ -45,6 +45,13 @@ export default defineConfig({
   testIgnore: ["agent-testing/**", "preview/**", "public-site/**"],
   fullyParallel: true,
   workers,
+  // Both budgets are hang watchdogs on real signals (a navigation, a DOM
+  // condition), not speed checks. Playwright's 30 s test and 5 s assertion
+  // defaults failed healthy specs when the suite shared a loaded host
+  // (docs/development/testing-guide.md, "Controlled time"). A spec that
+  // measures latency asserts it explicitly.
+  timeout: 120_000,
+  expect: { timeout: 30_000 },
   // Review validation retries a failed test once, so one timing miss on a busy
   // host does not fail the whole check. A test that passes on its retry is
   // still listed as flaky in the check's output; record it in

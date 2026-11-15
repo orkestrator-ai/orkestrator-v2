@@ -13,3 +13,7 @@
 - **Evidence:** `orkestrator-test-run.aMkTVq/` under the host temporary directory.
 
 No assertion, timeout or skip was changed for these tests. Shared-host and external-drive contention is a possible contributor, not an established cause.
+
+## Triage (2026-11-15)
+
+Left open. `environment-move.test.ts` calls `setDefaultTimeout(30_000)`, smaller than the shared 60 s default in `tests/default-test-timeout.ts`, so [0621](../environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md) and [0248](../environments-and-containers/0248-move-restart-recovery-submodule-timeout.md) own those two timeouts. The Mermaid watchdog elapsed-bound failure is an assertion on a measured deadline, not a test budget, and stays with [9858](../design-canvas-and-artifacts/9858-mermaid-watchdog-elapsed-under-load.md) and [9866](../design-canvas-and-artifacts/9866-mermaid-watchdog-aggregate-deadline.md).

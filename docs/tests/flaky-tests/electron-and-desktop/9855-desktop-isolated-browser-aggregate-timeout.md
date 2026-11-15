@@ -1,7 +1,7 @@
 # Isolated browser runner cases time out under aggregate load (`apps/desktop/scripts/dev/isolated-browser.test.ts`)
 
 - **ID:** 9855
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-25
 - **Tests:** `full task runs the whole configured suite and preserves Playwright failure`,
   `a profile exit during Playwright terminates the test process and cleans up`,
@@ -54,3 +54,44 @@ run in [0995](../aggregate-validation-runs/0995-agent-accounts-sign-in-0003-qual
 - **Failure:** `companion startup-hang stops the suite and resets both started profiles` failed after 1939.99 ms: `toThrow("startup timed out")` received `Command timed out`. 584 of 585 tests across 26 files passed.
 - **Isolated rerun:** `mise run test:logged -- --name isolated-browser -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/isolated-browser.test.ts --parallel=1 --only-failures` passed unchanged in 14.1 s.
 - **Hypothesis:** plausibly the same deadline sensitivity with a different symptom: under four-worker load another deadline ("Command timed out") fired before the case's 1.5 s `startupTimeoutMs` was reported. Not reproduced alone; no assertion, timeout or skip was changed. The branch does not touch `isolated-browser.ts` or its test. `mise run flaky:recurrence -- 9855 --base 498b6876…` answered "open; record the failure as a recurrence".
+
+## Resolution (2026-11-15)
+
+- **Root cause:** three things, all deadlines that load could break while the
+  runner was making progress.
+  1. Bun's five-second default (the 2026-09-25, 2026-10-12 and 2026-10-26
+     observations): the cases spawn and reap real fake launchers.
+  2. A product race behind the 2026-11-11 symptom: when less than a status
+     probe's own 10 s bound was left before the startup deadline, the probe
+     was cut to the remainder, and on a slow host that cut fired before the
+     loop's own deadline check, so the run failed with `Command timed out`
+     instead of `Isolated profile startup timed out`.
+  3. Short test deadlines: startup deadlines of 400 ms and 1.5 s that had to
+     pass only after a launcher had recorded itself, a 3 s and 8 s wait for
+     marker files, and two `elapsed < 15 s` assertions.
+- **Fix:**
+  - `apps/desktop/scripts/dev/isolated-browser.ts`: a probe whose budget the
+    startup deadline clipped and that timed out reports the startup deadline.
+    Pinned by the new `a status probe cut short by the startup deadline reports the deadline`
+    case (a `dev:status` fake that never answers).
+  - `isolated-browser.test.ts`: the companion `startup-hang` case and
+    `a profile that fails to start …` use a 60 s startup watchdog and move the
+    runner's clock (`performance.now`) past the deadline only once the hanging
+    launcher has recorded its own `dev:test` event (`jumpClockWhen`), so the
+    deadline passes on that event, not after real time. The two Docker-check
+    cases no longer bound elapsed time; their fakes would sleep 30 s and then
+    leave a `-finished` marker, and the run (which awaits every stopped
+    process group before rejecting) must leave no marker. The marker-file
+    waits are 45 s hang watchdogs; the owner-signal cases use the suite
+    default instead of their own 15 s.
+- **Reproduced:** partly. Under `bun scripts/test-under-contention.ts --burners 6`
+  (command under 9912's resolution) `a profile that fails to start …` failed
+  2 of 3 times with the old 400 ms deadline: the run stopped the launcher
+  before it recorded `dev:test`. That was fixed as above. The five-second
+  budget failures and the `Command timed out` race were not reproduced; the
+  race is pinned by the new case instead.
+- **Stress:** `mise run test:logged -- --name f9855-contention4 -- bun scripts/test-under-contention.ts --core 11 --burners 6 -- bash -c 'for i in 1 2 3; do bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/isolated-browser.test.ts ./scripts/dev/fixture.test.ts --isolate || exit 1; done'`
+  passed 3 of 3 (63.8 s). The same loop twice on the default core 15, which
+  other workers' burners were also loading (where the 400 ms failure above
+  appeared), passed 2 of 2 (`f9855-contention5`, 389.6 s). A stress pass is
+  weaker evidence than a reproduction for the parts not reproduced.

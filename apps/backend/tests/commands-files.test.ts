@@ -164,7 +164,10 @@ describe("Electron backend command registry", () => {
         cwd: workspace,
         input: Buffer.from("?? waiting.pipe\0"),
         encoding: "utf8",
-        timeout: 2_000,
+        // Only a hang watchdog: a scanner that opened the pipe would block
+        // forever, so any finite bound separates it from one that skips the
+        // pipe, however slowly the host starts `node`.
+        timeout: 30_000,
       },
     );
 

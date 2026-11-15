@@ -1,7 +1,7 @@
 # Historic tool row has no tool buttons after a long-session append under load
 
 - **ID:** 0253
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-16
 - **Test:** `[mobile-chromium] › a tool row outside the render window remains reachable after a long-session append`
 - **Owning file:** `e2e/StreamingTranscript.spec.ts:114`
@@ -25,3 +25,10 @@
   backdrop) does not touch transcript rendering, measurement or this
   fixture. The related history cases are 0207 and 0238. No assertion was
   skipped or weakened.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** a default Playwright deadline on a loaded host while waiting on a real signal. Playwright's 5 s default assertion deadline expired on the web-first `toHaveCount(16)` for the historic row's tool buttons, a real render signal that a loaded host delayed. The spec passes no smaller timeout at that call (the only explicit `timeout: 1_000` in the file is inside the `toPass` fold retry, not the recorded call).
+- **Fix:** `e2e/playwright.config.ts` (the component browser suite, `mise run test:browser`) now sets `timeout: 120_000` (was Playwright's 30 s default) and `expect: { timeout: 30_000 }` (was 5 s). Both are hang watchdogs on real signals, not speed checks.
+- **Reproduced:** no — the recorded failure was not reproduced before the fix. The evidence is a rerun of the component specs that had failed in a loaded run, with the new config: 112 passed. A raised budget is weaker evidence than a reproduced race.
+- **Reopen:** a recurrence that hangs near the new budget (a navigation near 120 s, an assertion near 30 s) means the signal never arrives; reopen this case rather than raising the budget again.

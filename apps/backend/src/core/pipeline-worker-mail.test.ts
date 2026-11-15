@@ -390,6 +390,10 @@ describe("pipeline worker mailboxes", () => {
     const { build, pipeline } = await runningBuild(h);
     const main = await h.world.main();
     const sent = await h.world.delegate(main, worker(h.environmentId, build), "Never read.");
+    // The explicit synchronization below owns expiry. Drain the service's timer
+    // work first: a competing sync could expire the message while this one finds
+    // nothing left to expire, and return before that sync has sent the notice.
+    await h.world.mail.shutdown();
     // The build ends without another turn and the pipeline moves on.
     const verify = stageSession("verify", { key: "verify", label: "Verify Session" });
     await h.save({
@@ -766,6 +770,9 @@ test("expired command-node mail sends a notice through the node outbox", async (
     },
     { newDelegation: true },
   );
+  // Explicit synchronization owns expiry (see the claim-settling test): drain
+  // the service's timer work so no competing sync publishes the notice late.
+  await h.world.mail.shutdown();
   pipeline.phase = "failed";
   await h.save(pipeline);
   expect(

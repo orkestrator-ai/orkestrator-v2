@@ -38,3 +38,7 @@ passed. Recorded with the rest of that run in to-do
 ("Real-display run on mbp3") and
 [8300](../../todo/cross-cutting/8300-electron-suite-on-a-shared-mac-desktop.md).
 Cause not established; the case stays open.
+
+## Triage note (2026-11-15)
+
+Not changed. Recorded failure: `beforeAll` finding no adjacent ports, a host port-availability dependency. Electron specs and their configs were not run or edited in this pass (shared with other groups, and unverifiable here); no spec-local explicit signal could be justified without a live reproduction. Stays `open`.

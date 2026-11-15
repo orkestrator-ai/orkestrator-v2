@@ -10,3 +10,7 @@
 - **Suite counts:** CLI package 325 pass, 1 fail.
 - **Isolated rerun:** `mise run test:logged -- --name a-cli -- bun test --cwd packages/cli --preload ../../tests/setup-node.ts tests/cli-client.test.ts --parallel=1` passed (19.7 s).
 - **Hypothesis:** the packaged client's first command against a backend that was still starting under host load; the branch did not change the CLI.
+
+## Triage (2026-11-15)
+
+- **Not changed:** `project add` exited with no stdout after 2.6 s. This is not a deadline: the CLI driver's own limit is 10 min. The cause (a client crash, or a startup refusal printed elsewhere) cannot be established from the record. Still open.

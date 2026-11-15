@@ -1,4 +1,5 @@
-import { describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
+import { describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
+import { DEFAULT_TEST_TIMEOUT_MS } from "../../../../tests/default-test-timeout.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,8 +11,13 @@ import { observeCommandInvocations, runCommand } from "./shell.js";
 // status script of about fifteen processes) against a temporary repository.
 // The exclude-repair case runs two repository inits and seven scans, 1.3 s on
 // an idle Linux host; a saturated macOS aggregate pushed it past Bun's generic
-// five seconds (flake case 6603), where Bun kills the running `git`.
-setDefaultTimeout(30_000);
+// five seconds (flake case 6603), where Bun kills the running `git`, and later
+// its own 30 s budget. The shared preload's hang watchdog
+// (tests/default-test-timeout.ts, 60 s) now bounds it; no smaller per-file
+// budget is set here.
+// The file sets the same budget itself: in a run without `--parallel`/`--isolate`
+// Bun applies a preload's setDefaultTimeout to the first test file only.
+setDefaultTimeout(DEFAULT_TEST_TIMEOUT_MS);
 
 test("scanning a stat-dirty but content-clean linked worktree leaves its index untouched", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-local-scan-index-"));

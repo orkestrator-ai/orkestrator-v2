@@ -26,6 +26,7 @@ import { RichTranscriptScopeContext, type RichTranscriptScope } from "@/lib/chat
 import { richRenderScheduler } from "@/lib/chat/rich-render-cache";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
 import { richViewStoreStats, useRichContentViewStore } from "@/stores/richContentViewStore";
+import { ASYNC_UTIL_HANG_WATCHDOG_MS } from "@/test/async-util-hang-watchdog";
 
 const WINDOW = 20;
 const controllers = new Map<unknown[], (start: number) => void>();
@@ -300,7 +301,9 @@ async function settle(): Promise<void> {
       const stats = richRenderScheduler.stats();
       expect(stats.inflight + stats.queued).toBe(0);
     },
-    { timeout: 3_000 },
+    // The scheduler drains on its own; this bound only stops a hung drain, so
+    // a starved aggregate worker cannot fail a drain that is still progressing.
+    { timeout: ASYNC_UTIL_HANG_WATCHDOG_MS },
   );
   sample();
 }

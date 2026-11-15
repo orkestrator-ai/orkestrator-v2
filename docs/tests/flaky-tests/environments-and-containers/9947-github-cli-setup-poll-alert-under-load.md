@@ -39,3 +39,7 @@ macOS host, 18 cores, shared with other worktrees:
 Unconfirmed. The alert waits on a coordinated poll's interval; on a loaded
 page the first poll (or its rerender) can land after the 5 s expectation
 budget. Not investigated further in the change that observed it.
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. The alert at line 15 is transient: the fixture fails only the first login poll, and `GitHubCliSetup` clears the error on the next successful poll (`setError(null)` in its poll loop, `pollIntervalMs={500}` in `e2e/fixture/GitHubCliSetupFixture.tsx`). A loaded page can show and clear the alert between assertion retries, so a longer budget (`expect: { timeout: 30_000 }` in `e2e/playwright.config.ts`) does not fix a missed transient signal. It also failed with the owning file alone.

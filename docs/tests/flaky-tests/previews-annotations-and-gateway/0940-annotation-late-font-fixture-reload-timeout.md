@@ -23,3 +23,7 @@
 - **Complete unchanged owner rerun:** `mise run test:logged -- --name essential-annotations-isolated -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts web-annotations-electron.spec.ts` passed with 14 passed and 1 skipped in 122.3 seconds. Neither the test file nor preview/pin implementation was edited by this branch. The full suite remains failed; this isolated pass does not qualify the other scenarios.
 - **Evidence:** `output/agent-testing/essential-review-fixes/validation/essential-electron.log.gz`; the isolated Playwright results are `output/agent-testing/essential-review-fixes/validation/annotations-isolated-results.json`.
 - **Attribution:** this matches the existing reload-deadline symptom. No cause is established from this recurrence, and no assertion, timeout or skip was changed.
+
+## Triage note (2026-11-15)
+
+Not changed. Recorded failure: a 20 s fixture reload predicate in Electron. Electron specs and their configs were not run or edited in this pass (shared with other groups, and unverifiable here); no spec-local explicit signal could be justified without a live reproduction. Stays `open`.

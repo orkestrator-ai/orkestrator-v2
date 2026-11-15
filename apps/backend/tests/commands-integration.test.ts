@@ -6,6 +6,7 @@ import {
 } from "../src/core/storage-test-support";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, mock, test, setDefaultTimeout } from "bun:test";
+import { DEFAULT_TEST_TIMEOUT_MS } from "../../../tests/default-test-timeout.js";
 
 import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
 import {
@@ -14,6 +15,7 @@ import {
 } from "../src/core/terminal-runtime";
 import { createBackendChangeTracking } from "../src/core/change-tracking";
 import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
+import { eventSink } from "../src/core/backend-emit.js";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -23,6 +25,7 @@ const {
   commandTesting,
   createCommandRegistry,
   createContext,
+  createDeferred,
   createEnvironment,
   createRuntime,
   createGitRepoOnBranch,
@@ -59,9 +62,12 @@ const {
 import type { CommandContext, Environment, RepositoryConfig } from "./command-fixtures";
 
 // This slow-tier file creates real repositories/worktrees and waits for
-// subprocess cleanup. Give that fixture work its own bounded host budget;
-// explicit operation deadlines and shorter test budgets remain unchanged.
-setDefaultTimeout(30_000);
+// subprocess cleanup. The shared preload's hang watchdog
+// (tests/default-test-timeout.ts, 60 s) bounds that work; a smaller per-file
+// budget here would let a loaded host fail a test that is still progressing.
+// The file sets the same budget itself: in a run without `--parallel`/`--isolate`
+// Bun applies a preload's setDefaultTimeout to the first test file only.
+setDefaultTimeout(DEFAULT_TEST_TIMEOUT_MS);
 
 /**
  * A managed `opencode2` stand-in: answers `/api/info` as OpenCode 2 behind
@@ -2323,7 +2329,7 @@ exit 1
       } finally {
         await deleteEnvironmentQuietly(commands, environment.id, context);
       }
-    }, 30_000);
+    });
 
     test("does not mark the counts approximate for an ordinary worktree", async () => {
       const { worktree } = await createGitWorktreeWithOrigin();
@@ -2417,7 +2423,7 @@ exit 1
         if (previousResponse === undefined) delete process.env.FAKE_CONTAINER_DIFF_RESPONSE;
         else process.env.FAKE_CONTAINER_DIFF_RESPONSE = previousResponse;
       }
-    }, 15_000);
+    });
 
     // git status is dominated by walking and stat'ing the tree, and the
     // untracked cache is what stops it re-reading directories it has already
@@ -2442,21 +2448,27 @@ exit 1
         },
         repositoryConfig: { defaultBranch: "main", prBaseBranch: "main" },
       });
+      // Diff tracking announces its first scan with this event. Wait for the
+      // event itself rather than polling for it under a fixed deadline: the
+      // scan runs real Git, which a loaded host can delay for any length of
+      // time without anything being wrong.
+      const trackingStarted = createDeferred();
+      context.emit = eventSink((event, payload) => {
+        emitted.push({ event, payload });
+        if (
+          event === "environment-diff-stats-changed" &&
+          (payload as { environmentId?: string }).environmentId === environment.id
+        ) {
+          trackingStarted.resolve();
+        }
+      });
       const commands = createCommandRegistry();
 
       try {
         await commands.get("start_environment")?.({ environmentId: environment.id }, context);
         const worktreePath = environment.worktreePath!;
 
-        await waitForCondition(
-          () =>
-            emitted.some(
-              (entry) =>
-                entry.event === "environment-diff-stats-changed" &&
-                (entry.payload as { environmentId?: string }).environmentId === environment.id,
-            ),
-          "new local environment diff tracking to start",
-        );
+        await trackingStarted.promise;
         const snapshot = (await commands.get("get_environment_diff_stats")?.({}, context)) as {
           entries: Array<{ environmentId: string }>;
         };
@@ -3999,18 +4011,10 @@ printf '%s' ${JSON.stringify(
         { environmentId: environment.id, forceRefresh: true },
         context,
       );
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const snapshot = await Promise.race([
-        refresh,
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error("Claude model refresh waited for the host cache write")),
-            2_000,
-          );
-        }),
-      ]).finally(() => {
-        if (timeout) clearTimeout(timeout);
-      });
+      // The host cache write stays pending until `finally`, so a refresh that
+      // waited for it would never settle and the test's hang watchdog would
+      // fail it. No wall-clock race is needed to tell the two apart.
+      const snapshot = await refresh;
 
       expect(snapshot).toMatchObject({
         environmentId: environment.id,

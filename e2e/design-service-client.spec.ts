@@ -6,8 +6,6 @@ import { join } from "node:path";
 import { createDesignServiceClient, startDesignServiceHost } from "./design-service-client";
 
 test.describe("design service host lifecycle", () => {
-  test.setTimeout(10_000);
-
   function fixture(mode: string, timeoutMs = 1000) {
     const child = spawn(
       process.execPath,

@@ -1,7 +1,7 @@
 # Git fsmonitor scans exceed the aggregate test deadline
 
 - **ID:** 1253
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-28
 - **File:** `apps/backend/src/core/git-fsmonitor.test.ts`
 - **Original command:** `mise run test` during review preparation at `05737aff0133f4d7a377ec30d1cfb37f514b71de`.
@@ -537,3 +537,11 @@ reported `open`: record it as a recurrence.
   12.5 s).
 - **Hypothesis (unconfirmed):** as above, the asynchronous daemon start loses
   the race with the follow-up `status` call on a loaded host.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** The fsmonitor scans run real Git (and on macOS a daemon); they exceeded Bun's 5 s default under load.
+- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup-node.ts`, `tests/setup.ts`), makes 60 s the default per-test and hook budget, a hang watchdog only. The file's own `setDefaultTimeout(30_000)`, which undercut the preload, now sets `DEFAULT_TEST_TIMEOUT_MS` (60 s) explicitly, because in a run without `--parallel`/`--isolate` Bun applies a preload's `setDefaultTimeout` to the first test file only. The product Git commands keep their own 10–30 s timeouts, unchanged.
+- **Reproduced:** no — the recorded deadline was Bun's default budget on a loaded host; the failing body is fast alone, and a 5 s exhaustion was not re-created per case here.
+- **Stress:** `mise run test:logged -- --name ec-stress-b -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --core 13 --burners 6 -- bun test --preload ../../tests/setup-node.ts <seventeen container, pipeline, move, worktree and native-agent owners, this one included> --rerun-each=2 --parallel=1'` at host load about 80: 1,139 passed, 1 failed — `git fsmonitor > fixture repositories inherit fsmonitor off from the test preload` on its second rerun, which fails the same way without contention and with the unchanged file (`git-fsmonitor.test.ts` is not rerun-safe). Fresh processes instead: `mise run test:logged -- --name ec-fsmon-stress -- bash -c 'cd apps/backend && for i in 1 2 3; do bun ../../scripts/test-under-contention.ts --core 13 --burners 6 -- bun test --preload ../../tests/setup-node.ts ./src/core/git-fsmonitor.test.ts --parallel=1 || exit 1; done'` passed 3 of 3.
+- **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).

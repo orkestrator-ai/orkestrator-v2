@@ -10,6 +10,14 @@ import { PI_BRIDGE_RUNTIME_EXPORTS } from "../../bridges/pi-bridge/src/pi-sdk";
 
 const execFileAsync = promisify(execFile);
 
+// Hang watchdogs, not assertions. The test copies the whole Pi runtime closure
+// and then waits for a real child process to import it; both take far longer
+// when the host is saturated (flakes 0178 and 9860 saw 30 s, and once 112 s),
+// and neither outcome depends on how long it took. The child's budget sits
+// inside the test's so a stuck import fails with its own error, not a timeout.
+const STAGED_RUNTIME_WATCHDOG_MS = 150_000;
+const STAGED_RUNTIME_TEST_WATCHDOG_MS = 180_000;
+
 type FixturePackage = {
   key: string;
   name: string;
@@ -85,44 +93,48 @@ describe("Pi bridge runtime vendoring", () => {
     }
   });
 
-  test("loads Pi's supported SDK from the staged runtime closure", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "pi-vendor-live-test-"));
-    const packageRoot = path.resolve(import.meta.dir, "../../bridges/pi-bridge");
-    const stagedModules = path.join(root, "node_modules");
-    const entryPackages = [
-      "@earendil-works/pi-coding-agent",
-      "@earendil-works/pi-ai",
-      "@earendil-works/pi-agent-core",
-    ] as const;
+  test(
+    "loads Pi's supported SDK from the staged runtime closure",
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "pi-vendor-live-test-"));
+      const packageRoot = path.resolve(import.meta.dir, "../../bridges/pi-bridge");
+      const stagedModules = path.join(root, "node_modules");
+      const entryPackages = [
+        "@earendil-works/pi-coding-agent",
+        "@earendil-works/pi-ai",
+        "@earendil-works/pi-agent-core",
+      ] as const;
 
-    try {
-      await stageRuntimeClosure({ packageRoot, destination: stagedModules, entryPackages });
+      try {
+        await stageRuntimeClosure({ packageRoot, destination: stagedModules, entryPackages });
 
-      const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
-      for (const name of entryPackages) {
-        const staged = JSON.parse(
-          await readFile(path.join(stagedModules, name, "package.json"), "utf8"),
+        const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
+        for (const name of entryPackages) {
+          const staged = JSON.parse(
+            await readFile(path.join(stagedModules, name, "package.json"), "utf8"),
+          );
+          expect(staged.version).toBe(manifest.dependencies[name]);
+        }
+
+        // Pi 0.85.1 removes the accidentally published experimental worker.
+        // Probe the public entrypoint the bridge uses, resolving only from the
+        // staged tree, without creating a session or making a model request.
+        await execFileAsync(
+          process.execPath,
+          [
+            "--eval",
+            'const sdk = await import("@earendil-works/pi-coding-agent"); ' +
+              `for (const name of ${JSON.stringify(PI_BRIDGE_RUNTIME_EXPORTS)}) ` +
+              'if (typeof sdk[name] !== "function") throw new Error("Missing SDK export: " + name);',
+          ],
+          { cwd: root, timeout: STAGED_RUNTIME_WATCHDOG_MS, maxBuffer: 128 * 1024 },
         );
-        expect(staged.version).toBe(manifest.dependencies[name]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
       }
-
-      // Pi 0.85.1 removes the accidentally published experimental worker.
-      // Probe the public entrypoint the bridge uses, resolving only from the
-      // staged tree, without creating a session or making a model request.
-      await execFileAsync(
-        process.execPath,
-        [
-          "--eval",
-          'const sdk = await import("@earendil-works/pi-coding-agent"); ' +
-            `for (const name of ${JSON.stringify(PI_BRIDGE_RUNTIME_EXPORTS)}) ` +
-            'if (typeof sdk[name] !== "function") throw new Error("Missing SDK export: " + name);',
-        ],
-        { cwd: root, timeout: 15_000, maxBuffer: 128 * 1024 },
-      );
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  }, 30_000);
+    },
+    STAGED_RUNTIME_TEST_WATCHDOG_MS,
+  );
 
   test("preserves nested versions and remains resolvable without the source install", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "pi-vendor-test-"));

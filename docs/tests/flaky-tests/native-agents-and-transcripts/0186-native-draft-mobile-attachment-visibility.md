@@ -91,3 +91,7 @@ config with `testMatch: "native-draft-attachments.spec.ts"`):
 ```bash
 mise run test:logged -- --name draft-owner -- bun --eval 'import { runIsolatedBrowser } from "./apps/desktop/scripts/dev/isolated-browser.ts"; process.exitCode = await runIsolatedBrowser({ suite: { label: "draft attachment owner", config: "e2e/agent-testing/playwright.arrival-owner.tmp.config.ts" } });'
 ```
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. Although the chip assertions hit the old 5 s default, the case also records a blank page after reload at `:304` and a chip absent after the mobile switch, which point at wrong state rather than a slow signal. The cause is unclear, so the 2026-11-15 `expect: { timeout: 30_000 }` change in `e2e/agent-testing/playwright.browser.config.ts` is not claimed as a fix.

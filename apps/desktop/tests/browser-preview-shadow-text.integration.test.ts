@@ -189,14 +189,38 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
   let browser: Browser;
   let isolated: IsolatedPage;
 
+  // The launch is a real Chromium process, so its duration is the host's. Each
+  // phase is a hang watchdog that names the step that stalled (a failure here
+  // once reported only "(unnamed) timed out after 60000ms"), below the hook's
+  // own budget (`tests/default-test-timeout.ts`), never a speed bound.
+  const phase = async <T>(name: string, work: Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stalled = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Chromium setup stalled at: ${name}`)), 45_000);
+    });
+    try {
+      return await Promise.race([work, stalled]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   beforeAll(async () => {
-    browser = await chromium.launch({ executablePath: CHROMIUM });
-    const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
-    await page.route(FIXTURE_URL, (route) =>
-      route.fulfill({ contentType: "text/html", body: FIXTURE }),
+    browser = await phase("launch", chromium.launch({ executablePath: CHROMIUM }));
+    const page = await phase(
+      "new page",
+      browser.newPage({ viewport: { width: 1000, height: 700 } }),
     );
-    isolated = new IsolatedPage(page, await page.context().newCDPSession(page));
-  }, 60_000);
+    await phase(
+      "route",
+      page.route(FIXTURE_URL, (route) =>
+        route.fulfill({ contentType: "text/html", body: FIXTURE }),
+      ),
+    );
+    isolated = new IsolatedPage(
+      page,
+      await phase("CDP session", page.context().newCDPSession(page)),
+    );
+  });
   afterAll(async () => {
     await browser?.close();
   });
@@ -218,7 +242,7 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
       closed: null,
       customElements: null,
     });
-  }, 30_000);
+  });
 
   for (const [name, node, words, tagName, hosts] of [
     ["an open root", NODE.inOpen, "paragraph of", "p", ["x-open"]],
@@ -245,7 +269,7 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
       expect(reloaded).toMatchObject({ state: "matched", rule: "text-quote", candidateCount: 1 });
       expect(Math.abs(reloaded.rect.x - expected.left)).toBeLessThan(1);
       expect(reloaded.rect.width).toBeCloseTo(expected.right - expected.left, 0);
-    }, 30_000);
+    });
   }
 
   test("recapture preselects a quote inside a root after a reload", async () => {
@@ -261,7 +285,7 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
     const recaptured = await isolated.selected(again);
     expect(recaptured.quote).toEqual(target.quote);
     expect(recaptured.container.scope).toEqual(target.container.scope);
-  }, 30_000);
+  });
 
   for (const [name, from, to] of [
     ["light into an open root", [NODE.light, "paragraph"], [NODE.inOpen, "paragraph"]],
@@ -284,7 +308,7 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
       expect(status.selection).toBeUndefined();
       expect(await isolated.hint()).toContain("This text can't be captured; try Region");
       await isolated.run(BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT);
-    }, 30_000);
+    });
   }
 
   test("a selection inside a closed root is refused and not read", async () => {
@@ -296,7 +320,7 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
     expect(JSON.stringify(status)).not.toContain("paragraph");
     expect(await isolated.hint()).toContain("This text can't be captured");
     await isolated.run(BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT);
-  }, 30_000);
+  });
 
   for (const gesture of ["drag", "double-click"] as const) {
     test(`a ${gesture} inside a nested closed root is refused`, async () => {
@@ -313,7 +337,7 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
       expect(status.selection).toBeUndefined();
       expect(await isolated.hint()).toContain("This text can't be captured");
       await isolated.run(BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT);
-    }, 30_000);
+    });
   }
 
   test("sensitive content inside a root stays refused", async () => {
@@ -340,7 +364,7 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
     expect(JSON.stringify(status)).not.toContain("hunter2");
     expect(await isolated.hint()).toContain("Sensitive fields can't be captured");
     await isolated.run(BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT);
-  }, 30_000);
+  });
 
   test("document selections by drag, double click and triple click still capture", async () => {
     await isolated.load();
@@ -366,7 +390,7 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
       expect(clicked.quote.exact).toBe(exact);
       expect(clicked.container.scope).toEqual({ kind: "document" });
     }
-  }, 30_000);
+  });
 
   test("select all still captures the light text and no component's", async () => {
     await isolated.load();
@@ -380,7 +404,7 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
     expect(target.quote.exact).toEndWith("Light paragraph after the components");
     expect(target.quote.exact).not.toContain("Open root");
     expect(target.quote.exact).not.toContain("Closed root");
-  }, 30_000);
+  });
 
   test("recapture preselects a document quote after a reload", async () => {
     await isolated.load();
@@ -393,7 +417,7 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
     await isolated.page.keyboard.press("Enter");
     await isolated.page.waitForTimeout(40);
     expect((await isolated.selected(again)).quote).toEqual(target.quote);
-  }, 30_000);
+  });
 
   test("a light selection dragged over the hosts keeps only the light text", async () => {
     await isolated.load();
@@ -402,5 +426,5 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
     const target = await isolated.selected(captureId);
     expect(target.quote.exact).toBe("components Light");
     expect(target.container.scope).toEqual({ kind: "document" });
-  }, 30_000);
+  });
 });

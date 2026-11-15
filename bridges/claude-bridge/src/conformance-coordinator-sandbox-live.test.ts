@@ -8,6 +8,7 @@
  */
 import { describe, test } from "bun:test";
 import {
+  QUALIFICATION_TEST_BUDGET_MS,
   HOOK_ONLY_ADVERSARIAL_SCENARIOS,
   qualifyCoordinatorSandbox,
 } from "../test-fixtures/coordinator-sandbox-qualification.js";
@@ -25,7 +26,11 @@ describe("Claude coordinator sandbox qualification", () => {
     "unavailable-hook-refuses-glob",
     "unavailable-hook-refuses-abbreviation",
   ] as const) {
-    (supported ? test : test.skip)(scenario, () => qualifyCoordinatorSandbox(scenario), 20_000);
+    (supported ? test : test.skip)(
+      scenario,
+      () => qualifyCoordinatorSandbox(scenario),
+      QUALIFICATION_TEST_BUDGET_MS,
+    );
   }
 });
 
@@ -40,18 +45,18 @@ describe("Claude read-only turn without a working sandbox", () => {
     "read-only-unavailable-reads",
     "read-only-unavailable-hook-refuses",
   ] as const) {
-    test(scenario, () => qualifyCoordinatorSandbox(scenario), 20_000);
+    test(scenario, () => qualifyCoordinatorSandbox(scenario), QUALIFICATION_TEST_BUDGET_MS);
   }
   (process.platform === "linux" ? test : test.skip)(
     "read-only-required-refused",
     () => qualifyCoordinatorSandbox("read-only-required-refused"),
-    20_000,
+    QUALIFICATION_TEST_BUDGET_MS,
   );
 });
 
 // These need no OS sandbox and qualify the hook on Windows as well.
 describe("Claude hook-only adversarial qualification", () => {
   for (const scenario of HOOK_ONLY_ADVERSARIAL_SCENARIOS) {
-    test(scenario, () => qualifyCoordinatorSandbox(scenario), 20_000);
+    test(scenario, () => qualifyCoordinatorSandbox(scenario), QUALIFICATION_TEST_BUDGET_MS);
   }
 });

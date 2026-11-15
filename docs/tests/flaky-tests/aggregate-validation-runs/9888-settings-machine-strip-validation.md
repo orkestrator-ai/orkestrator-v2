@@ -18,3 +18,7 @@ No assertion, timeout or skip was changed for these four tests. Shared-host cont
 ## Triage 2026-10-25
 
 Stays open. Root failures were branch defects fixed in the change; the digest, coordinator and move timeouts are tracked in [0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md), [0165](../coordinator-and-multi-review/0165-coordinator-bound-discard-timeout.md) and [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md). Next step: add an agent-bridges owner case for `bridges/cursor-bridge/src/initial-run.test.ts` `replaces an unused warm agent when a read-only prompt changes its policy` (5001.32 ms; owner passed alone, 18 passed), then mark this record resolved as a run record.
+
+## Triage (2026-11-15)
+
+Left open. `apps/backend/src/core/coordinator-service.test.ts` and `apps/backend/src/core/environment-move.test.ts` each call `setDefaultTimeout(30_000)`, a budget smaller than `tests/default-test-timeout.ts` (60 s), so the shared default does not govern them; their per-file cases [0165](../coordinator-and-multi-review/0165-coordinator-bound-discard-timeout.md) and [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md) own the fix. The `coordinator-live.test.ts` digest case ([0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md)) and the Cursor `initial-run.test.ts` case set no budget for the failing test, so the shared default now covers them; no Cursor owner case exists yet.

@@ -45,3 +45,11 @@ fresh credential-free profile `e3a4-ring-r1` (`--agent-platforms claude`,
 `mise run test:logged -- --name agent-browser-owners -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts:2859 e2e/agent-testing/graph-run-view.spec.ts:48`
 (the two `browser-gateway` cases in that run are recorded in 0484). No assertion,
 timeout or skip changed.
+
+## Triage note (2026-11-15)
+
+Not changed. The owner is an `e2e/agent-testing` spec run through `playwright.browser.config.ts`, which this pass left alone because the config is shared with other groups' specs (a global assertion budget could loosen latency checks they rely on); no safe spec-local signal was identified without a live agent-testing profile. Stays `open`; Playwright agent-testing suites were not run.
+
+## Triage note (2026-11-15, after the config change)
+
+Follow-up: `playwright.browser.config.ts` now sets `expect: { timeout: 30_000 }` (its `timeout: 120_000` was already in place), but this case stays `open`: the first failure is a page that stayed blank for the helper's whole 30 s wait after `page.reload()` (the renderer never mounted), a wrong state; only the 2026-11-11 5 s `[data-graph-designer]` wait is covered by the new default.

@@ -1,7 +1,7 @@
 # Remote gateway: proxy buffer reservation release timed out under load
 
 - **ID:** 9998
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-13
 
 Test: `remote gateway > releases a proxy buffer reservation when the downstream disconnects while buffering`
@@ -91,3 +91,11 @@ files is changed by the branch, and each passed alone with one worker:
   (`apps/web/src/components/projects/CoordinatorPanel.render-cost.test.tsx`):
   the initial `waitFor` in `renderPanel` (line 178) gave up at 2,051.80 ms,
   before the test wrote anything.
+
+## Resolution (2026-11-15)
+
+- **Class:** default budget plus the scenario's own deadline (A/B).
+- **Root cause:** the scenario subprocess boots a gateway and waits on real signals (eight parked requests, the upstream close, the recovery response) inside Bun's 5 s test default, and its own `failTimer` exited after 8 s; at load about 100 the subprocess start and gateway boot alone used most of that.
+- **Fix:** the test budget is now `tests/default-test-timeout.ts` (a 60 s per-test and hook hang watchdog in both shared preloads, replacing Bun's 5 s default); the scenario's `failTimer` in `apps/backend/tests/gateway-proxy.test.ts` is a 45 s hang watchdog (commented), below that budget. No assertion changed.
+- **Reproduced:** no — the unchanged code passed under the same contention; the evidence is the removed deadline, not a reproduced failure, which is weaker.
+- **Stress:** `mise run test:logged -- --name gw-cont3 -- bun scripts/test-under-contention.ts --core 4 --burners 6 -- bash -c 'cd apps/backend && bun test tests/gateway-events.test.ts tests/gateway-proxy.test.ts tests/gateway-sse-gzip-routes.test.ts --preload ../../tests/setup-node.ts --parallel=1'` passed (65.9 s); each file also passed alone with `--rerun-each=2` (208, 66 and 190 tests).

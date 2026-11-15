@@ -559,8 +559,10 @@ describe("diagnostic backend selection", () => {
   );
 });
 
+// A hang watchdog on a file the child writes when it reaches that point: it
+// says "never arrived", not "arrived slowly". Well inside the default test budget.
 async function waitForFile(file: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 50_000;
   while (!existsSync(file)) {
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${path.basename(file)}`);
     await Bun.sleep(10);
@@ -658,7 +660,8 @@ test("packaged launcher dispatches fix without importing a backend or creating d
         stderr: "pipe",
       },
     );
-    const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    // Hang watchdog for a child that never exits, not a performance bound.
+    const timer = setTimeout(() => child.kill("SIGKILL"), 50_000);
     try {
       const [stdout, stderr, status] = await Promise.all([
         new Response(child.stdout).text(),

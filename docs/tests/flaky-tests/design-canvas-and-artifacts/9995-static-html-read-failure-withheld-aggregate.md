@@ -1,7 +1,7 @@
 # a read failure is withheld too, and a successful Retry releases it
 
 - **ID:** 9995
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-13
 - **Test:** `StaticHtmlArtifactView > document text in Find > a read failure is withheld too, and a successful Retry releases it`
 - **File:** `apps/web/src/components/chat/rich/StaticHtmlArtifactView.test.tsx:606`
@@ -88,3 +88,11 @@ assertion (57 ms). The aggregate runner's lone rerun of the unchanged file:
 `PASSED ALONE (2.1s)`. The branch changes backend storage only; the web
 component imports none of it. `mise run flaky:recurrence -- 9995 --base
 a8b89f154` answered open.
+
+## Resolution (2026-11-15)
+
+- **Class:** product race (C). The hypothesis above was right.
+- **Root cause:** `StaticHtmlArtifactView` withheld a failed read's text from Find (`withholdArtifactSearchBody`) in a passive `useEffect` keyed on `readFailed`. The commit that shows "The document could not be loaded." (or the `unavailable` state) and that effect ran in separate tasks. A loaded host widened the gap enough for the test, and Find, to see the failure on screen while `artifactSearchBodyWithheld` still answered `false`.
+- **Fix:** `apps/web/src/components/chat/rich/StaticHtmlArtifactView.tsx` runs that withhold in a `useLayoutEffect`, so it happens in the same commit that shows the failure. The frame-error paths already withheld synchronously in their callbacks. The test is unchanged.
+- **Reproduced:** yes. `NODE_ENV=test mise run test:logged -- --name r9995 -- bun scripts/test-under-contention.ts --core 12 --burners 6 -- bun --cwd=apps/web test src/components/chat/rich/StaticHtmlArtifactView.test.tsx -t "withhold" --rerun-each=40` failed on the unchanged code at run 34 of 40. That was the recorded sibling assertion at line 594, `artifactSearchBodyWithheld(REF)` received `false`.
+- **Stress:** the same command passed with the fix, at `--rerun-each=40` (20.0 s) and at `--rerun-each=150` (47.2 s). The whole `src/components/chat/rich` directory passed with `--parallel=4` (27.6 s).

@@ -1,7 +1,7 @@
 # Hidden-window Electron specs review repair: default-suite rerun under host load
 
 - **ID:** 9970
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-13
 - **Snapshot:** `a9a66681e` on `electron-hidden-window-9b885cf8c702-r1` (base
   `17d28238c098b4443d1289df5c4ed75e7cc2802e`), the review repair for to-do
@@ -46,3 +46,10 @@ assertion, timeout or skip was changed.
 
 Evidence: `orkestrator-test-run.EDRJ1a` and `orkestrator-test-run.HXGzuZ`
 under the host temporary directory.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** all eleven failures were deadlines of Bun's five-second default budget (5.0 to 5.1 s for the backend cases; 9.8 to 12.2 s for the three repository-source scans, whose timers fired late on a host at load 33 to 38), and each complete owner passed alone in 0.9 to 26.9 s. The five owners (`staged-input-relay.test.ts`, `public-api/test-support.test.ts`, `client-adapters.test.ts`, `change-tracking-boundaries.test.ts`, `mcp-fixture-cleanup.test.ts`) set no `setDefaultTimeout` and no per-test budget, so nothing smaller than the default applies.
+- **Fix:** `tests/default-test-timeout.ts`, imported by `tests/setup.ts` and `tests/setup-node.ts`, raises the default test and hook budget from 5 s to 60 s (an explicit `--timeout` is left alone). No assertion was loosened.
+- **Reproduced:** no. The failure was observed only in the aggregate. This rests on the timings above, and the raised budget is weaker evidence than a reproduced fix.
+- **Stress:** none run. The public-API cleanup case remains tracked by its own case, [1240](../backend-services-and-tooling/1240-public-api-harness-tracking-timeouts.md); reopen this case only if a failure here is a hang near 60 s.

@@ -102,12 +102,13 @@ function objectNames(store: ObjectStore): string[] {
     .flatMap((prefix) => readdirSync(join(objects, prefix)).map((name) => `${prefix}${name}`));
 }
 
+/**
+ * Waits for a state the code under test reaches by itself. No deadline of its
+ * own: a slow host only delays the state, and one that never comes is a hang
+ * that the test's budget reports.
+ */
 async function waitFor(condition: () => boolean) {
-  const deadline = Date.now() + 5_000;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error("condition not reached");
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
+  while (!condition()) await new Promise((resolve) => setTimeout(resolve, 1));
 }
 
 function deferred() {

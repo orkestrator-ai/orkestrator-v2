@@ -15,6 +15,8 @@ import {
 } from "./runtime-env.js";
 
 const noGhToken = async () => undefined;
+// A hang watchdog for a fixture `gh`, not an assertion about speed.
+const WATCHDOG_MS = 30_000;
 
 describe("Claude Agent SDK runtime environment", () => {
   test("preserves the inherited environment when no managed file is configured", async () => {
@@ -164,11 +166,18 @@ describe("Claude Agent SDK runtime environment", () => {
         '#!/bin/sh\nprintf "%s\\n" "$@" > "$GH_TEST_ARGS"\nprintf "  fake-token\\n"\n',
       );
       await chmod(gh, 0o755);
-      expect(await readGitHubCliToken({ PATH: directory, GH_TEST_ARGS: args })).toBe("fake-token");
+      // The reader's own two-second deadline is a product bound on a stalled
+      // `gh`; a starved host can spend it just starting the fixture, so this
+      // case waits on the process (the test's hang watchdog bounds it).
+      expect(await readGitHubCliToken({ PATH: directory, GH_TEST_ARGS: args }, WATCHDOG_MS)).toBe(
+        "fake-token",
+      );
       expect(await readFile(args, "utf8")).toBe("auth\ntoken\n--hostname\ngithub.com\n");
       await writeFile(gh, "#!/bin/sh\nexit 1\n");
-      expect(await readGitHubCliToken({ PATH: directory })).toBeUndefined();
-      expect(await readGitHubCliToken({ PATH: join(directory, "missing") })).toBeUndefined();
+      expect(await readGitHubCliToken({ PATH: directory }, WATCHDOG_MS)).toBeUndefined();
+      expect(
+        await readGitHubCliToken({ PATH: join(directory, "missing") }, WATCHDOG_MS),
+      ).toBeUndefined();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -177,16 +186,27 @@ describe("Claude Agent SDK runtime environment", () => {
   test("bounds a stalled gh lookup", async () => {
     const directory = await mkdtemp(join(tmpdir(), "claude-slow-gh-"));
     const gh = join(directory, "gh");
+    const pidFile = join(directory, "pid");
     try {
-      await writeFile(gh, "#!/bin/sh\nexec /bin/sleep 4\n");
+      // `exec` keeps the recorded pid the stalled process's own. It sleeps
+      // far past the test's own budget, so only the reader's deadline can end
+      // the lookup in time: a broken deadline fails the test as a hang.
+      await writeFile(gh, '#!/bin/sh\necho $$ > "$GH_TEST_PID"\nexec /bin/sleep 600\n');
       await chmod(gh, 0o755);
-      const started = Date.now();
-      expect(await readGitHubCliToken({ PATH: directory })).toBeUndefined();
-      expect(Date.now() - started).toBeLessThan(3_500);
+      expect(
+        await readGitHubCliToken({ PATH: directory, GH_TEST_PID: pidFile }, 250),
+      ).toBeUndefined();
+      // The lookup settled because the deadline killed `gh`, not because it
+      // finished. On a host so starved that `gh` never started there is no pid
+      // file, and the deadline still bounded the lookup.
+      const recorded = await readFile(pidFile, "utf8").catch(() => "");
+      if (recorded.trim()) {
+        expect(() => process.kill(Number(recorded.trim()), 0)).toThrow();
+      }
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
-  }, 5_000);
+  });
 
   test("leaves the GitHub MCP token unset when gh has no login", async () => {
     const environment = await runtimeEnvironmentForAgentQuery(

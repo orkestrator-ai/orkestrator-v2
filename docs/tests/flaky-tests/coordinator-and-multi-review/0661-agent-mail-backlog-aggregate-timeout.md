@@ -1,7 +1,7 @@
 # Agent mail backlog capacity check exceeds the aggregate deadline
 
 - **ID:** 0661
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `StorageService agent mail > refuses a mailbox whose 200-message backlog has no settled eviction candidate`
 - **Owning file:** `apps/backend/src/core/storage-agent-mail.test.ts`
@@ -21,3 +21,11 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name mail-owner -- bun test --cwd apps/backend ./src/core/storage-agent-mail.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed (1.4 s logged).
 - **Aggregate command, workers, counts and evidence:** [hidden-resume review validation](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#hidden-resume-review-validation--2026-10-26). The backend used two Bun workers; the component suite used nine Playwright workers. Concurrent worktree validation was active.
 - **Assessment:** confirmed intermittent recurrence; no owning source, assertion, deadline or skip changed. The original aggregate remains failed; no root cause was established.
+
+## Resolution (2026-11-15)
+
+- **Class:** default test budget (A). `src/core/storage-agent-mail.test.ts` sets no budget of its own: no `setDefaultTimeout`, no third-argument or hook timeout, and no wall-clock wait deadline in the test or the helpers it uses.
+- **Root cause:** the recorded failure was Bun's former 5 s default per-test/hook budget expiring while the host was loaded; the owner passes alone in a few seconds and nothing it asserts depends on elapsed time.
+- **Fix:** none in this file. It now runs under `tests/default-test-timeout.ts` (imported by `tests/setup.ts` and `tests/setup-node.ts`), which sets the default per-test and hook budget to 60 s as a hang watchdog.
+- **Reproduced:** no. Under contention with the old budget forced (`mise run test:logged -- --name a0661 -- bun scripts/test-under-contention.ts --core <n> --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/storage-agent-mail.test.ts --timeout=5000`) the owner passed (19.1 s), so six burners on one core did not recreate the aggregate's load.
+- **Stress:** the same contention command with `--rerun-each=3` at the new default passed (46.9 s).

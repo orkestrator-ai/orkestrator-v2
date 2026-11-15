@@ -11,6 +11,7 @@
  */
 import path from "node:path";
 import process from "node:process";
+import { forwardWithDotLines, withProgressDots } from "./test-progress-dots";
 import { testTier, tierArguments } from "./test-tiers";
 
 const root = path.resolve(import.meta.dir, "..");
@@ -23,7 +24,9 @@ if (!packageDirectory || separator < 1) {
   process.exit(2);
 }
 const paths = rest.slice(0, separator);
-const flags = rest.slice(separator + 1);
+// A run that hides passing tests reports each finished one as a dot, so the
+// aggregate's no-output watchdog follows real progress (test-progress-dots.ts).
+const flags = withProgressDots(rest.slice(separator + 1));
 const tier = testTier(process.env);
 const selection = tierArguments(tier, root, packageDirectory, paths);
 if (!selection) {
@@ -31,13 +34,23 @@ if (!selection) {
   process.exit(0);
 }
 
-const child = Bun.spawn([process.execPath, "test", ...selection, ...flags], {
-  stdio: ["inherit", "inherit", "inherit"],
+// Turbo and the aggregate runner signal this process; pass it on so the test
+// runner can clean up its own workers instead of being orphaned. The handlers
+// exist before the child does (AGENTS.md invariant 16): a signal that reached
+// this script first would otherwise kill it with the default action and leave
+// the child running unsignalled (flake 9945).
+let child: { kill(signal: NodeJS.Signals): void } | undefined;
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(signal, () => child?.kill(signal));
+}
+// Bun's reporter writes to stderr; it is piped only to close each run of
+// progress dots with a newline for Turbo's line-at-a-time output.
+const spawned = Bun.spawn([process.execPath, "test", ...selection, ...flags], {
+  stdio: ["inherit", "inherit", "pipe"],
   env: process.env,
 });
-// Turbo and the aggregate runner signal this process; pass it on so the test
-// runner can clean up its own workers instead of being orphaned.
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-  process.on(signal, () => child.kill(signal));
-}
-process.exitCode = await child.exited;
+child = spawned;
+const forwarded = forwardWithDotLines(spawned.stderr, (text) => process.stderr.write(text));
+const status = await spawned.exited;
+await forwarded;
+process.exitCode = status;

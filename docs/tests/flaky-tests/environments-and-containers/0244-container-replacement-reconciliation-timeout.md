@@ -1,7 +1,7 @@
 # Container replacement reconciliation aggregate timeout
 
 - **ID:** 0244
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `restart reconciliation > a kill at any phase before the commit write leaves the original authoritative`
 - **Owning file:** `apps/backend/tests/container-replacement.test.ts`
@@ -44,3 +44,11 @@
 - **Isolated rerun:** `mise run test:logged -- --name container-owner -- bun test --cwd apps/backend ./tests/container-replacement.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 31.0 s).
 - **Evidence:** `orkestrator-test-run.wESThp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion. Aggregate results and other owner reruns are recorded in [1140](../aggregate-validation-runs/1140-direct-history-cursors-0232-validation.md).
 - **Assessment:** credible recurrence of the existing timing flake. Host contention remains plausible but unproven; no implementation, assertion, deadline or skip changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** The phase loop reconciles seven fake-Docker operations in one test; at load about 30 it exceeded Bun's 5 s default alone too.
+- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup-node.ts`, `tests/setup.ts`), makes 60 s the default per-test and hook budget, a hang watchdog only. The owning file sets no smaller file, test or hook budget, and the failing test has no inner wall-clock deadline of its own.
+- **Reproduced:** yes (earlier evidence in this case, 2026-10-24) — at load about 30 the owner failed alone at 5 s and passed with `--timeout 30000` in about 3 s; that is the condition the 60 s default now removes. Not re-run against the unchanged code here.
+- **Stress:** `mise run test:logged -- --name ec-stress-b -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --core 13 --burners 6 -- bun test --preload ../../tests/setup-node.ts <seventeen container, pipeline, move, worktree and native-agent owners, this one included> --rerun-each=2 --parallel=1'` at host load about 80: 1,139 passed, 1 failed — `git fsmonitor > fixture repositories inherit fsmonitor off from the test preload` on its second rerun, which fails the same way without contention and with the unchanged file (`git-fsmonitor.test.ts` is not rerun-safe).
+- **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).

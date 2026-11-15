@@ -53,3 +53,7 @@ If it recurs, compare `backendDownMs` with the 2026-10-31 run's restarts (not
 recorded then) and decide, with that evidence, whether the rule should be
 measured from the moment the backend listens, or whether the banner delay or
 the ladder's first rung should change.
+
+## Triage note (2026-11-15)
+
+Not changed. Recorded failure: the first-reconnect-under-banner-delay rule, which counts backend start-up time (suspected, unproven). The specs run through `e2e/preview/playwright.preview.config.ts` or `e2e/agent-testing/playwright.browser.config.ts`, which this pass did not change (shared configs; a global assertion budget could loosen latency rules like the banner delay). Not run. Stays `open`.

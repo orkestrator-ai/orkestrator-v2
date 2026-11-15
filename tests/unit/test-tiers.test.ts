@@ -188,7 +188,7 @@ describe("test tier selection", () => {
 function packageFixture() {
   const context = fixture();
   context.write("scripts/placeholder", "");
-  for (const file of ["bun-test-tier.ts", "test-tiers.ts"])
+  for (const file of ["bun-test-tier.ts", "test-progress-dots.ts", "test-tiers.ts"])
     copyFileSync(
       path.join(repositoryRoot, "scripts", file),
       path.join(context.root, "scripts", file),
@@ -390,18 +390,14 @@ test("wait for cancellation", async () => {
         new Response(child.stderr).text(),
       ]);
       try {
-        const deadline = Date.now() + 5000;
-        while (!existsSync(ready) && Date.now() < deadline)
+        // The ready file is the readiness signal. A wrapper that exits first
+        // ends the wait at once; otherwise the test's budget is only the hang
+        // watchdog, so a slow host is never mistaken for a failed handoff.
+        while (!existsSync(ready) && child.exitCode === null && child.signalCode === null)
           await new Promise((resolve) => setTimeout(resolve, 10));
         expect(existsSync(ready)).toBe(true);
         child.kill(signal);
-        const exited = await Promise.race([
-          child.exited,
-          new Promise<never>((_, reject) => {
-            const timeout = setTimeout(() => reject(new Error("child did not stop")), 5000);
-            child.exited.finally(() => clearTimeout(timeout));
-          }),
-        ]);
+        const exited = await child.exited;
         expect(exited).toBe(0);
         expect(readFileSync(handled, "utf8")).toBe(signal);
       } finally {
@@ -414,6 +410,5 @@ test("wait for cancellation", async () => {
         await output;
       }
     },
-    15_000,
   );
 });

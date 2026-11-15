@@ -13,11 +13,18 @@ import { claudeExecutionSandbox } from "./services/claude-execution-sandbox.js";
 
 type Scenario = "control" | "escape" | "network" | "unavailable";
 
-// Native CLI launch and SDK initialization slow down under the aggregate suite.
-// Keep that startup budget separate from the scripted model/tool round trip.
-const CLI_STARTUP_TIMEOUT_MS = 45_000;
-const FIXTURE_EXECUTION_TIMEOUT_MS = 15_000;
-const QUALIFICATION_TIMEOUT_MS = CLI_STARTUP_TIMEOUT_MS + FIXTURE_EXECUTION_TIMEOUT_MS + 5_000;
+// Hang watchdogs, not assertions. Native CLI launch and SDK initialization, and
+// then the scripted model/tool round trip, each wait for a real signal (the
+// first model request, then the stream ending). A starved host can make either
+// take many times what it takes alone, and the scenarios assert what the CLI
+// did, never how long it took; a CLI that is genuinely stuck still fails
+// (`controller.signal.aborted`) once the watchdog fires.
+const CLI_STARTUP_TIMEOUT_MS = 120_000;
+const FIXTURE_EXECUTION_TIMEOUT_MS = 90_000;
+// The outer hang watchdog: above both idle watchdogs together, so a stuck
+// phase reports itself through the diagnostic below rather than Bun's generic
+// "timed out".
+const QUALIFICATION_TIMEOUT_MS = CLI_STARTUP_TIMEOUT_MS + FIXTURE_EXECUTION_TIMEOUT_MS + 60_000;
 
 async function qualify(scenario: Scenario) {
   return withPolicyCliFixture(async (fixture) => {
@@ -29,21 +36,24 @@ async function qualify(scenario: Scenario) {
     let firstMessageMs: number | undefined;
     let firstModelMs: number | undefined;
     let expiredPhase: "startup" | "execution" | undefined;
-    let executionTimeout: ReturnType<typeof setTimeout> | undefined;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
-    const startupTimeout = setTimeout(() => {
-      expiredPhase = "startup";
-      controller.abort();
-    }, CLI_STARTUP_TIMEOUT_MS);
+    // One idle watchdog, re-armed whenever the CLI makes progress (a stream
+    // message, the first model request), so a slow but advancing start never
+    // fails and only a CLI that has gone silent does.
+    const arm = (phase: "startup" | "execution", ms: number) => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        expiredPhase = phase;
+        controller.abort();
+      }, ms);
+    };
+    arm("startup", CLI_STARTUP_TIMEOUT_MS);
     const endpoint = scriptedAnthropicEndpoint((origin) => {
       // This callback runs once, when the CLI first reaches the local model.
       // An unavailable Linux sandbox can fail before making any model request.
       firstModelMs = Math.round(performance.now() - startedAt);
-      clearTimeout(startupTimeout);
-      executionTimeout = setTimeout(() => {
-        expiredPhase = "execution";
-        controller.abort();
-      }, FIXTURE_EXECUTION_TIMEOUT_MS);
+      arm("execution", FIXTURE_EXECUTION_TIMEOUT_MS);
       return [
         [
           {
@@ -53,7 +63,7 @@ async function qualify(scenario: Scenario) {
             input: {
               command:
                 scenario === "network" || scenario === "control"
-                  ? `curl --silent --show-error --max-time 2 ${origin}/unlisted`
+                  ? `curl --silent --show-error --max-time 30 ${origin}/unlisted`
                   : `printf qualified > '${marker}'`,
               description: "Conformance fixture",
               dangerouslyDisableSandbox: scenario === "escape",
@@ -125,6 +135,12 @@ async function qualify(scenario: Scenario) {
     try {
       for await (const message of query({ prompt: "Run the conformance fixture", options })) {
         firstMessageMs ??= Math.round(performance.now() - startedAt);
+        // Progress before the first model request re-arms the startup watchdog;
+        // afterwards the execution watchdog re-arms on each message.
+        arm(
+          firstModelMs === undefined ? "startup" : "execution",
+          firstModelMs === undefined ? CLI_STARTUP_TIMEOUT_MS : FIXTURE_EXECUTION_TIMEOUT_MS,
+        );
         messages.push(message);
         if (messages.length > 64) {
           controller.abort();
@@ -134,8 +150,7 @@ async function qualify(scenario: Scenario) {
     } catch (error) {
       failure = error;
     } finally {
-      clearTimeout(startupTimeout);
-      clearTimeout(executionTimeout);
+      clearTimeout(watchdog);
       endpoint.stop();
     }
     expect(

@@ -10,3 +10,7 @@
 - **Isolated rerun:** `bun run test:logged -- --name features-view-isolated -- bun test tests/unit/components/FeaturesView.test.tsx --only-failures` → passed in 2.7 s.
 - **Attribution:** the change in flight touches native-agent and chat-shell components plus their tests; it does not touch `FeaturesView`, its tests, or their dependencies. The isolated owner passed against the same immutable head.
 - **Hypothesis:** the evidence establishes an aggregate-only worker termination, but not why the worker received `SIGTERM`. A recurrence should capture the runner's process/resource diagnostics and the test reached immediately before termination before changing test budgets or assertions.
+
+## Triage note (2026-11-15)
+
+Not changed; stays `open`. A worker `SIGTERM` is the runner terminating the process, not a test deadline, and nothing in the file's timing can cause or prevent it; the single observation has no diagnostics. If it recurs, capture the runner's reason for the signal.

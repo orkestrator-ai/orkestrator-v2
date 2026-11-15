@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { ReactNode } from "react";
@@ -11,6 +11,7 @@ import {
   useConversationScrollTargetStore,
 } from "@/stores/conversationScrollTargetStore";
 import { useConversationScrollTarget } from "./useConversationScrollTarget";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 
 type HookProps = Parameters<typeof useConversationScrollTarget>[0];
 
@@ -65,37 +66,59 @@ describe("useConversationScrollTarget", () => {
   });
 
   test("a repeat jump to the same message restarts the highlight; another moves it", async () => {
-    const { result } = setup({ highlightMs: 200 });
-    act(() => {
-      useConversationScrollTargetStore
-        .getState()
-        .request(at("env-1", "tab-1"), { messageId: "u-2" });
-    });
-    await waitFor(() => expect(result.current?.messageId).toBe("u-2"));
-    const first = result.current!;
+    // The highlight's own timer and clock are controlled, so a starved host
+    // cannot end a period between two steps (flake 9983). A period computes
+    // its timer from `startedAt + durationMs - performance.now()`: a repeat
+    // that restarted it arms a full-length timer from the later start, which
+    // is the only delay captured here.
+    const HIGHLIGHT_MS = 200;
+    let now = 1_000;
+    const clock = spyOn(performance, "now").mockImplementation(() => now);
+    const highlightTimer = installControlledTimeout(HIGHLIGHT_MS, { label: "highlight period" });
+    try {
+      const { result } = setup({ highlightMs: HIGHLIGHT_MS });
+      act(() => {
+        useConversationScrollTargetStore
+          .getState()
+          .request(at("env-1", "tab-1"), { messageId: "u-2" });
+      });
+      await waitFor(() => expect(result.current?.messageId).toBe("u-2"));
+      const first = result.current!;
+      expect(highlightTimer.pendingCount()).toBe(1);
 
-    // Part-way through the period, jump to the same message again.
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    act(() => {
-      useConversationScrollTargetStore
-        .getState()
-        .request(at("env-1", "tab-1"), { messageId: "u-2" });
-    });
-    await waitFor(() => expect(result.current?.generation).toBeGreaterThan(first.generation));
-    expect(result.current?.messageId).toBe("u-2");
-    // The first period would have ended by now; the repeat restarted it.
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    expect(result.current?.messageId).toBe("u-2");
-    const repeat = result.current!;
+      // Part-way through the period, jump to the same message again.
+      now += 120;
+      act(() => {
+        useConversationScrollTargetStore
+          .getState()
+          .request(at("env-1", "tab-1"), { messageId: "u-2" });
+      });
+      await waitFor(() => expect(result.current?.generation).toBeGreaterThan(first.generation));
+      expect(result.current?.messageId).toBe("u-2");
+      // Past the end of the first period: the repeat's period started later,
+      // and its full-length timer replaced the first one.
+      now += 120;
+      expect(result.current!.startedAt).toBe(first.startedAt + 120);
+      expect(highlightTimer.pendingCount()).toBe(1);
+      expect(result.current?.messageId).toBe("u-2");
+      const repeat = result.current!;
 
-    act(() => {
-      useConversationScrollTargetStore
-        .getState()
-        .request(at("env-1", "tab-1"), { messageId: "a-1" });
-    });
-    await waitFor(() => expect(result.current?.messageId).toBe("a-1"));
-    expect(result.current!.generation).toBeGreaterThan(repeat.generation);
-    await waitFor(() => expect(result.current).toBeNull());
+      act(() => {
+        useConversationScrollTargetStore
+          .getState()
+          .request(at("env-1", "tab-1"), { messageId: "a-1" });
+      });
+      await waitFor(() => expect(result.current?.messageId).toBe("a-1"));
+      expect(result.current!.generation).toBeGreaterThan(repeat.generation);
+      expect(highlightTimer.pendingCount()).toBe(1);
+      act(() => {
+        highlightTimer.advance();
+      });
+      await waitFor(() => expect(result.current).toBeNull());
+    } finally {
+      highlightTimer.restore();
+      clock.mockRestore();
+    }
   });
 
   test("waits for the tab to become active and the message to load", async () => {

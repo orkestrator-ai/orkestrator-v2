@@ -20,6 +20,7 @@ import {
 import { installReactFlowDomStubs } from "./react-flow.test-support";
 import { appCommandStore } from "@/test/app-command-store";
 
+import { useAsyncUtilHangWatchdog } from "@/test/async-util-hang-watchdog";
 /**
  * The editable designer end to end in the tab (item 212): new graph, palette,
  * undo and redo, keyboard commands, saving with compare-and-swap and the
@@ -163,6 +164,8 @@ afterEach(() => {
   cleanup();
   invokeMock.mockImplementation(() => Promise.resolve());
 });
+
+useAsyncUtilHangWatchdog();
 
 describe("GraphDesignerTab editing", () => {
   test("New graph: add from the palette, then undo and redo with the toolbar and the keyboard", async () => {

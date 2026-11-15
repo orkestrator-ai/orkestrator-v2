@@ -1,7 +1,7 @@
 # Graph designer "Save as copy" test hit the 5000 ms timeout in a parallel subset
 
 - **ID:** 1640
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-01
 - **Test:** `GraphDesignerTab editing > saves with compare-and-swap; a lost race keeps the draft and offers Save as copy`
 - **File:** `apps/web/src/components/graph-designer/GraphDesignerEditing.test.tsx`
@@ -49,3 +49,11 @@ before it. No race was found. Timing out needs about a sevenfold slowdown,
 which matches the 26 s whole-file runs recorded on 2026-11-02. Next step:
 profile `openForEditing` (the React Flow mount) under load before choosing
 between less render work and an explicit budget.
+
+## Resolution (2026-11-15)
+
+- **Class:** default budget (A).
+- **Root cause:** the case (0.73 s alone) exceeded Bun's 5 s default when the file took 26 s on a loaded host; it has no sleep or timer wait, only `waitFor` on mocked invokes and the React Flow mount.
+- **Fix:** `tests/default-test-timeout.ts` (a 60 s per-test and hook hang watchdog in both shared preloads, replacing Bun's 5 s default); `apps/web/src/test/async-util-hang-watchdog.ts` (new: `useAsyncUtilHangWatchdog()` sets Testing Library's `asyncUtilTimeout` to a 30 s hang watchdog per test and restores it, as `useAnnotationUiTestBudget` does), called in `apps/web/src/components/graph-designer/GraphDesignerEditing.test.tsx`.
+- **Reproduced:** no — not reproduced (the 2026-11-02 detached-main reproduction was a whole-file 26 s run); the fix is the removed deadline, which is weaker evidence.
+- **Stress:** `mise run test:logged -- --name web-cont2 -- bun scripts/test-under-contention.ts --core 3 --burners 6 -- bash -c 'cd apps/web && for i in 1 2 3; do NODE_ENV=test bun test src/components/projects/CoordinatorPanel.render-cost.test.tsx || exit 1; done && NODE_ENV=test bun test src/lib/node-scope/multiplexed-relay-stream.test.ts src/components/layout/MobileAppShellLayout.test.tsx src/components/federation/ProjectCopyDialog.test.tsx src/components/graph-designer/GraphDesignerEditing.test.tsx src/components/federation/federation-ui.test.tsx ../../tests/unit/components/FeaturesView.test.tsx --parallel=1'` passed (100.2 s). (`CoordinatorPanel.render-cost.test.tsx` is not `--rerun-each` safe: its `afterAll` restores the real modules, so the second in-process run fails on the unchanged file too; it is looped in fresh processes.)

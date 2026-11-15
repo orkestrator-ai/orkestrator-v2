@@ -1,7 +1,7 @@
 # copying a project to another machine > suggested files are ticked, dependencies hidden, and the copy names target, location and files
 
 - **ID:** 0783
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** `copying a project to another machine > suggested files are ticked, dependencies hidden, and the copy names target, location and files`
 - **Owning file:** `apps/web/src/components/federation/ProjectCopyDialog.test.tsx`
@@ -26,3 +26,11 @@ Not fixed, still open. A JUnit-timed run of the unchanged owner alone took
 `a coordinator's copy request is approved from the copy dialog with the user's choices`,
 took 3.11 s against the same five-second default (load average about 20), so
 that sibling is the likelier next timeout. No race was found in this case.
+
+## Resolution (2026-11-15)
+
+- **Class:** default budget (A).
+- **Root cause:** the case ran under Bun's 5 s default; the file takes about 12 s alone, and its waits used Testing Library's 1 s default (two had explicit 5 s timeouts).
+- **Fix:** `tests/default-test-timeout.ts` (a 60 s per-test and hook hang watchdog in both shared preloads, replacing Bun's 5 s default); `apps/web/src/test/async-util-hang-watchdog.ts` (new: `useAsyncUtilHangWatchdog()` sets Testing Library's `asyncUtilTimeout` to a 30 s hang watchdog per test and restores it, as `useAnnotationUiTestBudget` does), called in `apps/web/src/components/federation/ProjectCopyDialog.test.tsx`, and the two explicit 5 s `waitFor` timeouts are removed in its favour.
+- **Reproduced:** no — the unchanged code passed under the same contention; the evidence is the removed deadline, not a reproduced failure, which is weaker.
+- **Stress:** `mise run test:logged -- --name web-cont2 -- bun scripts/test-under-contention.ts --core 3 --burners 6 -- bash -c 'cd apps/web && for i in 1 2 3; do NODE_ENV=test bun test src/components/projects/CoordinatorPanel.render-cost.test.tsx || exit 1; done && NODE_ENV=test bun test src/lib/node-scope/multiplexed-relay-stream.test.ts src/components/layout/MobileAppShellLayout.test.tsx src/components/federation/ProjectCopyDialog.test.tsx src/components/graph-designer/GraphDesignerEditing.test.tsx src/components/federation/federation-ui.test.tsx ../../tests/unit/components/FeaturesView.test.tsx --parallel=1'` passed (100.2 s). (`CoordinatorPanel.render-cost.test.tsx` is not `--rerun-each` safe: its `afterAll` restores the real modules, so the second in-process run fails on the unchanged file too; it is looped in fresh processes.)

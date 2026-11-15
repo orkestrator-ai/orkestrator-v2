@@ -116,3 +116,10 @@ establishes intermittence, not a cause or environmental exemption.
 ## Packaged-backend cases moved (2026-11-10)
 
 The packaged-backend boot cases left `packages/cli/tests/cli.test.ts` for `packages/cli/tests/cli-packaged-backend.test.ts`, which is in the slow tier (`scripts/test-tiers.ts`). The two boots became one, under `NODE_ENV=development`; the static package checks stay in `cli.test.ts` in the default tier.
+
+## Triage (2026-11-15)
+
+- **Owner moved:** the packaged-backend boot cases are now one test in `packages/cli/tests/cli-packaged-backend.test.ts` (slow tier).
+- **Change:** its readiness and exit deadlines (20 s and 10 s, test budget 40 s) are now hang watchdogs on the real readiness line and exit: 90 s, 60 s and a 180 s test budget. They are not assertions.
+- **Reproduction:** on core 15 with six burners (shared with other contention runs, load average about 140), HEAD's file failed 5 of 5 with `Packaged backend did not become ready:` at 20 s. The changed file still failed 5 of 5 under that condition, at 90 s. On core 10 with six burners, the old and new files both passed 3 of 3 (`f3-0080-old2`, `f3-0080-after2`). Alone it passes in 2.3 s.
+- **Status:** still open. Whether the backend is only slow or wedged under that extreme contention is not established. The next step is to capture backend stderr and timing when readiness is late. Base `a8b89f1541e7abb6af36d45121593ae14640a3ca`.

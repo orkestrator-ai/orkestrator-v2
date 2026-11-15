@@ -40,3 +40,14 @@ The long fixture exceeded 120 seconds (120,789.83 ms) in the aggregate; the comp
 ### Investigation — 2026-11-06
 
 - Profiled at load average 21-25: one run took 44 s. The 400 `scroll()` acts accounted for 29.2 s (about 73 ms each, React rendering two windowed transcripts), the 201 `settle()` waits for 7.5 s and the clicks for the rest. The work is CPU-bound with no race, so the 120 s budget is breached once the host is 3-4x more contended than in this run. Options for a fix: move the case to the slow tier, or reduce the cycle count. The second weakens the "stays at its bound for every later cycle" check, so neither was applied here. Status stays open.
+
+## Partial hardening, still open — 2026-11-15
+
+`settle()` waited at most 3 s for the render scheduler to drain; that bound is
+now `ASYNC_UTIL_HANG_WATCHDOG_MS` (30 s, `apps/web/src/test/async-util-hang-watchdog.ts`),
+a hang watchdog on a drain that always completes. The recorded failure is the
+case's own 120 s budget over CPU-bound work (400 `scroll()` acts, about 73 ms
+each at load 21–25), which has no completion signal to wait on instead. The
+two options from 2026-11-06 still stand: move the case to the slow tier, or
+cut the cycle count (which weakens the "stays at its bound for every later
+cycle" check). Neither was applied; the owner passed alone after this change.

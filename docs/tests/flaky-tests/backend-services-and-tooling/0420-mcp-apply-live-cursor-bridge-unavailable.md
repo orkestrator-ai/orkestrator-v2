@@ -10,3 +10,7 @@
 - **Owning-file rerun:** the same command, run with only the OpenCode run alongside, passed (1 passed, 6.3 min); a project-scope-only run later passed alone (4.2 min).
 - **Evidence:** `output/agent-testing/mcpq2-cursor/mcp-apply-live/cursor.json` (overwritten by the passing rerun) and the profile's `electron.log`; the summary of the failed attempt recorded only the timeout.
 - **Assessment:** load-dependent bridge start-up under four concurrent live providers on one backend; the cause is unconfirmed. Nothing in the spec or the bridge was changed for it. Run the spec one provider at a time when a clean record matters.
+
+## Investigation (2026-11-15, status stays open)
+
+No change. The failure is a live Cursor bridge start-up under four concurrent providers (`cursor bridge is unavailable`), and the 120 s figure is Playwright's request timeout on a real dispatch. No safe, verifiable spec change was identified without a live run; e2e live suites were not run.

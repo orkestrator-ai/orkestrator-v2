@@ -110,3 +110,25 @@ ACP filesystem/terminal generalization hit its 60-second hook deadline (60,013.0
 ## Design-agent links refresh through d6ed0717d — 2026-10-24
 
 The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 2.5 s: `mise run test:logged -- --name design-links-owner-acp-generalization -- bun test --cwd bridges/acp-bridge --preload ../../tests/setup-node.ts ./src/acp-generalization.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.
+
+## Investigation (2026-11-15) — left open
+
+- **What changed since:** `dc90609bf` (in `HEAD`) moved this file to one
+  `sharedBridge` started in `beforeAll` and stopped in `afterAll`; its
+  `afterEach` now closes the test's sessions over HTTP instead of stopping a
+  per-test bridge. The hook that timed out in every observation, the
+  per-test bridge stop (`stopChild`: SIGTERM, then wait for exit, with no
+  escalation), no longer runs for this file's tests. On 2026-11-15 the harness
+  budget became 180 s per test and hook, with 60 s state waits
+  (`bridges/acp-bridge/src/acp-test-harness.ts`, see 0015).
+- **Not reproduced:** with the old budgets under 6 burners
+  (`repro-acp-before-p1`, see 0015) every test in this file passed, and it
+  passed again with the new budgets (`repro-acp-after-p1b`).
+- **Why still open:** every recorded failure is a hook that did not finish in
+  60 s, while the whole file runs in about a second alone. CPU starvation
+  alone is a weak explanation for a minute-long bridge stop after the
+  terminal-request test, so a real shutdown stall (the bridge waiting on the
+  fake agent's terminal process tree after SIGTERM) is not ruled out, and the
+  current `afterAll` stop has the same shape. If this recurs, record how long
+  the bridge took to exit after SIGTERM and which of its children were still
+  alive, before changing the budget.

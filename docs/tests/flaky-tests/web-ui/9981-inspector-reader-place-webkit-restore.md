@@ -103,3 +103,7 @@ Status stays open; no assertion or wait changed.
   reported `open`.
 
 No assertion or wait was changed.
+
+## Triage note (2026-11-15)
+
+Not changed. The recorded failures are value mismatches in real scroll/layout measurements (scroll offsets, fold gaps, sampled frames), not expired waits, so a larger Playwright budget does not address them; each needs its own live reproduction (WebKit, CPU throttling) first. Stays `open`; nothing verified in this pass.

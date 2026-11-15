@@ -11,3 +11,7 @@
 - **Isolated rerun:** the complete unchanged owning file passed twice the same day inside a loopback-only network namespace (`q0044-linux-electron-3`: 14 passed, 1 skipped, before that branch's new cases; `q0044-linux-electron-10`: 16 passed, 2 skipped), this case included. The next host-namespace run of the same command (`q0044-linux-electron-13`) failed earlier, on 2340 (72 `ERR_NETWORK_CHANGED` lines after the startup reload), so it says nothing about this case.
 - **Evidence:** `output/agent-testing/q0044-linux-electron-12/electron/` in that worktree (results, trace, Electron diagnostics).
 - **Hypothesis:** none established. The poll does not name the surviving process; a first step is to record its command line (`ps -o pid=,args= -p <pid>`) in the failure message. No assertion, timeout or skip was changed.
+
+## Triage note (2026-11-15)
+
+Not changed. Recorded failure: an Electron descendant still alive 20 s after a graceful quit, an assertion about process lifetime. Electron specs and their configs were not run or edited in this pass (shared with other groups, and unverifiable here); no spec-local explicit signal could be justified without a live reproduction. Stays `open`.

@@ -42,10 +42,20 @@ if (!imagePresent)
     `[preview-runaway.test] container mode skipped: Docker or image ${IMAGE} unavailable`,
   );
 
+/**
+ * Hang watchdogs, not assertions. Each case ends on its own signal (the memory
+ * watchdog, the DOM limit, the probe step deadline, a readiness handshake), and
+ * the product deadlines below only guarantee a stuck job still ends. They are
+ * generous so a starved host, which delays Chromium's launch and the RSS
+ * watchdog's polling, cannot make a job lose to the wall clock instead: with
+ * the former 15 s wall, a CPU-starved run reported `wall` where the case
+ * expects `worker-memory`, and the healthy job after it timed out on a 5 s
+ * readiness budget.
+ */
 const BUDGETS: Partial<PreviewBudgets> = {
-  readinessMs: 5_000,
-  workerWallMs: 15_000,
-  operationDeadlineMs: 25_000,
+  readinessMs: 30_000,
+  workerWallMs: 90_000,
+  operationDeadlineMs: 120_000,
   cleanupGraceMs: 1_000,
 };
 /**
@@ -265,7 +275,8 @@ function runawaySuite(mode: "process" | "container", enabled: boolean) {
         .filter(Boolean);
 
     async function assertRecovered(target: TranscriptPreviewRunner, operationId: string) {
-      const deadline = Date.now() + 20_000;
+      // A wait for the runner to report its slot free, bounded only against a hang.
+      const deadline = Date.now() + 90_000;
       while (target.stats().running > 0 && Date.now() < deadline)
         await new Promise((resolve) => setTimeout(resolve, 50));
       expect(target.stats()).toMatchObject({ running: 0, queued: 0, quarantined: 0 });
@@ -317,7 +328,8 @@ function runawaySuite(mode: "process" | "container", enabled: boolean) {
           expect(healthy.ok).toBe(true);
           await assertRecovered(target, healthyScope.operationId);
         },
-        120_000,
+        // Two jobs, each bounded by BUDGETS plus its recovery wait; a hang watchdog.
+        480_000,
       );
     }
   });

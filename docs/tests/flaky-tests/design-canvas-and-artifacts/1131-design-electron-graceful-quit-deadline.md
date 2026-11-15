@@ -43,3 +43,7 @@ error with the host-reachability probe off, and it followed a title timeout with
 the probe on. A third run, with the probe on and no Docker shim, passed in 18.5 s.
 The process table at the deadline was again not captured. Details are in
 [4250](4250-design-electron-reachability-dialog-race.md).
+
+## Triage note (2026-11-15)
+
+Not changed. The 30 s `waitForStopped` after `app.quit()` is a deliberate qualification bound (a graceful shutdown that does not finish fails by design), not a test-side timing check, so raising it would weaken what the spec qualifies. Why the owned process tree outlived quit is not established. Stays `open`.

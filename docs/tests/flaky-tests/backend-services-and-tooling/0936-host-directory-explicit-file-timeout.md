@@ -1,7 +1,7 @@
 # Explicit host-file resolution times out in the aggregate
 
 - **ID:** 0936
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-25
 - **Test:** `list_host_directory > resolves explicit files independently of a folder-first capped listing`
 - **Owner:** `apps/backend/src/core/commands-host-files.test.ts`
@@ -12,3 +12,10 @@
 - **Aggregate result:** backend 11,431 passed, four failed; web one failure. Other packages, root/support, bridges and protocol passed. Aggregate exit 1 in 1099.1 seconds logged.
 - **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; outer log `orkestrator-test-run.S8V2fZ/voice-suite.log.gz`.
 - **Assessment:** the owning-file pass establishes intermittence. Shared-host contention is a hypothesis; no implementation, assertion, deadline or skip changed in the owner.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** the five-second default test budget, exhausted under aggregate load (5034.77 ms; the complete owner passes in 0.9 s). `commands-host-files.test.ts` sets no budget, hook timeout or inner deadline of its own.
+- **Fix:** `tests/default-test-timeout.ts` (preloaded by `tests/setup-node.ts`) raises the default per-test and hook budget to a 60 s hang watchdog. No test change.
+- **Reproduced:** no — not reproduced; classified from the recorded duration and a check of the file for smaller explicit budgets.
+- **Stress:** none for this case.

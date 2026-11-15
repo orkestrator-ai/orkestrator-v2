@@ -1,7 +1,7 @@
 # Node reconnect wake mail not yet delivered under load
 
 - **ID:** 9962
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-11
 - **Base:** `498b68766f5c9f357a3a86782406d1e9e0977559`.
 - **Observed head:** `egress-name-checks-99a7933a4d12-r1` at `5cff101fa`. The
@@ -90,3 +90,11 @@ the send itself rather than adding microtask rounds.
   Expected length 1, Received length 0 (59.10 ms).
 - **Isolated rerun:** the owning file passed alone with one worker, in the
   same run as the gateway file.
+
+## Resolution (2026-11-15)
+
+- **Class:** test waited a fixed amount instead of on the completion signal (B).
+- **Root cause:** `CoordinatorNodeReconnectWakes.nodeConnected` awaits the node-name lookup, `mainAddress` and `storage.sendAgentMail` (real SQLite) before the mail exists. The test's `settle()` yielded five microtasks and then called `world.deliver()`, so on a loaded host the send had not been enqueued yet and the mailbox held nothing. The `node-reconnect.notice-failed` line in one recurrence fits the same gap: after the assertion failed, `finally` closed the world under the still-running send.
+- **Fix:** `apps/backend/src/core/coordinator-node-reconnect-wakes.test.ts` wraps the production `nodeConnected` passed to `connectCoordinatorNodeWakes`, keeps each notice's promise and awaits them all before `world.deliver()`. The listener assertions and the exactly-one-mail assertion are unchanged. No product change.
+- **Reproduced:** yes. A temporary `await Bun.sleep(30)` at the top of `tell` (production file restored afterwards) made the unchanged test fail with the recorded `Expected length: 1, Received length: 0`; the fixed test passed with the same delay in place.
+- **Stress:** `mise run test:logged -- --name c9962 -- bun scripts/test-under-contention.ts --core 12 --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-node-reconnect-wakes.test.ts --rerun-each=10` passed (29.1 s).

@@ -21,3 +21,11 @@
 - **Owning-file rerun:** `mise run test:logged -- --name grok-close-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/CloseRetention.spec.ts --workers=1` passed the unchanged owner (exit 0, 59.4 seconds).
 - **Evidence:** `orkestrator-test-run.JJG7SR/browser.log.gz` under the host temporary directory, with the original trace under `output/playwright/test-results/` (later runs may replace it).
 - Reload/fixture reconciliation under concurrent load is a possible cause; renderer source edits during the initial run may also have contributed. No close-retention implementation, assertion, deadline or skip changed.
+
+## Triage note (2026-11-15)
+
+Class A candidate (Playwright's default 5 s assertion / 30 s test deadline expiring on a loaded host). Not changed. The fix would be hang-watchdog defaults in `e2e/playwright.config.ts` (`expect.timeout` and `timeout`), but that config is shared with every group's component browser specs, so it is left for a separate decision rather than changed in a per-group sweep. Not reproduced; the browser suite was not run. Stays `open`.
+
+## Triage note (2026-11-15, after the config change)
+
+Follow-up: the hang-watchdog defaults this note deferred have now landed (`e2e/playwright.config.ts`: `timeout: 120_000`, `expect: { timeout: 30_000 }`), but this case stays `open`: the 2026-10-22 observation is a strict-mode violation (two `New agent tab` buttons), not an expired wait.

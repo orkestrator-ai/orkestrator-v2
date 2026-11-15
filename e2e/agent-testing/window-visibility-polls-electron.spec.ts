@@ -401,7 +401,8 @@ async function runSteps(
     options.requireLocked === true && code === UNLOCKED_EXIT_CODE,
     "the screen unlocked during the run, so the fixture hid its windows and stopped",
   );
-  expect(code, stderr).toBe(0);
+  // The step lines say how far a fixture that hung or failed got.
+  expect(code, `${stdout}\n${stderr}`).toBe(0);
   const lines = stdout
     .split("\n")
     .filter((line) => line.startsWith(STEP_LINE))

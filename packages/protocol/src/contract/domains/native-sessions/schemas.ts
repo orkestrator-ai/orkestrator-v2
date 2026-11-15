@@ -714,20 +714,6 @@ export const SuborkTranscriptSchema = openRecord({
   transcript: Schema.optional(Schema.Unknown),
 });
 
-/** `AgentInteractionObservation` (backend `native-agent-service-shared.ts`). */
-export const InteractionObservationSchema = openRecord({
-  provider: Schema.optional(Schema.String),
-  kind: Schema.optional(Schema.String),
-  workflowSurface: Schema.optional(Schema.Unknown),
-  phase: Schema.optional(Schema.String),
-  firstDetectedAt: Schema.optional(Schema.Finite),
-  lastDetectedAt: Schema.optional(Schema.Finite),
-  count: Schema.optional(Schema.Finite),
-  providerState: Schema.optional(Schema.String),
-  eventualOutcome: optionalString,
-  eventualAt: optionalNumber,
-});
-
 /** `ViewRevisionStamp` (view-sync.ts). */
 export const ViewRevisionStampSchema = Schema.Struct({
   generation: Schema.String,

@@ -326,14 +326,6 @@ describe("artifact lifecycle per kind", () => {
     expect(live.preparedSha256).toBe(view.source.effectiveSha256);
     const loaded = await h.content.minted[0]!.load();
     expect(new TextDecoder().decode(loaded)).toContain("<!-- prepared");
-    h.flags.liveInteractive = false;
-    await expect(h.service.openLiveSession(scope, published.publicationId)).rejects.toMatchObject({
-      error: { code: "policy_denied" },
-    });
-    // Rollback keeps history readable.
-    expect((await h.service.getPublication(scope, published.publicationId)).availability).toBe(
-      "available",
-    );
   });
 
   test("a failed probe keeps its diagnostic capture on the operation and creates no receipt", async () => {

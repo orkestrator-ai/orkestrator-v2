@@ -4,6 +4,7 @@ import {
   BRIDGE_SUMMARY_INLINE_DETAIL_BYTES,
   bridgeTranscriptPage,
   bridgeTranscriptPageCursorAt,
+  bridgeTranscriptPageCursorFor,
   bridgeTranscriptSummaryUpdate,
   isBridgeDetailLocator,
   parseBridgeTranscriptDetailResponse,
@@ -413,6 +414,45 @@ describe("pages", () => {
     expect(bridgeTranscriptPageCursorAt(cursor, 149)).toBeUndefined();
     expect(bridgeTranscriptPageCursorAt(cursor, 1.5)).toBeUndefined();
     expect(bridgeTranscriptPageCursorAt("bp1.bad", 160)).toBeUndefined();
+  });
+
+  test("a cursor minted from a snapshot's generation and epoch is the bridge's own (8110)", () => {
+    const cursor = firstCursor();
+    expect(bridgeTranscriptPageCursorFor("g1", 3, 150)).toBe(cursor);
+    expect(bridgeTranscriptPageCursorFor("g1", 3, 160)).toBe(
+      bridgeTranscriptPageCursorAt(cursor, 160),
+    );
+    // A snapshot at the first message sends no cursor; one minted for a later
+    // row still pages exactly the rows before it.
+    const head = bridgeTranscriptSummaryUpdate(history.slice(0, 5), {
+      sessionIdentity: "session-1",
+      generation: "g1",
+      contentEpoch: 3,
+      revision: 1,
+      complete: true,
+      limit: 100,
+      targetBytes: 512 * 1024,
+      pages: true,
+    });
+    if (head.status !== "snapshot") throw new Error("expected a snapshot");
+    expect(head.value.startIndex).toBe(0);
+    expect(head.value.historyCursor).toBeUndefined();
+    const page = bridgeTranscriptPage(history.slice(0, 5), {
+      generation: "g1",
+      contentEpoch: 3,
+      complete: true,
+      cursor: bridgeTranscriptPageCursorFor("g1", 3, 3)!,
+      limit: 20,
+      targetBytes: 512 * 1024,
+    });
+    if (page.status !== "page") throw new Error("expected a page");
+    expect(page.messages.map((entry) => (entry as Message).id)).toEqual(
+      history.slice(0, 3).map((entry) => entry.id),
+    );
+    expect(page.complete).toBe(true);
+    expect(bridgeTranscriptPageCursorFor("g1", 3, 0)).toBeUndefined();
+    expect(bridgeTranscriptPageCursorFor("g1", 3, 1.5)).toBeUndefined();
+    expect(bridgeTranscriptPageCursorFor("g".repeat(2048), 3, 4)).toBeUndefined();
   });
 
   test("history lost before the first retained message is never reported complete", () => {

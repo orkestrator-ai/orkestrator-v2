@@ -53,9 +53,8 @@ test("retaining close counts only the restart notice", async () => {
   expect(count("bridge-close.upgrade-required")).toBe(upgrade + 1);
 });
 
-test("transcript fallback counts legacy messages reads, not current reads or missing sessions", async () => {
-  const id = "bridge-transcript.messages-fallback";
-  const before = count(id);
+test("a transcript read never falls back to /messages, so it counts no compatibility use", async () => {
+  const before = compatibilityPathUsage.snapshot().paths;
   const options = { limit: 10, targetBytes: 1024 };
   const current = httpProvider(() =>
     Response.json(
@@ -70,22 +69,17 @@ test("transcript fallback counts legacy messages reads, not current reads or mis
     ),
   );
   await (current.provider as NativeAgentRuntimeProvider).transcriptSnapshot!("session-1", options);
-  expect(count(id)).toBe(before);
-  const legacy = httpProvider((url) =>
-    new URL(url).pathname.endsWith("/transcript")
-      ? new Response(null, { status: 404 })
-      : Response.json({ messages: [] }),
-  );
-  await (legacy.provider as NativeAgentRuntimeProvider).transcriptSnapshot!("session-1", options);
-  expect(count(id)).toBe(before + 1);
-  // Both routes 404: the session is missing, which is no compatibility use.
+  // `/transcript` answers 404: the session is missing, and `/messages` is not read.
   const missing = httpProvider(() => new Response(null, { status: 404 }));
   const snapshot = await (missing.provider as NativeAgentRuntimeProvider).transcriptSnapshot!(
     "session-1",
     options,
   );
   expect(snapshot).toMatchObject({ messages: [], complete: true });
-  expect(count(id)).toBe(before + 1);
+  expect(missing.requests.map((request) => new URL(request.url).pathname)).toEqual([
+    "/session/session-1/transcript",
+  ]);
+  expect(compatibilityPathUsage.snapshot().paths).toEqual(before);
 });
 
 test("the local branch read and the upstream auto-merge setting count every call (to-do 7570)", async () => {

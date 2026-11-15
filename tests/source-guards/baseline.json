@@ -28,7 +28,7 @@
     "apps/backend/src/core/native-agent-service-dispatch.test.ts": 1,
     "apps/backend/src/core/native-agent-service-progressive.test.ts": 5,
     "apps/backend/src/core/native-agent-service-projection.test.ts": 1,
-    "apps/backend/src/core/native-agent-service-reconciliation.test.ts": 2,
+    "apps/backend/src/core/native-agent-service-reconciliation.test.ts": 1,
     "apps/backend/src/core/native-agent-service-summary-transcripts.test.ts": 2,
     "apps/backend/src/core/nodes/node-controller-settings.test.ts": 1,
     "apps/backend/src/core/nodes/node-portal.test.ts": 1,

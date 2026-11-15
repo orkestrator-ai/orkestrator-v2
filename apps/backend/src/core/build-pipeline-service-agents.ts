@@ -210,7 +210,8 @@ export class BuildPipelineAgents {
       return this.settingsForSelection(pipeline, {
         agent: step.agent,
         // Normalised on read as well as on write: `start()` is not the only way
-        // a snapshot gets here — `importLegacy` accepts one straight from disk,
+        // a snapshot gets here — a stored record (an older write, or another
+        // process sharing the data directory) is read straight from disk,
         // where a placeholder could otherwise be sent as a real model id.
         model: stepModel(step.agent, step.model),
         effort: effort && effort !== "default" ? effort : undefined,

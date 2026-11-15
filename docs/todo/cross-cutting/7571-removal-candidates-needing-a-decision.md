@@ -2,7 +2,8 @@
 
 ## Task analysis
 
-Analysed 2026-11-14 against main at `dc90609bf` (task 3), before that
+Analysed 2026-11-15 against main at `a8b89f154` (tasks 5, 6, 7, 11 and 15,
+built under 8109), before that 2026-11-14 against `dc90609bf` (task 3),
 2026-11-13 against `17d28238c`, first written on
 2026-11-10 against `53340356c` from the dead-code and fallback
 investigation of that day. The same branch removed everything that was safe
@@ -19,10 +20,14 @@ candidate or part of one that needs a person (tasks 4, 5, 6, 7, 11, 13 and
 which carries each one's context, options and the agent work that follows
 the answer. Task 3 was done on 2026-11-14. The user answered every moved
 decision on 2026-11-14 (see Assumptions and decisions): the removals went to
-[8109](8109-decided-removal-candidates.md), the `envFilePatterns` copy to
+8109 (retired), the `envFilePatterns` copy to
 [8106](../containers-and-environments/8106-env-file-patterns-copy.md), the
 legacy readiness path to [8108](8108-legacy-retirement-sweep.md), and the
-Linear integration stays. What is left here is agent work only: task 10.
+Linear integration stays. On 2026-11-15 the 8109 removals were built and
+8109 was retired (it is in Git history at `a8b89f154`; the removals are
+recorded in the Retired table of
+[version-compatibility.md](../../architecture/version-compatibility.md#retired)).
+What is left here is agent work only: task 10.
 
 ### Tasks
 
@@ -30,17 +35,17 @@ Linear integration stays. What is left here is agent work only: task 10.
 2. **Claude bridge delete-tombstone machinery**: writer and reader removed; no tombstone was ever stored. Status: done.
 3. **Image readiness markers**: the image no longer writes or reads `/tmp/.environment-ready` and `/tmp/.entrypoint-complete`; it and its smoke and live checks use boot status, validated with an image build and the final-image smoke on a disposable daemon. Status: done.
 4. `envFilePatterns` setting (Settings offers it, but the backend never reads it): the user chose on 2026-11-14 to implement the copy, with a security review; the build is [8106](../containers-and-environments/8106-env-file-patterns-copy.md). Status: done here (moved to 8106).
-5. Interaction observer switches (`ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY` and `..._MONITOR_KILL_SWITCH`): the user chose on 2026-11-14 to remove the observe-only monitor, its adoption and both switches; the removal is [8109](8109-decided-removal-candidates.md) task 1. Status: done here (moved to 8109).
-6. Artifact rollout flags (the four `ORKESTRATOR_RICH_MARKDOWN`/`ARTIFACT_*` flags): the user chose on 2026-11-14 to remove them and their gate checks; the removal is [8109](8109-decided-removal-candidates.md) task 2. Status: done here (moved to 8109).
-7. Unmounted and uncalled surfaces (`NetworkWhitelistDialog.tsx`, `set_workflow_result_tools_rollout`, `graph_capability_ceiling_set`): the user chose on 2026-11-14 to delete all three, with no older-version adapter; the removal is [8109](8109-decided-removal-candidates.md) task 3. Status: done here (moved to 8109).
-8. **Old browser-held and stored state readers**: the localStorage build-pipeline import, `migrateLegacyClaudeTmuxState` and single-`pipelineId` handoff records removed from the renderer. Status: done (the backend command is task 15, now [8109](8109-decided-removal-candidates.md) task 5).
+5. Interaction observer switches (`ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY` and `..._MONITOR_KILL_SWITCH`): the user chose on 2026-11-14 to remove the observe-only monitor, its adoption and both switches; the removal was 8109 (retired) task 1. Status: done (built under 8109 (retired), 2026-11-15).
+6. Artifact rollout flags (the four `ORKESTRATOR_RICH_MARKDOWN`/`ARTIFACT_*` flags): the user chose on 2026-11-14 to remove them and their gate checks; the removal was 8109 (retired) task 2. Status: done (built under 8109 (retired), 2026-11-15).
+7. Unmounted and uncalled surfaces (`NetworkWhitelistDialog.tsx`, `set_workflow_result_tools_rollout`, `graph_capability_ceiling_set`): the user chose on 2026-11-14 to delete all three, with no older-version adapter; the removal was 8109 (retired) task 3. Status: done (built under 8109 (retired), 2026-11-15).
+8. **Old browser-held and stored state readers**: the localStorage build-pipeline import, `migrateLegacyClaudeTmuxState` and single-`pipelineId` handoff records removed from the renderer. Status: done (the backend command was task 15, removed under 8109 (retired) task 5).
 9. **Small probable leftovers needing one check each**: four of six items checked (two removed, two kept with the reason in a code comment). Status: done (the `bypassPermissionsModeAccepted` live check is on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md); the user chose on 2026-11-14 to remove the `kind: "legacy"` readiness path, which is [8108](8108-legacy-retirement-sweep.md) task 2).
 10. **Remaining retired to-do numbers in source comments**: about 39 numbers on about 80 comment lines. Status: open.
-11. Root `conductor.json`: nobody uses Conductor (the user, 2026-11-14); the deletion is [8109](8109-decided-removal-candidates.md) task 4. Status: done here (moved to 8109).
+11. Root `conductor.json`: nobody uses Conductor (the user, 2026-11-14); the deletion was 8109 (retired) task 4. Status: done (built under 8109 (retired), 2026-11-15).
 12. **Commands kept only for tests**: `merge_pr_local` and `refresh_environment_diff_stats` removed, their tests ported. Status: done.
 13. Linear integration (`connect_linear`, `disconnect_linear`, `post_linear_completion_comment`): in use, no change. The 2026-11-13 premise that these had no caller was wrong: `connect_linear` is called by `LinearConnectDialog.tsx`, `disconnect_linear` by `LinearTicketsView.tsx`, and `post_linear_completion_comment` by `build-pipeline-service-recovery.ts`, and the user actively uses Linear (2026-11-14). Status: done (kept).
 14. **Uncalled renderer API factories**: `createCommandNodesApi` and `createSelfImprovementApi` removed. Status: done.
-15. `import_legacy_build_pipelines` (the backend half of task 8, still used by e2e seeding): the user chose on 2026-11-14 to port its callers to a test-only seed and remove the command, its schema and its tests, with no older-version adapter; the build is [8109](8109-decided-removal-candidates.md) task 5. Status: done here (moved to 8109).
+15. `import_legacy_build_pipelines` (the backend half of task 8, still used by e2e seeding): the user chose on 2026-11-14 to port its callers to a test-only seed and remove the command, its schema and its tests, with no older-version adapter; the build was 8109 (retired) task 5. Status: done (built under 8109 (retired), 2026-11-15).
 
 ### 1. Bridge full-payload SSE mode
 
@@ -138,8 +143,8 @@ sets `messageQueue` and never creates a tab entry, the tmux store was never
 persisted, and every store write in `ClaudeTmuxChatTab.tsx` uses the scoped
 key, so the tmux migration could not fire. The backend command stays for
 now; whether to port its callers and remove it (task 15) was a decision,
-which the user answered on 2026-11-14; the build is
-[8109](8109-decided-removal-candidates.md) task 5.
+which the user answered on 2026-11-14; the build was
+8109 (retired) task 5, done 2026-11-15.
 
 **Decisions.** The recommended "retire all three" for the renderer readers.
 
@@ -277,7 +282,7 @@ seeding entry point of two e2e specs and a mixed-version scenario, which
 this change could not run, so its removal is task 15 rather than an
 unverified edit. Task 15 is a choice between a public test-only command
 and porting its callers, so it went to the manual-test checklist (answered
-2026-11-14; the build is [8109](8109-decided-removal-candidates.md) task 5).
+2026-11-14; the build was 8109 (retired) task 5).
 
 ### Task 9: two items kept with a comment, two left for a person
 
@@ -333,23 +338,23 @@ change.
   `ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH`, including their entries
   in the `apps/desktop/electron/backend-process.ts` allowlist. Keep the core
   `NativeAgentInteractionTracker` pending-interaction handling.
-  [8109](8109-decided-removal-candidates.md) task 1.
+  8109 (retired) task 1, done 2026-11-15.
 - **Task 6 (artifact rollout flags)**: remove `ORKESTRATOR_RICH_MARKDOWN`,
   `ORKESTRATOR_ARTIFACT_PUBLICATION`, `ORKESTRATOR_ARTIFACT_LIVE_INTERACTIVE`
   and `ORKESTRATOR_ARTIFACT_STATIC_PRESENTATION` and their gate checks.
-  [8109](8109-decided-removal-candidates.md) task 2.
+  8109 (retired) task 2, done 2026-11-15.
 - **Task 7 (unmounted and uncalled surfaces)**: delete
   `NetworkWhitelistDialog.tsx` and its test, `set_workflow_result_tools_rollout`
   and `graph_capability_ceiling_set`, with no older-version adapter (the
   2026-11-14 legacy-retirement policy, [8108](8108-legacy-retirement-sweep.md)).
-  [8109](8109-decided-removal-candidates.md) task 3.
+  8109 (retired) task 3, done 2026-11-15.
 - **Task 9 (`kind: "legacy"` readiness)**: remove the path with its tests and
   add a Retired row in
   [version-compatibility.md](../../architecture/version-compatibility.md).
   Part of the legacy-retirement sweep, [8108](8108-legacy-retirement-sweep.md)
   task 2.
 - **Task 11 (`conductor.json`)**: delete it; nobody uses Conductor.
-  [8109](8109-decided-removal-candidates.md) task 4.
+  8109 (retired) task 4, done 2026-11-15.
 - **Task 13 (Linear)**: keep it. The user actively uses Linear, and the
   premise of the 2026-11-13 item was wrong: `connect_linear` is called by
   `LinearConnectDialog.tsx`, `disconnect_linear` by `LinearTicketsView.tsx`,
@@ -362,13 +367,73 @@ change.
   `scripts/mixed-version/scenarios/pipelines.ts` unless the mixed-version
   sweep in [8108](8108-legacy-retirement-sweep.md) retires it first) to a
   test-only seed, then remove the command, its schema and its tests, with no
-  older-version adapter. [8109](8109-decided-removal-candidates.md) task 5.
+  older-version adapter. 8109 (retired) task 5, done 2026-11-15.
+
+### Tasks 5, 6, 7 and 15: removed commands bump their domains, with a same-API adapter
+
+Built 2026-11-15 under 8109 (retired). Removing `import_legacy_build_pipelines`,
+`set_workflow_result_tools_rollout`, `graph_capability_ceiling_set` and the
+interaction monitor's three commands took `pipelines` and `graphs` to
+version 2 and `native-sessions` to version 3, all `min: 1`. The user's
+"no older-version adapter" decision is kept for the removed commands
+themselves: nothing serves them to an older client, which now gets
+`unknown-command`. Each client still has an adapter for the previous domain
+version with the same API, because the contract CI job refuses a bump
+without one while an in-window release speaks that version. Those adapters
+are older-version support of the kind the legacy-retirement sweep
+([8108](8108-legacy-retirement-sweep.md)) removes everywhere at once, so
+they are left to it rather than special-cased here. The register and Retired
+rows are in
+[version-compatibility.md](../../architecture/version-compatibility.md#retired).
+
+### Task 5: the e2e seed writes through `saveBuildPipeline` from a second process
+
+The two real-stack specs and the mixed-version scenario were the only
+callers. The specs now store their finished pipeline with
+`seedBuildPipeline` (`apps/backend/src/core/storage-test-support.ts`), run
+through the existing `e2e/agent-testing/backend-store.ts` helper
+(`seed-pipeline` action), which opens the profile's database as a second
+backend process would and calls `StorageService.saveBuildPipeline`: the
+same record, revision and admission checks the command produced, with no
+public command. A `dev:test` fixture seed was not used because the
+app-wiring spec's pipeline carries a validation run it creates at test time.
+The mixed-version scenario lost only its empty-import check; the scenario
+itself retires with 8108 task 4. The new helper has a unit test, and
+`pipeline-delete.spec.ts` passed on a credential-free `dev:test` profile
+(`--fixture --no-agent-credentials --no-host-seed`) on 2026-11-15, four
+times. On that host the user could not reach the Docker daemon, so the
+spec now continues past the Docker permission dialog, which otherwise
+covered the sidebar its login waits on (it uses no container). The
+container app-wiring spec needs Docker and is on the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md).
+
+### Task 7: the stored graph ceiling is still read and enforced
+
+Only the `graph_capability_ceiling_set` command went. `graph_capability_ceiling_get`
+and the enforcement of a stored ceiling stay, and the service's `setCeiling`
+stays as the path its tests use to establish a ceiling. Removing the
+ceiling feature itself was not part of the decision.
+
+### Task 6: capability fields report `true` rather than disappearing
+
+`transcript_artifact_capabilities` keeps `authoring` and `rolloutFlags`,
+now always `true`, so no result schema changed and an older renderer reads
+the same shape. The renderer's branches for `false` stay, because an older
+backend can still send it.
+
+### Task 10: left open, repointed as files are touched
+
+A scan on 2026-11-15 found retired to-do numbers on far more comment lines
+than the 80 estimated (the scan also counts plan items and test fixtures,
+so the true number is lower), spread over most areas. The recorded
+recommendation stands: repoint them as files are touched. This change did
+not sweep them.
 
 ## Related
 
 - [7570](7570-compatibility-paths-waiting-on-the-floor.md): window-dated removals.
 - [8108](8108-legacy-retirement-sweep.md): the 2026-11-14 legacy-retirement sweep, including task 9's readiness path.
-- [8109](8109-decided-removal-candidates.md): the removals the user decided on 2026-11-14 (tasks 5, 6, 7, 11 and 15).
+- 8109 (retired 2026-11-15; `git show a8b89f154:docs/todo/cross-cutting/8109-decided-removal-candidates.md`): the removals the user decided on 2026-11-14 (tasks 5, 6, 7, 11 and 15), now in the Retired table of [version-compatibility.md](../../architecture/version-compatibility.md#retired).
 - [8106](../containers-and-environments/8106-env-file-patterns-copy.md): the `envFilePatterns` copy (task 4).
 - [version-compatibility.md](../../architecture/version-compatibility.md)
 - [Cross-cutting index](0000-index.md)

@@ -64,7 +64,11 @@ test("real renderer sessions grant writes/fullscreen and deny other permissions 
         await navigator.clipboard.writeText("permission-regression");
         await document.documentElement.requestFullscreen();
         const fullscreen = !!document.fullscreenElement;
-        await document.exitFullscreen();
+        // Leaving fullscreen is only cleanup, so it is bounded. Under Playwright on a
+        // MacBook Pro with external displays (macOS 27.2, Electron 45.2.3) the native
+        // window never entered fullscreen, and exitFullscreen() waited for good for a
+        // transition that never came (to-do 2181, 2026-11-15).
+        await Promise.race([document.exitFullscreen(), new Promise((done) => setTimeout(done, 3000))]);
         const geo = await navigator.permissions.query({ name: "geolocation" });
         const notifications = await navigator.permissions.query({ name: "notifications" });
         const child = document.querySelector("iframe").contentWindow;

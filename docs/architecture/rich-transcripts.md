@@ -634,7 +634,7 @@ on screen, such as a static document at index 25 + 150k, rather than the tail) a
 `--retained-mib N` (pads the same 3,000 messages to about N MiB of encoded
 JSON through `?retainedMiB=N`, so a large retained history stays under the
 4,096-message client cap; the 2026-10-24 run at 8 MiB is in
-[0050](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md)).
+to-do 0050, retired 2026-11-15: `git show a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`).
 Every run also covers the page with another tab for 10 s while the response
 streams and then brings it back, recording the first frame and long tasks
 after. A page Playwright drives stays `visible`, with timers at full rate,
@@ -982,9 +982,10 @@ and a frame that gave up all leave the card on its saved preview, and the card
 withholds the document (`withholdArtifactSearchBody`, per occurrence, kept when the
 card scrolls away) so a read in flight or a later Find session cannot write the text
 back. A frame that renders the document again, after Retry or on a remount,
-releases it. Find never counts a match it cannot highlight. The `staticPresentation` switch (and a build that
-declares the view unavailable, which none does now) reads nothing, because its
-cards never show the text. A publication verified before the text
+releases it. Find never counts a match it cannot highlight. An older backend's
+`staticPresentation: false` (and a build that declares the view unavailable, which
+none does now) reads nothing, because its cards never show the text. A publication
+verified before the text
 was stored, and an older backend, answer `invalid_input`; such a document counts
 once its card has shown it, as before. There is no backfill: one would launch a
 browser per old document when Find opens, the cost the stored text exists to
@@ -1079,17 +1080,18 @@ convenience publishing tool are out of scope:
 
 ## Rollout
 
-`transcript_artifact_capabilities.rolloutFlags` carries four switches. With
-`richMarkdown` off, text renders and is indexed through the plain Markdown
-path. With `artifactPublication` off, `publish_artifact` is refused while
-existing publications stay readable. With `liveInteractive` off, Run
+`transcript_artifact_capabilities.rolloutFlags` carries four former switches.
+The backend has no off switch for any of them and reports each `true`; the
+fields stay so the capability contract is unchanged. The renderer still honours
+a `false` from an older backend. With `richMarkdown` off, text renders and is
+indexed through the plain Markdown path. With `liveInteractive` off, Run
 interactive is unavailable and saved previews remain. With `staticPresentation`
-off (`ORKESTRATOR_ARTIFACT_STATIC_PRESENTATION=0`), `html-static` cards show
-their saved preview and no document view; it is independent of `liveInteractive`,
-and an older backend that does not send it displays documents as usual. The hosted
-client (`apps/web-public`) shows documents like the other clients: its build emits
-`static-html-frame.html`, which `vercel.json` serves under its own sandboxed rule
-(`renderer-security.md`, "Static HTML frames"). A build whose host policy cannot
-run the frame can still declare the view unavailable
-(`ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable`, `staticHtmlPresentationSupported`),
-which keeps its cards on saved previews. No switch deletes or rewrites stored records.
+off, `html-static` cards show their saved preview and no document view; it is
+independent of `liveInteractive`, and an older backend that does not send it
+displays documents as usual. The hosted client (`apps/web-public`) shows documents
+like the other clients: its build emits `static-html-frame.html`, which
+`vercel.json` serves under its own sandboxed rule (`renderer-security.md`, "Static
+HTML frames"). A build whose host policy cannot run the frame can still declare the
+view unavailable (`ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable`,
+`staticHtmlPresentationSupported`), which keeps its cards on saved previews. No
+switch deletes or rewrites stored records.

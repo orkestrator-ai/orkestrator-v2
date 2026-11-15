@@ -378,6 +378,9 @@ queued for over an hour (2026-11-10: 218 queued, 14 running). So:
   four platforms including two macOS runners) runs on pull requests and merges
   only when Bun, dependencies, Docker or packaging inputs change, and nightly
   on `main` for everything else.
+- `electron-qualification.yml` runs the whole `mise run test:agent:electron`
+  suite under `xvfb-run` on one Linux runner weekly and on demand, not on
+  every change ([agent-testing.md](agent-testing.md#electron-specs-and-their-display)).
 
 The runner reports each group as soon as it finishes, but prints detailed
 failure sections in a stable order. It waits for every group, so one failure

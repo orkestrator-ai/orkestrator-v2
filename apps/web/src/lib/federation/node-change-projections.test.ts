@@ -6,7 +6,11 @@ import {
   type ChangeProjection,
 } from "@orkestrator/protocol/change-resources";
 import type { BackendId, EnvironmentRef } from "@orkestrator/protocol/federation";
-import { RELAYED_NODE_EVENT, type RelayedNodeEvent } from "@orkestrator/protocol/node-events";
+import {
+  RELAYED_NODE_EVENT,
+  relayedNodeEventName,
+  type RelayedNodeEvent,
+} from "@orkestrator/protocol/node-events";
 import { invoke } from "@/lib/native/backend";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import {
@@ -115,6 +119,9 @@ describe("another node's change projections", () => {
       `listen:${NATIVE_EVENT_STREAM_CONNECTED_EVENT}`,
       `listen:${RELAYED_NODE_EVENT}`,
       `watch:${CHANGE_PROJECTION_CHANGED_EVENT}`,
+      // Every command node relays under the node's own name, listened to
+      // before the first read.
+      `listen:${relayedNodeEventName(LEAF)}`,
       `read:${KEY}`,
     ]);
     expect(reads()[0]!.args).toEqual({

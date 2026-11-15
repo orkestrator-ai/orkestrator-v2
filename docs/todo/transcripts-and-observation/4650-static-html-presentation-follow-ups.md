@@ -2,11 +2,11 @@
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `e198fd4a7`, on the branch that added the static document view. Task 2 re-checked and done 2026-11-05 against `main` at `e1f4c875f`.
+Analysed 2026-11-04 against `main` at `e198fd4a7`, on the branch that added the static document view. Task 2 re-checked and done 2026-11-05 against `main` at `e1f4c875f`. Task 1's agent part done 2026-11-15 against `main` at `a8b89f154`.
 
 ### Tasks
 
-1. **Run static documents in the hosted client**: let `apps/web-public` display them rather than saved previews, by emitting the frame document in the hosted build with its own header rule. Status: open (the user approved the hosted policy change on 2026-11-14, so the build change is agent work; the check on a real Vercel deployment stays on the manual-test checklist, 7568: 4650 task 1).
+1. **Run static documents in the hosted client**: let `apps/web-public` display them rather than saved previews, by emitting the frame document in the hosted build with its own header rule. Status: done (2026-11-15, the agent part); see Assumptions and decisions. The check on a real Vercel deployment stays on the manual-test checklist (7568: 4650 task 1).
 2. **Include document text in Find**: text inside a static frame is not indexed. Status: done (2026-11-05); see Assumptions and decisions. What it left went to 5780 (retired 2026-11-11, all three tasks done; `git show 498b68766:docs/todo/transcripts-and-observation/5780-find-inside-static-documents.md`).
 3. **Share one sanitizer with the design runtime**: remove the pinned copy. Status: open (do with the next intentional design-runtime change).
 4. **Consider a thin visual publishing tool**: only if real provider sessions show the lifecycle is cumbersome. Status: blocked (waits on 7568: 4650 task 4, evidence from real provider sessions).
@@ -15,9 +15,9 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, on the branch that added the 
 
 **Problem.** The hosted client shows static reports as saved previews, while desktop and gateway clients show the document.
 
-**Context.** `apps/web-public/vercel.json` sets `script-src 'self'` and `frame-ancestors 'none'` on `/(.*)`, and its Vite build does not use `rendererSecurityPlugin`, so there is no emitted frame document. A `srcdoc` frame inherits the parent policy, so the bootstrap cannot run. The build declares `ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable`.
+**Context.** Before 2026-11-15, `apps/web-public/vercel.json` set `script-src 'self'` and `frame-ancestors 'none'` on `/(.*)`, and its Vite build did not use `rendererSecurityPlugin`, so there was no emitted frame document. A `srcdoc` frame inherits the parent policy, so the bootstrap could not run, and the build declared `ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable`.
 
-**Investigation.** Not attempted live. Approval to relax the hosted policy for that path was given by the user on 2026-11-14 (see Assumptions and decisions). Whether a more specific Vercel header rule replaces the `/(.*)` policy for one path is still the manual-test checklist's Vercel check (7568); build the change so that check can run against it.
+**Investigation.** Approval to relax the hosted policy for that path was given by the user on 2026-11-14 (see Assumptions and decisions). Built on 2026-11-15: the hosted build emits `static-html-frame.html` (`staticHtmlFramePlugin` in `apps/web/vite-plugin-renderer-security.ts`), `vercel.json` gives `/static-html-frame.html` the gateway's frame policy and excludes exactly that path from the general rule (`/((?!static-html-frame\.html$).*)`), and the build no longer declares the view unavailable. `bun run --cwd apps/web-public build` emitted the document with its hash-pinned script. Locally, the built `dist` served by a small Bun server that applied `vercel.json`'s rules as `config.test.ts` reads them, in headless Chromium: a same-origin page under the strict policy framed the document with `sandbox="allow-scripts"`, the frame rendered a report through `StaticHtmlFrameSession`, its text was selectable, and `/` still received `frame-ancestors 'none'`. With the general rule left as `/(.*)` (both policies on the frame path) the frame never reported `ready`. That local server is not Vercel: whether Vercel matches the rules this way is the manual-test checklist's check (7568).
 
 **Decisions.**
 
@@ -134,6 +134,18 @@ This fixes a gap outside the file's wording, because document text would otherwi
 
 All three went to 5780 (retired 2026-11-11, all three tasks done; `git show 498b68766:docs/todo/transcripts-and-observation/5780-find-inside-static-documents.md`); the architecture is in [`rich-transcripts.md`](../../architecture/rich-transcripts.md#static-document-presentation).
 
+### Task 1: how the hosted build ships the frame (2026-11-15)
+
+- **Excluding the frame path from the general rule.**
+  - **A negative lookahead in the general rule's source, `/((?!static-html-frame\.html$).*)` (chosen).**
+    - Pros: holds whether Vercel merges or replaces matching rules, because only one rule matches the frame path; every other path, including `/static-html-frame.html/anything`, keeps the strict policy.
+    - Cons: a regular expression in a deployed policy; `config.test.ts` reads it with a hand-written subset of path-to-regexp 6, since the repository has no copy of that version.
+  - **A more specific rule listed after `/(.*)`.**
+    - Pros: simpler sources.
+    - Cons: Vercel applies every matching rule, so the frame would get both policies and the strict `script-src 'self'` would refuse its bootstrap; the local merge run above showed the frame never starting.
+- **Where the hosted plugin lives.** `staticHtmlFramePlugin` sits beside `rendererSecurityPlugin` and reuses its document builder, so the hosted client ships byte-for-byte the document the desktop and gateway builds ship (a test compares them). It adds no `<meta>` policy to the hosted `index.html`, whose policy stays the Vercel header, and emits no design frame document (out of this task's scope).
+- **The unavailable switch stays.** `staticHtmlPresentationSupported` and `ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable` remain as the one-line way back to saved previews if the Vercel check finds the rules do not apply as built; no build sets it now.
+
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: approving the hosted policy change and checking it on a real Vercel deployment; the user part of task 4: evidence from real provider sessions) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: checking the built header rules on a real Vercel deployment, the approval having been given on 2026-11-14; the user part of task 4: evidence from real provider sessions) moved there on 2026-11-10.

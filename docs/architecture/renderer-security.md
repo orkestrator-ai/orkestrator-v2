@@ -59,7 +59,8 @@ inline bootstrap. A production build therefore emits the bootstrap as
 `design-frame.html`, and `designFrameSource` loads that instead, resolving it
 from the gateway root on nested SPA routes and beside the packaged index. A file cannot
 carry a fresh nonce, so its policy pins the script's SHA-256; authored code still
-cannot execute. A dev server and the hosted client keep the nonce-bearing `srcdoc`.
+cannot execute. A dev server and the hosted client keep the nonce-bearing `srcdoc`
+for design frames.
 
 ### Static HTML frames
 
@@ -71,9 +72,24 @@ frame's `ready` to this mount. The frame is always opaque, so the host checks th
 sender window and that identity rather than `event.origin`. Adding another frame
 document means updating `vite-plugin-renderer-security.ts`,
 `staticDocumentContentSecurityPolicy` in `gateway-proxy.ts` and the probes in
-`packaged-security-electron.spec.ts`. The hosted client emits no frame documents
-and its policy refuses a `srcdoc` bootstrap, so its build declares the static view
-unavailable (`staticHtmlPresentationSupported`) and shows saved previews.
+`packaged-security-electron.spec.ts`.
+
+The hosted client (`apps/web-public`) gets no `<meta>` policy from this build;
+Vercel sends its policy as a header from `vercel.json`. Its build emits only
+`static-html-frame.html` (`staticHtmlFramePlugin`), and `vercel.json` gives that
+one path its own rule, the gateway's frame policy
+(`sandbox allow-scripts; frame-ancestors 'self'`). The general rule's source,
+`/((?!static-html-frame\.html$).*)`, excludes exactly that path: two matching
+policies would both be enforced, and the general one's `script-src 'self'`
+refuses the frame's hash-pinned bootstrap. Every other path, the frame path
+with a trailing segment included, keeps the strict policy with
+`frame-ancestors 'none'`. `apps/web-public/src/config.test.ts` checks which
+policy each path matches; whether a real Vercel deployment applies the rules
+that way is on the manual-test checklist (7568, 4650 task 1). A build whose host
+policy cannot run the frame declares the view unavailable
+(`ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable`,
+`staticHtmlPresentationSupported`) and shows saved previews; no build does now.
+The hosted client emits no design frame document.
 
 ## OS sandbox
 

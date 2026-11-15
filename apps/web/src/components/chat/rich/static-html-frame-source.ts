@@ -18,9 +18,11 @@ export function staticHtmlFrameSource(
 }
 
 /**
- * The hosted client's own policy (`apps/web-public/vercel.json`) refuses a
- * `srcdoc` bootstrap and its build emits no frame document, so a frame there
- * could only time out. That build says so, and its cards stay on saved previews.
+ * A build whose host policy cannot run the frame (no emitted frame document and
+ * a `script-src 'self'` that refuses the `srcdoc` bootstrap) declares
+ * `ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable`, and its cards stay on saved
+ * previews. No build does now: the hosted client (`apps/web-public`) emits the
+ * frame document and serves it under its own `vercel.json` rule.
  */
 export function staticHtmlPresentationSupported(
   declared = import.meta.env.ORKESTRATOR_STATIC_HTML_PRESENTATION,

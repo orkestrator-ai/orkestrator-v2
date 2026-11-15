@@ -982,8 +982,9 @@ and a frame that gave up all leave the card on its saved preview, and the card
 withholds the document (`withholdArtifactSearchBody`, per occurrence, kept when the
 card scrolls away) so a read in flight or a later Find session cannot write the text
 back. A frame that renders the document again, after Retry or on a remount,
-releases it. Find never counts a match it cannot highlight. The hosted client and the `staticPresentation` switch read nothing,
-because their cards never show the text. A publication verified before the text
+releases it. Find never counts a match it cannot highlight. The `staticPresentation` switch (and a build that
+declares the view unavailable, which none does now) reads nothing, because its
+cards never show the text. A publication verified before the text
 was stored, and an older backend, answer `invalid_input`; such a document counts
 once its card has shown it, as before. There is no backfill: one would launch a
 browser per old document when Find opens, the cost the stored text exists to
@@ -1086,6 +1087,9 @@ interactive is unavailable and saved previews remain. With `staticPresentation`
 off (`ORKESTRATOR_ARTIFACT_STATIC_PRESENTATION=0`), `html-static` cards show
 their saved preview and no document view; it is independent of `liveInteractive`,
 and an older backend that does not send it displays documents as usual. The hosted
-client (`apps/web-public`) declares the view unavailable at build time, because
-`vercel.json`'s policy cannot run its frame, so its cards stay on saved previews. No
-switch deletes or rewrites stored records.
+client (`apps/web-public`) shows documents like the other clients: its build emits
+`static-html-frame.html`, which `vercel.json` serves under its own sandboxed rule
+(`renderer-security.md`, "Static HTML frames"). A build whose host policy cannot
+run the frame can still declare the view unavailable
+(`ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable`, `staticHtmlPresentationSupported`),
+which keeps its cards on saved previews. No switch deletes or rewrites stored records.

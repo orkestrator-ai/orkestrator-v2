@@ -167,6 +167,25 @@ private generated classes. The turn asserts the result text and that the
 fake served a run, and the error turn asserts the SDK's own error status;
 the SDK's retry of a failed run (about 16 s) is inside the 90 s bound.
 
+### Task 2: separate Cursor counters and a strict run match (review fix, 2026-11-15)
+
+Multi Review found two weaknesses in the first version. Cursor's failed runs
+were counted under the same `broken` key as the Claude and Codex error turns.
+The SDK retries a failed run four times, so the Cursor turn alone met the
+final `broken >= 2` check. The fake also sent the RunSSE reply whether or not
+the run's request id had arrived through `BidiAppend`, so the comment's claim
+that a renumbered request field fails the turn was not true. Cursor runs now
+count under `cursor` and `cursor-broken`. The Claude and Codex error turns
+each assert their own `broken` delta. The fake answers a run whose request
+id is empty, or has not arrived through `BidiAppend` within 5 s, with a
+Connect `failed_precondition` error, counts it under `cursor-unmatched`, and
+the test asserts that count is zero. A narrower comment would also have
+removed the false claim. The strict match was chosen because it lets a
+protocol change on either side fail the suite. On omarchy-hp with image
+`orkestrator-v2:dev-ca9f88454633` the suite passed (64.4 s). With the
+`BidiAppendRequest` field number temporarily changed in the fake, the Cursor
+turn failed with that error, as intended.
+
 ### Task 4: require observed native execution (unchanged 2026-11-15)
 
 Keep arm64 qualification open until the existing native CI job supplies a

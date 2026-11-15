@@ -2103,6 +2103,17 @@ the run's status and result, that the fake served the run, DNS refusal of the
 telemetry names and the 90 s bound. Native arm64 execution remains unverified
 (7420 task 4).
 
+After review the same day, Cursor runs were given counters of their own
+(`cursor`, `cursor-broken`). Before that, the SDK's four attempts at a failed
+run counted under the `broken` key that the Claude and Codex error turns
+share, and could satisfy their check. Each of those two error turns now
+asserts its own count of failed requests. The fake now refuses a run whose
+request id is empty, or has not arrived through `BidiAppend` within 5 s,
+with a Connect `failed_precondition` error, and the test asserts that no run
+was refused. Same host and image: the suite passed (64.4 s, no trace). With
+the fake's `BidiAppendRequest` field number deliberately changed, the Cursor
+turn failed with that error, which shows that a renumbering fails the suite.
+
 ## Rootless daemon restart on a disposable daemon (2026-11-06)
 
 To-do 0018 (retired 2026-11-11)

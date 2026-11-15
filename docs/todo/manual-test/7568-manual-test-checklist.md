@@ -31,7 +31,7 @@ been removed, and 8110 (retired) task 1's real-provider paging check came in.
 
 ### Tasks
 
-1. **Manual tests and live checks** (334 items): run each check under
+1. **Manual tests and live checks** (335 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (24 items): make each call
@@ -178,12 +178,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 0 |
 | Containers and environments | 29 | 6 |
 | Coordinator and Multi Review | 84 | 3 |
-| Cross-cutting | 89 | 8 |
+| Cross-cutting | 90 | 8 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 16 | 1 |
 | Transcripts, observation and bandwidth | 27 | 2 |
-| **Total** | 334 | 24 |
+| **Total** | 335 | 24 |
 
 ## Outstanding work
 
@@ -681,6 +681,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **5820 (retired) task 1: remove a synced project on your fleet.** (Background: [Removing a project](../../architecture/tickets.md#sync-across-machines).) Agents checked this with two real storage services over an in-process link, not with two of your machines. Pick a repository your command node has a project for and a leaf does not, add a throwaway ticket to that project on the command node, add the repository as a project on the leaf and wait for the ticket to arrive there, then remove the project on the leaf. Pass: after the next sync (within a minute) the command node still has the ticket, and adding the repository again on the leaf brings its copy back. Then delete the throwaway ticket. Record: the date, both machines' versions and pass or fail, as a reply to the coordinator (5820 is retired).
 
 - [ ] **8109 (retired) task 5: run the container app-wiring spec on its new pipeline seed.** (Background: the `import_legacy_build_pipelines` Retired row in [version-compatibility.md](../../architecture/version-compatibility.md#retired); the to-do is in Git history at `a8b89f154`.) The spec's "a pipeline naming the run opens in the container's Build tab" step now stores its finished pipeline through `seedBuildPipeline` (`e2e/agent-testing/backend-store.ts`) instead of the removed command. The building session could not reach a Docker daemon, so the spec was not run. On a host with Docker, start a credential-free profile with a container fixture (`mise run dev:test --profile seed-8109 --fixture --fixture-environments local,container --no-agent-credentials --no-host-seed --headless`), wait for `dev:status --json` to report `ready`, then run `ORKESTRATOR_AGENT_TEST_PROFILE=seed-8109 mise run test:logged -- --name app-wiring -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts container-app-wiring.spec.ts`, and stop and reset the profile afterwards (`dev:stop`, `dev:reset`). Expected: every test in the file passes; the seeded pipeline lists, and its Build tab shows the validation run's two commands. Record: the commit, the pass and fail counts and any failing step's message, as a reply to the coordinator. A failure goes to a new to-do for an agent.
+- [ ] **8171 (retired) task 1: burst rescans on arktech-mini once `fseventsd` delivers again.** (Background: [Lost events on macOS](../../architecture/git-scan-caches.md#lost-events-on-macos), "A watcher that missed a change"; the to-do is in Git history.) On 2026-11-15 arktech-mini's `fseventsd` was at 100% CPU after 10 days of uptime and delivered no file event to any process, so the fix was measured only on the "deliver nothing" side. Restarting `fseventsd` needs a reboot or root, which is yours to do. After the next reboot of arktech-mini, (1) check a watch gets events again: `mkdir -p ~/w8171 && bun -e 'require("fs").watch(process.env.HOME+"/w8171",()=>{console.log("event");process.exit(0)}); setTimeout(()=>require("fs").writeFileSync(process.env.HOME+"/w8171/x","x"),500)'` prints `event` within a few seconds; (2) from a worktree on a current build, run the busy driver as in [the testing guide](../../development/testing-guide.md#live-idle-ab) with `--busy-rounds 5 --busy-clients 0 --busy-environments 10 --busy-burst-files 2500 --busy-turn-files 2500 --fixture-environments local --agent-platforms pi --freshness-probes 0`; (3) in that profile's backend log, count `scan.watcher-missed-change` lines. Expected: no `burst-backend` timeout, rescans in a few seconds, and no or very few `scan.watcher-missed-change` lines (each one makes that environment poll every 15 s for at least 5 min). Record: uptime, `fseventsd` CPU, the `burst-backend` and `burst-clear-backend` rows and the line count, as a reply to the coordinator; an agent adds them to the "A watcher that missed a change" paragraph. This also unblocks [7551](../cross-cutting/7551-macos-watch-churn-loses-events.md) task 3.
 
 #### Design canvas
 

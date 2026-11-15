@@ -270,6 +270,47 @@ mutation (`invalidateChanges` and a refresh) and never waits for a hint;
 `write_local_file` joined that list after a design-canvas case found an editor
 write missing from the tree (to-do 8015, retired 2026-11-14).
 
+**A watcher that missed a change** (to-do 8171, retired 2026-11-15). When a
+scan finds the file list changed although nothing (no hint, mutation or
+refresh) dirtied the entry since a previous scan under the same qualified
+watcher, the diff service calls the watcher's `unannouncedChange`. Unless an
+event reaches the watcher within `WATCH_MISS_GRACE_MS` (3 s) or a burst is
+still settling, the local watcher withdraws qualified coverage, logs
+`scan.watcher-missed-change` once per spell of distrust, and the environment polls every 15 s
+(`DIFF_POLL_INTERVAL_MS`) instead of waiting for the 120 s safety scan. While
+it is distrusted the service also reports the changes its polls find before
+any event, and each such miss restarts the distrust. The first event the
+watcher delivers `WATCH_DISTRUST_MS` (5 min) after its latest miss restores
+coverage. A watcher unqualified for another reason (an unreadable directory, a
+tree left out) ignores these reports. The cost is that of an unwatched
+worktree, for as long as delivery stays late; a healthy host loses at most
+5 min of watching after an unlucky race between a poll and a settling burst.
+
+On arktech-mini on 2026-11-15 (`fseventsd` at 100% CPU after 10 days of
+uptime, load average 2 to 4), `fseventsd` was not silent but late and
+sparse: a single `fs.watch` on either volume saw no event within 20 s, and
+`scripts/benchmark-burst-watch.ts` (the real watcher and helper, no backend,
+10 repositories, 2,500-file bursts) got a hint for 3 of 30 writes and 11 of
+30 removals within 60 s, each 20 to 59 s late. Those late events had forgiven
+misses and restored coverage, which is why the restart on a polled miss
+exists. The busy driver (5 rounds unless noted, no clients, 10 environments, 2,500
+burst and turn files, with its `burst-clear-backend` wait; each row one run):
+
+| Build | `burst-backend` timeouts (60 s) | Environments rescanned per round | `burst-clear-backend` timeouts | Rounds |
+| --- | --- | --- | --- | --- |
+| Before (`a8b89f154`) | 4 of 5 | 10, 1, 0, 9, 5 | 3 of 5 | 20 to 141 s |
+| Distrust without the restart (`15049013a`) | 5 of 5 | 2, 3, 5, 6, 7 | 0 of 5 (p50 15.0 s, max 49.8 s) | 82 to 141 s |
+| Current (`baa0f64af`) | 1 of 5 (the others p50 15.1 s, max 15.5 s) | 10, 3, 10, 10, 10 | 1 of 5 (the others max 15.0 s) | 38 to 118 s |
+| Current, 10 rounds (load average 8 to 10) | 3 of 10, rounds 2 to 4, 1 or 2 environments short each (the others p50 15.1 s) | 10, 8, 9, 9, then 10 in every round | 1 of 10 (the others max 18.0 s) | 24 to 119 s, 24 to 47 s from round 6 |
+
+Each environment still waits for one safety scan to find its first miss, so the
+first rounds can run out; once every watcher is distrusted, a burst is
+rescanned at the next poll, about 15 s after it is written.
+
+A healthy host was not measured; that is in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(8171 task 1).
+
 Linux start and close for 20 watches took 6 ms and 0 ms. The full measurements were recorded in
 to-do 5060 (retired 2026-11-10; its last version is in Git history).
 

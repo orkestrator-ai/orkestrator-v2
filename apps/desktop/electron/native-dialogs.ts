@@ -36,7 +36,9 @@ const desktopLog = createLogger("desktop");
  * cancelled too (`quitting-cancelled`), rather than given a new host window or
  * a windowless box. A host still being created when the quit begins counts as
  * new: every dialog waiting on it is cancelled once it settles, and the host
- * is closed. A window created after the quit has closed every other
+ * is closed. The host is known as one from the moment it is constructed, so a
+ * caller or `currentWindow` handing back that still-loading window cannot pass
+ * it off as an ordinary parent. A window created after the quit has closed every other
  * fails to load, and on macOS a dialog opened on one after `will-quit` killed
  * Electron with SIGSEGV before the essential log was stopped (2 of 5 runs on
  * a real display; to-do 6303, retired, and docs/debugging/process-crashes-and-kills.md
@@ -106,7 +108,12 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
    */
   quitting?: () => boolean;
   currentWindow(): Window | null;
-  createHostWindow(): Promise<Window>;
+  /**
+   * Opens a host window. `onCreated` must be called as soon as the window is
+   * constructed, before it has loaded: Electron lists it from then on, so
+   * `currentWindow` may return it while it is still pending.
+   */
+  createHostWindow(onCreated: (window: Window) => void): Promise<Window>;
   /** Tells someone away from the app that a dialog is waiting for them. */
   requestAttention(window: Window, message: string): void;
   /** Monotonic milliseconds. */
@@ -131,11 +138,15 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
   let host: HostLease | null = null;
   const hostWindows = new WeakSet<Window>();
 
+  const registerHost = (created: Window): void => {
+    hostWindows.add(created);
+  };
+
   const acquireHost = (): HostLease => {
     if (!host) {
       const lease: HostLease = {
         // Runs after `lease` is assigned: the promise settles asynchronously.
-        window: createHostWindow().then((created) => {
+        window: createHostWindow(registerHost).then((created) => {
           hostWindows.add(created);
           if (!options.quitting?.()) lease.readyBeforeQuit = created;
           return created;
@@ -223,9 +234,11 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
       return open(source, dialogOptions, requested, parentState(requested));
     }
     const parent = requested ?? usable(currentWindow());
-    // The host also appears in Electron's window list and may be supplied by
-    // the caller. Every dialog using it must hold a lease until it settles.
-    // A retiring host also goes through acquisition, which creates a new one.
+    // The host also appears in Electron's window list, from construction on,
+    // and may be supplied by the caller. Every dialog using it, even one still
+    // loading, must hold a lease until it settles, and goes through the quit
+    // checks below. A retiring host also goes through acquisition, which
+    // creates a new one.
     if (parent && !hostWindows.has(parent))
       return open(source, dialogOptions, parent, parentState(parent));
     // Acquisition would create a window; never during a quit. A host still
@@ -290,6 +303,29 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
       const last = overlapping.at(-1);
       return last ? `; dialog ${last.source} (parent: ${last.parent}) was open` : "";
     },
+  };
+}
+
+/**
+ * The desktop's host-window factory, refusing to create a window once the app
+ * is quitting: a window created after the quit has closed every other fails to
+ * load (6303, retired). The quit may begin while it waits for `whenReady`, so
+ * it checks before and after.
+ */
+export function quitGuardedHostWindowFactory<Window>(options: {
+  whenReady: () => Promise<unknown>;
+  quitting: () => boolean;
+  productName: string;
+  create: (onCreated: (window: Window) => void) => Promise<Window>;
+}): (onCreated: (window: Window) => void) => Promise<Window> {
+  const refuse = (): never => {
+    throw new Error(`${options.productName} is quitting`);
+  };
+  return async (onCreated) => {
+    if (options.quitting()) refuse();
+    await options.whenReady();
+    if (options.quitting()) refuse();
+    return options.create(onCreated);
   };
 }
 

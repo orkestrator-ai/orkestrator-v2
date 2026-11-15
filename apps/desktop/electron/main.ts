@@ -144,7 +144,11 @@ import {
 } from "./remote-relaunch.js";
 import { relaunchApplication } from "./relaunch.js";
 import { showRestartPrompt } from "./restart-prompt.js";
-import { createNativeDialogs, installUncaughtExceptionDialog } from "./native-dialogs.js";
+import {
+  createNativeDialogs,
+  installUncaughtExceptionDialog,
+  quitGuardedHostWindowFactory,
+} from "./native-dialogs.js";
 import { createDialogAttention } from "./dialog-attention.js";
 import { createStartupFailureReporter } from "./startup-failure.js";
 import {
@@ -426,12 +430,13 @@ const nativeDialogs = createNativeDialogs<BrowserWindow>({
   dialog,
   platform: process.platform,
   currentWindow: currentDialogWindow,
-  createHostWindow: async () => {
-    await app.whenReady();
-    // The quit may have begun while this waited; a window created now fails.
-    if (quitReopen.isQuitting()) throw new Error(`${productName} is quitting`);
-    return createDialogHostWindow({ BrowserWindowCtor: WindowCtor, dirname: __dirname });
-  },
+  createHostWindow: quitGuardedHostWindowFactory<BrowserWindow>({
+    whenReady: () => app.whenReady(),
+    quitting: quitReopen.isQuitting,
+    productName,
+    create: (onCreated) =>
+      createDialogHostWindow({ BrowserWindowCtor: WindowCtor, dirname: __dirname, onCreated }),
+  }),
   requestAttention: requestDialogAttention,
 });
 nativeDialogs.install();

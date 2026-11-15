@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   createNativeDialogs,
   installUncaughtExceptionDialog,
+  quitGuardedHostWindowFactory,
   type NativeDialogApi,
 } from "../electron/native-dialogs";
 
@@ -58,7 +59,7 @@ function harness(
     noDisplay?: boolean;
     quitting?: boolean;
     current?: FakeWindow | null;
-    createHostWindow?: () => Promise<FakeWindow>;
+    createHostWindow?: (onCreated: (window: FakeWindow) => void) => Promise<FakeWindow>;
   } = {},
 ) {
   let clock = 1_000;
@@ -77,7 +78,14 @@ function harness(
     showErrorBox: errorBox,
   } as NativeDialogApi<FakeWindow>;
   const host = fakeWindow("host");
-  const createHostWindow = mock(input.createHostWindow ?? (async () => host));
+  // Like the real factory, a host is reported as soon as it is constructed.
+  const createHostWindow = mock(
+    input.createHostWindow ??
+      (async (onCreated: (window: FakeWindow) => void) => {
+        onCreated(host);
+        return host;
+      }),
+  );
   const requestAttention = mock((_window: FakeWindow, _message: string) => undefined);
   configureLogger({
     sink: ({ method, line }) => (method === "info" ? logs : errors).push(line),
@@ -333,7 +341,13 @@ describe("native dialogs", () => {
     const oldHost = fakeWindow("old-host");
     const newHost = fakeWindow("new-host");
     const hosts = [oldHost, newHost];
-    const run = harness({ createHostWindow: async () => hosts.shift()! });
+    const run = harness({
+      createHostWindow: async (onCreated) => {
+        const next = hosts.shift()!;
+        onCreated(next);
+        return next;
+      },
+    });
     const first = run.dialogs.showMessageBox("a", OPTIONS);
     await Bun.sleep(0);
     await run.answer();
@@ -430,7 +444,10 @@ describe("native dialogs", () => {
     let resolveHost!: (window: FakeWindow) => void;
     const pendingHost = fakeWindow("pending-host");
     const run = harness({
-      createHostWindow: () => new Promise<FakeWindow>((resolve) => (resolveHost = resolve)),
+      createHostWindow: (onCreated) => {
+        onCreated(pendingHost);
+        return new Promise<FakeWindow>((resolve) => (resolveHost = resolve));
+      },
     });
     const first = run.dialogs.showMessageBox("a", OPTIONS);
     await Bun.sleep(0);
@@ -450,6 +467,77 @@ describe("native dialogs", () => {
       "[desktop.dialog] quitting-cancelled source=b response=1",
       "[desktop.dialog] quitting-cancelled source=a response=1",
     ]);
+  });
+
+  // The real host is in Electron's window list from construction, while it
+  // still loads, so the focused-or-any lookup or a caller can hand it back.
+  for (const via of ["currentWindow", "an explicit parent"] as const) {
+    test(`while quitting, a still-loading host supplied through ${via} parents no dialog`, async () => {
+      let resolveHost!: (window: FakeWindow) => void;
+      const pendingHost = fakeWindow("pending-host");
+      const run = harness({
+        createHostWindow: (onCreated) => {
+          onCreated(pendingHost);
+          return new Promise<FakeWindow>((resolve) => (resolveHost = resolve));
+        },
+      });
+      const first = run.dialogs.showMessageBox("first", OPTIONS);
+      await Bun.sleep(0);
+      run.setQuitting(true);
+      if (via === "currentWindow") run.setCurrent(pendingHost);
+      const second = run.dialogs.showMessageBox(
+        "second",
+        OPTIONS,
+        via === "currentWindow" ? undefined : pendingHost,
+      );
+      expect(await second).toEqual({ response: 1, checkboxChecked: false });
+      resolveHost(pendingHost);
+      expect(await first).toEqual({ response: 1, checkboxChecked: false });
+      await Bun.sleep(0);
+      expect(run.calls).toEqual([]);
+      expect(run.requestAttention).not.toHaveBeenCalled();
+      expect(run.createHostWindow).toHaveBeenCalledTimes(1);
+      expect(pendingHost.closed).toBe(true);
+      expect(run.errors).toEqual([]);
+      expect(run.logs).toEqual([
+        "[desktop.dialog] quitting-cancelled source=second response=1",
+        "[desktop.dialog] quitting-cancelled source=first response=1",
+      ]);
+    });
+  }
+
+  test("a still-loading host returned by currentWindow is shared under one lease", async () => {
+    // Before the quit, a second dialog on the pending host waits for it and
+    // keeps it open until both dialogs have closed.
+    let resolveHost!: (window: FakeWindow) => void;
+    const pendingHost = fakeWindow("pending-host");
+    const run = harness({
+      createHostWindow: (onCreated) => {
+        onCreated(pendingHost);
+        return new Promise<FakeWindow>((resolve) => (resolveHost = resolve));
+      },
+    });
+    const first = run.dialogs.showMessageBox("first", OPTIONS);
+    await Bun.sleep(0);
+    run.setCurrent(pendingHost);
+    const second = run.dialogs.showMessageBox("second", OPTIONS);
+    await Bun.sleep(0);
+    expect(run.calls).toEqual([]);
+    resolveHost(pendingHost);
+    await Bun.sleep(0);
+    expect(run.calls.map((call) => call.parent)).toEqual(["pending-host", "pending-host"]);
+    expect(run.logs).toEqual([
+      "[desktop.dialog] opening source=first parent=host",
+      "[desktop.dialog] opening source=second parent=host",
+    ]);
+    await run.answer();
+    await Bun.sleep(0);
+    expect(pendingHost.closed).toBe(false);
+    await run.answer();
+    await Promise.all([first, second]);
+    await Bun.sleep(0);
+    expect(pendingHost.closed).toBe(true);
+    expect(run.createHostWindow).toHaveBeenCalledTimes(1);
   });
 
   test("a host refused because the quit began cancels its dialog without an error", async () => {
@@ -608,6 +696,51 @@ describe("native dialogs", () => {
       run.advance(10_000);
       expect(run.dialogs.describeStall(5_000)).toBe("");
     });
+  });
+});
+
+describe("quitGuardedHostWindowFactory", () => {
+  const setup = (quitting: { now: boolean }, whenReady: () => Promise<unknown>) => {
+    const window = fakeWindow("host");
+    const create = mock(async (onCreated: (window: FakeWindow) => void) => {
+      onCreated(window);
+      return window;
+    });
+    const factory = quitGuardedHostWindowFactory<FakeWindow>({
+      whenReady,
+      quitting: () => quitting.now,
+      productName: "Orkestrator Test",
+      create,
+    });
+    return { window, create, factory };
+  };
+
+  test("creates the window after ready and reports it as soon as it exists", async () => {
+    const { window, create, factory } = setup({ now: false }, async () => undefined);
+    const created: FakeWindow[] = [];
+    expect(await factory((added) => created.push(added))).toBe(window);
+    expect(created).toEqual([window]);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  test("refuses once the app is quitting, without creating a window", async () => {
+    const { create, factory } = setup({ now: true }, async () => undefined);
+    await expect(factory(() => undefined)).rejects.toThrow("Orkestrator Test is quitting");
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  test("refuses when the quit begins while it waits for ready", async () => {
+    const quitting = { now: false };
+    let ready!: () => void;
+    const { create, factory } = setup(
+      quitting,
+      () => new Promise<void>((resolve) => (ready = resolve)),
+    );
+    const pending = factory(() => undefined);
+    quitting.now = true;
+    ready();
+    await expect(pending).rejects.toThrow("Orkestrator Test is quitting");
+    expect(create).not.toHaveBeenCalled();
   });
 });
 

@@ -272,6 +272,10 @@ logging `desktop.dialog` `quitting-cancelled` with its source and response; a
 dialog with an open window still opens on it. A host window that was still
 being created when the quit began counts as new: the dialogs waiting on it are
 cancelled once it settles and it is closed, and the desktop's host factory
-refuses to create one once the quit has begun. The uncaught exception itself is
+refuses to create one once the quit has begun. Electron lists the host from the
+moment it is constructed, so it is registered as a host then, before it loads:
+a still-loading host handed back as the focused or current window, or by a
+caller, goes through the same cancellation instead of counting as an open
+window. The uncaught exception itself is
 still logged first. `apps/desktop/tests/native-dialogs.test.ts` and the final
 close of `e2e/agent-testing/renderer-log-boundary-electron.spec.ts` pin it.

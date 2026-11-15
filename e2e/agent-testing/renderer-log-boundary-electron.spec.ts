@@ -317,16 +317,20 @@ test("a real window sends its startup markers to the main process and none of it
       action.click();
       extra.close();
     });
+    // `extra` is closing: it can still be listed while already destroyed, and
+    // reading `webContents` from it throws "Object has been destroyed".
     await expect
       .poll(() =>
         app.evaluate(({ BrowserWindow }) =>
-          BrowserWindow.getAllWindows().some((win) => win.webContents.isDevToolsOpened()),
+          BrowserWindow.getAllWindows().some(
+            (win) => !win.isDestroyed() && win.webContents.isDevToolsOpened(),
+          ),
         ),
       )
       .toBe(true);
     const inspectorImage = await app.evaluate(async ({ BrowserWindow }) => {
-      const inspector = BrowserWindow.getAllWindows().find((win) =>
-        win.webContents.isDevToolsOpened(),
+      const inspector = BrowserWindow.getAllWindows().find(
+        (win) => !win.isDestroyed() && win.webContents.isDevToolsOpened(),
       )!.webContents.devToolsWebContents!;
       return (await inspector.capturePage()).toPNG().toString("base64");
     });
@@ -335,7 +339,9 @@ test("a real window sends its startup markers to the main process and none of it
       Buffer.from(inspectorImage, "base64"),
     );
     await app.evaluate(({ BrowserWindow }) => {
-      for (const win of BrowserWindow.getAllWindows()) win.webContents.closeDevTools();
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.closeDevTools();
+      }
     });
 
     await expect.poll(debugProbes).toEqual([

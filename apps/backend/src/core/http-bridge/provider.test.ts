@@ -2949,53 +2949,39 @@ test("sends a read-only build turn without provider plan semantics", async () =>
 describe("HTTP bridge progressive transcript", () => {
   const transcriptOptions = { limit: 100, targetBytes: 512 * 1024 };
 
-  test("falls back to the legacy messages route on a bridge without /transcript", async () => {
-    for (const status of [404, 405]) {
-      const { provider, requests } = httpProvider((url) => {
-        if (url.includes("/transcript")) return new Response("", { status });
-        return Response.json({
-          messages: [{ id: "m1", content: "legacy", parts: [] }],
-          revision: 7,
-        });
-      }, codexConnection);
-
-      const snapshot = await provider.transcriptSnapshot!("session-1", transcriptOptions);
+  test("a /transcript 404 is a missing session and never reads /messages", async () => {
+    for (const representation of [undefined, "summary" as const]) {
+      const { provider, requests } = httpProvider(
+        () => new Response("", { status: 404 }),
+        codexConnection,
+      );
+      const snapshot = await provider.transcriptSnapshot!("session-1", {
+        ...transcriptOptions,
+        ...(representation ? { representation } : {}),
+      });
       if ("unchanged" in snapshot) throw new Error("expected a snapshot");
-      expect(snapshot.messages).toHaveLength(1);
-      expect(snapshot.complete).toBe(true);
-      expect(snapshot.revision).toBe(7);
-      expect(snapshot.freshness).toBe("current");
-      expect(requests.at(-1)!.url).toContain("/session/session-1/messages");
+      expect(snapshot).toMatchObject({ messages: [], complete: true, freshness: "current" });
+      expect(requests.some((request) => request.url.includes("/messages"))).toBe(false);
     }
   });
 
-  test("trims the legacy fallback to the requested tail and reports it incomplete", async () => {
-    const { provider } = httpProvider(
-      (url) =>
-        url.includes("/transcript")
-          ? new Response("", { status: 404 })
-          : Response.json({
-              messages: Array.from({ length: 5 }, (_, index) => ({
-                id: `m${index}`,
-                content: `body-${index}`,
-                parts: [],
-              })),
-            }),
-      codexConnection,
-    );
-
-    const snapshot = await provider.transcriptSnapshot!("session-1", {
-      limit: 2,
-      targetBytes: 512 * 1024,
-    });
-    if ("unchanged" in snapshot) throw new Error("expected a snapshot");
-    expect(snapshot.messages.map((message) => (message as { id: string }).id)).toEqual([
-      "m3",
-      "m4",
-    ]);
-    // The caller asked for a tail and got one, so the history it holds is not
-    // the whole conversation and must not claim to be.
-    expect(snapshot.complete).toBe(false);
+  test("a /transcript 405 fails the read instead of reading /messages", async () => {
+    for (const representation of [undefined, "summary" as const]) {
+      const { provider, requests } = httpProvider(
+        (url) =>
+          url.includes("/transcript")
+            ? new Response("", { status: 405 })
+            : Response.json({ messages: [{ id: "m1", content: "legacy", parts: [] }] }),
+        codexConnection,
+      );
+      await expect(
+        provider.transcriptSnapshot!("session-1", {
+          ...transcriptOptions,
+          ...(representation ? { representation } : {}),
+        }),
+      ).rejects.toThrow("predates the transcript route");
+      expect(requests.some((request) => request.url.includes("/messages"))).toBe(false);
+    }
   });
 
   test("answers unchanged from the bridge's conditional token", async () => {

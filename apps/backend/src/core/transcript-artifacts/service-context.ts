@@ -42,13 +42,6 @@ export interface ArtifactAuthoringAvailability {
   interactive: boolean;
 }
 
-export interface ArtifactRolloutFlags {
-  richMarkdown: boolean;
-  artifactPublication: boolean;
-  liveInteractive: boolean;
-  staticPresentation: boolean;
-}
-
 /** Resolves an already authorized attachment/upload reference to bytes. */
 export type ArtifactAssetResolver = (
   owner: ArtifactOwner,
@@ -73,7 +66,6 @@ export interface ArtifactServiceContext {
   now(): number;
   iso(): string;
   backendId(): string;
-  rollout(): ArtifactRolloutFlags;
   overrides: ArtifactIdentityOverrides;
   assetResolver?: ArtifactAssetResolver;
   /** Ledger hint after a committed publication. */

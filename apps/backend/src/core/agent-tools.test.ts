@@ -378,7 +378,6 @@ describe("agent Kanban tools", () => {
     const workflowResults = workflowResultService();
     server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
     server.setTranscriptArtifactToolHost({
-      toolsEnabled: () => true,
       handleTool: async () => ({ value: { schemaVersion: 1, ok: true }, isError: false }),
     });
     await server.start();

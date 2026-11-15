@@ -4,6 +4,7 @@ import { ScheduleInputError, type ScheduleOwner } from "@orkestrator/protocol/sc
 import {
   SCHEDULING_DISABLED_MESSAGE,
   scheduleListFilter,
+  schedulerStatus,
   schedulingEnabled,
   scheduleTimingArgs,
   withProjectEnvironments,
@@ -133,11 +134,15 @@ const scheduleList: ReadActionHandler<{
         await withProjectEnvironments(input.filter, context.command.storage),
       ),
     );
+    // Whether this backend fires them, as `list_scheduled_jobs` answers it.
+    // Omitted after a clean lease release, which says nothing either way.
+    const scheduler = schedulerStatus(context.command.registryWriterLease);
     return {
       result: {
         schedules: all.slice(input.offset, input.offset + input.limit),
         total: all.length,
         offset: input.offset,
+        ...(scheduler ? { scheduler } : {}),
       },
     };
   },

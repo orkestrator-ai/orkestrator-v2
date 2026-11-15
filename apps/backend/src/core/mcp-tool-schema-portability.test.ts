@@ -240,7 +240,6 @@ describe("published MCP tool schemas are provider-portable", () => {
     agentTools.setWebAnnotationToolHost({} as WebAnnotationToolHost);
     // Registration only: tools/list never calls the artifact host.
     agentTools.setTranscriptArtifactToolHost({
-      toolsEnabled: () => true,
       handleTool: async () => ({ value: {}, isError: false }),
     });
 

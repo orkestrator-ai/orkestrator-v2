@@ -261,8 +261,10 @@ the public `schedule.list` result and print it in `orkestrator schedule
 list`, so a CLI user on a paused backend is told their schedules will not
 fire. Under the user's legacy-retirement decision of the same day it gets no
 older-version adapter. Task 3 here stays done (its live evidence is
-recorded); the build is a new to-do,
-[8105](../cli-and-slash-commands/8105-schedule-list-scheduler-status.md).
+recorded); the build was to-do 8105 (retired 2026-11-15, done: see
+[scheduled-jobs.md](../../architecture/scheduled-jobs.md#exactly-once)); its
+live check is in the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 
 ### Task 4: the container prompt that reads working is recorded, not fixed
 
@@ -272,7 +274,7 @@ needs a choice (screen reading, a ceiling, or a CLI change), so it is to-do
 
 ## Open questions
 
-- `orkestrator schedule list` and the scheduler status: decided by the user on 2026-11-14 (add it to the `schedule.list` result and print it in the CLI, with no older-version adapter); built under [8105](../cli-and-slash-commands/8105-schedule-list-scheduler-status.md). See Assumptions and decisions.
+- `orkestrator schedule list` and the scheduler status: decided by the user on 2026-11-14 (add it to the `schedule.list` result and print it in the CLI, with no older-version adapter); built under 8105 (retired 2026-11-15; [scheduled-jobs.md](../../architecture/scheduled-jobs.md#exactly-once)). See Assumptions and decisions.
 
 ## Related
 

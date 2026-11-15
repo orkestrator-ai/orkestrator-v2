@@ -2163,7 +2163,7 @@ Recorded 2026-11-06 for task 11 (the 0622 window-close symptom), on branch
   `getRendererRequestAuthorization` answers `null` for a released scope; (b)
   the gateway request hooks catch a throwing lookup and still call back; (c)
   keep the scope bound until the window's requests drain. Chose (a) and (b),
-  as [6303](../cross-cutting/6303-window-close-during-request-throws.md)
+  as 6303 (retired 2026-11-15; `git show a8b89f154:docs/todo/cross-cutting/6303-window-close-during-request-throws.md`)
   recommended (a). Pros: (a) covers every caller of the lookup (the window
   hook, the preview views' hook, realms and `window-workspace-target.ts`).
   The window hook's local gateway fallback also uses a nonthrowing bound-scope

@@ -56,6 +56,7 @@ function harness(
     platform?: NodeJS.Platform;
     hiddenWindows?: boolean;
     noDisplay?: boolean;
+    quitting?: boolean;
     current?: FakeWindow | null;
     createHostWindow?: () => Promise<FakeWindow>;
   } = {},
@@ -85,6 +86,7 @@ function harness(
     dialog,
     hiddenWindows: input.hiddenWindows,
     noDisplay: input.noDisplay,
+    quitting: () => input.quitting ?? false,
     platform: input.platform ?? "darwin",
     currentWindow: () => input.current ?? null,
     createHostWindow,
@@ -98,6 +100,9 @@ function harness(
   return {
     setCurrent: (window: FakeWindow | null) => {
       input.current = window;
+    },
+    setQuitting: (quitting: boolean) => {
+      input.quitting = quitting;
     },
     dialog,
     dialogs,
@@ -357,6 +362,83 @@ describe("native dialogs", () => {
     expect(run.calls).toEqual([]);
     expect(run.errors).toHaveLength(1);
     expect(run.errors[0]).toStartWith("[desktop.dialog] open-failed source=toolchain-setup");
+  });
+
+  test("while quitting, macOS cancels a dialog that would need a new host window", async () => {
+    // A host created after the quit closed every window failed to load, and a
+    // dialog on one after will-quit killed Electron with SIGSEGV (6303 (retired) task 2).
+    const run = harness({ quitting: true });
+    run.dialogs.install();
+    let listener!: (error: Error) => void;
+    installUncaughtExceptionDialog(
+      {
+        on: (_event, added) => {
+          listener = added;
+        },
+      },
+      run.dialogs,
+      { error: mock(() => undefined) },
+    );
+    listener(new Error("secret exception"));
+    await Bun.sleep(0);
+    expect(await run.dialogs.showMessageBox("backend-error", OPTIONS)).toEqual({
+      response: 1,
+      checkboxChecked: false,
+    });
+    expect(
+      await run.dialogs.showMessageBox("updater", OPTIONS, fakeWindow("old", { destroyed: true })),
+    ).toEqual({ response: 1, checkboxChecked: false });
+    run.dialog.showErrorBox("secret title", "secret content");
+    await Bun.sleep(0);
+    expect(run.logs).toEqual([
+      "[desktop.dialog] quitting-cancelled source=uncaught-exception response=0",
+      "[desktop.dialog] quitting-cancelled source=backend-error response=1",
+      "[desktop.dialog] quitting-cancelled source=updater response=1",
+      "[desktop.dialog] quitting-cancelled source=error-box response=0",
+    ]);
+    expect(run.calls).toEqual([]);
+    expect(run.createHostWindow).not.toHaveBeenCalled();
+    expect(run.requestAttention).not.toHaveBeenCalled();
+  });
+
+  test("while quitting, a dialog with an open window still opens on it", async () => {
+    // A sheet on a window that has not closed yet let the quit finish (6303 (retired) task 2).
+    const run = harness({ quitting: true, current: fakeWindow("current") });
+    void run.dialogs.showMessageBox("uncaught-exception", OPTIONS);
+    await Bun.sleep(0);
+    expect(run.calls[0]?.parent).toBe("current");
+    expect(run.createHostWindow).not.toHaveBeenCalled();
+  });
+
+  test("a host opened before the quit still parents a dialog raised during it", async () => {
+    const run = harness();
+    const first = run.dialogs.showMessageBox("a", OPTIONS);
+    await Bun.sleep(0);
+    run.setQuitting(true);
+    run.setCurrent(run.host);
+    const second = run.dialogs.showMessageBox("b", OPTIONS);
+    await Bun.sleep(0);
+    expect(run.calls.map((call) => call.parent)).toEqual(["host", "host"]);
+    expect(run.createHostWindow).toHaveBeenCalledTimes(1);
+    await run.answer();
+    await run.answer();
+    await Promise.all([first, second]);
+    expect(run.host.closed).toBe(true);
+  });
+
+  test("while quitting, elsewhere a windowless box is cancelled but a parented one opens", async () => {
+    const run = harness({ platform: "linux", quitting: true });
+    expect(await run.dialogs.showMessageBox("backend-error", OPTIONS)).toEqual({
+      response: 1,
+      checkboxChecked: false,
+    });
+    void run.dialogs.showMessageBox("updater", OPTIONS, fakeWindow("main"));
+    await Bun.sleep(0);
+    expect(run.calls.map((call) => call.parent)).toEqual(["main"]);
+    expect(run.logs).toEqual([
+      "[desktop.dialog] quitting-cancelled source=backend-error response=1",
+      "[desktop.dialog] opening source=updater parent=visible",
+    ]);
   });
 
   test("elsewhere a windowless box stays windowless", async () => {

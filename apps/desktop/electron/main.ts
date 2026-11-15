@@ -422,6 +422,7 @@ const nativeDialogs = createNativeDialogs<BrowserWindow>({
   hiddenWindows,
   // A headless `dev:test` profile on Linux (HEADLESS_ELECTRON_SWITCHES).
   noDisplay: app.commandLine.getSwitchValue("ozone-platform") === "headless",
+  quitting: quitReopen.isQuitting,
   dialog,
   platform: process.platform,
   currentWindow: currentDialogWindow,

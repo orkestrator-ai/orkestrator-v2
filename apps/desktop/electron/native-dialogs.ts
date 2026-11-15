@@ -32,6 +32,15 @@ const desktopLog = createLogger("desktop");
  * so its dialogs are cancelled too, unless a test has replaced
  * `dialog.showMessageBox` to answer them.
  *
+ * Once the app is quitting, a dialog that has no open window to attach to is
+ * cancelled too (`quitting-cancelled`), rather than given a new host window or
+ * a windowless box. A window created after the quit has closed every other
+ * fails to load, and on macOS a dialog opened on one after `will-quit` killed
+ * Electron with SIGSEGV before the essential log was stopped (2 of 5 runs on
+ * a real display; to-do 6303, retired, and docs/debugging/process-crashes-and-kills.md
+ * section 7). The exit follows within seconds anyway,
+ * and an uncaught exception has already been logged by then.
+ *
  * Log lines name the dialog's source and never its text, which can carry paths
  * and errors.
  */
@@ -89,6 +98,11 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
    * Electron's own box, which would crash the process.
    */
   noDisplay?: boolean;
+  /**
+   * True once the app has begun quitting (`before-quit`): a dialog that needs a
+   * new window then is cancelled instead.
+   */
+  quitting?: () => boolean;
   currentWindow(): Window | null;
   createHostWindow(): Promise<Window>;
   /** Tells someone away from the app that a dialog is waiting for them. */
@@ -185,16 +199,25 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
       return { response, checkboxChecked: false };
     }
     const requested = usable(window);
+    const cancelWhileQuitting = (): MessageBoxResult => {
+      const response = dialogOptions.cancelId ?? 0;
+      log.info("quitting-cancelled", { source, response });
+      return { response, checkboxChecked: false };
+    };
     // Elsewhere a windowless box does not hold the main thread, and a parent
     // would newly block that window, so the caller's choice stands.
-    if (platform !== "darwin")
+    if (platform !== "darwin") {
+      if (!requested && options.quitting?.()) return cancelWhileQuitting();
       return open(source, dialogOptions, requested, parentState(requested));
+    }
     const parent = requested ?? usable(currentWindow());
     // The host also appears in Electron's window list and may be supplied by
     // the caller. Every dialog using it must hold a lease until it settles.
     // A retiring host also goes through acquisition, which creates a new one.
     if (parent && !hostWindows.has(parent))
       return open(source, dialogOptions, parent, parentState(parent));
+    // Acquisition would create a window; never during a quit.
+    if (!host && options.quitting?.()) return cancelWhileQuitting();
     try {
       return await open(source, dialogOptions, await acquireHost(), "host");
     } catch (error) {

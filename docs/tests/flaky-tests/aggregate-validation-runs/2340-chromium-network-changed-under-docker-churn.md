@@ -309,7 +309,8 @@ This launch failure is separate from Chromium's network-change failures.
 - **Rerun:** with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, the next four runs had no
   `ERR_NETWORK_CHANGED`, although bridge events still occurred during at least two.
   Those four failed later, for an unrelated reason
-  ([6303](../../../todo/cross-cutting/6303-window-close-during-request-throws.md)).
+  (to-do 6303, retired 2026-11-15; its throw was fixed under
+  [flake 0622](../previews-annotations-and-gateway/0622-service-preview-window-close-remote-release.md)).
 - **Change:** the spec launches with the probe off. Its module loads still go through
   Chromium, so other Docker work on the host can still cause this.
 

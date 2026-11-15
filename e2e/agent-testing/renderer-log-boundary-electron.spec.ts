@@ -436,7 +436,7 @@ test("a real window sends its startup markers to the main process and none of it
     await window.reload();
     await expect.poll(essential, { timeout: 30_000 }).toContain('"event":"error.recorded"');
     // Let the reloaded page finish starting. Closing it mid-request throws in the
-    // main process and loses the shutdown lines checked below (6303).
+    // main process and loses the shutdown lines checked below (to-do 6303, retired).
     await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
     await expect(window.getByRole("button", { name: "Global settings", exact: true })).toBeVisible({
       timeout: 60_000,
@@ -464,10 +464,35 @@ test("a real window sends its startup markers to the main process and none of it
     expect(failure.fields.fingerprint).toMatch(/^[0-9a-f]{8}$/);
     expect(await essential()).not.toContain("synthetic-private-renderer");
 
-    await closeElectronWithin(launchedApp);
+    // An uncaught exception once every window has closed (6303 (retired) task 2). Its
+    // error dialog used to get a new host window, which on a real macOS display
+    // killed Electron with SIGSEGV in 2 of 5 runs, before the essential log
+    // stopped; the quit must now cancel it and finish cleanly.
+    await launchedApp.evaluate(({ app }) => {
+      app.once("will-quit", () =>
+        setImmediate(() => {
+          throw new Error("quit-time-exception-probe");
+        }),
+      );
+    });
+    const electronProcess = launchedApp.process();
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve) => {
+        if (electronProcess.exitCode !== null || electronProcess.signalCode !== null)
+          resolve({ code: electronProcess.exitCode, signal: electronProcess.signalCode });
+        else electronProcess.once("exit", (code, signal) => resolve({ code, signal }));
+      },
+    );
+    expect(await closeElectronWithin(launchedApp)).toBe("closed");
     launchedApp = null;
+    expect(await exited).toEqual({ code: 0, signal: null });
     await expect.poll(essential, { timeout: 10_000 }).toContain('"event":"essential.stopped"');
     expect(await essential()).toContain('"event":"shutdown.finished"');
+    expect(mainConsole).toContain("quit-time-exception-probe");
+    expect(mainConsole).toContain(
+      "[desktop.dialog] quitting-cancelled source=uncaught-exception response=0",
+    );
+    expect(mainConsole).not.toMatch(/\[desktop\.dialog\] (opening|open-failed) source=uncaught/);
   } finally {
     await closeElectronWithin(launchedApp).catch(() => undefined);
     if (vite) await stopProcessGroup(vite).catch(() => undefined);

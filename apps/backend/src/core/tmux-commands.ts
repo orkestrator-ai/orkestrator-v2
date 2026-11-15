@@ -73,7 +73,6 @@ import {
   workspaceAndClaudeHome,
 } from "./tmux-session-manager.js";
 import { TmuxTranscriptReader } from "./tmux-transcript-reader.js";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { InteractiveTmuxTerminalManager } from "./tmux-interactive.js";
 import { ClaudeStatePollManager, environmentContainerId } from "./tmux-poll.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -400,24 +399,15 @@ export function registerTmuxBackendCommands(
   // Stopped history has no poll owner. Keep a small LRU so walking back
   // reconstructs task state once, without retaining every stopped session.
   const historyReaders = new Map<string, TmuxTranscriptReader>();
-  // `page` selects a bounded read; `page.before` is the cursor of an earlier
-  // page. Without it the caller predates paging and expects the whole file as
-  // an array (see the compatibility register in version-compatibility.md).
+  // Every read is bounded: `page.before` is the cursor of an earlier page, and
+  // a missing `page` asks for the tail page, as `page: {}` does.
   register(
     claudeTmuxTranscriptCommand,
     // Transcript records are Claude's JSONL objects (`ClaudeTranscriptLine`):
     // the readers type them `unknown` because they never narrow them.
     async ({ tabId: tab, environmentId: envId, page }, context): Promise<TmuxTranscriptResult> => {
       const session = context.runtime.tmux.sessions.get(envId, tab);
-      if (page === undefined) {
-        compatibilityPathUsage.record("tmux-transcript.whole-read");
-        return (await requireSession(
-          context,
-          envId,
-          tab,
-        ).transcriptLines()) as TmuxTranscriptResult;
-      }
-      const request = page as { before?: unknown; sessionId?: unknown } | null;
+      const request = (page ?? {}) as { before?: unknown; sessionId?: unknown } | null;
       const before = typeof request?.before === "string" ? request.before : undefined;
       if (session) return (await session.transcriptPage(context, before)) as TmuxTranscriptResult;
 

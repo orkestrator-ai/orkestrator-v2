@@ -88,9 +88,8 @@ Tab close is `POST /session/:id/close` on every bridge. It answers 200
 does not hold (never 404), or 503 `{closed:false,pending:true,error}` when it
 cannot prove the work stopped — in which case the session stays registered.
 The backend (`commands-registry-teardown.ts`, `bridge-session-close.ts`) keeps
-its durable teardown intent until a 2xx arrives. A 404/405 from the route
-means the bridge predates it, which only an unpublished source build can do.
-The close stays pending with a "restart the environment" error on every
+its durable teardown intent until a 2xx arrives. A 404/405 from the route is
+an unconfirmed close like any other failure: the close stays pending on every
 platform and never falls back to `DELETE /session/:id`, which no current bridge
 serves and which an older Claude bridge answered by calling the SDK's
 `deleteSession`.
@@ -99,10 +98,8 @@ Only a 2xx whose body affirms `closed: true` confirms a close; an empty or
 malformed 2xx leaves the intent pending. Pending intents are retried at
 startup and by the backend's coalesced 60-second sweep, with a per-intent
 backoff (30 s, doubling, capped at 15 minutes) so a bridge that keeps refusing
-is not polled every minute. The old-bridge failure carries a stable
-`bridge-upgrade-required` marker (`@orkestrator/protocol/tab-teardown`), and
-the renderer shows one non-destructive toast per environment asking the user
-to restart it; the conversation is not deleted and the close is retried.
+is not polled every minute. The renderer only logs a rejected teardown; the
+conversation is not deleted and the close is retried.
 
 Per bridge, "stop proven" means:
 
@@ -536,8 +533,8 @@ a lock whose owner is proven dead: a free pid, this process's own pid under
 another instance, or a live pid with another start time or boot id. A bridge
 killed while holding the lock therefore no longer stalls its successor, even
 when a container restart hands the same pid to the new bridge. Unreadable
-metadata, and an older bridge's pid-only lock whose pid is dead, wait out a
-30-second stale window; past it, where `/proc` cannot answer (macOS), the
+metadata (including a lock without an instance id) waits out a 30-second
+stale window; past it, where `/proc` cannot answer (macOS), the
 recorded start is compared with `ps -o lstart=`. A live owner that matches or
 cannot be checked is never displaced. The owner refreshes the lock every 5 s,
 and a writer gives up after 5 s (`PreferenceLockTimeoutError`). On a prompt's

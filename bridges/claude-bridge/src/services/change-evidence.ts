@@ -364,20 +364,21 @@ export function claimSpoolDirectory(
   return undefined;
 }
 
-/**
- * The pid on the first line, which is all an older bridge reads (it parses
- * the leading integer), and this process's identity as JSON on the second.
- */
+/** The pid on the first line and this process's identity as JSON on the second. */
 function ownerFileContents(): string {
   const { pid, ...identity } = currentProcessIdentity();
   return `${pid}\n${JSON.stringify(identity)}\n`;
 }
 
+/**
+ * The owner a claim names, or undefined when the file has no pid line or no
+ * identity line with an instance id. The caller removes an unreadable claim,
+ * as it always has an empty or foreign one.
+ */
 function parseOwnerFile(raw: string): RecordedOwner | undefined {
   const [first = "", second] = raw.split("\n");
   const pid = Number.parseInt(first, 10);
-  if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
-  if (!second) return { pid };
+  if (!Number.isSafeInteger(pid) || pid <= 0 || !second) return undefined;
   try {
     const parsed = JSON.parse(second) as Record<string, unknown> | null;
     if (
@@ -387,11 +388,11 @@ function parseOwnerFile(raw: string): RecordedOwner | undefined {
       parsed.instance.length === 0 ||
       parsed.instance.length > 64
     ) {
-      return { pid };
+      return undefined;
     }
     return { pid, instance: parsed.instance, ...parseIdentityFields(parsed) };
   } catch {
-    return { pid };
+    return undefined;
   }
 }
 

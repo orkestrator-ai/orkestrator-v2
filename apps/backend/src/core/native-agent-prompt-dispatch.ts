@@ -393,16 +393,9 @@ export class NativeAgentPromptDispatch {
       input.logicalSessionKey,
     );
     try {
-      let instructionsIgnored = false;
-      await this.dispatchPromptInternal(input, prepare, true, false, false, () => {
-        instructionsIgnored = true;
-      });
+      await this.dispatchPromptInternal(input, prepare, true);
       void this.host.projections.refreshProjectionState(input).catch(() => undefined);
-      return {
-        outcome: "accepted",
-        requestId: input.requestId,
-        ...(instructionsIgnored ? { instructionsIgnored: true } : {}),
-      };
+      return { outcome: "accepted", requestId: input.requestId };
     } catch (error) {
       if (error instanceof PendingNativeAgentDispatchError) {
         // The only thing refusing this prompt is an older dispatch nobody has
@@ -1070,21 +1063,13 @@ export class NativeAgentPromptDispatch {
     persistAmbiguousDispatch = false,
     mailInject = false,
     recovery = false,
-    onInstructionsIgnored?: () => void,
   ): Promise<PersistedNativeAgentSession> {
     const releaseBridge = this.host.beginBridgeWork(input);
     let releaseAgentWork: (() => void) | undefined;
     try {
       releaseAgentWork = this.host.environmentFence.beginAgentWork(input.environmentId);
       return await this.host.promptQueues.withSessionMutationFence(input, () =>
-        this.dispatchAdmittedPrompt(
-          input,
-          prepare,
-          persistAmbiguousDispatch,
-          mailInject,
-          recovery,
-          onInstructionsIgnored,
-        ),
+        this.dispatchAdmittedPrompt(input, prepare, persistAmbiguousDispatch, mailInject, recovery),
       );
     } finally {
       releaseAgentWork?.();
@@ -1103,7 +1088,6 @@ export class NativeAgentPromptDispatch {
     persistAmbiguousDispatch: boolean,
     mailInject: boolean,
     recovery = false,
-    onInstructionsIgnored?: () => void,
   ): Promise<PersistedNativeAgentSession> {
     input = await this.host.trustedSessionInput(input);
     const coordinatorContextRevision =
@@ -1242,13 +1226,7 @@ export class NativeAgentPromptDispatch {
           session.key,
           input.requestId,
           async (durable) => {
-            const outcome = await this.performCommandSessionAction(
-              input,
-              durable,
-              provider,
-              commandPlan,
-            );
-            if (outcome.instructionsIgnored) onInstructionsIgnored?.();
+            await this.performCommandSessionAction(input, durable, provider, commandPlan);
           },
         );
         return result.session;
@@ -1732,7 +1710,7 @@ export class NativeAgentPromptDispatch {
     session: PersistedNativeAgentSession,
     provider: NativeAgentRuntimeProvider,
     plan: Extract<CommandDispatchPlan, { kind: "session-action" }>,
-  ): Promise<{ instructionsIgnored?: boolean }> {
+  ): Promise<void> {
     const label = AGENT_PLATFORM_LABELS[input.agent] ?? input.agent;
     if (!nativeCapabilities(input.agent).actions?.compact || !provider.performSessionAction) {
       throw new PromptRejectedError(`${label} does not support /compact here.`);
@@ -1756,9 +1734,6 @@ export class NativeAgentPromptDispatch {
       ...(plan.instructions ? { instructions: plan.instructions } : {}),
     });
     this.host.projections.invalidateProjection(session.key);
-    // An applied outcome with `instructionsIgnored` still succeeds: the
-    // compaction ran, and refusing now would invite a second one. The bridge
-    // adapter has already counted and logged the older bridge.
     if (outcome.outcome !== "applied") {
       throw new PromptRejectedError(
         outcome.outcome === "idle"
@@ -1766,6 +1741,5 @@ export class NativeAgentPromptDispatch {
           : `${label} did not confirm the compaction. Check the transcript before retrying.`,
       );
     }
-    return outcome;
   }
 }

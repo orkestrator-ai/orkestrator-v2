@@ -68,7 +68,7 @@ that work; 0232 task 4 waits on it and on 0050 task 1.
 - [0232](0232-direct-history-cursor-minting.md) task 4: the removal this unblocks.
 - [0050](0050-transcript-history-efficiency.md) task 1: the `/messages`
   fallback removal, the other wait.
-- [8108](../cross-cutting/8108-legacy-retirement-sweep.md): the sweep.
+- 8108 (retired): the sweep.
 
 ## Replaces
 

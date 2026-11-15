@@ -8,9 +8,7 @@ import {
   TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES,
   TERMINAL_WEBSOCKET_CHANNEL_HARD_BUFFER_BYTES,
   TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES,
-  TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS,
   TERMINAL_WEBSOCKET_CLOSE,
-  TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
   TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
   TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES,
   TERMINAL_WEBSOCKET_MAX_ERROR_MESSAGE_BYTES,
@@ -690,18 +688,8 @@ describe("terminal WebSocket control protocol shared boundary", () => {
 describe("terminal WebSocket protocol constants", () => {
   test("pins the negotiated identity of version 1", () => {
     expect(TERMINAL_WEBSOCKET_PROTOCOL_VERSION).toBe(1);
-    expect(TERMINAL_WEBSOCKET_SUBPROTOCOL).toBe("orkestrator-terminal.v1");
+    expect(TERMINAL_WEBSOCKET_SUBPROTOCOL).toBe("orkestrator-terminal.v1.input-results");
     expect(TERMINAL_WEBSOCKET_PATH).toBe("/__orkestrator/terminal");
-  });
-
-  test("a client offers input results first and keeps v1 for an older server", () => {
-    expect(TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL).toBe(
-      "orkestrator-terminal.v1.input-results",
-    );
-    expect(TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS).toEqual([
-      "orkestrator-terminal.v1.input-results",
-      "orkestrator-terminal.v1",
-    ]);
   });
 
   test("parses a cumulative input result and refuses a malformed one", () => {

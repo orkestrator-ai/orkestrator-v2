@@ -517,5 +517,5 @@ collecting with the first release that carries them.
   joined-page counter verification) moved there on 2026-11-10. The counter
   reading is no longer needed since the user's legacy-retirement decision of
   2026-11-14.
-- [8108](../cross-cutting/8108-legacy-retirement-sweep.md): the 2026-11-14
+- 8108 (retired): the 2026-11-14
   legacy-retirement sweep.

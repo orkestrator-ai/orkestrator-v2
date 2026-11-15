@@ -48,8 +48,6 @@ import {
 import { DesktopNodeIpc } from "./node-ipc.js";
 import {
   NodePreviewRuntimes,
-  nodePreviewRequestOrigin,
-  nodePreviewUrl,
   routeBrowserPreviews,
   type NodePreviewRuntime,
 } from "./node-previews.js";
@@ -626,6 +624,8 @@ function previewRetention(): PreviewPartitionRetention {
     inUse: () =>
       previewPartitionsInUse(
         rendererContexts().flatMap((context) => [
+          // The shared partitions retired legacy URL tabs used: no view opens
+          // in them, but a live window's stays held, as before (0042 task 9).
           {
             sharedPartition: browserPreviewPartitionForWindow(
               context.slot,
@@ -661,12 +661,8 @@ function createWindowBrowserPreviews(
   slot: number,
   connectionId: string,
   partitionKey = connectionId,
-  node?: {
-    resolveAddress: (url: string) => string;
-    requestOrigin: (url: string) => string | null;
-  },
+  node = false,
 ) {
-  const partition = browserPreviewPartitionForWindow(slot, partitionKey);
   let manager: BrowserPreviewManager | null = null;
   previewPortHints ??= createPreviewPortHints(
     path.join(app.getPath("userData"), "preview-ports.json"),
@@ -728,8 +724,6 @@ function createWindowBrowserPreviews(
       previewLog.error("link.open-external-failed", { error: formatLogError(error) }),
   });
   const runtime = initializeBrowserPreviews({
-    fromPartition: (partitionName) => session.fromPartition(partitionName),
-    partition,
     WebContentsViewCtor: WebContentsView,
     menu: Menu,
     getWindow: () => createdWindow,
@@ -745,12 +739,9 @@ function createWindowBrowserPreviews(
       else if (owner === "workspace") requestAppShortcut(target?.renderer, shortcut);
       else requestAppShortcut(createdWindow.webContents, shortcut);
     },
-    getAuthorization: (url) =>
-      connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
     transport,
     captureStore: browserPreviewCaptureStore(),
     nativeImage,
-    ...node,
     // External browsers never inherit Electron's request hooks. They sign in
     // through the private preview origin with a one-use grant POSTed by a
     // loopback handoff page (the grant is never part of a URL), or, for a
@@ -803,17 +794,11 @@ function createNodeBrowserPreviews(
     context.slot,
     connectionManager.getConnectionId(record.scope),
     partitionKey,
-    {
-      // Address-bar previews load through the node's own gateway (its current route).
-      resolveAddress: (url) =>
-        nodePreviewUrl(connectionManager?.getGatewayBaseUrl(record.scope) ?? null, url),
-      // A workspace grant is admitted only from the node's own origin or a
-      // command node's portal; the desktop's default origin is neither.
-      requestOrigin: nodePreviewRequestOrigin,
-    },
+    true,
   );
   return {
     controller: previews.manager,
+    // No view opens in it; kept so retention still counts it held (0042 task 9).
     partition: browserPreviewPartitionForWindow(context.slot, partitionKey),
     partitionsInUse: () => previews.previewTransport.partitionsInUse(),
     dispose: () => {

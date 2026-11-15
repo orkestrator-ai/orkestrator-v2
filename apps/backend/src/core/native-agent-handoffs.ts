@@ -28,7 +28,6 @@ import {
   AGENT_HANDOFF_PROVIDER_LABELS,
   parseAgentHandoffSnapshot,
   prependAgentHandoffHistory,
-  textCarriesAgentHandoff,
 } from "@orkestrator/protocol/agent-handoff";
 import { NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX } from "@orkestrator/protocol/native-agent";
 import { parseGoalCommandArguments } from "@orkestrator/protocol/native-agent-goal";
@@ -38,7 +37,6 @@ import {
   readProviderStatus,
   type NativeAgentRuntimeProvider,
 } from "./agent-provider-contract.js";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { PersistedNativeAgentSession } from "./models.js";
 import type { CommandDispatchPlan } from "./native-agent-command-dispatch.js";
 import {
@@ -149,9 +147,8 @@ export function coordinatorPromptWithAttachmentPaths(
 
 /**
  * The prompt a dispatch sends: `prompt` with the pending handoff's carrier in
- * front, unless the journal already recorded it delivered or the prompt
- * already carries it (an older renderer prepends the history itself).
- * `deliveredId` is the handoff this send delivers, for the journal.
+ * front, unless the journal already recorded it delivered. `deliveredId` is
+ * the handoff this send delivers, for the journal.
  */
 export function promptWithPendingAgentHandoff(
   prompt: string,
@@ -159,10 +156,6 @@ export function promptWithPendingAgentHandoff(
   session: PersistedNativeAgentSession,
 ): { prompt: string; deliveredId?: string } {
   if (!handoff || deliveredAgentHandoffIds(session).includes(handoff.id)) return { prompt };
-  if (textCarriesAgentHandoff(prompt, handoff.id)) {
-    compatibilityPathUsage.record("agent-handoff.renderer-carried");
-    return { prompt, deliveredId: handoff.id };
-  }
   return {
     prompt: prependAgentHandoffHistory(handoff.bootstrapPrompt, prompt),
     deliveredId: handoff.id,

@@ -7,9 +7,9 @@
  * `session_index.jsonl`, which a container rebuild does not preserve, and
  * derives the first-message label the resume list shows for an untitled thread.
  */
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
-import { codexBridgeStateDir, codexLoginBridgeDir } from "./bridge-state-dir.js";
+import { codexBridgeStateDir } from "./bridge-state-dir.js";
 import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import { stripTranscriptAnnotations } from "@orkestrator/protocol/transcript-annotations";
 
@@ -87,16 +87,6 @@ function sessionTitleIndexPath(codexHome: string): string {
   return join(codexBridgeStateDir(codexHome), SESSION_TITLE_INDEX_FILENAME);
 }
 
-/**
- * The index a bridge on this login wrote before titles moved to the shared
- * state directory, when that is somewhere else. Read under the shared index,
- * which wins a tie, so an added account keeps its earlier titles.
- */
-function legacySessionTitleIndexPath(codexHome: string): string | undefined {
-  const legacy = join(codexLoginBridgeDir(codexHome), SESSION_TITLE_INDEX_FILENAME);
-  return legacy === sessionTitleIndexPath(codexHome) ? undefined : legacy;
-}
-
 export async function readPersistedSessionTitles(codexHome: string): Promise<Map<string, string>> {
   const entries = await readPersistedSessionTitleEntries(codexHome);
   return new Map(Array.from(entries, ([threadId, entry]) => [threadId, entry.title]));
@@ -108,14 +98,26 @@ function persistedSourcePriority(source: PersistedSessionTitleSource): number {
   return 1;
 }
 
-export async function readPersistedSessionTitleEntries(
-  codexHome: string,
-): Promise<Map<string, PersistedSessionTitle>> {
-  const legacyPath = legacySessionTitleIndexPath(codexHome);
-  const legacy = legacyPath ? await readFile(legacyPath, "utf8").catch(() => "") : "";
-  const current = await readFile(sessionTitleIndexPath(codexHome), "utf8").catch(() => "");
-  const raw = legacy ? `${legacy}\n${current}` : current;
-  const selected = new Map<string, PersistedSessionTitle & { updatedAt: number; line: number }>();
+interface SelectedSessionTitle extends PersistedSessionTitle {
+  updatedAt: number;
+  line: number;
+  /** The index line it came from, as written. */
+  raw: string;
+}
+
+/** Whether `candidate` replaces `current`, read later in the same index. */
+function titleWins(candidate: SelectedSessionTitle, current: SelectedSessionTitle): boolean {
+  const delta = persistedSourcePriority(candidate.source) - persistedSourcePriority(current.source);
+  if (delta !== 0) return delta > 0;
+  return (
+    candidate.updatedAt > current.updatedAt ||
+    (candidate.updatedAt === current.updatedAt && candidate.line > current.line)
+  );
+}
+
+/** The winning entry per thread of one index file's contents. */
+function selectSessionTitles(raw: string): Map<string, SelectedSessionTitle> {
+  const selected = new Map<string, SelectedSessionTitle>();
 
   for (const [lineIndex, line] of raw.split("\n").entries()) {
     if (!line.trim()) continue;
@@ -138,29 +140,29 @@ export async function readPersistedSessionTitleEntries(
 
       const parsedUpdatedAt =
         typeof entry.updatedAt === "string" ? Date.parse(entry.updatedAt) : Number.NaN;
-      const candidate = {
+      const candidate: SelectedSessionTitle = {
         title,
         source,
         updatedAt: Number.isFinite(parsedUpdatedAt) ? parsedUpdatedAt : Number.NEGATIVE_INFINITY,
         line: lineIndex,
+        raw: line,
       };
       const current = selected.get(threadId);
-      if (
-        !current ||
-        persistedSourcePriority(candidate.source) > persistedSourcePriority(current.source) ||
-        (persistedSourcePriority(candidate.source) === persistedSourcePriority(current.source) &&
-          (candidate.updatedAt > current.updatedAt ||
-            (candidate.updatedAt === current.updatedAt && candidate.line > current.line)))
-      ) {
-        selected.set(threadId, candidate);
-      }
+      if (!current || titleWins(candidate, current)) selected.set(threadId, candidate);
     } catch {
       // A malformed line must not hide titles from later valid entries.
     }
   }
 
+  return selected;
+}
+
+export async function readPersistedSessionTitleEntries(
+  codexHome: string,
+): Promise<Map<string, PersistedSessionTitle>> {
+  const raw = await readFile(sessionTitleIndexPath(codexHome), "utf8").catch(() => "");
   return new Map(
-    Array.from(selected, ([threadId, entry]) => [
+    Array.from(selectSessionTitles(raw), ([threadId, entry]) => [
       threadId,
       {
         title: entry.title,
@@ -168,6 +170,53 @@ export async function readPersistedSessionTitleEntries(
       },
     ]),
   );
+}
+
+/** A title index larger than this is not adopted (it stays in place, unread). */
+const MAX_ADOPTED_TITLE_INDEX_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Part of the one-time upgrade at bridge start (`login-state-adoption.ts`):
+ * the titles a bridge before the shared state directory wrote into this
+ * login's own directory. Each thread's winning entry is appended to the shared
+ * index, as written, unless the shared index already holds an entry that wins
+ * the tie (the shared index won it when both were read), so every thread
+ * keeps the title it showed. The source is then renamed `*.adopted` and never
+ * read again. Rerunning after a crash between the two appends nothing new: an
+ * entry already appended ties with itself, and the shared one wins.
+ */
+export async function adoptLoginSessionTitles(codexHome: string, source: string): Promise<boolean> {
+  const target = sessionTitleIndexPath(codexHome);
+  if (source === target) return false;
+  let legacy: string;
+  try {
+    const handle = await open(source, "r");
+    try {
+      const metadata = await handle.stat();
+      if (!metadata.isFile() || metadata.size > MAX_ADOPTED_TITLE_INDEX_BYTES) return false;
+      legacy = await handle.readFile("utf8");
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  const current = selectSessionTitles(await readFile(target, "utf8").catch(() => ""));
+  const adopted: string[] = [];
+  for (const [threadId, entry] of selectSessionTitles(legacy)) {
+    const existing = current.get(threadId);
+    // `line: -1`: the legacy entry was read before every shared line.
+    if (!existing || titleWins({ ...entry, line: -1 }, existing)) {
+      adopted.push(`${entry.raw}\n`);
+    }
+  }
+  if (adopted.length > 0) {
+    await mkdir(codexBridgeStateDir(codexHome), { recursive: true });
+    await appendFile(target, adopted.join(""), "utf8");
+  }
+  await rename(source, `${source}.adopted`);
+  return true;
 }
 
 export async function persistSessionTitle(

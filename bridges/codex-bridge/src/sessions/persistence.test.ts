@@ -562,39 +562,6 @@ describe("BridgeSessionStore across Codex accounts", () => {
     ]);
     await expect(readdir(join(account, "orkestrator-bridge"))).rejects.toThrow();
   });
-
-  test("adopts the records an account kept in its own home before the move", async () => {
-    const { host, account, shared } = await homes();
-    const now = Date.now();
-    await writeRecordFile(account, "only-on-account", validRecordFields("only-on-account", now));
-    const stale = await writeRecordFile(account, "on-both", {
-      ...validRecordFields("on-both", now),
-      threadId: "thread-stale",
-    });
-    await writeRecordFile(host, "on-both", {
-      ...validRecordFields("on-both", now),
-      threadId: "thread-current",
-    });
-    await writeRecordFile(account, "closed", validRecordFields("closed", now));
-    await writeRecordFile(host, "closed", {
-      bridgeSessionId: "closed",
-      deleted: true,
-      deletedAt: new Date(now).toISOString(),
-    });
-
-    process.env.CODEX_BRIDGE_STATE_DIR = shared;
-    const store = new BridgeSessionStore({ codexHome: account, cwd: "/workspace" });
-    const loaded = await store.load();
-
-    // The shared record and the tombstone win; the account-only record moves over.
-    expect(Object.fromEntries(loaded.map((s) => [s.bridgeSessionId, s.threadId]))).toEqual({
-      "only-on-account": "thread-only-on-account",
-      "on-both": "thread-current",
-    });
-    expect(await readdir(recordsDirFor(account))).toEqual([]);
-    await expect(stat(stale)).rejects.toThrow();
-    expect((await stat(recordPathFor(host, "only-on-account"))).mode & 0o777).toBe(0o600);
-  });
 });
 
 async function waitForFile(path: string): Promise<void> {

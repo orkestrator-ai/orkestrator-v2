@@ -5,10 +5,10 @@ import {
   TERMINAL_BINARY_FRAME_TYPE,
   TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES,
   TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES,
-  TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS,
   TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
   TERMINAL_WEBSOCKET_PATH,
   TERMINAL_WEBSOCKET_PROTOCOL_VERSION,
+  TERMINAL_WEBSOCKET_SUBPROTOCOL,
   type TerminalWebSocketClientControlFrame,
 } from "@orkestrator/protocol/terminal-websocket";
 import {
@@ -162,8 +162,6 @@ export class TerminalWebSocketClient {
   private operationId = 0;
   private pendingOperationBytes = 0;
   private serverReady = false;
-  /** Whether the current socket's `ready` frame advertised the `ping` feature. */
-  private serverAnswersPing = false;
   private livenessProbe: LivenessProbe | null = null;
   private heartbeat: Heartbeat | null = null;
   private pingNonce = 0;
@@ -415,16 +413,11 @@ export class TerminalWebSocketClient {
     // OPEN and an earlier ready frame cannot prove this transport is still live:
     // a mobile WebView can keep a dead socket OPEN while backgrounded, and the
     // main event stream has its own connection that may keep heartbeating while
-    // this one silently stalls. A server that answers pings is asked directly,
-    // and the socket is kept only if the answer comes back. Anything else is
-    // replaced at once and every desired channel reconciles.
+    // this one silently stalls. A ready socket is asked directly, and kept only
+    // if the answer comes back. Anything else is replaced at once and every
+    // desired channel reconciles.
     const socket = this.socket;
-    if (
-      socket &&
-      this.serverReady &&
-      this.serverAnswersPing &&
-      socket.readyState === WebSocket.OPEN
-    ) {
+    if (socket && this.serverReady && socket.readyState === WebSocket.OPEN) {
       if (this.livenessProbe?.socket !== socket) this.probeLiveness(socket);
       this.startHeartbeat();
       return;
@@ -434,8 +427,8 @@ export class TerminalWebSocketClient {
 
   /**
    * The visible-page heartbeat (#2052). Runs only while channels
-   * are desired, the page is visible and the current socket is ready and
-   * answers pings; every other state stops it, and `dispose` cancels it.
+   * are desired, the page is visible and the current socket is ready; every
+   * other state stops it, and `dispose` cancels it.
    */
   private startHeartbeat(): void {
     const socket = this.socket;
@@ -461,7 +454,6 @@ export class TerminalWebSocketClient {
       socket === this.socket &&
       this.desired.size > 0 &&
       this.serverReady &&
-      this.serverAnswersPing &&
       socket.readyState === WebSocket.OPEN &&
       document.visibilityState === "visible"
     );
@@ -568,14 +560,13 @@ export class TerminalWebSocketClient {
       this.options.createSocket ?? ((url, protocols) => new WebSocket(url, protocols));
     let socket: WebSocket;
     try {
-      socket = createSocket(this.options.url, TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS);
+      socket = createSocket(this.options.url, [TERMINAL_WEBSOCKET_SUBPROTOCOL]);
     } catch {
       this.fallbackAndReconnect();
       return;
     }
     this.socket = socket;
     this.serverReady = false;
-    this.serverAnswersPing = false;
     socket.binaryType = "arraybuffer";
     socket.onopen = () => {
       if (this.socket !== socket) return;
@@ -620,7 +611,6 @@ export class TerminalWebSocketClient {
       switch (frame.type) {
         case "ready":
           this.serverReady = true;
-          this.serverAnswersPing = frame.features?.includes("ping") ?? false;
           this.socketBackoff.connected();
           this.options.onSocketReady();
           for (const channel of this.desired.values()) this.sendSubscribe(channel);
@@ -695,9 +685,12 @@ export class TerminalWebSocketClient {
         case "operation-result": {
           const pending = this.pendingOperations.get(frame.operationId);
           if (!pending) return;
+          // Input that succeeded is settled only by `input-results`; this
+          // frame answers failures and resizes.
           if (
             pending.channel.channelId !== frame.channelId ||
-            pending.operation !== frame.operation
+            pending.operation !== frame.operation ||
+            (frame.ok && frame.operation === "input")
           ) {
             socket.close(4004, "Mismatched operation response");
             return;

@@ -28,7 +28,7 @@ const log = createLogger("nodes");
 /**
  * The command node's side of Kanban sync (docs/architecture/tickets.md, "Sync
  * across machines"). For each leaf that has a copy of one of this node's
- * repositories, and advertises `ticket-sync`:
+ * repositories:
  *
  * 1. Up: collect the changes the leaf queued for this node, apply them to the
  *    board in order and exactly once, and only then acknowledge them.
@@ -41,32 +41,25 @@ const log = createLogger("nodes");
  * It runs on every (re)connect and stream resync, when the leaf announces
  * queued changes, and shortly after any change to a synced board here. A
  * failure leaves everything where it was (the leaf's outbox, the leaf's
- * cursor) for the next run; nothing is dropped. An older leaf is reported as
- * needing an update and left as it is.
+ * cursor) for the next run; nothing is dropped. A leaf whose `ticket-sync`
+ * range shares no version with this node's is reported as needing an update
+ * and left as it is.
  *
- * The leaf is called through the `ticket-sync` domain client (plan item
- * 1010): a leaf that advertises the domain syncs; a pre-contract leaf syncs
- * when its hello names the `ticket-sync` capability, as before.
+ * The leaf is called through the `ticket-sync` domain client (plan item 1010).
  */
 
 export interface TicketSyncLink extends EnvelopeLink {
   readonly connected: boolean;
 }
 
-/** The leaf's ticket-sync API, or `null` when it cannot sync with this node. */
+/** The leaf's ticket-sync API, or `null` when its `ticket-sync` range shares no version with this node's. */
 function ticketSyncApi(link: EnvelopeLink): TicketSyncApi | null {
   try {
-    const api = linkDomainApi(link, ticketSyncClient);
-    return api.syncs ? api : null;
+    return linkDomainApi(link, ticketSyncClient);
   } catch {
-    // No version in common (`unsupported-version`): reported like an older leaf.
+    // No version in common (`unsupported-version`).
     return null;
   }
-}
-
-/** Whether the leaf behind `link` syncs tickets with this node (connected or not). */
-export function leafSyncsTickets(link: EnvelopeLink): boolean {
-  return ticketSyncApi(link) !== null;
 }
 
 export interface TicketSyncNode {

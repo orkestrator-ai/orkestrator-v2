@@ -19,8 +19,8 @@ export interface NoticeController {
   controllerId: string;
   displayName: string;
   /**
-   * The repositories that command node has. Absent when it never said it takes
-   * coordinator notices, which is what an older command node looks like.
+   * The repositories that command node has. Absent until it first collects,
+   * which reads as none.
    */
   repositoryHints?: readonly string[];
 }
@@ -29,7 +29,7 @@ export type CoordinatorNoticeRoute =
   | { kind: "command-node"; controllerId: string; controllerName: string }
   | {
       kind: "local";
-      reason: "standalone" | "older-command-node" | "no-repository" | "repository-not-on-command";
+      reason: "standalone" | "no-repository" | "repository-not-on-command";
     };
 
 /**
@@ -45,8 +45,6 @@ export function routeCoordinatorNotice(input: {
   machineWide?: boolean;
 }): CoordinatorNoticeRoute {
   if (input.controllers.length === 0) return { kind: "local", reason: "standalone" };
-  const capable = input.controllers.filter((entry) => entry.repositoryHints !== undefined);
-  if (capable.length === 0) return { kind: "local", reason: "older-command-node" };
   const pick = (candidates: readonly NoticeController[]): CoordinatorNoticeRoute | null => {
     const chosen =
       candidates.find((entry) => entry.controllerId === input.preferredControllerId) ??
@@ -59,11 +57,11 @@ export function routeCoordinatorNotice(input: {
         }
       : null;
   };
-  if (input.machineWide) return pick(capable)!;
+  if (input.machineWide) return pick(input.controllers)!;
   const hint = input.repositoryHint;
   if (!hint) return { kind: "local", reason: "no-repository" };
   return (
-    pick(capable.filter((entry) => entry.repositoryHints!.includes(hint))) ?? {
+    pick(input.controllers.filter((entry) => entry.repositoryHints?.includes(hint))) ?? {
       kind: "local",
       reason: "repository-not-on-command",
     }

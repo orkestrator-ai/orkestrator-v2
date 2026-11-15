@@ -1700,7 +1700,7 @@ All three checked on 2026-10-24.
   the real-provider Electron and container runs of task 4) moved there on
   2026-11-10. The counter reading of task 1 is no longer needed since the
   user's legacy-retirement decision of 2026-11-14.
-- [8108](../cross-cutting/8108-legacy-retirement-sweep.md): the 2026-11-14
+- 8108 (retired): the 2026-11-14
   legacy-retirement sweep.
 - [0232-direct-history-cursor-minting.md](0232-direct-history-cursor-minting.md):
   the renderer's cursor mint that keeps joined `sync-v1` paging in use (item 3).

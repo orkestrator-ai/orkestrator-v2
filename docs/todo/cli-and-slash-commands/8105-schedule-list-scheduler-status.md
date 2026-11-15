@@ -77,7 +77,7 @@ and decisions as well.
 - [5160](../cross-cutting/5160-silent-failures-live-evidence.md) task 3: the
   live evidence for the Settings notice.
 - [Scheduled jobs](../../architecture/scheduled-jobs.md).
-- [8108](../cross-cutting/8108-legacy-retirement-sweep.md): the
+- 8108 (retired): the
   legacy-retirement decision.
 
 ## Replaces

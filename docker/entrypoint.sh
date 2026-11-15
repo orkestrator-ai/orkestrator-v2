@@ -1227,7 +1227,7 @@ chmod 700 "$HOME/.claude"
 
 # Create settings.json with bypass permissions mode and activity hooks
 # This is the primary settings file that Claude Code reads
-# Hooks write state to /tmp/.claude-state for the host to read, then ring the
+# Hooks write state to /tmp/.claude-state-snapshot for the host to read, then ring the
 # backend (orkestrator-state-signal) so it reads on change instead of polling
 # every second; the backend keeps a slow safety read for a missed signal
 # - UserPromptSubmit: fires when user sends a prompt (better than PreToolUse which fires on startup)

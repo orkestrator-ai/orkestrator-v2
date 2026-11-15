@@ -243,7 +243,7 @@ Observed 2026-11-11 on `cli-slash-qualification-024da345b17c-r1` at
 (`mise run flaky:recurrence -- 9932 --base 14df96544` answered "open. Record
 the failure as a recurrence"). The branch changes the CLI scenario harness
 (`packages/cli/scenarios`, `packages/cli/scripts`), adds
-`scripts/qualify-slash-mixed-versions.ts` and edits to-do docs; it does not
+`scripts/qualify-slash-mixed-versions.ts` (retired 2026-11-14 (8108)) and edits to-do docs; it does not
 touch `apps/web`.
 
 - **Command:** `mise run test:logged -- --name review-default-tests-fix-rerun -- mise run test`

@@ -24,40 +24,15 @@ export interface BrowserPreviewServiceTarget {
   path: string;
 }
 
-/**
- * Request header naming the environment a legacy gateway preview
- * (`/__orkestrator/browser/loopback/<port>/`) belongs to. Electron main sets
- * it on the preview requests it authenticates, from the environment the
- * renderer attached the view for, and drops any copy a page sent. The gateway
- * opens the port only when it is a verified preview target of that
- * environment (security report M2).
- */
-export const BROWSER_PREVIEW_ENVIRONMENT_HEADER = "x-orkestrator-preview-environment";
-
-const BROWSER_PREVIEW_ENVIRONMENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
-
-/** The value as an environment id fit for that header, or null. */
-export function browserPreviewEnvironmentId(value: unknown): string | null {
-  return typeof value === "string" && BROWSER_PREVIEW_ENVIRONMENT_ID.test(value) ? value : null;
-}
-
 export interface BrowserPreviewAttachInput {
   tabId: string;
-  /** Legacy/manual previews: a loopback or gateway-preview URL. */
-  url?: string;
+  /** The service the view shows: resolved and authorized in the main process. */
+  service: BrowserPreviewServiceTarget;
   /**
-   * Legacy/manual previews: the environment whose tab shows the view. Its
-   * gateway preview requests may open only that environment's preview
-   * targets. Absent from older renderers, whose legacy previews are refused.
-   */
-  environmentId?: string;
-  /** Service previews: resolved and authorized in the main process. */
-  service?: BrowserPreviewServiceTarget;
-  /**
-   * The view navigation that `service.path` (`BrowserPreviewState.service.navigation`)
-   * or `url` (`BrowserPreviewState.navigation`) was chosen against. A target
-   * chosen against an older navigation is stale and never navigates the view.
-   * Absent from older renderers.
+   * The view navigation (`BrowserPreviewState.service.navigation`) that
+   * `service.path` was chosen against. A path chosen against an older
+   * navigation is stale and never navigates the view. Absent until the tab
+   * has seen a state of its view.
    */
   navigationBasis?: number;
   bounds: BrowserPreviewBounds;
@@ -72,7 +47,7 @@ export interface BrowserPreviewAttachInput {
 
 /** Effective transport for a service preview, separate from page loading. */
 export interface BrowserPreviewTransportState {
-  mode: "desktop-tunnel" | "legacy";
+  mode: "desktop-tunnel";
   state: "connecting" | "ready" | "reconnecting" | "unavailable";
   /** Stable failure category (`PreviewErrorCategory`) when unavailable. */
   failure?: string;
@@ -89,23 +64,18 @@ export type BrowserPreviewSessionImport =
 
 export interface BrowserPreviewState {
   tabId: string;
-  /** Actual view URL. For service previews this is a runtime transport URL; never persist it. */
+  /** Actual view URL: a runtime transport URL; never persist it. */
   url: string;
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
   error: string | null;
   /**
-   * Present for service previews: the durable identity and app-relative path.
-   * `navigation` counts the view's main-frame navigations (links, redirects,
-   * history, in-page routes); echo it as `navigationBasis`.
+   * The service's durable identity and app-relative path, while the view
+   * shows a page of it. `navigation` counts the view's main-frame navigations
+   * (links, redirects, history, in-page routes); echo it as `navigationBasis`.
    */
   service?: { serviceId: string; path: string; displayUrl: string; navigation?: number };
-  /**
-   * Legacy/manual previews: the view's main-frame navigation count, as
-   * `service.navigation` is for service previews; echo it as `navigationBasis`.
-   */
-  navigation?: number;
   transport?: BrowserPreviewTransportState;
   /** Present only where this client can offer the import: a service preview on a local connection. */
   sessionImport?: BrowserPreviewSessionImport;
@@ -115,9 +85,10 @@ export interface BrowserPreviewState {
 
 export interface BrowserPreviewOpenLinkEvent {
   tabId: string;
+  /** The link's application address (never a runtime transport URL). */
   url: string;
-  /** Same-service link from a service preview: open as a service tab. */
-  service?: BrowserPreviewServiceTarget;
+  /** The same-service link, opened as a service tab. */
+  service: BrowserPreviewServiceTarget;
 }
 
 export interface BrowserPreviewElementRect {

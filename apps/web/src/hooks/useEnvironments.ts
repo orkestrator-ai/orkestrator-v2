@@ -54,7 +54,6 @@ import {
   activateProjectForEnvironmentCleanup,
   startEnvironmentCleanupSelectionSync,
 } from "@/lib/environment-cleanup-selection";
-import { classifyReadError } from "@/lib/read-coordinator";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.environment");
@@ -300,24 +299,17 @@ export function cleanupSubscriptionsRemovedByProjectSnapshot(
 
 /**
  * Installs one environment's authoritative snapshot, for a change announcement
- * that named only it. Resolves `false` when the backend predates the read, so
- * the caller reads the project's list instead.
+ * that named only it.
  */
 export async function refreshEnvironmentSnapshot(
   projectId: string,
   environmentId: string,
   scope: NodeScope,
-): Promise<boolean> {
+): Promise<void> {
   const node = environmentNode(scope);
   const creationGeneration = getEnvironmentCreationState(node, projectId).generation;
   const attemptRevisions = lifecycleAttemptRevisions(node);
-  let snapshot: Environment | null;
-  try {
-    snapshot = await environmentsApi(scope).getEnvironmentSnapshot(environmentId);
-  } catch (error) {
-    if (classifyReadError(error) === "unsupported") return false;
-    throw error;
-  }
+  const snapshot = await environmentsApi(scope).getEnvironmentSnapshot(environmentId);
   const store = node.environments.getState();
   const creation = getEnvironmentCreationState(node, projectId);
   // Not held yet, so it may be a creation this client is still waiting on: its
@@ -326,7 +318,7 @@ export async function refreshEnvironmentSnapshot(
     !store.getEnvironmentById(environmentId) &&
     (creation.activeCreations > 0 || creation.generation !== creationGeneration)
   ) {
-    return true;
+    return;
   }
   if (!snapshot) cleanupDeletedEnvironmentSubscriptions(environmentId, scope);
   store.applyEnvironmentSnapshot(
@@ -336,7 +328,6 @@ export async function refreshEnvironmentSnapshot(
         .environment,
   );
   reconcileNodeLifecycleErrors(node);
-  return true;
 }
 
 function beginLifecycleAttempt(node: EnvironmentNode, environmentId: string): number {

@@ -2321,12 +2321,6 @@ export function SharedNativeAgentController({
           if (outcome.outcome === "applied") {
             clearDraft(sessionKey);
             discardProvisionalDraft();
-            if (outcome.instructionsIgnored) {
-              // It did compact, so the draft goes; retrying would compact twice.
-              reportSendError(
-                `${label} compacted without your instructions: this environment's agent bridge predates them. Restart the environment to update it.`,
-              );
-            }
             return true;
           }
           if (outcome.outcome !== "unknown") {
@@ -3148,12 +3142,13 @@ export function SharedNativeAgentController({
 
   const submissionError = sendError ?? draft.submissionError;
   // While sending is held the owner's own notice explains the pane, so a saved
-  // view's error, or a read an older backend refuses, is not a second failure.
+  // view's error is not a second failure. A failed read still is one: the
+  // backend answers a held conversation's reads from saved data.
   const errorMessage =
     submissionError ??
-    (sendingHeld
-      ? null
-      : (transcriptError ?? sessionStateError ?? runtimeError ?? projection?.turn.error ?? null));
+    transcriptError ??
+    sessionStateError ??
+    (sendingHeld ? null : (runtimeError ?? projection?.turn.error ?? null));
   // An uninitialized inactive tab has neither a projection nor an in-flight
   // refresh. That is still a pending connection, not a failed one: newly added
   // tabs can render for one commit before pane selection marks them active,
@@ -3166,21 +3161,22 @@ export function SharedNativeAgentController({
   // Retry and a new identity both start work with `isRefreshing`. That has to
   // win over the previous completed-read/error, or the only recovery control
   // stays on screen while the reconnect is already running.
-  const connectionState = sendingHeld
-    ? isRefreshing || transcriptRefreshing
-      ? ("connecting" as const)
-      : ("connected" as const)
-    : transcriptError || sessionStateError
+  const connectionState =
+    transcriptError || sessionStateError
       ? ("error" as const)
-      : ((sessionStateAuthoritative ? projection?.connection : undefined) ??
-        (isRefreshing ||
-        transcriptRefreshing ||
-        sessionStateRefreshing ||
-        sessionStateAvailability === "refreshing"
+      : sendingHeld
+        ? isRefreshing || transcriptRefreshing
           ? ("connecting" as const)
-          : runtimeError || hasCompletedRead
-            ? ("error" as const)
-            : ("connecting" as const)));
+          : ("connected" as const)
+        : ((sessionStateAuthoritative ? projection?.connection : undefined) ??
+          (isRefreshing ||
+          transcriptRefreshing ||
+          sessionStateRefreshing ||
+          sessionStateAvailability === "refreshing"
+            ? ("connecting" as const)
+            : runtimeError || hasCompletedRead
+              ? ("error" as const)
+              : ("connecting" as const)));
   // Visibility unmounts retain the intent in the compose store. Reconcile it
   // before replay, including expiry while hidden and provider-session changes.
   const sessionStateFailure = sessionStateError ?? runtimeError;

@@ -9,7 +9,6 @@ import {
 } from "./build-pipeline-review-fanout-test-support.js";
 import { TEST_ADDRESS_FINDINGS_RESULT } from "./build-pipeline-test-fixtures.js";
 import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "./review-prompts.js";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { resumePromptFor } from "./build-pipeline-service-helpers.js";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
@@ -171,53 +170,31 @@ describe("typed Address report", () => {
 });
 
 describe("Address sessions from before the typed report", () => {
-  test("a pipeline record from before the upgrade still uses the last assistant text", async () => {
+  test("a pipeline record from before the upgrade fails the stage instead of reading its text", async () => {
     await withPipeline(async ({ service, storage, provider, read }) => {
-      const record = spyOn(compatibilityPathUsage, "record");
-      try {
-        const started = await service.start(startInput());
-        const addressing = await advanceUntil(service, read, started.id, "addressing");
-        const address = current(addressing);
-        // A pre-upgrade Address session: no marker and no result slot.
-        await rewritePipeline(storage, started.id, (pipeline) => {
-          const session = current(pipeline);
-          delete session.addressReportKind;
-          delete session.structuredRequestId;
-          delete session.resultTransport;
-          delete session.resultSubmission;
-          delete session.structuredResultStatus;
-        });
-        provider.transcriptOverrides.set(address.sdkSessionId, [
-          {
-            id: "address-final",
-            role: "assistant",
-            parts: [{ type: "text", content: "LEGACY ADDRESS REPORT: fixed the branch." }],
-          },
-        ]);
-        // A pre-upgrade session never answers a fix-result read.
-        const structured = provider.structured.bind(provider);
-        const reads: string[] = [];
-        provider.structured = async (sessionId, requestId) => {
-          if (sessionId === address.sdkSessionId) reads.push(requestId);
-          return structured(sessionId, requestId);
-        };
+      const started = await service.start(startInput());
+      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      const address = current(addressing);
+      // A pre-upgrade Address session: no marker and no result slot.
+      await rewritePipeline(storage, started.id, (pipeline) => {
+        const session = current(pipeline);
+        delete session.addressReportKind;
+        delete session.structuredRequestId;
+        delete session.resultTransport;
+        delete session.resultSubmission;
+        delete session.structuredResultStatus;
+      });
+      provider.transcriptOverrides.set(address.sdkSessionId, [
+        {
+          id: "address-final",
+          role: "assistant",
+          parts: [{ type: "text", content: "LEGACY ADDRESS REPORT: fixed the branch." }],
+        },
+      ]);
 
-        const verifying = await advanceUntil(service, read, started.id, "verifying");
-        expect(verifying.phase).toBe("verifying");
-        expect(reads).toEqual([]);
-        const legacy = verifying.sessions.find(
-          (session) => session.sdkSessionId === address.sdkSessionId,
-        )!;
-        expect(legacy.addressReportKind).toBeUndefined();
-        expect(legacy.fixResult).toBeUndefined();
-        const prompt = verifyPrompt(provider.sent)!;
-        expect(prompt).toContain("the Address Findings stage's latest assistant text");
-        expect(prompt).toContain("LEGACY ADDRESS REPORT: fixed the branch.");
-        expect(prompt).not.toContain(ADDRESS_FINDINGS_RESULT_FRAME_OPEN);
-        expect(record).toHaveBeenCalledWith("build-pipeline.address-text-report");
-      } finally {
-        record.mockRestore();
-      }
+      const failed = await advanceUntil(service, read, started.id, "failed", 5);
+      expect(failed.error).toContain("started before typed fix results");
+      expect(verifyPrompt(provider.sent)).toBeUndefined();
     });
   });
 

@@ -6,7 +6,6 @@ import path from "node:path";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 
 import type { CommandContext } from "./commands-context.js";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { listMachineAgentAccounts, setPreferredAgentIdentity } from "./agent-accounts-machines.js";
 import { NodeUnavailableError } from "./nodes/node-link.js";
 import { StorageService } from "./storage.js";
@@ -276,10 +275,7 @@ test("keeps a preferred login per platform on the machine asking and reports it"
   expect((await listMachineAgentAccounts(ctx, { readSignIns })).preferred).toBeUndefined();
 });
 
-test("a machine that predates the sign-in read still lists its accounts, and is counted", async () => {
-  const id = "host-agent-sign-ins.older-node";
-  const count = () => compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;
-  const before = count();
+test("a failed sign-in read still lists the machine's accounts", async () => {
   const run = (signIns: () => unknown) =>
     listMachineAgentAccounts(
       context({
@@ -299,15 +295,14 @@ test("a machine that predates the sign-in read still lists its accounts, and is 
       }),
       { timeoutMs: 1_000, readSignIns },
     );
-  const older = await run(() => {
-    throw new Error(unknownBackendCommandMessage("read_host_agent_sign_ins"));
-  });
-  expect(older.machines[1]).toMatchObject({ state: "ok", snapshot: LEAF_SNAPSHOT });
-  expect(older.machines[1]).not.toHaveProperty("signIns");
-  expect(count()).toBe(before + 1);
-  // Any other failure is not an older machine.
-  await run(() => {
-    throw new NodeUnavailableError("offline");
-  });
-  expect(count()).toBe(before + 1);
+  for (const failure of [
+    () => new Error(unknownBackendCommandMessage("read_host_agent_sign_ins")),
+    () => new NodeUnavailableError("offline"),
+  ]) {
+    const listed = await run(() => {
+      throw failure();
+    });
+    expect(listed.machines[1]).toMatchObject({ state: "ok", snapshot: LEAF_SNAPSHOT });
+    expect(listed.machines[1]).not.toHaveProperty("signIns");
+  }
 });

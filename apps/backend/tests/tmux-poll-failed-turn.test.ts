@@ -100,11 +100,11 @@ async function harness() {
 }
 
 describe("orkestrator-state-signal failed", () => {
-  test("counts a revision but no completion, and tells older backends idle", () => {
+  test("counts a revision but no completion, and writes only the snapshot", () => {
     hook("working");
     hook("failed");
     expect(readFileSync(`${stateFile}-snapshot`, "utf8").trim()).toBe("failed 2 0");
-    expect(readFileSync(stateFile, "utf8").trim()).toBe("idle");
+    expect(existsSync(stateFile)).toBe(false);
     // The next prompt starts from a failed snapshot, and its Stop still counts.
     hook("working");
     hook("waiting");

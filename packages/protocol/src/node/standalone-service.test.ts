@@ -35,11 +35,20 @@ afterEach(async () => {
   await rm(dataDir, { recursive: true, force: true });
 });
 
-/** Stands in for `bun install`: lays out the package the release would get. */
-function fakeInstall(version: string, options: { produce?: boolean } = {}): CommandRunner {
+/**
+ * Stands in for `bun install`: the fetch install lays out the package the
+ * release would get, with its published lockfile unless `lockfile` is false;
+ * the frozen install adds its dependencies, which this fake has none of.
+ */
+function fakeInstall(
+  version: string,
+  options: { produce?: boolean; lockfile?: boolean } = {},
+): CommandRunner {
   return async (_file, args, runOptions) => {
     expect(args[0]).toBe("install");
-    if (options.produce === false) return { stdout: "", stderr: "" };
+    if (options.produce === false || args.includes("--frozen-lockfile")) {
+      return { stdout: "", stderr: "" };
+    }
     const root = path.join(runOptions.cwd!, "node_modules", "orkestrator");
     await mkdir(path.join(root, "bin"), { recursive: true });
     await writeFile(
@@ -47,6 +56,12 @@ function fakeInstall(version: string, options: { produce?: boolean } = {}): Comm
       JSON.stringify({ name: "orkestrator", version, engines: { bun: ">=1.4.3" } }),
     );
     await writeFile(path.join(root, "bin", "orkestrator.js"), "// entry\n");
+    if (options.lockfile !== false) {
+      const runtime = path.join(root, RELEASE_RUNTIME_PATH);
+      await mkdir(runtime, { recursive: true });
+      await writeFile(path.join(runtime, "package.json"), "{}\n");
+      await writeFile(path.join(runtime, "bun.lock"), "{}\n");
+    }
     return { stdout: "", stderr: "" };
   };
 }
@@ -72,15 +87,7 @@ describe("standalone releases", () => {
     const installs: { args: string[]; cwd: string; env?: NodeJS.ProcessEnv }[] = [];
     const run: CommandRunner = async (file, args, options) => {
       installs.push({ args, cwd: options.cwd!, env: options.env });
-      // Only the first install lays out the package; the frozen one adds its
-      // dependencies, which this fake has none of.
-      if (installs.length > 1) return { stdout: "", stderr: "" };
-      const result = await fakeInstall("2.22.0")(file, args, options);
-      const runtime = path.join(options.cwd!, "node_modules", "orkestrator", RELEASE_RUNTIME_PATH);
-      await mkdir(runtime, { recursive: true });
-      await writeFile(path.join(runtime, "package.json"), "{}\n");
-      await writeFile(path.join(runtime, "bun.lock"), "{}\n");
-      return result;
+      return fakeInstall("2.22.0")(file, args, options);
     };
     await installRelease(layout, "2.22.0", { bun: "bun", run });
     expect(installs).toHaveLength(2);
@@ -109,6 +116,23 @@ describe("standalone releases", () => {
       }),
     ).rejects.toThrow("produced no usable release");
     expect(existsSync(releaseDirectory(layout, "2.22.0"))).toBe(false);
+  });
+
+  test("a release published without its lockfile is refused and leaves no release", async () => {
+    const layout = standaloneLayout(dataDir);
+    const installs: string[][] = [];
+    await expect(
+      installRelease(layout, "2.36.3-beta", {
+        bun: "bun",
+        run: async (file, args, options) => {
+          installs.push(args);
+          return fakeInstall("2.36.3-beta", { lockfile: false })(file, args, options);
+        },
+      }),
+    ).rejects.toThrow("was published without its dependency lockfile");
+    // Only the fetch ran: nothing resolved the release's dependencies afresh.
+    expect(installs).toHaveLength(1);
+    expect(readdirSync(layout.releases)).toEqual([]);
   });
 
   test("activation moves current and remembers previous", async () => {

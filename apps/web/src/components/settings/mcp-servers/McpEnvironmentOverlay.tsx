@@ -3,7 +3,6 @@ import { Download, Loader2, RotateCcw, Undo2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import {
-  isUnknownMcpManagementCommandError,
   type McpConfigSource,
   type McpDefaultsRefreshPreview,
   type McpEnvironmentOverlayState,
@@ -52,14 +51,6 @@ const STATE_TONE: Record<McpEnvironmentOverlayState["state"], string> = {
   conflict: "border-amber-500/30 text-amber-300",
   corrupt: "border-amber-500/30 text-amber-300",
 };
-
-const UNSUPPORTED_BACKEND =
-  "This backend cannot manage environment changes yet. Update the backend to use this action.";
-
-function problemFrom(error: unknown): McpProblem {
-  if (isUnknownMcpManagementCommandError(error)) return { message: UNSUPPORTED_BACKEND };
-  return mcpProblemFrom(error);
-}
 
 function successText(action: McpOverlayAction): string {
   switch (action.kind) {
@@ -140,7 +131,7 @@ export function McpEnvironmentSourceControls({
       );
       toast.success(successText(action));
     } catch (error) {
-      setProblem(problemFrom(error));
+      setProblem(mcpProblemFrom(error));
     } finally {
       setBusy(null);
       onReload();
@@ -390,7 +381,7 @@ export function McpDefaultsRefreshDialog({
     try {
       setPreview(await backend.previewMcpEnvironmentDefaults({ targetId, sourceId }, machine));
     } catch (error) {
-      setProblem(problemFrom(error));
+      setProblem(mcpProblemFrom(error));
       onReload();
     } finally {
       setBusy(false);
@@ -423,7 +414,7 @@ export function McpDefaultsRefreshDialog({
     } catch (error) {
       setPreview(null);
       setFailedRefresh(true);
-      setProblem(problemFrom(error));
+      setProblem(mcpProblemFrom(error));
       onReload();
     } finally {
       setBusy(false);

@@ -243,12 +243,6 @@ async function stopNext(): Promise<void> {
   for (let attempt = 0; attempt < 50 && signalGroup(0); attempt += 1) await Bun.sleep(100);
   signalGroup("SIGKILL");
 }
-/** Loopback ports for the legacy `/__orkestrator/browser/loopback/<port>/` route. */
-const loopbackPorts: Record<string, number> = {
-  app: fixture.port,
-  ...(viteRelay ? { vite: viteRelay.port } : {}),
-};
-
 await harness.runtime.updateSettings((current) => ({
   ...current,
   publication: {
@@ -297,9 +291,6 @@ const gateway = new OrkestratorGateway({
   port: 0,
   env: { ORKESTRATOR_GATEWAY_TOKEN: crypto.randomUUID() },
   allowNonTailscaleBind: true,
-  // This gateway fronts no preview registry; the fixtures are its only targets.
-  legacyPreviewPortAccess: async (port) =>
-    Object.values(loopbackPorts).includes(port) ? "allowed" : "unknown",
 });
 const gatewayInfo = await gateway.start();
 if (!gatewayInfo) throw new Error("gateway did not start");
@@ -416,7 +407,6 @@ process.stdout.write(
     services: Object.keys(services),
     ipv6Unavailable,
     gateway: gatewayUrl,
-    loopbackPorts,
     redirectPort: (redirector.address() as AddressInfo).port,
   })}\n`,
 );

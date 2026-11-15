@@ -1,10 +1,9 @@
 /**
- * Processes and transport for the mixed-version qualification runner
- * (`scripts/qualify-contract-mixed-versions.ts`, plan item 1012).
+ * Processes and transport for the two-backend checks of this checkout
+ * (`scripts/qa-remote-goal-hold.ts`).
  *
- * A {@link PeerNode} is one backend: this checkout's (`apps/backend/src/main.ts`)
- * or a published `orkestrator` npm release installed with `--ignore-scripts`
- * into the run's private directory ({@link installRelease}). Every backend:
+ * A {@link PeerNode} is one backend of this checkout (`apps/backend/src/main.ts`).
+ * Every backend:
  *
  * - has its own temporary data directory, worktree directory and HOME;
  * - listens on loopback on a free port that is never one of
@@ -19,15 +18,15 @@
  * - has a private random gateway token that is never printed.
  *
  * Only processes started here are signalled, through the handle recorded at
- * spawn time. A node can also be {@link attachedNode} (an already running
- * backend, e.g. a `dev:test` profile), which is never started or stopped.
+ * spawn time.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
+
+import type { ControlMcpInvoker } from "../../apps/backend/src/core/control-shared-actions.ts";
 
 export const ROOT = path.resolve(import.meta.dir, "..", "..");
 
@@ -36,22 +35,7 @@ export const FORBIDDEN_PORTS: ReadonlySet<number> = new Set([34121, 34122, 45507
 
 export class SetupError extends Error {}
 
-/** Which code a node runs. */
-export type Build =
-  | { readonly kind: "current" }
-  | { readonly kind: "old"; readonly version: string; readonly packageRoot: string };
-
 export type Role = "command" | "leaf";
-
-/** What `/__orkestrator/hello` reports, as far as the scenarios read it. */
-export interface HelloView {
-  readonly appVersion?: string;
-  readonly nodeMode?: string;
-  /** The commit the backend was built from; absent on a build that reports none. */
-  readonly buildCommit?: string;
-  readonly capabilities?: Readonly<Record<string, number>>;
-  readonly domains?: Readonly<Record<string, { readonly min: number; readonly max: number }>>;
-}
 
 /** Environment variables a provider SDK or agent CLI reads credentials from. */
 const CREDENTIAL_VARIABLE =
@@ -129,28 +113,6 @@ export function runSetup(command: string, args: readonly string[], cwd: string):
   return result.stdout;
 }
 
-/**
- * Install `orkestrator@<version>` from npm into `directory` (its own
- * `package.json`, so nothing outside it changes), without lifecycle scripts.
- * Returns the package root.
- */
-export async function installRelease(version: string, directory: string): Promise<string> {
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await writeFile(
-    path.join(directory, "package.json"),
-    '{"name":"mixed-version-qualification","private":true}\n',
-  );
-  runSetup("bun", ["add", "--ignore-scripts", "--exact", `orkestrator@${version}`], directory);
-  const packageRoot = path.join(directory, "node_modules", "orkestrator");
-  const installed = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8")) as {
-    version?: string;
-  };
-  if (installed.version !== version) {
-    throw new SetupError(`npm installed orkestrator ${installed.version}, expected ${version}.`);
-  }
-  return packageRoot;
-}
-
 export interface InvokeFailure {
   readonly status: number;
   readonly message: string;
@@ -175,7 +137,7 @@ function errorText(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
-/** One backend in a qualification pair. */
+/** One backend of this checkout in a two-node pair. */
 export class PeerNode {
   child: ChildProcess | null = null;
   readonly output: string[] = [];
@@ -183,37 +145,21 @@ export class PeerNode {
   id = "";
   /** What `get_app_version` answered. */
   version = "";
-  hello: HelloView = {};
 
   constructor(
     readonly name: string,
     readonly role: Role,
-    readonly build: Build,
     readonly dir: string,
     readonly port: number,
     readonly token: string,
-    /** The commands this build registers (manifest or release snapshot). */
-    readonly commands: ReadonlySet<string>,
-    readonly managed = true,
-    readonly originOverride?: string,
   ) {}
 
   get origin(): string {
-    return this.originOverride ?? `http://127.0.0.1:${this.port}`;
+    return `http://127.0.0.1:${this.port}`;
   }
 
   get label(): string {
-    return `${this.name} (${this.build.kind === "current" ? "current" : this.build.version})`;
-  }
-
-  /** Whether this build registers `command`. */
-  has(command: string): boolean {
-    return this.commands.has(command);
-  }
-
-  /** Commands of `required` this build does not register. */
-  missing(required: readonly string[]): string[] {
-    return required.filter((command) => !this.has(command));
+    return this.name;
   }
 
   async request(
@@ -251,25 +197,14 @@ export class PeerNode {
     return payload?.result as T;
   }
 
-  /** The error a command answers with, or `""` when it succeeded. */
-  async refusal(command: string, args: Record<string, unknown> = {}): Promise<string> {
-    try {
-      await this.invoke(command, args);
-      return "";
-    } catch (error) {
-      return error instanceof InvokeError ? error.failure.message : String(error);
-    }
-  }
-
   /** Start the backend and wait for it to answer. */
   async start(): Promise<void> {
-    if (!this.managed) return;
     const home = path.join(this.dir, "home");
     const tmp = path.join(this.dir, "tmp");
     for (const directory of [home, tmp, path.join(this.dir, "data")]) {
       await mkdir(directory, { recursive: true, mode: 0o700 });
     }
-    const service = [
+    const args = [
       "--data-dir",
       path.join(this.dir, "data"),
       "--host",
@@ -284,18 +219,10 @@ export class PeerNode {
       "agent-test",
       "--worktree-dir",
       path.join(this.dir, "worktrees"),
-      ...(this.role === "command" && this.supportsCommandNodeFlag() ? ["--command-node"] : []),
+      ...(this.role === "command" ? ["--command-node"] : []),
     ];
-    const [entry, args, cwd] =
-      this.build.kind === "current"
-        ? [
-            path.join(ROOT, "apps", "backend", "src", "main.ts"),
-            service,
-            path.join(ROOT, "apps", "backend"),
-          ]
-        : [path.join(this.build.packageRoot, "bin", "orkestrator.js"), ["serve", ...service], tmp];
-    const child = spawn("bun", [entry, ...args], {
-      cwd,
+    const child = spawn("bun", [path.join(ROOT, "apps", "backend", "src", "main.ts"), ...args], {
+      cwd: path.join(ROOT, "apps", "backend"),
       env: backendEnvironment(process.env, { home, tmp, token: this.token }),
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -313,31 +240,13 @@ export class PeerNode {
       }
       try {
         this.version = await this.invoke<string>("get_app_version");
-        await this.identify();
+        this.id = (await this.invoke<{ nodeId: string }>("get_node_status")).nodeId;
         return;
       } catch {
         await Bun.sleep(500);
       }
     }
     throw new SetupError(`${this.label} did not answer within 120 s.`);
-  }
-
-  /** Read the node's id, version and hello (also for an attached node). */
-  async identify(): Promise<void> {
-    if (!this.version) this.version = await this.invoke<string>("get_app_version");
-    if (this.has("get_node_status")) {
-      this.id = (await this.invoke<{ nodeId: string }>("get_node_status")).nodeId;
-    }
-    const hello = await this.request("/__orkestrator/hello").catch(() => null);
-    if (hello?.status === 200 && hello.json && typeof hello.json === "object") {
-      this.hello = hello.json as HelloView;
-    }
-  }
-
-  private supportsCommandNodeFlag(): boolean {
-    if (this.build.kind === "current") return true;
-    const main = path.join(this.build.packageRoot, "dist", "main.js");
-    return existsSync(main) && readFileSync(main, "utf8").includes('"--command-node"');
   }
 
   async stop(): Promise<void> {
@@ -352,49 +261,19 @@ export class PeerNode {
   }
 }
 
-/** A new managed node with its own directory, port and token. */
+/** A new node with its own directory, port and token. */
 export async function makeNode(input: {
   name: string;
   role: Role;
-  build: Build;
   root: string;
-  commands: ReadonlySet<string>;
 }): Promise<PeerNode> {
   const dir = await mkdtemp(path.join(input.root, `${input.name.toLowerCase()}-`));
   return new PeerNode(
     input.name,
     input.role,
-    input.build,
     dir,
     await freePort(),
     randomBytes(24).toString("base64url"),
-    input.commands,
-  );
-}
-
-/**
- * A backend that is already running (a `dev:test` profile): its origin and
- * gateway token, read by the caller from the profile's owner-only auth file.
- * It is never started or stopped here.
- */
-export function attachedNode(input: {
-  name: string;
-  role: Role;
-  origin: string;
-  token: string;
-  dir: string;
-  commands: ReadonlySet<string>;
-}): PeerNode {
-  return new PeerNode(
-    input.name,
-    input.role,
-    { kind: "current" },
-    input.dir,
-    Number(new URL(input.origin).port),
-    input.token,
-    input.commands,
-    false,
-    input.origin,
   );
 }
 
@@ -427,4 +306,53 @@ export function tokenLeaks(nodes: readonly PeerNode[]): string[] {
   return nodes
     .filter((node) => nodes.some((owner) => node.output.join("").includes(owner.token)))
     .map((node) => node.label);
+}
+
+/** The Web platform the invoker uses; a test under Happy DOM passes Bun's own. */
+export interface InvokerPlatform {
+  readonly fetch: typeof fetch;
+  readonly AbortSignal: typeof AbortSignal;
+}
+
+/**
+ * A Control MCP invoker over `node`'s gateway with the caller's signal: what
+ * the Control MCP server's invoker does in process, so production code that
+ * takes an invoker (`NodeCoordinatorRemote`) reads a real node.
+ */
+export function gatewayInvoker(
+  node: Pick<PeerNode, "origin" | "token">,
+  platform: InvokerPlatform = { fetch: globalThis.fetch, AbortSignal: globalThis.AbortSignal },
+): ControlMcpInvoker {
+  return async <T>(
+    command: string,
+    args: Record<string, unknown> = {},
+    options?: { signal?: AbortSignal },
+  ): Promise<T> => {
+    const timeout = platform.AbortSignal.timeout(120_000);
+    const signal = options?.signal ? platform.AbortSignal.any([options.signal, timeout]) : timeout;
+    const response = await platform.fetch(`${node.origin}/__orkestrator/invoke`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${node.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ command, args }),
+      signal,
+    });
+    const text = await response.text();
+    let payload: { result?: T; error?: unknown } | null = null;
+    try {
+      payload = JSON.parse(text) as { result?: T; error?: unknown };
+    } catch {
+      payload = null;
+    }
+    if (response.status !== 200) {
+      const error = payload?.error;
+      const message =
+        typeof error === "string"
+          ? error
+          : typeof (error as { message?: unknown } | null)?.message === "string"
+            ? (error as { message: string }).message
+            : text;
+      throw new InvokeError(command, { status: response.status, message: message.slice(0, 500) });
+    }
+    return payload?.result as T;
+  };
 }

@@ -583,10 +583,7 @@ describe("useProjects", () => {
       await result.current.arrangeProjectsByIntent(intent);
     });
 
-    expect(mockArrangeProjectsByIntent).toHaveBeenCalledWith(intent, {
-      projectIds: ["second", "first"],
-      folders: { second: "Work" },
-    });
+    expect(mockArrangeProjectsByIntent).toHaveBeenCalledWith(intent);
     // The sidebar must not wait for the round trip to show the new tree.
     expect(observedDuringRequest.map(({ id, folder }) => ({ id, folder }))).toEqual([
       { id: "second", folder: "Work" },

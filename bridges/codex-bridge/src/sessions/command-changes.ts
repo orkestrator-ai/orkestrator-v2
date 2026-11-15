@@ -14,9 +14,10 @@
  * Rows are matched by tool call id: app-server's command item id is the
  * rollout's `call_id`, which hydration carries as `toolUseId`.
  */
+import { readdir, rename } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { codexBridgeStateDir, codexLoginBridgeDir } from "../bridge-state-dir.js";
+import { codexBridgeStateDir } from "../bridge-state-dir.js";
 import {
   CommandChangeJournal,
   hasMeasuredChanges,
@@ -83,18 +84,47 @@ export async function readCommandChanges(
 ): Promise<Map<string, MeasuredWorkspaceChange>> {
   const journal = commandChangeJournalFor(codexHome, threadId);
   if (!journal) return new Map();
-  const current = await journal.read().catch(() => new Map<string, MeasuredWorkspaceChange>());
-  // A thread run on this login before measurements moved to the shared state
-  // directory keeps its badges; the shared journal wins a call id both hold.
-  const fileName = journalFileName(threadId);
-  const legacyPath = fileName
-    ? join(codexLoginBridgeDir(codexHome), "command-changes", fileName)
-    : undefined;
-  if (!legacyPath || legacyPath === commandChangeJournalPath(codexHome, threadId)) return current;
-  const legacy = await new CommandChangeJournal(legacyPath)
-    .read()
-    .catch(() => new Map<string, MeasuredWorkspaceChange>());
-  return legacy.size === 0 ? current : new Map([...legacy, ...current]);
+  return journal.read().catch(() => new Map<string, MeasuredWorkspaceChange>());
+}
+
+/** Login journals adopted per bridge start; the rest wait for the next start. */
+export const MAX_ADOPTED_COMMAND_CHANGE_JOURNALS = 4_096;
+
+/**
+ * Part of the one-time upgrade at bridge start (`login-state-adoption.ts`):
+ * the per-thread journals a bridge before the shared state directory wrote
+ * into this login's own `command-changes` directory. A call id the shared
+ * journal lacks is appended to it; the shared journal keeps the call ids it
+ * already holds. Once every file is merged the directory is renamed
+ * `command-changes.adopted` and never read again. A rerun after a crash
+ * appends nothing twice, since the ids it appended are then held. Returns the
+ * number of journals merged.
+ */
+export async function adoptLoginCommandChanges(codexHome: string, source: string): Promise<number> {
+  const target = join(codexBridgeStateDir(codexHome), "command-changes");
+  if (source === target) return 0;
+  let names: string[];
+  try {
+    names = (await readdir(source)).filter((name) => name.endsWith(".jsonl"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw error;
+  }
+  const batch = names.slice(0, MAX_ADOPTED_COMMAND_CHANGE_JOURNALS);
+  for (const name of batch) {
+    // A file name is a folded thread id, which folds to itself.
+    const threadId = name.slice(0, -".jsonl".length);
+    const journal = commandChangeJournalFor(codexHome, threadId);
+    if (!journal) continue;
+    const legacy = await new CommandChangeJournal(join(source, name)).read();
+    if (legacy.size === 0) continue;
+    const current = await journal.read();
+    for (const [id, change] of legacy) {
+      if (!current.has(id)) await journal.append(id, change);
+    }
+  }
+  if (batch.length === names.length) await rename(source, `${source}.adopted`);
+  return batch.length;
 }
 
 /** Journal one measurement. Never rejects; a lost record costs a badge. */

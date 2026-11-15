@@ -321,7 +321,7 @@ export class NodeLink {
           timeoutMs: NODE_HELLO_TIMEOUT_MS,
           fetchImpl: this.fetchImpl,
         });
-        if (outcome.kind !== "hello" || outcome.hello.installationId !== this.record.nodeId) {
+        if (outcome.hello.installationId !== this.record.nodeId) {
           throw new NodeUnavailableError("The route reached a different machine.");
         }
         return await this.request<T>(opened.baseUrl, token, command, args, options);
@@ -402,11 +402,6 @@ export class NodeLink {
         });
         if (attempt !== this.attempt) {
           opened.release();
-          return;
-        }
-        if (outcome.kind !== "hello") {
-          opened.release();
-          this.fail("needs-update", needsUpdate(), false);
           return;
         }
         const hello = outcome.hello;
@@ -692,7 +687,7 @@ export class NodeLink {
         fetchImpl: this.fetchImpl,
       });
       if (attempt !== this.attempt || this.active !== active) return;
-      if (outcome.kind !== "hello" || outcome.hello.installationId !== this.record.nodeId) {
+      if (outcome.hello.installationId !== this.record.nodeId) {
         this.lostConnection({
           code: "identity-mismatch",
           message: "The route now reaches a different machine.",

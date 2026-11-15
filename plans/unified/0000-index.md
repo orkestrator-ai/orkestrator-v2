@@ -393,7 +393,7 @@ Report: [§11](../../docs/reports/unified-federation.md#11-versioned-interfaces)
 | 1009 | [1009-domain-clients-and-adapters.md](1009-domain-clients-and-adapters.md) | 1 | done | 1002, 1004 | `createDomainClient` with version selection, version-0 legacy adapters for pre-contract nodes, an adapter list and usage counters. |
 | 1010 | [1010-pilot-node-mail-and-ticket-sync.md](1010-pilot-node-mail-and-ticket-sync.md) | 1 | done | 1003, 1004, 1005, 1009 | Pilot: node mail, node files and ticket sync, defined, negotiated and adapted in the backend sender, with register rows retired. |
 | 1011 | [1011-contract-policy-and-docs.md](1011-contract-policy-and-docs.md) | 1 | done | 1006 | The untyped-command count can only fall. A "Domain contracts" docs section and an `AGENTS.md` row. |
-| 1012 | [1012-mixed-version-qualification.md](1012-mixed-version-qualification.md) | 1 | done | 1010 | A scheduled run of the current code against the floor release in both directions, generalising the design mixed-version script. |
+| 1012 | [1012-mixed-version-qualification.md](1012-mixed-version-qualification.md) | 1 | done | 1010 | A scheduled run of the current code against the floor release in both directions, generalising the design mixed-version script. Tooling retired 2026-11-14 (to-do 8108). |
 
 Exit criteria:
 

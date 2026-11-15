@@ -3,12 +3,8 @@ import { hydrationActivity } from "@/lib/hydration-activity";
 import { systemApi } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
 import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { DeclaredAptPackages } from "@orkestrator/protocol/apt-packages";
-import type {
-  ProjectArrangement,
-  ProjectArrangementIntent,
-} from "@orkestrator/protocol/project-arrangement";
+import type { ProjectArrangementIntent } from "@orkestrator/protocol/project-arrangement";
 import type {
   ContainerLifecycleSnapshot,
   RebuildPreview,
@@ -210,33 +206,9 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     return projects().get_project_setup_requirements({ projectId });
   }
 
-  /**
-   * Persists a sidebar arrangement: the full project order plus any folder
-   * memberships that changed, applied as one backend mutation.
-   */
-  async function arrangeProjects(
-    projectIds: string[],
-    folders: Record<string, string | null> = {},
-  ): Promise<Project[]> {
-    return projects().arrange_projects({ projectIds, folders });
-  }
-
-  /**
-   * Sends a sidebar gesture for the backend to resolve against its current
-   * projects. `preview` is what this client resolved locally; it is written as a
-   * whole arrangement only to a backend that predates the command.
-   */
-  async function arrangeProjectsByIntent(
-    intent: ProjectArrangementIntent,
-    preview: ProjectArrangement,
-  ): Promise<Project[]> {
-    try {
-      return await projects().arrange_projects_by_intent({ intent });
-    } catch (error) {
-      if (incompatibility(error, "arrange_projects_by_intent")?.code !== "unknown-command")
-        throw error;
-      return arrangeProjects(preview.projectIds, preview.folders);
-    }
+  /** Sends a sidebar gesture for the backend to resolve against its current projects. */
+  async function arrangeProjectsByIntent(intent: ProjectArrangementIntent): Promise<Project[]> {
+    return projects().arrange_projects_by_intent({ intent });
   }
 
   /** Bounded with the other hydration reads (`hydration-request-limiter.ts`). */
@@ -533,7 +505,6 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     updateProject,
     switchProjectRemoteToHttps,
     getProjectSetupRequirements,
-    arrangeProjects,
     arrangeProjectsByIntent,
     getEnvironments,
     getEnvironmentSnapshots,
@@ -585,7 +556,6 @@ export const {
   updateProject,
   switchProjectRemoteToHttps,
   getProjectSetupRequirements,
-  arrangeProjects,
   arrangeProjectsByIntent,
   getEnvironments,
   getEnvironmentSnapshots,

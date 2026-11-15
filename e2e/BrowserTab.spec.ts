@@ -12,7 +12,7 @@ async function expectNoHorizontalOverflow(locator: Locator) {
     .toBe(true);
 }
 
-test("browser toolbar follows pane container breakpoints without horizontal overflow", async ({
+test("URL tab toolbar follows pane container breakpoints without horizontal overflow", async ({
   page,
 }, testInfo) => {
   test.skip(
@@ -25,51 +25,33 @@ test("browser toolbar follows pane container breakpoints without horizontal over
   const root = pane.locator(":scope > div");
   const address = page.getByRole("textbox", { name: "Browser address" });
   const form = address.locator("xpath=ancestor::form");
-  const back = page.getByRole("button", { name: "Back" });
-  const backendLabel = page.getByText("Backend", { exact: true });
-  const iframe = page.getByTitle("Backend browser preview");
+  const annotations = page.getByRole("button", { name: /^Annotations/ });
 
-  await setPaneWidth(pane, 400);
-  const [narrowBackBox, narrowFormBox] = await Promise.all([
-    back.boundingBox(),
-    form.boundingBox(),
-  ]);
-  expect(narrowBackBox).not.toBeNull();
-  expect(narrowFormBox).not.toBeNull();
-  expect(narrowFormBox!.y).toBeGreaterThanOrEqual(narrowBackBox!.y + narrowBackBox!.height);
-  await expect(backendLabel).toBeHidden();
-  await expectNoHorizontalOverflow(root);
+  for (const width of [400, 480]) {
+    await setPaneWidth(pane, width);
+    const [buttonBox, formBox] = await Promise.all([annotations.boundingBox(), form.boundingBox()]);
+    expect(buttonBox).not.toBeNull();
+    expect(formBox).not.toBeNull();
+    // The address keeps its own row below 672 px, as in a service tab.
+    expect(formBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height);
+    await expectNoHorizontalOverflow(root);
+  }
 
-  await setPaneWidth(pane, 480);
-  const [mediumBackBox, mediumFormBox] = await Promise.all([
-    back.boundingBox(),
-    form.boundingBox(),
-  ]);
-  expect(mediumBackBox).not.toBeNull();
-  expect(mediumFormBox).not.toBeNull();
-  // The toolbar keeps the address on its own row below 672 px so native
-  // service controls fit in a narrow pane (including an 800 px app window).
-  expect(mediumFormBox!.y).toBeGreaterThanOrEqual(mediumBackBox!.y + mediumBackBox!.height);
-  await expect(backendLabel).toBeHidden();
-  await expectNoHorizontalOverflow(root);
-
-  await setPaneWidth(pane, 560);
-  await expect(backendLabel).toBeVisible();
   await setPaneWidth(pane, 720);
-  const [wideBackBox, wideFormBox] = await Promise.all([back.boundingBox(), form.boundingBox()]);
-  expect(wideBackBox).not.toBeNull();
+  const [wideButtonBox, wideFormBox] = await Promise.all([
+    annotations.boundingBox(),
+    form.boundingBox(),
+  ]);
+  expect(wideButtonBox).not.toBeNull();
   expect(wideFormBox).not.toBeNull();
-  expect(Math.abs(wideFormBox!.y - wideBackBox!.y)).toBeLessThanOrEqual(1);
-  await expect(iframe).toHaveCSS("color-scheme", "dark");
-  const [rootBox, iframeBox] = await Promise.all([root.boundingBox(), iframe.boundingBox()]);
-  expect(rootBox).not.toBeNull();
-  expect(iframeBox).not.toBeNull();
-  expect(iframeBox!.x).toBeGreaterThanOrEqual(rootBox!.x);
-  expect(iframeBox!.x + iframeBox!.width).toBeLessThanOrEqual(rootBox!.x + rootBox!.width);
+  expect(Math.abs(wideFormBox!.y - wideButtonBox!.y)).toBeLessThanOrEqual(8);
+  // A saved address has no in-app view: it offers the user's browser instead.
+  await expect(page.locator("iframe")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open in browser" })).toBeVisible();
   await expectNoHorizontalOverflow(root);
 });
 
-test("long errors and the empty state stay contained in a narrow pane", async ({
+test("the saved-address and empty states stay contained in a narrow pane", async ({
   page,
 }, testInfo) => {
   test.skip(
@@ -78,28 +60,13 @@ test("long errors and the empty state stay contained in a narrow pane", async ({
   );
   await page.goto("/browser");
   const pane = page.getByTestId("browser-pane");
-  const root = pane.locator(":scope > div");
   await setPaneWidth(pane, 320);
-
-  await page.evaluate(() => {
-    Object.defineProperty(window, "orkestratorGateway", {
-      configurable: true,
-      get() {
-        throw "unbroken-error-".repeat(40);
-      },
-    });
-  });
-  await page.getByRole("textbox", { name: "Browser address" }).fill("3000");
-  await page.getByRole("button", { name: "Go" }).click();
-  const alert = page.getByRole("alert");
-  await expect(alert).toBeVisible();
-  await expectNoHorizontalOverflow(alert);
-  await expectNoHorizontalOverflow(root);
+  await expect(page.getByRole("heading", { name: "http://localhost:3000/" })).toBeVisible();
+  await expectNoHorizontalOverflow(pane.locator(":scope > div"));
 
   await page.goto("/browser?empty=1");
   const emptyPane = page.getByTestId("browser-pane");
   await setPaneWidth(emptyPane, 320);
-  const emptyRoot = emptyPane.locator(":scope > div");
   await expect(page.getByText("Preview a backend service")).toBeVisible();
-  await expectNoHorizontalOverflow(emptyRoot);
+  await expectNoHorizontalOverflow(emptyPane.locator(":scope > div"));
 });

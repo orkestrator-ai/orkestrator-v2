@@ -20,9 +20,9 @@ import { configureLogger } from "@orkestrator/protocol/logger";
  *   burst-slow-write  The same burst with a write that takes 1 ms, so results finish
  *                     in different event-loop turns.
  *   output            One channel receiving 100 frames a second for 5 seconds.
- *   proxy-chunks      A 64-chunk body through each idle deadline: the buffered proxy,
- *                     the browser-preview rewrite and the preview forwarder. Counts
- *                     the timers created with that deadline.
+ *   proxy-chunks      A 64-chunk body through each idle deadline: the buffered proxy
+ *                     and the preview forwarder. Counts the timers created with
+ *                     that deadline.
  *
  * Measured figures are aggregates only, never content. JSON goes to stdout (or
  * `--out`).
@@ -386,7 +386,6 @@ async function closeServer(server: Server) {
 async function proxyChunks() {
   const results: Record<string, { timersCreated: number; bytes: number }> = {};
   const gatewayUpstream = await chunkedUpstream("text/plain; charset=utf-8");
-  const previewUpstream = await chunkedUpstream("text/html; charset=utf-8");
   const started = await startGateway(undefined, {
     compression: "body",
     proxyBodyIdleTimeoutMs: PROXY_IDLE_MS,
@@ -404,12 +403,6 @@ async function proxyChunks() {
   await measure("bufferedProxy", () =>
     fetchBody(
       new URL(`/__orkestrator/proxy/loopback/${portOf(gatewayUpstream)}/`, started.url),
-      headers,
-    ),
-  );
-  await measure("previewRewrite", () =>
-    fetchBody(
-      new URL(`/__orkestrator/browser/loopback/${portOf(previewUpstream)}/`, started.url),
       headers,
     ),
   );
@@ -440,7 +433,6 @@ async function proxyChunks() {
   );
   await closeServer(forwarder);
   await closeServer(gatewayUpstream);
-  await closeServer(previewUpstream);
   await started.stop();
   return { chunks: PROXY_CHUNKS, sites: results };
 }

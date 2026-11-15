@@ -36,6 +36,8 @@ const task: KanbanTask = {
   title: "Ship feature",
   description: "Implement the feature",
   acceptanceCriteria: "It works",
+  kind: "feature",
+  sections: {},
   status: "backlog",
   comments: [],
   images: [],

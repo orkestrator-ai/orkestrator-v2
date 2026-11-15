@@ -740,14 +740,9 @@ test.describe("coordinator worker surfaces on a fake model", () => {
       await expect
         .poll(endpoint, { timeout: 60_000, message: "the container service to answer its probe" })
         .toEqual({ transportKind: "container-relay", tcp: "ok" });
-      const iframe = page.locator('iframe[title="Backend browser preview"]');
-      const embedded = (await iframe.count()) > 0;
-      if (embedded) {
-        const frame = page.frameLocator('iframe[title="Backend browser preview"]');
-        await expect(frame.locator("h1")).toHaveText(markers.container, { timeout: 60_000 });
-      } else {
-        await expect(page.getByRole("heading", { name: "surfaces-0142" })).toBeVisible();
-      }
+      // A browser client has no embedded fallback for a service, so the tab
+      // shows the bound service's own placeholder rather than its page.
+      await expect(page.getByRole("heading", { name: "surfaces-0142" })).toBeVisible();
       await page.screenshot({ path: path.join(outputDirectory, "worker-browser-container.png") });
       summary.workerBrowser = {
         intentStored: true,
@@ -755,7 +750,6 @@ test.describe("coordinator worker surfaces on a fake model", () => {
         transportKind: "container-relay",
         relayTcp: "ok",
         tabBound: true,
-        embeddedPageChecked: embedded,
       };
 
       const fake = await calls(model.origin);

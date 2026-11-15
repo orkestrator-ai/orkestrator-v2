@@ -166,32 +166,4 @@ describe("BridgeSessionStore.loadRecord", () => {
       "never-written": null,
     });
   });
-
-  test("finds a record an account kept in its own home, as load() would adopt it", async () => {
-    const root = await temporaryHome();
-    const host = join(root, "host-codex");
-    const account = join(root, "account-codex");
-    const shared = join(host, "orkestrator-bridge");
-    const accountDir = join(account, "orkestrator-bridge");
-    await writeJson(recordPathFor(accountDir, "account-only"), validRecord("account-only"));
-    await writeJson(recordPathFor(accountDir, "closed"), validRecord("closed"));
-    await writeJson(recordPathFor(shared, "closed"), {
-      bridgeSessionId: "closed",
-      deleted: true,
-      deletedAt: new Date(NOW).toISOString(),
-    });
-
-    process.env.CODEX_BRIDGE_STATE_DIR = shared;
-    const store = storeFor(account);
-    const before = [await store.loadRecord("account-only"), await store.loadRecord("closed")];
-    // Nothing was moved by the read.
-    expect(await Bun.file(recordPathFor(accountDir, "account-only")).exists()).toBe(true);
-
-    const loaded = await store.load();
-    expect(before).toEqual([
-      loaded.find((record) => record.bridgeSessionId === "account-only") ?? null,
-      null,
-    ]);
-    expect(before[0]?.threadId).toBe("thread-account-only");
-  });
 });

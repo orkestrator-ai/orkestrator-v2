@@ -1,33 +1,25 @@
 /**
- * Shared fixtures for mixed-version scenario modules (`scenario.ts`): created
- * on first use, once per topology, and reused by every module.
+ * Shared fixtures for the two-backend checks (`harness.ts`): created on first
+ * use and reused.
  *
  * - `project(node)`: a Git checkout with a local bare `origin`, added to the
  *   node with the same repository identity ({@link REPOSITORY_URL}) on both
  *   nodes, so the nodes pair the two copies (ticket boards, coordinator mail).
  *   Each checkout has `fixtures/from-<role>.json`, distinct per node.
- * - `coordinator(node)`: the project's main coordinator conversation with an
- *   agent picked (as the composer's picker does) and no turn started.
  * - `worker(node)`: a local environment whose worktree is ready, with one
  *   Agent (native) tab that never starts: the backends have no toolchain and
  *   no credentials.
- * - `pairedOn(command, leaf)`: waits until the command node's portal lists
- *   the leaf's copy of the project. The portal learns of a project added on
- *   the leaf from the leaf's events, so a tool that checks for a copy (coordinator
- *   mail) can run before it has; mixed-version run 42827537552 refused mail
- *   with "has no copy of this project" that way.
  */
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
 import { runSetup, until, type PeerNode } from "./harness.ts";
 
 /** Both nodes' project copies name this remote, so they pair by repository. */
-export const REPOSITORY_URL = "https://github.com/orkestrator-qualification/mixed-version.git";
+export const REPOSITORY_URL = "https://github.com/orkestrator-qualification/two-node.git";
 
 export interface ProjectFixture {
   readonly node: PeerNode;
@@ -37,14 +29,6 @@ export interface ProjectFixture {
   /** The fixture file only this node's checkout has, relative to the root. */
   readonly ownFile: string;
   readonly ownContent: string;
-}
-
-export interface CoordinatorFixture {
-  readonly node: PeerNode;
-  readonly projectId: string;
-  readonly coordinatorId: string;
-  readonly conversationId: string;
-  readonly tabId: string;
 }
 
 export interface WorkerFixture {
@@ -63,7 +47,6 @@ const git = (cwd: string, ...args: string[]) =>
 
 export class PairFixtures {
   private readonly projects = new Map<PeerNode, Promise<ProjectFixture>>();
-  private readonly coordinators = new Map<PeerNode, Promise<CoordinatorFixture>>();
   private readonly workers = new Map<PeerNode, Promise<WorkerFixture>>();
 
   constructor(
@@ -80,15 +63,6 @@ export class PairFixtures {
     return created;
   }
 
-  coordinator(node: PeerNode): Promise<CoordinatorFixture> {
-    let created = this.coordinators.get(node);
-    if (!created) {
-      created = this.createCoordinator(node);
-      this.coordinators.set(node, created);
-    }
-    return created;
-  }
-
   worker(node: PeerNode): Promise<WorkerFixture> {
     let created = this.workers.get(node);
     if (!created) {
@@ -98,34 +72,12 @@ export class PairFixtures {
     return created;
   }
 
-  /** The leaf's project, once the command node's portal summaries list its copy. */
-  async pairedOn(command: PeerNode, leaf: PeerNode): Promise<ProjectFixture> {
-    const project = await this.project(leaf);
-    const hint = repositoryHint(REPOSITORY_URL);
-    if (!command.has("get_node_summaries")) return project;
-    type Summaries = {
-      nodes: Array<{ nodeId: string; projects?: Array<{ repositoryHint?: string }> }>;
-    };
-    await until(
-      `${command.label}'s portal to list ${leaf.label}'s copy of the project`,
-      () => command.invoke<Summaries>("get_node_summaries", { nodeIds: [leaf.id] }),
-      (summaries) =>
-        summaries.nodes.some(
-          (node) =>
-            node.nodeId === leaf.id &&
-            (node.projects ?? []).some((entry) => entry.repositoryHint === hint),
-        ),
-      60_000,
-    );
-    return project;
-  }
-
   private async createProject(node: PeerNode): Promise<ProjectFixture> {
     const base = path.join(this.root, `${node.role}-repository`);
-    const dir = path.join(base, "mixed-version");
+    const dir = path.join(base, "two-node");
     await mkdir(dir, { recursive: true });
     git(dir, "init", "-q", "-b", "main");
-    await writeFile(path.join(dir, "README.md"), "# mixed-version qualification\n");
+    await writeFile(path.join(dir, "README.md"), "# two-node check\n");
     git(dir, "add", ".");
     git(dir, "commit", "-q", "-m", "init");
     git(base, "clone", "-q", "--bare", dir, `${dir}.git`);
@@ -133,7 +85,7 @@ export class PairFixtures {
     git(dir, "fetch", "-q", "origin");
     // Untracked, so only the project root has it (a transfer source).
     const ownFile = `fixtures/from-${node.role}.json`;
-    const ownContent = `${JSON.stringify({ from: node.role, build: node.build.kind })}\n`;
+    const ownContent = `${JSON.stringify({ from: node.role })}\n`;
     await mkdir(path.join(dir, "fixtures"), { recursive: true });
     await writeFile(path.join(dir, ownFile), ownContent);
     const created = await node.invoke<{ id: string }>("add_project", {
@@ -141,37 +93,6 @@ export class PairFixtures {
       localPath: dir,
     });
     return { node, projectId: created.id, dir, ownFile, ownContent };
-  }
-
-  private async createCoordinator(node: PeerNode): Promise<CoordinatorFixture> {
-    const { projectId } = await this.project(node);
-    const snapshot = await node.invoke<{
-      workspace: { id: string; conversations: Array<{ id: string; role: string; tabId: string }> };
-    }>("ensure_project_coordinator", { projectId });
-    const main = snapshot.workspace.conversations.find((item) => item.role === "main");
-    if (!main) throw new Error(`${node.label} has no main coordinator conversation.`);
-    // Lets its mailbox send; starts nothing.
-    await node.invoke("assign_coordinator_conversation_agent", {
-      projectId,
-      conversationId: main.id,
-      agent: "claude",
-    });
-    // The fixture's workers are not launched by the coordinator, so opt it in
-    // to environments it did not create (the project's Coordinator setting).
-    // A release without the setting has no such boundary.
-    const optIn = { coordinatorOtherEnvironments: true };
-    if (node.has("patch_repository_settings")) {
-      await node.invoke("patch_repository_settings", { projectId, updates: optIn });
-    } else if (node.has("update_repository_config")) {
-      await node.invoke("update_repository_config", { projectId, repoConfig: optIn });
-    }
-    return {
-      node,
-      projectId,
-      coordinatorId: snapshot.workspace.id,
-      conversationId: main.id,
-      tabId: main.tabId,
-    };
   }
 
   private async createWorker(node: PeerNode): Promise<WorkerFixture> {
@@ -219,13 +140,4 @@ export class PairFixtures {
       worktree: environment.worktreePath!,
     };
   }
-}
-
-/** The coordinator scope a coordinator tool command takes. */
-export function coordinatorScope(of: CoordinatorFixture) {
-  return {
-    projectId: of.projectId,
-    coordinatorId: of.coordinatorId,
-    conversationId: of.conversationId,
-  };
 }

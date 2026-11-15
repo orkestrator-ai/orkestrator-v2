@@ -5,8 +5,8 @@
 # Persist bounded revision/completion counters before ringing. A lost POST
 # cannot hide a whole turn. No argument is the install's non-mutating probe.
 # `failed` (version 3, the StopFailure hook) is a turn that ended on an API
-# error: it bumps the revision but is not a completion. The legacy state file
-# remains readable by older backends, which know no `failed`, so it says idle.
+# error: it bumps the revision but is not a completion. Only the snapshot
+# (`<state file>-snapshot`) is written; the plain state file is no longer kept.
 # `hook` (tmux-hook-signal=1) is the claude-tmux hook script's doorbell: it
 # writes no state and rings the separate tmux hook credential, so a backend
 # reads a tab's hook directory when a hook fires instead of on every tick.
@@ -35,9 +35,6 @@ case "${1:-}" in
       trap 'rm -f "$tmp"' EXIT
       printf '%s %s %s\n' "$1" "$revision" "$completions" > "$tmp" || exit 1
       mv -f "$tmp" "$snapshot" || exit 1
-      legacy="$1"
-      [ "$legacy" = failed ] && legacy=idle
-      printf '%s\n' "$legacy" > "$state_file"
     ) 9>"${snapshot}.lock" || exit 0
     ;;
   "") ;;

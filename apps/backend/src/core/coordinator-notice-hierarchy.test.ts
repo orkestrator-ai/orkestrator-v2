@@ -148,8 +148,6 @@ function stopNotices(
 async function fleet(
   options: {
     commandHasRepository?: boolean;
-    olderCommandNode?: boolean;
-    olderLeaf?: boolean;
   } = {},
 ) {
   const leaf = await world();
@@ -218,7 +216,7 @@ async function fleet(
             hello: {
               capabilities: {
                 "node-coordinator-mail": 1,
-                ...(options.olderLeaf ? {} : { [BACKEND_CAPABILITIES.coordinatorNotices]: 1 }),
+                [BACKEND_CAPABILITIES.coordinatorNotices]: 1,
               },
             },
             invoke: async <T>(name: string, args: Record<string, unknown> = {}) => {
@@ -229,8 +227,6 @@ async function fleet(
                 return (await leafMail.collect(
                   COMMAND,
                   args.after as number,
-                  args.coordinatorMail === true,
-                  args.attachmentMail === true,
                   notices ? { repositoryHints: notices.repositoryHints ?? [] } : undefined,
                 )) as T;
               }
@@ -238,30 +234,21 @@ async function fleet(
                 link.lostAcks -= 1;
                 throw new Error("the answer was lost");
               }
-              return (await leafMail.ack(
-                COMMAND,
-                args.upTo as number,
-                args.sequences as number[],
-                args.coordinatorMail === true,
-                args.attachmentMail === true,
-                notices ? { declined: notices.declined ?? [] } : undefined,
-              )) as T;
+              return (await leafMail.ack(COMMAND, args.upTo as number, args.sequences as number[], {
+                declined: notices?.declined ?? [],
+              })) as T;
             },
           }
         : null,
     deliver: async () => undefined,
-    ...(options.olderCommandNode
-      ? {}
-      : {
-          notices: {
-            repositoryHints: async () =>
-              (await command.storage.loadProjects())
-                .map((project) => repositoryHint(project.gitUrl))
-                .filter((hint): hint is string => Boolean(hint)),
-            deliver: (item: OutboxItem, node: { nodeId: string; name: string }) =>
-              command.coordinator.noticeRouter.fromLeaf.deliverFromLeaf(item, node),
-          },
-        }),
+    notices: {
+      repositoryHints: async () =>
+        (await command.storage.loadProjects())
+          .map((project) => repositoryHint(project.gitUrl))
+          .filter((hint): hint is string => Boolean(hint)),
+      deliver: (item: OutboxItem, node: { nodeId: string; name: string }) =>
+        command.coordinator.noticeRouter.fromLeaf.deliverFromLeaf(item, node),
+    },
   });
   return {
     leaf,
@@ -373,52 +360,6 @@ describe("who hears a notice", () => {
     expect(f.store.state.outbox[COMMAND]?.items ?? []).toHaveLength(0);
     f.dispose();
   });
-
-  test("an older command node leaves notices with the leaf's coordinator", async () => {
-    const f = await fleet({ olderCommandNode: true });
-    await f.collect();
-    await f.leaf.coordinator.noticeRouter.deliver(repositoryNotice(f.leaf));
-    await f.leaf.deliver();
-    expect(f.leaf.wakes(await f.leaf.main())).toBe(1);
-    expect(await inbox(f.command, await f.command.main())).toHaveLength(0);
-    f.dispose();
-  });
-
-  test("an older leaf is never sent the new collect key", async () => {
-    const f = await fleet({ olderLeaf: true });
-    await f.collect();
-    expect(f.store.state.noticeRoutes).toBeUndefined();
-    f.dispose();
-  });
-
-  test.each([false, true])(
-    "a downgraded command node hands back deferred notices (collected=%s)",
-    async (collected) => {
-      const f = await fleet();
-      await f.collect();
-      await f.leaf.coordinator.noticeRouter.deliver(repositoryNotice(f.leaf));
-      // Collection can have returned without any mailbox delivery.
-      // It collects again without saying it takes notices, as an older one does.
-      const mail = new LeafNodeMail(
-        f.store,
-        {
-          attachedControllers: () => [{ controllerId: COMMAND, displayName: "Command" }],
-          mostRecentControllerId: () => COMMAND,
-        },
-        () => undefined,
-      );
-      if (collected)
-        await mail.collect(COMMAND, 0, false, false, {
-          repositoryHints: [repositoryHint(GIT_URL)!],
-        });
-      expect((await mail.collect(COMMAND, 0, true)).items).toHaveLength(0);
-      expect(f.store.state.noticeRoutes?.[COMMAND]).toBeUndefined();
-      await f.takeBack();
-      await f.leaf.deliver();
-      expect(f.leaf.wakes(await f.leaf.main())).toBe(1);
-      f.dispose();
-    },
-  );
 });
 
 describe("a notice with no main coordinator running", () => {
@@ -1562,7 +1503,7 @@ test("a collected batch survives silence and delivers once on reconnect", async 
       () => undefined,
       () => Date.parse("2030-01-01T12:00:00.000Z"),
     );
-    await mail.collect(COMMAND, 0, false, false, { repositoryHints: [repositoryHint(GIT_URL)!] });
+    await mail.collect(COMMAND, 0, { repositoryHints: [repositoryHint(GIT_URL)!] });
     expect(await mail.noticesToTakeBack()).toHaveLength(0);
     expect(f.store.state.outbox[COMMAND]!.items).toHaveLength(1);
     const requestId = f.store.state.outbox[COMMAND]!.items[0]!.requestId;

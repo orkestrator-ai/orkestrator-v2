@@ -21,7 +21,6 @@ import { normalizeProviderAuthNotice, normalizeProviderReadiness } from "./trans
 import { readHttpBridgeSessionState } from "./progressive.js";
 import { PlanUsageState } from "../plan-usage/cache.js";
 import { HttpBridgeProvider } from "./provider.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 
 describe("HTTP bridge provider", () => {
   const operations = {
@@ -3355,20 +3354,15 @@ test("background human-prompt observations use only the no-touch route", async (
     ],
     backgroundTasks: [],
   };
-  const id = "bridge-human-prompts.missing-route";
-  const count = () => compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;
-  const before = count();
   const { provider, requests } = httpProvider(() => Response.json(body));
   expect(await provider.humanPromptOutput!("session-1")).toEqual(body);
   expect(requests.map((request) => request.url)).toEqual([
     "http://claude.test/session/session-1/human-prompts",
   ]);
-  expect(count()).toBe(before);
-  const legacy = httpProvider(() => new Response("", { status: 404 }));
-  expect(await legacy.provider.humanPromptOutput!("session-1")).toBeNull();
-  expect(legacy.requests).toHaveLength(1);
-  expect(count()).toBe(before + 1);
+  // A missing route is an ordinary failure, never an empty observation.
+  const missing = httpProvider(() => new Response("", { status: 404 }));
+  await expect(missing.provider.humanPromptOutput!("session-1")).rejects.toThrow("HTTP 404");
+  expect(missing.requests).toHaveLength(1);
   const noMethod = httpProvider(() => new Response("", { status: 405 }));
-  expect(await noMethod.provider.humanPromptOutput!("session-1")).toBeNull();
-  expect(count()).toBe(before + 2);
+  await expect(noMethod.provider.humanPromptOutput!("session-1")).rejects.toThrow("HTTP 405");
 });

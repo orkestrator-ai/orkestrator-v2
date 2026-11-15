@@ -49,7 +49,11 @@ import { APP_SLUG, APP_VERSION } from "../src/core/constants";
 
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { resetImageManifestCache } from "../src/core/docker-image";
-import { FIXTURE_IMAGE_ID, imageManifestArchive } from "./container-lifecycle-fixtures";
+import {
+  FIXTURE_IMAGE_ID,
+  imageManifestArchive,
+  READY_BOOT_RECORD,
+} from "./container-lifecycle-fixtures";
 
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
 import { BackendRuntime, type BackendRuntimeOptions } from "../src/core/backend-runtime";
@@ -1160,9 +1164,9 @@ printf '%s\\n' '{"slug":"${slug}"}' > "$out"
     await fs.writeFile(scenario, scriptBody);
     await fs.chmod(scenario, 0o755);
     // Most command fixtures model an image from before the later capabilities.
-    // Their ad-hoc Docker scripts do not answer the boot probe; make that legacy
-    // contract explicit instead of letting empty output bypass production
-    // readiness checks. New containers do need staged inputs, so the image is
+    // Their ad-hoc Docker scripts do not answer the boot probe, so this answers
+    // it with a ready record for the current boot instead of letting empty
+    // output bypass production readiness checks. New containers do need staged inputs, so the image is
     // resolved and declares that one capability unless the scenario refuses. Only
     // a real image id gets a manifest: a scenario's placeholder stays unreadable.
     const manifestArchive = await imageManifestArchive(root);
@@ -1172,7 +1176,7 @@ printf '%s\\n' '{"slug":"${slug}"}' > "$out"
       path.join(binDir, "docker"),
       `#!/bin/sh
 case "$*" in
-  *boot-status.json*) printf 'ORKESTRATOR_NO_BOOT_DIR\\n1\\n'; exit 0 ;;
+  *boot-status.json*) printf '%s\\n1\\n' '${READY_BOOT_RECORD}'; exit 0 ;;
   "image inspect --format"*)
     answer=$('${scenario}' "$@") || { status=$?; printf '%s' "$answer"; exit $status; }
     case "$answer" in

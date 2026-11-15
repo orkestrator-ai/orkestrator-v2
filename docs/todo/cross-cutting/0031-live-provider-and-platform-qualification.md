@@ -126,7 +126,7 @@ evidence. This file only points at it.
   `test:agent:electron` suite, and none runs Electron on a schedule. The user
   chose on 2026-11-14 to schedule `test:agent:electron` weekly on Linux
   (task 8); `mixed-version-qualification.yml` retires with the
-  legacy-retirement sweep ([8108](8108-legacy-retirement-sweep.md) task 4).
+  legacy-retirement sweep (8108 (retired) task 4).
 - Almost all recorded evidence is from Linux amd64 with Docker Engine 29.7.2,
   taken before the SQLite storage migration (#969) and the October agent
   upgrades (#964).

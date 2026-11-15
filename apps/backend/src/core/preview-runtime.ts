@@ -24,11 +24,7 @@ import {
 import { PreviewReadinessProber } from "./preview-readiness.js";
 import { PreviewServiceRegistry, type PreviewRegistryStorage } from "./preview-service-registry.js";
 import type { ResolvedPreviewTarget } from "./preview-service-registry.js";
-import {
-  PreviewTargetResolver,
-  isAlwaysReservedPort,
-  type DockerRunner,
-} from "./preview-target-resolver.js";
+import { PreviewTargetResolver, type DockerRunner } from "./preview-target-resolver.js";
 import {
   DEFAULT_PREVIEW_SETTINGS,
   type PreviewServicesStorage,
@@ -71,13 +67,6 @@ export interface PreviewRuntimeOptions {
   /** Test seam replacing the `lsof`/`ps` listener check. */
   listenerOwnership?: ConstructorParameters<typeof PreviewTargetResolver>[0]["listenerOwnership"];
 }
-
-/**
- * Answer for a legacy loopback-route port: see
- * `PreviewRuntime.legacyLoopbackPortAccess`. `unscoped` means the request
- * named no environment (an older desktop app).
- */
-export type LegacyLoopbackPortAccess = "allowed" | "reserved" | "unknown" | "unscoped";
 
 const defaultDockerRunner: DockerRunner = (args, { timeoutMs }) =>
   runCommand("docker", args, { timeoutMs });
@@ -235,27 +224,6 @@ export class PreviewRuntime {
     return ports;
   }
 
-  /**
-   * Whether the legacy `/__orkestrator/browser/loopback/<port>/` route may open
-   * this backend-host port for the requesting environment. Only the verified
-   * binding of an enabled service of that same environment qualifies, so the
-   * route can no longer reach a bridge, the gateway, an unrelated host-only
-   * service or another environment's application (security report M2).
-   */
-  async legacyLoopbackPortAccess(
-    port: number,
-    environmentId: string | null,
-  ): Promise<LegacyLoopbackPortAccess> {
-    if (isAlwaysReservedPort(port)) return "reserved";
-    // A stopped environment's agent ports stay reserved while free, so a
-    // container could publish one; the reserved set wins over a binding.
-    if ((await this.reservedPorts()).has(port)) return "reserved";
-    if (environmentId === null) return "unscoped";
-    return (await this.registry.isHostLoopbackTargetOf(environmentId, port))
-      ? "allowed"
-      : "unknown";
-  }
-
   private envFlag(name: string): boolean | undefined {
     const value = this.env[name];
     if (value === "1" || value === "true") return true;
@@ -370,7 +338,12 @@ export class PreviewRuntime {
             "Embedded browser previews have not passed real-browser privacy tests; use the top-level preview.",
           platforms: [],
         },
-        legacyPath: { available: true },
+        // Kept in the contract's result shape; the gateway path preview route
+        // it described was removed.
+        legacyPath: {
+          available: false,
+          reason: "The legacy gateway preview route was removed; open a registered service.",
+        },
       },
       relay: this.relayStatus(),
       limits: { ...this.limits },

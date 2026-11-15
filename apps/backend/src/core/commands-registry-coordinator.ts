@@ -185,11 +185,11 @@ export function registerCoordinatorCommands(
   };
   register(
     ensureProjectCoordinatorCommand,
-    async ({ projectId, keepConversationErrors }, context) => {
+    // `keepConversationErrors` stays a defined argument but changes nothing:
+    // opening the panel never clears a conversation's startup error.
+    async ({ projectId }, context) => {
       if (!context.coordinators) throw new Error("Coordinator service is unavailable");
-      return context.coordinators.ensure(asNonBlankString(projectId, "projectId"), {
-        clearConversationErrors: keepConversationErrors !== true,
-      });
+      return context.coordinators.ensure(asNonBlankString(projectId, "projectId"));
     },
   );
   register(retryCoordinatorConversationCommand, ({ projectId, conversationId }, context) => {

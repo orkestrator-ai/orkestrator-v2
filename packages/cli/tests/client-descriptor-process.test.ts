@@ -631,16 +631,14 @@ test.skipIf(process.platform !== "linux")(
       ).toBeNull();
     }
     // Every backend before #1848 (v2.21.0 included) writes no identity. The
-    // refusal stays and names the explicit-URL route the version-compatibility
-    // register records (to-do 7120 (retired) task 3).
+    // refusal is permanent and names no workaround.
     const refusal = await descriptorProcessRefusal({
       pid: process.pid,
       startedAt: new Date().toISOString(),
     });
     expect(refusal).toContain("publishes no Linux process identity");
     expect(refusal).toContain("2.36.4-beta");
-    expect(refusal).toContain("--url <its URL> --credential-file");
-    expect(refusal).toContain("gateway-auth.json");
+    expect(refusal).not.toContain("--url");
     expect(
       await descriptorProcessRefusal({
         pid: process.pid,

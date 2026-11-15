@@ -839,10 +839,10 @@ export class BackendHttpClient {
     }
   }
 
-  /** Authenticated hello; `null` for an older backend without one. */
-  async hello(timeoutMs: number): Promise<BackendHello | null> {
+  /** Authenticated hello; a backend that does not answer it fails the check. */
+  async hello(timeoutMs: number): Promise<BackendHello> {
     const outcome = await checkBackendRoute(this.baseUrl, this.token, { timeoutMs });
-    return outcome.kind === "hello" ? outcome.hello : null;
+    return outcome.hello;
   }
 
   async getTokenSettings(): Promise<GatewayTokenSettings> {
@@ -1005,8 +1005,7 @@ export class BackendHttpClient {
         const url = this.endpoint("/__orkestrator/events");
         if (stream.cursor) url.searchParams.set(GATEWAY_EVENT_CURSOR_PARAM, stream.cursor);
         // Relayed events come on their own filtered stream, for what windows
-        // listen to. A backend from before per-node names ignores this and sends
-        // them here under the old name, which windows always listen for.
+        // listen to; the main stream never carries them.
         url.searchParams.set(
           GATEWAY_RELAYED_EVENTS_PARAM,
           "per-node" satisfies GatewayRelayedEventsMode,

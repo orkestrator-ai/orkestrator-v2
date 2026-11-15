@@ -377,14 +377,13 @@ A command node attached to another command node operates in leaf mode:
 - Notices for a repository's coordinator (status, pull request, automatic switch,
   usage-limit stop) go to the command node's main coordinator for that repository, not
   to its own, through the same outbox. It keeps the ones for repositories the command
-  node lacks, those a command node too old to take them would miss, and those whose
-  command node has been gone for an hour. Fallback claims the notice durably
+  node lacks (or has not yet named on a collect) and those whose command node
+  has been gone for an hour. Fallback claims the notice durably
   before delivery, excluding concurrent collection. Once collected, the command
   node owns delivery until it acknowledges or explicitly declines: a lost ack
   is ambiguous, so timeout or detach cannot safely send a second copy locally.
   Collected notices remain pending through silence, including outages longer than
-  an hour, while that controller stays attached. A capability downgrade explicitly
-  hands collected, deferred notices back to the leaf. Once the controller
+  an hour, while that controller stays attached. Once the controller
   detaches, ambiguous collected notices are retired with `notice.collected-retired`
   rather than silently occupying the outbox or risking duplicate local delivery.
   A policy-parked notice (no open main and creation disallowed) stays queued but
@@ -492,15 +491,12 @@ A command node attached to another command node operates in leaf mode:
     those windows. A window closing drops its listens, and a window
     moving to another connection takes them along. A window on the direct gateway
     transport adds nothing: it has its own stream.
-  - *Older peers.* A stream that does not ask for per-node names, which is what
-    an older renderer sends, gets each frame as `relayed-node-event` with no
-    `id`, and is sent a `resync` for the nodes that relayed something since its
-    cursor when it reconnects. An older command node answers `watch_node_events`
-    with no `perNodeEvents` and sends only that name, which the renderer always
-    listens for; main forwards it to every renderer on that connection. A desktop
-    from before its main process took per-node events asks for the old name
-    explicitly (`relayedEvents=legacy`). See the
-    [register](version-compatibility.md#register).
+  - *No old shared name.* A main stream never carries relayed events, whatever
+    it asks for (`relayedEvents` is still sent but no longer read), and the
+    renderer always opens per-node listeners. The old shared-name delivery
+    (`relayed-node-event` frames and resyncs on the main stream, and
+    `relayedEvents=legacy`) was retired with legacy support on 2026-11-14
+    (to-do 8108).
   - *Qualified between two backends in a browser* (2026-11-13,
     `mise run test:agent:federation:two-profile`; 5840 (retired), read it with
     `git show 17d28238c:docs/todo/cross-cutting/5840-relayed-events-live-evidence.md`).
@@ -510,12 +506,7 @@ A command node attached to another command node operates in leaf mode:
     ring by 0. A tab hidden and offline while the leaf changed and started a
     turn reopened its relayed stream from its cursor and showed the leaf's
     badge and activity within 0.3 s of coming back, and again after a reload.
-    A page made to look like an older peer on the wire (no
-    `relayedEvents=per-node`, no `perNodeEvents`) opened no relayed stream,
-    got the leaf's events as `relayed-node-event` and a `resync` after a
-    reconnect, kept the badge right, and was the only thing that moved
-    `relayed-node-event.legacy-stream`. Real older releases and two real
-    machines are in the
+    Two real machines are in the
     [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
   - In the renderer, `lib/federation/node-events.ts` holds one lease per
     node for every view and tells each view when to read (first after its
@@ -576,8 +567,9 @@ node ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-window
   for it on this command node; a node without one is refused and reads its
   own stream. At most 8 nodes per request and 32 requests per command node;
   leaf frames up to 8 MiB; a response holding more than 16 MiB is closed and
-  every node resumes from its own cursor. An older command node answers 404,
-  and the browser keeps one stream per leaf.
+  every node resumes from its own cursor. Any failure answer (a 404 or 405
+  included) moves the browser to one stream per leaf for a minute, then it
+  tries the shared request again.
 - **Switching** never reloads the window and never stops work on any node.
   Another environment of a node already held is a selection on that node's
   scope. A node switched away from stays **warm** (its main stream and light
@@ -635,7 +627,7 @@ node ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-window
   (`MachineCpuReadings`, one coordinated read per machine, routed through the
   command node). Within a
   node's own section, project, folder and environment order belong to that
-  node: a drag there is written to the owner (`arrange_projects`,
+  node: a drag there is written to the owner (`arrange_projects_by_intent`,
   `reorder_environments`), and moving a project into a folder of the merged
   list is recorded on the command node only.
 - **Presentation.** Per-node state (layouts, drafts) is namespaced by node
@@ -799,11 +791,10 @@ size and hash, with no content in a log or receipt.
 - **A disconnected node is refused,** as for other node operations, before
   anything moves. A leaf with mail queued for a disconnected command node keeps
   it until that node next collects.
-- **Older nodes.** A leaf without the capability is refused with "update that
-  machine", counted as `node-mail-attachments.older-node`, because it would
-  reject the unknown key or drop the images. A command node without it does not
-  collect mail with images and cannot acknowledge it: the item stays queued until
-  that node is updated. Its plain mail is unaffected.
+- **Every node takes images.** Neither end checks the other for image mail
+  any more (legacy support was retired on 2026-11-14, to-do 8108): a leaf's
+  outbox offers mail with images on every collect, and a node that cannot
+  take them fails the send like any other error.
 - **Abandoned batches** (a process that stopped between staging and placing) are
   swept after a day; an `outbox-` batch never is, since it is the only copy.
   The same maintenance pass, which runs on every backend, removes images placed
@@ -872,10 +863,10 @@ ticket outbox, conflicts, tombstones) is in
   Launches and other changes to a disconnected node are refused, not queued;
   the coordinator that tried is woken once when the node reconnects
   (see [coordinator.md](coordinator.md#tickets-on-other-machines)).
-- **Compatibility.** Gated on the `ticket-sync` capability. An older leaf is
-  never sent tickets and the board says to update it; coordinator ticket
-  tools work on that leaf's own board as before
-  ([version-compatibility.md](version-compatibility.md)).
+- **Compatibility.** Every leaf is assumed to sync (the capability gate was
+  retired with legacy support on 2026-11-14, to-do 8108). Only a leaf whose
+  `ticket-sync` domain range shares no version with the command node's is
+  reported as needing an update and left as it is.
 - **Several command nodes.** Each syncs its own board with the leaf. A ticket
   made on the leaf goes to the command node that synced that project last.
   When a command node detaches, the leaf keeps its copies as its own tickets.
@@ -891,7 +882,8 @@ when a node announces a reading it took (`agent-usage-readings-changed`), when
 the command node takes one, and every 60 s. Both commands run only over the
 link of an attached command node and are never routed. Only usage figures,
 reset times, the plan, the reading time and the machine that took it travel,
-never a credential. A node that predates the commands takes no part. The model
+never a credential. A node whose collect fails (an unknown command included)
+is reported as failed for that pass. The model
 is in [agent-accounts.md](agent-accounts.md#shared-readings).
 
 ## Projects on leaf nodes

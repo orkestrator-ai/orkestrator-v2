@@ -1165,9 +1165,6 @@ export const sessionCommands: CommandSpec[] = [
       }
       const seen = new Set<string>();
       let lastToken: string | null = null;
-      // Whether the answering backend takes `knownToken`; an older one refuses
-      // unknown input, so it gets the plain read and the token comparison below.
-      let conditional: boolean | null = null;
       let emitted = 0;
       const emit = (record: Record<string, unknown>) => {
         if (context.global.output === "jsonl") context.io.stdout(`${JSON.stringify(record)}\n`);
@@ -1179,13 +1176,12 @@ export const sessionCommands: CommandSpec[] = [
       try {
         await observe<never>(
           async () => {
-            conditional ??= (await session.capabilities()).features.transcriptKnownToken === true;
             const answer = await session.read<PublicTranscriptPage | PublicTranscriptUnchanged>(
               "session.transcript",
               {
                 ...input,
                 limit: PUBLIC_API_LIMITS.transcriptMaxMessages,
-                ...(conditional && lastToken !== null ? { knownToken: lastToken } : {}),
+                ...(lastToken !== null ? { knownToken: lastToken } : {}),
               },
             );
             if (isPublicTranscriptUnchanged(answer)) return { done: false };

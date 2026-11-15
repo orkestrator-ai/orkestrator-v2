@@ -28,14 +28,6 @@
  *   does. Then the tab goes away (hidden, offline, streams dropped) while the
  *   leaf changes and starts a turn; back again, and after a reload, the
  *   remote row's change badge and activity must match the leaf's own row.
- * - **Older peers on the wire** (to-do 5840 (retired) task 2). A second
- *   command page has its main stream's `relayedEvents=per-node` stripped and
- *   `perNodeEvents` removed from `watch_node_events` answers: what an older
- *   renderer sends and what an older command node answers look the same on
- *   the wire. Relayed events must arrive under the one old name, a reconnect
- *   must bring a `resync` for the leaf, the badge must stay right, and the
- *   `relayed-node-event.legacy-stream` counter must move only in this phase.
- *   Real older releases are a manual check (to-do 7568).
  *
  * Writes a content-free summary to
  * `output/agent-testing/<run>/federation-two-profile/summary.json`.
@@ -46,7 +38,6 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
-  decodedBodyHeaders,
   expect,
   fetchModulesOutsideChromium,
   test,
@@ -64,8 +55,6 @@ import {
   frameFacts,
   isRelayedFrame,
   lagSummary,
-  legacyMainStreamUrl,
-  withoutPerNodeEvents,
   type FrameFacts,
 } from "./federation-two-profile-support";
 import {
@@ -106,7 +95,6 @@ const DISPATCH_TIMEOUT_MS = 180_000;
 const LEAF_NAME = "Leaf two-profile";
 const COMMAND_NAME = "Command two-profile";
 const LEAF_TAB = "federation-two-profile-pi";
-const LEGACY_COUNTER = "relayed-node-event.legacy-stream";
 
 type Identity = { environmentId: string; agent: "pi"; logicalSessionKey: string };
 type Calls = { completions: number; refused: number; heldTotal: number; held: number };
@@ -247,15 +235,6 @@ async function streamFacts(page: Page, leafNodeId: string) {
       relayed.length > 0 && relayed.every((stream) => stream.relayedNodes.includes(leafNodeId)),
     mainFrames: mainFrames.length,
     mainRelayedFrames: mainFrames.filter(isRelayedFrame).length,
-    mainLegacyFromLeaf: mainFrames.filter(
-      (frame) => frame.event === "relayed-node-event" && frame.nodeId === leafNodeId,
-    ).length,
-    mainLegacyResyncsForLeaf: mainFrames.filter(
-      (frame) =>
-        frame.event === "relayed-node-event" &&
-        frame.nodeId === leafNodeId &&
-        frame.relayedKind === "resync",
-    ).length,
     relayedFrames: relayedFrames.length,
     relayedFramesFromLeaf: relayedFrames.filter(
       (frame) => frame.event === `relayed-node-event:${leafNodeId}`,
@@ -376,13 +355,6 @@ async function metrics(command: Gateway): Promise<{ main: number; relayed: numbe
   };
 }
 
-async function legacyCount(command: Gateway): Promise<number> {
-  const usage = await command.invoke<{ paths: Record<string, { count: number } | undefined> }>(
-    "get_compatibility_path_usage",
-  );
-  return usage.paths[LEGACY_COUNTER]?.count ?? 0;
-}
-
 async function startFakeModel(): Promise<{ origin: string; child: ChildProcess }> {
   const child = spawn(
     "bun",
@@ -437,7 +409,6 @@ interface Setup {
   leafPage: Page;
   /** Lines appended to the leaf worktree's README so far. */
   appended: number;
-  legacyCountAtStart: number;
 }
 
 let setup: Setup | null = null;
@@ -634,7 +605,6 @@ test.beforeAll(async ({ browser }) => {
     logicalSessionKey: `env-${leafEnvironment.id}:${LEAF_TAB}`,
   };
   await leaf.invoke("ensure_native_agent_session", { ...identity, model: MODEL_REF });
-  const legacyCountAtStart = await legacyCount(command);
 
   const commandContext = await openContext(browser, true);
   cleanup.push(() => commandContext.close().catch(() => undefined));
@@ -662,7 +632,6 @@ test.beforeAll(async ({ browser }) => {
     commandPage,
     leafPage,
     appended: 0,
-    legacyCountAtStart,
   };
   summary.topology = { leafNodeId, platforms: ["pi"] };
 });
@@ -820,99 +789,5 @@ test("relayed events arrive per node with a busy leaf and an inactive tab (5840 
     },
     afterReload,
     rings: { mainDelta: after.main - before.main, relayedDelta: after.relayed - before.relayed },
-    legacyCounterDelta: (await legacyCount(command)) - s().legacyCountAtStart,
   };
-  expect(
-    (await legacyCount(command)) - s().legacyCountAtStart,
-    "no stream took the legacy relayed name while every client asked for per-node names",
-  ).toBe(0);
-});
-
-test("relayed events still arrive for an older peer, under the one old name (5840 task 2)", async ({
-  browser,
-}) => {
-  test.setTimeout(600_000);
-  const { command, commandPage, leafEnvironment, leafNodeId } = s();
-  const counterBefore = await legacyCount(command);
-  const legacyContext = await openContext(browser, true);
-  cleanup.push(() => legacyContext.close().catch(() => undefined));
-  const rewrites = { mainStreams: 0, watchAnswers: 0 };
-  // What an older renderer sends, and what an older command node sees of a
-  // current renderer's request: the main stream without `relayedEvents`.
-  await legacyContext.route(
-    (url) => url.pathname === "/__orkestrator/events",
-    async (route) => {
-      const legacy = legacyMainStreamUrl(route.request().url());
-      if (!legacy) return route.fallback();
-      rewrites.mainStreams += 1;
-      return route.continue({ url: legacy });
-    },
-  );
-  // And what an older command node answers: no `perNodeEvents`.
-  await legacyContext.route(
-    (url) => url.pathname === "/__orkestrator/invoke",
-    async (route) => {
-      let command: unknown;
-      try {
-        command = (JSON.parse(route.request().postData() ?? "{}") as { command?: unknown }).command;
-      } catch {
-        command = undefined;
-      }
-      if (command !== "watch_node_events") return route.fallback();
-      const response = await route.fetch();
-      const body = (await response.json().catch(() => null)) as unknown;
-      rewrites.watchAnswers += 1;
-      return route.fulfill({
-        status: response.status(),
-        headers: decodedBodyHeaders(response.headers()),
-        body: JSON.stringify(withoutPerNodeEvents(command, body)),
-      });
-    },
-  );
-  const legacyPage = await openPage(legacyContext, commandProfile);
-  await revealRow(legacyPage, leafEnvironment.name);
-  appendLines(2);
-  const live = await expectBadgeParity(legacyPage, "older peer, live");
-  await expectBadgeParity(commandPage, "per-node page beside the older peer");
-  await expect
-    .poll(async () => (await streamFacts(legacyPage, leafNodeId)).mainLegacyFromLeaf, {
-      timeout: VIEW_TIMEOUT_MS,
-      message: "the leaf's events arrived under the old name",
-    })
-    .toBeGreaterThan(0);
-  const beforeReconnect = await streamFacts(legacyPage, leafNodeId);
-
-  // A reconnect: the leaf changes while the page is offline, so the main
-  // stream's replay must tell it to re-read the leaf.
-  await legacyContext.setOffline(true);
-  const dropped = await breakStreams(legacyPage);
-  appendLines(2);
-  await new Promise((resolve) => setTimeout(resolve, 3_000));
-  await legacyContext.setOffline(false);
-  const reconnected = await expectBadgeParity(legacyPage, "older peer, after reconnect");
-  await expect
-    .poll(async () => (await streamFacts(legacyPage, leafNodeId)).mainLegacyResyncsForLeaf, {
-      timeout: VIEW_TIMEOUT_MS,
-      message: "a resync for the leaf arrived under the old name",
-    })
-    .toBeGreaterThan(beforeReconnect.mainLegacyResyncsForLeaf);
-  const legacyStreams = await streamFacts(legacyPage, leafNodeId);
-  const perNodeStreams = await streamFacts(commandPage, leafNodeId);
-  const counterAfter = await legacyCount(command);
-  summary.olderPeer = {
-    rewrites,
-    droppedStreams: dropped,
-    badges: { live, reconnected },
-    legacyStreams,
-    perNodeStreamsBeside: perNodeStreams,
-    legacyCounterDelta: counterAfter - counterBefore,
-  };
-  expect(rewrites.mainStreams, "the older peer's main stream was opened").toBeGreaterThan(0);
-  expect(rewrites.watchAnswers, "the older peer's watch was answered").toBeGreaterThan(0);
-  expect(legacyStreams.relayedStreams, "an older peer opens no relayed stream").toBe(0);
-  expect(perNodeStreams.mainRelayedFrames, "the per-node page's main stream stays clean").toBe(0);
-  expect(counterAfter, "the legacy-stream counter moved for the older peer").toBeGreaterThan(
-    counterBefore,
-  );
-  await legacyContext.close();
 });

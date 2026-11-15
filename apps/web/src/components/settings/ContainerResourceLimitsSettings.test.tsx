@@ -94,16 +94,6 @@ test("saved Custom, No limits and Built-in default survive remounts from the sam
   }
 });
 
-test("legacy backend disables Built-in default and explains its behavior", async () => {
-  const { builtInDefault: _default, ...legacy } = capacity;
-  install(legacy);
-  renderInAppCommandScope(<Settings />);
-  await screen.findByText(/This backend has no built-in default/);
-  expect(screen.getByRole("button", { name: "Built-in default" }).hasAttribute("disabled")).toBe(
-    true,
-  );
-});
-
 for (const memoryLimit of [false, true]) {
   test(`warns about unenforced defaults and describes containment accurately (memory=${memoryLimit})`, async () => {
     const next = {

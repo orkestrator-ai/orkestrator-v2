@@ -4,17 +4,11 @@ import type { GatewayAuth } from "./gateway-auth.js";
 import type { GatewayContext } from "./gateway-context.js";
 import type { GatewayEvents } from "./gateway-events.js";
 import type { GatewayProxy } from "./gateway-proxy.js";
-import type { LegacyLoopbackPortAccess } from "./core/preview-runtime.js";
-import {
-  BROWSER_PREVIEW_ENVIRONMENT_HEADER,
-  browserPreviewEnvironmentId,
-} from "@orkestrator/protocol/browser-preview";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { parseGatewayCursor } from "./gateway-event-replay.js";
 import {
   GATEWAY_KEEPALIVE_EVENT,
   GATEWAY_KEEPALIVE_EVENTS_PARAM,
-  GATEWAY_RELAYED_EVENTS_PARAM,
 } from "@orkestrator/protocol/gateway-event-stream";
 import { isPerNodeRelayedEvent } from "@orkestrator/protocol/node-events";
 import { gatewayRequestCredential } from "./gateway-sessions.js";
@@ -40,7 +34,6 @@ import {
   IdentityEventClientWriter,
   GzipEventClientWriter,
   parseEventSubscriptionFilter,
-  parseRelayedEventsMode,
 } from "./gateway-internals.js";
 import type {
   GatewayRequestMetrics,
@@ -300,7 +293,6 @@ export class GatewayHandlers {
       prefixes: parseEventSubscriptionFilter(url.searchParams.get("events")),
       includedPrefixes: parseEventSubscriptionFilter(url.searchParams.get("includeEvents")),
       excludedPrefixes: parseEventSubscriptionFilter(url.searchParams.get("excludeEvents")),
-      relayedEvents: parseRelayedEventsMode(url.searchParams.get(GATEWAY_RELAYED_EVENTS_PARAM)),
       desyncedSessions: new Set(),
       handshake: { events: [], bytes: 0 },
       tracksReplayCursor: false,
@@ -494,64 +486,8 @@ export class GatewayHandlers {
       response,
       new URL(`http://127.0.0.1:${port}${targetPath}`),
       `${API_PREFIX}/proxy/loopback/${port}`,
-      false,
       true,
     );
-  }
-
-  async handleBrowserLoopbackProxy(
-    request: IncomingMessage,
-    response: ServerResponse,
-    url: URL,
-  ): Promise<void> {
-    const prefix = `${API_PREFIX}/browser/loopback/`;
-    const remaining = url.pathname.slice(prefix.length);
-    const slashIndex = remaining.indexOf("/");
-    const rawPort = slashIndex >= 0 ? remaining.slice(0, slashIndex) : remaining;
-    const port = Number.parseInt(rawPort, 10);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      jsonResponse(response, 400, { error: "Invalid browser preview port" });
-      return;
-    }
-    // Only a verified preview target of the requesting environment may be
-    // opened, never a bridge, the gateway, another host-only service or
-    // another environment's application (security report M2). Electron main
-    // names the environment on the requests it authenticates.
-    const environmentId = browserPreviewEnvironmentId(
-      request.headers[BROWSER_PREVIEW_ENVIRONMENT_HEADER],
-    );
-    let access: LegacyLoopbackPortAccess;
-    try {
-      access = await this.ctx.legacyPreviewPortAccess(port, environmentId);
-    } catch {
-      jsonResponse(response, 503, { error: "Could not verify the browser preview port" });
-      return;
-    }
-    if (access !== "allowed") {
-      jsonResponse(response, 403, { error: legacyPreviewRefusal(access, port) });
-      return;
-    }
-
-    const restPath = slashIndex >= 0 ? remaining.slice(slashIndex) : "/";
-    const targetPath = `${restPath}${url.search}`;
-    await this.proxy.proxyToTarget(
-      request,
-      response,
-      new URL(`http://127.0.0.1:${port}${targetPath}`),
-      `${API_PREFIX}/browser/loopback/${port}`,
-      true,
-    );
-  }
-}
-
-function legacyPreviewRefusal(access: Exclude<LegacyLoopbackPortAccess, "allowed">, port: number) {
-  switch (access) {
-    case "reserved":
-      return `Port ${port} belongs to Orkestrator or Docker and cannot be previewed.`;
-    case "unscoped":
-      return "This preview request names no environment. Update the Orkestrator desktop app to preview this address.";
-    case "unknown":
-      return `Port ${port} is not an available preview service of this environment. Add it as a service to preview it.`;
   }
 }
 

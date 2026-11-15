@@ -255,7 +255,7 @@ describe("hellos from published releases", () => {
     ["the web client's HTML", () => new Response("<!doctype html><html></html>", { status: 200 })],
     ["404 without a web build", () => new Response("Not found", { status: 404 })],
   ] as const) {
-    test(`the floor release v2.21.0 (hello answered by ${label}) is a legacy, pre-contract backend`, async () => {
+    test(`a backend without the hello (answered by ${label}) fails the check with no status fallback`, async () => {
       const seen: string[] = [];
       const fetchImpl = (async (input: string | URL | Request) => {
         const path = new URL(String(input)).pathname;
@@ -263,13 +263,10 @@ describe("hellos from published releases", () => {
         if (path === "/__orkestrator/status") return Response.json({ ok: true });
         return response();
       }) as typeof fetch;
-      const outcome = await checkBackendRoute("https://floor.test", "token", {
-        timeoutMs: 5_000,
-        fetchImpl,
-      });
-      expect(outcome.kind).toBe("legacy");
-      expect(seen).toEqual(["/__orkestrator/hello", "/__orkestrator/status"]);
-      expect(isPreContract(outcome.kind === "hello" ? outcome.hello : null)).toBe(true);
+      await expect(
+        checkBackendRoute("https://floor.test", "token", { timeoutMs: 5_000, fetchImpl }),
+      ).rejects.toMatchObject({ code: "protocol" });
+      expect(seen).toEqual(["/__orkestrator/hello"]);
     });
   }
 });

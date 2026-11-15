@@ -191,17 +191,6 @@ describe("handoff delivery at dispatch", () => {
     });
   });
 
-  test("a prompt that already holds the carrier (an older renderer) is not prefixed again", async () => {
-    await withDestination({}, async ({ service, storage, send }) => {
-      const carried = `${handoffSnapshot().bootstrapPrompt}\n\nCarry on`;
-      await service.dispatchIntent(dispatch("first", carried));
-      expect(promptOf(send.mock.calls[0])).toBe(carried);
-      expect((await storage.getNativeAgentSession(SESSION_KEY))?.deliveredAgentHandoffIds).toEqual([
-        "handoff-1",
-      ]);
-    });
-  });
-
   test("a definite rejection leaves the history pending for the next attempt", async () => {
     let reject = true;
     await withDestination(

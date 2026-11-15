@@ -2481,11 +2481,12 @@ configuration directory never holds the profile's `settings.json`, so
 pointing that file at a fake model reaches every Claude session except the
 coordinator's.
 
-### Multi-client, restarts and an older backend (fake model)
+### Multi-client and restarts (fake model)
 
 `e2e/agent-testing/multi-client-restarts-live.spec.ts` qualifies two headless
-browser clients, backend and bridge restarts, and an older backend without a
-billed turn (todo 0048 task 11). The provider is the profile's real Claude CLI
+browser clients and backend and bridge restarts without a billed turn (todo
+0048 task 11; its older-backend case was retired with mixed-version
+qualification on 2026-11-14, to-do 8108). The provider is the profile's real Claude CLI
 and bridge, sent to a loopback Anthropic endpoint
 (`e2e/agent-testing/fake-anthropic-model.ts`) by a `settings.json` the spec
 writes into the profile's own isolated `CLAUDE_CONFIG_DIR`. Every prompt is
@@ -2512,12 +2513,6 @@ profile alone; a new endpoint makes it restart the profile once so no Claude
 process keeps an old one. `ORKESTRATOR_AGENT_TEST_MULTI_CLIENT_ROUNDS` repeats
 the two-client and queued cases for a p50/p95. Cases:
 
-- **Older backend** (first, and only when
-  `ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_URL` and
-  `ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_AUTH_FILE` name a running older
-  backend whose `--renderer-dev-server-url` is this profile's current
-  `rendererUrl`, and whose Claude config points at the same fake port): two
-  clients run today's renderer against it through a turn and a save.
 - **Two clients, one disconnected**: client B sits behind the outage link
   (`client-outage-support.ts`) and is cut off while client A sends a held
   turn, the turn completes and a file is saved; then B's link returns.
@@ -3363,8 +3358,8 @@ project's "Let the coordinator use environments it did not create" setting
   must report a `container-relay` transport with TCP `ok`. The container
   publishes only its bridge ports, so the backend reaches the service through
   its in-container relay, which cannot see the host decoy. The browser client
-  in compatibility mode cannot embed a relayed service (it has no host port;
-  see [browser-previews.md, "Rollback"](../architecture/browser-previews.md#rollback)),
+  has no embedded fallback for a service (compatibility mode was removed on
+  2026-11-15; see [browser-previews.md, "Transports"](../architecture/browser-previews.md#transports)),
   so the page text is checked only when an embedded frame exists. The
   desktop-app half is on the manual-test checklist (7568).
 
@@ -3461,24 +3456,16 @@ moves the leaf's activity between working and idle on cue.
   goes away (document hidden, offline, streams dropped) while the leaf changes
   and starts a turn; on return, and again after a reload, the badge and the
   activity must match the leaf's.
-- **Older peers on the wire.** A second command page has
-  `relayedEvents=per-node` stripped from its main stream and `perNodeEvents`
-  removed from `watch_node_events` answers, which is what an older renderer
-  sends and what an older command node answers. It must open no relayed
-  stream, receive the leaf's events as `relayed-node-event`, get a `resync`
-  for the leaf after a reconnect, keep the badge right, and move the
-  `relayed-node-event.legacy-stream` counter, which must not move while every
-  client asks for per-node names. Real older releases are a manual check
-  (7568).
 
-Passed on Linux on 2026-11-13 (three cases, 154 s including both profile
-starts). The activity observers are armed before each dispatch and release, so
+The older-peer case (main stream without `relayedEvents=per-node`) was
+removed when the old shared relayed name was retired with legacy support on
+2026-11-14 (to-do 8108). Passed on Linux on 2026-11-13 (then three cases,
+154 s including both profile starts). The activity observers are armed before each dispatch and release, so
 a transition cannot happen before its polls start; the command node's row
 followed the leaf's record by 418–894 ms (median 557 ms). The flood moved the
 relayed ring by 10 and the main ring by 0, the returning tab showed the leaf's
 badge in 0.23 s and its activity in 0.53 s, a relayed stream naming the leaf
-reopened after the reload, and the older-peer page moved the legacy counter by
-3 with one `resync`. Frames are reduced by `frameFacts`, the helper the
+reopened after the reload. Frames are reduced by `frameFacts`, the helper the
 support unit test covers.
 
 Both backends share one kernel and loopback, so a cross-machine or slow link is

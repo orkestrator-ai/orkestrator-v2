@@ -14,6 +14,18 @@ updated: 2026-11-07
 
 # 1012 · Scheduled mixed-version qualification
 
+> **Tooling retired on 2026-11-14** by the user's legacy-retirement decision
+> (8108 (retired)
+> task 4): every machine and client now updates together, so no peer older
+> than the current code is served. The runner, the harness, the scenario
+> modules, the design and slash qualifiers, `scripts/older-release-stack.ts`,
+> the `qualify:mixed-versions` task, the weekly workflow and their tests were
+> deleted; read them with `git show a8b89f154:<path>`. The remote goal hold
+> (`scripts/qa-remote-goal-hold.ts`, two backends of this checkout) kept the
+> parts of the harness and fixtures it uses (`scripts/two-node/`) and its own
+> weekly workflow (`.github/workflows/remote-goal-hold.yml`). The record
+> below is kept as written.
+
 - **Report:** [§11.3 step 4](../../docs/reports/unified-federation.md#113-manifests-and-ci)
 - **Depends on:** [1010](1010-pilot-node-mail-and-ticket-sync.md)
 - **Parallel with:** Phase 7 conversions (each adds its domain's scenarios here)
@@ -48,7 +60,7 @@ On a schedule, not per PR, run the current client and backend against the floor 
 
 ### Decisions (2026-11-07)
 
-- **Files.** `scripts/qualify-contract-mixed-versions.ts` (the runner, `mise run qualify:mixed-versions`), `scripts/mixed-version/harness.ts` (processes, environment, ports, npm install), `scripts/mixed-version/scenario.ts` (the module interface and its rules), `scripts/mixed-version/fixtures.ts` (shared per-topology fixtures), `scripts/mixed-version/scenarios/{index,node-mail,ticket-sync,node-files}.ts`, `tests/unit/mixed-version-qualification.test.ts`, `.github/workflows/mixed-version-qualification.yml`. Docs: `version-compatibility.md#the-manifest-the-ratchet-and-ci` ("Mixed-version qualification" bullet) and `docs/development/testing-guide.md` (next to the design mixed-version run).
+- **Files.** `scripts/qualify-contract-mixed-versions.ts` (the runner, the `qualify:mixed-versions` task), `scripts/mixed-version/harness.ts` (processes, environment, ports, npm install), `scripts/mixed-version/scenario.ts` (the module interface and its rules), `scripts/mixed-version/fixtures.ts` (shared per-topology fixtures), `scripts/mixed-version/scenarios/{index,node-mail,ticket-sync,node-files}.ts`, `tests/unit/mixed-version-qualification.test.ts`, `.github/workflows/mixed-version-qualification.yml`. Docs: `version-compatibility.md#the-manifest-the-ratchet-and-ci` ("Mixed-version qualification" bullet) and `docs/development/testing-guide.md` (next to the design mixed-version run).
 - **Generalised, not replaced.** `qualify-design-mixed-versions.ts` stays: it is a different topology (one backend at a time over one data directory: upgrade, downgrade fence, export/import). The new runner takes its install path (`bun add --ignore-scripts orkestrator@<v>` into a private `package.json`) and the command-node QA harness's attach and invoke pattern (`qa-command-nodes-support.ts`). Options considered: (a) extend the design script with a pair mode (one 500-line script mixing two topologies); (b) a new runner with pluggable modules (chosen; 7001-7009 add one file each); (c) run old releases from tag worktrees like `qualify-backend-upgrade-rollback.ts` (needs each tag's Bun and a full install; the npm package is what users run).
 - **Module interface** (`scenario.ts`): `ScenarioModule = { domain, title, topologies?, requires?: { command?, leaf? }, run(ctx) }`; `ctx` has `topology`, `command`/`leaf`/`old` (`PeerNode`: `invoke`, `refusal`, `has(command)`, `hello` with `capabilities`/`domains`, `build`, `version`, `id`), `fixtures` (`project(node)`, `coordinator(node)`, `worker(node)`, memoised per topology), `scratch`, `check(id, description, ok, detail?)`, `note(step, detail)`, `notApplicable(reason)`, `expectedAdapter(domain)` (0/1 from the leaf's hello `domains`, `null` for an old command node) and `adapterCallsSince(domain, version)` (the `domain-adapter.backend.<domain>.v<n>` counter delta). `requires` names are checked against the release's snapshot (`readReleaseSnapshot`) and this checkout's manifest: missing on the release side is `not-applicable` (recorded with the names), missing on this checkout's side is a failure (a renamed command must update its module; the unit test also pins every `requires` name against the manifest). A scenario with no checks fails; a failed check fails it even if it then stops as not applicable. Modules register in `scenarios/index.ts` (while this item finished, 7002 was adding `terminals`, `files`, `claude-tmux` and a shared `renderer-client` helper, and 7001 `native-sessions`, against it; not checked here).
 - **Release choice.** `--old-version floor` (default) uses `contract-ci.ts`'s `supportFloor` on `releases/index.json`; npm lacks v2.21.0 and v2.21.1 (1007), so while the floor is one of those the runner takes the oldest published in-window release npm carries (v2.22.3 today) and says so in the report (`release.note`). `latest-stable` is the newest published Stable release on npm (v2.36.1). `current` runs this checkout on both sides (one topology; a control run for a new module). An exact version must be on npm (`https://registry.npmjs.org/orkestrator`). The workflow's matrix runs `floor` and `latest-stable`; `workflow_dispatch` takes one release instead.

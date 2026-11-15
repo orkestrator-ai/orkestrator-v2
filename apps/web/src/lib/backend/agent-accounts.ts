@@ -11,11 +11,7 @@ import type {
   PreferredAgentIdentities,
 } from "@orkestrator/protocol/agent-accounts";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import {
-  GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
-  type CoordinatorAccountSwitchGrantState,
-} from "@orkestrator/protocol/coordinator-account-switch-grant";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import type { CoordinatorAccountSwitchGrantState } from "@orkestrator/protocol/coordinator-account-switch-grant";
 import type { NativeAgentAuthStatus } from "@orkestrator/protocol/native-agent";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import {
@@ -137,22 +133,13 @@ export function createAgentAccountsApi(client: BackendClient) {
    * The standing permission for `machine`'s coordinators to switch accounts
    * without asking, and the switches it allowed. Each machine holds its own,
    * for the switches its coordinators make on it and on the machines it
-   * controls. `null` from a machine that predates it, which keeps asking.
+   * controls.
    */
   async function getCoordinatorAccountSwitchGrant(
     platform: AgentAccountPlatform,
     machine?: AccountMachine,
-  ): Promise<CoordinatorAccountSwitchGrantState | null> {
-    try {
-      return await on(machine).get_coordinator_account_switch_grant({ platform });
-    } catch (error) {
-      if (
-        incompatibility(error, GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND)?.code ===
-        "unknown-command"
-      )
-        return null;
-      throw error;
-    }
+  ): Promise<CoordinatorAccountSwitchGrantState> {
+    return on(machine).get_coordinator_account_switch_grant({ platform });
   }
 
   async function setCoordinatorAccountSwitchGrant(
@@ -212,23 +199,14 @@ export function createAgentAccountsApi(client: BackendClient) {
 
   /**
    * Sign one existing Claude account in again by id, without making it the
-   * active account. A machine that predates the command is told to update.
+   * active account.
    */
   async function reauthenticateAgentAccount(
     platform: AgentAccountPlatform,
     accountId: string,
     machine?: AccountMachine,
   ): Promise<AgentAccountLoginProgress> {
-    try {
-      return await on(machine).reauthenticate_agent_account({ platform, accountId });
-    } catch (error) {
-      if (incompatibility(error, "reauthenticate_agent_account")?.code === "unknown-command") {
-        throw new Error(
-          "This machine's Orkestrator is too old to sign an account in from here. Update it, or switch to the account and sign in from its agent tab.",
-        );
-      }
-      throw error;
-    }
+    return on(machine).reauthenticate_agent_account({ platform, accountId });
   }
 
   async function getAgentAccountLogin(

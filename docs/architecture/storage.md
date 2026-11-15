@@ -1011,6 +1011,15 @@ admissions on it. Retirement still deletes a namespace whole under the same
 lock; `storage-writer-guards.test.ts` allows that deletion beside the leased
 row writes and nothing else.
 
+Version 10 (`derive-kanban-ticket-sections`, `storage-record-upgrades.ts`)
+gives every Kanban row written before ticket sections (v2.21.0 to v2.34.1) its
+kind and sections, derived from its text exactly as a read used to derive them
+on every load; the text is kept as written and a legacy `- [x]` becomes a
+manual pass dated at the ticket's creation. A row whose text fields are not
+strings is left verbatim. Reads keep only the `sectionsBasis` check
+(`normalizeKanbanTask`): when a writer changes a text mirror without the
+sections, they are rebuilt from the text ([tickets.md](tickets.md#mirrors-and-migration)).
+
 Every startup also extracts identities from stray `looped-reviews.json` files
 and their retained `legacy-json/` copies, including backups and interrupted
 writer temps, then immediately removes those retired copies. No review context,

@@ -8,7 +8,7 @@
  */
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -39,7 +39,8 @@ test("hook writers serialize counters and retain a completed turn without any co
     expect(readFileSync(`${stateFile}-snapshot`, "utf8").trim()).toBe("working 20 0");
     expect(spawnSync("sh", [SCRIPT, "waiting"], { env }).status).toBe(0);
     expect(readFileSync(`${stateFile}-snapshot`, "utf8").trim()).toBe("waiting 21 1");
-    expect(readFileSync(stateFile, "utf8").trim()).toBe("waiting");
+    // Only the snapshot is written; the plain state file is retired.
+    expect(existsSync(stateFile)).toBe(false);
     // A duplicate Stop cannot manufacture another completion.
     expect(spawnSync("sh", [SCRIPT, "waiting"], { env }).status).toBe(0);
     expect(readFileSync(`${stateFile}-snapshot`, "utf8").trim()).toBe("waiting 22 1");

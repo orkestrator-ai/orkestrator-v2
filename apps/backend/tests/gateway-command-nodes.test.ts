@@ -455,11 +455,11 @@ describe("DP-03 relay through the command node", () => {
     const { gateway, info } = await startGateway({ backendHello: async () => identity, nodeHooks });
     const session = (gateway as unknown as { issueBrowserSession(): string }).issueBrowserSession();
     const { WebSocket } = await import("ws");
-    const { TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS, TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL } =
+    const { TERMINAL_WEBSOCKET_SUBPROTOCOL } =
       await import("@orkestrator/protocol/terminal-websocket");
     const socket = new WebSocket(
       `${info.url.replace(/^http/, "ws")}__orkestrator/nodes/bk_leaf/__orkestrator/terminal`,
-      TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS,
+      [TERMINAL_WEBSOCKET_SUBPROTOCOL],
       {
         headers: {
           cookie: `orkestrator_gateway_auth=${session}`,
@@ -475,7 +475,7 @@ describe("DP-03 relay through the command node", () => {
       );
     });
     expect(JSON.parse(firstText)).toMatchObject({ type: "ready" });
-    expect(socket.protocol).toBe(TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL);
+    expect(socket.protocol).toBe(TERMINAL_WEBSOCKET_SUBPROTOCOL);
     socket.close();
   });
 });

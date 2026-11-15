@@ -47,6 +47,7 @@ import {
   registerCodexTranscriptRoutes,
 } from "./transcript-routes.js";
 import { createCodexChangeEvidence } from "./change-evidence.js";
+import { adoptLoginChangeEvidence } from "./login-state-adoption.js";
 import { isCodexApprovalMode } from "./codex-approval-mode.js";
 import { normalizeExplicitSessionTitle } from "./session-title-index.js";
 import { AppServerRuntime, SESSION_CLOSING_ERROR } from "./app-server-runtime.js";
@@ -511,8 +512,11 @@ const codexEngine = createCodexEngine();
 
 /**
  * One change-evidence spool per process, persisted beside the bridge's other
- * sidecar state so unacknowledged evidence survives a restart.
+ * sidecar state so unacknowledged evidence survives a restart. Evidence an
+ * earlier bridge left in this login's own directory is adopted first, once
+ * (`login-state-adoption.ts`); the rest of that upgrade runs in `start()`.
  */
+adoptLoginChangeEvidence(getCodexHomeDir(), getWorkingDirectory());
 const codexChangeEvidence = createCodexChangeEvidence({
   codexHome: getCodexHomeDir(),
   cwd: getWorkingDirectory(),

@@ -2,11 +2,9 @@ import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
 import {
   COMPATIBILITY_PATH_USAGE_STORE,
   CompatibilityPathUsage,
-  compatibilityPathUsage,
   normalizeCompatibilityPathUsage,
   mergeCompatibilityPathUsage,
   type CompatibilityPathUsageSink,
@@ -57,11 +55,11 @@ describe("CompatibilityPathUsage", () => {
     expect(merges).toBe(1);
 
     usage.record("history.joined-v1-page");
-    usage.record("bridge-close.upgrade-required");
+    usage.record("bridge-credential.token-file");
     for (let index = 0; index < 3; index += 1) {
       const { paths } = usage.peek();
       expect(paths["history.joined-v1-page"]?.count).toBe(6);
-      expect(paths["bridge-close.upgrade-required"]?.count).toBe(1);
+      expect(paths["bridge-credential.token-file"]?.count).toBe(1);
     }
     expect(merges).toBe(1);
     expect(writes).toBe(0);
@@ -74,22 +72,22 @@ describe("CompatibilityPathUsage", () => {
 
   test("peek without a sink is the pending counts", () => {
     const usage = new CompatibilityPathUsage();
-    usage.record("preview.tunnel-v1");
-    expect(usage.peek().paths["preview.tunnel-v1"]?.count).toBe(1);
+    usage.record("bridge-transcript.messages-fallback");
+    expect(usage.peek().paths["bridge-transcript.messages-fallback"]?.count).toBe(1);
   });
 
   test("counts each path with its first and last use, without a sink", () => {
     const time = clock();
     const usage = new CompatibilityPathUsage(time.now);
-    usage.record("bridge-close.upgrade-required");
+    usage.record("bridge-credential.token-file");
     time.advance(1_000);
-    usage.record("bridge-close.upgrade-required");
+    usage.record("bridge-credential.token-file");
     usage.record("history.joined-v1-page");
 
     expect(usage.snapshot()).toEqual({
       version: 1,
       paths: {
-        "bridge-close.upgrade-required": {
+        "bridge-credential.token-file": {
           count: 2,
           firstSeenAt: "2026-10-24T10:00:00.000Z",
           lastSeenAt: "2026-10-24T10:00:01.000Z",
@@ -102,7 +100,7 @@ describe("CompatibilityPathUsage", () => {
       },
     });
     // Without a sink nothing is lost by reading.
-    expect(usage.snapshot().paths["bridge-close.upgrade-required"]?.count).toBe(2);
+    expect(usage.snapshot().paths["bridge-credential.token-file"]?.count).toBe(2);
   });
 
   test("persists totals across backends sharing a data directory", async () => {
@@ -110,17 +108,17 @@ describe("CompatibilityPathUsage", () => {
     const time = clock();
     const first = new CompatibilityPathUsage(time.now);
     const firstSink = compatibilityPathUsageDatabaseSink(dir);
-    first.record("slash-catalogue.outdated-bridge");
+    first.record("usage-limit.text-classified");
     first.attach(firstSink);
-    first.record("slash-catalogue.outdated-bridge");
+    first.record("usage-limit.text-classified");
     first.detach(firstSink);
 
     time.advance(60_000);
     const second = new CompatibilityPathUsage(time.now);
     const secondSink = compatibilityPathUsageDatabaseSink(dir);
     second.attach(secondSink);
-    second.record("slash-catalogue.outdated-bridge");
-    expect(second.snapshot().paths["slash-catalogue.outdated-bridge"]).toEqual({
+    second.record("usage-limit.text-classified");
+    expect(second.snapshot().paths["usage-limit.text-classified"]).toEqual({
       count: 3,
       firstSeenAt: "2026-10-24T10:00:00.000Z",
       lastSeenAt: "2026-10-24T10:01:00.000Z",
@@ -133,7 +131,7 @@ describe("CompatibilityPathUsage", () => {
       expect(database.readStore(COMPATIBILITY_PATH_USAGE_STORE)?.value).toEqual({
         version: 1,
         paths: {
-          "slash-catalogue.outdated-bridge": {
+          "usage-limit.text-classified": {
             count: 3,
             firstSeenAt: "2026-10-24T10:00:00.000Z",
             lastSeenAt: "2026-10-24T10:01:00.000Z",
@@ -149,14 +147,14 @@ describe("CompatibilityPathUsage", () => {
     const merged: number[] = [];
     const sink: CompatibilityPathUsageSink = {
       merge: (pending) => {
-        merged.push(pending.get("preview.legacy-loopback-route")?.count ?? 0);
+        merged.push(pending.get("bridge-transcript.messages-fallback")?.count ?? 0);
         return { version: 1, paths: {} };
       },
     };
     const usage = new CompatibilityPathUsage(undefined, 5);
     usage.attach(sink);
-    usage.record("preview.legacy-loopback-route");
-    usage.record("preview.legacy-loopback-route");
+    usage.record("bridge-transcript.messages-fallback");
+    usage.record("bridge-transcript.messages-fallback");
     const deadline = Date.now() + 1_000;
     while (merged.length === 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -258,14 +256,14 @@ describe("CompatibilityPathUsage", () => {
     usage.attach(sink);
     try {
       usage.record("history.joined-v1-page");
-      usage.record("bridge-close.upgrade-required");
+      usage.record("bridge-credential.token-file");
       const original = usage.snapshot();
       time.advance(1_000);
       usage.record("history.joined-v1-page");
       fail = true;
       for (let i = 0; i < 2; i++) {
         expect(usage.snapshot().paths).toEqual({
-          "bridge-close.upgrade-required": original.paths["bridge-close.upgrade-required"],
+          "bridge-credential.token-file": original.paths["bridge-credential.token-file"],
           "history.joined-v1-page": {
             count: 2,
             firstSeenAt: "2026-10-24T10:00:00.000Z",
@@ -290,18 +288,20 @@ describe("CompatibilityPathUsage", () => {
         return {
           version: 1,
           paths: {
-            "preview.tunnel-v1": { ...pending.get("preview.tunnel-v1")! },
+            "bridge-transcript.messages-fallback": {
+              ...pending.get("bridge-transcript.messages-fallback")!,
+            },
           },
         };
       },
     };
     const usage = new CompatibilityPathUsage(clock().now);
     usage.attach(sink);
-    usage.record("preview.tunnel-v1");
-    expect(usage.snapshot().paths["preview.tunnel-v1"]?.count).toBe(1);
+    usage.record("bridge-transcript.messages-fallback");
+    expect(usage.snapshot().paths["bridge-transcript.messages-fallback"]?.count).toBe(1);
     fail = false;
-    usage.record("preview.tunnel-v1");
-    expect(usage.snapshot().paths["preview.tunnel-v1"]?.count).toBe(2);
+    usage.record("bridge-transcript.messages-fallback");
+    expect(usage.snapshot().paths["bridge-transcript.messages-fallback"]?.count).toBe(2);
     usage.detach(sink);
   });
 
@@ -342,7 +342,7 @@ describe("normalizeCompatibilityPathUsage", () => {
       normalizeCompatibilityPathUsage({
         version: 1,
         paths: {
-          "bridge-close.upgrade-required": {
+          "bridge-credential.token-file": {
             count: 4,
             firstSeenAt: "2026-10-20T00:00:00.000Z",
             lastSeenAt: "2026-10-21T00:00:00.000Z",
@@ -358,7 +358,7 @@ describe("normalizeCompatibilityPathUsage", () => {
     ).toEqual({
       version: 1,
       paths: {
-        "bridge-close.upgrade-required": {
+        "bridge-credential.token-file": {
           count: 4,
           firstSeenAt: "2026-10-20T00:00:00.000Z",
           lastSeenAt: "2026-10-21T00:00:00.000Z",
@@ -366,19 +366,6 @@ describe("normalizeCompatibilityPathUsage", () => {
       },
     });
     expect(normalizeCompatibilityPathUsage(null)).toEqual({ version: 1, paths: {} });
-  });
-});
-
-describe("compatibility paths record their use", () => {
-  test("the close restart notice counts once per close", async () => {
-    const before =
-      compatibilityPathUsage.snapshot().paths["bridge-close.upgrade-required"]?.count ?? 0;
-    await expect(
-      closeBridgeSessionRetaining("codex", "s1", async () => new Response(null, { status: 404 })),
-    ).rejects.toThrow("predates non-destructive tab close");
-    expect(compatibilityPathUsage.snapshot().paths["bridge-close.upgrade-required"]?.count).toBe(
-      before + 1,
-    );
   });
 });
 
@@ -409,7 +396,7 @@ test("an idle reader refreshes another backend's totals on each bounded timer ti
     reader.attach(sink);
     writer.attach(sink);
     expect(reader.peek().paths).toEqual({});
-    writer.record("preview.tunnel-v1");
+    writer.record("bridge-transcript.messages-fallback");
     writer.snapshot();
     const before = reads;
     expect(reader.peek().paths).toEqual({});
@@ -417,7 +404,7 @@ test("an idle reader refreshes another backend's totals on each bounded timer ti
     time.advance(60_000);
     // peek replaced the initial attach timer; tick the reader's current timer.
     callbacks[2]!();
-    expect(reader.peek().paths["preview.tunnel-v1"]?.count).toBe(1);
+    expect(reader.peek().paths["bridge-transcript.messages-fallback"]?.count).toBe(1);
     expect(writes).toBe(1);
     expect(callbacks.length).toBeGreaterThan(2);
   } finally {

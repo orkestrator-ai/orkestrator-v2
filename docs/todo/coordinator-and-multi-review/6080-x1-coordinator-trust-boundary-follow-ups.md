@@ -222,7 +222,7 @@ run and a decision), not on a version.
 - to-do 7400 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#provider-qualification)), [7401](7401-grok-coordinator-data-dir-reads.md), and 7402 (retired 2026-11-10): follow-ups from task 3
 
 - [`docs/architecture/coordinator.md`](../../architecture/coordinator.md#which-environments-a-coordinator-may-act-on)
-- [8108](../cross-cutting/8108-legacy-retirement-sweep.md): the 2026-11-14 legacy-retirement sweep.
+- 8108 (retired): the 2026-11-14 legacy-retirement sweep.
 - [coordinator-live-conformance.md](../../development/coordinator-live-conformance.md) (to-do 0024, retired)
 - [Provider secrets at rest](../../architecture/storage.md#provider-secrets-at-rest)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, the live run of task 5, and the real Pi and OpenCode coordinator turns from Needs verification) moved there on 2026-11-10, and the reading of task 6's counter and the reply decision on 2026-11-14.

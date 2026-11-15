@@ -5,7 +5,7 @@ moved to the manual-test checklist on 2026-11-13 were answered by the user
 (maintainer) on 2026-11-14. This file holds the removals; the
 `envFilePatterns` copy is
 [8106](../containers-and-environments/8106-env-file-patterns-copy.md), the
-legacy readiness path is [8108](8108-legacy-retirement-sweep.md) task 2, and
+legacy readiness path is 8108 (retired) task 2, and
 the Linear integration stays.
 
 ## Task analysis
@@ -91,7 +91,7 @@ backend handlers and tests (`commands-registry-workflow-results.test.ts`,
 `commands-registry-graphs.test.ts`, the workspace-grant scope tests). The user
 decided on 2026-11-14 to delete all three with no older-version adapter (the
 legacy-retirement decision of the same day,
-[8108](8108-legacy-retirement-sweep.md)).
+8108 (retired)).
 
 **Investigation.** Not started. A removed command still changes the domain
 contract: follow
@@ -130,9 +130,9 @@ only for test seeding.
 
 **Context.** Callers: `e2e/agent-testing/container-app-wiring.spec.ts` (about
 line 315), `e2e/agent-testing/pipeline-delete.spec.ts` (about line 64) and
-`scripts/mixed-version/scenarios/pipelines.ts`, which retires with the
-mixed-version sweep ([8108](8108-legacy-retirement-sweep.md) task 4) if that
-lands first. The command is in
+`scripts/mixed-version/scenarios/pipelines.ts`, which was deleted with the
+rest of mixed-version qualification on 2026-11-15 (8108 (retired) task 4), so
+only the two e2e specs remain. The command is in
 `apps/backend/src/core/commands-registry-build.ts`, its schema in
 `packages/protocol/src/contract/domains/pipelines/schemas.ts` and
 `commands.ts`, its tests in `commands-state-sync.test.ts`. The user decided
@@ -175,7 +175,7 @@ keeps an older-version adapter.
 
 - [7571](7571-removal-candidates-needing-a-decision.md): the candidates and
   the decisions.
-- [8108](8108-legacy-retirement-sweep.md): the legacy-retirement sweep.
+- 8108 (retired): the legacy-retirement sweep.
 - [8106](../containers-and-environments/8106-env-file-patterns-copy.md): the
   `envFilePatterns` copy.
 

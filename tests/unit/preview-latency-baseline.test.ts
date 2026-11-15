@@ -180,7 +180,9 @@ describe("argument and token parsing", () => {
     expect(() => parse(["--url", `http://user:${TOKEN}@x`])).toThrow(/bare origin/);
     expect(() => parse(["--url", "http://x", "--samples", "0"])).toThrow(/--samples/);
     expect(() => parse(["--url", "http://x", "--warmups", "1.5"])).toThrow(/--warmups/);
-    expect(() => parse(["--url", "http://x", "--routes", "legacy,ssh"])).toThrow(/Unknown route/);
+    expect(() => parse(["--url", "http://x", "--routes", "direct,ssh"])).toThrow(/Unknown route/);
+    // The legacy gateway route was removed with the route itself.
+    expect(() => parse(["--url", "http://x", "--routes", "legacy"])).toThrow(/Unknown route/);
     expect(() => parse(["--url", "http://x", "--direct", "a b"])).toThrow(/--direct/);
     expect(() => parse(["--url", "http://x", "--path", "health"])).toThrow(/--path/);
     expect(() => parse(["--url", "http://x", "--publication-address", "name"])).toThrow(/IP/);
@@ -189,14 +191,14 @@ describe("argument and token parsing", () => {
     const options = parse([
       "--url=http://100.64.0.2:34121",
       "--routes",
-      "legacy,desktop-tunnel",
+      "private-origin,desktop-tunnel",
       "--direct",
       "[fd7a:115c:a1e0::1]",
       "--samples=7",
       "--warmups",
       "0",
     ]);
-    expect(options.routes).toEqual(["legacy", "desktop-tunnel"]);
+    expect(options.routes).toEqual(["private-origin", "desktop-tunnel"]);
     expect(options.direct).toEqual({ kind: "host", host: "fd7a:115c:a1e0::1" });
     expect(options.samples).toBe(7);
     expect(options.warmups).toBe(0);
@@ -245,7 +247,6 @@ describe("route planning and skip reasons", () => {
   test("runs every route when the backend offers it", () => {
     const plans = planRoutes({ options: base, capabilities: capabilities(), service: service() });
     expect(plans.direct).toEqual({ run: true, host: "build.tailnet.ts.net", port: 49152 });
-    expect(plans.legacy).toEqual({ run: true, port: 49152 });
     expect(plans["desktop-tunnel"]).toEqual({ run: true });
     expect(plans["private-origin"]).toEqual({ run: true });
   });
@@ -294,7 +295,6 @@ describe("route planning and skip reasons", () => {
       service: service({ hostPort: null }),
     });
     expect(reason(relay.direct)).toContain("no host port");
-    expect(reason(relay.legacy)).toContain("no host port");
     const https = planRoutes({
       options: base,
       capabilities: capabilities(),
@@ -303,7 +303,7 @@ describe("route planning and skip reasons", () => {
     expect(reason(https["desktop-tunnel"])).toContain("HTTP services only");
     expect(https["private-origin"]).toEqual({ run: true });
     const some = planRoutes({
-      options: { ...base, routes: ["legacy"], direct: { kind: "off" } },
+      options: { ...base, routes: ["desktop-tunnel"], direct: { kind: "off" } },
       capabilities: capabilities(),
       service: service(),
     });
@@ -313,7 +313,7 @@ describe("route planning and skip reasons", () => {
       capabilities: capabilities(),
       service: service({ state: "unavailable" }),
     });
-    expect(reason(stopped.legacy)).toBe("the service endpoint is unavailable");
+    expect(reason(stopped.direct)).toBe("the service endpoint is unavailable");
   });
 
   test("classifies the backend host without printing it", () => {
@@ -331,7 +331,7 @@ describe("output never carries secrets", () => {
     const routes = Object.fromEntries(
       ROUTES.map((route) => [route, skippedRoute("skipped", "not selected with --routes")]),
     ) as BaselineResult["routes"];
-    routes.legacy = routeResult([{ ok: true, connectMs: 1, firstByteMs: 2, status: 200 }]);
+    routes.direct = routeResult([{ ok: true, connectMs: 1, firstByteMs: 2, status: 200 }]);
     return {
       schema: "orkestrator.preview-latency-baseline.v1",
       label: "test",
@@ -345,7 +345,6 @@ describe("output never carries secrets", () => {
           access: true,
           desktopTunnel: true,
           browserTopLevel: false,
-          legacyPath: true,
           relay: false,
         },
       },
@@ -373,7 +372,7 @@ describe("output never carries secrets", () => {
     expect(() => assertNoSecrets(json, [TOKEN])).not.toThrow();
     const table = formatTable(result());
     for (const route of ROUTES) expect(table).toContain(`| ${route} |`);
-    expect(table).toContain("- direct: not selected with --routes");
+    expect(table).toContain("- desktop-tunnel: not selected with --routes");
     expect(() => assertNoSecrets(table, [TOKEN])).not.toThrow();
   });
 

@@ -234,9 +234,9 @@ const PREFERENCE_LOCK_HEARTBEAT_MS = 5_000;
 const UNAVAILABLE_PREFERENCES = Symbol("unavailable-session-preferences");
 
 /**
- * The owner of a lock or recovery marker. An older bridge wrote only
- * `{ token, pid }`; the identity fields are additive, so it still reads a new
- * lock by its pid.
+ * The owner of a lock or recovery marker: a token and this process's
+ * identity. Metadata without an instance id is unreadable, like any other
+ * malformed lock.
  */
 type LockMetadata = RecordedOwner & {
   token: string;
@@ -352,18 +352,12 @@ function parseLockMetadata(raw: string): LockMetadata | undefined {
       parsed.token.length === 0 ||
       typeof parsed.pid !== "number" ||
       !Number.isSafeInteger(parsed.pid) ||
-      parsed.pid <= 0
-    ) {
-      return undefined;
-    }
-    // Identity fields count only beside an instance id: an owner that wrote no
-    // instance is an older bridge, and keeps that bridge's rule.
-    if (
+      parsed.pid <= 0 ||
       typeof parsed.instance !== "string" ||
       parsed.instance.length === 0 ||
       parsed.instance.length > 64
     ) {
-      return { token: parsed.token, pid: parsed.pid };
+      return undefined;
     }
     return {
       token: parsed.token,
@@ -399,12 +393,11 @@ async function readLockSnapshot(lockPath: string): Promise<LockSnapshot | undefi
  * the mtime every 5 s, so the 30 s stale window is only ever reached by a dead
  * or suspended owner; a suspended one keeps its lock.
  *
- * - Unreadable metadata (mid-write, or foreign): past the stale window.
+ * - Unreadable metadata (mid-write, foreign, or no instance id): past the
+ *   stale window.
  * - An owner this process can prove dead: at once. Its pid is free, is this
  *   process's own (this process records its pid only under its own instance),
  *   or now belongs to a process with another start time or boot id.
- * - A dead owner from an older bridge (no instance): past the stale window, as
- *   that bridge did.
  * - A live owner whose identity matches, or cannot be checked: never. Where
  *   `/proc` is missing the start time is checked with `ps`, once the lock is
  *   past the stale window.
@@ -413,8 +406,7 @@ function snapshotIsRecoverable(snapshot: LockSnapshot): boolean {
   const aged = Date.now() - snapshot.mtimeMs > PREFERENCE_LOCK_STALE_MS;
   const owner = snapshot.metadata;
   if (!owner) return aged;
-  if (recordedOwnerState(owner, { slowPath: aged }) !== "dead") return false;
-  return owner.instance !== undefined || owner.pid === process.pid || aged;
+  return recordedOwnerState(owner, { slowPath: aged }) === "dead";
 }
 
 /**

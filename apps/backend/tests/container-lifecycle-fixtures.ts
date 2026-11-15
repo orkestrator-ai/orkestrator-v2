@@ -130,6 +130,13 @@ export function memoryLifecycleContext(
 export const FIXTURE_IMAGE_ID = `sha256:${"c".repeat(64)}`;
 
 /**
+ * A boot-status record saying the boot whose PID 1 started at `1` is ready.
+ * Fake Docker scripts print it, then `1`, to answer the readiness probe.
+ */
+export const READY_BOOT_RECORD =
+  '{"version":1,"bootId":"00000000-0000-4000-8000-000000000001","pid1Start":"1","phase":"ready"}';
+
+/**
  * Writes the archive `docker cp` streams for an image's manifest, for a fake
  * Docker script's `cp` to `cat`. New containers need `staged-inputs`, so that
  * is what a current image declares unless the test says otherwise.

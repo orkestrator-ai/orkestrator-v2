@@ -93,4 +93,4 @@ plain name changes with the switch.
 - `docs/architecture/remote-gateway.md` (Security notes)
 - To-do 5601 (retired 2026-11-10): the iOS guarantees it checked are in [renderer security, iOS app](../../architecture/renderer-security.md#ios-app), and its device and signed-release checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, recording the first iOS release that accepts the `__Host-` name and the iOS support window) moved there on 2026-11-10; task 2 closed on 2026-11-14 under the user's legacy-retirement decision, so that item goes.
-- [8108](8108-legacy-retirement-sweep.md): the 2026-11-14 legacy-retirement sweep.
+- 8108 (retired): the 2026-11-14 legacy-retirement sweep.

@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
-  TERMINAL_WEBSOCKET_SUBPROTOCOL,
-} from "@orkestrator/protocol/terminal-websocket";
+import { TERMINAL_WEBSOCKET_SUBPROTOCOL } from "@orkestrator/protocol/terminal-websocket";
 
 import {
   SESSION,
@@ -37,7 +34,7 @@ describe("the renderer's terminal client against the gateway", () => {
   test("keystrokes settle in order, with none lost and fewer result frames", async () => {
     const fixture = await startTerminalClient();
     try {
-      expect(fixture.protocol()).toBe(TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL);
+      expect(fixture.protocol()).toBe(TERMINAL_WEBSOCKET_SUBPROTOCOL);
       const settled = await typeKeys(fixture, KEYS, KEYS.length);
       expect(settled).toEqual(KEYS.map((key) => ({ key, outcome: "ok" })));
       expect(fixture.writes).toEqual(KEYS);
@@ -76,19 +73,6 @@ describe("the renderer's terminal client against the gateway", () => {
       expect(settled.map((entry) => entry.key)).toEqual(KEYS);
       expect(fixture.writes).toEqual(KEYS);
       expect(fixture.wire.failures).toBe(failing.size);
-    } finally {
-      await fixture.stop();
-    }
-  });
-
-  test("an older client that offers only v1 works the same, with one frame per key", async () => {
-    const fixture = await startTerminalClient({ protocols: [TERMINAL_WEBSOCKET_SUBPROTOCOL] });
-    try {
-      expect(fixture.protocol()).toBe(TERMINAL_WEBSOCKET_SUBPROTOCOL);
-      const settled = await typeKeys(fixture, KEYS, KEYS.length);
-      expect(settled).toEqual(KEYS.map((key) => ({ key, outcome: "ok" })));
-      expect(fixture.writes).toEqual(KEYS);
-      expect(fixture.wire.resultFrames).toBe(KEYS.length);
     } finally {
       await fixture.stop();
     }

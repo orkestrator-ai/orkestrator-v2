@@ -118,20 +118,11 @@ export async function establishRoute(
           : {}),
       });
       if (route.kind === "ssh") assertSshOutcome(outcome);
-      if (outcome.kind === "hello") {
-        if (
-          backend.verifiedInstallationId &&
-          outcome.hello.installationId !== backend.verifiedInstallationId
-        ) {
-          throw identityMismatch(backend, describeRoute(route));
-        }
-      } else if (backend.verifiedInstallationId && index > 0) {
-        // A fallback that cannot prove identity is not the same machine.
-        throw routeError(
-          "identity-mismatch",
-          "This route could not prove the machine's identity.",
-          false,
-        );
+      if (
+        backend.verifiedInstallationId &&
+        outcome.hello.installationId !== backend.verifiedInstallationId
+      ) {
+        throw identityMismatch(backend, describeRoute(route));
       }
       return { route, transport, token, outcome };
     } catch (error) {
@@ -149,13 +140,6 @@ export async function establishRoute(
 }
 
 export function assertSshOutcome(outcome: HelloOutcome): void {
-  if (outcome.kind !== "hello") {
-    throw routeError(
-      "legacy-backend",
-      "This backend is too old for SSH routes. Update it, or use its HTTPS route.",
-      false,
-    );
-  }
   if (outcome.hello.endpointRole !== "client") {
     throw routeError(
       "control-endpoint",

@@ -83,7 +83,6 @@ export type GatewayRouteKey =
   | "metrics"
   | "client-metrics"
   | "proxy-loopback"
-  | "browser-loopback"
   | "static";
 
 export const GATEWAY_COMPRESSION_MODES = ["off", "body", "on"] as const;
@@ -127,7 +126,6 @@ export interface BackendHelloIdentity {
 
 /** Command-node hooks: attached controllers' portal origins and their last contact. */
 export interface GatewayNodeHooks {
-  isRelayedNodeWatched?(nodeId: import("@orkestrator/protocol/federation").BackendId): boolean;
   isPortalOriginAllowed(origin: string): boolean;
   noteControllerContact(controllerId: string): void;
   /** Expiry (ms) of a live client grant this token proves, else `null`. */
@@ -203,21 +201,8 @@ export interface OrkestratorGatewayOptions {
     "now" | "schedule"
   >;
   proxyBodyIdleTimeoutMs?: number;
-  /** Legacy browser-preview connect+headers deadline (default 30 s). */
-  browserPreviewHeadersTimeoutMs?: number;
   /** Backend preview services; enables the desktop preview tunnel. */
   previews?: import("./core/preview-runtime.js").PreviewRuntime;
-  /**
-   * Which backend-host ports the legacy `browser/loopback/<port>/` route may
-   * open for the environment the request names (its
-   * `x-orkestrator-preview-environment` header, or null). Defaults to
-   * `previews.legacyLoopbackPortAccess`; with neither, the route refuses every
-   * port.
-   */
-  legacyPreviewPortAccess?: (
-    port: number,
-    environmentId: string | null,
-  ) => Promise<import("./core/preview-runtime.js").LegacyLoopbackPortAccess>;
   eventReplay?: {
     frameCapacity?: number;
     maxBytes?: number;
@@ -285,14 +270,6 @@ export const MAX_BROWSER_SESSIONS = 64;
 export { DEFAULT_GATEWAY_PORT } from "./fixed-ports.js";
 export const GATEWAY_PORT_FALLBACK_ATTEMPTS = 20;
 export const MAX_JSON_BODY_BYTES = 1024 * 1024;
-export const MAX_BROWSER_PREVIEW_BODY_BYTES = 8 * 1024 * 1024;
-/**
- * Sent on every legacy `browser/loopback` response. The same flags as the
- * client's preview iframe, without `allow-same-origin`, so the preview stays an
- * opaque origin even when it is opened top-level.
- */
-export const BROWSER_PREVIEW_SANDBOX_CSP =
-  "sandbox allow-scripts allow-forms allow-pointer-lock allow-presentation";
 /**
  * Command bodies carry durable snapshots — prompt queues, build pipelines and
  * agent handoffs — whose storage limit is 32 MB each. Every renderer command
@@ -334,13 +311,6 @@ export const MAX_CONCURRENT_DYNAMIC_COMPRESSIONS = 8;
  */
 export const MAX_CONCURRENT_STREAMING_COMPRESSIONS = 8;
 export const MAX_DYNAMIC_PROXY_BUFFERED_SOURCE_BYTES = 64 * 1024 * 1024;
-export const MAX_BUFFERED_BODY_CHUNKS = 8192;
-/**
- * Aggregate ceiling for decoded browser-preview bodies held across all in-flight
- * preview requests. The per-request bound alone leaves concurrency unbounded, so
- * N simultaneous previews could retain N times the per-request limit.
- */
-export const MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES = 64 * 1024 * 1024;
 /**
  * Idle ceiling for a proxied body that already holds a compression-buffer
  * reservation. Nothing else in the gateway times a proxy out, so an upstream
@@ -906,7 +876,6 @@ export function classifyGatewayRoute(pathname: string): GatewayRouteKey {
   if (pathname === `${API_PREFIX}/metrics`) return "metrics";
   if (pathname === `${API_PREFIX}/client-metrics`) return "client-metrics";
   if (pathname.startsWith(`${API_PREFIX}/proxy/loopback/`)) return "proxy-loopback";
-  if (pathname.startsWith(`${API_PREFIX}/browser/loopback/`)) return "browser-loopback";
   return "static";
 }
 
@@ -1790,26 +1759,6 @@ export function isDynamicCompressionSizeEligible(byteLength: number): boolean {
   );
 }
 
-export function canBufferBodyChunk(
-  currentBytes: number,
-  currentChunks: number,
-  nextChunkBytes: number,
-  maxBytes: number,
-): boolean {
-  return (
-    Number.isSafeInteger(currentBytes) &&
-    currentBytes >= 0 &&
-    Number.isSafeInteger(currentChunks) &&
-    currentChunks >= 0 &&
-    Number.isSafeInteger(nextChunkBytes) &&
-    nextChunkBytes >= 0 &&
-    Number.isSafeInteger(maxBytes) &&
-    maxBytes >= 0 &&
-    currentChunks < MAX_BUFFERED_BODY_CHUNKS &&
-    currentBytes + nextChunkBytes <= maxBytes
-  );
-}
-
 export type DynamicCompressionBufferBudgetSnapshot = {
   activeCount: number;
   activeBytes: number;
@@ -1866,41 +1815,6 @@ export function dynamicProxyCompressionBufferSnapshot(): DynamicCompressionBuffe
 
 export function activeDynamicCompressionCount(): number {
   return activeDynamicCompressions;
-}
-
-/**
- * Aggregate byte budget for buffers whose final size is not known in advance.
- * Preview bodies arrive decoded, so they are accounted for incrementally rather
- * than reserved up front the way a declared `Content-Length` can be.
- */
-export class AggregateByteBudget {
-  private activeBytes = 0;
-
-  constructor(private readonly maxBytes: number) {}
-
-  tryAcquire(bytes: number): boolean {
-    if (!Number.isSafeInteger(bytes) || bytes < 0) return false;
-    if (this.activeBytes + bytes > this.maxBytes) return false;
-    this.activeBytes += bytes;
-    return true;
-  }
-
-  release(bytes: number): void {
-    if (!Number.isSafeInteger(bytes) || bytes <= 0) return;
-    this.activeBytes = Math.max(0, this.activeBytes - bytes);
-  }
-
-  snapshot(): { activeBytes: number } {
-    return { activeBytes: this.activeBytes };
-  }
-}
-
-export const browserPreviewDecodeBudget = new AggregateByteBudget(
-  MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES,
-);
-
-export function browserPreviewDecodeSnapshot(): { activeBytes: number } {
-  return browserPreviewDecodeBudget.snapshot();
 }
 
 /**
@@ -2196,34 +2110,6 @@ export function settlePreparedBodyResponse(
     })
     .catch((error: unknown) => {
       recoverBodyResponseError(response, statusCode, headers, source, error);
-    });
-}
-
-export function settleRewrittenProxyBodyResponse(
-  response: ServerResponse,
-  statusCode: number,
-  headers: OutgoingHttpHeaders,
-  preparation: Promise<PreparedBody>,
-  isSettled: () => boolean,
-  finish: () => void,
-  fail: (error: Error) => void,
-): void {
-  void preparation
-    .then((prepared) => {
-      if (isSettled() || response.destroyed) return;
-      headers["content-length"] = prepared.body.byteLength;
-      if (prepared.variesByEncoding) appendHeadersVary(headers, "Accept-Encoding");
-      if (prepared.encoding === "identity") {
-        delete headers["content-encoding"];
-      } else {
-        headers["content-encoding"] = prepared.encoding;
-      }
-      response.writeHead(statusCode, headers);
-      response.end(prepared.body);
-      finish();
-    })
-    .catch((error: unknown) => {
-      fail(error instanceof Error ? error : new Error(String(error)));
     });
 }
 

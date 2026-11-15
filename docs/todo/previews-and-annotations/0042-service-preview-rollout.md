@@ -41,13 +41,14 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 8. **Retire the legacy route and compatibility mode**: code item 6. Status:
    done here (2026-11-14): the user decided to remove `ServiceBrowserTab`
    compatibility mode and the legacy loopback route now, with annotations on
-   legacy URL tabs, and no support-window wait (D30). The removal is
-   [8108](../cross-cutting/8108-legacy-retirement-sweep.md) task 3. Stored
-   tabs that match one service already migrate (D21).
+   legacy URL tabs, and no support-window wait (D30). The removal was
+   8108 (retired) task 3, done 2026-11-15 with its register Retired row. Stored
+   tabs that match one service already migrate (D21); a tab that matches no
+   single service stays a plain URL tab that opens externally.
 9. **Shared legacy partition retention**: the remaining half of code item 4.
-   Status: blocked (waits on 8108 task 3, the route's removal, and on 7568:
-   0042 task 12, the long-lived profile reading the window is set from): the
-   shared partitions serve legacy URL tabs until that route is retired.
+   Status: blocked (waits on 7568: 0042 task 12, the long-lived profile
+   reading the window is set from; the legacy route it also waited on was
+   retired on 2026-11-15 by 8108 (retired) task 3).
 10. **Real-window leftovers**: the pane-layout announcement (item 9), node
     retention against a real command node, and the narrow toolbar measured in
     a window (item 11). Status: done (2026-11-06): two Electron spec cases
@@ -229,7 +230,7 @@ register's condition now turned on them and the support window. The
 maintainer's calls on the fallback and on legacy-tab annotations were made on
 2026-11-14 (D30): both go now, with no support-window wait, under the user's
 legacy-retirement decision; the removal is
-[8108](../cross-cutting/8108-legacy-retirement-sweep.md) task 3.
+8108 (retired) task 3.
 
 **Decisions.**
 
@@ -2247,7 +2248,7 @@ of the same day that all legacy support retires in one sweep (every machine
 and client updates together). D8's recommendation of one Stable release of
 fallback is superseded. The removal, its register Retired row, and the
 plain-URL-tabs-open-externally behaviour move to
-[8108](../cross-cutting/8108-legacy-retirement-sweep.md) task 3; task 9 (the
+8108 (retired) task 3; task 9 (the
 shared legacy partitions) follows it.
 
 ### D28. Task 10: keep each save's exact revision as the assertion baseline

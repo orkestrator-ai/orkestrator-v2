@@ -100,6 +100,11 @@ describe("live pin layer", () => {
           getURL: () => "http://localhost:3000/dashboard",
           isDestroyed: () => false,
         },
+        describeService: () => ({
+          serviceId: "service-web",
+          path: "/dashboard",
+          displayUrl: "http://localhost:3000/dashboard",
+        }),
       }),
     });
     const [initial] = await sessions.showPins({

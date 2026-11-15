@@ -40,26 +40,15 @@ function countIdleTimers() {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-describe.each([
-  {
-    site: "buffered proxy",
-    route: "proxy",
-    contentType: "text/plain; charset=utf-8",
-    stalledMessage: `Proxied response stalled for ${IDLE_MS} ms`,
-  },
-  {
-    site: "browser preview rewrite",
-    route: "browser",
-    contentType: "text/html; charset=utf-8",
-    stalledMessage: "Browser preview response stalled",
-  },
-])("$site idle deadline", ({ route, contentType, stalledMessage }) => {
+describe("buffered proxy idle deadline", () => {
+  const contentType = "text/plain; charset=utf-8";
+  const stalledMessage = `Proxied response stalled for ${IDLE_MS} ms`;
   const CHUNKS = 10;
   const CHUNK = "x".repeat(2048);
 
   async function fetchBody(port: number) {
     const { info } = await startGateway({ compression: "body", proxyBodyIdleTimeoutMs: IDLE_MS });
-    return requestUrl(`${info.url}__orkestrator/${route}/loopback/${port}/`, {
+    return requestUrl(`${info.url}__orkestrator/proxy/loopback/${port}/`, {
       headers: { authorization: `Bearer ${info.token}`, "accept-encoding": "gzip" },
     });
   }

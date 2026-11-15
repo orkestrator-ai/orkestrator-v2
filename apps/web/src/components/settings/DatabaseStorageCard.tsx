@@ -128,7 +128,7 @@ export function DatabaseStorageCard() {
     try {
       next = await backend.getDatabaseStats(machine);
     } catch {
-      // A backend older than this command, or one that cannot answer.
+      // A backend that cannot answer: the card says the figures are unavailable.
     }
     if (request !== requestRef.current) return;
     setStats(next);

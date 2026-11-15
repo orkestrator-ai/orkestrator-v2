@@ -19,15 +19,8 @@ import type {
   GatewayEventClient,
   GatewayReconcileReason,
 } from "./gateway-internals.js";
-import {
-  MAX_NODE_EVENT_WATCHES,
-  RELAYED_NODE_EVENT,
-  relayedNodeEventNodeId,
-  type RelayedNodeEvent,
-} from "@orkestrator/protocol/node-events";
-import type { BackendId } from "@orkestrator/protocol/federation";
+import { relayedNodeEventNodeId } from "@orkestrator/protocol/node-events";
 import { createLogger } from "@orkestrator/protocol/logger";
-import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 
 const log = createLogger("gateway");
 
@@ -35,37 +28,14 @@ function formatControlFrame(event: string, cursor: string | null, payload: unkno
   return `${cursor ? `id: ${cursor}\n` : ""}data: ${JSON.stringify({ event, payload })}\n\n`;
 }
 
-function encodeLegacyRelayedFrame(payload: unknown): Buffer {
-  return encodeGatewayFrame(`data: ${JSON.stringify({ event: RELAYED_NODE_EVENT, payload })}\n\n`);
-}
-
-function recordLegacyRelayedFrame(state: GatewayEventClient): void {
-  compatibilityPathUsage.record(
-    state.relayedEvents
-      ? "relayed-node-event.legacy-desktop-stream"
-      : "relayed-node-event.legacy-stream",
-  );
-}
-
 /** SSE fan-out, the replay handshake, and bounded per-client buffering. */
 export class GatewayEvents {
-  /**
-   * The main revision at each node's newest relayed event, oldest first. Relayed
-   * events are outside the window a main stream replays, so a reconnecting
-   * older client is told which nodes it may have missed something from. A watch
-   * names one node, but historical node churn can exceed the live watch bound.
-   * Eviction retains a main-revision watermark requiring snapshot recovery.
-   */
-  private readonly relayedNodes = new Map<BackendId, number>();
-  private relayedOverflowRevision: number | null = null;
-
   constructor(private readonly ctx: GatewayContext) {}
 
   emit(event: string, payload: unknown): void {
     this.ctx.terminalWebSocket.emit(event, payload);
     const droppable = event.startsWith(DROPPABLE_EVENT_PREFIX);
     const relayedNode = relayedNodeEventNodeId(event);
-    if (relayedNode) this.rememberRelayedNode(relayedNode);
     const ring = relayedNode ? this.ctx.relayedEventReplay : this.ctx.eventReplay;
     // Authoritative state is revisioned and retained even while no renderer is
     // mounted. Terminal bytes have their own generation/revision snapshot
@@ -74,24 +44,9 @@ export class GatewayEvents {
     if (this.ctx.clients.size === 0) return;
     let message = replayFrame?.message ?? null;
     let messageBytes = replayFrame?.encodedBytes ?? 0;
-    let legacyMessage: Buffer | null = null;
     for (const [client, state] of this.ctx.clients) {
-      if (relayedNode && !state.relayedStream) {
-        if (!this.takesLegacyRelayedFrames(state)) continue;
-        legacyMessage ??= encodeLegacyRelayedFrame(payload);
-        recordLegacyRelayedFrame(state);
-        this.deliverEvent(
-          client,
-          state,
-          RELAYED_NODE_EVENT,
-          payload,
-          legacyMessage,
-          legacyMessage.byteLength,
-          false,
-          null,
-        );
-        continue;
-      }
+      // Relayed events reach only per-node relayed streams.
+      if (relayedNode && !state.relayedStream) continue;
       if (
         !eventMatchesSubscription(
           event,
@@ -160,70 +115,6 @@ export class GatewayEvents {
 
   private ringOf(state: GatewayEventClient): GatewayEventReplay {
     return state.relayedStream ? this.ctx.relayedEventReplay : this.ctx.eventReplay;
-  }
-
-  private takesLegacyRelayedFrames(state: GatewayEventClient): boolean {
-    return (
-      state.relayedEvents !== "per-node" &&
-      !state.relayedStream &&
-      eventMatchesSubscription(
-        RELAYED_NODE_EVENT,
-        state.prefixes,
-        state.includedPrefixes,
-        state.excludedPrefixes,
-      )
-    );
-  }
-
-  private rememberRelayedNode(nodeId: BackendId): void {
-    this.relayedNodes.delete(nodeId);
-    this.relayedNodes.set(nodeId, this.ctx.eventReplay.latestRevision);
-    if (this.relayedNodes.size > MAX_NODE_EVENT_WATCHES) {
-      const oldest = this.relayedNodes.keys().next().value;
-      if (oldest !== undefined) {
-        this.relayedOverflowRevision = Math.max(
-          this.relayedOverflowRevision ?? 0,
-          this.relayedNodes.get(oldest)!,
-        );
-        this.relayedNodes.delete(oldest);
-      }
-    }
-  }
-
-  /**
-   * A main stream's replay covers everything except relayed events, so an older
-   * client coming back is told to re-read the nodes that relayed something since
-   * its cursor. A relayed event at the cursor's own revision may have come after
-   * the client left, so it counts.
-   */
-  private writeLegacyRelayedResyncs(
-    client: EventClientWriter,
-    state: GatewayEventClient,
-    sinceRevision: number,
-  ): boolean {
-    if (!this.takesLegacyRelayedFrames(state)) return true;
-    for (const [nodeId, revision] of this.relayedNodes) {
-      if (revision < sinceRevision || this.ctx.nodeHooks?.isRelayedNodeWatched?.(nodeId) === false)
-        continue;
-      const frame: RelayedNodeEvent = { nodeId, kind: "resync" };
-      const message = encodeLegacyRelayedFrame(frame);
-      recordLegacyRelayedFrame(state);
-      if (
-        !this.writeEventToClient(
-          client,
-          state,
-          RELAYED_NODE_EVENT,
-          frame,
-          message,
-          message.byteLength,
-          false,
-        ) ||
-        !this.ctx.clients.has(client)
-      ) {
-        return false;
-      }
-    }
-    return true;
   }
 
   /**
@@ -455,17 +346,6 @@ export class GatewayEvents {
       }
     }
 
-    if (
-      !reconcileReason &&
-      cursor.kind === "valid" &&
-      this.takesLegacyRelayedFrames(state) &&
-      this.relayedOverflowRevision !== null &&
-      cursor.revision <= this.relayedOverflowRevision
-    ) {
-      replay = null;
-      replayStatus = "reconcile";
-      reconcileReason = "cursor-expired";
-    }
     const replayedFrames = replay?.complete ? replay.frames.length : 0;
     this.ctx.metrics.recordReplayHandshake(
       replayStatus,
@@ -501,8 +381,6 @@ export class GatewayEvents {
       if (!this.ctx.clients.has(client)) return;
       highestSent = ring.latestRevision;
     } else if (replay) {
-      // Recovery must precede every id that could advance beyond its watermark.
-      if (!this.writeLegacyRelayedResyncs(client, state, requestedRevision ?? 0)) return;
       if (!this.writeReplayFrames(client, state, replay.frames)) return;
       highestSent = Math.max(highestSent, replay.frames.at(-1)?.revision ?? 0);
     }

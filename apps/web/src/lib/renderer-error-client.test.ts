@@ -105,26 +105,7 @@ describe("the send", () => {
     expect(invoke).toHaveBeenCalledWith({ entries: [entry], client: "client-0001" });
   });
 
-  test("a backend that refuses the argument gets the batch again without it, from then on", async () => {
-    const calls: unknown[] = [];
-    const invoke = mock(async (args: unknown) => {
-      calls.push(args);
-      if ((args as { client?: string }).client) {
-        throw new Error("Unexpected arguments field: client");
-      }
-      return { accepted: 1, dropped: 0 };
-    });
-    const send = rendererErrorSender(invoke, "client-0001");
-    expect(await send([entry])).toEqual({ accepted: 1, dropped: 0 });
-    await send([entry]);
-    expect(calls).toEqual([
-      { entries: [entry], client: "client-0001" },
-      { entries: [entry] },
-      { entries: [entry] },
-    ]);
-  });
-
-  test("any other failure reaches the uploader unchanged", async () => {
+  test("a failure reaches the uploader unchanged", async () => {
     const failure = new Error("backend unreachable");
     const invoke = mock(async () => {
       throw failure;

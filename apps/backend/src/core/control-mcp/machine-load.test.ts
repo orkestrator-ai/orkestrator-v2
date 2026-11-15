@@ -12,7 +12,6 @@ import {
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerSystemCommands } from "../commands-registry-system.js";
-import { COMPATIBILITY_PATH_IDS, compatibilityPathUsage } from "../compatibility-path-usage.js";
 import { readNodeMachineLoad } from "./machine-load.js";
 import { registerNodeTools } from "./nodes.js";
 import { ControlMcpServer } from "./server.js";
@@ -227,7 +226,7 @@ describe("list_nodes over Control MCP", () => {
     expect(machineOf(listed, "bk_new")).toEqual({ status: "ok", ...REMOTE });
     expect(machineOf(listed, "bk_old")).toMatchObject({
       status: "unavailable",
-      reason: "older-version",
+      reason: "error",
     });
     expect(machineOf(listed, "bk_broken")).toMatchObject({
       status: "unavailable",
@@ -390,26 +389,11 @@ describe("reading one node's load", () => {
     await flushMicrotasks();
   });
 
-  test("only the unknown-command answer means an older node, and it is counted", async () => {
-    const before = compatibilityPathUsage.snapshot().paths["machine-load.older-node"]?.count ?? 0;
-    const view = await readNodeMachineLoad(
-      (async () => {
-        throw new Error(unknownBackendCommandMessage(MACHINE_LOAD_COMMAND));
-      }) as never,
-      node,
-    );
-    expect(view).toMatchObject({ reason: "older-version" });
-    expect(compatibilityPathUsage.snapshot().paths["machine-load.older-node"]?.count).toBe(
-      before + 1,
-    );
-    expect(COMPATIBILITY_PATH_IDS).toContain("machine-load.older-node");
-
-    // No backend has answered "Unknown command:", and a longer name is another command.
+  test("an unknown-command answer is an ordinary failure, with fixed wording", async () => {
     for (const wording of [
+      unknownBackendCommandMessage(MACHINE_LOAD_COMMAND),
       "Network down",
       `Unknown command: ${MACHINE_LOAD_COMMAND}`,
-      "Unknown backend command: something_else",
-      `Unknown backend command: ${MACHINE_LOAD_COMMAND}_v2`,
     ]) {
       const view = await readNodeMachineLoad(
         (async () => {
@@ -417,11 +401,12 @@ describe("reading one node's load", () => {
         }) as never,
         node,
       );
-      expect(view).toMatchObject({ reason: "error" });
+      expect(view).toEqual({
+        status: "unavailable",
+        reason: "error",
+        detail: "Build box could not report its load.",
+      });
     }
-    expect(compatibilityPathUsage.snapshot().paths["machine-load.older-node"]?.count).toBe(
-      before + 1,
-    );
   });
 
   test("a link that drops after the summaries were read is offline", async () => {

@@ -1,12 +1,4 @@
-import { Duplex } from "node:stream";
-
-import {
-  encodePreviewTunnelFrame,
-  parsePreviewTunnelServerFrame,
-  PREVIEW_TUNNEL_CLIENT_PING_MS,
-  PREVIEW_TUNNEL_CLOSE,
-  PREVIEW_TUNNEL_SUBPROTOCOL,
-} from "@orkestrator/protocol/preview-access";
+import { PREVIEW_TUNNEL_CLOSE } from "@orkestrator/protocol/preview-access";
 import {
   PREVIEW_LIMITS,
   previewFailure,
@@ -41,112 +33,13 @@ export const CATEGORY_FOR_CLOSE: Record<number, PreviewErrorCategory> = {
 };
 
 /**
- * One tunnel connection as a Duplex byte stream. Writes are split into
- * bounded frames and respect WebSocket backpressure; reads pause the socket
- * when the consumer is not reading. `end()` half-closes (EOF); `destroy()`
- * cancels. Nothing is buffered before the backend confirms `OPEN_OK`.
- *
- * While open it pings the backend, so a stream whose consumer stopped reading
- * (paused media) is not mistaken for a dead peer: the backend's own pings
- * wait behind the unread data.
+ * The tunnel WebSocket handshake, offering `protocol`. A backend that is busy
+ * answers 503 (capacity); any other refusal, including a backend that does
+ * not speak the offered subprotocol, is `backend-unavailable`.
  */
-export class PreviewTunnelStream extends Duplex {
-  private closedByPeer = false;
-  private readonly heartbeat: ReturnType<typeof setInterval>;
-  /** Milliseconds from starting the WebSocket connect to `OPEN_OK` (0 when built directly). */
-  readonly openMs: number;
-
-  constructor(
-    private readonly ws: PreviewWebSocket,
-    options: { pingIntervalMs?: number; openMs?: number } = {},
-  ) {
-    super({ allowHalfOpen: true });
-    this.openMs = options.openMs ?? 0;
-    this.heartbeat = setInterval(() => {
-      if (this.ws.isOpen) this.ws.ping();
-    }, options.pingIntervalMs ?? PREVIEW_TUNNEL_CLIENT_PING_MS);
-    this.heartbeat.unref?.();
-    ws.on("close", () => clearInterval(this.heartbeat));
-    ws.on("message", (data, binary) => {
-      if (binary) {
-        if (!this.push(data)) ws.pause();
-        return;
-      }
-      const frame = parsePreviewTunnelServerFrame(data.toString("utf8"));
-      if (frame?.type === "eof") this.push(null);
-      else if (frame?.type === "error")
-        this.destroy(previewFailure(frame.error.category, frame.error));
-    });
-    ws.on("close", (code) => {
-      this.closedByPeer = true;
-      if (code === PREVIEW_TUNNEL_CLOSE.normal || code === 1005) {
-        // Both directions ended. Let buffered bytes drain to the reader; the
-        // stream auto-destroys once it has ended and finished.
-        this.push(null);
-        if (!this.writableEnded) this.end();
-        return;
-      }
-      this.destroy(previewFailure(CATEGORY_FOR_CLOSE[code] ?? "backend-unavailable"));
-    });
-    ws.on("drain", () => this.emit("tunnel-drain"));
-  }
-
-  override _read(): void {
-    this.ws.resume();
-  }
-
-  override _write(
-    chunk: Buffer,
-    _encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ): void {
-    if (!this.ws.isOpen) {
-      callback(previewFailure("backend-unavailable", { message: "The preview tunnel closed." }));
-      return;
-    }
-    let flushed = true;
-    for (let offset = 0; offset < chunk.length; offset += PREVIEW_LIMITS.tunnelFrameMaxBytes) {
-      flushed =
-        this.ws.send(chunk.subarray(offset, offset + PREVIEW_LIMITS.tunnelFrameMaxBytes), true) &&
-        flushed;
-    }
-    if (flushed) callback();
-    else this.once("tunnel-drain", () => callback());
-  }
-
-  override _final(callback: (error?: Error | null) => void): void {
-    if (this.ws.isOpen) this.ws.send(encodePreviewTunnelFrame({ type: "eof" }), false);
-    callback();
-  }
-
-  override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
-    clearInterval(this.heartbeat);
-    if (!this.closedByPeer && this.ws.isOpen) {
-      this.ws.send(encodePreviewTunnelFrame({ type: "cancel" }), false);
-      this.ws.close(PREVIEW_TUNNEL_CLOSE.normal);
-    }
-    callback(error);
-  }
-}
-
-/**
- * Open an authorized v1 tunnel connection: WebSocket handshake, HELLO with
- * the attachment credential, OPEN (no destination fields), then OPEN_OK.
- * HELLO and OPEN are pipelined; application bytes wait for OPEN_OK.
- * `PreviewTunnelConnector` (`preview-tunnel-session.ts`) prefers v2.
- */
-export async function openPreviewTunnel(
-  options: PreviewTunnelOpenOptions,
-): Promise<PreviewTunnelStream> {
-  const started = performance.now();
-  const ws = await connectPreviewTunnelSocket(options, PREVIEW_TUNNEL_SUBPROTOCOL);
-  return startV1Tunnel(ws, options, started);
-}
-
-/** The tunnel WebSocket handshake, offering `protocol` (several in preference order). */
 export async function connectPreviewTunnelSocket(
   options: PreviewTunnelOpenOptions,
-  protocol: string | readonly string[],
+  protocol: string,
 ): Promise<PreviewWebSocket> {
   try {
     return await connectPreviewWebSocket({
@@ -166,65 +59,4 @@ export async function connectPreviewTunnelSocket(
       message: "The preview tunnel could not be reached.",
     });
   }
-}
-
-/** Run v1 on a socket that negotiated it: HELLO and OPEN, then wait for OPEN_OK. */
-export function startV1Tunnel(
-  ws: PreviewWebSocket,
-  options: PreviewTunnelOpenOptions,
-  started: number,
-): Promise<PreviewTunnelStream> {
-  return new Promise<PreviewTunnelStream>((resolve, reject) => {
-    let settled = false;
-    const finish = (error: Error | null) => {
-      if (settled) return;
-      settled = true;
-      ws.off("message", onMessage);
-      ws.off("close", onClose);
-      options.signal?.removeEventListener("abort", onAbort);
-      clearTimeout(timer);
-      if (error) {
-        ws.terminate();
-        reject(error);
-        return;
-      }
-      const stream = new PreviewTunnelStream(ws, {
-        pingIntervalMs: options.pingIntervalMs,
-        openMs: performance.now() - started,
-      });
-      resolve(stream);
-    };
-    const onMessage = (data: Buffer, binary: boolean) => {
-      if (binary) return finish(previewFailure("internal", { message: "Unexpected tunnel data." }));
-      const frame = parsePreviewTunnelServerFrame(data.toString("utf8"));
-      if (!frame) return finish(previewFailure("internal", { message: "Malformed tunnel frame." }));
-      if (frame.type === "ready") return;
-      if (frame.type === "open-ok") return finish(null);
-      if (frame.type === "open-failed" || frame.type === "error") {
-        return finish(previewFailure(frame.error.category, { message: frame.error.message }));
-      }
-    };
-    const onClose = (code: number) =>
-      finish(previewFailure(CATEGORY_FOR_CLOSE[code] ?? "backend-unavailable"));
-    const onAbort = () =>
-      finish(previewFailure("access-expired", { message: "The preview request was cancelled." }));
-    const timer = setTimeout(
-      () => finish(previewFailure("connect-timeout")),
-      (options.handshakeTimeoutMs ?? PREVIEW_LIMITS.connectTimeoutMs) * 2,
-    );
-    options.signal?.addEventListener("abort", onAbort, { once: true });
-    ws.on("message", onMessage);
-    ws.on("close", onClose);
-    ws.start();
-    ws.send(
-      encodePreviewTunnelFrame({
-        type: "hello",
-        version: 1,
-        attachmentId: options.attachmentId,
-        credential: options.credential,
-      }),
-      false,
-    );
-    ws.send(encodePreviewTunnelFrame({ type: "open" }), false);
-  });
 }

@@ -6,7 +6,6 @@ import {
   AGENT_MAIL_ATTACHMENT_DIRECTORY,
   type AgentMailAttachment,
 } from "@orkestrator/protocol/agent-mail";
-import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
 import {
   placeNodeMailAttachmentsCommand,
   prepareNodeMailAttachmentsCommand,
@@ -18,7 +17,6 @@ import {
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { CommandContext } from "./commands-context.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import { CONTAINER_PINNED_ATTACHMENT_WRITE, writeConfinedLocalArtifact } from "./commands-files.js";
@@ -434,17 +432,8 @@ export interface MailAttachmentNode {
   selfId: string;
   nodeId: string;
   nodeName: string;
-  /** That node's `node-mail` domain client: version 1 takes images, a pre-contract node by capability. */
-  nodeMail(): Pick<NodeMailApi, "supports" | "prepareAttachments">;
-}
-
-/** Refuse a node that would drop or reject the images, and say what to do. */
-export function assertNodeTakesMailAttachments(node: MailAttachmentNode): void {
-  if (node.nodeMail().supports(BACKEND_CAPABILITIES.nodeMailAttachments)) return;
-  compatibilityPathUsage.record("node-mail-attachments.older-node");
-  throw new Error(
-    `${node.nodeName} runs an older Orkestrator that cannot receive images by mail; update that machine, then retry. Nothing was sent.`,
-  );
+  /** That node's `node-mail` domain client. */
+  nodeMail(): Pick<NodeMailApi, "prepareAttachments">;
 }
 
 /**
@@ -461,7 +450,6 @@ export async function pushCallerAttachmentsToNode(
   own: readonly OwnAttachment[],
   to: MailAttachmentRecipient,
 ): Promise<MailAttachmentBatch> {
-  assertNodeTakesMailAttachments(node);
   const attachments = batchFor(caller, requestId, own);
   const { missing } = await node.nodeMail().prepareAttachments({ to, attachments });
   if (missing.length === 0) return attachments;

@@ -7,8 +7,7 @@ import {
   GatewayEventReplay,
 } from "./gateway-event-replay.js";
 import { TerminalWebSocketGateway } from "./terminal-websocket-server.js";
-import type { LegacyLoopbackPortAccess, PreviewRuntime } from "./core/preview-runtime.js";
-import { PreviewAdmission } from "./preview-admission.js";
+import type { PreviewRuntime } from "./core/preview-runtime.js";
 import { PreviewMetrics } from "./preview-metrics.js";
 import { PreviewTunnelServer } from "./preview-tunnel-server.js";
 import type { GatewayAuth } from "./gateway-auth.js";
@@ -99,16 +98,6 @@ export class GatewayContext {
   readonly previews?: PreviewRuntime;
   readonly previewMetrics: PreviewMetrics;
   readonly previewTunnel?: PreviewTunnelServer;
-  /** Legacy `/__orkestrator/browser/loopback/<port>/` concurrency (per port, overall). */
-  readonly legacyPreviewAdmission = new PreviewAdmission("http", {
-    perService: 32,
-    perBackend: 128,
-  });
-  readonly browserPreviewHeadersTimeoutMs: number;
-  readonly legacyPreviewPortAccess: (
-    port: number,
-    environmentId: string | null,
-  ) => Promise<LegacyLoopbackPortAccess>;
   servers = new Set<Server>();
   /** Set once the loopback client listener is serving. */
   loopbackClientUrl: string | null = null;
@@ -178,14 +167,7 @@ export class GatewayContext {
         : null;
     this.proxyBodyIdleTimeoutMs =
       options.proxyBodyIdleTimeoutMs ?? BUFFERED_PROXY_BODY_IDLE_TIMEOUT_MS;
-    this.browserPreviewHeadersTimeoutMs = options.browserPreviewHeadersTimeoutMs ?? 30_000;
     this.previews = options.previews;
-    const previews = this.previews;
-    this.legacyPreviewPortAccess =
-      options.legacyPreviewPortAccess ??
-      (previews
-        ? (port, environmentId) => previews.legacyLoopbackPortAccess(port, environmentId)
-        : async () => "unknown" as const);
     this.previewMetrics = this.previews?.metrics ?? new PreviewMetrics();
     if (this.previews) {
       this.previewTunnel = new PreviewTunnelServer({
@@ -197,10 +179,6 @@ export class GatewayContext {
       this.previewMetrics.gauge("tunnel.sockets", () => tunnel.stats().sockets);
       this.previewMetrics.gauge("tunnel.queued_bytes", () => tunnel.stats().aggregateQueuedBytes);
       this.previewMetrics.gauge("tunnel.active", () => tunnel.stats().admission.active);
-      this.previewMetrics.gauge(
-        "legacy.http_active",
-        () => this.legacyPreviewAdmission.stats().active,
-      );
     }
     this.eventReplay = new GatewayEventReplay(randomBytes(16).toString("hex"), options.eventReplay);
     this.relayedEventReplay = new GatewayEventReplay(randomBytes(16).toString("hex"), {

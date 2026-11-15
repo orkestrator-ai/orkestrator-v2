@@ -78,9 +78,9 @@ export const KanbanTaskSchema = openRecord({
   // Text mirrors of `sections`, kept for readers that predate sections.
   description: Schema.optional(Schema.String),
   acceptanceCriteria: Schema.optional(Schema.String),
-  // `TicketKind`; absent on tickets written before kinds (a feature ticket).
+  // `TicketKind`; the backend always sends it (optional here for the contract ratchet).
   kind: optionalString,
-  // `TicketSections`; absent on legacy rows (derived from the mirrors).
+  // `TicketSections`; the backend always sends them (optional here for the contract ratchet).
   sections: Schema.optional(OpenObject),
   sectionsBasis: optionalString,
   // Label names in the order they were added (`ticket-labels.ts`); absent when it has none.

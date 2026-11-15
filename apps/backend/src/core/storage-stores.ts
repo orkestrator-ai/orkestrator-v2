@@ -11,6 +11,7 @@ import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import { snapshotBeforeMigration } from "./storage-backups.js";
 import {
   buildPipelineReviewReportUpgradeMigration,
+  kanbanTicketSectionsUpgradeMigration,
   recordShapeUpgradeMigration,
 } from "./storage-record-upgrades.js";
 import {
@@ -286,6 +287,7 @@ export const STORAGE_MIGRATIONS: readonly StorageMigration[] = [
   moveChangeLedgerMigration,
   retireOpenCode2SessionsMigration,
   publicOperationRowsMigration,
+  kanbanTicketSectionsUpgradeMigration,
 ];
 
 function legacyArtifacts(entries: readonly string[], baseName: string): string[] {

@@ -6,7 +6,6 @@ import { Duplex } from "node:stream";
 
 import {
   PREVIEW_TUNNEL_PATH,
-  PREVIEW_TUNNEL_SUBPROTOCOL,
   type PreviewAttachmentDescriptor,
 } from "@orkestrator/protocol/preview-access";
 import {
@@ -15,12 +14,12 @@ import {
   encodePreviewTunnelMuxFrame,
   PREVIEW_TUNNEL_MUX,
   PREVIEW_TUNNEL_MUX_DATA_MAX_BYTES,
-  PREVIEW_TUNNEL_OFFERED_SUBPROTOCOLS,
   PREVIEW_TUNNEL_SUBPROTOCOL_V2,
   type PreviewTunnelMuxClientFrame,
 } from "@orkestrator/protocol/preview-tunnel-mux";
 import {
   connectPreviewWebSocket,
+  PreviewWebSocketHandshakeError,
   type PreviewWebSocket,
 } from "@orkestrator/protocol/node/preview-websocket";
 
@@ -28,7 +27,6 @@ import {
   startPreviewFixture,
   type PreviewFixture,
 } from "../../../test-fixtures/preview-app/server.ts";
-import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 import { createPreviewHarness, type PreviewHarness } from "./core/preview-test-support.js";
 import { PreviewTunnelServer } from "./preview-tunnel-server.js";
 
@@ -100,14 +98,16 @@ describe("PreviewTunnelServer v2 (multiplexed)", () => {
   });
 
   async function connect(
-    protocol: string | readonly string[] = PREVIEW_TUNNEL_OFFERED_SUBPROTOCOLS,
+    protocol: string = PREVIEW_TUNNEL_SUBPROTOCOL_V2,
+    options: { headers?: Array<[string, string]>; path?: string } = {},
   ) {
     const ws = await connectPreviewWebSocket({
-      url: `ws://127.0.0.1:${port}${PREVIEW_TUNNEL_PATH}`,
+      url: `ws://127.0.0.1:${port}${options.path ?? PREVIEW_TUNNEL_PATH}`,
       protocol,
       maxPayload: 1024 * 1024,
       connectTimeoutMs: 2_000,
       handshakeTimeoutMs: 2_000,
+      headers: options.headers,
     });
     sockets.push(ws);
     return ws;
@@ -187,18 +187,85 @@ describe("PreviewTunnelServer v2 (multiplexed)", () => {
       );
   }
 
-  test("attachments advertise v2, and a client offering only v1 still gets v1", async () => {
+  async function rejectedStatus(
+    options: { protocol?: string; headers?: Array<[string, string]>; path?: string } = {},
+  ): Promise<number | null> {
+    try {
+      await connect(options.protocol, options);
+      return null;
+    } catch (error) {
+      return error instanceof PreviewWebSocketHandshakeError ? error.status : -1;
+    }
+  }
+
+  test("attachments name v2, and any other offer, a browser origin or another path is refused", async () => {
     expect((await attachment()).tunnel).toMatchObject({
-      subprotocol: PREVIEW_TUNNEL_SUBPROTOCOL,
-      multiplexSubprotocol: PREVIEW_TUNNEL_SUBPROTOCOL_V2,
+      subprotocol: PREVIEW_TUNNEL_SUBPROTOCOL_V2,
     });
-    const v1Count = () => compatibilityPathUsage.snapshot().paths["preview.tunnel-v1"]?.count ?? 0;
-    const before = v1Count();
-    await connect();
-    expect(v1Count()).toBe(before);
-    expect((await connect(PREVIEW_TUNNEL_SUBPROTOCOL)).protocol).toBe(PREVIEW_TUNNEL_SUBPROTOCOL);
-    // An older desktop's socket is counted for retiring the v1 path.
-    expect(v1Count()).toBe(before + 1);
+    expect((await connect()).protocol).toBe(PREVIEW_TUNNEL_SUBPROTOCOL_V2);
+    expect(await rejectedStatus({ protocol: "orkestrator.preview-tunnel.v1" })).toBe(426);
+    expect(await rejectedStatus({ protocol: "something-else" })).toBe(426);
+    expect(await rejectedStatus({ headers: [["origin", "https://evil.test"]] })).toBe(403);
+    expect(await rejectedStatus({ path: "/__orkestrator/terminal" })).toBe(-1);
+  });
+
+  test("a wrong credential and a missing HELLO close the session", async () => {
+    const att = await attachment();
+    const wrong = await open();
+    wrong.send({
+      type: "hello",
+      version: 2,
+      attachmentId: att.attachmentId,
+      credential: "z".repeat(43),
+    });
+    expect((await wrong.closed).code).toBe(4401);
+    const silent = await open();
+    expect((await silent.closed).code).toBe(4408);
+    await until(() => tunnel.stats().sockets === 0);
+    expect(tunnel.stats().pendingHandshakes).toBe(0);
+  });
+
+  test("logs, diagnostics and events never carry credentials, app headers, paths or queries", async () => {
+    const good = await open();
+    const att = await ready(good);
+    await openStream(good, 1);
+    write(
+      good,
+      1,
+      "GET /app/private-route?token=QUERY_SECRET_1 HTTP/1.1\r\nhost: localhost\r\n" +
+        "authorization: Bearer APP_SECRET_2\r\ncookie: sid=COOKIE_SECRET_3\r\nconnection: close\r\n\r\n",
+    );
+    await good.next("closed", 1);
+    expect(good.bytes(1).toString()).toStartWith("HTTP/1.1 200");
+    const bad = await open();
+    bad.send({
+      type: "hello",
+      version: 2,
+      attachmentId: att.attachmentId,
+      credential: "WRONG_CREDENTIAL_4".padEnd(43, "x"),
+    });
+    await bad.closed;
+    await harness.runtime.registry.settle();
+    harness.runtime.registry.flushEvent();
+
+    const recorded = JSON.stringify({
+      diagnostics: harness.runtime.diagnostics(),
+      events: harness.events,
+      stats: tunnel.stats(),
+    });
+    for (const secret of [
+      att.tunnel!.credential,
+      "QUERY_SECRET_1",
+      "APP_SECRET_2",
+      "COOKIE_SECRET_3",
+      "WRONG_CREDENTIAL_4",
+      "private-route",
+    ]) {
+      expect(recorded).not.toContain(secret);
+    }
+    // The failure is still observable as a bounded category count.
+    const counters = Object.keys(harness.runtime.metrics.snapshot().counters);
+    expect(counters.some((name) => name.startsWith("tunnel.rejected"))).toBe(true);
   });
 
   test("several HTTP exchanges share one authenticated socket, each on its own upstream", async () => {
@@ -367,7 +434,10 @@ describe("PreviewTunnelServer v2 (multiplexed)", () => {
       (client: MuxClient) =>
         client.ws.send(JSON.stringify({ type: "open", stream: 2, host: "127.0.0.1", port: 22 })),
     ],
-    ["a v1 frame", (client: MuxClient) => client.ws.send(JSON.stringify({ type: "open" }))],
+    [
+      "an OPEN naming no stream",
+      (client: MuxClient) => client.ws.send(JSON.stringify({ type: "open" })),
+    ],
   ])("%s closes the session as a protocol violation", async (_name, violate) => {
     const client = await open();
     await ready(client);

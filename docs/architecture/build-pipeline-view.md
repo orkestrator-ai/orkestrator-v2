@@ -218,7 +218,7 @@ a transcript.
   checks (failed ones counted), then the summary, checks, files, notes and
   limitations (`PipelineAddressFindingsReport.tsx`). Its submission status reads as for
   the other typed stages. An Address Findings session from before the typed handoff has
-  no report there, and Verify reads its text as before. A round with no Address Findings
+  no report there either, and Verify is told none is available. A round with no Address Findings
   (a clean review) gives Verify no report.
 - **Fan-out.** The live pass reads `reviewFanout.reviewers`: status, queue
   position ("queued · #3 of 7"), "starting", the error, issue counts. Reviewers

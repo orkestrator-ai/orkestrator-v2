@@ -55,12 +55,6 @@ export function setBrowserPreviewVisible(
   return api()?.setVisible(tabId, visible) ?? Promise.resolve(null);
 }
 
-export function navigateBrowserPreview(tabId: string, url: string): Promise<BrowserPreviewState> {
-  const nativeApi = api();
-  if (!nativeApi) return Promise.reject(new Error("Native browser previews are unavailable"));
-  return nativeApi.navigate(tabId, url);
-}
-
 export function goBackBrowserPreview(tabId: string): Promise<BrowserPreviewState> {
   const nativeApi = api();
   if (!nativeApi) return Promise.reject(new Error("Native browser previews are unavailable"));

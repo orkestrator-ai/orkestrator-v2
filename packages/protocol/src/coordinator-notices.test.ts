@@ -12,7 +12,7 @@ import {
 const HINT = "github.com/acme/app";
 const withRepo = { controllerId: "bk_a", displayName: "A", repositoryHints: [HINT] };
 const withoutRepo = { controllerId: "bk_b", displayName: "B", repositoryHints: [] };
-const older = { controllerId: "bk_c", displayName: "C" };
+const unheard = { controllerId: "bk_c", displayName: "C" };
 
 describe("the one routing rule", () => {
   test("no command node: this machine's coordinator", () => {
@@ -37,10 +37,10 @@ describe("the one routing rule", () => {
     });
   });
 
-  test("an older command node leaves it here", () => {
-    expect(routeCoordinatorNotice({ controllers: [older], repositoryHint: HINT })).toEqual({
+  test("a command node that has not collected yet has no repository known here", () => {
+    expect(routeCoordinatorNotice({ controllers: [unheard], repositoryHint: HINT })).toEqual({
       kind: "local",
-      reason: "older-command-node",
+      reason: "repository-not-on-command",
     });
   });
 
@@ -65,17 +65,22 @@ describe("the one routing rule", () => {
     ).toMatchObject({ controllerId: "bk_d" });
   });
 
-  test("a machine-wide notice needs no repository, and still skips an older command node", () => {
+  test("a machine-wide notice needs no repository: the preferred command node, else the most recent", () => {
     expect(
       routeCoordinatorNotice({
-        controllers: [older, withoutRepo],
+        controllers: [unheard, withoutRepo],
         repositoryHint: null,
         machineWide: true,
       }),
-    ).toMatchObject({ controllerId: "bk_b" });
+    ).toMatchObject({ controllerId: "bk_c" });
     expect(
-      routeCoordinatorNotice({ controllers: [older], repositoryHint: null, machineWide: true }),
-    ).toEqual({ kind: "local", reason: "older-command-node" });
+      routeCoordinatorNotice({
+        controllers: [unheard, withoutRepo],
+        repositoryHint: null,
+        machineWide: true,
+        preferredControllerId: "bk_b",
+      }),
+    ).toMatchObject({ controllerId: "bk_b" });
   });
 });
 

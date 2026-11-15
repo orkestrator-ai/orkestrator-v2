@@ -5,7 +5,6 @@ import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import * as realBackend from "@/lib/backend";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
-import { configStore } from "@/stores/configStore";
 import { getAllLeaves, paneLayoutStore } from "@/stores/paneLayoutStore";
 import { uiStore } from "@/stores/uiStore";
 import type { KanbanTask } from "@/lib/backend";
@@ -25,16 +24,6 @@ const startBuildPipelineMock = mock(async (_input: unknown) =>
     projectId: "project-1",
   }),
 );
-// `startBuildPipelineMock` above answers `launch_build_pipeline`; this one is
-// the raw start an older backend gets instead.
-const legacyStartMock = mock(async (_input: unknown) =>
-  buildPipelineFixture({
-    id: "pipeline-new",
-    environmentId: "env-new",
-    taskId: "task-1",
-    projectId: "project-1",
-  }),
-);
 const getKanbanImageDataMock = mock(async (imageId: string) =>
   imageId === "image-bad" ? Promise.reject(new Error("missing image")) : `data:${imageId}`,
 );
@@ -42,7 +31,6 @@ const getKanbanImageDataMock = mock(async (imageId: string) =>
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   launchBuildPipeline: startBuildPipelineMock,
-  startBuildPipeline: legacyStartMock,
   getKanbanImageData: getKanbanImageDataMock,
 }));
 
@@ -58,6 +46,8 @@ const task: KanbanTask = {
   title: "Ship feature",
   description: "Implement the feature",
   acceptanceCriteria: "It works",
+  kind: "feature",
+  sections: {},
   status: "backlog",
   comments: [{ id: "comment-1", text: "Remember tests", createdAt: "" }],
   images: [
@@ -104,15 +94,7 @@ const linearIssue = {
 };
 
 function startInput() {
-  return (legacyStartMock.mock.calls[0]?.[0] ??
-    startBuildPipelineMock.mock.calls[0]?.[0]) as Record<string, unknown>;
-}
-
-/** The next launch answers as a backend that predates `launch_build_pipeline`. */
-function olderBackend() {
-  startBuildPipelineMock.mockImplementationOnce(async () => {
-    throw new Error("Unknown backend command: launch_build_pipeline");
-  });
+  return startBuildPipelineMock.mock.calls[0]?.[0] as Record<string, unknown>;
 }
 
 function buildTabs(environmentId: string) {
@@ -125,7 +107,6 @@ describe("useBuildPipeline", () => {
     cleanup();
     localStorage.clear();
     startBuildPipelineMock.mockClear();
-    legacyStartMock.mockClear();
     getKanbanImageDataMock.mockClear();
     appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
@@ -490,242 +471,6 @@ describe("useBuildPipeline", () => {
     expect(startInput().steps).toEqual(steps);
   });
 
-  test("older backend: the build step's harness outranks an agent override", async () => {
-    olderBackend();
-    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
-
-    await act(async () => {
-      // Both supplied, and they disagree on purpose.
-      await result.current.startBuild(task, "local", "claude", { steps });
-    });
-
-    expect(startInput().agentType).toBe("codex");
-  });
-
-  test("older backend: an agent override wins when no step configuration was chosen", async () => {
-    olderBackend();
-    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
-
-    await act(async () => {
-      await result.current.startBuild(task, "local", "opencode");
-    });
-
-    expect(startInput().agentType).toBe("opencode");
-    expect(startInput().steps).toMatchObject({
-      review: { agent: "claude" },
-      verify: { agent: "claude" },
-    });
-    expect(startInput().reviewers).toHaveLength(2);
-  });
-
-  test("older backend: an agent override wins when the step map pins no build harness", async () => {
-    olderBackend();
-    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
-
-    // The backend accepts a sparse step map, so the launcher's build step can
-    // legitimately be absent while other steps are pinned. The override then
-    // still decides the pipeline agent, and both sides agree on the snapshot.
-    await act(async () => {
-      await result.current.startBuild(task, "local", "opencode", {
-        steps: { review: { agent: "codex" } },
-      });
-    });
-
-    expect(startInput().agentType).toBe("opencode");
-    expect(startInput().steps).toMatchObject({ review: { agent: "codex" } });
-    expect((startInput().reviewers as Array<{ agent: string }>)[0]).toEqual({
-      agent: "codex",
-    });
-  });
-
-  test("older backend: applies the configured Multi Review fan-out and verify model by default", async () => {
-    olderBackend();
-    const baseConfig = appCommandStore(configStore).getState().config;
-    appCommandStore(configStore).setState({
-      config: {
-        ...baseConfig,
-        global: {
-          ...baseConfig.global,
-          agentSettings: {
-            ...baseConfig.global.agentSettings,
-            platforms: {},
-            actionDefaults: {
-              review: { platform: "claude", model: "opus" },
-              review2: { platform: "codex", model: "gpt-5.6" },
-              reviewPreparation: { platform: "codex", model: "gpt-5.6" },
-              verify: { platform: "opencode", model: "provider/verifier" },
-            },
-            multiReview: {
-              reviewerCount: 3,
-              additionalReviewers: [{ platform: "claude", model: "haiku" }],
-            },
-          },
-        },
-      },
-    });
-    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
-
-    await act(async () => {
-      await result.current.startBuild(task, "local");
-    });
-
-    expect(startInput().reviewers).toEqual([
-      { agent: "claude", model: "opus" },
-      { agent: "codex", model: "gpt-5.6" },
-      { agent: "claude", model: "haiku" },
-    ]);
-    expect(startInput().reviewPreparation).toEqual({
-      agent: "codex",
-      model: "gpt-5.6",
-    });
-    expect((startInput().steps as BuildStepConfigs).verify).toEqual({
-      agent: "opencode",
-      model: "provider/verifier",
-    });
-  });
-
-  test("older backend: falls back to the repository's configured agent when neither is given", async () => {
-    olderBackend();
-    const baseConfig = appCommandStore(configStore).getState().config;
-    appCommandStore(configStore).setState({
-      config: {
-        ...baseConfig,
-        repositories: {
-          ...baseConfig.repositories,
-          "project-1": {
-            defaultBranch: "main",
-            prBaseBranch: "main",
-            agentSettings: { defaultAgent: "opencode" },
-          },
-        },
-      },
-    });
-
-    try {
-      const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
-      await act(async () => {
-        await result.current.startBuild(task, "local");
-      });
-
-      expect(startInput().agentType).toBe("opencode");
-    } finally {
-      // The hook is still mounted and subscribed, so the restore is a render.
-      act(() => {
-        appCommandStore(configStore).setState({ config: baseConfig });
-      });
-    }
-  });
-
-  test("older backend: a single configured reviewer omits fan-out and review preparation", async () => {
-    olderBackend();
-    const baseConfig = appCommandStore(configStore).getState().config;
-    appCommandStore(configStore).setState({
-      config: {
-        ...baseConfig,
-        global: {
-          ...baseConfig.global,
-          agentSettings: {
-            ...baseConfig.global.agentSettings,
-            platforms: {},
-            actionDefaults: {
-              review: { platform: "claude", model: "opus" },
-              reviewPreparation: { platform: "codex", model: "gpt-5.6" },
-              verify: { platform: "claude", model: "sonnet" },
-            },
-            multiReview: { reviewerCount: 1 },
-          },
-        },
-      },
-    });
-    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
-
-    await act(async () => {
-      await result.current.startBuild(task, "local");
-    });
-
-    expect(startInput().reviewers).toEqual([{ agent: "claude", model: "opus" }]);
-    expect(startInput().reviewPreparation).toBeUndefined();
-    expect((startInput().steps as BuildStepConfigs).verify).toEqual({
-      agent: "claude",
-      model: "sonnet",
-    });
-  });
-
-  test("older backend: an explicit review step replaces only the first configured reviewer", async () => {
-    olderBackend();
-    const baseConfig = appCommandStore(configStore).getState().config;
-    appCommandStore(configStore).setState({
-      config: {
-        ...baseConfig,
-        global: {
-          ...baseConfig.global,
-          agentSettings: {
-            ...baseConfig.global.agentSettings,
-            platforms: {},
-            actionDefaults: {
-              review: { platform: "claude", model: "opus" },
-              review2: { platform: "codex", model: "gpt-5.6" },
-            },
-            multiReview: { reviewerCount: 2 },
-          },
-        },
-      },
-    });
-    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
-
-    await act(async () => {
-      await result.current.startBuild(task, "local", undefined, {
-        steps: { review: { agent: "opencode", model: "provider/overridden" } },
-      });
-    });
-
-    expect(startInput().reviewers).toEqual([
-      { agent: "opencode", model: "provider/overridden" },
-      { agent: "codex", model: "gpt-5.6" },
-    ]);
-  });
-
-  test("older backend: a GitHub issue build without options sends the configured Multi Review defaults", async () => {
-    olderBackend();
-    const baseConfig = appCommandStore(configStore).getState().config;
-    appCommandStore(configStore).setState({
-      config: {
-        ...baseConfig,
-        global: {
-          ...baseConfig.global,
-          agentSettings: {
-            ...baseConfig.global.agentSettings,
-            platforms: {},
-            actionDefaults: {
-              review: { platform: "claude", model: "opus" },
-              review2: { platform: "codex", model: "gpt-5.6" },
-              reviewPreparation: { platform: "codex", model: "gpt-5.6" },
-              verify: { platform: "opencode", model: "provider/verifier" },
-            },
-          },
-        },
-      },
-    });
-    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
-
-    await act(async () => {
-      await result.current.startBuildFromGitHubIssue(githubIssue, "project-1", "local");
-    });
-
-    expect(startInput().reviewers).toEqual([
-      { agent: "claude", model: "opus" },
-      { agent: "codex", model: "gpt-5.6" },
-    ]);
-    expect(startInput().reviewPreparation).toEqual({
-      agent: "codex",
-      model: "gpt-5.6",
-    });
-    expect((startInput().steps as BuildStepConfigs).verify).toEqual({
-      agent: "opencode",
-      model: "provider/verifier",
-    });
-  });
-
   test("a GitHub issue build carries the same per-step configuration", async () => {
     const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
@@ -788,12 +533,11 @@ describe("useBuildPipeline", () => {
     expect(input).not.toHaveProperty("steps");
     expect(input).not.toHaveProperty("reviewers");
     expect(input).not.toHaveProperty("reviewPreparation");
-    expect(legacyStartMock).not.toHaveBeenCalled();
   });
 
-  test("a refused launch never falls back to the raw start", async () => {
+  test("an unknown-command answer fails the launch like any other error", async () => {
     startBuildPipelineMock.mockImplementationOnce(async () => {
-      throw new Error("The selected pipeline environment does not belong to this project");
+      throw new Error("Unknown backend command: launch_build_pipeline");
     });
     const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
@@ -803,7 +547,9 @@ describe("useBuildPipeline", () => {
     });
 
     expect(pipelineId).toBeUndefined();
-    expect(legacyStartMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).toHaveBeenCalledWith("Failed to start build pipeline", {
+      description: "Unknown backend command: launch_build_pipeline",
+    });
   });
 
   test("announces the start and names the reason a start failed", async () => {

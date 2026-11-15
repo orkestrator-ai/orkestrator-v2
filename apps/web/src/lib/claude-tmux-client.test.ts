@@ -5,7 +5,6 @@
 // the rest of the suite is unaffected.
 
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { listen } from "@/lib/native/events";
 
 const calls: Array<{ cmd: string; args: unknown }> = [];
@@ -317,7 +316,7 @@ describe("claude-tmux-client invoke wrappers", () => {
     ]);
   });
 
-  test("renewInteractiveTerminal reads renewed, lapsed and an older backend", async () => {
+  test("renewInteractiveTerminal reads renewed and lapsed; a failure is thrown", async () => {
     invokeResult = { renewed: true };
     expect(await renewInteractiveTerminal("pty-1")).toBe("renewed");
     expect(calls.at(-1)).toEqual({
@@ -326,8 +325,6 @@ describe("claude-tmux-client invoke wrappers", () => {
     });
     invokeResult = { renewed: false };
     expect(await renewInteractiveTerminal("pty-1")).toBe("lapsed");
-    invokeError = new Error(unknownBackendCommandMessage("claude_tmux_renew_interactive_terminal"));
-    expect(await renewInteractiveTerminal("pty-1")).toBe("unsupported");
     invokeError = new Error("gateway unavailable");
     await expect(renewInteractiveTerminal("pty-1")).rejects.toThrow("gateway unavailable");
   });

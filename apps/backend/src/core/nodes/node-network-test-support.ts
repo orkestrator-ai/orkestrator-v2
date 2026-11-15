@@ -132,8 +132,6 @@ export interface TestNode {
   events: Array<{ event: string; payload: unknown }>;
   /** Commands this node received over `/invoke`, in order. */
   received: Array<{ command: string; controller: string | null }>;
-  /** Simulate an older backend: no hello at all. */
-  legacy: boolean;
   /** Advertise `public-action-relay` (false: a leaf from before node routing). */
   publicActionRelay: boolean;
   /** Answer the hello with a different identity (a route that reaches another machine). */
@@ -191,7 +189,6 @@ export class TestNodeNetwork {
     const controller = headers.get(CONTROLLER_HEADER);
     if (controller) node.service.noteControllerContact(controller);
     if (url.pathname === BACKEND_HELLO_PATH) {
-      if (node.legacy) return new Response("<html></html>", { status: 200 });
       return json(200, await this.hello(node));
     }
     if (url.pathname === "/__orkestrator/status") return json(200, { ok: true });
@@ -308,7 +305,6 @@ export class TestNodeNetwork {
       service,
       events,
       received: [],
-      legacy: false,
       publicActionRelay: true,
       online: true,
       portal,

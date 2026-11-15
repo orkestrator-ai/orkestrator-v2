@@ -82,8 +82,6 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
   let remote: boolean;
   let failAttach: Error | null;
   let beforeAttach: (() => Promise<void>) | undefined;
-  /** Attachments omit `multiplexSubprotocol`, as from a backend that predates tunnel v2. */
-  let legacyBackend: boolean;
   const sessions = new Map<string, FakeSession>();
   const invoked: string[] = [];
 
@@ -120,7 +118,6 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     remote = true;
     failAttach = null;
     beforeAttach = undefined;
-    legacyBackend = false;
     invoked.length = 0;
     sessions.clear();
     manager = new PreviewTransportManager({
@@ -129,11 +126,6 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
         if (command === "create_preview_attachment") await beforeAttach?.();
         if (failAttach && command === "create_preview_attachment") throw failAttach;
         const result = await commands.get(command)!(args, context);
-        if (legacyBackend && command === "create_preview_attachment") {
-          const attachment = result as PreviewAttachmentDescriptor;
-          const { multiplexSubprotocol: _omitted, ...tunnel } = attachment.tunnel!;
-          return { ...attachment, tunnel } as T;
-        }
         return result as T;
       },
       tunnelUrl: () => `ws://127.0.0.1:${gatewayPort}/__orkestrator/preview/tunnel`,
@@ -301,23 +293,6 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     expect(upgrades).toBe(1);
     expect(tunnel.stats().sessions).toBe(1);
     expect(manager.stats().tunnelSessions).toBe(1);
-  });
-
-  test("against a backend without tunnel v2, each connection opens its own socket", async () => {
-    legacyBackend = true;
-    const descriptor = await manager.acquire(target(), "tab-1");
-    const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
-    let upgrades = 0;
-    gateway.prependListener("upgrade", () => (upgrades += 1));
-    const responses = await Promise.all([
-      get(`${descriptor.origin}/health`, headers),
-      get(`${descriptor.origin}/assets/app.css`, headers),
-      get(`${descriptor.origin}/assets/app.js`, headers),
-    ]);
-    expect(responses.map((response) => response.status)).toEqual([200, 200, 200]);
-    expect(upgrades).toBe(3);
-    expect(tunnel.stats().sessions).toBe(0);
-    expect(manager.stats().tunnelSessions).toBe(0);
   });
 
   test("application websockets pass through the ingress with subprotocols", async () => {
@@ -556,126 +531,6 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
       harness.runtime.metrics.snapshot().counters["desktop.reconnect{generation-changed}"],
     ).toBe(1);
   });
-
-  test("a connection refused after its attachment was replaced retries without reattaching", async () => {
-    // Two tunnel handshakes racing needs one socket per connection: on v2 the
-    // second request joins the first's session.
-    legacyBackend = true;
-    const descriptor = await manager.acquire(target(), "tab-1");
-    const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
-    harness.runtime.access.revokeServices([serviceId], "operator-revoked");
-    // Hold both tunnel opens so each is sent on the revoked attachment, then
-    // let the second reach the server only after the first has fully recovered.
-    const held: Array<() => void> = [];
-    let holding = true;
-    gateway.removeAllListeners("upgrade");
-    gateway.on("upgrade", (request, socket, head) => {
-      const accept = () => {
-        if (!tunnel.handleUpgrade(request, socket, head)) socket.destroy();
-      };
-      if (holding) held.push(accept);
-      else accept();
-    });
-    const requests = [
-      get(`${descriptor.origin}/health`, headers),
-      get(`${descriptor.origin}/assets/app.css`, headers),
-    ];
-    const deadline = Date.now() + 2_000;
-    while (held.length < 2 && Date.now() < deadline) await Bun.sleep(5);
-    expect(held).toHaveLength(2);
-    holding = false;
-    held[0]!();
-    const first = await Promise.race(requests);
-    expect(first.status).toBe(200);
-    expect(invocations("create_preview_attachment")).toBe(2);
-
-    held[1]!();
-    const responses = await Promise.all(requests);
-    expect(responses.map((response) => response.status)).toEqual([200, 200]);
-    expect(invocations("create_preview_attachment")).toBe(2);
-    expect(invocations("release_preview_attachment")).toBe(1);
-    expect(manager.transportState(descriptor.serviceKey)).toEqual({
-      mode: "desktop-tunnel",
-      state: "ready",
-    });
-    await manager.disposeAll();
-    expect(harness.runtime.metrics.snapshot().counters["desktop.reconnect{access-expired}"]).toBe(
-      1,
-    );
-  });
-
-  for (const recovery of ["revoked replacement", "pending attach", "refused final open"] as const) {
-    test(`a delayed refusal recovers across a second revocation (${recovery})`, async () => {
-      // Needs two racing handshakes, so one socket per connection (v1).
-      legacyBackend = true;
-      const descriptor = await manager.acquire(target(), "tab-1");
-      const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
-      const held: Array<() => void> = [];
-      let holding = true;
-      let releaseAttach!: () => void;
-      const attachGate = new Promise<void>((resolve) => {
-        releaseAttach = resolve;
-      });
-      gateway.removeAllListeners("upgrade");
-      gateway.on("upgrade", (request, socket, head) => {
-        const accept = () => {
-          if (recovery === "refused final open" && invocations("create_preview_attachment") === 3)
-            harness.runtime.access.revokeServices([serviceId], "operator-revoked");
-          if (!tunnel.handleUpgrade(request, socket, head)) socket.destroy();
-        };
-        if (holding) held.push(accept);
-        else accept();
-      });
-      harness.runtime.access.revokeServices([serviceId], "operator-revoked");
-      const requests = [get(descriptor.url, headers), get(descriptor.url, headers)];
-      const waitFor = async (condition: () => boolean) => {
-        const deadline = Date.now() + 2_000;
-        while (!condition() && Date.now() < deadline) await Bun.sleep(5);
-        expect(condition()).toBe(true);
-      };
-      try {
-        await waitFor(() => held.length === 2);
-        holding = false;
-        held[0]!();
-        expect((await Promise.race(requests)).status).toBe(200);
-        expect(invocations("create_preview_attachment")).toBe(2);
-        harness.runtime.access.revokeServices([serviceId], "operator-revoked");
-        if (recovery === "pending attach") {
-          beforeAttach = () => attachGate;
-          const third = get(descriptor.url, headers);
-          requests.push(third);
-          await waitFor(() => invocations("create_preview_attachment") === 3);
-        }
-        let lateRefused = false;
-        const authenticate = harness.runtime.access.authenticateTunnel.bind(harness.runtime.access);
-        harness.runtime.access.authenticateTunnel = (id, credential) => {
-          lateRefused = true;
-          return authenticate(id, credential);
-        };
-        held[1]!();
-        await waitFor(() => lateRefused);
-        // Let the refused open join the pending attach before completing it.
-        if (recovery === "pending attach") await Bun.sleep(30);
-        releaseAttach();
-        const responses = await Promise.all(requests);
-        if (recovery === "refused final open")
-          expect(responses.map((response) => response.status).sort()).toEqual([200, 401]);
-        else expect(responses.every((response) => response.status === 200)).toBe(true);
-        expect(invocations("create_preview_attachment")).toBe(3);
-        expect(invocations("release_preview_attachment")).toBe(2);
-        expect(manager.transportState(descriptor.serviceKey)).toEqual({
-          mode: "desktop-tunnel",
-          state: "ready",
-        });
-        await manager.disposeAll();
-        expect(
-          harness.runtime.metrics.snapshot().counters["desktop.reconnect{access-expired}"],
-        ).toBe(2);
-      } finally {
-        releaseAttach();
-      }
-    });
-  }
 
   test("buffered ingress metrics are reported on a timer while the window stays open", async () => {
     const reports: unknown[] = [];

@@ -146,8 +146,9 @@ const DISCOVERY_INVALIDATION_CAUSES: ReadonlySet<NativeSessionInvalidationCause>
 
 /**
  * Whether a `native-agent-session` change should cost a discovery read. A
- * change with no cause (a backend before causes) or with one this client does
- * not know (a newer backend) could be about anything, so it counts.
+ * change with no cause (an announcement that dropped its label, which the
+ * backend counts) or with one this client does not know could be about
+ * anything, so it counts.
  */
 export function nativeSessionInvalidationNamesDiscovery(cause: unknown): boolean {
   return !isNativeSessionInvalidationCause(cause) || DISCOVERY_INVALIDATION_CAUSES.has(cause);

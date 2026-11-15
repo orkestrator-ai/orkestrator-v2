@@ -96,7 +96,7 @@ const ENABLED =
   (process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL === "1" || FAKE_API);
 const ACTIVITY_BUDGET_MS = 4_000;
 const COMPLETION_BUDGET_MS = 3_000;
-const STATE_FILE = "/tmp/.claude-state";
+const STATE_FILE = "/tmp/.claude-state-snapshot";
 
 function profileCommand<T>(command: string): T {
   const result = spawnSync("mise", ["run", command, "--profile", profile, "--json"], {

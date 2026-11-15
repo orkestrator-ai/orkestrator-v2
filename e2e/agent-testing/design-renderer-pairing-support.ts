@@ -5,7 +5,7 @@
  * Node inspect fuse is off, so Playwright reaches it only over CDP.
  *
  * Node, not Bun: Playwright runs the specs under Node. The backend's process
- * shape follows `scripts/mixed-version/harness.ts` (which needs Bun): its own
+ * shape follows `scripts/two-node/harness.ts` (which needs Bun): its own
  * data directory, worktree directory, HOME and TMPDIR under the run's root, a
  * constructed environment with nothing `ORKESTRATOR_*` or credential-shaped
  * inherited, `--runtime-flavor agent-test` (no agent outside a managed

@@ -16,6 +16,7 @@ import {
 import {
   BrowserPreviewManager,
   type BrowserPreviewManagerOptions,
+  type BrowserPreviewServiceTransport,
 } from "../electron/browser-preview-manager";
 import {
   BrowserPreviewCaptureStore,
@@ -305,9 +306,48 @@ export function createHarness(options: HarnessOptions = {}) {
     contentView: { addChildView: mock(() => undefined), removeChildView: mock(() => undefined) },
     webContents: { getZoomFactor: () => 1, focus: hostFocus },
   };
+  // Every preview is a service preview. The fake service is served at the
+  // origin of the URL a test attaches, and its application address is that
+  // same URL, so page identity is the service's with the URL's route.
+  let serviceOrigin: string | null = null;
+  let nextServiceUrl = "";
+  const inService = (url: string) => {
+    try {
+      return serviceOrigin !== null && new URL(url).origin === serviceOrigin;
+    } catch {
+      return false;
+    }
+  };
+  const transport: BrowserPreviewServiceTransport = {
+    acquire: async () => ({
+      serviceKey: "backend-1:service-web",
+      partition: "persist:service-web",
+      url: nextServiceUrl,
+    }),
+    release: () => undefined,
+    scopeFor: (url) => (inService(url) ? "service:backend-1:service-web" : null),
+    describe: (url) => {
+      if (!inService(url)) return null;
+      const parsed = new URL(url);
+      return {
+        serviceKey: "backend-1:service-web",
+        serviceId: "service-web",
+        path: `${parsed.pathname}${parsed.search}${parsed.hash}`,
+        displayUrl: url,
+      };
+    },
+    target: () => ({
+      backendInstanceId: "backend-1",
+      environmentId: "env-fixture",
+      serviceId: "service-web",
+    }),
+    transportState: () => ({ mode: "desktop-tunnel", state: "ready" }),
+    sessionFor: () => ({ id: "service-session" }) as never,
+    resetSiteData: async () => undefined,
+  };
   const manager = new BrowserPreviewManager({
     WebContentsViewCtor: FakeView as never,
-    browserSession: { id: "preview-session" } as never,
+    transport,
     menu: { buildFromTemplate: () => ({ popup: () => undefined }) },
     getWindow: () => window as never,
     emitState: () => undefined,
@@ -334,9 +374,17 @@ export function createHarness(options: HarnessOptions = {}) {
   const attach = async (
     url = "http://localhost:5173/settings?tab=profile&token=synthetic-token-value",
   ) => {
+    const parsed = new URL(url);
+    serviceOrigin = parsed.origin;
+    nextServiceUrl = url;
     await manager.attach({
       tabId: "browser-1",
-      url,
+      service: {
+        backendInstanceId: "backend-1",
+        environmentId: "env-fixture",
+        serviceId: "service-web",
+        path: `${parsed.pathname}${parsed.search}${parsed.hash}`,
+      },
       bounds: { x: 0, y: 0, width: 800, height: 500 },
       visible: true,
     });

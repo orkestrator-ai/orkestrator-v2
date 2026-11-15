@@ -700,14 +700,13 @@ iOS. The suite covers sibling reads/frames, visible links, hostile workers,
 same-service iframe returns through a synthetic external identity provider,
 `srcset`, source maps, SPA deep links and history, IndexedDB,
 BroadcastChannel, Cache and worker isolation, frame and popup handling,
-an IPv6-only (`::1`) service, upstream connection reuse and its closing on
-revocation and endpoint generation change, and legacy-route ETag revalidation
-(`upstream-pool.spec.ts`).
+an IPv6-only (`::1`) service, and upstream connection reuse and its closing on
+revocation and endpoint generation change (`upstream-pool.spec.ts`).
 
 With the Vite variable set, `vite-page-load.spec.ts` (Chromium only) also
 prints one `[preview-page-load]` line: medians of page-load time, requests,
-304s, bytes and upstream connections through the private origin and the
-legacy route. `ORKESTRATOR_TEST_PREVIEW_VITE_PAGE` picks the page,
+304s, bytes and upstream connections through the private origin.
+`ORKESTRATOR_TEST_PREVIEW_VITE_PAGE` picks the page,
 `ORKESTRATOR_TEST_PREVIEW_LOAD_SAMPLES` the samples, and
 `ORKESTRATOR_TEST_PREVIEW_POOL_OFF=1` turns connection reuse off for an A/B
 comparison.
@@ -799,25 +798,16 @@ ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_DOCKER=1 \
   --config e2e/agent-testing/playwright.browser.config.ts design-container-export.spec.ts
 ```
 
-Design canvases across a published backend and this checkout (upgrade, a
-legacy `.orkdes` migration, the downgrade fence and the export-then-import
-downgrade path, a future record version and a corrupt record) run against the
-real `orkestrator` npm package on a private temporary data directory:
+Mixed-version qualification (this checkout against published releases: the
+design-canvas, slash-command and per-domain command-node runners, the
+older-release launcher and their weekly workflow) was retired on 2026-11-14,
+when every machine and client began updating together (to-do 8108). The
+remote goal hold, two backends of this checkout, still runs weekly
+(`.github/workflows/remote-goal-hold.yml`):
 
 ```bash
-mise run test:logged -- --name design-mixed-versions -- bun scripts/qualify-design-mixed-versions.ts \
-  --old-version 2.22.3 --report output/agent-testing/design-mixed-versions/report.json
-```
-
-Command nodes and leaves across a published release and this checkout, in both
-topologies, for every domain scenario module
-([version-compatibility.md](../architecture/version-compatibility.md#the-manifest-the-ratchet-and-ci),
-"Mixed-version qualification"; scheduled weekly in CI). `--old-version current`
-checks a new module against this checkout on both sides first:
-
-```bash
-mise run test:logged -- --name mixed-versions -- mise run qualify:mixed-versions -- \
-  --old-version latest-stable --report output/agent-testing/mixed-versions/report.json
+mise run test:logged -- --name remote-goal-hold -- mise run qa:remote-goal-hold -- \
+  --report output/agent-testing/remote-goal-hold/report.json
 ```
 
 `e2e/DesignCanvas.spec.ts` takes `ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE=<rate>`

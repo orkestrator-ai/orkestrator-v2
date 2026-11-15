@@ -71,32 +71,10 @@ export function rendererErrorClientId(
   return id;
 }
 
-/** v2.36.5-beta and v2.36.6-beta refuse any argument but `entries` with this text. */
-function refusedClientArgument(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  return message.includes("Unexpected arguments field: client");
-}
-
-/**
- * The uploader's `send`: the entries with this renderer's `client` id. A
- * backend whose handler refused unknown arguments (the two releases before
- * the command took a tolerant schema) answers with an error naming `client`;
- * the batch is then sent again without it, and the id is left out for the rest
- * of this load. Such a backend applies only its shared bound.
- */
+/** The uploader's `send`: the entries with this renderer's `client` id. */
 export function rendererErrorSender(
   invoke: (args: { entries: RendererErrorEntry[]; client?: string }) => Promise<unknown>,
   client: string,
 ): (entries: RendererErrorEntry[]) => Promise<unknown> {
-  let withClient = true;
-  return async (entries) => {
-    if (!withClient) return invoke({ entries });
-    try {
-      return await invoke({ entries, client });
-    } catch (error) {
-      if (!refusedClientArgument(error)) throw error;
-      withClient = false;
-      return invoke({ entries });
-    }
-  };
+  return (entries) => invoke({ entries, client });
 }

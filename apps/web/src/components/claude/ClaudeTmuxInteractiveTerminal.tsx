@@ -307,10 +307,7 @@ export function ClaudeTmuxInteractiveTerminal({
       try {
         const renewal = await nodeTmux.renewInteractiveTerminal(sessionId);
         if (cancelled || sessionIdRef.current !== sessionId) return;
-        if (renewal === "unsupported") {
-          // An older backend never detaches on its own.
-          stopRenewing();
-        } else if (renewal === "lapsed") {
+        if (renewal === "lapsed") {
           stopRenewing();
           log.info("terminal.lease-lapsed", { sessionId });
           if (document.visibilityState === "hidden") {

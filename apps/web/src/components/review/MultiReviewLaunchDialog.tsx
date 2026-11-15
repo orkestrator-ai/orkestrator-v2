@@ -86,13 +86,12 @@ export interface MultiReviewLaunchDefaults {
 
 /**
  * The rows a plain click would run, as the environment's node resolved them
- * (`get_multi_review_launch_defaults`). `unsupported` is a node that predates
- * the command: the dialog then opens on the rows built from the props above.
+ * (`get_multi_review_launch_defaults`). The rows built from the props above
+ * show (disabled) only until that answer arrives, and seed rows added later.
  */
 export type MultiReviewResolvedDefaults =
   | { status: "loading" }
   | { status: "ready"; selection: MultiReviewLaunchSelection }
-  | { status: "unsupported" }
   | { status: "failed"; message: string };
 
 interface MultiReviewLaunchDialogProps extends MultiReviewLaunchDefaults {
@@ -100,7 +99,7 @@ interface MultiReviewLaunchDialogProps extends MultiReviewLaunchDefaults {
   onOpenChange: (open: boolean) => void;
   busy?: boolean;
   onConfirm: (selection: MultiReviewLaunchSelection) => void;
-  /** Omitted, the dialog opens on the rows built from the props (older callers). */
+  /** Omitted (closed, or no environment to ask), the dialog keeps the rows built from the props. */
   resolvedDefaults?: MultiReviewResolvedDefaults;
 }
 

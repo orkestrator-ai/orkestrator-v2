@@ -184,12 +184,12 @@ describe("journal helper", () => {
     expect(steerHistoryFenced(state, "r0")).toBe(true);
   });
 
-  test("the persisted fence keeps its bound, and a legacy boolean restores conservatively", () => {
+  test("the persisted fence keeps its bound, and a stored boolean restores conservatively", () => {
     const state = newSessionState();
     state.steerFence = { runs: ["r1"], overflowBefore: 1_000 };
     const persisted = persistedSteerJournal(state);
-    // The legacy boolean is written beside the bound for an older reader.
-    expect(persisted.steerFence).toEqual({ runs: ["r1"], overflowBefore: 1_000, overflow: true });
+    // Only the bound is written; the boolean is never written back.
+    expect(persisted.steerFence).toEqual({ runs: ["r1"], overflowBefore: 1_000 });
 
     const restored = newSessionState();
     restoreSteerJournal(restored, persisted.steerJournal, persisted.steerFence);

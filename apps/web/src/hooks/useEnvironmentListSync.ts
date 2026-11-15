@@ -15,8 +15,7 @@ const log = createLogger("web.environment");
  * once per moved environment) collapses into one read.
  *
  * An announcement names the environment that changed, so a lone change reads
- * only that record through `refreshEnvironment`, which resolves `false` when
- * the backend cannot serve it. Several changes waiting at once read the list,
+ * only that record through `refreshEnvironment`. Several changes waiting at once read the list,
  * as does anything without a project, so a burst stays one read.
  *
  * It hears the change feed of the node scope it renders in: a leaf's
@@ -26,7 +25,7 @@ const log = createLogger("web.environment");
 export function useEnvironmentListSync(
   projectIds: string[],
   refreshProject: (projectId: string) => Promise<void>,
-  refreshEnvironment?: (projectId: string, environmentId: string) => Promise<boolean>,
+  refreshEnvironment?: (projectId: string, environmentId: string) => Promise<void>,
 ): void {
   const projectIdsRef = useRef(projectIds);
   const refreshProjectRef = useRef(refreshProject);
@@ -34,7 +33,6 @@ export function useEnvironmentListSync(
   const inFlightProjectIdsRef = useRef(new Set<string>());
   const rerunProjectIdsRef = useRef(new Set<string>());
   const pendingEnvironmentIdsRef = useRef(new Map<string, Set<string>>());
-  const singleReadsUnavailableRef = useRef(false);
   const scope = useNodeScope();
 
   // Latest inputs for the long-lived subscription below, published at commit.
@@ -72,16 +70,11 @@ export function useEnvironmentListSync(
           if (disposed || !projectIdsRef.current.includes(projectId)) break;
           try {
             const refreshOne = refreshEnvironmentRef.current;
-            const lone =
-              !wholeProject &&
-              refreshOne &&
-              !singleReadsUnavailableRef.current &&
-              changedIds?.size === 1
-                ? Array.from(changedIds)[0]!
-                : null;
-            const served = lone !== null && (await refreshOne!(projectId, lone));
-            if (lone !== null && !served) singleReadsUnavailableRef.current = true;
-            if (!served) await refreshProjectRef.current(projectId);
+            if (!wholeProject && refreshOne && changedIds?.size === 1) {
+              await refreshOne(projectId, Array.from(changedIds)[0]!);
+            } else {
+              await refreshProjectRef.current(projectId);
+            }
           } catch (error) {
             // A failed read is still a read that predates the mutation, so a
             // queued request has to survive it rather than be lost with it.
@@ -127,8 +120,6 @@ export function useEnvironmentListSync(
       // mobile sidebar is closed and this hook is unmounted.
       if (request.reason === "manifest") return;
       if (request.resources !== null && !request.resources.has("environment")) return;
-      // Possibly a different backend now: let the next lone change try again.
-      singleReadsUnavailableRef.current = false;
       return refreshAll();
     }, scope);
 

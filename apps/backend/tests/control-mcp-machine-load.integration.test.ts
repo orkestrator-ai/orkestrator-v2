@@ -106,7 +106,7 @@ test("machine load crosses two real backends, their portal, link and gateways", 
     const expected = await leaf.invoke<MachineLoadReport>(MACHINE_LOAD_COMMAND);
     expect(await readNodeMachineLoad(invoke, node)).toEqual({ status: "ok", ...expected });
 
-    // Only the leaf's command availability changes, as on an older backend.
+    // An unknown command on the leaf reads as an ordinary failure.
     const realInvoke = leaf.invoke.bind(leaf);
     const older = spyOn(leaf, "invoke").mockImplementation(async (name, args) => {
       if (name === MACHINE_LOAD_COMMAND) throw new Error(`Unknown backend command: ${name}`);
@@ -115,7 +115,7 @@ test("machine load crosses two real backends, their portal, link and gateways", 
     try {
       expect(await readNodeMachineLoad(invoke, node)).toMatchObject({
         status: "unavailable",
-        reason: "older-version",
+        reason: "error",
       });
     } finally {
       older.mockRestore();

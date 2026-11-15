@@ -333,7 +333,7 @@ describe("register", () => {
     const document = parseRegisterDocument(
       readFileSync(path.join(root, "docs/architecture/version-compatibility.md"), "utf8"),
     );
-    expect(document.register.length).toBeGreaterThan(50);
+    expect(document.register.length).toBeGreaterThan(20);
     expect(checkRegisterCounters(document, new Set(COMPATIBILITY_PATH_IDS))).toEqual([]);
   });
 

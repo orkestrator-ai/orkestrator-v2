@@ -664,7 +664,7 @@ observation sharing, was retired on 2026-11-11, so
   reads than one per session per sweep, retained group passes, discovery
   within budget and two turn-end edges.
 - `recurring-work.md`, `version-compatibility.md`, `testing-guide.md` and
-  7570's current state describe the change. The catalogue
+  the current state of 7570 (retired) describe the change. The catalogue
   (`RECURRING_JOB_CATALOGUE`) named no switch for sharing, so it is
   unchanged.
 
@@ -2603,8 +2603,9 @@ with other tasks' decisions.
   and Docker unreachable. Why: no external download beyond the frozen
   lockfile's packages, and the tag is the release. Cons: it ran the current
   Claude CLI rather than its pinned one; the launcher was not committed then; since 2026-11-13 it is
-  `scripts/older-release-stack.ts` (7120 (retired) task 5,
-  [Checking a pairing live](../../architecture/version-compatibility.md#checking-a-pairing-live)).
+  `scripts/older-release-stack.ts` (7120 (retired) task 5), which was retired
+  with mixed-version qualification on 2026-11-15
+  ([Checking a pairing live](../../architecture/version-compatibility.md#checking-a-pairing-live)).
 - **T11.5 What counts as a durable boundary here.** Local bridges die with
   their backend, so "restart mid-dispatch" for a local environment is always
   "turn interrupted": the boundaries qualified are the dispatch accepted with

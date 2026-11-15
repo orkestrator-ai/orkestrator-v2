@@ -9,11 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 
 import { httpProvider, waitUntil } from "../agent-provider-test-support.js";
-import {
-  bridgeMcpConfigEvidence,
-  bridgeReportsMcpConfig,
-  bridgeRuntimeSummary,
-} from "./runtime-health.js";
+import { bridgeMcpConfigEvidence, bridgeRuntimeSummary } from "./runtime-health.js";
 
 const digest = (text: string) => `sha256:${createHash("sha256").update(text).digest("base64url")}`;
 const USER = digest("user file");
@@ -151,11 +147,6 @@ describe("renderer-facing health never carries the digests", () => {
     ]);
   });
 
-  test("a bridge that predates the route is older than the report", async () => {
-    const { provider } = httpProvider(() => new Response("not found", { status: 404 }));
-    expect(await provider.mcpConfigEvidence!("s-1")).toEqual({ state: "unsupported" });
-  });
-
   test("the scheduler's signal ends the evidence request", async () => {
     const { provider, requests } = httpProvider(
       (_url, init) =>
@@ -174,7 +165,7 @@ describe("renderer-facing health never carries the digests", () => {
   });
 });
 
-describe("telling an older bridge from one with nothing loaded", () => {
+describe("a runtime-health read without evidence", () => {
   const read = async (body: unknown, status = 200) => {
     const { provider } = httpProvider(() =>
       typeof body === "string" ? new Response(body, { status }) : Response.json(body, { status }),
@@ -182,30 +173,18 @@ describe("telling an older bridge from one with nothing loaded", () => {
     return provider.mcpConfigEvidence!("s-1");
   };
 
-  test("a current bridge marks every body, even before anything loaded", async () => {
+  test("a body with nothing loaded yet is no evidence", async () => {
     expect(await read({ summary: {}, notices: [], mcpConfigReporting: 1 })).toEqual({
       state: "none",
     });
-  });
-
-  test("a readable body without the marker is a bridge that does not report", async () => {
-    expect(await read({ summary: {}, notices: [] })).toEqual({ state: "unsupported" });
-    // An `mcpConfig` alone no longer counts: every published bridge marks its body.
     expect(
       await read({ summary: {}, notices: [], mcpConfig: { inventoryScope: "process" } }),
-    ).toEqual({ state: "unsupported" });
+    ).toEqual({ state: "none" });
   });
 
-  test("a failure that is not 404 or 405 says nothing about the version", async () => {
+  test("a failed read is no evidence, whatever its status", async () => {
     expect(await read("busy", 503)).toEqual({ state: "none" });
-    expect(await read("gone", 405)).toEqual({ state: "unsupported" });
-  });
-
-  test("only a positive marker counts", () => {
-    expect(bridgeReportsMcpConfig({ mcpConfigReporting: 0 })).toBe(false);
-    expect(bridgeReportsMcpConfig({ mcpConfigReporting: "1" })).toBe(false);
-    expect(bridgeReportsMcpConfig({ mcpConfig: [] })).toBe(false);
-    expect(bridgeReportsMcpConfig(null)).toBe(false);
-    expect(bridgeReportsMcpConfig({ mcpConfigReporting: 2 })).toBe(true);
+    expect(await read("not found", 404)).toEqual({ state: "none" });
+    expect(await read("gone", 405)).toEqual({ state: "none" });
   });
 });

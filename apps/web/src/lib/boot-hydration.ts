@@ -1,5 +1,4 @@
 import {
-  LIST_ENVIRONMENT_HYDRATION_COMMAND,
   MAX_ENVIRONMENT_HYDRATION_IDS,
   type EnvironmentHydrationBatch,
   type EnvironmentHydrationPart,
@@ -12,7 +11,6 @@ import {
   applyPromptQueuesForEnvironment,
   type PromptQueueSource,
 } from "@/lib/prompt-queue-persistence";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { hydrationActivity } from "@/lib/hydration-activity";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { PersistedPromptQueue, PersistedWorkflowRecord } from "@/types";
@@ -32,8 +30,8 @@ import type { PersistedPromptQueue, PersistedWorkflowRecord } from "@/types";
  *
  * Only requests not yet sent are joined; a request made while a batch is in
  * flight goes in the next one, so it never receives a read that predates it.
- * A backend without the command answers "unknown command" once, and from then
- * on the batcher reads each requested list per environment, as before.
+ * A chunk whose batch fails is read per environment instead, so one failure
+ * never fails another environment's lists.
  */
 
 type PartName = "promptQueues" | "multiReviewWorkflows";
@@ -58,7 +56,6 @@ export interface EnvironmentHydrationDependencies {
 export class EnvironmentHydrationBatcher {
   private pending = new Map<string, PendingEnvironment>();
   private scheduled = false;
-  private batchSupported = true;
 
   constructor(private readonly dependencies: EnvironmentHydrationDependencies) {}
 
@@ -109,34 +106,24 @@ export class EnvironmentHydrationBatcher {
   }
 
   private async sendChunk(ids: string[], batch: Map<string, PendingEnvironment>): Promise<void> {
-    if (this.batchSupported) {
-      let response: Awaited<ReturnType<EnvironmentHydrationDependencies["listBatch"]>>;
-      try {
-        response = await this.dependencies.listBatch(ids);
-      } catch (error) {
-        // A failed batch must not make an unrelated environment's lists fail.
-        // Only an unsupported command disables batching for future requests;
-        // transient transport/validation failures fall back for this chunk.
-        if (
-          incompatibility(error, LIST_ENVIRONMENT_HYDRATION_COMMAND)?.code === "unknown-command"
-        ) {
-          this.batchSupported = false;
-        }
-        return this.sendSeparately(ids, batch);
-      }
-      const answered = new Map(response.environments.map((entry) => [entry.environmentId, entry]));
-      for (const id of ids) {
-        const waiting = batch.get(id)!;
-        const entry = answered.get(id);
-        settle(waiting.promptQueues, entry?.promptQueues, "promptQueues");
-        settle(waiting.multiReviewWorkflows, entry?.multiReviewWorkflows, "multiReviewWorkflows");
-      }
-      return;
+    let response: Awaited<ReturnType<EnvironmentHydrationDependencies["listBatch"]>>;
+    try {
+      response = await this.dependencies.listBatch(ids);
+    } catch {
+      // A failed batch must not make an unrelated environment's lists fail:
+      // this chunk's lists are read separately; the next batch tries again.
+      return this.sendSeparately(ids, batch);
     }
-    return this.sendSeparately(ids, batch);
+    const answered = new Map(response.environments.map((entry) => [entry.environmentId, entry]));
+    for (const id of ids) {
+      const waiting = batch.get(id)!;
+      const entry = answered.get(id);
+      settle(waiting.promptQueues, entry?.promptQueues, "promptQueues");
+      settle(waiting.multiReviewWorkflows, entry?.multiReviewWorkflows, "multiReviewWorkflows");
+    }
   }
 
-  /** Isolated reads when a batch fails or the backend lacks the command. */
+  /** Isolated reads when a batch fails. */
   private async sendSeparately(
     ids: string[],
     batch: Map<string, PendingEnvironment>,

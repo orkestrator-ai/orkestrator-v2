@@ -263,7 +263,7 @@ moved into Current state.
 
 - [version-compatibility.md](../../architecture/version-compatibility.md)
 - [storage.md](../../architecture/storage.md#migrations)
-- [8108](8108-legacy-retirement-sweep.md): the 2026-11-14 legacy-retirement sweep.
+- 8108 (retired): the 2026-11-14 legacy-retirement sweep.
 
 ## Replaces
 

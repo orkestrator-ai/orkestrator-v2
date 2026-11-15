@@ -228,7 +228,9 @@ dockerTest(
           ],
           120_000,
         );
-      const snapshot = () => exec("cat /tmp/.claude-state-snapshot /tmp/.claude-state");
+      // Only the snapshot is written; the plain state file is retired.
+      const snapshot = () =>
+        exec("cat /tmp/.claude-state-snapshot; test ! -e /tmp/.claude-state && echo no-legacy");
 
       // A turn refused by the API: StopFailure runs instead of Stop.
       const refused = turn("refuse");
@@ -237,7 +239,7 @@ dockerTest(
       await exec("touch /tmp/release-refuse");
       expect(await refused).not.toBe("0");
       await waitFor(sourceIs("idle"), tick);
-      expect(await snapshot()).toBe("failed 2 0\nidle");
+      expect(await snapshot()).toBe("failed 2 0\nno-legacy");
       const failed = await read();
       expect(failed.hasUnreadWork).toBe(true);
       expect(failed.unreadReason).toBe("agent_failed");
@@ -252,7 +254,7 @@ dockerTest(
       await exec("touch /tmp/release-reply");
       expect(await replied).toBe("0");
       await waitFor(sourceIs("waiting"), tick);
-      expect(await snapshot()).toBe("waiting 4 1\nwaiting");
+      expect(await snapshot()).toBe("waiting 4 1\nno-legacy");
       const finished = await read();
       expect(finished.hasUnreadWork).toBe(true);
       expect(finished.unreadReason).toBe("agent_waiting");

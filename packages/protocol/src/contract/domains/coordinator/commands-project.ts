@@ -80,7 +80,8 @@ const optionalUnknown = Schema.optionalKey(Schema.Unknown);
 
 /**
  * Creates the project's coordinator workspace, or answers the one it has.
- * `keepConversationErrors` (`=== true`) keeps conversations' startup errors.
+ * It never clears a conversation's startup error; `keepConversationErrors`
+ * stays a defined argument but is ignored.
  */
 export const ensureProjectCoordinatorCommand = defineCommand({
   domain: coordinatorDomain,

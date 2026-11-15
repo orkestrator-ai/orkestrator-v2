@@ -222,6 +222,16 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "interaction.present-failed": "Presenting an interaction threw; it is cancelled.",
       "interaction.resolved-callback-failed": "An interaction resolved callback threw.",
       "journal.persist-failed": "Saving the dispatch journal failed.",
+      "login-state.adopted":
+        "State an earlier bridge kept in this login's own directory was adopted into the shared state directory; `adopted` lists what.",
+      "login-state.change-evidence-failed":
+        "Adopting this login's change evidence failed; it stays in place for the next start and the spool opens without it.",
+      "login-state.command-changes-failed":
+        "Adopting this login's command-change journals failed; the next start retries.",
+      "login-state.dispatch-journal-failed":
+        "Adopting this login's dispatch journal failed; every dispatch is refused until a start adopts it.",
+      "login-state.titles-failed":
+        "Adopting this login's session titles failed; the next start retries.",
       "message.publish-failed": "Publishing a message update failed.",
       "models.cache-persist-failed": "Saving the model cache failed.",
       "models.debug-read-failed": "`codex debug models` failed; another source is used.",

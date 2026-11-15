@@ -1,7 +1,5 @@
 import type { HttpBridgeAgent } from "./http-bridge/index.js";
 import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
-import { TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER } from "@orkestrator/protocol/tab-teardown";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 /**
  * Ordinary close of a bridge session: stop owned work, release the bridge's
@@ -21,21 +19,6 @@ const BRIDGE_LABELS: Readonly<Record<HttpBridgeAgent, string>> = {
 /** Close could not be confirmed; the caller must keep its intent and retry. */
 export class BridgeClosePendingError extends Error {
   override readonly name = "BridgeClosePendingError";
-}
-
-/**
- * The bridge predates `POST /session/:id/close`, so no close exists until it is
- * restarted on a current build. Every published release has the route; only an
- * unpublished source build can get here.
- * The message carries {@link TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER} so
- * the renderer can show the restart notice.
- */
-export class BridgeCloseUnsupportedError extends Error {
-  override readonly name = "BridgeCloseUnsupportedError";
-
-  constructor(message: string) {
-    super(`${TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER} ${message}`);
-  }
 }
 
 export type BridgeCloseResult = {
@@ -69,9 +52,9 @@ function boundedDetail(body: Record<string, unknown> | undefined): string {
  * Resolves only on affirmative evidence: a 2xx close answer whose body affirms
  * `closed: true` (in-band `missing` included). A 2xx without that affirmation
  * (empty, oversized, malformed, or `closed` anything but `true`) is not a close.
- * A 404/405 from the close route means the bridge predates it — never "already
- * closed" — and that is an actionable failure rather than a DELETE. Everything
- * else, 503 `pending` included, rejects so the durable intent stays.
+ * Every other answer, 503 `pending` and a 404/405 included, rejects so the
+ * durable intent stays: a 404/405 is never "already closed", and nothing falls
+ * back to DELETE.
  */
 export async function closeBridgeSessionRetaining(
   agent: HttpBridgeAgent,
@@ -80,14 +63,6 @@ export async function closeBridgeSessionRetaining(
 ): Promise<BridgeCloseResult> {
   const label = BRIDGE_LABELS[agent];
   const response = await request("POST", `/session/${encodeURIComponent(sessionId)}/close`);
-  if (response.status === 404 || response.status === 405) {
-    await response.body?.cancel().catch(() => undefined);
-    compatibilityPathUsage.record("bridge-close.upgrade-required");
-    throw new BridgeCloseUnsupportedError(
-      `The ${label} bridge predates non-destructive tab close. Restart the environment so ` +
-        "it runs the current bridge; the conversation was not deleted and the close will be retried.",
-    );
-  }
   const body = await readSmallJson(response);
   if (response.ok && body?.closed === true) {
     return { outcome: body?.missing === true ? "missing" : "closed" };

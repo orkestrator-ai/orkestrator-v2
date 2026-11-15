@@ -1,7 +1,11 @@
 # Relay read assertion after queued EOF
 
 - **ID:** 0340
-- **Status:** open
+- **Status:** resolved
+- **Retired:** 2026-11-15: the test and the tunnel v1 upstream pump it
+  exercised, `PreviewTunnelServer.accept`, were removed with tunnel v1 by the
+  legacy-retirement sweep (8108, retired); the tunnel carries every connection
+  as a v2 stream with per-stream credit.
 - **Date observed:** 2026-10-17
 - **Test:** `PreviewTunnelServer > relay upstream preserves unshifted bytes and EOF across a stopped tunnel reader`
   in `apps/backend/src/preview-tunnel-server.test.ts`.

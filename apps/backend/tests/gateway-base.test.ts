@@ -9,7 +9,6 @@ import {
   OrkestratorGateway,
   parseEventSubscriptionFilter,
   readStaticFileWithinLimit,
-  rewriteBrowserPreviewBody,
   stripCodedContentHeaders,
   stripTransformedRepresentationHeaders,
 } from "../src/gateway";
@@ -634,22 +633,6 @@ describe("remote gateway", () => {
 
     scoped.close();
     terminal.close();
-  });
-
-  test("leaves application string literals and already-proxied paths untouched", () => {
-    const prefix = "/__orkestrator/browser/loopback/3000";
-    const target = new URL("http://127.0.0.1:3000/");
-    const source = [
-      'const parts = location.pathname.split("/");',
-      'const key = ["users", id].join("/");',
-      'createBrowserRouter([{ path: "/", element: root }]);',
-      'if (route.startsWith("/admin")) {}',
-      "const icon = '/assets/icon.svg';",
-      `const proxied = "${prefix}";`,
-      `import "${prefix}/src/dep.js";`,
-    ].join("\n");
-
-    expect(rewriteBrowserPreviewBody(source, prefix, target, "js")).toBe(source);
   });
 
   test("keeps desktop control available and selects another browser port when the preferred port is occupied", async () => {

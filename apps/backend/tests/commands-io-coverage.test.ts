@@ -1238,7 +1238,7 @@ esac
           context,
         ),
       ).rejects.toThrow("File is too large to open in the editor");
-      // Only v2.21.0 to v2.23.0 renderers ask; every call is counted (to-do 7570).
+      // Only v2.21.0 to v2.23.0 renderers ask; every call is counted (to-do 8111).
       expect(branchReads()).toBe(branchReadsBefore + 6);
       await expect(
         commands.get("read_container_file_base64")?.(

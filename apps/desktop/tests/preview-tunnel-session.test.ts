@@ -6,10 +6,7 @@ import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 
 import {
-  encodePreviewTunnelFrame,
-  parsePreviewTunnelClientFrame,
   PREVIEW_TUNNEL_PATH,
-  PREVIEW_TUNNEL_SUBPROTOCOL,
   PREVIEW_TUNNEL_CLOSE,
   type PreviewAttachmentDescriptor,
 } from "@orkestrator/protocol/preview-access";
@@ -29,7 +26,6 @@ import {
   type PreviewHarness,
 } from "../../backend/src/core/preview-test-support";
 import { PreviewTunnelServer } from "../../backend/src/preview-tunnel-server";
-import { PreviewTunnelStream } from "../electron/preview-tunnel-client";
 import {
   PreviewTunnelConnector,
   PreviewTunnelMuxStream,
@@ -111,10 +107,11 @@ describe("PreviewTunnelConnector (tunnel v2)", () => {
   }
 
   function open(att: PreviewAttachmentDescriptor) {
-    return connector.open(
-      { url, attachmentId: att.attachmentId, credential: att.tunnel!.credential },
-      att.tunnel!.multiplexSubprotocol !== undefined,
-    );
+    return connector.open({
+      url,
+      attachmentId: att.attachmentId,
+      credential: att.tunnel!.credential,
+    });
   }
 
   test("parallel opens share one handshake and HELLO, and the session closes once idle", async () => {
@@ -162,9 +159,7 @@ describe("PreviewTunnelConnector (tunnel v2)", () => {
   test("concurrent joiners all reject a failed connection and a later attempt recovers", async () => {
     const att = await attachment();
     const bad = { url, attachmentId: att.attachmentId, credential: "invalid" };
-    const results = await Promise.allSettled(
-      Array.from({ length: 8 }, () => connector.open(bad, true)),
-    );
+    const results = await Promise.allSettled(Array.from({ length: 8 }, () => connector.open(bad)));
     expect(results.every((result) => result.status === "rejected")).toBe(true);
     expect(upgrades).toBe(1);
     await until(() => connector.stats().sessions === 0);
@@ -204,15 +199,12 @@ describe("PreviewTunnelConnector (tunnel v2)", () => {
     const att = await attachment();
     await (await open(att)).destroy();
     const controller = new AbortController();
-    const pending = connector.open(
-      {
-        url,
-        attachmentId: att.attachmentId,
-        credential: att.tunnel!.credential,
-        signal: controller.signal,
-      },
-      true,
-    );
+    const pending = connector.open({
+      url,
+      attachmentId: att.attachmentId,
+      credential: att.tunnel!.credential,
+      signal: controller.signal,
+    });
     controller.abort();
     const error = await pending.catch((failure: unknown) => failure);
     expect(previewErrorFromUnknown(error)?.category).toBe("access-expired");
@@ -220,24 +212,20 @@ describe("PreviewTunnelConnector (tunnel v2)", () => {
   });
 });
 
-describe("PreviewTunnelConnector against a v1-only backend", () => {
-  test("an attachment without v2, or a server answering v1, gets one v1 socket per connection", async () => {
+describe("PreviewTunnelConnector against a server that does not answer v2", () => {
+  test("the open fails explicitly and nothing falls back to another protocol", async () => {
     let upgrades = 0;
     const backends: PreviewWebSocket[] = [];
     const server = createServer();
     server.on("upgrade", (request, socket, head) => {
       upgrades += 1;
+      // Answers with a subprotocol the client did not offer.
       const backend = acceptPreviewWebSocket(request, socket, head, {
-        protocol: PREVIEW_TUNNEL_SUBPROTOCOL,
+        protocol: "orkestrator.preview-tunnel.v1",
         maxPayload: PREVIEW_LIMITS.tunnelFrameMaxBytes,
       });
       if (!backend) return;
       backends.push(backend);
-      backend.on("message", (data, binary) => {
-        if (binary) return;
-        const frame = parsePreviewTunnelClientFrame(data.toString());
-        if (frame?.type === "open") backend.send(encodePreviewTunnelFrame({ type: "open-ok" }));
-      });
       backend.start();
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -248,18 +236,10 @@ describe("PreviewTunnelConnector against a v1-only backend", () => {
       credential: "test-credential",
     };
     try {
-      // The attachment advertised v2, but this server only speaks v1.
-      const first = await connector.open(options, true);
-      expect(first).toBeInstanceOf(PreviewTunnelStream);
-      const [second, third] = await Promise.all([
-        connector.open(options, true),
-        connector.open(options, false),
-      ]);
-      expect(second).toBeInstanceOf(PreviewTunnelStream);
-      expect(third).toBeInstanceOf(PreviewTunnelStream);
-      expect(upgrades).toBe(3);
+      const error = await connector.open(options).catch((failure: unknown) => failure);
+      expect(previewErrorFromUnknown(error)?.category).toBe("backend-unavailable");
+      expect(upgrades).toBe(1);
       expect(connector.stats()).toEqual({ sessions: 0, streams: 0 });
-      for (const stream of [first, second, third]) stream.destroy();
     } finally {
       connector.close();
       for (const backend of backends) backend.terminate();

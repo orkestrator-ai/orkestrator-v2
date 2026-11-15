@@ -1,6 +1,5 @@
 import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, spyOn, test } from "bun:test";
-import { compatibilityPathUsage } from "../src/core/compatibility-path-usage";
 import path from "node:path";
 import { TmuxBackend } from "../src/core/tmux-backend";
 import { spawn } from "node:child_process";
@@ -16,6 +15,18 @@ import {
   withFakeTmuxRuntime,
   warpedCommandClock,
 } from "./tmux-test-harness.js";
+
+/** The lines of a tab's tail page: every line, for a transcript under one page. */
+async function tailLines(
+  handlers: Parameters<typeof invoke>[0],
+  args: { tabId: string; environmentId: string },
+): Promise<unknown[]> {
+  return (
+    (await invoke(handlers, "claude_tmux_transcript", { ...args, page: {} })) as {
+      lines: unknown[];
+    }
+  ).lines;
+}
 
 describe("Electron tmux hooks and transcripts", () => {
   test("stopped history uses the recreated container backend", async () => {
@@ -214,7 +225,7 @@ describe("Electron tmux hooks and transcripts", () => {
         `${JSON.stringify({ type: "user", message: { role: "user", content: "Hello" } })}\nnot-json\n${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "Hi" } })}\n`,
       );
       await expect(
-        invoke(handlers, "claude_tmux_transcript", {
+        tailLines(handlers, {
           tabId: "tab-1",
           environmentId: environment.id,
         }),
@@ -762,7 +773,7 @@ describe("Electron tmux hooks and transcripts", () => {
       );
 
       await expect(
-        invoke(handlers, "claude_tmux_transcript", {
+        tailLines(handlers, {
           tabId: "tab-fallback",
           environmentId: environment.id,
         }),
@@ -821,7 +832,7 @@ describe("Electron tmux hooks and transcripts", () => {
       expect(freshStatus.session_id).not.toBe(reviewStatus.session_id);
 
       await expect(
-        invoke(handlers, "claude_tmux_transcript", {
+        tailLines(handlers, {
           tabId: "fresh-tab",
           environmentId: environment.id,
         }),
@@ -833,7 +844,7 @@ describe("Electron tmux hooks and transcripts", () => {
       );
 
       await expect(
-        invoke(handlers, "claude_tmux_transcript", {
+        tailLines(handlers, {
           tabId: "fresh-tab",
           environmentId: environment.id,
         }),
@@ -893,7 +904,7 @@ describe("Electron tmux hooks and transcripts", () => {
       );
 
       await expect(
-        invoke(handlers, "claude_tmux_transcript", {
+        tailLines(handlers, {
           tabId: "tab-ambiguous",
           environmentId: environment.id,
         }),
@@ -1068,14 +1079,11 @@ describe("Electron tmux hooks and transcripts", () => {
         ),
       ).resolves.toEqual(expect.objectContaining({ lines: [], expired: true }));
 
-      // A renderer that predates paging still gets every line as an array, counted.
-      const countBefore =
-        compatibilityPathUsage.snapshot().paths["tmux-transcript.whole-read"]?.count ?? 0;
-      const whole = (await invoke(handlers, "claude_tmux_transcript", args)) as unknown[];
-      expect(whole).toHaveLength(lines.length);
-      expect(compatibilityPathUsage.snapshot().paths["tmux-transcript.whole-read"]?.count).toBe(
-        countBefore + 1,
-      );
+      // A call without `page` gets the same bounded tail page, never the whole file.
+      const unpaged = (await invoke(handlers, "claude_tmux_transcript", args, context)) as Page;
+      expect(Array.isArray(unpaged)).toBe(false);
+      expect(unpaged.lines.map((line) => line.uuid)).toEqual(tail.lines.map((line) => line.uuid));
+      expect(unpaged.earlierCursor).toBe(tail.earlierCursor);
 
       // Removing the live session must not strand the remaining history.
       // The fallback uses no retained reader or session-registry state, just
@@ -1167,7 +1175,7 @@ describe("Electron tmux hooks and transcripts", () => {
       );
 
       // A full read stamps each line with the list as it stood at that line.
-      const lines = (await invoke(handlers, "claude_tmux_transcript", {
+      const lines = (await tailLines(handlers, {
         tabId: "tab-tasks",
         environmentId: environment.id,
       })) as Array<{ taskSnapshots?: Record<string, unknown> }>;

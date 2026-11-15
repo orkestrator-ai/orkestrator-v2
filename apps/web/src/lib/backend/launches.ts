@@ -2,10 +2,7 @@ import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
 /**
  * One-request launches: the renderer states what the user chose and the
  * backend fills the saved defaults, owns every step and compensates failures.
- *
- * Each has an older-backend answer in the caller, chosen with
- * `incompatibility(error, command)` (`@orkestrator/protocol/contract/errors`) and listed in
- * `docs/architecture/version-compatibility.md`.
+ * A failed launch, an unknown command included, is the caller's ordinary error.
  */
 import type { BuildPipeline as BackendBuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import type { LaunchBuildPipelineInput } from "@orkestrator/protocol/build-pipeline-defaults";

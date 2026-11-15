@@ -11,7 +11,6 @@
  * (`invoke_on_node`), which routes them to the owner.
  */
 
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { AgentsMdChange, AgentsMdSection } from "@orkestrator/protocol/agents-md-orkestrator";
 import type { RootChangeFile } from "@orkestrator/protocol/coordinator-surfaces";
 import type { AgentInteractionQuestionAnswer } from "@orkestrator/protocol/agent-interactions";
@@ -57,7 +56,7 @@ export interface PortalState {
    */
   commandRelease: MachineRelease | null;
   loaded: boolean;
-  /** The connected backend has no command-node support (an older backend). */
+  /** The connected backend runs without the command-node portal. */
   unsupported: boolean;
   /** Bumped when a routed write's outcome became unknown (the notices re-read). */
   outcomesRevision: number;
@@ -158,8 +157,8 @@ export class PortalStore {
   }
 
   private async read(): Promise<void> {
-    // Status and summaries are read independently, so an older or
-    // non-command backend still reports its status.
+    // Status and summaries are read independently, so a non-command
+    // backend still reports its status.
     const [status, summaries] = await Promise.allSettled([
       portalNodesApi().get_node_status(NO_ARGS),
       portalNodesApi().get_node_summaries({}),
@@ -181,10 +180,8 @@ export class PortalStore {
           : null
         : state.commandRelease,
       loaded: true,
-      // A backend older than the portal commands, or one without the portal.
-      unsupported:
-        incompatibility(failure, "get_node_status") !== null ||
-        /not available in this backend/i.test(message),
+      // A backend without the portal; any other failure is a passing one.
+      unsupported: /not available in this backend/i.test(message),
     }));
   }
 

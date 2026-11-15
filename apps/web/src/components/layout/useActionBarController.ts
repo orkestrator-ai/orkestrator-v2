@@ -47,7 +47,6 @@ import {
 import { createOrkestratorScriptPrompt } from "@orkestrator/protocol/orkestrator-script-prompt";
 import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
 import { backendForScope } from "@/lib/backend/scope-backend";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
 import { isBackendOnAnotherDevice, isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
@@ -69,7 +68,6 @@ import {
   getAllLeaves,
   type EnvironmentPaneState,
 } from "@/stores/paneLayoutStore";
-import { legacyLaunchMultiReview } from "@/lib/multi-review-launch-compat";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
@@ -950,14 +948,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
    * Start Multi Review. With no `selection` (a plain click or ⌘M) the request
    * names only the environment and its node fills every row from its own saved
    * settings and model catalogue; the window never picks the models.
-   * `legacySelection` is only for a node that predates `launch_multi_review`
-   * and so cannot fill them.
    */
   const handleMultiReview = useCallback(
-    async (
-      selection?: MultiReviewLaunchSelection,
-      legacySelection?: () => MultiReviewLaunchSelection,
-    ) => {
+    async (selection?: MultiReviewLaunchSelection) => {
       if (
         multiReviewLaunchInFlightRef.current ||
         !createTab ||
@@ -992,51 +985,19 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         // One request: the backend reuses an active review, takes the target
         // branch and instruction from saved settings, starts the review and
         // writes its tab into the layout, so a crash here cannot orphan it.
-        const launched = await nodeBackend
-          .launchMultiReview({
-            requestId,
-            environmentId: selectedEnvironmentId,
-            ...(selection
-              ? {
-                  reviewers: selection.reviewers,
-                  reviewModel: selection.reviewModel,
-                  fixModel: selection.fixModel,
-                  autoFix: selection.autoFix,
-                  autoPr: selection.autoPr,
-                }
-              : {}),
-          })
-          .catch((error: unknown) => {
-            if (incompatibility(error, "launch_multi_review")?.code !== "unknown-command")
-              throw error;
-            return null;
-          });
-        if (!launched) {
-          launch.failed();
-          const legacyChoice = selection ?? legacySelection?.();
-          if (!legacyChoice) {
-            throw new Error("This machine's Orkestrator is too old to choose the review models.");
-          }
-          const legacy = await legacyLaunchMultiReview({
-            scope: actionBarScope,
-            environmentId: selectedEnvironmentId,
-            projectId: selectedProjectId,
-            targetBranch: defaultPrTargetBranch(
-              config.repositories[selectedProjectId]?.prBaseBranch,
-            ),
-            reviewInstruction: config.global.reviewInstruction,
-            selection: legacyChoice,
-            createTab: (workflowId) =>
-              Boolean(
-                createTab("multi-review", {
-                  multiReviewId: workflowId,
-                  displayTitle: "Multi Review",
-                }),
-              ),
-          });
-          if (legacy.reused) announceReused();
-          return;
-        }
+        const launched = await nodeBackend.launchMultiReview({
+          requestId,
+          environmentId: selectedEnvironmentId,
+          ...(selection
+            ? {
+                reviewers: selection.reviewers,
+                reviewModel: selection.reviewModel,
+                fixModel: selection.fixModel,
+                autoFix: selection.autoFix,
+                autoPr: selection.autoPr,
+              }
+            : {}),
+        });
         actionBarScope.store(multiReviewStore).getState().replaceWorkflow(launched.workflow);
         if (launched.ui.status !== "opened" || !launched.ui.tabId) {
           throw new Error(launched.recovery ?? "The review's tab could not be opened.");
@@ -1059,8 +1020,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       actionBarScope,
       beginLaunchedTab,
       canCreateTab,
-      config.global.reviewInstruction,
-      config.repositories,
       createTab,
       isRunning,
       selectedEnvironment,

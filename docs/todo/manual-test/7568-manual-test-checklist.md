@@ -20,14 +20,18 @@ trusted-publisher setting and first CI publish (5021 (retired) task 1), the anno
 which now live in [`docs/upstream-issues/`](../../upstream-issues/0000-index.md).
 Four manual checks went because the legacy-retirement decision made them
 moot (0015 (retired) task 1's mixed-version pairings and the compatibility counter
-readings of 7570 task 2, 0050 task 1 and 0232 task 4).
+readings of 7570 (retired) task 2, 0050 task 1 and 0232 task 4).
+Updated 2026-11-15: the legacy-retirement sweep (8108 and 7570, both retired)
+added one decision, how the contract tooling follows the retirement (8111
+task 1), and one live check, stored legacy URL preview tabs on the user's own
+installs (8108 (retired) task 3).
 
 ### Tasks
 
-1. **Manual tests and live checks** (327 items): run each check under
+1. **Manual tests and live checks** (328 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
-2. **Decisions, approvals and outward actions** (23 items): make each call
+2. **Decisions, approvals and outward actions** (24 items): make each call
    or take each action under
    [Decisions, approvals and outward actions](#decisions-approvals-and-outward-actions)
    and record it. Status: open.
@@ -166,12 +170,12 @@ agent can apply it.
 | CLI and slash commands | 5 | 0 |
 | Containers and environments | 28 | 6 |
 | Coordinator and Multi Review | 83 | 3 |
-| Cross-cutting | 85 | 8 |
+| Cross-cutting | 85 | 9 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
-| Service previews and web annotations | 16 | 1 |
+| Service previews and web annotations | 17 | 1 |
 | Transcripts, observation and bandwidth | 27 | 1 |
-| **Total** | 327 | 23 |
+| **Total** | 328 | 24 |
 
 ## Outstanding work
 
@@ -720,6 +724,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **5510 (retired) task 3 (bare-metal part): rootful Docker with no host firewall.** (Background: [nested rootful run](../../development/container-qualification.md#rootful-daemon-with-no-host-firewall-task-3).) On a disposable bare-metal Linux host whose rootful Docker daemon is usable and whose host firewall is off, run the opt-in live suite `apps/backend/tests/container-live-rootful-host-reach.test.ts` with `ORKESTRATOR_LIVE_HOST_FIREWALL=none`. Record: host, kernel, Docker version, firewall state, per-runtime results and cleanup, as a new dated section in [container qualification](../../development/container-qualification.md), and reply to the coordinator.
 - [ ] **5510 (retired) task 3 (arm64 part): Linux gateway reach on an arm64 host.** (Background: [x86_64 runs](../../development/container-qualification.md#pre-gateway-images-under-the-current-backend-on-rootless-linux-engine-2026-11-11).) On an arm64 Linux host (not emulated), run the restricted/full comparison: `mise run docker:disposable -- start --host-loopback` with `apps/backend/tests/container-live-rootless-host-loopback.test.ts`, and `container-live-rootful-host-reach.test.ts` where a rootful daemon is available. Record: host, kernel, iptables and Docker versions, per-runtime results, as a new dated section in [container qualification](../../development/container-qualification.md), and reply to the coordinator.
 - [ ] **5240 (retired) task 1: same-site preview domain warning on a real deployment.** With [0042](../previews-and-annotations/0042-service-preview-rollout.md) task 2's real private zone and wildcard certificate, turn on private preview publication twice: once with a preview domain on Orkestrator's own site (for example `preview.<tailnet>.ts.net` while Orkestrator is served from `<machine>.<tailnet>.ts.net`, or a company split-DNS zone sharing the gateway name's registrable domain) and once with a domain on a separate site. Check that Settings → Preview shows the same-site warning under the publication status, and the backend logs `preview/publication.same-site`, for the first only. Background: [private HTTPS origins](../../architecture/browser-previews.md#private-https-origins). Record: per layout, the Serve URL the gateway reports and whether the warning showed; which domain layouts your real deployments use and whether any needs a same-site preview domain. Reply to the coordinator; if none needs one, open a to-do to consider refusing as the artifact origin does (otherwise keep warning, the recommended default).
+- [ ] **8108 (retired) task 3: stored legacy URL preview tabs after updating your everyday installs.** The legacy loopback preview route and `ServiceBrowserTab` compatibility mode were removed on 2026-11-15 ([browser-previews.md](../../architecture/browser-previews.md)). After every machine you use runs a release built from that change, open a desktop window whose saved layout had `localhost` or loopback URL preview tabs from before service previews. Check that a tab matching exactly one service opens as that service, that a tab matching no single service stays a plain URL tab that opens in your external browser (no blank or failing in-app page), and that a note captured earlier on such a tab still reads in a browser tab's annotation panel. Record: per tab, which of the three it became and anything that failed, in a reply to the coordinator.
 
 #### Transcripts, observation and bandwidth
 
@@ -819,6 +824,13 @@ None open (both answered on 2026-11-14).
   - accept it (no change, but a covered Linux window keeps polling at full rate).
 
   Record: the choice and its reason, in 2181's Assumptions and decisions or as a reply to the coordinator. An agent then builds the relay under a new to-do or closes the question in 2181.
+
+- [ ] **[8111](../cross-cutting/8111-contract-pinned-compatibility-paths.md) task 1: decide how the contract tooling follows the 2026-11-14 legacy retirement.** The sweep (8108, retired 2026-11-15) removed every compatibility path it could, but `mise run contract:ci` still applies the 60-day support window, so the domain client adapters below each domain's current version, three capability commands and about twenty commands kept registered for older clients cannot go without failing it. Choose:
+  - record a one-time floor at the first release built from the sweep in `scripts/contract-ci.ts`, then delete those paths (recommended);
+  - keep the 60-day window and let them retire on its schedule;
+  - drop the window and the contract CI checks altogether.
+
+  Record: the choice, and whether later changes still need older-version adapters (the forward policy), in 8111's Assumptions and decisions or as a reply to the coordinator. An agent then does 8111 task 1.
 
 #### Design canvas
 

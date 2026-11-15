@@ -1,23 +1,26 @@
 import { afterAll, describe, test, expect, beforeEach, mock } from "bun:test";
 import * as realBackend from "@/lib/backend";
+import { kanbanTask } from "@/test/kanban-task";
 
 const realBackendSnapshot = { ...realBackend };
 
 // Mock backend before importing the store
 const mockUpdateKanbanTask = mock(
   (..._args: Parameters<typeof realBackend.updateKanbanTask>): Promise<KanbanTask> =>
-    Promise.resolve({
-      id: "task-1",
-      projectId: "proj-1",
-      title: "Test",
-      description: "desc",
-      acceptanceCriteria: "",
-      status: "backlog" as const,
-      comments: [],
-      images: [],
-      createdAt: new Date().toISOString(),
-      order: 0,
-    }),
+    Promise.resolve(
+      kanbanTask({
+        id: "task-1",
+        projectId: "proj-1",
+        title: "Test",
+        description: "desc",
+        acceptanceCriteria: "",
+        status: "backlog" as const,
+        comments: [],
+        images: [],
+        createdAt: new Date().toISOString(),
+        order: 0,
+      }),
+    ),
 );
 
 const mockGetKanbanTasks = mock(() => Promise.resolve([]));
@@ -28,32 +31,36 @@ const mockClearTaskBuildStatus = mock(async (taskId: string) => ({
 }));
 const mockAddKanbanTask = mock(
   (_projectId: string, _title: string, _description: string): Promise<KanbanTask> =>
-    Promise.resolve({
-      id: "new-task",
+    Promise.resolve(
+      kanbanTask({
+        id: "new-task",
+        projectId: "proj-1",
+        title: "New",
+        description: "",
+        acceptanceCriteria: "",
+        status: "backlog" as const,
+        comments: [],
+        images: [],
+        createdAt: new Date().toISOString(),
+        order: 0,
+      }),
+    ),
+);
+const mockAddKanbanComment = mock((_taskId: string, _text: string): Promise<KanbanTask> =>
+  Promise.resolve(
+    kanbanTask({
+      id: "task-1",
       projectId: "proj-1",
-      title: "New",
-      description: "",
+      title: "Test",
+      description: "desc",
       acceptanceCriteria: "",
       status: "backlog" as const,
-      comments: [],
+      comments: [{ id: "c1", text: "comment", createdAt: new Date().toISOString() }],
       images: [],
       createdAt: new Date().toISOString(),
       order: 0,
     }),
-);
-const mockAddKanbanComment = mock((_taskId: string, _text: string): Promise<KanbanTask> =>
-  Promise.resolve({
-    id: "task-1",
-    projectId: "proj-1",
-    title: "Test",
-    description: "desc",
-    acceptanceCriteria: "",
-    status: "backlog" as const,
-    comments: [{ id: "c1", text: "comment", createdAt: new Date().toISOString() }],
-    images: [],
-    createdAt: new Date().toISOString(),
-    order: 0,
-  }),
+  ),
 );
 
 mock.module("@/lib/backend", () => ({
@@ -84,7 +91,7 @@ afterAll(() => {
 });
 
 function createTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
-  return {
+  return kanbanTask({
     id: "task-1",
     projectId: "proj-1",
     title: "Test Task",
@@ -96,7 +103,7 @@ function createTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
     createdAt: new Date().toISOString(),
     order: 0,
     ...overrides,
-  };
+  });
 }
 
 describe("kanbanStore", () => {

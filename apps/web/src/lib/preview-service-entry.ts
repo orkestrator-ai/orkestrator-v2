@@ -3,7 +3,6 @@ import {
   formatPreviewIntentUri,
   formatPreviewServiceUri,
   normalizePreviewPath,
-  resolvePreviewEntryService,
   type PreviewCapabilities,
   type PreviewRegistrySnapshot,
   type PreviewServiceRef,
@@ -34,13 +33,8 @@ export async function environmentBrowserTarget(
   if (!capabilities) return legacyUrl ?? undefined;
   const snapshot = await store.refreshEnvironment(environment.id);
   if (!snapshot) return legacyUrl ?? undefined;
-  // The backend resolves the entry service; an older backend omits it, and the
-  // same protocol rule is applied to its services here.
-  const serviceId =
-    snapshot.entryServiceId !== undefined
-      ? snapshot.entryServiceId
-      : (resolvePreviewEntryService(snapshot.services, environment.id)?.definition.serviceId ??
-        null);
+  // The backend resolves the entry service.
+  const serviceId = snapshot.entryServiceId;
   if (!serviceId) return legacyUrl ?? undefined;
   return formatPreviewServiceUri({
     backendInstanceId: capabilities.backendInstanceId,

@@ -70,6 +70,11 @@ export class CodexRuntimeContext {
   /** Shared by concurrent callers; cleared after failure so startup can retry. */
   startPromise: Promise<void> | null = null;
   /**
+   * The one-time login-state upgrade and the dispatch journal's load
+   * (`login-state-adoption.ts`). Neither rejects, and a retried start reuses it.
+   */
+  loginStateAdoption: Promise<void> | null = null;
+  /**
    * Whether the persisted session registry has been restored.
    *
    * The HTTP server listens while `start()` reads the registry from disk, and

@@ -1233,27 +1233,3 @@ describe("node mail request collisions", () => {
     expect(routed.filter((item) => item.command === "deliver_node_mail")).toHaveLength(delivered);
   });
 });
-
-test("a leaf without build-origin support is refused before a pipeline can start", async () => {
-  const { run, scope, routed, associations } = await setup({
-    capabilities: { "node-attachment": 1 },
-  });
-  await expect(
-    run("start_coordinator_node_build_pipeline", {
-      scope,
-      nodeId: "bk_leaf",
-      requestId: "old-leaf-build",
-      input: {
-        projectId: scope.projectId,
-        taskId: "leaf-ticket",
-        taskTitle: "Build",
-        delegationBaseBranch: "main",
-        delegationBaseCommit: BASE,
-      },
-    }),
-  ).rejects.toThrow("Update this node");
-  expect(
-    routed.filter((entry) => entry.command === "start_controller_build_pipeline"),
-  ).toHaveLength(0);
-  expect(await associations()).toEqual([]);
-});

@@ -75,11 +75,11 @@ export function transportStateForError(error: unknown): ConnectionTransportState
   }
 }
 
-export type HelloOutcome =
-  /** The backend proved its installation identity and capabilities. */
-  | { kind: "hello"; hello: BackendHello; latencyMs?: number }
-  /** An older backend without the handshake: identity stays provisional. */
-  | { kind: "legacy"; latencyMs?: number };
+/**
+ * The backend proved its installation identity and capabilities. A backend that
+ * does not answer the hello handshake fails the check like any other.
+ */
+export type HelloOutcome = { kind: "hello"; hello: BackendHello; latencyMs?: number };
 
 const MAX_HELLO_BYTES = 64 * 1024;
 
@@ -112,41 +112,32 @@ export async function checkBackendRoute(
     );
     if (hello.status === 401)
       throw connectionCheckError("authentication-required", "The gateway token was rejected.");
-    if (hello.status === 200 && hello.json !== undefined) {
-      try {
-        const parsed = parseBackendHello(hello.json);
-        if (!isClientApiCompatible(parsed)) {
-          throw connectionCheckError(
-            "incompatible",
-            `This backend (${parsed.appVersion}) does not support this client's API version. Update one of them.`,
-          );
-        }
-        return { kind: "hello", hello: parsed, latencyMs: performance.now() - started };
-      } catch (error) {
-        if (isConnectionCheckError(error)) throw error;
-        // A 200 that is not a hello is an older backend serving its renderer
-        // for an unknown path: fall through to the authenticated status check.
-      }
-    }
-    const status = await requestJson(
-      fetchImpl,
-      new URL("/__orkestrator/status", baseUrl),
-      token,
-      controller.signal,
-    );
-    const payload = (status.json ?? {}) as { ok?: boolean; error?: string };
-    if (status.status === 401) {
-      throw connectionCheckError("authentication-required", "The gateway token was rejected.");
-    }
-    if (status.status < 200 || status.status >= 300 || payload.ok !== true) {
+    if (hello.status !== 200) {
+      const payload = (hello.json ?? {}) as { error?: unknown };
       throw connectionCheckError(
         "protocol",
         typeof payload.error === "string"
           ? payload.error.slice(0, 200)
-          : `Backend check failed with HTTP ${status.status}.`,
+          : `Backend check failed with HTTP ${hello.status}.`,
       );
     }
-    return { kind: "legacy", latencyMs: performance.now() - started };
+    let parsed: BackendHello;
+    try {
+      parsed = parseBackendHello(hello.json);
+    } catch (error) {
+      throw connectionCheckError(
+        "protocol",
+        "The backend did not answer the hello handshake. Update it.",
+        error,
+      );
+    }
+    if (!isClientApiCompatible(parsed)) {
+      throw connectionCheckError(
+        "incompatible",
+        `This backend (${parsed.appVersion}) does not support this client's API version. Update one of them.`,
+      );
+    }
+    return { kind: "hello", hello: parsed, latencyMs: performance.now() - started };
   } catch (error) {
     if (controller.signal.aborted) {
       const seconds = options.timeoutMs / 1_000;

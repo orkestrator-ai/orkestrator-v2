@@ -65,26 +65,3 @@ export function unfenceTabTeardownSessionId(value: string | undefined): {
   const sessionId = value.slice(RETAINING_CLOSE_SESSION_ID_PREFIX.length);
   return { ...(sessionId ? { sessionId } : {}), retainingClose: true };
 }
-
-/**
- * Stable marker on a tab teardown failure caused by a bridge that predates
- * `POST /session/:id/close`. The close stays pending until the environment runs
- * a current bridge; the renderer shows a bounded, non-destructive notice for it.
- *
- * Carried in the error message because command failures reach the renderer
- * as text (the gateway forwards `error.message`, Electron may prefix it).
- */
-export const TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER =
-  "TabTeardownError:bridge-upgrade-required:";
-
-export type TabTeardownFailureKind = "bridge-upgrade-required";
-
-/** Classify a rejected `teardown_tab` call; `null` for every other failure. */
-export function tabTeardownFailureKind(error: unknown): TabTeardownFailureKind | null {
-  const message =
-    error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
-  if (!message) return null;
-  return message.includes(TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER)
-    ? "bridge-upgrade-required"
-    : null;
-}

@@ -105,12 +105,12 @@ describe("backend adapter usage", () => {
         "domain-adapter.renderer.node-mail.v0": entry,
         "domain-adapter.renderer.made-up.v0": entry,
         "domain-adapter.anyone.node-mail.v0": entry,
-        "machine-load.older-node": entry,
+        "workspace-grant.config-echo": entry,
       },
     });
     expect(Object.keys(normalized.paths).sort()).toEqual([
       "domain-adapter.renderer.node-mail.v0",
-      "machine-load.older-node",
+      "workspace-grant.config-echo",
     ]);
   });
 });

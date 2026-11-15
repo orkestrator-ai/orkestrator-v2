@@ -119,8 +119,10 @@ code. The thread lists the same hints as "Source candidates", marking each
 "path found in workspace at capture" or "path not confirmed".
 
 Page identity comes from the real view URL in main, never from the page:
-`{kind: "port"}` for loopback or gateway previews, `{kind: "service"}` for
-registered services, and a route sanitized by `sanitizeWebAnnotationUrl`.
+`{kind: "service"}` for registered services, and a route sanitized by
+`sanitizeWebAnnotationUrl`. Notes are taken only in service tabs; `{kind: "port"}`
+pages remain only on notes saved from manual URL tabs before those tabs lost
+their in-app view (8108 task 3), and stay readable in any browser tab's panel.
 Credentials and token-like parameters are removed; when that happens the page
 is marked `requiresNavigation` rather than guessed.
 
@@ -320,9 +322,9 @@ into its open root. A closed root exposes no `shadowRoot` to page script, so
 its host is the target, as it always was. A host is an ordinary element in its
 own root: selecting one records that root's scope, not `unsupported`.
 Desktop clients send a `shadow` scope, on an element or a text range's
-container, only to a backend that advertises `operations.shadowTargets`; any
-other backend receives the older `{ kind: "unsupported", reason: "shadow-root" }`
-for the same target.
+container, to every backend; the backend still advertises
+`operations.shadowTargets` with authoring, but the renderer no longer reads it
+(every backend accepts the scope since 0047 task 5).
 
 A text range stores its quote with context plus the anchor of its containing
 element, whose scope says which tree the quote is in. Text mode reads a selection

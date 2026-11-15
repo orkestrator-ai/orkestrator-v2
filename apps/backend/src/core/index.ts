@@ -53,7 +53,6 @@ import {
   coordinatorNodeContext,
   createNodeSshFactory,
   errorCode,
-  leafTakesCoordinatorNotices,
   NodeCoordination,
   NodeCoordinatorRemote,
   NodePortal,
@@ -63,10 +62,8 @@ import {
 } from "./nodes/index.js";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
-import { legacyAutoSwitchEvent } from "@orkestrator/protocol/agent-account-auto-switch";
 import { AGENT_ACCOUNT_PLATFORMS } from "@orkestrator/protocol/agent-accounts";
 import {
-  agentAccountAutoSwitchedEvent,
   agentAccountsChangedEvent,
   controlMcpStateChangedEvent,
   nativeAgentAsyncQuestionEvent,
@@ -99,10 +96,6 @@ import {
 import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
 import { CoordinatorUsageLimitNotices } from "./coordinator-usage-limit-notices.js";
 import { COORDINATOR_STATUS_COALESCE_MS } from "./coordinator-status-wakes.js";
-import {
-  bridgeRemoteAutoSwitchNotices,
-  mailAutoSwitchNotice,
-} from "./agent-accounts-auto-switch-notices.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { multiReviewNativeAddressFindingsOptions } from "./multi-review-native-address-findings.js";
 import { checkDockerAvailability } from "./commands-registry-docker.js";
@@ -994,17 +987,6 @@ export class OrkestratorBackend {
     this.nodeCoordination.setCoordinatorNotices(this.coordinators.noticeRouter.fromLeaf);
     // Coordinators refused this node while it was down hear that it is back.
     connectCoordinatorNodeWakes(this.nodeCoordination, this.coordinators);
-    bridgeRemoteAutoSwitchNotices({
-      onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
-      nodeName: async (nodeId) =>
-        (await this.nodePortal.summaries([nodeId])).nodes[0]?.view.displayName ?? nodeId,
-      mail: (event, machineName) => mailAutoSwitchNotice(storage, event, machineName),
-      // The same answer the mail collector acts on (the node-mail client, plan item 1010).
-      sendsThroughOutbox: (nodeId) => {
-        const link = isBackendId(nodeId) ? this.nodes.link(nodeId) : null;
-        return link ? leafTakesCoordinatorNotices(link) : false;
-      },
-    });
     bridgeRemoteCoordinatorEvents({
       onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
       settleRemoteWorker: (nodeId, environmentId) =>
@@ -1066,9 +1048,6 @@ export class OrkestratorBackend {
       bridgeBusy: (environmentId, platform) =>
         this.nativeAgents.hasObservedLiveWork(environmentId, platform),
       notify: async ({ quietProjectId, ...notice }) => {
-        // An older command node hears through its event stream; a newer one
-        // ignores that and takes this machine's notice from its outbox.
-        emit(agentAccountAutoSwitchedEvent, legacyAutoSwitchEvent(notice));
         await this.coordinators.noticeRouter.deliverAutoSwitch(notice, "this machine", {
           coalesceMs: COORDINATOR_STATUS_COALESCE_MS,
           ...(quietProjectId ? { quietProjectId } : {}),
@@ -3066,7 +3045,6 @@ export class OrkestratorBackend {
       relayTarget: (nodeId) => this.nodePortal.relayTarget(nodeId),
       relayWorkspaceOpen: (workspaceId, nodeId) =>
         this.nodePortal.workspaceOpenFor(workspaceId, nodeId),
-      isRelayedNodeWatched: (nodeId) => this.nodePortal.events.isWatched(nodeId),
     };
   }
 

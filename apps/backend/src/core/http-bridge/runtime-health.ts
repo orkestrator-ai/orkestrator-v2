@@ -285,14 +285,3 @@ export function bridgeMcpConfigEvidence(payload: unknown): ProviderMcpConfigEvid
   const staleServers = mcpStaleServers(config.staleServers);
   return { sources, observedAt, scope: "session", ...(staleServers ? { staleServers } : {}) };
 }
-
-/**
- * Whether the bridge that wrote a runtime-health body reports MCP
- * configuration at all: it carries the `mcpConfigReporting` marker, which
- * every bridge that reports sends for every session, an unknown one included.
- * Without it the bridge cannot report what it loaded.
- */
-export function bridgeReportsMcpConfig(payload: unknown): boolean {
-  const body = asRecord(payload);
-  return typeof body?.mcpConfigReporting === "number" && body.mcpConfigReporting >= 1;
-}

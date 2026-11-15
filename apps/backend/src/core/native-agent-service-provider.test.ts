@@ -1593,10 +1593,10 @@ describe("MCP configuration evidence", () => {
           evidence,
         });
         expect(read).toHaveBeenCalledWith("provider-session-1", {});
-        // A bridge older than the report says so, rather than "nothing loaded".
-        read.mockImplementationOnce(async () => ({ state: "unsupported" }) as never);
+        // A read with nothing loaded yet passes through as no evidence.
+        read.mockImplementationOnce(async () => ({ state: "none" }) as never);
         expect(await service.mcpConfigEvidenceIfRunning("env-1", "claude", LOGICAL)).toEqual({
-          state: "unsupported",
+          state: "none",
         });
         // Observation only: nothing was created, sent or re-attached.
         expect(stub.createSession).not.toHaveBeenCalled();

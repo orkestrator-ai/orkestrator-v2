@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +7,7 @@ import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { EngineItem } from "../engine/types.js";
 import type { NormalizedMessage, NormalizedPart } from "../messages/types.js";
 import {
+  adoptLoginCommandChanges,
   commandChangeCwd,
   commandChangeJournalPath,
   commandChangeRole,
@@ -159,11 +161,12 @@ describe("overlayCommandChanges", () => {
 });
 
 describe("journal", () => {
-  test("an added account records in the shared state and still reads its earlier badges", async () => {
+  test("an added account records in the shared state and adopts its earlier badges once", async () => {
     const host = await temporaryCodexHome();
     const account = await temporaryCodexHome();
     const saved = process.env.CODEX_BRIDGE_STATE_DIR;
     const later: MeasuredWorkspaceChange = { ...change, additions: change.additions + 1 };
+    const source = join(account, "orkestrator-bridge", "command-changes");
     try {
       delete process.env.CODEX_BRIDGE_STATE_DIR;
       await recordCommandChanges(account, "thread-1", "call-old", change);
@@ -175,13 +178,20 @@ describe("journal", () => {
       );
       await recordCommandChanges(account, "thread-1", "call-both", later);
       await recordCommandChanges(account, "thread-1", "call-new", change);
-      expect(await readCommandChanges(account, "thread-1")).toEqual(
-        new Map([
-          ["call-old", change],
-          ["call-both", later],
-          ["call-new", change],
-        ]),
-      );
+      // Reads never look at the login's own journal.
+      expect((await readCommandChanges(account, "thread-1")).has("call-old")).toBe(false);
+
+      expect(await adoptLoginCommandChanges(account, source)).toBe(1);
+      const expected = new Map([
+        ["call-both", later],
+        ["call-new", change],
+        ["call-old", change],
+      ]);
+      expect(await readCommandChanges(account, "thread-1")).toEqual(expected);
+      expect(existsSync(source)).toBe(false);
+      expect(existsSync(`${source}.adopted`)).toBe(true);
+      expect(await adoptLoginCommandChanges(account, source)).toBe(0);
+      expect(await readCommandChanges(account, "thread-1")).toEqual(expected);
     } finally {
       if (saved === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
       else process.env.CODEX_BRIDGE_STATE_DIR = saved;

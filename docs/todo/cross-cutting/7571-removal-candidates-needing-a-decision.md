@@ -9,7 +9,7 @@ investigation of that day. The same branch removed everything that was safe
 under the support window
 ([version-compatibility.md](../../architecture/version-compatibility.md)).
 Window-dated removals are in
-[7570](7570-compatibility-paths-waiting-on-the-floor.md). This file held
+7570 (retired). This file held
 the rest: candidates that needed a product decision, a live check, or a
 change too large to fold into a removal sweep. On 2026-11-13 tasks 1, 2,
 8, 9, 12 and 14 were done (see Assumptions and decisions), and every
@@ -21,7 +21,7 @@ the answer. Task 3 was done on 2026-11-14. The user answered every moved
 decision on 2026-11-14 (see Assumptions and decisions): the removals went to
 [8109](8109-decided-removal-candidates.md), the `envFilePatterns` copy to
 [8106](../containers-and-environments/8106-env-file-patterns-copy.md), the
-legacy readiness path to [8108](8108-legacy-retirement-sweep.md), and the
+legacy readiness path to 8108 (retired), and the
 Linear integration stays. What is left here is agent work only: task 10.
 
 ### Tasks
@@ -34,7 +34,7 @@ Linear integration stays. What is left here is agent work only: task 10.
 6. Artifact rollout flags (the four `ORKESTRATOR_RICH_MARKDOWN`/`ARTIFACT_*` flags): the user chose on 2026-11-14 to remove them and their gate checks; the removal is [8109](8109-decided-removal-candidates.md) task 2. Status: done here (moved to 8109).
 7. Unmounted and uncalled surfaces (`NetworkWhitelistDialog.tsx`, `set_workflow_result_tools_rollout`, `graph_capability_ceiling_set`): the user chose on 2026-11-14 to delete all three, with no older-version adapter; the removal is [8109](8109-decided-removal-candidates.md) task 3. Status: done here (moved to 8109).
 8. **Old browser-held and stored state readers**: the localStorage build-pipeline import, `migrateLegacyClaudeTmuxState` and single-`pipelineId` handoff records removed from the renderer. Status: done (the backend command is task 15, now [8109](8109-decided-removal-candidates.md) task 5).
-9. **Small probable leftovers needing one check each**: four of six items checked (two removed, two kept with the reason in a code comment). Status: done (the `bypassPermissionsModeAccepted` live check is on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md); the user chose on 2026-11-14 to remove the `kind: "legacy"` readiness path, which is [8108](8108-legacy-retirement-sweep.md) task 2).
+9. **Small probable leftovers needing one check each**: four of six items checked (two removed, two kept with the reason in a code comment). Status: done (the `bypassPermissionsModeAccepted` live check is on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md); the user chose on 2026-11-14 to remove the `kind: "legacy"` readiness path, which is 8108 (retired) task 2).
 10. **Remaining retired to-do numbers in source comments**: about 39 numbers on about 80 comment lines. Status: open.
 11. Root `conductor.json`: nobody uses Conductor (the user, 2026-11-14); the deletion is [8109](8109-decided-removal-candidates.md) task 4. Status: done here (moved to 8109).
 12. **Commands kept only for tests**: `merge_pr_local` and `refresh_environment_diff_stats` removed, their tests ported. Status: done.
@@ -115,7 +115,7 @@ only lost its marker line. `container-lifecycle.md`'s Readiness section and
 a `container-readiness.ts` comment no longer mention the markers. The
 backend's `kind: "legacy"` readiness path is untouched: it was the task 9
 decision, which the user answered on 2026-11-14; its removal is
-[8108](8108-legacy-retirement-sweep.md) task 2.
+8108 (retired) task 2.
 
 **Decisions.** Removed, with an image build and smoke run (the recommended
 option; results in Assumptions and decisions).
@@ -154,7 +154,7 @@ which the user answered on 2026-11-14; the build is
 - Cursor's `streamed.total` usage fallback (`bridges/cursor-bridge/src/prompt.ts`): **kept**. `@cursor/sdk` 1.3.1 declares `RunResult.usage` optional, and a turn failed without a result has only what streamed. The comment now says so.
 - Pi's no-runtime `forkSession` fallback: **removed**; its two tests run on a fake runtime, and a new test forks through the real SDK runtime with a scripted model.
 - `bypassPermissionsModeAccepted` in `docker/entrypoint.sh` (about lines 1271-1343): **moved to the manual-test checklist**. The pinned Claude CLI may ignore it; confirming that needs one live container start with a Claude login.
-- The `kind: "legacy"` readiness path for images without boot status (`container-readiness.ts`, `parseBootProbe` and `observeContainerBoot`): **moved to the manual-test checklist**. It serves only images from before v2.21.0, but images are unmigrated user state, so the container-lifecycle owner decides. Decided 2026-11-14 by the user: remove it with its tests and add a Retired row; the removal is [8108](8108-legacy-retirement-sweep.md) task 2.
+- The `kind: "legacy"` readiness path for images without boot status (`container-readiness.ts`, `parseBootProbe` and `observeContainerBoot`): **moved to the manual-test checklist**. It serves only images from before v2.21.0, but images are unmigrated user state, so the container-lifecycle owner decides. Decided 2026-11-14 by the user: remove it with its tests and add a Retired row; the removal is 8108 (retired) task 2.
 
 **Investigation.** The checklist item for `bypassPermissionsModeAccepted`
 says what an agent does once it is answered; the readiness-path item was
@@ -248,7 +248,7 @@ the same image as the entrypoint, which always writes boot status, and the
 image creates `/run/orkestrator`, so the branch could not run. The backend's
 `kind: "legacy"` path, which serves images built before boot status, was left
 alone; it was the task 9 decision on the manual-test checklist (answered
-2026-11-14; the removal is [8108](8108-legacy-retirement-sweep.md) task 2). The checks that
+2026-11-14; the removal is 8108 (retired) task 2). The checks that
 used to require the marker now require its absence (final-image smoke, live
 restart test), so a regression that brings a marker back fails them.
 
@@ -286,7 +286,7 @@ each with the reason in a comment. The entrypoint item needs a live
 container start and the legacy readiness path a decision; both moved to the
 manual-test checklist, so task 9 holds no agent work and is done. The user
 answered the readiness-path decision on 2026-11-14; its removal is
-[8108](8108-legacy-retirement-sweep.md) task 2.
+8108 (retired) task 2.
 
 ### Task 12: bumped `pull-requests` and `git`
 
@@ -341,12 +341,12 @@ change.
 - **Task 7 (unmounted and uncalled surfaces)**: delete
   `NetworkWhitelistDialog.tsx` and its test, `set_workflow_result_tools_rollout`
   and `graph_capability_ceiling_set`, with no older-version adapter (the
-  2026-11-14 legacy-retirement policy, [8108](8108-legacy-retirement-sweep.md)).
+  2026-11-14 legacy-retirement policy, 8108 (retired)).
   [8109](8109-decided-removal-candidates.md) task 3.
 - **Task 9 (`kind: "legacy"` readiness)**: remove the path with its tests and
   add a Retired row in
   [version-compatibility.md](../../architecture/version-compatibility.md).
-  Part of the legacy-retirement sweep, [8108](8108-legacy-retirement-sweep.md)
+  Part of the legacy-retirement sweep, 8108 (retired)
   task 2.
 - **Task 11 (`conductor.json`)**: delete it; nobody uses Conductor.
   [8109](8109-decided-removal-candidates.md) task 4.
@@ -359,15 +359,15 @@ change.
 - **Task 15 (`import_legacy_build_pipelines`)**: port its callers
   (`e2e/agent-testing/container-app-wiring.spec.ts`,
   `e2e/agent-testing/pipeline-delete.spec.ts`, and
-  `scripts/mixed-version/scenarios/pipelines.ts` unless the mixed-version
-  sweep in [8108](8108-legacy-retirement-sweep.md) retires it first) to a
+  `scripts/mixed-version/scenarios/pipelines.ts`, which the mixed-version
+  sweep in 8108 (retired) deleted on 2026-11-15) to a
   test-only seed, then remove the command, its schema and its tests, with no
   older-version adapter. [8109](8109-decided-removal-candidates.md) task 5.
 
 ## Related
 
-- [7570](7570-compatibility-paths-waiting-on-the-floor.md): window-dated removals.
-- [8108](8108-legacy-retirement-sweep.md): the 2026-11-14 legacy-retirement sweep, including task 9's readiness path.
+- 7570 (retired): window-dated removals.
+- 8108 (retired): the 2026-11-14 legacy-retirement sweep, including task 9's readiness path.
 - [8109](8109-decided-removal-candidates.md): the removals the user decided on 2026-11-14 (tasks 5, 6, 7, 11 and 15).
 - [8106](../containers-and-environments/8106-env-file-patterns-copy.md): the `envFilePatterns` copy (task 4).
 - [version-compatibility.md](../../architecture/version-compatibility.md)

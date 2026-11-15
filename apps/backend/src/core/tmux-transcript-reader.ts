@@ -1,6 +1,6 @@
 import { TaskSnapshotHistory, TranscriptTaskTracker } from "./claude-transcript-tasks.js";
 import type { TmuxBackend } from "./tmux-backend.js";
-import { TranscriptTail, permissionModeFromTranscriptLine } from "./tmux-hooks.js";
+import { TranscriptTail } from "./tmux-hooks.js";
 import { AsyncMutex, type TaskListSnapshot } from "./tmux-shared.js";
 import { transcriptToolDiffs } from "./tmux-transcript-tool-diffs.js";
 
@@ -124,8 +124,8 @@ function decodeCursor(cursor: string, sessionId: string): number | null {
 export type TailLineSink = (line: unknown, stamped: unknown) => void;
 
 /**
- * Reads one session's transcript for three kinds of caller: the poll loop's
- * tail, a tab asking for a page, and a renderer that predates paging.
+ * Reads one session's transcript for two kinds of caller: the poll loop's
+ * tail and a tab asking for a page.
  *
  * Task state comes from the start of the file, but only the tail reads from
  * there, and only once per session in this backend process. It keeps the
@@ -252,33 +252,6 @@ export class TmuxTranscriptReader {
         earlierCursor: cut.firstOffset > 0 ? encodeCursor(this.sessionId, cut.firstOffset) : null,
       };
     }
-  }
-
-  /**
-   * The whole file, for a renderer that predates paging. Each line carries the
-   * list as it stood then, and overlapping with the live tail is safe: every
-   * operation the registry models is idempotent.
-   */
-  async readWhole(filePath: string): Promise<{ lines: unknown[]; permissionMode?: string }> {
-    const content = (await this.backend.readFile(filePath)) ?? "";
-    const tracker = new TranscriptTaskTracker();
-    const lines: unknown[] = [];
-    let permissionMode: string | undefined;
-    for (const raw of content.split("\n")) {
-      const trimmed = raw.trim();
-      if (!trimmed) continue;
-      try {
-        const line = JSON.parse(trimmed);
-        const taskSnapshots = tracker.applyLine(line);
-        if (taskSnapshots) this.snapshotHistory.record(taskSnapshots);
-        lines.push(stampedLine(line, taskSnapshots));
-        permissionMode = permissionModeFromTranscriptLine(line) ?? permissionMode;
-      } catch {
-        // Continue reading later lines.
-      }
-    }
-    this.tracker = tracker;
-    return { lines, ...(permissionMode ? { permissionMode } : {}) };
   }
 }
 

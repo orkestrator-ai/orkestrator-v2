@@ -136,7 +136,7 @@ interface ServiceGroup {
   forward: PreviewExternalForward | null;
   forwarding: Promise<PreviewExternalForward> | null;
   pool: Array<{ socket: Duplex; idle: ReturnType<typeof setTimeout> }>;
-  /** Multiplexed tunnel sessions, one per attachment (v1 against an older backend). */
+  /** Multiplexed tunnel sessions, one per attachment. */
   tunnel: PreviewTunnelConnector;
   retireTimer: ReturnType<typeof setTimeout> | null;
   renewTimer: ReturnType<typeof setInterval> | null;
@@ -918,15 +918,12 @@ export class PreviewTransportManager {
     const url = this.options.tunnelUrl();
     if (!url) throw previewFailure("backend-unavailable");
     const open = async (attachment: PreviewAttachmentDescriptor) => {
-      const stream = await group.tunnel.open(
-        {
-          url,
-          attachmentId: attachment.attachmentId,
-          credential: attachment.tunnel!.credential,
-          signal,
-        },
-        attachment.tunnel!.multiplexSubprotocol !== undefined,
-      );
+      const stream = await group.tunnel.open({
+        url,
+        attachmentId: attachment.attachmentId,
+        credential: attachment.tunnel!.credential,
+        signal,
+      });
       this.observe("desktop.connect_ms", stream.openMs);
       this.restoreReady(group);
       return stream;

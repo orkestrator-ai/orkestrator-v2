@@ -537,9 +537,8 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
       if (included) params.set("includeEvents", included);
     }
     if (!terminalEvents && since) params.set(GATEWAY_EVENT_CURSOR_PARAM, since);
-    // Relayed node events have their own stream. A gateway that predates this
-    // ignores the parameter and sends them here under the one old name, which is
-    // why `lib/federation/node-events.ts` keeps listening for that name.
+    // Relayed node events have their own stream; the main stream never carries
+    // them.
     if (!terminalEvents) {
       params.set(GATEWAY_RELAYED_EVENTS_PARAM, "per-node" satisfies GatewayRelayedEventsMode);
     }

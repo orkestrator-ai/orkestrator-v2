@@ -2,7 +2,7 @@ import type { PublicActionName } from "@orkestrator/protocol/public-api";
 import type { Environment } from "../models.js";
 import { isSetupReady } from "./actions-environments.js";
 import type { PublicOperationRecord } from "./operation-ledger.js";
-import { publicEnvironmentSummary } from "./summaries.js";
+import { PROJECT_REMOVE_EFFECTS, publicEnvironmentSummary } from "./summaries.js";
 import type { OperationPatch, PublicActionContext } from "./types.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { recurringWorkMetrics } from "../recurring-work-metrics.js";
@@ -163,7 +163,7 @@ const reconcileProjectRemove: ReconcileFunction = async (record, context) => {
     return {
       state: "succeeded",
       stage: "completed",
-      result: { ...record.result, removed: projectId, effects: "registration-only" },
+      result: { ...record.result, removed: projectId, effects: PROJECT_REMOVE_EFFECTS },
     };
   }
   await context.command.storage.releaseProjectRemovalFence(projectId);

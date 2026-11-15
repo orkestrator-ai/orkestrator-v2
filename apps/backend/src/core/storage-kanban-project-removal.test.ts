@@ -1,15 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
-import { createProject } from "./storage.js";
-import type { StorageService } from "./storage.js";
+import { createProject, StorageService } from "./storage.js";
 import { StorageFiles } from "./storage-files.js";
 import type { KanbanSyncStore } from "./storage-kanban-sync.js";
 import type { StorageRepositories } from "./storage-repositories.js";
+import { fenceProjectContent } from "./storage-kanban-project-removal.js";
 import type { FeaturePlan, ProjectNotes } from "./storage-shared.js";
 import {
   readStoredValue,
   storageFilesContain,
+  storageInternals,
   withTemporaryStorage,
 } from "./storage-test-support.js";
 
@@ -200,6 +202,221 @@ describe("project removal", () => {
       await expect(repositories(storage).kanban.deleteProjectContent(" ")).rejects.toThrow(
         "must not be blank",
       );
+    });
+  });
+});
+
+describe("project removal under concurrent writes and failures", () => {
+  test("writes racing a removal are refused or deleted, and a re-added project syncs again", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const project = await storage.addProject(createProject("https://github.com/acme/race.git"));
+      const leafCopy = {
+        controllerId: "bk_command",
+        projectId: project.id,
+        sourceProjectId: "source-race",
+        epoch: "epoch-1",
+        cursor: 1,
+        items: [snapshot("ticket-race", 1)],
+      };
+      // Queued on the Kanban lease before the removal, so it either lands
+      // before the delete takes that lease or meets the fence.
+      const early = storage.kanban.addKanbanTask(project.id, "Early", "racing-early-5820");
+      const removal = storage.removeProject(project.id);
+      // The fence is written before removeProject first yields.
+      const racing = await Promise.allSettled([
+        storage.kanban.addKanbanTask(project.id, "Late", "racing-late-5820"),
+        storage.ticketSync.applyTicketSync(leafCopy),
+        storage.kanban.createKanbanLabel(project.id, { name: "racing-label" }),
+        storage.kanban.saveProjectNotes(project.id, "racing notes"),
+        storage.kanban.createFeaturePlan(project.id),
+      ]);
+      for (const outcome of racing) {
+        expect(outcome.status).toBe("rejected");
+        expect(String((outcome as PromiseRejectedResult).reason)).toContain(
+          "Project is being removed",
+        );
+      }
+      await Promise.allSettled([early]);
+      await removal;
+
+      expect(await storage.getProject(project.id)).toBeNull();
+      expect(await storage.kanban.getKanbanTasks(project.id)).toEqual([]);
+      expect(await storage.kanban.getKanbanLabels(project.id)).toEqual([]);
+      expect((await storage.kanban.getProjectNotes(project.id)).content).toBe("");
+      expect(await storage.kanban.getFeaturePlans(project.id)).toEqual([]);
+      const sync = readStoredValue<KanbanSyncStore>(dataDir, "kanban-sync.json");
+      expect(Object.values(sync?.replicas ?? {}).map((link) => link.projectId)).not.toContain(
+        project.id,
+      );
+      // The fence outlives the removal: a late write still cannot land.
+      await expect(storage.ticketSync.applyTicketSync(leafCopy)).rejects.toThrow(
+        "Project is being removed",
+      );
+      expect(storageFilesContain(dataDir, "racing-early-5820")).toBe(false);
+
+      // A re-added copy of the repository is a new project and pairs again.
+      const readded = await storage.addProject(createProject("https://github.com/acme/race.git"));
+      await storage.ticketSync.applyTicketSync({ ...leafCopy, projectId: readded.id });
+      expect((await storage.kanban.getKanbanTasks(readded.id)).map((task) => task.id)).toEqual([
+        "ticket-race",
+      ]);
+    });
+  });
+
+  test("a command node keeps a leaf's changes for a project being removed queued, in order", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const kept = await storage.addProject(createProject("https://github.com/acme/kept.git"));
+      const going = await storage.addProject(createProject("https://github.com/acme/going.git"));
+      const keptTicket = await storage.kanban.addKanbanTask(kept.id, "Kept", "");
+      const goingTicket = await storage.kanban.addKanbanTask(going.id, "Going", "");
+      fenceProjectContent(storageInternals(storage).context, going.id);
+      const titleRev = async (ticketId: string) =>
+        (await storage.kanban.getKanbanTask(ticketId))?.sync?.revs.title ?? 0;
+      const rename = async (seq: number, ticketId: string, projectId: string, value: string) => ({
+        seq,
+        ticketId,
+        sourceProjectId: projectId,
+        createdAt: new Date().toISOString(),
+        op: { kind: "set-title" as const, value, baseRev: await titleRev(ticketId) },
+        bytes: 100,
+      });
+      const result = await storage.ticketSync.applyTicketSyncOps({
+        nodeId: "bk_leaf",
+        epoch: "leaf-epoch",
+        items: [
+          await rename(1, keptTicket.id, kept.id, "Kept, renamed"),
+          await rename(2, goingTicket.id, going.id, "Going, renamed"),
+          await rename(3, keptTicket.id, kept.id, "Kept, again"),
+        ],
+      });
+      expect(result.appliedSeq).toBe(1);
+      expect((await storage.kanban.getKanbanTask(keptTicket.id))?.title).toBe("Kept, renamed");
+      expect((await storage.kanban.getKanbanTask(goingTicket.id))?.title).toBe("Going");
+    });
+  });
+
+  test("an image file that cannot be unlinked fails the removal, keeps the project, and a retry after a restart removes it", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const files = new StorageFiles(dataDir);
+      const removed = await seedProject(storage, "gone", "secret-image-5820");
+      const kept = await seedProject(storage, "kept", "kept-image-5820");
+      const imageFile = files.kanbanImageFile(removed.imageId);
+      // A non-empty directory where the file was: every unlink attempt fails.
+      rmSync(imageFile);
+      mkdirSync(imageFile);
+      writeFileSync(path.join(imageFile, "bytes"), "image bytes");
+
+      await expect(storage.removeProject(removed.project.id)).rejects.toThrow(
+        "Could not delete 1 ticket image file(s)",
+      );
+      // The project stays, with its content already gone, and stays usable.
+      expect(await storage.getProject(removed.project.id)).not.toBeNull();
+      expect(await storage.kanban.getKanbanTask(removed.ticket.id)).toBeNull();
+      const replacement = await storage.kanban.addKanbanTask(removed.project.id, "After", "");
+      expect(replacement.projectId).toBe(removed.project.id);
+      expect(
+        Object.keys(
+          readStoredValue<Record<string, unknown>>(dataDir, "kanban-image-deletions.json") ?? {},
+        ),
+      ).toEqual([removed.imageId]);
+
+      // Filesystem access comes back, the bytes still there, and the backend
+      // restarts before the retry.
+      rmSync(imageFile, { recursive: true });
+      writeFileSync(imageFile, "image bytes");
+      const reopened = new StorageService(dataDir);
+      await reopened.init();
+      try {
+        await reopened.removeProject(removed.project.id);
+        expect(await reopened.getProject(removed.project.id)).toBeNull();
+        expect(existsSync(imageFile)).toBe(false);
+        expect(
+          Object.keys(
+            readStoredValue<Record<string, unknown>>(dataDir, "kanban-image-deletions.json") ?? {},
+          ),
+        ).toEqual([]);
+        expect(existsSync(files.kanbanImageFile(kept.imageId))).toBe(true);
+        expect(await reopened.kanban.getKanbanImageData(kept.imageId)).toBeString();
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+
+  test("the delivery records of the project's deleted tickets go with it, and no other's", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const gone = await storage.addProject(createProject("https://github.com/acme/gone.git"));
+      const kept = await storage.addProject(createProject("https://github.com/acme/kept.git"));
+      const goneTicket = await storage.kanban.addKanbanTask(gone.id, "Gone", "");
+      const keptTicket = await storage.kanban.addKanbanTask(kept.id, "Kept", "");
+      await storage.kanban.deleteKanbanTask(goneTicket.id);
+      await storage.kanban.deleteKanbanTask(keptTicket.id);
+      expect(
+        await storage.kanban.getDeletedKanbanDeliveryPolicy(goneTicket.id, gone.id),
+      ).toBeDefined();
+      const directory = `${new StorageFiles(dataDir).kanbanFile()}.delivery`;
+      expect(readdirSync(directory).filter((entry) => entry.endsWith(".json"))).toHaveLength(2);
+
+      await storage.removeProject(gone.id);
+
+      expect(
+        await storage.kanban.getDeletedKanbanDeliveryPolicy(goneTicket.id, gone.id),
+      ).toBeUndefined();
+      expect(readdirSync(directory)).toHaveLength(1);
+      expect(
+        await storage.kanban.getDeletedKanbanDeliveryPolicy(keptTicket.id, kept.id),
+      ).toBeDefined();
+    });
+  });
+
+  test("environment deletion removes the records of a linked pipeline whose row is gone, not another environment's", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const project = await storage.addProject(createProject("https://github.com/acme/app.git"));
+      for (const id of ["e1", "e2"]) {
+        await storage.addEnvironment({
+          id,
+          projectId: project.id,
+          name: id,
+          branch: "main",
+          containerId: null,
+          status: "running",
+          prUrl: null,
+          prState: null,
+          hasMergeConflicts: null,
+          createdAt: new Date(0).toISOString(),
+          networkAccessMode: "restricted",
+          order: 0,
+          environmentType: "local",
+        });
+      }
+      // A pipeline owned by another environment keeps its records.
+      await storage.saveBuildPipeline("p-foreign", project.id, "e2", 1, { id: "p-foreign" });
+      for (const pipelineId of ["p-absent", "p-foreign"]) {
+        await storage.kanban.saveLinearCompletionComment({
+          pipelineId,
+          issueId: "issue",
+          status: "posted",
+          commentId: `linear-${pipelineId}`,
+        });
+        await storage.kanban.saveGitHubCompletionComment({
+          pipelineId,
+          repositoryOwner: "acme",
+          repositoryName: "app",
+          issueNumber: 1,
+          status: "posted",
+          commentId: `github-${pipelineId}`,
+        });
+      }
+      const records = async (pipelineId: string) => [
+        await storage.kanban.getLinearCompletionComment(pipelineId),
+        await storage.kanban.getGitHubCompletionComment(pipelineId),
+      ];
+
+      // "p-absent" has no row (already deleted, or a retry after a failure).
+      await storage.deleteBuildPipelinesByEnvironment("e1", "p-absent");
+      expect(await records("p-absent")).toEqual([null, null]);
+      await storage.deleteBuildPipelinesByEnvironment("e1", "p-foreign");
+      expect((await records("p-foreign")).every(Boolean)).toBe(true);
     });
   });
 });

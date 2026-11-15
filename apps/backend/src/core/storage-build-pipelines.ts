@@ -763,6 +763,9 @@ export class BuildPipelinesRepository {
     const commit = await this.enqueueBuildPipelineMutation(async () => {
       const loaded = await this.loadBuildPipelineState();
       const record = loaded.records[pipelineId];
+      // Its completion comment records have nothing left to guard (to-do
+      // 5820); deleted before the row, so a retry after a failure finds them.
+      await this.repos.kanban.deleteCompletionCommentsForPipelines([pipelineId]);
       await this.importTranscriptsBeforeDelete(record ? [record] : []);
       const removed = record ? [pipelineId] : [];
       const commit = this.commitBuildPipelineChanges(loaded, {
@@ -786,8 +789,6 @@ export class BuildPipelinesRepository {
       return commit;
     });
     await this.finishTranscriptDeletion([pipelineId], commit);
-    // Its completion comment records have nothing left to guard (to-do 5820).
-    await this.repos.kanban.deleteCompletionCommentsForPipelines([pipelineId]);
   }
 
   async deleteBuildPipelinesByEnvironment(
@@ -826,6 +827,13 @@ export class BuildPipelinesRepository {
         const removedIds = removedPipelines.map((pipeline) => pipeline.id);
         const removedIdSet = new Set(removedIds);
         const transcriptOnly = linkedId && !removedIdSet.has(linkedId) ? [linkedId] : [];
+        // Completion comment records go before the rows (to-do 5820): every
+        // pipeline removed here, plus an eligible linked pipeline whose row is
+        // already gone, so a retry after a failed commit still finds them.
+        await this.repos.kanban.deleteCompletionCommentsForPipelines([
+          ...removedIds,
+          ...transcriptOnly,
+        ]);
         await this.importTranscriptsBeforeDelete(removedPipelines);
         const commit = this.commitBuildPipelineChanges(loaded, {
           remove: removedIds,
@@ -856,7 +864,6 @@ export class BuildPipelinesRepository {
       },
     );
     await this.finishTranscriptDeletion(transcriptOwners, commit);
-    await this.repos.kanban.deleteCompletionCommentsForPipelines(removedIds);
     return removedIds;
   }
 

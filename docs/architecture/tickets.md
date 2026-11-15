@@ -613,8 +613,23 @@ it.
 board: its tickets, the image files attached on that machine, its label
 catalogue, its notes and feature plans (`KanbanRepository.deleteProjectContent`,
 called first by `removeProject`, so a failure keeps the project for a retry;
-user decision of 2026-11-14, to-do 5820, retired). The remove-project
-confirmation says so. It is not a ticket deletion as far as sync is
+user decision of 2026-11-14, to-do 5820, retired), with the delivery
+sidecars of its deleted tickets. The remove-project confirmation says so.
+
+`removeProject` first writes a content fence for the project
+(`fenceProjectContent` in `storage-kanban-project-removal.ts`, a tombstone in
+`storage-deletion-fences`). Every writer that creates content for a project
+checks it under the lease or transaction the delete also takes: creating a
+ticket, applying a sync snapshot, recording a leaf's pairing, creating a
+label, saving notes, creating a feature plan. So a write racing the removal
+either lands before the delete (and goes with it) or is refused; a command
+node leaves a leaf's changes for a fenced project queued, as it does for an
+unknown one. The fence outlives a completed removal and is lifted only when a
+failed removal kept the project. Image ids are journaled
+(`kanban-image-deletions`) in the commit that deletes their tickets and
+unlinked from the journal; a file or sidecar that cannot be removed fails the
+removal, keeping the project, and the journal lets a retry, even after a
+restart, find files whose tickets are already gone. It is not a ticket deletion as far as sync is
 concerned: no deletion is queued for a command node and no tombstone is
 written (`forgetSyncProject` in `storage-kanban-sync.ts`). The removed
 project's replica links, tombstones, pruned cursor, each leaf's pairing with

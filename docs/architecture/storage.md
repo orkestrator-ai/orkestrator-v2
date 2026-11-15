@@ -122,9 +122,11 @@ Every repository takes the one `StorageContext` (`this.context`), the
 uses. Repositories call each other through the registry, which is how the
 paths that cross stores work: project removal deletes compose drafts
 (`this.repos.drafts`) and the project's tickets, ticket images, labels, notes
-and feature plans (`this.repos.kanban.deleteProjectContent`; what that means
-for sync is in [tickets.md](tickets.md#sync-across-machines)), deleting a
-pipeline deletes its Linear and GitHub completion comment records
+and feature plans (`this.repos.kanban.deleteProjectContent`, behind a
+content fence in `storage-deletion-fences` and with a `kanban-image-deletions`
+journal, both in `storage-kanban-project-removal.ts`; what that means for sync
+is in [tickets.md](tickets.md#sync-across-machines)), deleting a pipeline
+deletes its Linear and GitHub completion comment records before its row
 (`deleteCompletionCommentsForPipelines`, which project removal also calls for
 any pipeline still listed for the project), session removal deletes the
 session buffer, public

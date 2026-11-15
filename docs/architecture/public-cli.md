@@ -244,7 +244,7 @@ not advertise at its version before sending it.
 | `project create --path P --github-private` | `project.create` | `createProjectFromScratch`: `git init`, **private GitHub repository**, push | metadata, filesystem, external |
 | `project init --path P` | `project.init` | `initLocalProject`: `git init -b main`, one empty commit, **no remote** | metadata, filesystem |
 | `project update ID` | `project.update` | revision-checked storage patch | metadata only — no directory move, no `.git/config` rewrite |
-| `project remove ID [--cascade [--wait]]` | `project.remove` | `delete_environment` per environment (cascade), then removal fence + `cleanupProjectForRemoval` | registration, with the project's tickets, ticket images, notes and feature plans on that machine ([tickets.md](tickets.md#sync-across-machines)), plus the environments with `--cascade`; refused with environments otherwise |
+| `project remove ID [--cascade [--wait]]` | `project.remove` | `delete_environment` per environment (cascade), then removal fence + `cleanupProjectForRemoval` | registration, with the project's tickets, ticket images, notes and feature plans on that machine ([tickets.md](tickets.md#sync-across-machines)); the result reports `effects: "registration-and-local-content"`, plus the environments with `--cascade`; refused with environments otherwise |
 | `project config get/set/unset` | `project.config.get/set` | config lock, content revision | metadata |
 | `environment list/get` | `environment.list/get` | environment snapshot (no Docker sync) | read |
 | `environment create` | `environment.create` | `create_environment` (control request ID + fingerprint) | metadata |

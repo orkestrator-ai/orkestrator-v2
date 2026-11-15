@@ -349,6 +349,103 @@ change; the firewall already read `/etc/orkestrator-seed/github-ranges`).
   the full `container-live-firewall.test.ts` on the rootless daemon (started,
   then interrupted when the session moved accounts; no result).
 
+## Claude bridge without the SDK's platform binary (2026-11-15)
+
+To-do 6780 (retired on 2026-11-15; in Git history at `git show
+a8b89f154:docs/todo/containers-and-environments/6780-second-claude-binary-in-the-image.md`)
+task 2, efficiency finding DK-10. Every image shipped the Claude Code native
+binary twice: the pinned CLI's (`CLAUDE_CLI_PATH`) and the copy the Claude
+Agent SDK vendors in its platform package. The container bridge never ran the
+SDK's copy: every SDK call passes `pathToClaudeCodeExecutable` from
+`CLAUDE_CLI_PATH` (`claudeExecutableOptions` in
+`bridges/claude-bridge/src/services/session-manager-core.ts`), and the SDK
+(0.3.319, `sdk.mjs`) resolves its own platform binary only when that option is
+unset. The user chose on 2026-11-14 to drop the SDK's copy in the builder.
+
+**Change.** The `bridge-build` stage of `docker/Dockerfile` removes
+`dist/node_modules/@anthropic-ai/claude-agent-sdk-*` (the gnu and musl
+platform packages) and checks that the main `claude-agent-sdk` package's
+`sdk.mjs` is still there; the final stage checks the same of
+`/opt/claude-bridge/dist/node_modules`. The `COPY` of the vendored SDK keeps
+its place ahead of the bundles (DK-7). `tests/unit/version-drift.test.ts`
+("every SDK platform binary is stripped from the vendored runtime tree") pins
+the removal, both checks, `ENV CLAUDE_CLI_PATH` and the bridge passing the
+path. `bridges/claude-bridge/src/sdk-compatibility.test.ts` ("runs the passed
+executable without any platform package, and needs one only when none is
+passed") pins the SDK premise itself: it copies the SDK package alone into a
+temporary tree, as the image ships it, and checks that a passed executable is
+the one spawned and that an unset path fails with `Native CLI binary for
+<platform>-<arch> not found`. Patching the copied `sdk.mjs` to ignore the
+passed path makes it fail.
+
+**Run.** beelink (x86_64, kernel 7.1.8-arch1-3), rootful Docker Engine 29.9.2
+with the containerd image store, worktree
+`orkestrator-v2-20261115-154754-e32e099ead21` from `main` at `a8b89f154`.
+Both images were built with the same build arguments
+(`scripts/docker-image-build-args.ts`): `orkestrator-v2:6780-before` from
+`main`'s Dockerfile and `orkestrator-v2:6780-after` with the change. Pins: CLI
+2.1.319, Agent SDK 0.3.319. Only amd64 was built here; CI's image workflow
+builds and smoke-tests both architectures, and the build-time checks above run
+in both.
+
+**Size.**
+
+| | before | after | saving |
+| --- | --- | --- | --- |
+| Vendored SDK layer (`COPY /opt/bridge-deps/claude-bridge`, `docker history`) | 345 MB | 5.18 MB | 340 MB |
+| `/opt/claude-bridge/dist/node_modules` (`du -sh`) | 330M | 5.0M | |
+| Image content, compressed (`docker image ls --tree`), what a first pull downloads | 1.66 GB | 1.50 GB | about 160 MB |
+| Image disk usage (`docker image inspect .Size`: unpacked plus stored content) | 5,775,417,838 B | 5,272,832,248 B | 502,585,590 B |
+
+No other layer changed size. Both images have 79 layers and the first 31
+`RootFS.Layers` digests are identical, the CLI's npm layer among them; the
+first to differ is the vendored SDK layer, followed only by layers built after
+it. The arm64 platform binary is 297,067,016 bytes against amd64's
+298,229,464, so the saving there is about the same.
+
+**Final-image smoke.** `bash docker/tests/final-image-smoke.sh
+orkestrator-v2:6780-after` passed (31.6 s): all five bridges answered
+`/global/health`, and the manifest's CLI versions matched.
+
+**Container Claude turn on a loopback model.** A container of each image
+(`--network none`, `NETWORK_MODE=full`, labelled, removed afterwards) ran a
+fake Anthropic Messages API on `127.0.0.1:18300` (one streamed `ok`, a
+per-route request count) and a Claude bridge started as the backend starts it:
+`docker exec -u node`, inheriting the image's `ENV`, with only
+`ANTHROPIC_BASE_URL` and a fake `ANTHROPIC_API_KEY` added. Each bridge created
+a session, received `Reply with ok.` with a `requestId`, and was polled until
+the session left `running`.
+
+| Image | Bridge environment | Result |
+| --- | --- | --- |
+| after | image `CLAUDE_CLI_PATH` (`/usr/local/share/npm-global/bin/claude`, 2.1.319) | 202 `processing`, session `idle`, transcript `user: Reply with ok.` / `assistant: ok`, one Messages request at the fake; `POST /global/refresh-catalog` answered `{"ok":true}`; no error lines in the bridge log |
+| after | `CLAUDE_CLI_PATH` unset | the prompt answered `Native CLI binary for linux-x64 not found. Reinstall @anthropic-ai/claude-agent-sdk without --omit=optional, or set options.pathToClaudeCodeExecutable.`; no assistant row and no request at the fake |
+| before | image `CLAUDE_CLI_PATH` | same as the first row |
+| before | `CLAUDE_CLI_PATH` unset | the turn ran on the SDK's own copy and answered `ok` |
+
+The last two rows are the contrast: before the change a bridge without
+`CLAUDE_CLI_PATH` quietly ran a second, unpinned engine; after it, it fails
+with the SDK's own error. The image always sets the variable and the backend
+starts the container bridge through `docker exec`, so a production container
+bridge has it.
+
+**Isolated Docker suite.** `mise run test:logged -- --name
+agent-docker-isolated-6780 -- mise run test:agent:docker:isolated` built the
+workspace image from the change (`orkestrator-v2:dev-4d8f7a0a70c6`, 5.27 GB
+like `6780-after`). Its final-image smoke and the image qualification
+(`tests/claude-config-filter-docker.test.ts`, 1 pass, 1 skip) passed. The
+runner starts no Claude platform (`--agent-platforms
+codex,grok,opencode,cursor,pi`), so it covers the rest of the image, not the
+Claude bridge. Shard 2 passed (11 passed, 3 skipped, 5.3 min). Shard 1 started
+all 21 of its tests and reported no failure, but its last test
+(`container-app-wiring.spec.ts:457`, the coordinator view across switch,
+hidden document, reload and two windows) printed nothing for 300 s.
+`test:logged`'s no-progress watchdog then ended the run (`timeoutReason:
+no-progress`, recorded as an infrastructure error) before Playwright printed
+shard 1's summary. Shard 1 has no pass or fail count. Its last test was not
+rerun alone, so this run neither shows it passing nor makes it a flake. The
+profiles were stopped and reset.
+
 ## C22 on Docker Desktop and rootless Docker (2026-11-15)
 
 To-do 6103 (retired on 2026-11-15; in Git history at `git show

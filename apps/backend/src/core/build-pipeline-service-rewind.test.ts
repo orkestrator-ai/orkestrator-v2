@@ -769,6 +769,11 @@ describe("rewinding to an earlier step", () => {
           applyAgentKeyInformationUpdate(snapshot, {
             issues: [{ issue: "A", status: "resolved", resolution: "Fixed A" }],
           });
+          applyAgentKeyInformationUpdate(snapshot, {
+            summary: "Build summary",
+            workDone: ["Build work"],
+            tests: [{ name: "Build test", result: "passed" }],
+          });
           snapshot.iteration = 2;
           snapshot.sessions.push({
             ...old,
@@ -815,6 +820,19 @@ describe("rewinding to an earlier step", () => {
           expect(restarted.keyInformation?.issues).toMatchObject([
             { issue: "A", status: "resolved", resolution: "Fixed A" },
           ]);
+        }
+        // Only a Build rerun replaces the brief Build wrote; a later step's
+        // restart keeps it.
+        if (phase === "build") {
+          expect(restarted.keyInformation?.summary).toBeUndefined();
+          expect(restarted.keyInformation?.workDone).toEqual([]);
+          expect(restarted.keyInformation?.tests).toEqual([]);
+        } else {
+          expect(restarted.keyInformation).toMatchObject({
+            summary: "Build summary",
+            workDone: ["Build work"],
+            tests: [{ name: "Build test", result: "passed" }],
+          });
         }
         // Round 0's accepted report was kept, so Address reruns alone on it.
         if (phase === "address") expect(restarted.structuredReview).toEqual(cleanReview);

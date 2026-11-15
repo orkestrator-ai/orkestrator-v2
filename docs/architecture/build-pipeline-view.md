@@ -502,10 +502,20 @@ checks or deriving them from the criterion results. A restart that rewinds to
 an earlier round drops what later rounds recorded and the verification of the
 round it reruns. Restarting at or before Review, or explicitly retrying Review,
 also discards that round's superseded issues; restarting Address Findings or a later
-stage preserves the round's issues and resolutions. On any rewind or review
-retry, narrative sections and update history are cleared conservatively:
-they have no per-attempt snapshots to restore, so stages rebuild the brief
-instead of showing superseded work as current. Every field is bounded
+stage preserves the round's issues and resolutions. A restart clears only what
+the restarted step and the steps after it write, so what earlier steps
+recorded stays. The narrative sections (summary, problem or objective,
+context, solution, what was done, decisions, not done), the tests and the
+update history are cleared only when Build itself runs again, since Build is
+the stage that writes them. Restarting Fix, Review, Address Findings, Verify,
+Ship or conflict resolution keeps them: those stages amend the brief in place,
+and a restart does not rewind the code, so what they recorded still describes
+the worktree the restarted step continues on. "Rewind code to here" is the
+exception: it clears the narrative, tests and update history because they may
+describe dropped commits, and discards the target round's issues and verification
+because their resolutions and verdict may no longer apply
+(`pruneKeyInformationAfterRewind`).
+The update timestamp moves only when a restart removed something. Every field is bounded
 (`KEY_INFORMATION_LIMITS`, about 200 KB at worst) and checked by
 `isBuildPipeline`.
 

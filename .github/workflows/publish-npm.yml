@@ -110,6 +110,19 @@ jobs:
           sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
           unshare --user --map-root-user true
 
+      # The smoke test's probe prefers Playwright's own Chromium and otherwise
+      # falls back to the runner image's Chromium, a different build from the
+      # one the pinned Playwright drives (second CI publish, 2.38.3-beta: still
+      # "could not start" with the namespace step in place). Install the pinned
+      # build, with its libraries. Short apt timeouts move past a stalled
+      # mirror, as in ci.yml.
+      - name: Install the pinned Playwright Chromium
+        timeout-minutes: 12
+        run: |
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\n' \
+            | sudo tee /etc/apt/apt.conf.d/99orkestrator-ci-timeouts >/dev/null
+          bunx playwright install --with-deps chromium
+
       # Packs once, smoke-tests that tarball, then publishes it with
       # `npm publish --provenance`, so what users install is what was tested.
       - name: Pack, smoke-test and publish

@@ -1,0 +1,64 @@
+name: Smoke-test npm package
+
+# Packs the `orkestrator` npm package and runs the packed-tarball smoke test on
+# a GitHub-hosted runner, the same machine the "Publish npm package" workflow
+# publishes from, with the same runner preparation. It publishes nothing and
+# holds no npm identity. It exists so a change that would fail that workflow's
+# smoke test fails here, on the pull request, rather than in a release after
+# its desktop builds are already on the draft (2.38.3-beta failed twice that
+# way).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/workflows/publish-npm.yml"
+      - ".github/workflows/smoke-npm-package.yml"
+      - "packages/cli/**"
+      - "scripts/publish-cli.ts"
+      - "apps/backend/src/core/transcript-artifacts/**"
+      - "bun.lock"
+  workflow_dispatch:
+
+concurrency:
+  group: smoke-npm-package-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  smoke:
+    name: Packed npm package smoke test
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Keep these two steps the same as publish-npm.yml's; the test in
+      # tests/unit/publish-npm-workflow.test.ts checks they match.
+      - name: Allow unprivileged user namespaces on the disposable runner
+        run: |
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          unshare --user --map-root-user true
+
+      - name: Install the pinned Playwright Chromium
+        timeout-minutes: 12
+        run: |
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\n' \
+            | sudo tee /etc/apt/apt.conf.d/99orkestrator-ci-timeouts >/dev/null
+          bunx playwright install --with-deps chromium
+
+      - name: Smoke-test the packed package
+        run: mise run smoke:cli

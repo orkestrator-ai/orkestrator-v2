@@ -125,10 +125,6 @@ import { normalizeProjectFolderName } from "@orkestrator/protocol/project-folder
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import { FrozenStoreSnapshot } from "./storage-frozen-snapshot.js";
-import {
-  fenceProjectContent,
-  releaseProjectContentFence,
-} from "./storage-kanban-project-removal.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 import type { LegacyJsonItemCleanup } from "./storage-stores.js";
 
@@ -502,7 +498,7 @@ export class ProjectsRepository {
   async removeProject(projectId: string): Promise<void> {
     // The fence first: from here no ticket, sync snapshot, label, note or
     // plan can be added for it, so nothing lands behind the deletes below.
-    fenceProjectContent(this.context, projectId);
+    this.repos.kanban.fenceProjectContent(projectId);
     try {
       // Its tickets, ticket images, labels, notes and feature plans go first
       // (to-do 5820), so a failure keeps the project and a retry finishes them.
@@ -522,7 +518,7 @@ export class ProjectsRepository {
       });
     } catch (error) {
       // A project that stays keeps working; the fence of one that is gone stays.
-      if (await this.getProject(projectId)) releaseProjectContentFence(this.context, projectId);
+      if (await this.getProject(projectId)) this.repos.kanban.releaseProjectContentFence(projectId);
       throw error;
     }
     await this.repos.drafts.deleteComposeDraftsByProject(projectId);

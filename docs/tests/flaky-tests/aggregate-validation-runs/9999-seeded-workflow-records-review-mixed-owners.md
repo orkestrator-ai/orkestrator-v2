@@ -57,3 +57,13 @@ projection, the OpenCode snapshot, the HTTP bridge reader) and docs; the
 bench imports none of them. `mise run flaky:recurrence -- 9999 --base
 a8b89f1541e7abb6af36d45121593ae14640a3ca` answered open. No assertion,
 timeout or skip changed.
+
+## Recurrence 2026-11-15 (base a8b89f154)
+
+The project-removal review fix (`ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run
+test`, default worker plan, host slots shared with other worktrees) timed out
+the bench's `rejects malformed, empty, missing and nonpositive sizes` at its
+5 s deadline. The aggregate runner's lone rerun of the unchanged file:
+`PASSED ALONE (9.9s)`. The branch changes Kanban, project and pipeline
+storage; the bench imports none of those modules. `mise run flaky:recurrence
+-- 9999 --base a8b89f154` answered open.

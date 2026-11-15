@@ -17,10 +17,7 @@ import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import { clearKanbanLifecycleOwnership } from "./kanban-merge-closure.js";
 import { KanbanBoardStore, normalizeKanbanTask } from "./storage-kanban-board.js";
-import {
-  assertProjectAcceptsContent,
-  projectContentFenced,
-} from "./storage-kanban-project-removal.js";
+
 import {
   acceptsFieldChange,
   assignTicketContent,
@@ -145,7 +142,7 @@ export class KanbanSyncRepository {
     return this.board.enqueue(async () => {
       // Under the Kanban lease, which project removal's delete also takes, so
       // a snapshot racing the removal cannot recreate its tickets or link.
-      assertProjectAcceptsContent(this.context, input.projectId);
+      this.board.removal.assertAcceptsContent(input.projectId);
       const tasks = await this.board.loadTasks();
       const { store } = await this.board.loadSyncStore();
       const key = replicaLinkKey(input.controllerId, input.projectId);
@@ -530,8 +527,7 @@ export class KanbanSyncRepository {
       // as one for an unknown project does (`NodeTicketSync`); so does every
       // change after it, keeping the outbox in order.
       const fenced = sorted.findIndex(
-        (item) =>
-          item.seq > peer.appliedSeq && projectContentFenced(this.context, item.sourceProjectId),
+        (item) => item.seq > peer.appliedSeq && this.board.removal.fenced(item.sourceProjectId),
       );
       const items = fenced < 0 ? sorted : sorted.slice(0, fenced);
       for (const item of items) {
@@ -752,7 +748,7 @@ export class KanbanSyncRepository {
   ): Promise<void> {
     await this.board.enqueue(async () => {
       // A project being removed keeps no pairing (`forgetSyncProject`).
-      if (projectContentFenced(this.context, projectId)) return;
+      if (this.board.removal.fenced(projectId)) return;
       const { store } = await this.board.loadSyncStore();
       const peer = store.peers[nodeId] ?? { appliedSeq: 0, projects: {} };
       const previous = peer.projects[projectId];

@@ -6,7 +6,6 @@ import { createProject, StorageService } from "./storage.js";
 import { StorageFiles } from "./storage-files.js";
 import type { KanbanSyncStore } from "./storage-kanban-sync.js";
 import type { StorageRepositories } from "./storage-repositories.js";
-import { fenceProjectContent } from "./storage-kanban-project-removal.js";
 import type { FeaturePlan, ProjectNotes } from "./storage-shared.js";
 import {
   readStoredValue,
@@ -269,7 +268,7 @@ describe("project removal under concurrent writes and failures", () => {
       const going = await storage.addProject(createProject("https://github.com/acme/going.git"));
       const keptTicket = await storage.kanban.addKanbanTask(kept.id, "Kept", "");
       const goingTicket = await storage.kanban.addKanbanTask(going.id, "Going", "");
-      fenceProjectContent(storageInternals(storage).context, going.id);
+      storageInternals(storage).repos.kanban.fenceProjectContent(going.id);
       const titleRev = async (ticketId: string) =>
         (await storage.kanban.getKanbanTask(ticketId))?.sync?.revs.title ?? 0;
       const rename = async (seq: number, ticketId: string, projectId: string, value: string) => ({

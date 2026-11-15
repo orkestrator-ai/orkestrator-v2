@@ -34,12 +34,6 @@ import {
 } from "@orkestrator/protocol/ticket-labels";
 import { KanbanBoardStore, normalizeKanbanTask } from "./storage-kanban-board.js";
 import { forgetSyncProject } from "./storage-kanban-sync.js";
-import {
-  assertProjectAcceptsContent,
-  journalImageDeletions,
-  removeDeliverySidecars,
-  replayImageDeletions,
-} from "./storage-kanban-project-removal.js";
 
 export { normalizeKanbanTask } from "./storage-kanban-board.js";
 
@@ -139,7 +133,7 @@ export class KanbanRepository {
     private readonly files: StorageFiles,
     private readonly board: KanbanBoardStore,
   ) {
-    this.labelCatalogue = new KanbanLabelCatalogueStore(context, files);
+    this.labelCatalogue = new KanbanLabelCatalogueStore(context, files, board.removal);
   }
 
   async getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
@@ -194,7 +188,7 @@ export class KanbanRepository {
     }
     return this.board.enqueue(async () => {
       // Under the Kanban lease, which project removal's delete also takes.
-      assertProjectAcceptsContent(this.context, projectId);
+      this.board.removal.assertAcceptsContent(projectId);
       const tasks = await this.board.loadTasks();
       const labels =
         initial.labels === undefined
@@ -636,6 +630,20 @@ export class KanbanRepository {
   }
 
   /**
+   * Fences a project's content for its removal: from now on no ticket, sync
+   * snapshot, label, note or feature plan can be added for it
+   * (`KanbanProjectRemovalStore.fence`).
+   */
+  fenceProjectContent(projectId: string): void {
+    this.board.removal.fence(projectId);
+  }
+
+  /** Lifts the fence of a removal that failed and kept the project. */
+  releaseProjectContentFence(projectId: string): void {
+    this.board.removal.release(projectId);
+  }
+
+  /**
    * Deletes what one project holds here, for project removal (to-do 5820):
    * its tickets and their image files, the delivery sidecars of its deleted
    * tickets, its label catalogue, its notes, its feature plans, and the sync
@@ -668,8 +676,7 @@ export class KanbanRepository {
         await this.context.atomically(async () => {
           if (removed.length) {
             await this.context.saveSensitiveJson(this.files.kanbanFile(), kept);
-            journalImageDeletions(
-              this.context,
+            await this.board.removal.journalImageDeletions(
               projectId,
               removed.flatMap((task) => (task.images ?? []).map((image) => image.id)),
             );
@@ -681,9 +688,9 @@ export class KanbanRepository {
         if (removed.length) this.context.changes.announce("kanban", projectId);
       }
       // Also finishes what an earlier removal left journaled.
-      return replayImageDeletions(this.context, this.files, kept);
+      return this.board.removal.replayImageDeletions(kept);
     });
-    const sidecarsLeft = await removeDeliverySidecars(this.context, this.files, projectId);
+    const sidecarsLeft = await this.board.removal.removeDeliverySidecars(projectId);
     this.labelCatalogue.delete(projectId);
     const removeProjectRows = <T extends { projectId?: unknown }>(rows: T[]): number => {
       if (!Array.isArray(rows)) return 0;
@@ -929,7 +936,7 @@ export class KanbanRepository {
       this.files.projectNotesFile(),
       (): ProjectNotes[] => [],
       (notes) => {
-        assertProjectAcceptsContent(this.context, projectId);
+        this.board.removal.assertAcceptsContent(projectId);
         let existing = notes.find((candidate) => candidate.projectId === projectId);
         if (!existing) {
           existing = { projectId, content, updatedAt: nowIso() };
@@ -974,7 +981,7 @@ export class KanbanRepository {
   async createFeaturePlan(projectId: string, id: string = randomUUID()): Promise<FeaturePlan> {
     return this.mutateFeaturePlans(
       (plans) => {
-        assertProjectAcceptsContent(this.context, projectId);
+        this.board.removal.assertAcceptsContent(projectId);
         const existing = plans.find((plan) => plan.id === id);
         if (existing) {
           if (existing.projectId !== projectId)

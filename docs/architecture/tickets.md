@@ -617,7 +617,8 @@ user decision of 2026-11-14, to-do 5820, retired), with the delivery
 sidecars of its deleted tickets. The remove-project confirmation says so.
 
 `removeProject` first writes a content fence for the project
-(`fenceProjectContent` in `storage-kanban-project-removal.ts`, a tombstone in
+(`KanbanRepository.fenceProjectContent`, held by `KanbanProjectRemovalStore`
+in `storage-kanban-project-removal.ts` as a tombstone in
 `storage-deletion-fences`). Every writer that creates content for a project
 checks it under the lease or transaction the delete also takes: creating a
 ticket, applying a sync snapshot, recording a leaf's pairing, creating a

@@ -4,7 +4,7 @@ The removal candidates that [7571](7571-removal-candidates-needing-a-decision.md
 moved to the manual-test checklist on 2026-11-13 were answered by the user
 (maintainer) on 2026-11-14. This file holds the removals; the
 `envFilePatterns` copy is
-[8106](../containers-and-environments/8106-env-file-patterns-copy.md), the
+8106 (retired 2026-11-15; [Project seed files](../../architecture/container-lifecycle.md#project-seed-files)), the
 legacy readiness path is [8108](8108-legacy-retirement-sweep.md) task 2, and
 the Linear integration stays.
 
@@ -176,7 +176,7 @@ keeps an older-version adapter.
 - [7571](7571-removal-candidates-needing-a-decision.md): the candidates and
   the decisions.
 - [8108](8108-legacy-retirement-sweep.md): the legacy-retirement sweep.
-- [8106](../containers-and-environments/8106-env-file-patterns-copy.md): the
+- 8106 (retired 2026-11-15; [Project seed files](../../architecture/container-lifecycle.md#project-seed-files)): the
   `envFilePatterns` copy.
 
 ## Replaces

@@ -24,7 +24,7 @@ readings of 7570 task 2, 0050 task 1 and 0232 task 4).
 
 ### Tasks
 
-1. **Manual tests and live checks** (327 items): run each check under
+1. **Manual tests and live checks** (328 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (23 items): make each call
@@ -124,6 +124,11 @@ and [container-qualification.md](../../development/container-qualification.md).
 disposable systemd container; it is in Git history at the parent of the
 commit that deleted it (`git log -1 --diff-filter=D -- docs/todo/cross-cutting/5022-release-chain-live-evidence.md`), and the run
 is recorded in [host-updates.md](../../architecture/host-updates.md#qualification).
+8106 was retired on 2026-11-15, once the Environment Files copy and its
+security review were built; it is in Git history at the parent of the commit
+that deleted it (`git log -1 --diff-filter=D -- docs/todo/containers-and-environments/8106-env-file-patterns-copy.md`),
+and the review is recorded in
+[container-lifecycle.md](../../architecture/container-lifecycle.md#environment-file-patterns-security-review).
 
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.
@@ -164,14 +169,14 @@ agent can apply it.
 | --- | --- | --- |
 | Agent engines and provider SDKs | 68 | 3 |
 | CLI and slash commands | 5 | 0 |
-| Containers and environments | 28 | 6 |
+| Containers and environments | 29 | 6 |
 | Coordinator and Multi Review | 83 | 3 |
 | Cross-cutting | 85 | 8 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 16 | 1 |
 | Transcripts, observation and bandwidth | 27 | 1 |
-| **Total** | 327 | 23 |
+| **Total** | 328 | 23 |
 
 ## Outstanding work
 
@@ -419,6 +424,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **4730 (retired) task 4: the disposable daemon's nested rootful mode on a rootful host daemon.** (Background: [Nested rootful mode](../../development/container-qualification.md#nested-rootful-mode).) Needs a Linux host whose rootful Docker daemon you let this run use (beelink, where the agent account can reach it, or a host where you grant access; do not add an account to the `docker` group without deciding to, since that is root-equivalent). Run `mise run docker:disposable -- start --mode rootful --ipv6 --name r4730 --image <image>` with the host daemon as the outer daemon (`--outer-host unix:///var/run/docker.sock`), then the egress-conditions suite (`apps/backend/tests/container-live-egress-conditions.test.ts`, with the printed `DOCKER_HOST` and `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND`, through `mise run test:logged`), then `mise run docker:disposable -- stop --name r4730`. Check afterwards that `docker ps -a`, `docker volume ls` and `docker network ls` on the host daemon show nothing labelled `orkestrator-disposable-docker`, and that the instance's runtime and shared directories held no root-owned file after `stop`. Record: host, Engine version, `start` output (`outerRootless: false`), the suite's pass count and assertions, the restart generations, `stop` time and the leftover check, as a dated section in [container qualification](../../development/container-qualification.md) (or reply to the coordinator; 4730 is retired).
 - [ ] **[7390](../containers-and-environments/7390-rootless-restart-remaining-settings.md) task 3: rootless daemon restart on arm64.** On a self-managed arm64 Linux host, start a rootless daemon with `mise run docker:disposable -- start` (it pins aarch64 rootless extras and slirp4netns) and run `apps/backend/tests/container-live-egress-conditions.test.ts` with the printed `DOCKER_HOST` and `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND`, then `mise run docker:disposable -- stop`. Record: host, kernel and the pass/fail counts per case (and whether `ip_set`, `xt_set`, `nf_tables` loaded), in 7390 or a reply to the coordinator.
 - [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 9: does the pinned Claude CLI ignore `bypassPermissionsModeAccepted`?** `docker/entrypoint.sh` (about lines 1271-1343) still writes `bypassPermissionsModeAccepted` into the container's `~/.claude/settings.json`. Build the image from current `main` (or use a disposable `dev:test` profile with `--fixture-environments local,container`), then, with the pinned Claude CLI and a disposable Claude login (never your own), start one container environment with that key removed from the generated settings (edit the container's copy before the first Claude launch) and open a Claude terminal tab in bypass-permissions mode. Expected if the key is dead: no bypass-permissions acceptance prompt appears and the session runs exactly as with the key. Record: the CLI version and whether the prompt appeared with and without the key, as a reply to the coordinator. An agent then deletes the block (validated with an image build and `bash docker/tests/final-image-smoke.sh <image>`), or keeps it with a comment saying why.
+- [ ] **8106 (retired) task 2: Environment Files patterns on a real daemon and in the real Settings page.** (Background: [Project seed files](../../architecture/container-lifecycle.md#project-seed-files) and its security review.) In a disposable `dev:test` profile with `--fixture` on a rootless Linux daemon (beelink, or `mise run docker:disposable -- start`), set **Settings → Environment Files** to `.env, .env.*, config/*.env` and check the help text reads correctly at desktop and narrow widths. In the fixture project folder add untracked `.env.test`, `config/app.env`, a link `config/leak.env` to a throwaway file outside the project, and a `config/big.env` over 1 MiB. Create a container environment and a local environment. Check: `/workspace/.env.test` and `/workspace/config/app.env` exist in the container (and in the worktree, mode `0600`), `leak.env` and `big.env` do not, and each setup terminal starts with `[orkestrator] Skipped config/leak.env … symbolic link` and `… config/big.env … larger than 1 MiB`. Then add 33 `config/fNN.env` files, rebuild the container and check that none of the matches arrive and the terminal says the patterns match more than 32 files. Record the date, the Docker version and the outcome in the Project seed files section of container-lifecycle.md, or reply to the coordinator.
 
 #### Coordinator and Multi Review
 

@@ -131,3 +131,52 @@ test("cleans a worktree and branch when add succeeds but output capture rejects"
     run.mockRestore();
   }
 });
+
+test("a new worktree gets the files the Environment Files setting matches, never a link", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worktree-env-files-"));
+  tempDirectories.push(root);
+  const project = path.join(root, "repo");
+  const outside = path.join(root, "outside");
+  await runCommand("git", ["init", "-b", "main", project]);
+  await runCommand("git", [
+    "-C",
+    project,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "initial",
+  ]);
+  // Untracked files in the project checkout, as a user's own `.env` would be.
+  await fs.mkdir(path.join(project, "config"));
+  await fs.mkdir(outside);
+  await fs.writeFile(path.join(outside, "host-secret"), "HOST_ONLY=1\n");
+  await fs.writeFile(path.join(project, ".env"), "A=1\n");
+  await fs.writeFile(path.join(project, ".env.local"), "not matched by these patterns\n");
+  await fs.writeFile(path.join(project, "config", "app.env"), "C=1\n");
+  await fs.symlink(path.join(outside, "host-secret"), path.join(project, "leak.env"));
+
+  const worktree = await createLocalWorktree(
+    project,
+    "app",
+    "feature",
+    "main",
+    [],
+    path.join(root, "trees"),
+    undefined,
+    true,
+    [".env", "*.env", "config/*.env", "../outside/host-secret"],
+  );
+
+  expect(worktree.envFileRefusals).toEqual([
+    { name: "../outside/host-secret", reason: "invalid-pattern" },
+    { name: "leak.env", reason: "symlink" },
+  ]);
+  expect(await fs.readFile(path.join(worktree.path, ".env"), "utf8")).toBe("A=1\n");
+  expect(await fs.readFile(path.join(worktree.path, "config", "app.env"), "utf8")).toBe("C=1\n");
+  expect(await fs.lstat(path.join(worktree.path, ".env.local")).catch(() => null)).toBeNull();
+  expect(await fs.lstat(path.join(worktree.path, "leak.env")).catch(() => null)).toBeNull();
+});

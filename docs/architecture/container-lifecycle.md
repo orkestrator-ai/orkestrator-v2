@@ -1132,36 +1132,87 @@ the earlier ones in to-do 1202, task 15 (retired 2026-11-10).
 
 ### Project seed files
 
-The project folder's own `.env`, `.env.local` and `opencode.json` are copied
-into every new container (`container-project-seed-files.ts`), where
-`workspace-setup.sh` moves them into `/workspace`. They are repository
-content, so a branch can commit any of them as a link to a host path, and
-Docker resolves a bind source on the host (as root on a rootful daemon). They
-are therefore never bind-mounted (security report H3):
+The files the **Environment Files** setting (`envFilePatterns`, by default
+`.env` and `.env.local`) matches in the project folder, and the project's
+`opencode.json`, are copied into every new container
+(`container-project-seed-files.ts`, matching in
+`project-env-file-patterns.ts`), where `workspace-setup.sh` moves them into
+`/workspace`. They are repository content, so a branch can commit any of
+them as a link to a host path, and Docker resolves a bind source on the host
+(as root on a rootful daemon). They are therefore never bind-mounted
+(security report H3):
 
 - Before `docker create` the backend `lstat`s each one and reads it only when
   it is a regular file, not a link (even one to a file inside the project),
   whose `realpath` stays inside the project folder and which is at most 1 MiB.
   It is opened `O_NOFOLLOW | O_NONBLOCK` and must be the inode it listed.
 - The bytes it read are what `docker cp` writes into the created, stopped
-  container at `/project-env/<name>` and `/opencode-project-json`, owned by
-  `node` (uid/gid 1000), `0600`, with a `0700` parent directory. An archive
-  with explicit ownership is sent through `docker cp -a`, so delivery works
-  even on images without the staged-input relay. Nothing re-reads the checkout.
+  container: `.env` and `.env.local` at `/project-env/<name>`, every other
+  match at `/project-files/<path>` (which the setup copies to
+  `/workspace/<path>`, as it does configured files), and `opencode.json` at
+  `/opencode-project-json`. Everything is owned by `node` (uid/gid 1000),
+  files `0600` and directories `0700`. An archive with explicit ownership is
+  sent through `docker cp -a`, so delivery works even on images without the
+  staged-input relay. Nothing re-reads the checkout.
 - A refused file is skipped, never a failed environment. The refusal
   (`symlink`, `not-a-file`, `outside-project`, `too-large`,
-  `changed-while-reading` or `unreadable`) is logged as
-  `docker project-seed.refused`, recorded on the container as the
-  `orkestrator-project-seed-refused` label (`name=reason` pairs), and printed
-  as one `[orkestrator] Skipped …` line per file at the top of the setup
-  terminal, before the setup's own "Setting up environment files" step. A
-  rebuild re-reads and re-checks the files; a container that predates the
-  label shows nothing.
-- These three seed names are excluded from generic configured-file staging.
-  A command-node fallback for a configured seed is read with the same rules,
-  only when the project file is absent; a refusal never permits fallback.
-  Other configured files still use `stageConfiguredProjectFilesForContainer`
-  (realpath-confined, `docker cp` into `/project-files`).
+  `changed-while-reading`, `unreadable`, `unsafe-name`, `invalid-pattern`,
+  `too-many-patterns`, or a bound: `too-many-matches`, `matches-too-large`,
+  `scan-limit`) is logged as `docker project-seed.refused`, recorded on the
+  container as the `orkestrator-project-seed-refused` label
+  (URI-encoded `name=reason` pairs, at most 24), and printed as one
+  `[orkestrator] …` line per refusal at the top of the setup terminal,
+  before the setup's own "Setting up environment files" step. A rebuild
+  re-reads and re-checks the files; a container that predates the label
+  shows nothing.
+- `.env`, `.env.local`, `opencode.json` and every match are excluded from
+  generic configured-file staging. A configured file the repository's own
+  files-to-copy list names is left to that staging; `.env` or `.env.local` in
+  that list (or a command node's staged manifest) is read here as a literal
+  pattern even when the setting omits it, as it always was. A command-node
+  fallback is read with the same rules, only for a literal pattern whose
+  project file is absent; a refusal never permits fallback, and a wildcard
+  never reads the fallback. Other configured files still use
+  `stageConfiguredProjectFilesForContainer` (realpath-confined, `docker cp`
+  into `/project-files`).
+- A new local worktree gets the same matches (not `opencode.json`, which its
+  checkout has) through the same reader (`createLocalWorktree`). A path the
+  branch already has in the worktree, a link included, is left alone, as
+  `.env` always was; one behind a linked or non-directory parent is refused
+  as `linked-destination`. New files are created `0600` with `O_EXCL`, so a
+  final link is never followed. The refusals are logged as
+  `environment project-seed.refused` and held in memory until the
+  environment's setup terminal prints them once (a backend restart in
+  between loses only that notice).
+
+#### Environment file patterns: security review
+
+Reviewed and decided on 2026-11-15 under to-do 8106 (retired; the user's
+decision of 2026-11-14 on 7571 task 4, `git log -1 --diff-filter=D --
+docs/todo/containers-and-environments/8106-env-file-patterns-copy.md`).
+The threat is the one above: the project folder is repository content, so a
+user's broad pattern must not let a branch make the backend read or copy a
+file outside the project, follow a link, or fill a container.
+
+| Question | Decision |
+| --- | --- |
+| Pattern syntax | A relative path of `/`-separated segments. `*` matches any run of characters within one segment and `?` one character; everything else is literal. Refused (reported as `invalid-pattern`, nothing read): `**`, an absolute path (`/`, `~`, a drive letter), an empty, `.` or `..` segment, a backslash, a control character, any `.git` segment, more than 8 segments or 256 characters. At most 32 patterns; the 33rd is reported once (`too-many-patterns`). |
+| Which names a wildcard matches | Not a name starting with `.` unless the segment does (as in a shell), so `*` never picks up `.ssh` or `.npmrc`; never `.git`, so Git's credentials and hooks cannot be named at all. |
+| Where matches come from | The project checkout only (`project.localPath`, through its real path), never the worktree a branch produced. A command node's staged copy fills only an absent literal. |
+| Directories, links, devices, escapes | Matching never descends through a linked directory: the link is reported as `symlink` and its contents are not listed. Every matched path then passes the per-file reader above: a link, a directory, a FIFO or device, a real path outside the project, more than 1 MiB, or a file swapped while it was read is refused and reported. A matched name with a control character or backslash is refused as `unsafe-name` (it would be printed in the setup terminal and copied by a line-based loop). Names in the label are URI-encoded and parsed back only when printable. |
+| Bounds | At most 32 matched files and 4 MiB in total (each file also at most 1 MiB), and at most 5,000 directory entries examined across wildcard listings. Over any bound, none of the matches is copied and one aggregate refusal says which bound (`opencode.json` is not a match and is unaffected). Copying up to the bound was rejected: which files arrive would depend on listing order, silently. |
+| Files staged by other paths | Matches land only below `/project-env/` (for `.env`, `.env.local`) and `/project-files/`, and from there only under `/workspace`, so a pattern cannot reach a staged credential (`/claude-config`, `/codex-home`, …) or `/opencode-project-json`. A match that names a committed file overwrites the container's copy with the project folder's, as configured files do; in a local worktree the committed file is kept. |
+| Restricted and full network modes | No difference: the copy happens before the container starts and does not use the network. A copied secret can leave through any allowed host in either mode, exactly as `.env` could. |
+| Stored settings that differ from the default | Honoured as written; refused matches show in the setup terminal. An empty setting copies no `.env` (unless files-to-copy names it). |
+| Rootless `docker cp` refusals | Every match travels in the one seed archive, so the refusals of [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md) apply to it exactly as to `.env`: no extra copy call. |
+
+Residual risk: between the reader's `lstat`, `realpath` and `open`, a
+process that can already write the user's checkout could swap a parent
+directory for a link and back; the final inode comparison catches a single
+swap but not a timed double swap. Such a process already controls the
+checkout, so this is accepted. The live check on a real daemon is in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(8106 (retired)).
 
 ## Environment networks (`network-policy=2`)
 

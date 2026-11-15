@@ -1123,15 +1123,23 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       {/* Environment Files */}
       <div className="space-y-3">
         <SettingsSectionHeader title="Environment Files">
-          File patterns for .env files to copy (comma-separated)
+          Project files to copy into each new container and local worktree (comma-separated)
         </SettingsSectionHeader>
         <Input
           value={envPatterns}
           onChange={(e) => setEnvPatterns(e.target.value)}
           placeholder=".env, .env.local"
+          aria-label="Environment file patterns"
         />
         <p className="text-xs text-muted-foreground">
-          Files matching these patterns will be copied into containers
+          Patterns are paths inside the project folder, such as <code>.env.*</code> or{" "}
+          <code>config/*.env</code>. <code>*</code> and <code>?</code> match within one folder;{" "}
+          <code>**</code>, <code>..</code> and <code>.git</code> are not allowed, and a wildcard
+          skips names starting with a dot unless the pattern starts with one.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Only regular files inside the project are copied, never links: up to 32 files of at most 1
+          MiB each and 4 MiB in total, or none. Skipped files are listed in the setup terminal.
         </p>
       </div>
     </SettingsPageLayout>

@@ -129,12 +129,22 @@ rules: [`bridges/AGENTS.md`](../../../bridges/AGENTS.md).
 - **Do the side routes fold into the revision?**
   - **Yes: questions, plan approvals, interactions, approvals and Codex's
     `/config` move the same state revision, so one `unchanged` answer
-    replaces all five requests (recommended).**
-    - Pros: a quiet state poll becomes one small request instead of five.
+    replaces the four state and side-route requests (recommended).**
+    - Pros: the state part of a quiet poll becomes one small request
+      instead of four, so a poll with nothing new costs two bridge requests
+      instead of five.
     - Cons: every side route's mutation sites join the per-bridge test.
   - **Revision the main state body only.**
     - Pros: fewer sites.
-    - Cons: four of five requests per poll stay.
+    - Cons: the three side-route requests per poll stay.
+- **What about the transcript read?** It is the fifth request of every poll
+  in baseline B and is not covered by the state revision: the transcript
+  keeps its own content revision and can change while the state does not.
+  This task leaves it in place, so the target is five requests down to two
+  for a poll whose state is unchanged. The poll's transcript read goes in
+  task 3, when the live view reads the `transcript` part only after a frame
+  names it (D9 step 3). Measure this task with separate counters for state
+  and transcript requests (spec B already counts by route).
 
 ### 3. The layer's core and the live agent view over push
 
@@ -415,7 +425,8 @@ socket, route or transport.
 
 - **A command naming the connection's `streamId` (recommended).**
   - Pros: no reconnect to change topics; checked by the same command auth
-    as the read it replaces; works unchanged through the node relay.
+    as the read it replaces; reaches other nodes through the command
+    node's subscription controller over the existing relay (D10).
   - Cons: a connection-scoped id to validate, and the set must be re-sent
     after each reconnect.
 - **Topics in the stream URL (`?topics=`).**
@@ -449,9 +460,14 @@ A frame is a batch of change signals:
 }
 ```
 
-- `seq` is contiguous per connection, starting at 1 after each
-  `push_set_subscriptions` answer. A gap means the backend dropped frames
-  for this connection (D6) and is answered by re-subscribing.
+- `seq` is contiguous and monotonic for the whole life of a connection
+  (its `streamId`): the first `push.changed` frame on a connection is 1 and
+  every later one is the previous plus 1. It never resets, not after a
+  `push_set_subscriptions` answer and not after a re-subscription, so a
+  frame's `seq` alone places it in the connection's order whichever set it
+  was sent under. A gap means the backend dropped frames for this connection
+  (D6) and is answered by re-subscribing; the next frame continues the same
+  numbering.
 - `generation` and `revision` are the topic owner's stamp for that key, as
   in the view-sync contract: equality and ordering within one generation,
   never compared across keys or generations.
@@ -489,10 +505,26 @@ Initial topic catalogue (each later surface adds one):
 - **Subscribe before snapshot (invariant 7).** `push_set_subscriptions`
   registers every subscription first, then reads each key's current stamp,
   and answers `{ setRevision, seqBase, subscriptions: [{ topic, key,
-  status, generation, revision }] }`. Any change after registration is
-  delivered as a frame with `seq > seqBase`, so nothing between the
-  registration and the answer is lost. `status` is `ok`, `denied` or
-  `missing` per subscription; one bad key never fails the set.
+  status, generation, revision }] }`. `seqBase` is the last `seq` the
+  connection had been sent when the new set was registered (0 if none).
+  Any change after registration is delivered as a frame with
+  `seq > seqBase`, so nothing between the registration and the answer is
+  lost. `status` is `ok`, `denied` or `missing` per subscription; one bad
+  key never fails the set.
+- **Frames and answers travel separately.** The answer comes back on the
+  invoke response and frames on the event stream, so either can arrive
+  first. The client checks `seq` contiguity across the whole connection as
+  frames arrive, independently of answers, and acts on each frame against
+  the set it currently holds: a change for a key it is not subscribed to is
+  dropped, and one at or below the stamp it already read is ignored. Frames
+  with `seq <= seqBase` were sent under an earlier set; because a frame is
+  only an invalidation, acting on one for a key that is still subscribed
+  costs at most one extra conditional read and never hides a change. While
+  a `push_set_subscriptions` call is in flight the client keeps frames it
+  receives and applies the answer's stamps and any frame with
+  `seq > seqBase` once the answer lands. An answer whose `setRevision` is
+  older than the newest one the client sent is ignored (D3), so a reordered
+  answer cannot roll the set back.
 - **The client compares, then reads.** For each subscription it holds the
   stamp of what it last read. If the answer's stamp differs (or the
   generation changed), it reads the named parts once through its existing
@@ -515,6 +547,22 @@ Initial topic catalogue (each later surface adds one):
   not subscribed; it reads when it mounts, as today (invariants 1 and 2).
   A hidden document keeps its subscriptions but defers reads to the read
   coordinator's return reconcile, as today.
+
+**Decision: how is `seq` numbered across subscription changes?**
+
+- **One monotonic `seq` per connection, never reset; the answer's `seqBase`
+  marks where the new set took effect (recommended).**
+  - Pros: gap detection does not depend on which channel arrives first; a
+    `seq` of 1 can only mean a new connection; a set change needs no epoch
+    in every frame.
+  - Cons: a frame sent under the old set can reach a client after it changed
+    its set, costing at most one redundant conditional read.
+- **Reset `seq` to 1 on every answer and add `setRevision` to every
+  `push.changed` payload.**
+  - Pros: the client can drop frames from a superseded set exactly.
+  - Cons: a larger frame; the client must hold frames until the answer for
+    their `setRevision` arrives before it can check contiguity, and a reset
+    looks like a gap whenever a frame overtakes its answer.
 
 #### D6. Back-pressure and bounds
 
@@ -563,8 +611,11 @@ The backend learns that a session moved without reading it (task 2):
   The transcript keeps its own content revision (Claude's transcript token,
   Codex's `messageRevision`), named separately.
 - **The state route answers `unchanged`** to a matching `knownToken`, and
-  the side routes are read only when the revision moved. A quiet state poll
-  becomes one small request instead of five.
+  the side routes are read only when the revision moved. The state and
+  side-route reads of a quiet poll become one small request instead of
+  four. The transcript read is not part of this revision: until task 3 it
+  stays, so a poll with nothing new costs two bridge requests instead of
+  five (baseline B's route list).
 - **The observer stream carries the revisions.** Each `?observe=1` frame
   for a session gains `stateRevision` and `transcriptRevision` (still no
   content). Cursor, Pi and the ACP bridge gain the same observer stream
@@ -599,13 +650,16 @@ The backend learns that a session moved without reading it (task 2):
 
 #### D9. Migration order
 
-1. **Bridge revisions (task 2).** Useful alone: the five-request state poll
-   becomes one `unchanged` answer while nothing changed. Measured with spec
-   B.
+1. **Bridge revisions (task 2).** Useful alone: the four state and
+   side-route requests of a poll become one `unchanged` answer while the
+   state did not change; the transcript read stays, so the poll goes from
+   five bridge requests to two. Measured with spec B, counting state and
+   transcript requests separately.
 2. **The layer's core (task 3, part 1).** `streamId`,
-   `push_set_subscriptions`, frames, bounds, metrics and the client
-   controller in `packages/protocol` (shared by the web and desktop
-   clients), with contract fixtures. Shipped together with step 3, since
+   `push_set_subscriptions`, frames, bounds, metrics, the command node's
+   node subscription controller (D10) and the client controller in
+   `packages/protocol` (shared by the web and desktop clients), with
+   contract fixtures. Shipped together with step 3, since
    there are no shims and no consumer-less release.
 3. **The `native-session` topic (task 3, part 2).** The live view
    subscribes per mounted session, reads on frames, keeps the 30 s recovery
@@ -634,16 +688,67 @@ The backend learns that a session moved without reading it (task 2):
   `missing`.
 - **Frames carry nothing beyond what the read would show**: ids, stamps
   and part names.
-- **Node scopes.** A node scope subscribes on that node's own backend,
-  through the relay (`/__orkestrator/nodes/<id>/__orkestrator/invoke`), with
-  the `streamId` of that node's stream, which reaches the window through the
-  multiplexed relay route or the node event relay. A relayed stream's
-  `resync` hint (`{ kind: "resync" }`) is a reconnect for that node: the
-  scope re-sends its set there. The relay's own bounds (8 MiB frames, 16 MiB
-  queued) still apply, and the leaf throttles as in D6, so a remote node
-  adds no new unbounded hop.
+- **Node scopes: the command node owns the leaf subscription.** The leaf
+  stream a window's node events arrive on is not the window's own.
+  `NodeEventRelay` (`apps/backend/src/core/nodes/node-event-relay.ts`) keeps
+  one upstream stream per node for every lease that watches it, takes the
+  union of their prefixes in `sync()`, and may replace that stream when a
+  new prefix is added. If each window sent its whole set to the leaf with
+  that shared stream's `streamId`, two windows viewing different sessions
+  would replace each other's set, and their independently chosen
+  `setRevision` values would make the leaf ignore one of them, leaving that
+  window on the recovery poll. So a window never subscribes on a leaf
+  directly:
+  - The window sends its set for a node scope to its command node, as an
+    ordinary `push_set_subscriptions` naming its own command-node `streamId`
+    and the node id (`{ streamId, setRevision, nodeId, subscriptions }`).
+    The command node checks it like any subscription.
+  - A **node subscription controller** on the command node, beside the
+    relay, owns the upstream subscription for each leaf stream. It
+    reference-counts each (topic, key) across its downstream connections,
+    sends the leaf the union with its own `setRevision` counter (one writer
+    per upstream `streamId`, so revisions never collide), and drops a key
+    from the union when its last downstream subscriber unsubscribes or
+    disconnects.
+  - The leaf's answer stamps are copied into each downstream answer that
+    asked for those keys. A leaf `push.changed` frame is fanned out into the
+    coalescing map (D6) of every downstream connection subscribed to each
+    changed key, which then numbers it in its own `seq`. Downstream clients
+    never see the leaf's `seq`; the controller checks it.
+  - A leaf `seq` gap, a leaf `push.resync`, a new upstream `streamId` (the
+    relay replaced or reopened the stream) or the relay's `resync` hint
+    (`{ kind: "resync" }`) makes the controller re-send the union to the
+    leaf and send each affected downstream connection a `push.resync` for
+    that node, so each window re-reads what it holds there.
+  - The same controller serves the multiplexed relay route
+    (`/__orkestrator/nodes/events`) when that is how the leaf stream
+    reaches the command node.
+
+  The relay's own bounds (8 MiB frames, 16 MiB queued) still apply, the
+  leaf throttles as in D6, and the controller's union is bounded by the
+  leaf's subscription limit (512, D6): a downstream subscription that would
+  exceed it answers `denied` with reason `limit`. A remote node adds no new
+  unbounded hop.
 - **Electron** keeps its bearer stream; the renderer's commands carry the
   same identity as its reads.
+
+**Decision: who owns a leaf subscription for node scopes?**
+
+- **A subscription controller on the command node that unions and
+  reference-counts downstream sets over the shared leaf stream
+  (recommended).**
+  - Pros: works with the relay as built (one leaf stream per node); one
+    subscriber per key at the leaf however many windows view it, so a
+    second viewer adds no leaf traffic; one `setRevision` writer per
+    upstream stream.
+  - Cons: a fan-out component with its own bounds and tests; a leaf gap
+    resyncs every window viewing that node.
+- **A separate leaf stream per downstream client, each subscribing with its
+  own `streamId`.**
+  - Pros: no shared state; each window's set is independent.
+  - Cons: the relay shares one stream per node on purpose, so this either
+    abandons that or runs a second relay path; leaf connections and frames
+    multiply per viewer, which is the cost the layer exists to remove.
 
 #### D11. Metrics (content-free)
 
@@ -661,7 +766,11 @@ No keys, ids or revisions are logged (invariant 12).
   snapshot, a change between registration and answer, coalescing, `seq` gap,
   `push.resync`, a reconnect that re-subscribes, a generation change, a
   denied and a missing subscription, a refused `streamId`, a revoked
-  credential.
+  credential. Ordering across the two channels: frames that arrive before
+  the subscription answer they follow, a set replaced while frames sent
+  under the old set are still in flight, and an answer that arrives after a
+  newer one; each must end with no false `seq` gap, no lost invalidation
+  and the newest set in force.
 - **Backend units on a virtual clock**: the throttle, the coalescing map's
   bounds, the subscription limits, per-connection cleanup on close, and that
   unsubscribed keys cost nothing.
@@ -679,16 +788,36 @@ No keys, ids or revisions are logged (invariant 12).
   counted; cut the stream mid-turn and check re-subscription catches up.
 - **Node scopes**: the two-profile federation fake model
   (`federation-two-profile-fake-model.ts`) with a session on the leaf viewed
-  from the command node.
+  from the command node. Two clients of the command node view different
+  sessions on the same leaf: both receive push; changing one client's set,
+  then closing that client, leaves the other subscribed and receiving
+  frames. A leaf stream replaced by the relay (a new prefix) re-sends the
+  union and resyncs both clients. Backend units cover the controller's
+  reference counts, its `setRevision` counter and its union bound.
 
 #### D13. Expected effect
 
 From the baseline: a quiet running tab goes from 2.2 requests and about
 5.7 KB a second per viewer (A) to about one `unchanged` read per 30 s per
-viewer plus discovery reads only when discovery moved; the bridge's five
-requests per state poll become one while nothing changed (B). Streaming
+viewer plus discovery reads only when discovery moved. At the bridge (B),
+task 2 alone takes a poll whose state did not change from five requests to
+two (one `unchanged` state answer plus the transcript read); with task 3
+the transcript is read only when a frame names it, so a quiet poll costs one
+request and quiet turns make few polls at all. Streaming
 stays at or below today's two reads a second per viewer. These are
 expectations to measure in task 3, not results.
+
+## Constraints and rationale
+
+- The root `AGENTS.md` "Background Work and Transport Invariants" all apply,
+  in particular: live events are incremental over authoritative snapshots;
+  every missed event is detectable; replay subscribes before it calculates;
+  a connected frame echoes the client's cursor; every queue has byte and
+  count bounds; Codex's stdout loop never awaits a consumer.
+- A structural change of this kind needs a baseline first
+  ([efficiency-harness.md](../../development/efficiency-harness.md#rules-for-efficiency-changes));
+  the baseline above is it.
+- No backward-compatibility shims (the user's 2026-11-14 decisions).
 
 ## Open questions
 
@@ -707,18 +836,6 @@ the review:
    own gateway client (the default today, and recommended).
 5. **OpenCode**: whether its `/api/event` stream is enough as a change
    signal for every part, or OpenCode sessions keep a faster recovery poll.
-
-## Constraints and rationale
-
-- The root `AGENTS.md` "Background Work and Transport Invariants" all apply,
-  in particular: live events are incremental over authoritative snapshots;
-  every missed event is detectable; replay subscribes before it calculates;
-  a connected frame echoes the client's cursor; every queue has byte and
-  count bounds; Codex's stdout loop never awaits a consumer.
-- A structural change of this kind needs a baseline first
-  ([efficiency-harness.md](../../development/efficiency-harness.md#rules-for-efficiency-changes));
-  the baseline above is it.
-- No backward-compatibility shims (the user's 2026-11-14 decisions).
 
 ## Needs verification
 
@@ -785,3 +902,24 @@ reading `/proc/<pid>/cmdline`, so it ran only on Linux. On macOS it now
 reads the backend's command line with `ps` and takes the value that starts
 with the profile's data directory (which contains a space), so the baseline
 could be taken on the Mac the maintainer uses.
+
+### Task 1: review corrections to the draft (2026-11-15)
+
+A multi-model review of the draft found four problems, corrected before the
+draft goes to the user:
+
+- **`seq` rule.** D4 reset `seq` at every subscription answer while D5's
+  `seqBase` assumed it did not, and answers and frames travel on separate
+  channels. `seq` is now monotonic for the whole connection, `seqBase` marks
+  where a new set took effect, and D5 says how a client treats frames that
+  overtake their answer. The alternative (reset plus `setRevision` in every
+  frame) is recorded in D5's decision.
+- **Node relay ownership.** `NodeEventRelay` shares one leaf stream per
+  node, so per-window sets sent straight to the leaf would overwrite each
+  other. D10 now gives the command node a subscription controller that
+  unions and reference-counts downstream sets; D9 and D12 include it.
+- **Savings claim.** The transcript read is not covered by the state
+  revision, so task 2 takes a quiet poll from five bridge requests to two,
+  not one; the transcript poll goes in task 3. Task 2, D7, D9 and D13 say so.
+- **Section order.** Constraints and rationale now precedes Open questions,
+  as the to-do layout requires.

@@ -69,9 +69,10 @@ export const OPENCODE2_DISABLE_FILEWATCHER = { OPENCODE_DISABLE_FILEWATCHER: "1"
  * process whose parent was alive; on Linux an orphan is adopted by a live
  * subreaper (`systemd --user`), so the reaper skipped it and the old server
  * ran on beside the new one, on the same database, finishing a turn the
- * restarted backend had already given its continuation. The reaper now tells
- * a subreaper from a backend (`liveParentRole` in `local-server-reaper.ts`,
- * to-dos 8101 and 8093, retired), but it runs only when the next backend
+ * restarted backend had already given its continuation. The reaper now reaps
+ * an orphan whose live parent is the `systemd` subreaper (`liveParentRole` in
+ * `local-server-reaper.ts`, to-dos 8101 and 8093, retired) and still leaves
+ * any other live parent alone, but it runs only when the next backend
  * starts, so the watch is still what stops a turn promptly. Stopping on
  * SIGTERM lets 2.2.6 suspend the run exactly as the reaper's SIGTERM does,
  * which the provider then reports as a restart interruption (`restart-cut.ts`).

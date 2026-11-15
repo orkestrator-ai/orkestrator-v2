@@ -42,7 +42,7 @@ export const LOCAL_SERVER_LOG_AREAS = defineLogAreas({
       "reaper.server-unidentified":
         "An orphan candidate could not be identified, so its record is kept.",
       "reaper.server-parent-unidentified":
-        "An orphan candidate's live parent could not be identified as a backend or a subreaper, so its record is kept.",
+        "An orphan candidate's live parent could not be read, so it is unknown whether a subreaper adopted it; its record is kept.",
       "reaper.server-refused": "An orphan candidate leads no process group, so it was not reaped.",
       "reaper.server-reaping":
         "An orphaned server is being stopped; `adoptedBySubreaper` says a Linux subreaper, not PID 1, had adopted it.",

@@ -17,10 +17,11 @@
  *     belongs to another backend sharing this data dir, and killing it would
  *     break that instance. An orphan is adopted by PID 1, or on Linux by the
  *     nearest live *subreaper* (`systemd --user` on a desktop session), so a
- *     live parent other than PID 1 is counted as an owner only when it can be
- *     a backend: on Linux its `argv[0]` must name a Bun (or Node) program,
- *     because every backend runs under Bun and spawns its bridges directly
- *     (see `liveParentRole`); elsewhere any live parent still counts, and
+ *     live parent other than PID 1 still counts as an owner unless it is
+ *     positively identified as a subreaper: on Linux its `argv[0]` must name
+ *     `systemd`, which never spawns a server itself (see `liveParentRole`).
+ *     Any other live parent, a shell or native supervisor included, may own
+ *     the server, so it is left alone; elsewhere any live parent counts, and
  *   - it must be its own process-group leader (`pgid == pid`). Termination
  *     signals the group, so a PID that leads no group would spray SIGKILL
  *     across an unrelated group. Every bridge is spawned `detached`, which
@@ -359,19 +360,21 @@ export interface ProcessIdentity {
 }
 
 /**
- * Whether a live parent can be the backend that owns a recorded server.
+ * Whether a live parent is a known subreaper: positive evidence that it
+ * *adopted* a recorded server rather than spawned it.
  *
  * `argv[0]` comes from `/proc/<pid>/cmdline`, split on NUL, so an install path
- * with spaces (`/opt/Orkestrator AI/bin/bun`) is read whole; a `ps` command
- * column cannot tell its words apart. The match is deliberately broad: `bun`,
- * any `bun-*` build (`bun-debug`, `bun-profile`) and `node`/`nodejs`, which Bun answers
- * to when run through its node shim. A parent that matches is left alone (the
- * old rule, at worst a leak); only a parent that cannot be a backend at all,
- * such as `/usr/lib/systemd/systemd --user`, is read as an adopter.
+ * with spaces is read whole; a `ps` command column cannot tell its words apart.
+ * The list is deliberately narrow. `systemd` (the `systemd --user` session
+ * manager, or a container's init seen from the host) never spawns an
+ * Orkestrator server itself, so a server under it was reparented when its
+ * backend died: the desktop equivalent of a PID 1 parent. Any other live
+ * parent may own the server, a shell's background `opencode serve` or a
+ * native supervisor included, even when it is not a Bun program, so it is
+ * left alone (at worst the old leak) rather than read as an adopter.
  */
-export function argv0MayBeBackend(argv0: string): boolean {
-  const name = path.basename(argv0.trim());
-  return /^(?:bun|node|nodejs)(?:[-.].*)?$/.test(name);
+export function argv0IsKnownSubreaper(argv0: string): boolean {
+  return path.basename(argv0.trim()) === "systemd";
 }
 
 /** `argv[0]` of a Linux process, or null when it is gone or has none (a zombie). */
@@ -393,12 +396,14 @@ export type LiveParentRole = "owner" | "adopter" | "unreadable";
 /**
  * Classifies the live, non-init parent of a recorded server.
  *
- *   - `owner`: it may be another backend sharing this data dir. Off Linux every
- *     live parent is an owner: there is no subreaper there (macOS hands orphans
- *     to launchd, PID 1), so a live parent really is the process that spawned it.
- *   - `adopter`: on Linux, a process that cannot be a backend. A backend spawns
- *     its servers directly (`nice` execs in place), so a server whose parent is
- *     not a Bun program was reparented when its backend died, to a subreaper.
+ *   - `owner`: it may be the process that spawned the server, another backend
+ *     sharing this data dir or something that is not ours at all (a shell job
+ *     that a recycled PID now names). Off Linux every live parent is an owner:
+ *     there is no subreaper there (macOS hands orphans to launchd, PID 1).
+ *   - `adopter`: on Linux, a known subreaper (`argv0IsKnownSubreaper`). It
+ *     never spawns a server itself, so a server under it was reparented when
+ *     its backend died. Only this positive identification relaxes the
+ *     live-parent protection.
  *   - `unreadable`: the parent's `argv[0]` could not be read; the record is
  *     kept for a later startup.
  */
@@ -417,7 +422,7 @@ export async function liveParentRole(
     return "unreadable";
   }
   if (argv0 === null) return "unreadable";
-  return argv0MayBeBackend(argv0) ? "owner" : "adopter";
+  return argv0IsKnownSubreaper(argv0) ? "adopter" : "owner";
 }
 
 /**

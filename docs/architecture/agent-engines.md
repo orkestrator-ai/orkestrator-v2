@@ -797,8 +797,9 @@ its SDK were retired on 2026-11-11: there is no 1.x server, no
   owns the process under `opencode:<environmentId>`, so it is stopped with the
   environment, on backend shutdown and on a worktree move, reaped after a
   backend crash (`local-server-reaper.ts`, at the next backend's start; on
-  Linux an orphan whose live parent is not a Bun program, such as a
-  `systemd --user` subreaper, counts as orphaned) and, for a coordinator, replaced once
+  Linux an orphan whose live parent is `systemd`, the `systemd --user`
+  subreaper, counts as orphaned; any other live parent may own it and is left
+  alone) and, for a coordinator, replaced once
   idle when its research setting changes. `opencode2/host-launch.ts` builds the
   launch: its own `OPENCODE_DB` and configuration directory under
   Orkestrator's data directory (never the user's `opencode.db`), a mirror of

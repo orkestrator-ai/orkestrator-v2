@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import {
-  argv0MayBeBackend,
+  argv0IsKnownSubreaper,
   detachedProcessHandle,
   isPidAlive,
   liveParentRole,
@@ -200,21 +200,29 @@ describe("reapOrphanedLocalServers", () => {
       expect(reaped.map((entry) => entry.outcome)).toEqual(["skipped-not-group-leader"]);
     });
 
-    test("leaves a server alone whose live parent runs under Bun, for each launcher", async () => {
-      // Electron's backend child (dev and packaged, an install path with
-      // spaces included), `dev:test`, the CLI's `serve` and its systemd unit
-      // (`#!/usr/bin/env bun` and `ExecStart=<bun> <launcher>`) all run Bun.
-      const launchers = [
+    test("leaves a server alone whose live parent is not a known subreaper", async () => {
+      // A backend under each launcher (Electron's child, dev and packaged with
+      // an install path with spaces, `dev:test`, the CLI's `serve` and its
+      // systemd unit), and parents that are not Bun at all but may still own
+      // the server: a shell's background `opencode serve` job or a native
+      // supervisor that a recycled PID now names. None is evidence of adoption.
+      const parents = [
         "bun",
         "/home/user/.local/share/mise/installs/bun/1.4.4/bin/bun",
         "/opt/Orkestrator AI/resources/bin/bun",
         "/usr/local/bin/bun-debug",
         "/usr/bin/node",
+        "/bin/bash",
+        "-zsh",
+        "/usr/bin/fish",
+        "/usr/bin/tmux",
+        "/usr/bin/supervisord",
+        "/usr/bin/tini",
       ];
-      for (const argv0 of launchers) {
+      for (const argv0 of parents) {
         const { options, updates, terminated } = makeOptions(
-          [environment({ codexBridgePid: 4242 })],
-          { identities: new Map([[4242, adoptedLeader(4242, COMMAND_LINES.codex)]]) },
+          [environment({ opencodePid: 4242, localOpencodePort: 5000 })],
+          { identities: new Map([[4242, adoptedLeader(4242, COMMAND_LINES.opencode)]]) },
         );
         const reaped = await reapOrphanedLocalServers({
           ...options,
@@ -843,29 +851,25 @@ describe("detachedProcessHandle", () => {
   });
 });
 
-describe("argv0MayBeBackend", () => {
-  test("accepts every Bun or Node program name and nothing else", () => {
-    for (const argv0 of [
-      "bun",
-      "/usr/local/bin/bun",
-      "/opt/Orkestrator AI/resources/bin/bun",
-      "bun-profile",
-      "bun.exe",
-      "node",
-      "/usr/bin/nodejs",
-    ]) {
-      expect({ argv0, owner: argv0MayBeBackend(argv0) }).toEqual({ argv0, owner: true });
+describe("argv0IsKnownSubreaper", () => {
+  test("accepts only systemd, under any path", () => {
+    for (const argv0 of ["systemd", "/usr/lib/systemd/systemd", "/lib/systemd/systemd"]) {
+      expect({ argv0, adopter: argv0IsKnownSubreaper(argv0) }).toEqual({ argv0, adopter: true });
     }
     for (const argv0 of [
-      "/usr/lib/systemd/systemd",
-      "systemd",
-      "/sbin/init",
+      "bun",
+      "/opt/Orkestrator AI/resources/bin/bun",
+      "node",
+      "/bin/bash",
+      "-bash",
+      "/usr/bin/supervisord",
       "tini",
-      "bunyan",
-      "/usr/bin/nodemon-like",
+      "/sbin/init",
+      "systemd-run",
+      "/usr/lib/systemd/systemd-logind",
       "",
     ]) {
-      expect({ argv0, owner: argv0MayBeBackend(argv0) }).toEqual({ argv0, owner: false });
+      expect({ argv0, adopter: argv0IsKnownSubreaper(argv0) }).toEqual({ argv0, adopter: false });
     }
   });
 });
@@ -880,13 +884,19 @@ describe("liveParentRole", () => {
       "owner",
     );
   });
+
+  test("reads any other live parent as an owner, a shell included", async () => {
+    const bash = async () => "/bin/bash";
+    expect(await liveParentRole(fakePid(1), { platform: "linux", readArgv0: bash })).toBe("owner");
+  });
 });
 
 describe.skipIf(process.platform !== "linux")("readLinuxProcessArgv0", () => {
   test("reads this process's argv[0] whole", async () => {
     const argv0 = await readLinuxProcessArgv0(process.pid);
     expect(argv0).not.toBeNull();
-    expect(argv0MayBeBackend(argv0!)).toBe(true);
+    expect(argv0IsKnownSubreaper(argv0!)).toBe(false);
+    expect(argv0!.length).toBeGreaterThan(0);
   });
 
   test("answers null for a PID that names no process", async () => {

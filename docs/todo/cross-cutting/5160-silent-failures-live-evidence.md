@@ -131,7 +131,7 @@ billed; commands are in
   outlived the profile's reset; the reaper skips orphans that a
   `systemd --user` subreaper adopts. Stopped by hand; recorded as
   8093 (retired 2026-11-15, with 8101): the reaper now reaps an orphan whose
-  live parent is not a Bun program (`liveParentRole` in
+  live parent is the `systemd --user` subreaper (`liveParentRole` in
   `apps/backend/src/core/local-server-reaper.ts`); its final state is in Git
   history at `a8b89f154`.
 

@@ -490,17 +490,8 @@ export interface NativeAgentServiceOptions {
   now?: () => number;
   /** Injectable for bounded provider-start retries. */
   delay?: (milliseconds: number) => Promise<void>;
-  /** Disabled by default. Milestone 3 observes and never resolves. */
-  interactionMonitorMode?: "disabled" | "observe-only";
-  interactionMonitorAdoptionEnabled?: boolean;
   /** Launch/queue sweep cadence. Injectable so tests do not sleep through 2 s. */
   launchReconcileIntervalMs?: number;
-  interactionMonitorIntervalMs?: number;
-  interactionMonitorMaxConcurrency?: number;
-  interactionMonitorMaxSessionsPerEnvironment?: number;
-  interactionMonitorRetryBaseMs?: number;
-  interactionMonitorMaxRetries?: number;
-  onInteractionObservation?: (observation: AgentInteractionObservation) => void | Promise<void>;
   onActivityTransition?: (event: NativeAgentActivityTransition) => void;
   /** The environment-side work of the goal loop; the composition root has the context it needs. */
   goalEnvironment?: {
@@ -677,19 +668,6 @@ export interface NativeAgentChangeTrackingHooks {
   }): void;
 }
 
-export interface AgentInteractionObservation {
-  provider: BuildPipelineAgent;
-  kind: AgentInteractionKind;
-  workflowSurface: AgentInteractionOrigin;
-  phase: string;
-  firstDetectedAt: number;
-  lastDetectedAt: number;
-  count: number;
-  providerState: "blocked" | "running" | "idle" | "error" | "missing";
-  eventualOutcome?: "expired" | "withdrawn";
-  eventualAt?: number;
-}
-
 export const QUEUE_RETRY_BASE_MS = 2_000;
 export const QUEUE_RETRY_CEILING_MS = 60_000;
 export const MAX_QUEUE_DISPATCH_ATTEMPTS = 5;
@@ -746,13 +724,6 @@ export const ABSENT_BRIDGE_RECHECK_MS = 15_000;
  * for an in-flight projection read or interaction answer to finish.
  */
 export const PROVIDER_RETIREMENT_GRACE_MS = 30_000;
-export const INTERACTION_MONITOR_MAX_OBSERVATIONS = 64;
-export const INTERACTION_MONITOR_MAX_TRACKED_REQUESTS = 512;
-export const INTERACTION_MONITOR_MAX_ADOPTED_SESSIONS = 1_024;
-export const INTERACTION_MONITOR_DEFAULT_CONCURRENCY = 4;
-export const INTERACTION_MONITOR_DEFAULT_PER_ENVIRONMENT = 8;
-export const INTERACTION_MONITOR_DEFAULT_MAX_RETRIES = 5;
-export const INTERACTION_MONITOR_DEFAULT_RETRY_BASE_MS = 1_000;
 /**
  * How long a tab stays `connecting` while the provider reports `missing`.
  *

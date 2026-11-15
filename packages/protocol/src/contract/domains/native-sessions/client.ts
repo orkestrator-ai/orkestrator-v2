@@ -9,7 +9,7 @@
  * (`api.get_native_agent_session(args)`), plus the domain's two capability
  * reads:
  *
- * - **Version 1** (a node whose hello advertises `native-sessions`): calls are
+ * - **Versions 3, 2 and 1** (a node whose hello advertises `native-sessions`): calls are
  *   typed by their definitions, carry the envelope (version and the critical
  *   keys the arguments hold), and results are decoded with the command's
  *   schema. Both capability commands are folded into the version: every
@@ -156,6 +156,10 @@ function legacyApi(_call: CommandCall, context: DomainAdapterContext): NativeSes
 }
 
 export const nativeSessionsClient = domainClient(nativeSessionsDomain, {
+  3: (call) => currentApi(call),
+  // Version 3 only removed the interaction monitor's commands, which no client
+  // called (2026-11-15), so version 2 peers take the same API. Adapter 2 goes
+  // when the support floor passes the first Stable release with version 3.
   2: (call) => currentApi(call),
   // Version 2 only removed commands nothing called (2026-11-10), so version 1
   // peers take the same API. Adapter 1 goes when the support floor passes the

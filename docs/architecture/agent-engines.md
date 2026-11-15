@@ -796,7 +796,10 @@ its SDK were retired on 2026-11-11: there is no 1.x server, no
   server. The generic supervisor (`startLocalServer` in `commands-servers.ts`)
   owns the process under `opencode:<environmentId>`, so it is stopped with the
   environment, on backend shutdown and on a worktree move, reaped after a
-  backend crash (`local-server-reaper.ts`) and, for a coordinator, replaced once
+  backend crash (`local-server-reaper.ts`, at the next backend's start; on
+  Linux an orphan whose live parent is `systemd`, the `systemd --user`
+  subreaper, counts as orphaned; any other live parent may own it and is left
+  alone) and, for a coordinator, replaced once
   idle when its research setting changes. `opencode2/host-launch.ts` builds the
   launch: its own `OPENCODE_DB` and configuration directory under
   Orkestrator's data directory (never the user's `opencode.db`), a mirror of
@@ -1959,11 +1962,14 @@ has always run, with the same validation and the same domain results.
 
 ### Rollout and rollback
 
-Admission is a backend-owned setting, `global.workflowResultTools`, not a
-user-facing transport choice. It carries a master switch plus per-provider and
-per-result-kind lists, and is read through `get_workflow_result_tools_rollout`
-and `set_workflow_result_tools_rollout`. The gate is evaluated once, when an
-attempt is admitted, and the outcome is persisted on the attempt.
+Admission is a backend-owned setting, `global.workflowResultTools` in
+`config.json`, not a user-facing transport choice. It carries a master switch
+plus per-provider and per-result-kind lists, and is read through
+`get_workflow_result_tools_rollout`; no command writes it (the unused
+`set_workflow_result_tools_rollout` was removed on 2026-11-15), so an operator
+edits the file. The backend re-reads it before each admission. The gate is
+evaluated once, when an attempt is admitted, and the outcome is persisted on
+the attempt.
 
 The setting can only narrow the qualified set, never widen it. Qualification is
 a property of the code: naming an unqualified provider here has no effect,

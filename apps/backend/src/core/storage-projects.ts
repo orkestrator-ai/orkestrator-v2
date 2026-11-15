@@ -496,12 +496,31 @@ export class ProjectsRepository {
   }
 
   async removeProject(projectId: string): Promise<void> {
-    await this.enqueueProjectMutation(async () => {
-      this.context.updateStoreRow(this.files.projectsFile(), projectId, (current) => {
-        if (current === undefined) throw new Error(`Project not found: ${projectId}`);
-        return { result: undefined, delete: true };
+    // The fence first: from here no ticket, sync snapshot, label, note or
+    // plan can be added for it, so nothing lands behind the deletes below.
+    this.repos.kanban.fenceProjectContent(projectId);
+    try {
+      // Its tickets, ticket images, labels, notes and feature plans go first
+      // (to-do 5820), so a failure keeps the project and a retry finishes them.
+      await this.repos.kanban.deleteProjectContent(projectId);
+      // Its pipelines normally went with its environments, taking their
+      // completion comment records with them; these are any still listed.
+      await this.repos.kanban.deleteCompletionCommentsForPipelines(
+        (await this.repos.buildPipelines.listBuildPipelines(projectId)).map(
+          (pipeline) => pipeline.id,
+        ),
+      );
+      await this.enqueueProjectMutation(async () => {
+        this.context.updateStoreRow(this.files.projectsFile(), projectId, (current) => {
+          if (current === undefined) throw new Error(`Project not found: ${projectId}`);
+          return { result: undefined, delete: true };
+        });
       });
-    });
+    } catch (error) {
+      // A project that stays keeps working; the fence of one that is gone stays.
+      if (await this.getProject(projectId)) this.repos.kanban.releaseProjectContentFence(projectId);
+      throw error;
+    }
     await this.repos.drafts.deleteComposeDraftsByProject(projectId);
     // A project's permission rules have nothing left to answer for (todo 0723 (retired)).
     try {

@@ -9,10 +9,13 @@
  * fake one on the runtime's own loopback, so no provider is called and nothing
  * is billed: Claude Code in print mode, in the stream-json mode the Agent SDK
  * drives (the native tab) and on a provider error, Codex on a reply and on a
- * provider error, OpenCode, Pi and Grok. Cursor is not covered (to-do
- * 7420). Claude's nonessential traffic is left on, as the backend leaves it in
- * a real container. A turn has to finish as expected and within a bound, so a
- * CLI that stalls on a refused host fails.
+ * provider error, OpenCode, Pi, Grok, and the Cursor SDK (the Cursor bridge's
+ * own vendored copy) on a reply and on a provider error (to-do 7420). Cursor
+ * has no CLI and no provider setting: its fake is a loopback Cursor backend
+ * named by `CURSOR_BACKEND_URL`, answering the few Connect RPCs a local
+ * agent's turn makes. Claude's nonessential traffic is left on, as the backend
+ * leaves it in a real container. A turn has to finish as expected and within
+ * a bound, so a CLI that stalls on a refused host fails.
  *
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE=<image>.
  * ORKESTRATOR_TELEMETRY_HOSTS_TRACE=<file> also starts a packet reader in the
@@ -81,10 +84,89 @@ afterAll(async () => {
  * the one word "ok", streamed when asked. Under `/broken` every request fails
  * with a 500, for the turns that end on a provider error. It keeps per-route
  * counts only.
+ *
+ * Under `/cursor` it is a Cursor backend, as far as a local SDK agent's turn
+ * needs one (observed against `@cursor/sdk` 1.3.1, to-do 7420): the API-key
+ * exchange and model list are JSON, every other unary RPC gets an empty
+ * protobuf message (proto3's all-defaults value), and `AgentService/RunSSE`
+ * streams two Connect frames once the run request has arrived through
+ * `BidiService/BidiAppend`: an `InteractionUpdate` text delta "ok", then
+ * `turn_ended`. Under `/cursor/broken` that stream ends on a Connect
+ * `internal` error instead. The field numbers come from the SDK's bundled
+ * descriptors (`AgentServerMessage` 1 = interaction_update;
+ * `InteractionUpdate` 1 = text_delta, 14 = turn_ended; `TextDeltaUpdate`
+ * 1 = text; `BidiAppendRequest` 2 = request_id; `BidiRequestId` 1 =
+ * request_id). An SDK bump that renumbers them fails this turn: a renumbered
+ * reply field leaves the run with no "ok", and a run whose request id is
+ * empty, or never arrives through `BidiAppend` within 5 s, gets a Connect
+ * `failed_precondition` error instead of a reply (counted as
+ * `cursor-unmatched`). Cursor runs count under keys of their own (`cursor`,
+ * `cursor-broken`), so the SDK's retries of a failed run cannot stand in
+ * for another CLI's turn.
  */
 const FAKE_PROVIDER = String.raw`
 const counts = {};
 const count = (key) => (counts[key] = (counts[key] ?? 0) + 1);
+const varint = (n) => { const out = []; while (n > 0x7f) { out.push((n & 0x7f) | 0x80); n >>>= 7; } out.push(n); return out; };
+const field = (no, bytes) => [...varint((no << 3) | 2), ...varint(bytes.length), ...bytes];
+const utf8 = (text) => [...new TextEncoder().encode(text)];
+// The length-delimited fields of one protobuf message, as [number, bytes].
+const fields = (buffer) => {
+  const out = []; let i = 0;
+  const read = () => { let n = 0, shift = 0, b; do { b = buffer[i++]; n += (b & 0x7f) * 2 ** shift; shift += 7; } while (b & 0x80 && i < buffer.length); return n; };
+  while (i < buffer.length) {
+    const tag = read(), type = tag & 7;
+    if (type === 2) { const length = read(); out.push([Math.floor(tag / 8), buffer.subarray(i, i + length)]); i += length; }
+    else if (type === 0) read(); else if (type === 1) i += 8; else if (type === 5) i += 4; else break;
+  }
+  return out;
+};
+const first = (buffer, no) => fields(buffer).find(([n]) => n === no)?.[1] ?? new Uint8Array();
+const frame = (flags, bytes) => {
+  const out = new Uint8Array(5 + bytes.length);
+  out[0] = flags; new DataView(out.buffer).setUint32(1, bytes.length); out.set(bytes, 5);
+  return out;
+};
+const appended = new Set();
+const waiting = new Map();
+const cursor = async (request, url) => {
+  const broken = url.pathname.startsWith("/cursor/broken/");
+  const route = url.pathname.replace(/^\/cursor(\/broken)?/, "");
+  const body = new Uint8Array(await request.arrayBuffer());
+  const empty = () => new Response(new Uint8Array(), { headers: { "content-type": "application/proto" } });
+  if (route === "/auth/exchange_user_api_key") return Response.json({ accessToken: "fake-not-a-token" });
+  if (route === "/v1/models") return Response.json({ items: [{ id: "composer-2", displayName: "Fake" }] });
+  if (route === "/aiserver.v1.AnalyticsService/TrackEvents") count("cursor-analytics");
+  if (route === "/aiserver.v1.BidiService/BidiAppend") {
+    const id = new TextDecoder().decode(first(first(body, 2), 1));
+    appended.add(id); waiting.get(id)?.();
+    return empty();
+  }
+  if (route === "/agent.v1.AgentService/RunSSE") {
+    const id = new TextDecoder().decode(first(body.subarray(5), 1));
+    count(broken ? "cursor-broken" : "cursor");
+    const stream = new ReadableStream({ async start(controller) {
+      if (id && !appended.has(id)) await new Promise((resolve) => { waiting.set(id, resolve); setTimeout(resolve, 5000); });
+      waiting.delete(id);
+      const fail = (code, message) =>
+        controller.enqueue(frame(2, new TextEncoder().encode(JSON.stringify({ error: { code, message } }))));
+      if (!id || !appended.has(id)) {
+        count("cursor-unmatched");
+        fail("failed_precondition", "fake backend: no BidiAppend for run request id");
+      } else if (broken) {
+        fail("internal", "fake provider failure");
+      } else {
+        controller.enqueue(frame(0, new Uint8Array(field(1, field(1, field(1, utf8("ok")))))));
+        controller.enqueue(frame(0, new Uint8Array(field(1, field(14, [])))));
+        controller.enqueue(frame(2, new TextEncoder().encode("{}")));
+      }
+      controller.close();
+    }});
+    return new Response(stream, { headers: { "content-type": "application/connect+proto" } });
+  }
+  if (request.headers.get("content-type") === "application/json") return Response.json({});
+  return empty();
+};
 const sse = (events) =>
   new Response(events.map(([event, data]) => "event: " + event + "\ndata: " + JSON.stringify(data) + "\n\n").join(""), {
     headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
@@ -99,6 +181,7 @@ Bun.serve({
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/count") return Response.json(counts);
+    if (url.pathname.startsWith("/cursor/")) return cursor(request, url);
     if (url.pathname.startsWith("/broken/")) {
       count("broken");
       return Response.json(
@@ -160,6 +243,27 @@ Bun.serve({
     return new Response("not served", { status: 404 });
   },
 });
+`;
+
+/**
+ * One Cursor turn through the SDK the image's Cursor bridge runs, the way the
+ * bridge starts one: a local agent on a host directory, one `send`, then
+ * `wait`. Disposing the agent flushes the SDK's analytics, so that path is
+ * inside the timed turn too. Prints the run's status and result, and exits 0
+ * only when the run finished.
+ */
+const CURSOR_CLIENT = String.raw`
+import { Agent } from "/opt/cursor-bridge/dist/node_modules/@cursor/sdk/dist/bundled/index.js";
+const agent = await Agent.create({
+  apiKey: process.env.CURSOR_API_KEY,
+  model: { id: "composer-2" },
+  local: { cwd: process.cwd() },
+});
+const run = await agent.send("Reply with ok.");
+const result = await run.wait();
+await agent[Symbol.asyncDispose]();
+console.log(result.status + " " + (result.result ?? result.error?.message ?? ""));
+process.exit(result.status === "finished" ? 0 : 1);
 `;
 
 /**
@@ -440,13 +544,18 @@ async function probe(
     .find((event) => event.type === "result");
   expect(result).toMatchObject({ is_error: false, result: "ok" });
   // A turn the provider fails: the path that reports errors. It has to end
-  // promptly and say so, not wait on Sentry.
+  // promptly and say so, not wait on Sentry. The count of failed requests
+  // proves the turn reached the fake rather than failing locally.
+  const beforeClaudeError = await counts();
   expect(
     await turn("claude-error", "claude -p 'Reply with ok.'", {
       ...claude,
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${PORT}/broken/anthropic`,
     }),
   ).toMatch(/\nrc=1$/);
+  expect(((await counts()).broken ?? 0) - (beforeClaudeError.broken ?? 0)).toBeGreaterThanOrEqual(
+    1,
+  );
 
   // Codex against a Responses provider of its own.
   await write(
@@ -475,6 +584,7 @@ async function probe(
       FAKE_API_KEY: "fake-not-a-key",
     }),
   ).toMatch(/\nok\nrc=0$/);
+  const beforeCodexError = await counts();
   expect(
     await turn(
       "codex-error",
@@ -482,6 +592,7 @@ async function probe(
       { CODEX_HOME: `${PROBE}/codex-home`, FAKE_API_KEY: "fake-not-a-key" },
     ),
   ).toMatch(/\nrc=1$/);
+  expect(((await counts()).broken ?? 0) - (beforeCodexError.broken ?? 0)).toBeGreaterThanOrEqual(1);
 
   // OpenCode through an OpenAI-compatible provider of its own.
   await write(
@@ -558,6 +669,40 @@ async function probe(
   expect((afterGrok.responses ?? 0) + (afterGrok.chat ?? 0)).toBeGreaterThan(
     (beforeGrok.responses ?? 0) + (beforeGrok.chat ?? 0),
   );
+
+  // The Cursor SDK against the loopback Cursor backend: a reply, then a run
+  // the backend fails. The SDK retries a failed run itself (four attempts
+  // over about 16 s), which is still well inside the turn bound.
+  await write(containerId, `${PROBE}/cursor-client.mjs`, CURSOR_CLIENT);
+  const cursorEnv = (base: string) => ({
+    HOME: `${PROBE}/cursor-home`,
+    CURSOR_API_KEY: "crsr_fake-not-a-key",
+    CURSOR_BACKEND_URL: `http://127.0.0.1:${PORT}${base}`,
+  });
+  await inRuntime(containerId, `mkdir -p ${PROBE}/cursor-home ${PROBE}/cursor-workspace`);
+  const beforeCursor = await counts();
+  expect(
+    await turn(
+      "cursor",
+      `sh -c 'cd ${PROBE}/cursor-workspace && bun ${PROBE}/cursor-client.mjs'`,
+      cursorEnv("/cursor"),
+    ),
+  ).toMatch(/finished ok\nrc=0$/);
+  const afterCursor = await counts();
+  expect((afterCursor.cursor ?? 0) - (beforeCursor.cursor ?? 0)).toBeGreaterThanOrEqual(1);
+  expect(
+    await turn(
+      "cursor-error",
+      `sh -c 'cd ${PROBE}/cursor-workspace && bun ${PROBE}/cursor-client.mjs'`,
+      cursorEnv("/cursor/broken"),
+    ),
+  ).toMatch(/error .*fake provider failure\nrc=1$/);
+  const afterCursorError = await counts();
+  expect(
+    (afterCursorError["cursor-broken"] ?? 0) - (afterCursor["cursor-broken"] ?? 0),
+  ).toBeGreaterThanOrEqual(1);
+  // Every Cursor run carried a request id that arrived through BidiAppend.
+  expect(afterCursorError["cursor-unmatched"] ?? 0).toBe(0);
 
   // Every turn reached the fake provider rather than finishing locally.
   await mark("end");

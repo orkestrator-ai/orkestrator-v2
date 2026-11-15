@@ -58,7 +58,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live GitHub ranges seed bind | same command, `./tests/container-live-github-seed.test.ts`; `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED=<file>` supplies the ranges, otherwise the backend fetches them once | The firewall container binds the seed directory read-only, its boot reports `githubRanges: seed`, and after a stop and a rename of a refreshed seed into the directory the next boot through the start path loads the new range, with no `extract-to-dir` event on the container ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md) task 2) |
 | Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart (on a rootless daemon with `live-restore` on, the containers' surviving processes are counted, probed and killed before the backend restarts them). Point that command only at a disposable daemon. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep the restart's observations. |
 | Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep its topology line: whether the daemon is rootless, how Docker names its DNS upstreams in the gateway, and the gateway's nat redirections. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
-| Live agent CLIs without telemetry hosts | same command, `./tests/container-live-telemetry-hosts.test.ts`; set `ORKESTRATOR_TELEMETRY_HOSTS_TRACE=<file>` to record each turn's lookups and connections | With `sentry.io`, `statsig.anthropic.com`, `statsig.com` and the CLIs' Sentry ingest hosts refused, Claude Code (print, Agent SDK stream-json, a provider error), Codex (a turn and a provider error), OpenCode and Pi each finish a turn against a fake provider on the runtime's loopback within 90 s. No credentials and no provider turns; outside traffic only to registry.npmjs.org (OpenCode installs its provider package) and GitHub (to-do 6100) |
+| Live agent CLIs without telemetry hosts | same command, `./tests/container-live-telemetry-hosts.test.ts`; set `ORKESTRATOR_TELEMETRY_HOSTS_TRACE=<file>` to record each turn's lookups and connections | With `sentry.io`, `statsig.anthropic.com`, `statsig.com` and the CLIs' Sentry ingest hosts refused, Claude Code (print, Agent SDK stream-json, a provider error), Codex (a turn and a provider error), OpenCode, Pi, Grok and the Cursor SDK (a turn and a provider error, against a loopback Cursor backend through `CURSOR_BACKEND_URL`; 7420) each finish a turn against a fake provider on the runtime's loopback within 90 s. No credentials and no provider turns; outside traffic only to registry.npmjs.org (OpenCode installs its provider package) and GitHub (to-do 6100) |
 | Live rootless loopback | same command, `./tests/container-live-rootless-loopback.test.ts`, plus `ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=disabled` (printed by the [disposable daemon](#disposable-docker-daemon)); skips unless `docker info` also reports rootless, so the Linux Engine workflow lists it but it skips on the rootful runners | On a rootless daemon refusing host loopback (RootlessKit's default): host discovery reports `blocked` with the rootless remediation, and a restricted runtime behind its gateway cannot reach a host listener |
 | Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; on derived images that do not declare `egress-gateway`, so the firewall stays in the runtime), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run. On a rootless daemon put `TMPDIR` on a filesystem mounted without `nosuid`/`nodev`: from `/tmp` the two firewall-failure boots report `boot-record-copy-refused` (before 2026-11-10, `container-exited`), because the daemon refuses `docker cp` from those containers ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)) |
 | Live copy refusal | `ORKESTRATOR_COPY_REFUSAL_TEST_IMAGE=<image with sleep>` and a rootless `DOCKER_HOST`, `./tests/docker-copy-refusal-docker.test.ts` | Every `docker cp` the backend runs against a runtime (project seed files, configured project files, the GitHub seed, the boot record) against a container with a read-only bind from a `nosuid`/`nodev` directory (`/tmp`, or `ORKESTRATOR_COPY_REFUSAL_NOSUID_DIR`) is the typed refusal ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md) task 1) |
@@ -2243,8 +2243,61 @@ The opt-in packet trace recorded no outside DNS or TCP activity during Grok's
 turn, and no removed telemetry or ingest name during any turn. This is a
 trace observation; the test asserts DNS refusal and bounded turn completion.
 The local trace is `output/agent-testing/telemetry-review/trace-with-grok.json`.
-Cursor still has no live turn in this suite, and native arm64 execution
-remains unverified (7420 tasks 2 and 4).
+Cursor had no live turn in this suite until 2026-11-15 (below); native arm64
+execution remains unverified (7420 task 4).
+
+### Cursor SDK turn against a loopback Cursor backend (2026-11-15)
+
+To-do 7420 task 2. The Cursor SDK has no CLI and no provider setting, but it
+sends every backend call to `CURSOR_BACKEND_URL` (default
+`https://api2.cursor.sh`), so the suite's fake provider now also answers, under
+`/cursor`, the calls a local agent's turn makes: the API-key exchange and the
+model list (JSON), six unary Connect RPCs (privacy mode, team settings, team
+repositories, server config, Statsig bootstrap, analytics events; each takes
+an empty protobuf message), and `AgentService/RunSSE`, which streams an
+`InteractionUpdate` text delta "ok" and `turn_ended` once the run request
+arrives through `BidiService/BidiAppend`. Under `/cursor/broken` that stream
+ends on a Connect `internal` error. The SDK's Statsig bootstrap and analytics
+go to the Cursor backend, not to a Statsig host.
+
+- **Host:** omarchy-hp (Omarchy Linux, x86_64), host Docker Engine 29.9.1
+  rootful, with the test-only network shim
+  (`apps/desktop/scripts/dev/docker-qualification-bin`). Every container and
+  network the run made carried its private owner label and was removed by it.
+- **Image:** `orkestrator-v2:dev-ca9f88454633` (`sha256:462a044c85be…`,
+  amd64, created 2026-11-11): Claude Code 2.1.319, codex-cli 0.167.0,
+  OpenCode 2.2.6, Pi 1.5.0, Grok 1.0.77 and Cursor SDK 1.3.1, the versions
+  `docker/Dockerfile` and the Cursor bridge pin at `main` `a8b89f154`.
+- **Client:** a script importing the Cursor bridge's own vendored SDK
+  (`/opt/cursor-bridge/dist/node_modules/@cursor/sdk`) creates a local agent,
+  sends one prompt, waits for the run and disposes the agent (which flushes
+  its analytics), with a fake API key and an isolated `HOME`.
+
+| Turn | Result | Time | Names looked up during the turn |
+| --- | --- | --- | --- |
+| Cursor SDK local agent | run `finished`, result `ok`, exit 0 | 1.8 s | none |
+| Cursor SDK, backend fails the run | run `error` (`[internal] fake provider failure`) after the SDK's own four attempts, exit 1 | 16.9 s | none |
+
+The suite passed with the packet trace (77.0 s; the other nine turns
+0.9–7.6 s) and again without it (73.0 s). The trace recorded no DNS lookup and
+no outside connection during either Cursor turn, nor during the Pi and Grok
+turns; the fake counted one served run, one failed run per attempt and three
+analytics posts. The local trace is
+`output/agent-testing/telemetry-7420/trace-with-cursor.json`. The test asserts
+the run's status and result, that the fake served the run, DNS refusal of the
+telemetry names and the 90 s bound. Native arm64 execution remains unverified
+(7420 task 4).
+
+After review the same day, Cursor runs were given counters of their own
+(`cursor`, `cursor-broken`). Before that, the SDK's four attempts at a failed
+run counted under the `broken` key that the Claude and Codex error turns
+share, and could satisfy their check. Each of those two error turns now
+asserts its own count of failed requests. The fake now refuses a run whose
+request id is empty, or has not arrived through `BidiAppend` within 5 s,
+with a Connect `failed_precondition` error, and the test asserts that no run
+was refused. Same host and image: the suite passed (64.4 s, no trace). With
+the fake's `BidiAppendRequest` field number deliberately changed, the Cursor
+turn failed with that error, which shows that a renumbering fails the suite.
 
 ## Rootless daemon restart on a disposable daemon (2026-11-06)
 

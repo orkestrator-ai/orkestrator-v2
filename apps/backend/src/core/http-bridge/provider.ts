@@ -88,6 +88,7 @@ import {
   bridgeFetch,
   normalizeProviderAuthNotice,
   normalizeProviderReadiness,
+  bridgeSnapshotTurnRunId,
   fetchSessionSnapshot,
   readProviderActivityObservation,
   resolvePromptAttachments,
@@ -325,11 +326,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ),
     );
     if (status?.status !== "running") return { state: "idle" };
-    const candidateRunId = nonEmptyString(status.turnId);
-    const runId =
-      candidateRunId && Buffer.byteLength(candidateRunId, "utf8") <= 512
-        ? candidateRunId
-        : undefined;
+    const runId = bridgeSnapshotTurnRunId(status);
     return runId ? { state: "running", runId } : { state: "unknown" };
   }
 
@@ -735,6 +732,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           : {}),
         composer: composer as unknown as NativeAgentComposerState,
         ...(readiness ? { readiness } : {}),
+        ...turnRunIdField(status, payload),
         providerRevision: providerRevision as number,
         ...commandCatalogueRevisionField(payload?.commandRevision),
         ...(contextUsage ? { contextUsage } : {}),
@@ -864,6 +862,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ...(typeof config?.fastMode === "boolean" ? { fastMode: config.fastMode } : {}),
         },
         ...(phase ? { phase } : {}),
+        ...turnRunIdField(status, payload),
         ...(typeof payload.turnStartedAt === "string" &&
         Number.isFinite(Date.parse(payload.turnStartedAt))
           ? { turnStartedAt: Date.parse(payload.turnStartedAt) }
@@ -973,6 +972,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ...(typeof payload.turnStartedAt === "number" && Number.isFinite(payload.turnStartedAt)
         ? { turnStartedAt: payload.turnStartedAt }
         : {}),
+      ...turnRunIdField(status, payload),
       // Claude publishes its inventory revision on `GET /session/:id`, as the
       // other bridges do on `/status`; without it this path never revalidates
       // on `commands_changed`.
@@ -1489,4 +1489,18 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     this.codexModes.delete(sessionId);
     this.steerQualification.forget(sessionId);
   }
+}
+
+/**
+ * The running turn's id when the snapshot as a whole says it is running: a
+ * transcript-sourced status that has already left `running` must not publish
+ * the status route's older turn id.
+ */
+function turnRunIdField(
+  status: unknown,
+  payload: Record<string, unknown> | null | undefined,
+): { turnRunId?: string } {
+  if (status !== "running") return {};
+  const turnRunId = bridgeSnapshotTurnRunId(payload);
+  return turnRunId ? { turnRunId } : {};
 }

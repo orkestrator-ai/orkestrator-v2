@@ -3811,6 +3811,11 @@ export class NativeAgentTranscriptProjection {
         ...(stateSnapshot.turnActivity && stateSnapshot.status === "running"
           ? { activity: stateSnapshot.turnActivity }
           : {}),
+        // The run a steer from this view is bound to (to-do 8107 (retired)).
+        ...(stateSnapshot.turnRunId &&
+        (stateSnapshot.status === "running" || stateSnapshot.status === "blocked" || blocked)
+          ? { runId: stateSnapshot.turnRunId }
+          : {}),
         ...this.quietObservationFlag(resolved.session),
       },
       interactions: interactionSnapshot.requests,
@@ -6082,6 +6087,11 @@ export class NativeAgentTranscriptProjection {
           ...(snapshot.error ? { error: snapshot.error } : {}),
           ...(snapshot.turnActivity && snapshot.status === "running"
             ? { activity: snapshot.turnActivity }
+            : {}),
+          // The run a steer from this view is bound to (to-do 8107 (retired)).
+          ...(snapshot.turnRunId &&
+          (snapshot.status === "running" || snapshot.status === "blocked" || blocked)
+            ? { runId: snapshot.turnRunId }
             : {}),
           ...this.quietObservationFlag(resolved.session),
         },

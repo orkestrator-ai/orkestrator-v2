@@ -19,9 +19,12 @@
  *   snapshot's run boundary). A steer aimed at a run that has already
  *   settled answers `idle`/`mismatch` before anything is sent; the backend
  *   then delivers it as a new turn. A steer that loses the race after the
- *   check is still delivered once: 2.x starts a new run with it.
- * - **Close never deletes.** It interrupts, rejects parked permissions and
- *   forms, and forgets the session; the conversation stays in OpenCode.
+ *   check is still delivered once: 2.x starts a new run with it. A stop
+ *   withdraws the user's steers still in the inbox (to-do 8100 (retired)), so they
+ *   never open the next turn.
+ * - **Close never deletes.** It interrupts, withdraws the user's pending
+ *   steers, rejects parked permissions and forms, and forgets the session;
+ *   the conversation stays in OpenCode.
  * - **Orkestrator's tools, results and read-only turns** (phase 5) are in
  *   `workflow-results.ts`: the tab's MCP connection and the workflow-result
  *   broker are location MCP servers (`mcp.ts`), confined to their session by
@@ -90,7 +93,9 @@ import {
   OpenCode2CoordinatorSessions,
   type OpenCode2CoordinatorAuthority,
 } from "./coordinator.js";
-import { checkOpenCode2Admission, mintOpenCode2InputId, newestOpenCode2IdleId } from "./steer.js";
+import { checkOpenCode2Admission, mintOpenCode2InputId } from "./steer.js";
+import { openCode2RunId } from "./session-state.js";
+import { asRecord } from "../agent-provider-runtime.js";
 import {
   OPENCODE2_RESTART_CUT_MESSAGE,
   openCode2CutRun,
@@ -525,8 +530,36 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
       // Whichever turn held a grant (read-only, result tools) no longer does.
       await this.workflow.afterAbort(sessionId);
     } finally {
+      // Before the cards: answering one is a step boundary that could still
+      // deliver a held steer into the run being stopped.
+      await this.withdrawUserSteers(sessionId);
       await this.rejectPendingRequests(sessionId);
     }
+  }
+
+  /**
+   * A stop ends the turn the user's steers were written for, so any still in
+   * the inbox (held behind a card until a step boundary that never came) are
+   * withdrawn rather than delivered ahead of the next prompt (to-do 8100 (retired)).
+   * A withdrawn steer then reads `absent`: positive evidence it was removed.
+   * Mail, queued and pipeline steers carry no `user` mark and stay, so they
+   * still reach the agent. Best-effort: a failed read or withdraw leaves the
+   * steer where it was, which is what 2.2.6 does on its own.
+   */
+  private async withdrawUserSteers(sessionId: string): Promise<void> {
+    const inbox = await this.client.listInbox(sessionId).catch((): OpenCode2InboxItem[] => []);
+    await Promise.all(
+      inbox.map(async (item) => {
+        const requestId = userSteerRequestId(item.payload?.metadata);
+        if (!requestId) return;
+        try {
+          await this.client.withdrawInput(sessionId, item.id);
+          this.rememberRefusal(requestId);
+        } catch (error) {
+          log.warn("steer.withdraw-failed", { error: formatLogError(error, { message: false }) });
+        }
+      }),
+    );
   }
 
   /** Stop owned work and forget the session. Never deletes the conversation. */
@@ -583,7 +616,13 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
         id,
         text,
         delivery: "steer",
-        metadata: { orkestrator: { requestId: action.requestId, steer: true } },
+        metadata: {
+          orkestrator: {
+            requestId: action.requestId,
+            steer: true,
+            ...(action.origin === "user" ? { user: true } : {}),
+          },
+        },
       });
     } catch (error) {
       if (error instanceof OpenCode2RequestError) {
@@ -777,11 +816,9 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return [...page.messages].reverse();
   }
 
-  private async currentRunId(sessionId: string): Promise<string> {
-    const anchor = newestOpenCode2IdleId(
-      await this.history(sessionId, OPENCODE2_EVIDENCE_SCAN_LIMIT),
-    );
-    return `${sessionId}:${anchor ?? "start"}`;
+  /** The same id the session projection publishes as `turnRunId` (`session-state.ts`). */
+  private currentRunId(sessionId: string): Promise<string> {
+    return openCode2RunId(this.client, sessionId);
   }
 
   private async hasEvidence(sessionId: string, requestId: string): Promise<boolean> {
@@ -938,6 +975,13 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     for (const state of this.sessions.values()) state.dirty = true;
     this.activityCache = undefined;
   }
+}
+
+/** The request id of a steer the user typed (`orkestrator.user`), else undefined. */
+function userSteerRequestId(metadata: unknown): string | undefined {
+  const orkestrator = asRecord(asRecord(metadata)?.orkestrator);
+  if (orkestrator?.steer !== true || orkestrator.user !== true) return undefined;
+  return typeof orkestrator.requestId === "string" ? orkestrator.requestId : undefined;
 }
 
 function carriesRequest(metadata: unknown, requestId: string): boolean {

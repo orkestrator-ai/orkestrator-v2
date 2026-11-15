@@ -31,13 +31,16 @@ const realBackendSnapshot = { ...realBackend };
 const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
 const realNativeComposeBarPasteSnapshot = { ...realNativeComposeBarPaste };
 
+/** The running turn's id the projection publishes, when a test sets one. */
+let projectionRunId: string | undefined;
+
 function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<NativeMessage> {
   return {
     platform: agent,
     environmentId: "env-1",
     sessionId: `${agent}-session`,
     connection: "connected",
-    turn: { phase: "running" },
+    turn: { phase: "running", ...(projectionRunId ? { runId: projectionRunId } : {}) },
     messages: [],
     interactions: [],
     composerControls: [],
@@ -176,6 +179,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   steerOutcome = { outcome: "applied" };
+  projectionRunId = undefined;
   sessionProjectionMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   enqueuePromptQueueMessageMock.mockClear();
@@ -224,5 +228,20 @@ describe("AgentNativeTab steer rejection", () => {
 
     await screen.findByText(/Steering is unavailable for this turn/);
     expect(draftText(tabId)).toBe("/steer narrow the scope");
+  });
+
+  test("binds the steer to the turn the tab shows (to-do 8107 (retired))", async () => {
+    projectionRunId = "cursor-turn-3";
+    await steerFrom("tab-steer-bound", "/steer keep the diff small");
+    expect(performNativeAgentSessionActionMock.mock.calls[0]![0]).toMatchObject({
+      action: { kind: "steer", text: "keep the diff small", expectedRunId: "cursor-turn-3" },
+    });
+  });
+
+  test("sends no run when the projection names none", async () => {
+    await steerFrom("tab-steer-unbound", "/steer keep the diff small");
+    expect(
+      (performNativeAgentSessionActionMock.mock.calls[0]![0] as { action: object }).action,
+    ).not.toHaveProperty("expectedRunId");
   });
 });

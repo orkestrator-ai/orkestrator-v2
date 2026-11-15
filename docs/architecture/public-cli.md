@@ -1012,7 +1012,7 @@ loopback model (`scripts/opencode2-steer-probe.ts`) that holds the turn's first
 request open while `session steer` redirects it, an exact retry replays the same
 operation, another text under the key is `request-conflict`, and the turn ends
 on the steer's reply once. It is what qualifies OpenCode's `steer: true` here
-(to-do 7905 task 4). The container matrix adds
+(to-do 7905 (retired) task 4). The container matrix adds
 `foreign-owner`: a container and two volumes (one mounted, one unmounted)
 carrying every label of the scenario's environment except its owner
 (`orkestrator-owner`) sit beside it while `environment start`, `exec`, `list`,

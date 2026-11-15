@@ -16,8 +16,8 @@
  * - **Model** from the session's current model and the newest response's.
  *
  * The state read costs `GET /api/session/:id` plus one-row reads of the
- * newest assistant row (and, after a failed run, the newest idle row), so it
- * never reads the transcript itself.
+ * newest assistant row (and, after a failed run or while one runs, the newest
+ * idle row), so it never reads the transcript itself.
  */
 import type {
   NativeAgentContextUsage,
@@ -52,6 +52,24 @@ export interface OpenCode2SessionState {
   sessionReasoningId?: string;
   lastAssistantModelId?: string;
   lastAssistantReasoningId?: string;
+  /** The running run's id ({@link openCode2RunId}) while the session is running or waiting. */
+  turnRunId?: string;
+}
+
+/**
+ * The id of a session's current run: the session plus the newest `idle` row
+ * before it (the run boundary), `start` before the first run settles. The
+ * steer check (`activeSteerRun`) and the session projection read it the same
+ * way, one one-row read, so the run a view shows is the run a steer is
+ * checked against (to-do 8107 (retired)) however long the run's history grows.
+ */
+export function openCode2RunIdFrom(sessionId: string, newestIdle: OpenCode2Message | undefined) {
+  return `${sessionId}:${newestIdle?.id ?? "start"}`;
+}
+
+/** {@link openCode2RunIdFrom} with its own one-row read of the newest `idle` row. */
+export async function openCode2RunId(client: OpenCode2Client, sessionId: string): Promise<string> {
+  return openCode2RunIdFrom(sessionId, await newest(client, sessionId, "idle"));
 }
 
 function modelId(value: unknown): { modelId?: string; reasoningId?: string } {
@@ -95,14 +113,24 @@ export async function openCode2SessionState(
     throw new ProviderUnavailableError("OpenCode 2 session state is unavailable", { cause: error });
   }
   const settled = status === "idle";
+  const active = status === "running" || status === "blocked";
   const [assistant, idle] = await Promise.all([
     recentRows
       ? Promise.resolve(recentRows.filter((row) => row.type === "assistant"))
       : newest(client, sessionId, "assistant").then((row) => (row ? [row] : [])),
+    // A failed run's reason, or the boundary that names the running run. The
+    // run id is optional metadata: an unreadable boundary leaves it out.
     settled && session.outcome === "failed"
       ? newest(client, sessionId, "idle")
-      : Promise.resolve(undefined),
+      : active
+        ? newest(client, sessionId, "idle").then(
+            (row) => row ?? null,
+            () => false as const,
+          )
+        : Promise.resolve(undefined),
   ]);
+  const turnRunId =
+    active && idle !== false ? openCode2RunIdFrom(sessionId, idle ?? undefined) : undefined;
   const last = assistant.at(-1);
   const lastModel = modelId(asRecord(last)?.model);
   const sessionModel = modelId(session.model);
@@ -138,6 +166,7 @@ export async function openCode2SessionState(
     ...(status === "running" && typeof busy === "number" && busy > 0
       ? { turnStartedAt: busy }
       : {}),
+    ...(turnRunId ? { turnRunId } : {}),
     ...(sessionModel.modelId ? { sessionModelId: sessionModel.modelId } : {}),
     ...(sessionModel.reasoningId ? { sessionReasoningId: sessionModel.reasoningId } : {}),
     ...(lastModel.modelId ? { lastAssistantModelId: lastModel.modelId } : {}),

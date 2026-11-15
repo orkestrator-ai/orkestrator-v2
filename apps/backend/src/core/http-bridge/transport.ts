@@ -274,6 +274,20 @@ export function fetchSessionSnapshot(
   return bridgeFetch(connection, sessionSnapshotPath(connection.agent, sessionId), {}, fetchImpl);
 }
 
+/**
+ * The running turn's id from a `sessionSnapshotPath` payload: the bridge's
+ * `turnId` while `status` is `running`, bounded to 512 bytes. The steer path
+ * (`activeSteerRun`) and the session projection (to-do 8107 (retired)) both read it, so
+ * the run a view shows is the run a steer is checked against.
+ */
+export function bridgeSnapshotTurnRunId(
+  payload: Record<string, unknown> | null | undefined,
+): string | undefined {
+  if (payload?.status !== "running") return undefined;
+  const candidate = nonEmptyString(payload.turnId);
+  return candidate && Buffer.byteLength(candidate, "utf8") <= 512 ? candidate : undefined;
+}
+
 /** The most a Claude bridge's whole session resource may decode to. */
 export const CLAUDE_SESSION_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
 

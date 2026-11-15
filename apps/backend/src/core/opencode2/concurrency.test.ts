@@ -12,7 +12,7 @@ import {
 } from "./reload-gate.js";
 
 /**
- * The always-run half of to-do 7905 tasks 2 and 3, on the fake server: the
+ * The always-run half of to-do 7905 (retired) tasks 2 and 3, on the fake server: the
  * provider's own bookkeeping when sessions share one server, and a steer sent
  * while the run waits on a card. What the real 2.2.6 server does with them
  * (overlapping runs, delivery order behind a card) is pinned by
@@ -33,7 +33,13 @@ function provider(fake: FakeOpenCode2Server): OpenCode2Provider {
   return created;
 }
 
-async function steer(on: OpenCode2Provider, sessionId: string, text: string, requestId: string) {
+async function steer(
+  on: OpenCode2Provider,
+  sessionId: string,
+  text: string,
+  requestId: string,
+  origin?: "user",
+) {
   const run = await on.activeSteerRun(sessionId);
   expect(run.state).toBe("running");
   return on.performSessionAction(sessionId, {
@@ -41,6 +47,7 @@ async function steer(on: OpenCode2Provider, sessionId: string, text: string, req
     text,
     requestId,
     expectedRunId: (run as { runId: string }).runId,
+    ...(origin ? { origin } : {}),
   });
 }
 
@@ -53,7 +60,7 @@ function timeline(fake: FakeOpenCode2Server, sessionId: string): string[] {
   });
 }
 
-describe("concurrent sessions on one server (to-do 7905 task 2)", () => {
+describe("concurrent sessions on one server (to-do 7905 (retired) task 2)", () => {
   test("two providers and two sessions each settle their own turn, and a steer reaches only its session", async () => {
     server = new FakeOpenCode2Server();
     const tab = provider(server);
@@ -136,7 +143,7 @@ function resolution(
   };
 }
 
-describe("a steer sent while a card is parked (to-do 7905 task 3)", () => {
+describe("a steer sent while a card is parked (to-do 7905 (retired) task 3)", () => {
   for (const decision of ["allowed", "denied"] as const) {
     test(`waits behind a permission card and joins the same run once it is ${decision}`, async () => {
       server = new FakeOpenCode2Server();
@@ -191,32 +198,124 @@ describe("a steer sent while a card is parked (to-do 7905 task 3)", () => {
     });
   }
 
-  test("a stop leaves the held steer in the inbox (to-do 8100)", async () => {
+  function parkOnCard(fake: FakeOpenCode2Server, id: string) {
+    fake.sessions.get(id)!.permissions.push({
+      id: "per_1",
+      sessionID: id,
+      action: "shell",
+      resources: ["echo parked"],
+    });
+  }
+
+  test("a stop withdraws the user's held steer, so the next prompt runs alone (to-do 8100 (retired))", async () => {
     server = new FakeOpenCode2Server();
     const p = provider(server);
     const id = await p.createSession("build", "card-stop");
     await p.send(id, "run a command", { requestId: "stop-turn" });
+    parkOnCard(server, id);
+    expect(await steer(p, id, "held", "stop-steer", "user")).toMatchObject({ outcome: "applied" });
+    expect(server.sessions.get(id)!.inbox).toHaveLength(1);
+    await p.abort(id);
+    expect((await p.interactions.listPendingInteractions(id)).requests).toEqual([]);
+    expect(await p.activity(id)).toBe("idle");
+    expect(server.sessions.get(id)!.inbox).toEqual([]);
+    expect(server.withdrawals).toHaveLength(1);
+    // Positive evidence it was removed, so the backend never reports it delivered.
+    expect(await p.steerStatus(id, "stop-steer")).toBe("absent");
+    expect(timeline(server, id)).toEqual(["user:run a command", "idle:interrupted"]);
+
+    await p.send(id, "the next prompt", { requestId: "after-stop" });
+    server.finishRun(id);
+    expect(timeline(server, id)).toEqual([
+      "user:run a command",
+      "idle:interrupted",
+      "user:the next prompt",
+      "idle:succeeded",
+    ]);
+  });
+
+  test("a stop keeps a mail or queued steer, which the next run delivers first", async () => {
+    server = new FakeOpenCode2Server();
+    const p = provider(server);
+    const id = await p.createSession("build", "card-stop-mail");
+    await p.send(id, "run a command", { requestId: "stop-turn" });
+    parkOnCard(server, id);
+    expect(await steer(p, id, "mail", "mail-steer")).toMatchObject({ outcome: "applied" });
+    await p.abort(id);
+    expect(server.sessions.get(id)!.inbox).toHaveLength(1);
+    expect(server.withdrawals).toEqual([]);
+    expect(await p.steerStatus(id, "mail-steer")).toBe("dispatched");
+
+    await p.send(id, "the next prompt", { requestId: "after-stop" });
+    server.finishRun(id);
+    expect(timeline(server, id)).toEqual([
+      "user:run a command",
+      "idle:interrupted",
+      "user:mail",
+      "user:the next prompt",
+      "idle:succeeded",
+    ]);
+  });
+
+  test("a withdraw that fails leaves the steer as 2.2.6 does and still stops the turn", async () => {
+    server = new FakeOpenCode2Server();
+    const p = provider(server);
+    const id = await p.createSession("build", "card-stop-fail");
+    await p.send(id, "run a command", { requestId: "stop-turn" });
+    parkOnCard(server, id);
+    await steer(p, id, "held", "stop-steer", "user");
+    server.failNextWithdraw = 500;
+    await p.abort(id);
+    expect(await p.activity(id)).toBe("idle");
+    expect((await p.interactions.listPendingInteractions(id)).requests).toEqual([]);
+    expect(server.sessions.get(id)!.inbox).toHaveLength(1);
+    expect(await p.steerStatus(id, "stop-steer")).toBe("dispatched");
+  });
+});
+
+describe("the run a view shows (to-do 8107 (retired))", () => {
+  test("the state snapshot names the same run the steer check does, and a new one after a turn ends", async () => {
+    server = new FakeOpenCode2Server();
+    const p = provider(server);
+    const id = await p.createSession("build", "bound");
+    expect((await p.sessionState(id)).turnRunId).toBeUndefined();
+
+    await p.send(id, "first", { requestId: "bound-1" });
+    const first = await p.sessionState(id);
+    const firstRun = await p.activeSteerRun(id);
+    expect(firstRun).toEqual({ state: "running", runId: first.turnRunId! });
+
+    // Parked on a card the run is still the same one, and still named.
     server.sessions.get(id)!.permissions.push({
       id: "per_1",
       sessionID: id,
       action: "shell",
       resources: ["echo parked"],
     });
-    expect(await steer(p, id, "held", "stop-steer")).toMatchObject({ outcome: "applied" });
-    await p.abort(id);
-    expect((await p.interactions.listPendingInteractions(id)).requests).toEqual([]);
-    expect(await p.activity(id)).toBe("idle");
-    expect(server.sessions.get(id)!.inbox).toHaveLength(1);
-    expect(timeline(server, id)).toEqual(["user:run a command", "idle:interrupted"]);
+    expect((await p.sessionState(id)).turnRunId).toBe(first.turnRunId);
+    server.sessions.get(id)!.permissions = [];
 
-    // The next prompt's run delivers the held steer first, as 2.2.6 does.
-    await p.send(id, "the next prompt", { requestId: "after-stop" });
+    server.finishRun(id);
+    expect((await p.sessionState(id)).turnRunId).toBeUndefined();
+    await p.send(id, "second", { requestId: "bound-2" });
+    const second = await p.sessionState(id);
+    expect(second.turnRunId).toBeString();
+    expect(second.turnRunId).not.toBe(first.turnRunId);
+
+    // A steer written for the first run is refused as a miss, never delivered.
+    expect(
+      await p.performSessionAction(id, {
+        kind: "steer",
+        text: "for the first",
+        requestId: "late-steer",
+        expectedRunId: first.turnRunId!,
+      }),
+    ).toEqual({ outcome: "mismatch" });
     server.finishRun(id);
     expect(timeline(server, id)).toEqual([
-      "user:run a command",
-      "idle:interrupted",
-      "user:held",
-      "user:the next prompt",
+      "user:first",
+      "idle:succeeded",
+      "user:second",
       "idle:succeeded",
     ]);
   });

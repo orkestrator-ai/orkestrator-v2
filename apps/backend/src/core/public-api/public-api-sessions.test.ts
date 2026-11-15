@@ -845,7 +845,7 @@ describe("controls and interactions", () => {
     expect(stub.resolutions).toHaveLength(1);
   });
 
-  // The always-run half of to-do 7905 task 4: the `opencode-steer` CLI
+  // The always-run half of to-do 7905 (retired) task 4: the `opencode-steer` CLI
   // scenario qualifies OpenCode steer on a real server but runs only by name.
   test("an OpenCode session is steerable through the public API", async () => {
     expect(providerCapabilities("opencode").steer).toBe(true);
@@ -883,7 +883,7 @@ describe("controls and interactions", () => {
   });
 
   // Grok is the provider that cannot steer (ACP v1 has no mid-turn input);
-  // OpenCode's steer is qualified through the CLI since to-do 7905 task 4.
+  // OpenCode's steer is qualified through the CLI since to-do 7905 (retired) task 4.
   test("steering is refused where the provider cannot steer", async () => {
     const { harness } = await setup("grok");
     await harness.storage.updateGlobalConfig({

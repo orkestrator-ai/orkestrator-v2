@@ -91,6 +91,12 @@ export interface PipelineFlowNode {
   slot?: number;
   /** Earlier attempts of this reviewer slot in the same pass. */
   earlierAttempts?: number;
+  /**
+   * A reviewer of a retired pass that never had a session (it failed to
+   * start): its record id and round, from its Consolidation's summary, so the
+   * slot can still be rerun on its own.
+   */
+  sessionlessReviewer?: { id: string; iteration: number };
   /** The review pass the node belongs to, for opening it on its own. */
   passKey?: string;
   /** The prepare node carries a validation run: the latest unless {@link validationRun} is set. */
@@ -339,7 +345,8 @@ export function pipelineReviewWorktreeChanged(pipeline: BuildPipeline): boolean 
 
 /**
  * What restarting this reviewer alone names: its live record, or for a pass the
- * pipeline has moved on from, its session. Only the current round's panel can
+ * pipeline has moved on from, its session (or, for a slot that never had one,
+ * the record its Consolidation summarised). Only the current round's panel can
  * restart this way, because a later round's code needs a whole new review. A
  * failed reviewer of the live pass has Retry reviewer instead, and a queued one
  * has nothing to restart yet.
@@ -356,8 +363,14 @@ export function pipelineRestartableReviewerId(
       ? node.reviewer.id
       : null;
   }
-  return node.session && node.session.iteration === pipeline.iteration && pipeline.reviewPackage
-    ? node.session.sessionKey
+  // A slot of a pass the pipeline has moved on from reruns alone while its
+  // round is current: the backend rewinds to the panel and consolidates again.
+  if (!pipeline.reviewPackage) return null;
+  if (node.session) {
+    return node.session.iteration === pipeline.iteration ? node.session.sessionKey : null;
+  }
+  return node.sessionlessReviewer?.iteration === pipeline.iteration
+    ? node.sessionlessReviewer.id
     : null;
 }
 
@@ -685,16 +698,25 @@ export function pipelineFlowModel(
     passes.push(created);
     return created;
   };
-  /** The open pass of an iteration, or a new one. */
+  /**
+   * The open pass of an iteration, or a new one. A session naming the last
+   * pass's own identity rejoins it even after a previous attempt closed it: a
+   * reviewer rerun after consolidation supersedes Consolidation and the steps
+   * after it but keeps the panel, so its new attempt and the re-consolidation
+   * belong to that panel rather than to a new pass. Rejoining reopens it, so a
+   * later stop that names no pass (a pause of the rerun) lands on that panel
+   * too instead of opening an empty one.
+   */
   const continuePass = (iteration: number, identity?: string): ReviewPass => {
     const open = lastPass();
     if (
       open &&
-      !open.closed &&
       open.iteration === iteration &&
-      (!identity || !open.identity || open.identity === identity)
+      ((!open.closed && (!identity || !open.identity || open.identity === identity)) ||
+        (identity !== undefined && open.identity === identity))
     ) {
       open.identity ??= identity;
+      open.closed = false;
       return open;
     }
     return openPass(iteration, identity);
@@ -1060,6 +1082,9 @@ export function pipelineFlowModel(
           model: reviewer.model,
           reasoningEffort: reviewer.reasoningEffort,
           error: reviewer.error,
+          ...(session.superseded === true
+            ? {}
+            : { sessionlessReviewer: { id: reviewer.id, iteration: session.iteration } }),
           // Missing session rows do not establish a startup failure.
           startFailed: reviewer.startFailed,
         };

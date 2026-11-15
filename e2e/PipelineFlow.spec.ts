@@ -359,6 +359,43 @@ test("a running reviewer restarts alone from its context menu", async ({ page })
   await expect(page.getByRole("menuitem", { name: "Restart reviewer" })).toHaveCount(0);
 });
 
+test("one reviewer of a consolidated pass reruns alone, superseding Consolidation onward", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=reviewer-rerun");
+  await expect(node(page, "Consolidation")).toHaveAttribute("data-flow-state", "complete");
+  await node(page, "Reviewer 2").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Restart reviewer" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__pipelineCommands?.filter(
+          (entry) => entry.command === "restart_build_pipeline_reviewer",
+        ),
+      ),
+    )
+    .toEqual([
+      {
+        command: "restart_build_pipeline_reviewer",
+        args: expect.objectContaining({ reviewerId: "rerun-rev-2" }),
+      },
+    ]);
+  const assertRerun = async () => {
+    // The rerun slot waits in its own panel beside the kept report; the old
+    // Consolidation and Address are one previous attempt, and the pass
+    // consolidates again after it.
+    await expect(node(page, "Reviewer 2")).toHaveAttribute("data-flow-state", "not-started");
+    await expect(node(page, "Reviewer 1")).toHaveAttribute("data-flow-state", "complete");
+    await expect(node(page, "Previous attempt")).toBeVisible();
+    await expect(node(page, "Consolidation")).toHaveAttribute("data-flow-state", "not-started");
+    await expect(node(page, "Consolidation 2")).toHaveCount(0);
+  };
+  await assertRerun();
+  // A reload rebuilds the same graph from the stored record.
+  await page.goto("/pipeline-flow?scenario=reviewer-rerun&restore=1&view=build");
+  await assertRerun();
+});
+
 test("a reviewer's focus, findings so far and a moved worktree are shown", async ({ page }) => {
   await page.goto("/pipeline-flow?scenario=live-findings");
   await expect(node(page, "Reviewer 1")).toContainText("Focus: Security");

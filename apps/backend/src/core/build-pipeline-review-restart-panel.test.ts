@@ -181,7 +181,9 @@ describe("build pipeline restart keeps the panel", () => {
   test("restarting a reviewer after the review moved on rewinds to the panel", async () => {
     await withPipeline(async ({ service, read, provider }) => {
       const started = await service.start(startInput(PANEL));
-      const addressing = await advanceUntil(service, read, started.id, "addressing", 30);
+      await advanceUntil(service, read, started.id, "addressing", 30);
+      // A running Address refuses the rerun; the user pauses first.
+      const addressing = await service.pause(started.id);
       const reviewer = reviewerSession(addressing, "opus");
       const address = addressing.sessions.find((s) => s.phase === "address")!;
 

@@ -1134,6 +1134,8 @@ export interface PipelineSessionlessReviewer {
   agent: BuildPipelineAgent;
   model?: string;
   reasoningEffort?: string;
+  /** The Fast/Normal choice the slot launched with, so a later rerun keeps it. */
+  fastMode?: boolean;
   error: string;
 }
 
@@ -1149,6 +1151,7 @@ function isPipelineSessionlessReviewer(value: unknown): value is PipelineSession
     (value.model === undefined || (isNonBlankString(value.model) && value.model.length <= 256)) &&
     (value.reasoningEffort === undefined ||
       (isNonBlankString(value.reasoningEffort) && value.reasoningEffort.length <= 128)) &&
+    (value.fastMode === undefined || typeof value.fastMode === "boolean") &&
     isNonBlankString(value.error) &&
     value.error.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH
   );

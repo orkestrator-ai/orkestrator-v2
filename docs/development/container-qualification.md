@@ -335,7 +335,13 @@ platform packages) and checks that the main `claude-agent-sdk` package's
 its place ahead of the bundles (DK-7). `tests/unit/version-drift.test.ts`
 ("every SDK platform binary is stripped from the vendored runtime tree") pins
 the removal, both checks, `ENV CLAUDE_CLI_PATH` and the bridge passing the
-path.
+path. `bridges/claude-bridge/src/sdk-compatibility.test.ts` ("runs the passed
+executable without any platform package, and needs one only when none is
+passed") pins the SDK premise itself: it copies the SDK package alone into a
+temporary tree, as the image ships it, and checks that a passed executable is
+the one spawned and that an unset path fails with `Native CLI binary for
+<platform>-<arch> not found`. Patching the copied `sdk.mjs` to ignore the
+passed path makes it fail.
 
 **Run.** beelink (x86_64, kernel 7.1.8-arch1-3), rootful Docker Engine 29.9.2
 with the containerd image store, worktree

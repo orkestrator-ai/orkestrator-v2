@@ -737,10 +737,15 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    so an SDK that resolved its binary even when given a path would fail every
    container turn. At 0.3.319 the only lookup in `sdk.mjs` sits behind
    `if(!<pathToClaudeCodeExecutable>)` and throws `Native CLI binary for
-   <platform>-<arch> not found` when it finds nothing. After the image is
-   built, the container Claude turn recorded in
+   <platform>-<arch> not found` when it finds nothing.
+   `bridges/claude-bridge/src/sdk-compatibility.test.ts` (slow tier, so run
+   it by path or through `mise run test:full`) pins both halves against the
+   new SDK: it copies the SDK package alone into a temporary tree, as the
+   image ships it, and checks that a passed executable is the one spawned and
+   that an unset path fails with that error. After the image is built, the
+   container Claude turn recorded in
    [container-qualification.md](container-qualification.md#claude-bridge-without-the-sdks-platform-binary-2026-11-15)
-   is the proof.
+   is the end-to-end proof.
 
    Check whether `SlashCommand` in the new `sdk.d.ts` has gained a marker for
    terminal-only commands (at 0.3.322 it is still

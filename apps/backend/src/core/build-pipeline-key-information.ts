@@ -186,18 +186,21 @@ export function recordVerdictInKeyInformation(
  *   Build itself runs again, since Build is the stage that writes them. Fix,
  *   Address and Verify amend them in place, and the code is not rewound by a
  *   restart, so what they recorded still describes the worktree the restarted
- *   step continues on.
+ *   step continues on. A code rewind is the exception: without section-level
+ *   commit provenance, clear the narrative, tests and updates, and discard
+ *   the target round's issues and verification as potentially superseded.
  */
 export function pruneKeyInformationAfterRewind(
   pipeline: BuildPipeline,
   iteration: number,
   restart: PipelineRestartRequest,
+  codeRewound = false,
 ): void {
   const info = pipeline.keyInformation;
   if (!info) return;
   const order = restartStepOrder(restart);
-  const keepRoundIssues = order > PHASE_ORDER.review;
-  const keepRoundVerification = order > PHASE_ORDER.verify;
+  const keepRoundIssues = !codeRewound && order > PHASE_ORDER.review;
+  const keepRoundVerification = !codeRewound && order > PHASE_ORDER.verify;
   const before = JSON.stringify(info);
   info.issues = info.issues.filter(
     (entry) => entry.round < iteration || (entry.round === iteration && keepRoundIssues),
@@ -205,7 +208,7 @@ export function pruneKeyInformationAfterRewind(
   info.verifications = info.verifications.filter(
     (entry) => entry.round < iteration || (entry.round === iteration && keepRoundVerification),
   );
-  if (restart.kind === "session" && restart.phase === "build") {
+  if (codeRewound || (restart.kind === "session" && restart.phase === "build")) {
     info.framing = "problem";
     delete info.summary;
     delete info.statement;

@@ -510,7 +510,11 @@ update history are cleared only when Build itself runs again, since Build is
 the stage that writes them. Restarting Fix, Review, Address Findings, Verify,
 Ship or conflict resolution keeps them: those stages amend the brief in place,
 and a restart does not rewind the code, so what they recorded still describes
-the worktree the restarted step continues on (`pruneKeyInformationAfterRewind`).
+the worktree the restarted step continues on. "Rewind code to here" is the
+exception: it clears the narrative, tests and update history because they may
+describe dropped commits, and discards the target round's issues and verification
+because their resolutions and verdict may no longer apply
+(`pruneKeyInformationAfterRewind`).
 The update timestamp moves only when a restart removed something. Every field is bounded
 (`KEY_INFORMATION_LIMITS`, about 200 KB at worst) and checked by
 `isBuildPipeline`.

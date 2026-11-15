@@ -398,6 +398,28 @@ describe("what the supervisor records", () => {
     expect(subject.keyInformation?.solution).toBeUndefined();
   });
 
+  test.each(["review", "address", "verify", "pr", "resolve-conflicts"] as const)(
+    "a code rewind to %s clears sections without commit provenance",
+    (phase) => {
+      const subject = briefedPipeline();
+      pruneKeyInformationAfterRewind(subject, 0, { kind: "session", phase }, true);
+      expect(subject.keyInformation).toMatchObject({
+        framing: "problem",
+        workDone: [],
+        notDone: [],
+        decisions: [],
+        tests: [],
+        issues: [],
+        verifications: [],
+        updates: [],
+      });
+      expect(subject.keyInformation?.summary).toBeUndefined();
+      expect(subject.keyInformation?.statement).toBeUndefined();
+      expect(subject.keyInformation?.context).toBeUndefined();
+      expect(subject.keyInformation?.solution).toBeUndefined();
+    },
+  );
+
   test("a restart that removes nothing leaves the updated time alone", () => {
     const subject = briefedPipeline();
     const updatedAt = subject.keyInformation!.updatedAt;

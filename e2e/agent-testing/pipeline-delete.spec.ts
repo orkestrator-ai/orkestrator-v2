@@ -62,6 +62,12 @@ test("renderer deletion wrapper removes a pending code rewind through the real g
   };
   try {
     expect(seedBuildPipeline(snapshot as unknown as Record<string, unknown>)).toBe(id);
+    // Nothing here needs Docker: on a host whose user cannot reach the daemon,
+    // the permission dialog would otherwise cover the sidebar the login waits on.
+    const dockerDialog = page.getByRole("alertdialog", { name: "Docker Permission Required" });
+    await page.addLocatorHandler(dockerDialog, async () => {
+      await dockerDialog.getByRole("button", { name: "Continue Without Docker" }).click();
+    });
     await login(page, testInfo);
     const list = () =>
       invoke<Array<{ id: string; snapshot: BuildPipeline }>>("list_build_pipelines", { projectId });

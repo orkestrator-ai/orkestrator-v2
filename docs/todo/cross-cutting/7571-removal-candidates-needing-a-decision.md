@@ -398,9 +398,14 @@ same record, revision and admission checks the command produced, with no
 public command. A `dev:test` fixture seed was not used because the
 app-wiring spec's pipeline carries a validation run it creates at test time.
 The mixed-version scenario lost only its empty-import check; the scenario
-itself retires with 8108 task 4. `pipeline-delete.spec.ts` and the new
-helper's unit test were run; the container app-wiring spec needs Docker and
-is on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
+itself retires with 8108 task 4. The new helper has a unit test, and
+`pipeline-delete.spec.ts` passed on a credential-free `dev:test` profile
+(`--fixture --no-agent-credentials --no-host-seed`) on 2026-11-15, four
+times. On that host the user could not reach the Docker daemon, so the
+spec now continues past the Docker permission dialog, which otherwise
+covered the sidebar its login waits on (it uses no container). The
+container app-wiring spec needs Docker and is on the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 
 ### Task 7: the stored graph ceiling is still read and enforced
 

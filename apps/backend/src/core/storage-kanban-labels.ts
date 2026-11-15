@@ -63,6 +63,16 @@ export class KanbanLabelCatalogueStore {
     private readonly files: StorageFiles,
   ) {}
 
+  /** Removes a project's catalogue, an unreadable one included. */
+  delete(projectId: string): void {
+    this.context.updateStoreRow<void>(
+      this.files.kanbanLabelsFile(),
+      projectId,
+      () => ({ result: undefined, delete: true }),
+      { unreadableRow: "replace" },
+    );
+  }
+
   list(projectId: string): TicketLabelDefinition[] {
     return storedLabels(this.context.loadStoreRow(this.files.kanbanLabelsFile(), projectId));
   }

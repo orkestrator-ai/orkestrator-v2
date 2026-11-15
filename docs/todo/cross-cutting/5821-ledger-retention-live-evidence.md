@@ -73,5 +73,5 @@ Tests: `deleted-environment-reconcile.test.ts` (purge of a missing id including 
 - Batch file E3, parts 0730 and 0540 (deleted): its outcome is the closing check of E3 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), which names the commit that holds the file's last version.
 - [Change tracking](../../architecture/change-tracking.md#age-based-retention)
 - [5361](5361-retention-pass-on-a-large-real-store.md), the object store side of the pass
-- [5820](5820-removed-project-kanban-notes-plans.md), the rest of the same batch
+- 5820 (retired), the rest of the same batch: a removed project's tickets, notes and plans are deleted with it ([tickets.md](../../architecture/tickets.md#sync-across-machines))
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, measuring a copy of a real ledger; task 3, timing a first retention run on a copy of an old real ledger) moved there on 2026-11-10, and task 5's first run on the user's real install on 2026-11-14.

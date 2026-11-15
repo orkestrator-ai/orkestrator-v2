@@ -786,6 +786,8 @@ export class BuildPipelinesRepository {
       return commit;
     });
     await this.finishTranscriptDeletion([pipelineId], commit);
+    // Its completion comment records have nothing left to guard (to-do 5820).
+    await this.repos.kanban.deleteCompletionCommentsForPipelines([pipelineId]);
   }
 
   async deleteBuildPipelinesByEnvironment(
@@ -854,6 +856,7 @@ export class BuildPipelinesRepository {
       },
     );
     await this.finishTranscriptDeletion(transcriptOwners, commit);
+    await this.repos.kanban.deleteCompletionCommentsForPipelines(removedIds);
     return removedIds;
   }
 

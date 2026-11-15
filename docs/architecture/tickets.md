@@ -609,6 +609,31 @@ work on its own board as before (see
 become the leaf's own, keeping what they say, and nothing more is queued for
 it.
 
+**Removing a project.** Removing a project deletes that machine's rows of its
+board: its tickets, the image files attached on that machine, its label
+catalogue, its notes and feature plans (`KanbanRepository.deleteProjectContent`,
+called first by `removeProject`, so a failure keeps the project for a retry;
+user decision of 2026-11-14, to-do 5820, retired). The remove-project
+confirmation says so. It is not a ticket deletion as far as sync is
+concerned: no deletion is queued for a command node and no tombstone is
+written (`forgetSyncProject` in `storage-kanban-sync.ts`). The removed
+project's replica links, tombstones, pruned cursor, each leaf's pairing with
+it and its conflicts are dropped. So:
+
+- removed on a leaf, the command node's board and every other machine's
+  copies stay; a re-added copy of the repository is a new project
+  (`createProject` mints a new id), pairs again and receives the board's
+  tickets in a full sync. Changes the leaf had already queued for the
+  command node stay queued, because they name the command node's project;
+- removed on the command node, its board is gone from that machine and it no
+  longer sends that project to any leaf; each leaf's own project and its
+  copies are that machine's to remove.
+
+Kanban tickets are not linked to Linear issues or GitHub issues (see
+[Linear](#linear)), so removing a project changes nothing in either.
+`storage-kanban-project-removal.test.ts` and
+`nodes/node-ticket-sync-project-removal.test.ts` cover it.
+
 ## Linear
 
 A project uses Kanban or a Linear board, not both for one ticket: nothing

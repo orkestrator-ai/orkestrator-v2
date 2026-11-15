@@ -121,7 +121,13 @@ Every repository takes the one `StorageContext` (`this.context`), the
 `StorageRepositories` registry (`this.repos.projects`), and keeps only what it
 uses. Repositories call each other through the registry, which is how the
 paths that cross stores work: project removal deletes compose drafts
-(`this.repos.drafts`), session removal deletes the session buffer, public
+(`this.repos.drafts`) and the project's tickets, ticket images, labels, notes
+and feature plans (`this.repos.kanban.deleteProjectContent`; what that means
+for sync is in [tickets.md](tickets.md#sync-across-machines)), deleting a
+pipeline deletes its Linear and GitHub completion comment records
+(`deleteCompletionCommentsForPipelines`, which project removal also calls for
+any pipeline still listed for the project), session removal deletes the
+session buffer, public
 operations write projects and environments under those stores' leases
 (`this.repos.projects.enqueueEnvironmentMutation`). A lease
 wrapper (`enqueueEnvironmentMutation`, `enqueueConfigMutation`, …) lives in

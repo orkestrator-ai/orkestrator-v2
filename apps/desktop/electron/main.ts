@@ -428,6 +428,8 @@ const nativeDialogs = createNativeDialogs<BrowserWindow>({
   currentWindow: currentDialogWindow,
   createHostWindow: async () => {
     await app.whenReady();
+    // The quit may have begun while this waited; a window created now fails.
+    if (quitReopen.isQuitting()) throw new Error(`${productName} is quitting`);
     return createDialogHostWindow({ BrowserWindowCtor: WindowCtor, dirname: __dirname });
   },
   requestAttention: requestDialogAttention,

@@ -47,6 +47,14 @@ async function waitForUrl(url: string): Promise<void> {
 
 const count = (text: string, line: string): number => text.split(line).length - 1;
 
+/**
+ * How long a graceful quit may take before it counts as hung: main's longest
+ * will-quit hold (BACKEND_EXIT_WAIT_MS 20 s + ESSENTIAL_LOG_STOP_WAIT_MS 2 s in
+ * apps/desktop/electron/main.ts), plus room for before-quit and window
+ * teardown on a loaded host.
+ */
+const QUIT_WITH_FULL_SHUTDOWN_BUDGET_MS = 45_000;
+
 test("rejected second launch leaves crash markers intact and immediate exit flushes without will-quit", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ork-essential-native-"));
   const fixture = path.join(root, "main.ts");
@@ -483,7 +491,13 @@ test("a real window sends its startup markers to the main process and none of it
         else electronProcess.once("exit", (code, signal) => resolve({ code, signal }));
       },
     );
-    expect(await closeElectronWithin(launchedApp)).toBe("closed");
+    // main holds will-quit for up to BACKEND_EXIT_WAIT_MS + ESSENTIAL_LOG_STOP_WAIT_MS
+    // (22 s) while the backend drains and the essential log stops. The default
+    // 20 s close would kill a quit that is merely using that budget.
+    const closingAt = Date.now();
+    const closed = await closeElectronWithin(launchedApp, QUIT_WITH_FULL_SHUTDOWN_BUDGET_MS);
+    const closeMs = Date.now() - closingAt;
+    expect(closed, `Electron did not exit within ${closeMs} ms of the quit`).toBe("closed");
     launchedApp = null;
     expect(await exited).toEqual({ code: 0, signal: null });
     await expect.poll(essential, { timeout: 10_000 }).toContain('"event":"essential.stopped"');

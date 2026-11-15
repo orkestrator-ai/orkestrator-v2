@@ -269,6 +269,9 @@ What it looks like:
 Fixed: once `before-quit` has fired, `createNativeDialogs` cancels any dialog
 that would need a new host window (macOS) or a windowless box (elsewhere),
 logging `desktop.dialog` `quitting-cancelled` with its source and response; a
-dialog with an open window still opens on it. The uncaught exception itself is
+dialog with an open window still opens on it. A host window that was still
+being created when the quit began counts as new: the dialogs waiting on it are
+cancelled once it settles and it is closed, and the desktop's host factory
+refuses to create one once the quit has begun. The uncaught exception itself is
 still logged first. `apps/desktop/tests/native-dialogs.test.ts` and the final
 close of `e2e/agent-testing/renderer-log-boundary-electron.spec.ts` pin it.

@@ -426,6 +426,63 @@ describe("native dialogs", () => {
     expect(run.host.closed).toBe(true);
   });
 
+  test("a host still being created when the quit begins parents no dialog and is closed", async () => {
+    let resolveHost!: (window: FakeWindow) => void;
+    const pendingHost = fakeWindow("pending-host");
+    const run = harness({
+      createHostWindow: () => new Promise<FakeWindow>((resolve) => (resolveHost = resolve)),
+    });
+    const first = run.dialogs.showMessageBox("a", OPTIONS);
+    await Bun.sleep(0);
+    run.setQuitting(true);
+    // A second dialog during the pending acquisition must not join it.
+    const second = run.dialogs.showMessageBox("b", OPTIONS);
+    expect(await second).toEqual({ response: 1, checkboxChecked: false });
+    resolveHost(pendingHost);
+    expect(await first).toEqual({ response: 1, checkboxChecked: false });
+    await Bun.sleep(0);
+    expect(run.calls).toEqual([]);
+    expect(run.requestAttention).not.toHaveBeenCalled();
+    expect(run.createHostWindow).toHaveBeenCalledTimes(1);
+    expect(pendingHost.closed).toBe(true);
+    expect(run.errors).toEqual([]);
+    expect(run.logs).toEqual([
+      "[desktop.dialog] quitting-cancelled source=b response=1",
+      "[desktop.dialog] quitting-cancelled source=a response=1",
+    ]);
+  });
+
+  test("a host refused because the quit began cancels its dialog without an error", async () => {
+    let rejectHost!: (error: Error) => void;
+    const run = harness({
+      createHostWindow: () => new Promise<FakeWindow>((_resolve, reject) => (rejectHost = reject)),
+    });
+    const shown = run.dialogs.showMessageBox("a", OPTIONS);
+    await Bun.sleep(0);
+    run.setQuitting(true);
+    rejectHost(new Error("quitting"));
+    expect(await shown).toEqual({ response: 1, checkboxChecked: false });
+    expect(run.calls).toEqual([]);
+    expect(run.errors).toEqual([]);
+    expect(run.logs).toEqual(["[desktop.dialog] quitting-cancelled source=a response=1"]);
+  });
+
+  test("while quitting, a host destroyed after it opened parents no new dialog", async () => {
+    const run = harness();
+    const first = run.dialogs.showMessageBox("a", OPTIONS);
+    await Bun.sleep(0);
+    run.setQuitting(true);
+    run.host.destroyed = true;
+    expect(await run.dialogs.showMessageBox("b", OPTIONS)).toEqual({
+      response: 1,
+      checkboxChecked: false,
+    });
+    expect(run.calls.map((call) => call.parent)).toEqual(["host"]);
+    expect(run.createHostWindow).toHaveBeenCalledTimes(1);
+    await run.answer();
+    await first;
+  });
+
   test("while quitting, elsewhere a windowless box is cancelled but a parented one opens", async () => {
     const run = harness({ platform: "linux", quitting: true });
     expect(await run.dialogs.showMessageBox("backend-error", OPTIONS)).toEqual({

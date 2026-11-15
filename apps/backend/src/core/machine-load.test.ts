@@ -414,6 +414,62 @@ describe("history across a restart", () => {
     expect(saved.fine.length + saved.coarse.length).toBe(30);
   });
 
+  /** The end time of every bucket in a stored document. */
+  function storedEnds(store: ReturnType<typeof memoryStore>): number[] {
+    const saved = store.value as { fine: number[][]; coarse: number[][] };
+    return [...saved.fine, ...saved.coarse].map((bucket) => bucket[1]!);
+  }
+
+  test("a clock moved back while running drops future readings, and stop writes the drop", async () => {
+    const store = memoryStore();
+    const { state, sampler, step } = fixture(START, store);
+    sampler.start();
+    // Fifteen readings close a period, so everything recorded so far is written.
+    for (let minute = 0; minute < 15; minute += 1) await step(MINUTE);
+    expect(store.saves).toBe(1);
+    expect(Math.max(...storedEnds(store))).toBe(START + 15 * MINUTE);
+
+    state.now = START + 5 * MINUTE;
+    expect(window(sampler.report(), "24h").coveredSeconds).toBe(300);
+    // Nothing was sampled since the last write; only the drop is left to write.
+    sampler.stop();
+    expect(store.saves).toBe(2);
+    expect(Math.max(...storedEnds(store))).toBe(START + 5 * MINUTE);
+
+    const restarted = fixture(START + 5 * MINUTE, store);
+    restarted.sampler.start();
+    expect(window(restarted.sampler.report(), "24h").coveredSeconds).toBe(300);
+    restarted.sampler.stop();
+  });
+
+  test("a drop found by a report while running is written with the next reading's period", async () => {
+    const store = memoryStore();
+    const { state, sampler, step } = fixture(START, store);
+    sampler.start();
+    for (let minute = 0; minute < 15; minute += 1) await step(MINUTE);
+    expect(store.saves).toBe(1);
+
+    state.now = START + 5 * MINUTE;
+    sampler.report();
+    expect(store.saves).toBe(1);
+    // The first reading after the rollback only sets a fresh baseline.
+    await step(MINUTE);
+    expect(store.saves).toBe(1);
+    // The next one falls in a period other than the last write's, so it writes.
+    await step(MINUTE);
+    expect(store.saves).toBe(2);
+    const ends = storedEnds(store);
+    expect(Math.max(...ends)).toBe(START + 7 * MINUTE);
+    expect(ends.every((end) => end <= state.now)).toBe(true);
+    sampler.stop();
+    expect(store.saves).toBe(2);
+
+    const restarted = fixture(state.now, store);
+    restarted.sampler.start();
+    expect(window(restarted.sampler.report(), "24h").coveredSeconds).toBe(360);
+    restarted.sampler.stop();
+  });
+
   test("writes once a 15-minute period rather than after every reading, and once more at stop", async () => {
     const store = memoryStore();
     const { sampler, step } = fixture(START, store);
@@ -490,8 +546,9 @@ describe("history across a restart", () => {
     for (let minute = 0; minute < 20; minute += 1) await first.step(MINUTE);
     first.sampler.stop();
     const logs = captureLogs();
+    const restarted = fixture(first.state.now, store);
     try {
-      fixture(first.state.now, store).sampler.start();
+      restarted.sampler.start();
       const restored = logs.records().find((record) => record.event === "load.history-restored");
       expect(restored).toMatchObject({
         level: "info",
@@ -499,6 +556,7 @@ describe("history across a restart", () => {
         fields: { buckets: 20, coveredSeconds: 1_200 },
       });
     } finally {
+      restarted.sampler.stop();
       logs.restore();
     }
   });

@@ -34,13 +34,6 @@ import {
   retryNativeAgentDispatchCommand,
 } from "./index.js";
 
-/** Commands no workspace client calls: the interaction monitor's diagnostics. */
-const ADMIN = new Set([
-  "get_agent_interaction_observations",
-  "reconcile_agent_interactions",
-  "set_agent_interaction_monitor_adoption",
-]);
-
 /** Results the gateway splices pre-encoded (`markSpliceableResult`). */
 const ENCODED = new Set([
   "get_native_agent_projection",
@@ -51,11 +44,11 @@ const ENCODED = new Set([
 ]);
 
 describe("native-sessions definitions", () => {
-  it("defines the domain's 85 commands once each, since version 1", () => {
+  it("defines the domain's 82 commands once each, since version 1", () => {
     const names = NATIVE_SESSIONS_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(85);
-    expect(new Set(names).size).toBe(85);
-    expect(nativeSessionsDomain).toMatchObject({ name: "native-sessions", version: 2, min: 1 });
+    expect(names).toHaveLength(82);
+    expect(new Set(names).size).toBe(82);
+    expect(nativeSessionsDomain).toMatchObject({ name: "native-sessions", version: 3, min: 1 });
     for (const def of NATIVE_SESSIONS_COMMANDS) {
       expect(def.domain).toBe(nativeSessionsDomain);
       expect(def.since).toBe(1);
@@ -70,7 +63,7 @@ describe("native-sessions definitions", () => {
       });
       expect({ name: def.name, access: def.access }).toEqual({
         name: def.name,
-        access: ADMIN.has(def.name) ? "admin" : "workspace",
+        access: "workspace",
       });
       expect({ name: def.name, encoded: def.encoded }).toEqual({
         name: def.name,
@@ -157,9 +150,9 @@ describe("native-sessions definitions", () => {
     expect(result._tag).toBe("Success");
   });
 
-  it("lists its client in DOMAIN_CLIENTS with adapters 1 and 0", () => {
+  it("lists its client in DOMAIN_CLIENTS with adapters 3 to 0", () => {
     expect(DOMAIN_CLIENTS).toContain(nativeSessionsClient);
-    expect(nativeSessionsClient.versions).toEqual([2, 1, 0]);
+    expect(nativeSessionsClient.versions).toEqual([3, 2, 1, 0]);
   });
 });
 
@@ -192,7 +185,7 @@ function fakeNode(
 }
 
 const NATIVE_SESSIONS_V1 = { "native-sessions": { min: 1, max: 1 } };
-const NATIVE_SESSIONS_CURRENT = { "native-sessions": { min: 1, max: 2 } };
+const NATIVE_SESSIONS_CURRENT = { "native-sessions": { min: 1, max: 3 } };
 
 const dispatch = {
   environmentId: "env-1",
@@ -204,14 +197,14 @@ const dispatch = {
 };
 
 describe("native-sessions client", () => {
-  it("version 2: typed calls carry the envelope and its critical keys, results decode", async () => {
+  it("version 3: typed calls carry the envelope and its critical keys, results decode", async () => {
     const node = fakeNode(NATIVE_SESSIONS_CURRENT, (command) =>
       command === "dispatch_native_agent_intent"
         ? { outcome: "accepted", requestId: "r1", extra: "kept" }
         : null,
     );
     const client = createDomainClient(nativeSessionsClient, node.options);
-    expect(client.version()).toBe(2);
+    expect(client.version()).toBe(3);
     const api = client.api();
     await expect(api.dispatch_native_agent_intent(dispatch)).resolves.toEqual({
       outcome: "accepted",
@@ -221,7 +214,7 @@ describe("native-sessions client", () => {
     expect(node.sent[0]).toEqual({
       command: dispatchNativeAgentIntentCommand.name,
       args: dispatch,
-      envelope: { domain: "native-sessions", version: 2, critical: ["requestId", "schema"] },
+      envelope: { domain: "native-sessions", version: 3, critical: ["requestId", "schema"] },
     });
     await expect(
       api.get_native_agent_session({

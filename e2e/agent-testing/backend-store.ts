@@ -9,6 +9,8 @@
  *   bun backend-store.ts <dataDir> native-agent-sessions.json append-turn-outcome
  *     (stdin: {"session":{environmentId,agent,logicalSessionKey},"outcome":{…}};
  *      exits 3 when the session does not exist)
+ *   bun backend-store.ts <dataDir> build-pipelines.json seed-pipeline
+ *     (stdin: one build pipeline snapshot; stdout: `{"id": …}`)
  *
  * The write commits like a second backend process sharing the directory; the
  * running backend observes it through the store's committed revision.
@@ -17,6 +19,7 @@ import {
   appendNativeAgentTurnOutcome,
   deleteStoredValue,
   readStoredValue,
+  seedBuildPipeline,
   seedStore,
 } from "../../apps/backend/src/core/storage-test-support";
 
@@ -34,6 +37,13 @@ if (action === "read") {
     outcome: Parameters<typeof appendNativeAgentTurnOutcome>[2];
   };
   if (!appendNativeAgentTurnOutcome(dataDir, session, outcome)) process.exit(3);
+} else if (action === "seed-pipeline") {
+  if (file !== "build-pipelines.json") throw new Error("Only build pipelines are seeded this way");
+  const saved = await seedBuildPipeline(
+    dataDir,
+    JSON.parse(await Bun.stdin.text()) as Record<string, unknown>,
+  );
+  process.stdout.write(JSON.stringify({ id: saved.id }));
 } else if (action === "delete") {
   deleteStoredValue(dataDir, file);
 } else {

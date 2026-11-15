@@ -63,7 +63,6 @@ import {
   toArtifactError,
   type ArtifactAssetResolver,
   type ArtifactResponse,
-  type ArtifactRolloutFlags,
   type ArtifactRuntimeParts,
   type ArtifactServiceContext,
   type ArtifactAuthoringAvailability,
@@ -89,21 +88,6 @@ import {
 const DEFAULT_LEASE_MS = 60_000;
 const MAX_TRACKED_TURNS = 1_024;
 
-const DISABLED = new Set(["0", "false", "off", "disabled", "no"]);
-
-/** Rollout switches; each defaults on. Disabling never deletes or hides stored records. */
-export function readArtifactRolloutFlags(
-  env: NodeJS.ProcessEnv = process.env,
-): ArtifactRolloutFlags {
-  const on = (name: string) => !DISABLED.has((env[name] ?? "").trim().toLowerCase());
-  return {
-    richMarkdown: on("ORKESTRATOR_RICH_MARKDOWN"),
-    artifactPublication: on("ORKESTRATOR_ARTIFACT_PUBLICATION"),
-    liveInteractive: on("ORKESTRATOR_ARTIFACT_LIVE_INTERACTIVE"),
-    staticPresentation: on("ORKESTRATOR_ARTIFACT_STATIC_PRESENTATION"),
-  };
-}
-
 export interface TranscriptArtifactServiceOptions {
   dataDir: string;
   /** A connection to share instead of opening (and owning) one. */
@@ -115,7 +99,6 @@ export interface TranscriptArtifactServiceOptions {
   assetResolver?: ArtifactAssetResolver;
   /** Current dispatched turn of a session-bound conversation (overrides noteDispatchedTurn). */
   currentTurn?: (environmentId: string, conversationKey: string) => string | null | undefined;
-  rollout?: () => ArtifactRolloutFlags;
   now?: () => number;
   leaseMs?: number;
   syncDirectories?: boolean;
@@ -194,7 +177,6 @@ export class TranscriptArtifactService {
       now,
       iso: () => new Date(now()).toISOString(),
       backendId,
-      rollout: options.rollout ?? (() => readArtifactRolloutFlags()),
       overrides: options.identityOverrides ?? {},
       ...(options.assetResolver ? { assetResolver: options.assetResolver } : {}),
       notifyPublication: (environmentId, conversationKey, publicationId, sequence) => {
@@ -310,11 +292,6 @@ export class TranscriptArtifactService {
 
   // ---------------------------------------------------------------------------
   // Agent tools
-
-  /** Artifact authoring tools are advertised while publication is enabled. */
-  toolsEnabled(): boolean {
-    return this.ctx.rollout().artifactPublication;
-  }
 
   /**
    * Whether agents can verify HTML and Mermaid artifacts right now. Tool
@@ -484,12 +461,12 @@ export class TranscriptArtifactService {
   // Renderer commands
 
   capabilities(): TranscriptArtifactCapabilities {
-    const flags = this.ctx.rollout();
     const status = this.ctx.runtime.runner?.status();
     const origin = this.ctx.runtime.contentServer?.origin() ?? null;
     return {
       backendId: this.backendId(),
-      authoring: flags.artifactPublication,
+      // Publication has no off switch; the field stays in the contract.
+      authoring: true,
       previewRenderer: status
         ? {
             available: status.available,
@@ -506,8 +483,8 @@ export class TranscriptArtifactService {
             isolation: "unavailable",
             reason: "Preview runtime is not installed",
           },
-      liveInteractive: flags.liveInteractive && origin !== null,
-      ...(flags.liveInteractive && origin === null
+      liveInteractive: origin !== null,
+      ...(origin === null
         ? {
             liveInteractiveReason:
               this.ctx.runtime.contentServer?.status?.().reason ??
@@ -515,7 +492,14 @@ export class TranscriptArtifactService {
           }
         : {}),
       contentOrigin: origin,
-      rolloutFlags: flags,
+      // The rollout switches are gone; every surface is on. The fields stay
+      // in the capability contract so older renderers keep reading them.
+      rolloutFlags: {
+        richMarkdown: true,
+        artifactPublication: true,
+        liveInteractive: true,
+        staticPresentation: true,
+      },
       ...(this.workerPreparation ? { workerPreparation: this.workerPreparation.status() } : {}),
     };
   }

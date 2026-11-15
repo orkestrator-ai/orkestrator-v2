@@ -203,10 +203,4 @@ describe("a workflow turn's artifact-only server", () => {
     h.service.revokeArtifactGrantsForTurn(ENV, "turn-1");
     expect((await rpc(ORKESTRATOR_ARTIFACT_MCP_PATH, grant, "tools/list")).status).toBe(401);
   });
-
-  test("is not served while artifact publication is rolled back", async () => {
-    const grant = reviewerGrant();
-    h.flags.artifactPublication = false;
-    expect((await rpc(ORKESTRATOR_ARTIFACT_MCP_PATH, grant, "tools/list")).status).toBe(404);
-  });
 });

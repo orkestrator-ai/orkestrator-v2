@@ -39,7 +39,6 @@ import {
 } from "./service-context.js";
 
 export interface TranscriptArtifactToolHost {
-  toolsEnabled(): boolean;
   handleTool(
     name: ArtifactToolName,
     scope: ArtifactCallerScope,

@@ -222,17 +222,9 @@ export async function withService(
     invoke?: Invoke;
     now?: NativeAgentServiceOptions["now"];
     delay?: NativeAgentServiceOptions["delay"];
-    interactionMonitorMode?: NativeAgentServiceOptions["interactionMonitorMode"];
-    interactionMonitorAdoptionEnabled?: boolean;
-    interactionMonitorIntervalMs?: number;
-    interactionMonitorMaxConcurrency?: number;
-    interactionMonitorMaxSessionsPerEnvironment?: number;
-    interactionMonitorRetryBaseMs?: number;
-    interactionMonitorMaxRetries?: number;
     onActivityTransition?: NativeAgentServiceOptions["onActivityTransition"];
     onObservationInvalidation?: NativeAgentServiceOptions["onObservationInvalidation"];
     onAsyncQuestionAttention?: NativeAgentServiceOptions["onAsyncQuestionAttention"];
-    onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
     environmentFence?: NativeAgentServiceOptions["environmentFence"];
@@ -255,39 +247,12 @@ export async function withService(
     ...(setup.environmentFence ? { environmentFence: setup.environmentFence } : {}),
     ...(setup.now ? { now: setup.now } : {}),
     ...(setup.delay ? { delay: setup.delay } : {}),
-    ...(setup.interactionMonitorMode
-      ? { interactionMonitorMode: setup.interactionMonitorMode }
-      : {}),
-    ...(setup.interactionMonitorAdoptionEnabled === undefined
-      ? {}
-      : { interactionMonitorAdoptionEnabled: setup.interactionMonitorAdoptionEnabled }),
-    ...(setup.interactionMonitorIntervalMs === undefined
-      ? {}
-      : { interactionMonitorIntervalMs: setup.interactionMonitorIntervalMs }),
-    ...(setup.interactionMonitorMaxConcurrency === undefined
-      ? {}
-      : { interactionMonitorMaxConcurrency: setup.interactionMonitorMaxConcurrency }),
-    ...(setup.interactionMonitorMaxSessionsPerEnvironment === undefined
-      ? {}
-      : {
-          interactionMonitorMaxSessionsPerEnvironment:
-            setup.interactionMonitorMaxSessionsPerEnvironment,
-        }),
-    ...(setup.interactionMonitorRetryBaseMs === undefined
-      ? {}
-      : { interactionMonitorRetryBaseMs: setup.interactionMonitorRetryBaseMs }),
-    ...(setup.interactionMonitorMaxRetries === undefined
-      ? {}
-      : { interactionMonitorMaxRetries: setup.interactionMonitorMaxRetries }),
     ...(setup.onActivityTransition ? { onActivityTransition: setup.onActivityTransition } : {}),
     ...(setup.onObservationInvalidation
       ? { onObservationInvalidation: setup.onObservationInvalidation }
       : {}),
     ...(setup.onAsyncQuestionAttention
       ? { onAsyncQuestionAttention: setup.onAsyncQuestionAttention }
-      : {}),
-    ...(setup.onInteractionObservation
-      ? { onInteractionObservation: setup.onInteractionObservation }
       : {}),
     ...(setup.toolDetailCacheMaxEntries === undefined
       ? {}

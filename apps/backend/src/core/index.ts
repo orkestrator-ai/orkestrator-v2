@@ -1021,10 +1021,6 @@ export class OrkestratorBackend {
       noteRemotePullRequestChange: (nodeId, environmentId) =>
         this.coordinators.statusWakes.notePullRequestChange(environmentId, nodeId),
     });
-    const interactionMonitorMode =
-      process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
-        ? ("observe-only" as const)
-        : ("disabled" as const);
     // Per-turn transcript-artifact bookkeeping, shared by native turns and the
     // workflows that drive providers directly (workflow-artifact-turns.ts).
     // The artifact service is constructed after this; resolve it lazily.
@@ -1050,7 +1046,6 @@ export class OrkestratorBackend {
         artifacts.clearDispatchedTurn(environmentId, conversationKey, turnId);
         artifacts.revokeArtifactGrantsForTurn(environmentId, turnId);
       },
-      toolsEnabled: () => this.transcriptArtifacts?.toolsEnabled() === true,
     };
     const artifactLedger = () => this.transcriptArtifacts ?? null;
     this.accountAutoSwitch = new AgentAccountAutoSwitcher({
@@ -1139,9 +1134,6 @@ export class OrkestratorBackend {
         signInGuidance: (environmentId, agent) =>
           containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
-        interactionMonitorMode,
-        interactionMonitorAdoptionEnabled:
-          process.env.ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH !== "1",
         // A view-only invalidation for an idle session whose content changed:
         // same channel and stamp sequence as transitions, so a client re-reads
         // that view (or every view after a gap). Deliberately nothing else

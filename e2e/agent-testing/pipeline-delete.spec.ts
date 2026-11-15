@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { expect, test } from "./browser-test";
-import { invoke, login, reloadApp } from "./container-wiring-support";
+import { invoke, login, reloadApp, seedBuildPipeline } from "./container-wiring-support";
 
-// No provider turns: import a failed snapshot with a durable reset intent.
+// No provider turns: seed a failed snapshot with a durable reset intent
+// straight into the profile's database (no command writes one).
 // This covers the renderer wrapper and real gateway command, not a Delete UI
 // control (there is currently no caller of deleteBuildPipeline in the UI).
 test.use({ trace: "off", screenshot: "off", video: "off" });
@@ -60,9 +61,13 @@ test("renderer deletion wrapper removes a pending code rewind through the real g
     ],
   };
   try {
-    expect(
-      await invoke("import_legacy_build_pipelines", { projectId, snapshots: [snapshot] }),
-    ).toEqual({ importedIds: [id], skipped: 0 });
+    expect(seedBuildPipeline(snapshot as unknown as Record<string, unknown>)).toBe(id);
+    // Nothing here needs Docker: on a host whose user cannot reach the daemon,
+    // the permission dialog would otherwise cover the sidebar the login waits on.
+    const dockerDialog = page.getByRole("alertdialog", { name: "Docker Permission Required" });
+    await page.addLocatorHandler(dockerDialog, async () => {
+      await dockerDialog.getByRole("button", { name: "Continue Without Docker" }).click();
+    });
     await login(page, testInfo);
     const list = () =>
       invoke<Array<{ id: string; snapshot: BuildPipeline }>>("list_build_pipelines", { projectId });

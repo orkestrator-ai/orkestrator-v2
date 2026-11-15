@@ -2,8 +2,7 @@
  * pipelines across versions (plan item 7007): a current renderer's
  * `pipelines` client against each node of the pair, without starting a build
  * or an agent turn. A project's pipelines are listed, an unknown pipeline
- * reads as `null`, an empty legacy import changes nothing, the backend-owned
- * record refuses a renderer save, and a worker environment's unread badge is
+ * reads as `null`, the backend-owned record refuses a renderer save, and a worker environment's unread badge is
  * set and cleared at its last activity (`expectedLastActivityAt` is a
  * critical field on version 1). A pre-contract node gets today's calls
  * through version 0.
@@ -15,7 +14,6 @@ import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-c
 const COMMANDS = [
   "list_build_pipelines",
   "get_build_pipeline",
-  "import_legacy_build_pipelines",
   "save_build_pipeline",
   "set_environment_unread",
 ];
@@ -31,8 +29,7 @@ async function refusal(run: () => Promise<unknown>): Promise<string | null> {
 
 export default defineScenario({
   domain: "pipelines",
-  title:
-    "Pipeline reads, an empty import, a refused save and the unread badge, from a current renderer",
+  title: "Pipeline reads, a refused save and the unread badge, from a current renderer",
   requires: { command: COMMANDS, leaf: COMMANDS },
   async run(ctx) {
     for (const node of pairNodes(ctx.command, ctx.leaf)) {
@@ -56,14 +53,11 @@ export default defineScenario({
         Array.isArray(listed) && missing === null,
       );
 
-      const imported = await pipelines.import_legacy_build_pipelines({ projectId, snapshots: [] });
       const refused = await refusal(() => pipelines.save_build_pipeline({}));
       ctx.check(
         `PL-${tag}3`,
-        "an empty legacy import changes nothing and a renderer save is refused",
-        imported.importedIds.length === 0 &&
-          imported.skipped === 0 &&
-          (refused?.includes("backend-owned") ?? false),
+        "a renderer save is refused",
+        refused?.includes("backend-owned") ?? false,
         refused ?? "save accepted",
       );
 

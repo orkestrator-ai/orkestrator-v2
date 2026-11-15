@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1010,
-    "defined": 1010,
+    "commands": 1004,
+    "defined": 1004,
     "untyped": 0,
     "events": 45
   },
@@ -54,7 +54,7 @@
       "min": 1
     },
     "graphs": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "kanban": {
@@ -70,7 +70,7 @@
       "min": 1
     },
     "native-sessions": {
-      "version": 2,
+      "version": 3,
       "min": 1
     },
     "node-files": {
@@ -86,7 +86,7 @@
       "min": 1
     },
     "pipelines": {
-      "version": 1,
+      "version": 2,
       "min": 1
     },
     "previews": {
@@ -2679,15 +2679,6 @@
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:3e3f7b7727a9bc7319860c06681156be788e8fa9e08edd24b4f0d0d23d2a108d"
     },
-    "get_agent_interaction_observations": {
-      "domain": "native-sessions",
-      "since": 1,
-      "access": "admin",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:830e1512119d268cb8b9e178fc526a2386f1cc73a81b80c981d9e195c0f6c6ab"
-    },
     "get_agent_mail_conversation": {
       "domain": "agent-mail",
       "since": 1,
@@ -4515,15 +4506,6 @@
       "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
       "resultDigest": "sha256:65c84d6119922add92cc4a9d2631eb58efc7bef1124b0bdba99f8cbf1d712c70"
     },
-    "graph_capability_ceiling_set": {
-      "domain": "graphs",
-      "since": 1,
-      "access": "admin",
-      "read": false,
-      "critical": ["expectedRevision"],
-      "argsDigest": "sha256:7691ba2ed626767c5d8284c9bcdfb161d449bb81e7c005002db4d59541d4f84f",
-      "resultDigest": "sha256:65c84d6119922add92cc4a9d2631eb58efc7bef1124b0bdba99f8cbf1d712c70"
-    },
     "graph_describe_cancel": {
       "domain": "graphs",
       "since": 1,
@@ -4910,15 +4892,6 @@
       "critical": [],
       "argsDigest": "sha256:a4c37688a38b9796cd1afbeb9cced6dbd7bf85f31f808d196bd0dc6567e7dd49",
       "resultDigest": "sha256:2e4be3996d0eb7b798ef6aaf4e99d95f2daa2ff484b74bb391188c497d98e2b6"
-    },
-    "import_legacy_build_pipelines": {
-      "domain": "pipelines",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:295f5adba30de67e2fbf67160ebf82ec1d7d0c6855d919423f4c1ed0f73aa059",
-      "resultDigest": "sha256:54a023fa9504815e230bb0eab099d0b58c81eb1d03dc76ab887f06a74f2d153a"
     },
     "invoke_on_node": {
       "domain": "nodes",
@@ -6284,15 +6257,6 @@
       "argsDigest": "sha256:98ae357a6cf605008c9dcee8acb911c83a77dabb903e7c020f756370531a51fb",
       "resultDigest": "sha256:4543a49d95e0d570b50d02680399fe638a040a0951fa760e045fadc19b88513a"
     },
-    "reconcile_agent_interactions": {
-      "domain": "native-sessions",
-      "since": 1,
-      "access": "admin",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:830e1512119d268cb8b9e178fc526a2386f1cc73a81b80c981d9e195c0f6c6ab"
-    },
     "reconcile_claude_state_polling": {
       "domain": "claude-tmux",
       "since": 1,
@@ -7364,15 +7328,6 @@
       "argsDigest": "sha256:d4391729a51dd275d856f7e5a58a1af02bea7bfad9844aec127d9adbbc62d819",
       "resultDigest": "sha256:2cbbe323b434cbe69a7d8fcc27f6b0c8604ce36ba492b801ad7efe347a1a811b"
     },
-    "set_agent_interaction_monitor_adoption": {
-      "domain": "native-sessions",
-      "since": 1,
-      "access": "admin",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:ac70213b5a07ea0a1194f16a7a593b1179afcca3e4e008d082c6850ba9401e35",
-      "resultDigest": "sha256:ac70213b5a07ea0a1194f16a7a593b1179afcca3e4e008d082c6850ba9401e35"
-    },
     "set_anthropic_api_key": {
       "domain": "config",
       "since": 1,
@@ -7624,15 +7579,6 @@
       "critical": [],
       "argsDigest": "sha256:de4d75cbe39dc18c6ee98727cf0c2f18a6e99563caacfd2404dbff8bae09af9e",
       "resultDigest": "sha256:9b9987916995346cd68220ade0d275cd05723d27421bb990e9bba9f1187ade60"
-    },
-    "set_workflow_result_tools_rollout": {
-      "domain": "pipelines",
-      "since": 1,
-      "access": "admin",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:84f144656938f27b14fccb2d88dec0bea28d32dc99a7afff97351d79a2365518",
-      "resultDigest": "sha256:380cceab024fd5ad6459a0c112b1b04fdb6dd87ba4aa5ee5b9d2be65eb217a4b"
     },
     "share_tickets_with_command_node": {
       "domain": "ticket-sync",

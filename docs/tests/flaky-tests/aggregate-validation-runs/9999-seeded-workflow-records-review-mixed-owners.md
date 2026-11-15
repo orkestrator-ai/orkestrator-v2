@@ -67,3 +67,8 @@ the bench's `rejects malformed, empty, missing and nonpositive sizes` at its
 `PASSED ALONE (9.9s)`. The branch changes Kanban, project and pipeline
 storage; the bench imports none of those modules. `mise run flaky:recurrence
 -- 9999 --base a8b89f154` answered open.
+A second run on the same branch (commit e4f8a20d3, before the rebase onto main) timed out the same case
+again, and this time the runner's rerun inside the busy aggregate also timed
+out (11.0 s file). The owner then passed alone:
+`mise run test:logged -- --name bench-alone -- bun --cwd=apps/backend test ./tests/agent-mail-store-size-bench.test.ts --parallel=1`,
+exit 0, 10.0 s.

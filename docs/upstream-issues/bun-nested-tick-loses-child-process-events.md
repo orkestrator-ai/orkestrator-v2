@@ -1,7 +1,7 @@
 # Bun: a nested event-loop tick loses child-process completion events
 
 **Tracker:** Bun, <https://github.com/oven-sh/bun/issues> (bug report)
-**Status:** do not file (2026-11-15): Bun canary 1.4.5-canary.1+ed4363334 loses nothing in any mode, and Bun's open [oven-sh/bun#33261](https://github.com/oven-sh/bun/issues/33261) already tracks this mechanism. Re-run on the 1.4.5 release ([6900](../todo/cross-cutting/6900-reproduce-lost-child-event-on-pipe-capture.md) task 5); if it still loses events there, post the issue text below as a comment on #33261 and set **Status** to `ready to file`.
+**Status:** do not file (2026-11-15): Bun canary 1.4.5-canary.1+ed4363334 loses nothing in any mode, and Bun's open [oven-sh/bun#33261](https://github.com/oven-sh/bun/issues/33261) already tracks this mechanism. Re-run on the 1.4.5 release ([6900](../todo/cross-cutting/6900-reproduce-lost-child-event-on-pipe-capture.md) task 5); if it loses nothing there, this file is deleted; if it still loses events, an agent sets **Status** to `ready to file, as a comment on #33261` and the user posts the issue text below there through the manual-test checklist, never as a new issue.
 **Source:** 4260 (retired) task 1, "Draft report" (`git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`); [6900](../todo/cross-cutting/6900-reproduce-lost-child-event-on-pipe-capture.md) task 3 (cause), tasks 1, 4 (macOS and canary) and 5 (the 1.4.5 re-run); filed through the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)'s "file the upstream reports marked ready" item; reproduction [`nested-tick.ts`](../../scripts/lost-child-event/nested-tick.ts) and [`probe.ts`](../../scripts/lost-child-event/probe.ts)
 **Filed:** —
 
@@ -64,7 +64,7 @@ Searched 2026-11-15 (`gh search issues` and `gh search prs` in oven-sh/bun, open
 - [x] Fill the macOS paragraph from 6900 task 4 if it has a result. Done 2026-11-15 (6900 task 4).
 - [x] Do not cite the first replays that lost nothing: they did not rebuild the test's repository and are void (6900, "Task 2: the first replays were not the recorded workload"). Not cited.
 - [x] Search for duplicates. Done 2026-11-15: #33261 tracks the mechanism (above).
-- [ ] When Bun 1.4.5 is released, re-run `nested-tick.ts` in `rejects`, `sleep` and `plain` modes on it on macOS and Linux (6900 task 5). If it loses nothing, delete this file and record the result in 6900; if it still loses events, post the issue text as a comment on #33261.
+- [ ] When Bun 1.4.5 is released, re-run `nested-tick.ts` in `rejects`, `sleep` and `plain` modes on it on macOS and Linux (6900 task 5). If it loses nothing, delete this file and record the result in 6900; if it still loses events, set **Status** to `ready to file, as a comment on #33261` for the user to post (agents never post it).
 
 ## After filing
 

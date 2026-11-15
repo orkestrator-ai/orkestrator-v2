@@ -576,19 +576,28 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(publishWorkflow).not.toContain("platforms: linux/amd64,linux/arm64");
   });
 
-  test("Claude bridge: musl variant is stripped from the vendored runtime tree, not top-level node_modules", () => {
-    // The claude-bridge build vendors the SDK into dist/node_modules, which is the
-    // tree the SDK actually resolves its native binary from at runtime. Stripping
-    // musl from top-level node_modules (the historical location) is a no-op against
-    // that runtime path. This guards against regressing to the ineffective form.
-    // Verified with the pinned oven/bun Debian image: the bridge resolves the gnu binary from this tree.
+  test("Claude bridge: every SDK platform binary is stripped from the vendored runtime tree", () => {
+    // The claude-bridge build vendors the SDK and its platform packages into
+    // dist/node_modules, the tree the SDK resolves its native binary from. The
+    // container bridge always passes pathToClaudeCodeExecutable (CLAUDE_CLI_PATH,
+    // the image's pinned CLI), so the SDK never looks there and each ~300 MB
+    // platform binary is dead weight (docs/development/container-qualification.md,
+    // "Claude bridge without the SDK's platform binary"). Stripping top-level
+    // node_modules (the historical location) would be a no-op against that tree.
     const dockerfile = read("docker/Dockerfile");
+    expect(dockerfile).toContain("rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-* \\");
+    expect(dockerfile).not.toContain("rm -rf node_modules/@anthropic-ai/claude-agent-sdk-");
+    // The main SDK package stays, and the final stage checks both halves.
     expect(dockerfile).toContain(
-      "rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl",
+      "test -s /opt/claude-bridge/dist/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs",
     );
-    expect(dockerfile).not.toContain(
-      "rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl",
+    expect(dockerfile).toContain(
+      "! ls -d /opt/claude-bridge/dist/node_modules/@anthropic-ai/claude-agent-sdk-* 2>/dev/null",
     );
+    // The image's CLI is what the SDK runs instead, so it must stay set.
+    expect(dockerfile).toContain("ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude");
+    const core = read("bridges/claude-bridge/src/services/session-manager-core.ts");
+    expect(core).toContain("pathToClaudeCodeExecutable: executable");
   });
 
   test("Codex: the bridge does not depend on the Codex SDK", () => {

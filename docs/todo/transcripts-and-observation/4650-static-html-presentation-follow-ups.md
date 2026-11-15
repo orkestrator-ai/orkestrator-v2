@@ -157,6 +157,19 @@ Review found that nothing automated served the built hosted client under `vercel
   - Pros: leaves the existing tests' server unchanged.
   - Cons: two servers to build and keep in step, and the rest of the public site would stay untested under its deployed policy.
 
+### Task 1: matching header sources as Vercel compiles them (2026-11-15)
+
+Review found that, under `vercel-routing.ts`'s model, `/static-html-frame.html/` matched both rules and would have been served the application shell under both policies, and that the tests could not see it: `config.test.ts` checked that path with `toContain`, and the browser spec read headers through `headers()`, which joins repeats.
+
+- **Match strictly and case-sensitively, as Vercel does (chosen).** Vercel's `sourceToRegex` (`@vercel/routing-utils`, `packages/routing-utils/src/superstatic.ts`) compiles every `source` with `strict: true, sensitive: true`, so the earlier model (an optional trailing slash, case-insensitive) was wrong. `vercelSourcePattern` now does the same, and the trailing-slash and uppercase forms of the frame path match only the general rule, which serves them the application shell under the strict policy. `vercel.json` is unchanged.
+  - Pros: the model matches the platform's own compiler; the frame rule names exactly one path.
+  - Cons: still a model; the manual check (7568) stays.
+- **Add `(?!/)` to the frame source so it cannot match a trailing slash under either reading.**
+  - Pros: robust to either matching mode for the slash.
+  - Cons: leaves the model wrong about case, where an uppercase path would still get the sandbox policy alone in the model, and adds a second regular expression to the deployed policy for a mode Vercel does not use.
+
+Every path other than the frame's is now asserted to receive exactly the strict policy, in `config.test.ts` and over HTTP in `static-html-frame.spec.ts`. The spec counts policies from `headersArray()` and splits each value on commas, because a server may fold repeated headers into one (Bun's `Headers.append` does) and CSP reads a comma as a policy boundary. The spec also loads the frame from the address the client's own `staticHtmlFrameSource` resolves, and checks that the built bundle references the frame document and that the document is emitted.
+
 ## Related
 
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: checking the built header rules on a real Vercel deployment, the approval having been given on 2026-11-14; the user part of task 4: evidence from real provider sessions) moved there on 2026-11-10.

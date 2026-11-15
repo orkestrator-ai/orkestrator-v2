@@ -2,6 +2,7 @@ import { defineConfig } from "@playwright/test";
 import path from "node:path";
 import { installPlaywrightRunnerSigterm } from "../../tests/playwright-runner-sigterm";
 import { enterPrivateTestTmpdir } from "../../tests/private-tmpdir";
+import { publicSiteDistDirectory } from "./public-site-dist";
 
 // Workers inherit a private TMPDIR, so the browser profiles of a worker that is
 // killed land where a later run can remove them (0248). Workers load this file
@@ -15,9 +16,8 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const port = Number.parseInt(process.env.ORKESTRATOR_PUBLIC_E2E_PORT ?? "4423", 10);
 const baseURL = `http://127.0.0.1:${port}`;
 
-// Build outside apps/web-public/dist: the aggregate suite's Turbo build writes
-// that directory, and review validation runs the two concurrently.
-const distDirectory = path.join(repositoryRoot, "output/playwright/public-site-dist");
+// Built outside apps/web-public/dist (public-site-dist.ts says why).
+const distDirectory = publicSiteDistDirectory;
 
 // Serve the built public entrypoint, including its real lazy-loaded chunks and
 // SPA fallback, with vercel.json's header rules and rewrites applied

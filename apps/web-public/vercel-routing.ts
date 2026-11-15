@@ -5,11 +5,16 @@
  * serves the built client with these rules so the browser sees the policies a
  * deployment sends.
  *
- * Vercel matches `source` with path-to-regexp 6: case-insensitive, an optional
- * trailing slash, and a parenthesised group taken as a raw regular expression.
- * The repository has no path-to-regexp 6 to call, so this is the subset these
- * rules use; whether a real deployment applies them as matched here is the
- * manual-test checklist's check (7568, 4650 task 1).
+ * Vercel compiles `source` with path-to-regexp 6 under `strict: true` and
+ * `sensitive: true` (`sourceToRegex` in `@vercel/routing-utils`,
+ * `packages/routing-utils/src/superstatic.ts`): matching is case-sensitive, a
+ * trailing slash is not optional, and a parenthesised group is taken as a raw
+ * regular expression. So `/static-html-frame.html` names exactly that path, and
+ * `/static-html-frame.html/` or `/STATIC-HTML-FRAME.HTML` is a different path
+ * that only the general rule matches. The repository has no path-to-regexp 6
+ * to call, so this is the subset these rules use; whether a real deployment
+ * applies them as matched here is the manual-test checklist's check (7568,
+ * 4650 task 1).
  */
 
 export type VercelHeader = { key: string; value: string };
@@ -35,7 +40,7 @@ export function vercelSourcePattern(source: string): RegExp {
     if (character === ")") depth--;
   }
   if (depth !== 0) throw new Error(`Unbalanced source ${source}`);
-  return new RegExp(`^${pattern}(?:\\/)?$`, "i");
+  return new RegExp(`^${pattern}$`);
 }
 
 /** Every header of every rule whose source matches, in rule order (Vercel applies them all). */

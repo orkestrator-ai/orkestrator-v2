@@ -5,7 +5,12 @@ import {
   GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
   STATIC_HTML_FRAME_DOCUMENT,
 } from "@orkestrator/protocol/renderer-content-security-policy";
-import { type VercelConfig, vercelHeadersFor, vercelRewriteFor } from "../vercel-routing";
+import {
+  type VercelConfig,
+  vercelHeadersFor,
+  vercelRewriteFor,
+  vercelSourcePattern,
+} from "../vercel-routing";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const read = (name: string) => readFileSync(path.join(packageRoot, name), "utf8");
@@ -72,31 +77,46 @@ describe("public client deployment configuration", () => {
     // A second matching policy would be enforced as well, and its `script-src
     // 'self'` would refuse the frame's hash-pinned bootstrap.
     expect(policiesFor(config, framePath)).toEqual([GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY]);
-    expect(policiesFor(config, framePath.toUpperCase())).toEqual([
-      GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
-    ]);
 
-    // Every other path, including ones that only resemble the frame's, keeps
-    // the strict application policy.
+    // Every other path, including ones that only resemble the frame's, gets
+    // exactly the strict application policy and never the sandbox one as well.
+    // The trailing-slash and uppercase forms are different paths to Vercel
+    // (strict, case-sensitive matching) and are served the application shell.
     for (const probe of [
       "/",
       "/index.html",
       "/releases",
+      "/connect/",
       "/connect/deep/route",
       "/assets/index-abc.js",
       "/design-frame.html",
       `${framePath}/`,
       `${framePath}/nested`,
       `${framePath}x`,
+      framePath.toUpperCase(),
+      `${framePath.toUpperCase()}/`,
       `/x${framePath}`,
       `/assets${framePath}`,
       "/static-html-frameXhtml",
     ]) {
-      expect(policiesFor(config, probe)).toContain(appPolicy(config));
+      expect({ probe, policies: policiesFor(config, probe) }).toEqual({
+        probe,
+        policies: [appPolicy(config)],
+      });
     }
-    for (const probe of ["/", "/releases", `${framePath}x`, `/assets${framePath}`]) {
-      expect(policiesFor(config, probe)).toEqual([appPolicy(config)]);
+  });
+
+  test("matches header sources the way Vercel compiles them: strict and case-sensitive", () => {
+    // `sourceToRegex` in @vercel/routing-utils passes `strict: true, sensitive: true`.
+    const frame = vercelSourcePattern(`/${STATIC_HTML_FRAME_DOCUMENT}`);
+    expect(frame.test(`/${STATIC_HTML_FRAME_DOCUMENT}`)).toBe(true);
+    expect(frame.test(`/${STATIC_HTML_FRAME_DOCUMENT}/`)).toBe(false);
+    expect(frame.test(`/${STATIC_HTML_FRAME_DOCUMENT.toUpperCase()}`)).toBe(false);
+    const anyPath = vercelSourcePattern("/(.*)");
+    for (const probe of ["/", "/connect", "/connect/", "/a/b/"]) {
+      expect(anyPath.test(probe)).toBe(true);
     }
+    expect(vercelSourcePattern("/assets/(.*)").test("/Assets/x.js")).toBe(false);
   });
 
   test("the hosted build emits the frame document instead of declaring the view unavailable", () => {

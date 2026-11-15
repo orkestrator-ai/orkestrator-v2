@@ -16,7 +16,7 @@ MacBook Pro `mbp3`, at the user's request; the suite itself ran at
 
 ### Tasks
 
-1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: blocked (Linux only: waits on 7568 for a Linux real-display run of the whole Electron suite, from whichever comes first of the scheduled CI job's first runs (0031 task 8) and a fleet display host (6303 task 2); its `desktop-window-polls` attachment says whether a covered Linux window pauses, and only if it stays `visible` is the covered-window decision in 7568 needed). Implementation done 2026-11-03; macOS qualified 2026-11-06; Linux re-checked on current `main` and the CI real-display run repaired 2026-11-11; the Windows check moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10; the macOS real-display run of the whole suite done on `mbp3` on 2026-11-15 (hidden, minimised and covered windows all pause there; one spec defect fixed, the rest recorded in [8300](8300-electron-suite-on-a-shared-mac-desktop.md)).
+1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: blocked (Linux only: waits on 7568 for a Linux real-display run of the whole Electron suite, from whichever comes first of the scheduled CI job's first runs (0031 task 8) and a fleet display host (7568: 2181 task 1 Linux display host); its `desktop-window-polls` attachment says whether a covered Linux window pauses, and only if it stays `visible` is the covered-window decision in 7568 needed). Implementation done 2026-11-03; macOS qualified 2026-11-06; Linux re-checked on current `main` and the CI real-display run repaired 2026-11-11; the Windows check moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10; the macOS real-display run of the whole suite done on `mbp3` on 2026-11-15 (hidden, minimised and covered windows all pause there; one spec defect fixed, the rest recorded in [8300](8300-electron-suite-on-a-shared-mac-desktop.md)).
 2. **Home terminal on a host without systemd OSC context**: qualify the repaired exact-line assertion outside beelink. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06, passed on macOS).
 3. **Audit other terminal snapshot line comparisons**: check for the same OSC-sensitive assertion elsewhere. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06; every whole-line comparison already used visible text, so no spec changed).
 4. **Keep agent-test Electron off the macOS desktop**: on macOS `--headless` changed nothing, so every agent's profile opened a window (and a detached DevTools window) on the user's desktop. Status: done (2026-11-13: the browser smoke and the native-dialog checks passed on macOS with the window kept hidden; implementation done 2026-11-06; the checks that need a person watching the Mac's screen are in [7568](../manual-test/7568-manual-test-checklist.md) since 2026-11-11).
@@ -38,7 +38,8 @@ Windows since the Playwright 1.65.0 bump (#2107). That was a test-fixture
 problem, fixed here (Assumptions and decisions). The full
 `mise run test:agent:electron` under a disposable display needs a host with
 Xvfb, which no agent host has and which is the user's decision
-([7568](../manual-test/7568-manual-test-checklist.md), 6303 task 2).
+([7568](../manual-test/7568-manual-test-checklist.md), 2181 task 1 Linux display host;
+until 2026-11-15 filed under 6303 task 2, now retired).
 
 That run also answers what 5460 (retired 2026-11-13) left for Linux: whether
 a real Electron window there reports `hidden`, so the renderer's polls pause,
@@ -68,7 +69,7 @@ the one that depends on the desktop's focus are in
 also runs the whole suite weekly on Linux under `xvfb-run`
 (`electron-qualification.yml`, 0031 task 8), so the Linux run this task waits
 on can come from that job's first runs, read in 7568 under 0031 task 8, as
-well as from 6303 task 2's display host. That job's Xvfb has no window
+well as from the fleet display host (7568: 2181 task 1 Linux display host). That job's Xvfb has no window
 manager, so its desktop case cannot minimise the window (the spec records
 `not-minimised`), but it still records the covered state.
 
@@ -236,8 +237,8 @@ the step it stopped at. The assertions are unchanged.
 
 `electron-qualification.yml` (0031 task 8, merged 2026-11-15) runs this
 suite weekly under `xvfb-run` on a GitHub Linux runner, which includes the
-window-visibility desktop case. Waiting only on 6303 task 2's fleet display
-host would ignore a run that already exists, so task 1 now takes its Linux
+window-visibility desktop case. Waiting only on the fleet display host (7568: 2181 task 1 Linux
+display host, then filed under 6303 task 2) would ignore a run that already exists, so task 1 now takes its Linux
 answer from whichever comes first; both are already 7568 items, so no new
 item was added for it.
 
@@ -343,7 +344,7 @@ flake: it failed every time.
 The full `mise run test:agent:electron` under a disposable display cannot run
 on any agent host: `omarchy-hp` and beelink have no Xvfb, an agent may not
 install it, and the specs must never use the signed-in desktop. Whether a
-fleet host gets Xvfb is already a user decision in 7568 (6303 task 2), so task
+fleet host gets Xvfb is already a user decision in 7568 (2181 task 1 Linux display host), so task
 1 now waits on that item instead of adding a second one. The CI workflow covers
 three of the specs under Xvfb. Once a display host exists, an agent runs the
 suite there and records it here.
@@ -880,7 +881,7 @@ before the fixture's page had loaded. The lock-screen case was not run (7568).
 - The Electron specs under a real display on Linux: the full
   `mise run test:agent:electron` under `xvfb-run`, from the first runs of
   `electron-qualification.yml` (read in 7568 under 0031 task 8) or once 7568's
-  6303 task 2 provides a host. No agent host has Xvfb and the specs must not
+  2181 task 1 Linux display host item provides a host. No agent host has Xvfb and the specs must not
   open on the user's session, so only their no-display preflight and the
   headless-capable specs have run on Linux hosts. On macOS the whole suite ran
   on `mbp3` on 2026-11-15 (Current state).
@@ -903,9 +904,8 @@ before the fixture's page had loaded. The lock-screen case was not run (7568).
 
 - [8300](8300-electron-suite-on-a-shared-mac-desktop.md): the flakes and the desktop-focus failure from task 1's run on `mbp3`, 2026-11-15.
 - [0031](0031-live-provider-and-platform-qualification.md) task 8: `electron-qualification.yml`, the weekly Linux Xvfb run of the whole suite that can give task 1 its Linux answer.
-
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do: the Windows check of task 1 (moved 2026-11-10), the desktop observation of task 4 (moved 2026-11-11), the covered-window decision of task 1 (moved 2026-11-13), the keyboard annotation case at an idle Mac and the lock-screen case of the window-visibility spec (both 2026-11-15), and 6303 task 2, one of the two Linux runs task 1 waits on.
-- [6303](6303-window-close-during-request-throws.md), whose task 2 asks for the host with a disposable display.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do: the Windows check of task 1 (moved 2026-11-10), the desktop observation of task 4 (moved 2026-11-11), the covered-window decision of task 1 (moved 2026-11-13), the keyboard annotation case at an idle Mac and the lock-screen case of the window-visibility spec (both 2026-11-15), and the Linux display host, one of the two Linux runs task 1 waits on (filed under 6303 task 2 until 2026-11-15).
+- 6303 (retired 2026-11-15; `git show a8b89f154:docs/todo/cross-cutting/6303-window-close-during-request-throws.md`): its task 2 first asked for the display host; its own run was done on mbp3's real macOS display, and the crash it found is recorded in [process-crashes-and-kills.md](../../debugging/process-crashes-and-kills.md#7-a-native-dialog-during-a-quit-macos-sigsegv).
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
 - 7340 (retired 2026-11-11, see task 3 above), found in task 3's audit.
 - 8015 (retired 2026-11-14), the browser-suite cases that failed on the Mac in task 4's run; its fixes are described in flakes 0484 and 0380.

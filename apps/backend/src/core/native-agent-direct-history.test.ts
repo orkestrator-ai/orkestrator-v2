@@ -4,7 +4,13 @@
  * callers without letting a stale read repopulate it.
  */
 import { describe, expect, test } from "bun:test";
-import { DirectHistoryPageCache } from "./native-agent-direct-history.js";
+import {
+  DIRECT_HISTORY_CURSOR_MAX_LENGTH,
+  DirectHistoryCursorHandles,
+  DirectHistoryPageCache,
+  decodeHistoryCursor,
+  encodeDirectHistoryCursor,
+} from "./native-agent-direct-history.js";
 
 const limits = {
   maxEntries: 10,
@@ -169,5 +175,70 @@ describe("direct history page cache", () => {
     // A page larger than the whole budget is served but never admitted.
     expect(await load("s2", "huge", 5_000)).toBe("huge");
     expect(cache.lookup("s2", "p1", "e1", "huge", now())).toBeUndefined();
+  });
+});
+
+describe("direct history cursors too long to wrap (8110)", () => {
+  const owner = { sessionKey: "s1", providerSessionId: "p1" };
+  const long = (tag: string) => `bp1.${tag}${"c".repeat(900)}`;
+  const mint = (handles: DirectHistoryCursorHandles | undefined, cursor: string, epoch = "e1") =>
+    encodeDirectHistoryCursor({ ...owner, historyEpoch: epoch, providerCursor: cursor }, handles);
+
+  test("a short cursor is carried inline and needs no handle", () => {
+    const handles = new DirectHistoryCursorHandles();
+    const cursor = mint(handles, "bp1.short")!;
+    expect(handles.size).toBe(0);
+    expect(decodeHistoryCursor(cursor, owner)).toEqual({
+      version: 2,
+      epoch: "e1",
+      providerCursor: "bp1.short",
+    });
+  });
+
+  test("a long one is named by a handle, only for its owner and epoch", () => {
+    expect(mint(undefined, long("a"))).toBeUndefined();
+    const handles = new DirectHistoryCursorHandles();
+    const cursor = mint(handles, long("a"))!;
+    expect(cursor.length).toBeLessThanOrEqual(DIRECT_HISTORY_CURSOR_MAX_LENGTH);
+    expect(decodeHistoryCursor(cursor, owner, handles)).toEqual({
+      version: 2,
+      epoch: "e1",
+      providerCursor: long("a"),
+    });
+    // The same cursor again is the same handle, not a second entry.
+    expect(mint(handles, long("a"))).toBe(cursor);
+    expect(handles.size).toBe(1);
+    // Another session, a caller holding no handles, or a forgotten session.
+    expect(
+      decodeHistoryCursor(cursor, { ...owner, providerSessionId: "p2" }, handles).version,
+    ).toBe("invalid");
+    expect(decodeHistoryCursor(cursor, owner).version).toBe("invalid");
+    handles.forgetSession("other-session");
+    expect(decodeHistoryCursor(cursor, owner, handles).version).toBe(2);
+    handles.forgetSession("s1");
+    expect(handles.size).toBe(0);
+    expect(handles.bytes).toBe(0);
+    expect(decodeHistoryCursor(cursor, owner, handles).version).toBe("invalid");
+  });
+
+  test("handles are bounded by count and bytes, oldest unused first", () => {
+    const handles = new DirectHistoryCursorHandles({ maxEntries: 2, maxBytes: 1_000_000 });
+    const a = mint(handles, long("a"))!;
+    const b = mint(handles, long("b"))!;
+    // Using `a` makes `b` the least recently used.
+    expect(decodeHistoryCursor(a, owner, handles).version).toBe(2);
+    const c = mint(handles, long("c"))!;
+    expect(handles.size).toBe(2);
+    expect(decodeHistoryCursor(b, owner, handles).version).toBe("invalid");
+    expect(decodeHistoryCursor(a, owner, handles).version).toBe(2);
+    expect(decodeHistoryCursor(c, owner, handles).version).toBe(2);
+
+    const small = new DirectHistoryCursorHandles({ maxEntries: 100, maxBytes: 2_500 });
+    for (const tag of ["a", "b", "c", "d"]) mint(small, long(tag));
+    expect(small.bytes).toBeLessThanOrEqual(2_500);
+    expect(small.size).toBe(2);
+    small.clear();
+    expect(small.size).toBe(0);
+    expect(small.bytes).toBe(0);
   });
 });

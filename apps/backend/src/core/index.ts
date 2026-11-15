@@ -407,7 +407,7 @@ export class OrkestratorBackend {
   private readonly agentTestTiming: AgentTestTiming | undefined;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
-  private readonly machineLoad = new MachineLoadSampler();
+  private readonly machineLoad: MachineLoadSampler;
   readonly diagnostics: BackendDiagnostics;
   private accountAutoSwitch!: AgentAccountAutoSwitcher;
   private usageLimitNotices!: CoordinatorUsageLimitNotices;
@@ -572,6 +572,13 @@ export class OrkestratorBackend {
     const emit = createBackendEmit((event, payload) => options.emit(event, payload));
     this.activityJobClock = options.activityJobClock;
     const storage = new StorageService(options.dataDir);
+    // History survives a restart through one database row (to-do 8104).
+    this.machineLoad = new MachineLoadSampler({
+      historyStore: {
+        load: () => storage.machineLoadHistory.loadMachineLoadHistory(),
+        save: (document) => storage.machineLoadHistory.saveMachineLoadHistory(document),
+      },
+    });
     this.compatibilityPathSink = compatibilityPathUsageDatabaseSink(options.dataDir);
     compatibilityPathUsage.attach(this.compatibilityPathSink);
     this.workflowResults = new WorkflowResultService(options.dataDir);
@@ -3189,6 +3196,7 @@ export class OrkestratorBackend {
       this.hostSuspendDetector = null;
       detector?.stop();
     });
+    // Also the shutdown write of load history; storage closes much later.
     stopStepNow("machine-load", () => this.machineLoad.stop());
     stopStepNow("account-auto-switch", () => this.accountAutoSwitch?.stop());
     stopStepNow("claude-login-keeper", () => {

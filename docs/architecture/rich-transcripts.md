@@ -634,7 +634,7 @@ on screen, such as a static document at index 25 + 150k, rather than the tail) a
 `--retained-mib N` (pads the same 3,000 messages to about N MiB of encoded
 JSON through `?retainedMiB=N`, so a large retained history stays under the
 4,096-message client cap; the 2026-10-24 run at 8 MiB is in
-[0050](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md)).
+to-do 0050, retired 2026-11-15: `git show a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`).
 Every run also covers the page with another tab for 10 s while the response
 streams and then brings it back, recording the first frame and long tasks
 after. A page Playwright drives stays `visible`, with timers at full rate,

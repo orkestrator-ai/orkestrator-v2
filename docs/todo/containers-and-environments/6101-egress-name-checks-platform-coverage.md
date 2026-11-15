@@ -29,7 +29,7 @@ on PATH), so the file is blocked.
 - The five cases the ticket named were also run by hand through `createDockerContainer` on the host daemon itself, with each environment network pre-created on an explicit subnet. All five passed: an allowed name answered 200; a foreign SNI on its address got `access denied`; a name off the list got `REFUSED` with EDE 18 over UDP, over TCP and to `192.0.2.53`; with the daemon killed, the allowed address was refused (curl 7) and DNS reached no server, until a refresh brought it back; and a full-mode runtime had no daemon and no record, and was not filtered. That gateway's `resolv.conf` read `# ExtServers: [172.17.0.1]`, the addressed-upstream path of task 3.
 - No Linux-only defect was found. Two test defects showed on every `egress-filter=1` image, Linux included. CI run 42128741746 (Engine 28.0.4) failed both on x64 and on arm64:
   - The firewall tuple case and the DNS-rotation case sent a bare word as their first TCP write, which the name checks hold for up to 30 s. Both now send whole lines; the product behaviour is documented in [container lifecycle](../../architecture/container-lifecycle.md#name-checks-egress-filter1) (to-do 7000, retired 2026-11-11, kept the hold).
-  - The DNS-rotation case also called `node` on the gateway's root PATH ([6103](6103-live-suite-failures-seen-during-s0100.md) task 2).
+  - The DNS-rotation case also called `node` on the gateway's root PATH (6103 (retired) task 2; [C22 on Docker Desktop and rootless Docker](../../development/container-qualification.md#c22-on-docker-desktop-and-rootless-docker-2026-11-15)).
 - In that CI run M12 passed 4 (older image skipped), network 4/4 and readiness 9/9, on both architectures.
 
 **Decisions.**
@@ -210,7 +210,7 @@ pasta (task 4, waits on the user installing `passt` on beelink, 7568).
 
 ## Related
 
-- [7420](7420-telemetry-hosts-grok-and-cursor-turns.md), [6103](6103-live-suite-failures-seen-during-s0100.md)
+- [7420](7420-telemetry-hosts-grok-and-cursor-turns.md), 6103 (retired; [C22 on Docker Desktop and rootless Docker](../../development/container-qualification.md#c22-on-docker-desktop-and-rootless-docker-2026-11-15))
 - 6102 (retired 2026-11-11): what the name checks cannot see, now in [container lifecycle](../../architecture/container-lifecycle.md#name-checks-egress-filter1); its refusal-count live run is in [container qualification](../../development/container-qualification.md#egress-refusal-counts-on-rootful-linux-engine-2026-11-06)
 - To-do 0018 (retired 2026-11-11): the egress gateway, described in [container lifecycle](../../architecture/container-lifecycle.md#egress-gateway-egress-gateway1), and its qualification, summarised in [container qualification](../../development/container-qualification.md#egress-gateway-on-linux-engine-qualification-closed-2026-11-11)
 - 7000 (retired 2026-11-11): a newline-less first write is held, found by task 1; documented in [container lifecycle](../../architecture/container-lifecycle.md#name-checks-egress-filter1)

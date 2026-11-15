@@ -389,8 +389,8 @@ describe("build pipeline reviewer retry", () => {
     });
   });
 
-  test("refuses a reviewer that has not failed, and one whose review was consolidated", async () => {
-    await withPipeline(async ({ service, read, provider, storage }) => {
+  test("refuses a reviewer that has not failed, and one that is not in the review", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
       provider.runningModels.add("opus");
       provider.runningModels.add("sonnet");
       const started = await service.start(startInput(PANEL));
@@ -404,16 +404,8 @@ describe("build pipeline reviewer retry", () => {
       await expect(service.retryReviewer(started.id, "missing")).rejects.toThrow(
         "no longer part of the current review",
       );
-
-      await rewritePipeline(storage, started.id, (pipeline) => {
-        const reviewer = pipeline.reviewFanout!.reviewers[0]!;
-        reviewer.status = "failed";
-        reviewer.error = "boom";
-        pipeline.reviewFanout!.report = reportFor("Merged review.");
-      });
-      await expect(service.retryReviewer(started.id, reviewerId)).rejects.toThrow(
-        "has been consolidated",
-      );
+      // A consolidated pass reruns the slot instead of refusing it:
+      // build-pipeline-reviewer-rerun.test.ts.
     });
   });
 

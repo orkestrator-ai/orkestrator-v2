@@ -621,11 +621,15 @@ export class BuildPipelineReviewFanout {
     return panel;
   }
 
-  /** Makes `panel` the live pass again for {@link panelToKeep}'s restart. */
+  /**
+   * Makes `panel` the live pass again for {@link panelToKeep}'s restart. With
+   * `rerun` (one of `panel`'s records) that reviewer alone runs again; the
+   * others keep their reports, so the pass consolidates again once it settles.
+   */
   async reopenPanel(
     pipeline: BuildPipeline,
     panel: ReviewFanoutState,
-    rerun?: PipelineSession,
+    rerun?: ReviewerRecord,
   ): Promise<void> {
     pipeline.reviewFanout = panel;
     delete panel.report;
@@ -635,10 +639,7 @@ export class BuildPipelineReviewFanout {
     for (const reviewer of panel.reviewers) {
       if (reviewer.status === "cancelled") markReviewerStopped(pipeline, reviewer);
     }
-    const reviewer = rerun
-      ? panel.reviewers.find((candidate) => candidate.sessionKey === rerun.sessionKey)
-      : undefined;
-    if (reviewer) await this.requeueReviewers(pipeline, [reviewer]);
+    if (rerun && panel.reviewers.includes(rerun)) await this.requeueReviewers(pipeline, [rerun]);
   }
 
   /**
@@ -665,7 +666,9 @@ export class BuildPipelineReviewFanout {
       throw new Error("This reviewer is no longer part of the current review");
     }
     if (state.report) {
-      throw new Error("The review has been consolidated; restart the review stage to rerun it");
+      // The lifecycle reruns a slot of a consolidated pass as a rewind to the
+      // panel (`build-pipeline-reviewer-rerun.ts`), never through here.
+      throw new Error("The review has been consolidated; restart the reviewer to rerun it alone");
     }
     if (!options.anyStatus && reviewer.status !== "failed") {
       throw new Error("Only a failed reviewer can be retried");

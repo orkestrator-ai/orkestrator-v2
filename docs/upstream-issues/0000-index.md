@@ -25,7 +25,7 @@ A title, then **Tracker**, **Status**, **Source** and **Filed**; then `## Issue 
 
 | File | Tracker | Status | Source |
 | --- | --- | --- | --- |
-| [grok-never-trust-switch.md](grok-never-trust-switch.md) | xAI, Grok Build CLI (channel to confirm) | draft | [0001](../todo/agent-engines/0001-agent-interactions-and-permissions.md) task 1 (item 12) |
+| [grok-never-trust-switch.md](grok-never-trust-switch.md) | xAI, Grok Build CLI, through its `/feedback` command (no public tracker) | ready to file | [0001](../todo/agent-engines/0001-agent-interactions-and-permissions.md) task 1 (item 12) |
 | [claude-agent-sdk-slash-command-terminal-flag.md](claude-agent-sdk-slash-command-terminal-flag.md) | github.com/anthropics/claude-agent-sdk-typescript | ready to file | 0016 (retired) task 1 |
 | [claude-code-replaced-mcp-server-lingers.md](claude-code-replaced-mcp-server-lingers.md) | github.com/anthropics/claude-code | ready to file, as a comment on [#79740](https://github.com/anthropics/claude-code/issues/79740) | [0039](../todo/mcp/0039-mcp-management.md) task 1 (code item 8) |
 | [moby-rootless-docker-cp-readonly-bind.md](moby-rootless-docker-cp-readonly-bind.md) | github.com/moby/moby | do not file: fixed by [moby#53981](https://github.com/moby/moby/pull/53981) (Engine 29.10.0) | [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md) task 1 |

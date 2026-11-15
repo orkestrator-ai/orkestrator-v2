@@ -628,7 +628,12 @@ rewinds the round to the panel instead of rerunning it
   result slot and its next session is `…:attempt-<n>` in the same pass. The
   earlier session stays as that slot's earlier attempt, as after a live retry.
   A slot that never had a session (it failed to start) is named by its record
-  id and the rewind is anchored on its pass's Consolidation.
+  id and the rewind is anchored on its pass's Consolidation. It reruns with the
+  reasoning effort and Fast/Normal choice it launched with, which the
+  Consolidation's `sessionlessReviewers` entry records (`reasoningEffort`,
+  `fastMode`); an entry written before they were recorded falls back to the
+  slot's configured selection. The key of an earlier attempt still names its
+  slot.
 - **Consolidation and everything after it are superseded.** One
   `PipelineRewind` supersedes the old Consolidation, Address Findings and every
   later step of the round; `structuredReview`, the verdict and the delivery
@@ -647,7 +652,8 @@ rewinds the round to the panel instead of rerunning it
   reviewer column beside the kept reports, the superseded steps are one
   "Previous attempt" node after it, and the re-consolidation follows as the
   same pass's Consolidation (a session naming the last pass's identity rejoins
-  it in `pipelineFlowModel`). A failed reviewer that never started still offers
+  and reopens it in `pipelineFlowModel`, so pausing the rerun marks that
+  panel's Consolidation paused rather than opening an empty second pass). A failed reviewer that never started still offers
   "Restart reviewer" from its Consolidation's summary.
 
 Everything is backend state on the pipeline record, so a reload or a switch to

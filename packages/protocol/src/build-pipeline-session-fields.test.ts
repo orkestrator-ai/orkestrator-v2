@@ -152,8 +152,16 @@ describe("pipeline session graph fields", () => {
     expect(
       isBuildPipeline(pipelineWith({ sessionlessReviewers: [{ ...reviewer, startFailed: true }] })),
     ).toBe(true);
+    expect(
+      isBuildPipeline(
+        pipelineWith({
+          sessionlessReviewers: [{ ...reviewer, reasoningEffort: "high", fastMode: true }],
+        }),
+      ),
+    ).toBe(true);
     for (const invalid of [
       { ...reviewer, startFailed: "yes" },
+      { ...reviewer, fastMode: "on" },
       { ...reviewer, slot: -1 },
       { ...reviewer, error: "" },
       { ...reviewer, model: "x".repeat(257) },

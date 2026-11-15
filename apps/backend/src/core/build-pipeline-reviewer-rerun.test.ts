@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { isBuildPipeline, type BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import {
   advanceUntil,
+  reportFor,
   reviewerSessionCreates,
   rewritePipeline,
   startInput,
@@ -205,13 +206,13 @@ describe("rerunning one reviewer after consolidation", () => {
   });
 
   test("a slot that never started reruns after the pipeline moved on, anchored on its Consolidation", async () => {
-    await withPipeline(async ({ service, read, providers, unstartable }) => {
+    await withPipeline(async ({ service, createService, read, providers, unstartable }) => {
       unstartable.set("cursor", "cursor bridge directory not found");
       providers.get("cursor")!.runningModels.add("auto");
       const started = await service.start(
         startInput([
           { agent: "claude", model: "opus" },
-          { agent: "cursor", model: "auto" },
+          { agent: "cursor", model: "auto", reasoningEffort: "high", fastMode: true },
         ]),
       );
       await advanceUntil(service, read, started.id, "addressing", 30);
@@ -219,9 +220,19 @@ describe("rerunning one reviewer after consolidation", () => {
       const [consolidation] = consolidationSessions(paused);
       const sessionless = consolidation!.sessionlessReviewers![0]!;
       expect(sessionless.slot).toBe(1);
+      // The Consolidation records what the slot launched with.
+      expect(sessionless).toMatchObject({ reasoningEffort: "high", fastMode: true });
       unstartable.delete("cursor");
 
-      const restarted = await service.restartReviewer(started.id, sessionless.id);
+      // The rewind happens on a fresh service, so the slot's selection comes
+      // from the stored record alone.
+      const reloaded = createService();
+      let restarted: BuildPipeline;
+      try {
+        restarted = await reloaded.restartReviewer(started.id, sessionless.id);
+      } finally {
+        await reloaded.shutdown();
+      }
 
       expect(restarted.phase).toBe("reviewing");
       expect(restarted.rewinds!.at(-1)!.sessionKey).toBe(consolidation!.sessionKey);
@@ -229,16 +240,211 @@ describe("rerunning one reviewer after consolidation", () => {
         "completed",
         "running",
       ]);
+      expect(restarted.reviewFanout?.reviewers[1]).toMatchObject({
+        reasoningEffort: "high",
+        fastMode: true,
+      });
       providers.get("cursor")!.runningModels.delete("auto");
       const addressing = await advanceUntil(service, read, started.id, "addressing", 30);
       expect(addressing.phase).toBe("addressing");
-      expect(
-        providers.get("cursor")!.created.filter((entry) => entry.phase === "review"),
-      ).toHaveLength(1);
+      const cursorReviews = providers
+        .get("cursor")!
+        .created.filter((entry) => entry.phase === "review");
+      expect(cursorReviews).toHaveLength(1);
+      // The replacement launched with the slot's own effort and Fast choice,
+      // not the provider defaults.
+      expect(cursorReviews[0]!.options).toMatchObject({ effort: "high", fastMode: true });
       expect(
         providers.get("claude")!.created.filter((entry) => entry.label === "Review 1"),
       ).toHaveLength(1);
     });
+  });
+
+  test("a sessionless slot with no recorded selection reruns with its step's effort and Fast choice", async () => {
+    await withPipeline(async ({ service, read, storage, providers, unstartable }) => {
+      unstartable.set("cursor", "cursor bridge directory not found");
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "cursor", model: "auto", reasoningEffort: "high", fastMode: true },
+        ]),
+      );
+      await advanceUntil(service, read, started.id, "addressing", 30);
+      await service.pause(started.id);
+      // A Consolidation written before the slot's selection was recorded.
+      await rewritePipeline(storage, started.id, (pipeline) => {
+        for (const entry of consolidationSessions(pipeline)[0]!.sessionlessReviewers!) {
+          delete entry.reasoningEffort;
+          delete entry.fastMode;
+        }
+      });
+      const paused = await read(started.id);
+      const sessionless = consolidationSessions(paused)[0]!.sessionlessReviewers![0]!;
+      unstartable.delete("cursor");
+
+      await service.restartReviewer(started.id, sessionless.id);
+      await advanceUntil(service, read, started.id, "addressing", 30);
+
+      const cursorReviews = providers
+        .get("cursor")!
+        .created.filter((entry) => entry.phase === "review");
+      expect(cursorReviews).toHaveLength(1);
+      expect(cursorReviews[0]!.options).toMatchObject({ effort: "high", fastMode: true });
+    });
+  });
+
+  test("the name of a slot's earlier attempt still reruns that slot", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      const started = await service.start(startInput(PANEL));
+      await advanceUntil(service, read, started.id, "addressing", 30);
+      await service.pause(started.id);
+      const first = reviewerSession(await read(started.id), "opus");
+      await service.restartReviewer(started.id, first.sessionKey);
+      await advanceUntil(service, read, started.id, "addressing", 30);
+      const paused = await service.pause(started.id);
+      const second = reviewerSession(paused, "opus");
+      expect(second.sessionKey).toBe(`${first.sessionKey}:attempt-2`);
+      const kept = reviewerSession(paused, "sonnet");
+      provider.runningModels.add("opus");
+
+      // The first attempt's key matches neither the slot's record id nor its
+      // current session key; the anchor's slot resolves the record.
+      const restarted = await service.restartReviewer(started.id, first.sessionKey);
+
+      expect(restarted.phase).toBe("reviewing");
+      expect(restarted.reviewFanout?.reviewers.map((reviewer) => reviewer.status)).toEqual([
+        "running",
+        "completed",
+      ]);
+      expect(restarted.reviewFanout?.reviewers[1]?.report).toEqual(kept.reviewReport);
+      provider.runningModels.delete("opus");
+      const addressing = await advanceUntil(service, read, started.id, "addressing", 30);
+      expect(addressing.phase).toBe("addressing");
+      expect(reviewerSession(addressing, "opus").sessionKey).toBe(`${first.sessionKey}:attempt-3`);
+      // Only the opus slot ran again, twice; sonnet ran once.
+      expect(reviewerSessionCreates(provider).map((entry) => entry.options?.model)).toEqual([
+        "opus",
+        "sonnet",
+        "opus",
+        "opus",
+      ]);
+    });
+  });
+
+  test("a reviewer that is not part of a panel is refused", async () => {
+    await withPipeline(async ({ service, read }) => {
+      const started = await service.start(startInput());
+      await advanceUntil(service, read, started.id, "addressing", 30);
+      const paused = await service.pause(started.id);
+      const review = paused.sessions.find((session) => session.phase === "review")!;
+      expect(review.label).toBe("Review Session");
+
+      await expect(service.restartReviewer(started.id, review.sessionKey)).rejects.toThrow(
+        "Only a reviewer of a review panel can restart on its own",
+      );
+
+      const after = await read(started.id);
+      expect(after.phase).toBe("paused");
+      expect(after.rewinds).toBeUndefined();
+      expect(after.sessions.some((session) => session.supersededBy)).toBe(false);
+    });
+  });
+
+  test("a tool-mode rerun gets a fresh request and the earlier attempt's request cannot override it", async () => {
+    await withPipeline(
+      async ({ service, read, provider, workflowResults }) => {
+        const scope = { environmentId: "env-1", projectId: "project-1" };
+        // A reviewer report as the result tool takes it: each issue states its
+        // alternatives, and the merge-only attribution fields are null.
+        const submission = (summary: string) => {
+          const report = reportFor(summary, "Reviewer finding");
+          return {
+            ...report,
+            issues: report.issues.map((issue) => ({
+              ...issue,
+              alternativeFixes: [],
+              reviewModels: null,
+              reviewSourceIds: null,
+            })),
+          };
+        };
+        const submitted = new Set<string>();
+        // Answers every dispatched reviewer request through the result tool,
+        // as a tool-mode reviewer does.
+        const runUntil = async (id: string, phase: BuildPipeline["phase"]) => {
+          let current = await read(id);
+          for (let pass = 0; pass < 40 && current.phase !== phase; pass += 1) {
+            for (const reviewer of current.reviewFanout?.reviewers ?? []) {
+              if (
+                reviewer.requestId &&
+                reviewer.dispatchState === "sent" &&
+                !submitted.has(reviewer.requestId) &&
+                !provider.runningModels.has(reviewer.model)
+              ) {
+                submitted.add(reviewer.requestId);
+                expect(
+                  await workflowResults!.submit(
+                    scope,
+                    reviewer.requestId,
+                    submission(`Report from ${reviewer.providerSessionId}`),
+                  ),
+                ).toMatchObject({ ok: true });
+              }
+            }
+            await service.advanceNow(id);
+            current = await read(id);
+          }
+          return current;
+        };
+        const started = await service.start(startInput(PANEL));
+        const addressing = await runUntil(started.id, "addressing");
+        expect(addressing.error ?? addressing.phase).toBe("addressing");
+        const paused = await service.pause(started.id);
+        const first = reviewerSession(paused, "opus");
+        expect(first.structuredRequestId).toBeDefined();
+        provider.runningModels.add("opus");
+
+        await service.restartReviewer(started.id, first.sessionKey);
+        let rerunning = await read(started.id);
+        for (
+          let pass = 0;
+          pass < 10 && rerunning.reviewFanout?.reviewers[0]?.dispatchState !== "sent";
+          pass += 1
+        ) {
+          await service.advanceNow(started.id);
+          rerunning = await read(started.id);
+        }
+        const fresh = rerunning.reviewFanout!.reviewers[0]!;
+        expect(fresh.resultTransport).toBe("tool-v1");
+        expect(fresh.requestId).toBeDefined();
+        expect(fresh.requestId).not.toBe(first.structuredRequestId);
+
+        // The earlier attempt's request is closed: a late submission from its
+        // turn is refused and cannot stand in for the rerun's report.
+        const late = await workflowResults!.validate(
+          scope,
+          first.structuredRequestId!,
+          submission("Late report"),
+        );
+        expect(late).toMatchObject({ ok: false, error: { code: "attempt_closed" } });
+        expect(await workflowResults!.status(scope, first.structuredRequestId!)).toMatchObject({
+          lifecycle: "consumed",
+        });
+        await service.advanceNow(started.id);
+        const stillRunning = await read(started.id);
+        expect(stillRunning.phase).toBe("reviewing");
+        expect(stillRunning.reviewFanout?.reviewers[0]?.status).toBe("running");
+        expect(stillRunning.reviewFanout?.report).toBeUndefined();
+
+        provider.runningModels.delete("opus");
+        const after = await runUntil(started.id, "addressing");
+        expect(after.error ?? after.phase).toBe("addressing");
+        const rerun = reviewerSession(after, "opus");
+        expect(rerun.structuredRequestId).toBe(fresh.requestId);
+        expect(rerun.reviewReport?.reviewSummary).toBe(`Report from ${rerun.sdkSessionId}`);
+      },
+      { toolMode: true, toolKinds: ["review-report"] },
+    );
   });
 
   test("an unknown reviewer is refused", async () => {

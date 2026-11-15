@@ -1226,6 +1226,7 @@ export class BuildPipelineReviewFanout {
               ...(reviewer.reasoningEffort
                 ? { reasoningEffort: reviewer.reasoningEffort.slice(0, 128) }
                 : {}),
+              ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
               error: boundedPipelineSessionError(
                 reviewer.error ?? "Reviewer session creation failed",
               ),

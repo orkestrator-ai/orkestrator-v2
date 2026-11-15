@@ -149,11 +149,17 @@ export function panelFromSessions(
     }
     const failure = sessionless?.find((entry) => entry.slot === slot);
     const config = configs[slot]!;
+    // The slot reruns with what it launched with: the effort and Fast/Normal
+    // choice its Consolidation recorded, else the step's own selection.
+    const effort = failure?.reasoningEffort ?? config.reasoningEffort;
+    const fastMode = failure?.fastMode ?? config.fastMode;
     reviewers.push({
       id: failure?.id ?? (slot === 0 ? passId : `${passId}:${slot}`),
       agent: failure?.agent ?? config.agent,
       model: failure?.model ?? config.model ?? "default",
       ...((failure?.model ?? config.model) ? {} : { modelUnpinned: true }),
+      ...(effort ? { reasoningEffort: effort } : {}),
+      ...(typeof fastMode === "boolean" ? { fastMode } : {}),
       ...reviewLensField(config.lens),
       status: failure ? "failed" : "cancelled",
       ...(failure ? { error: failure.error, startFailed: failure.startFailed } : {}),

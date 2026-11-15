@@ -703,7 +703,9 @@ export function pipelineFlowModel(
    * pass's own identity rejoins it even after a previous attempt closed it: a
    * reviewer rerun after consolidation supersedes Consolidation and the steps
    * after it but keeps the panel, so its new attempt and the re-consolidation
-   * belong to that panel rather than to a new pass.
+   * belong to that panel rather than to a new pass. Rejoining reopens it, so a
+   * later stop that names no pass (a pause of the rerun) lands on that panel
+   * too instead of opening an empty one.
    */
   const continuePass = (iteration: number, identity?: string): ReviewPass => {
     const open = lastPass();
@@ -714,6 +716,7 @@ export function pipelineFlowModel(
         (identity !== undefined && open.identity === identity))
     ) {
       open.identity ??= identity;
+      open.closed = false;
       return open;
     }
     return openPass(iteration, identity);

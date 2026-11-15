@@ -132,6 +132,34 @@ describe("one reviewer rerun after consolidation", () => {
     expect(model.columns.filter((column) => column.kind === "consolidation")).toHaveLength(1);
   });
 
+  test("a paused rerun marks its own panel paused rather than opening another pass", () => {
+    const pipeline = rerunAfterConsolidation({
+      phase: "paused",
+      pausedFromPhase: "reviewing",
+      currentSessionIndex: 5,
+    });
+    pipeline.sessions[5] = {
+      ...pipeline.sessions[5]!,
+      status: "idle",
+      reviewerOutcome: "cancelled",
+    };
+    pipeline.reviewFanout!.reviewers[1]!.status = "cancelled";
+
+    const assertOnePausedPanel = (model: PipelineFlowModel) => {
+      expect(line(model).slice(3, 6)).toEqual([
+        ["Reviewer 1:complete", "Reviewer 2:cancelled"],
+        ["Previous attempt:cancelled"],
+        ["Consolidation:paused"],
+      ]);
+      expect(model.columns.filter((column) => column.kind === "review")).toHaveLength(1);
+      expect(model.columns.filter((column) => column.kind === "consolidation")).toHaveLength(1);
+      expect(model.nodes.some((node) => node.title.startsWith("Review 2"))).toBe(false);
+    };
+    assertOnePausedPanel(pipelineFlowModel(pipeline));
+    // The stored snapshot, as a reload or another window reads it.
+    assertOnePausedPanel(pipelineFlowModel(structuredClone(pipeline)));
+  });
+
   test("a reviewer of a retired pass offers Restart reviewer while its round is current", () => {
     const pipeline = build({
       phase: "paused",

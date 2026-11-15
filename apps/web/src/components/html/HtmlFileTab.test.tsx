@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect, type ReactNode } from "react";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { TerminalProvider, useTerminalContext } from "@/contexts/TerminalContext";
 import { fileDirtyStore } from "@/stores/fileDirtyStore";
@@ -270,7 +270,11 @@ describe("HtmlFileTab", () => {
       await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("#000002"));
       // The old set's read settles late and changes nothing.
       pending[0]!.resolve("h1{color:#000001}");
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      // The late read settles through promise callbacks alone, so one macrotask
+      // turn has run all of them and any render they cause.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
       expect(frame().getAttribute("srcdoc")).not.toContain("#000001");
       expect(frame().getAttribute("srcdoc")).toContain("#000002");
     });
@@ -280,7 +284,11 @@ describe("HtmlFileTab", () => {
       const { read, pending } = deferredReads();
       const view = renderWithFiles(read, false);
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      // The render's effects have run inside `act`; an inactive tab's effect
+      // returns before reading, so nothing can still be on its way.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
       expect(read).not.toHaveBeenCalled();
       expect(screen.queryByTitle("Rendered view of docs/report.html") === null).toBe(true);
       expect(screen.queryByText(NOTICE) === null).toBe(true);

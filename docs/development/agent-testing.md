@@ -2362,8 +2362,9 @@ that session, and graceful shutdown rejects all held sends and clears their poll
 A cancellation before send is a rejection; one after acceptance keeps an ambiguous
 outcome for reconciliation. The live test re-arms the before-send marker after the
 second crash, so even a bridge-deduplicated resend fails the no-resend assertion.
-Results are in
-[0050](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md#qualification-results-2026-11-10-pre-acceptance-dispatch-window).
+Results are in to-do 0050 (retired 2026-11-15), section "Qualification
+results (2026-11-10): pre-acceptance dispatch window":
+`git show a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`.
 
 A spec that restarts a profile builds the launcher's arguments with
 `devTestRestartArgs` (`e2e/agent-testing/profile-restart-args.ts`): a

@@ -10,7 +10,7 @@
  *
  * A row *names* something when it holds it as a code span (`` `name` ``).
  * Counter ids are the dotted lowercase code spans of the Counter cell
- * (`bridge-transcript.messages-fallback`); a cell that starts with "None"
+ * (`tmux-transcript.whole-read`); a cell that starts with "None"
  * has no counter. A domain adapter's row names its counter id,
  * `domain-adapter.<backend|renderer>.<domain>.v<version>`, anywhere in the row.
  *

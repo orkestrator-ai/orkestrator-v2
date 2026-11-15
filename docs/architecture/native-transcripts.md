@@ -19,7 +19,7 @@ native transcript windows keep the contract below instead.
 | `packages/protocol/src/node/bridge-transcript-routes.ts` | Route bodies every bridge serves from one `BridgeTranscriptSource` |
 | `packages/protocol/src/node/revised-rows.ts` | `RecentlyRevisedRows`: changed rows outside the live window |
 | `apps/backend/src/core/http-bridge/transcript-v2.ts` | Backend side of v2: capability learning, bounded reads |
-| `apps/backend/src/core/http-bridge/progressive.ts` | Snapshot reads, with the v1 and pre-`/transcript` fallbacks |
+| `apps/backend/src/core/http-bridge/progressive.ts` | Snapshot reads, with the v1 fallback; a `/transcript` 404 is a missing session |
 | `apps/backend/src/core/native-agent-transcript-projection.ts` | Projection, conditional reads, deltas, history pages |
 | `apps/backend/src/core/native-terminal-messages.ts`, `packages/protocol/src/native-terminal-rows.ts` | Terminal-state rows and where they are placed |
 | `apps/backend/src/core/native-agent-direct-history.ts` | v2 history cursors and `DirectHistoryPageCache` |
@@ -110,17 +110,21 @@ The backend has two cursor namespaces that never mix
   view has none. It is a retained compatibility path; see the end of this
   document.
 
-A progressive view carries a direct cursor (`historyPaging: "direct"`) when
-its provider pages and a usable whole-message boundary remains. The
+A progressive view carries a direct cursor (`historyPaging: "direct"`)
+whenever its provider pages and it has older history to load. The
 provider's `historyCursor` names the position of its snapshot's first row,
 which is usable while the view starts at or before it. When the view's own
 byte bound drops leading rows the provider sent, the view names its first
 kept row instead through the snapshot's `historyCursorBefore`: a bridge
-cursor moved to that row's absolute position
-(`bridgeTranscriptPageCursorAt`), or, for OpenCode, which pages by whole
-message, the cursor before the first kept row that starts a message. Rows
-between the view's start and that position come back on the first page too,
-and the renderer drops them by id. Byte bounding happens to ordinary
+cursor for that row's absolute position, named from the snapshot's
+generation and content epoch (`bridgeTranscriptPageCursorFor`, so a window at
+the first message, which carries no `historyCursor`, names one too), or, for
+OpenCode, which pages by whole message, the cursor before the first kept row
+that starts a message. When no kept row can name one (an OpenCode view left
+with only an error row), the view pages from the window's end
+(`historyCursorAtEnd`). Rows between the view's start and that position come
+back on the first page too, and the renderer drops them by id. A provider
+cursor too long to wrap travels as a backend-held handle (to-do 8110, retired 2026-11-15). Byte bounding happens to ordinary
 sessions: a tool call's detail reference is larger than a short output the
 bridge summary kept inline, so a window of edits and short commands is
 larger once projected than the bridge measured it. Before 0232 such a view
@@ -536,38 +540,52 @@ These are ceilings, not targets to raise.
 
 ## Retained compatibility paths
 
-Both are in the register of
-[version-compatibility.md](version-compatibility.md#register), with their
-removal conditions. Checked on 2026-10-26 and again on 2026-10-27: neither
-serves only peers outside the support window.
+One path remains, in the register of
+[version-compatibility.md](version-compatibility.md#register) with its
+removal condition, which is met (checked 2026-11-15).
 
 - **Joined `sync-v1` history paging.** `getMessagePage` serves a v1 cursor by
   refreshing the sync-v1 projection, which reads the whole transcript, and
   paging the backend's own joined copy. Every renderer reaches it the same
   way: when the progressive view carries no direct cursor, **Load earlier
   messages** mints one from the sync-v1 projection, which only mints v1
-  cursors. Since 0232 a view whose provider pages carries a direct cursor
-  when a usable whole-message boundary remains, and every renderer in the
-  window adopts it. On this backend the joined path serves sources without
-  direct pages (the `/messages` fallback below, a bridge without page routes),
-  a provider cursor too long to wrap, and an OpenCode view retaining only a
-  failed message's inline error row after its main row was byte-omitted. The
-  renderer keeps the mint for those and for backends before 0232. Each joined
-  page is counted by why the session's latest view had no direct cursor:
-  `history.joined-v1-page.unpaged-source`, `history.joined-v1-page.unnamed-cursor`,
-  or `history.joined-v1-page` when it had one or none was read.
+  cursors. A view whose provider pages carries a direct cursor whenever it has
+  older history to load, and every renderer adopts it:
+  - from the first row the view kept (`historyCursorBefore`, 0232), also when
+    the provider's window starts at the first message and sent no cursor of
+    its own (a bridge position is named from the snapshot's generation and
+    content epoch with `bridgeTranscriptPageCursorFor`; OpenCode names the row
+    the same way it names any other);
+  - when no kept row can name one, because only an OpenCode inline error row
+    remains after its response's main row was byte-omitted, from the window's
+    end (`historyCursorAtEnd`): the first page holds the window's rows again,
+    which the renderer drops by id, and the dropped main row with them. The
+    cursor names the window's newest row, inclusively (OpenCode's
+    `openCode2CursorThrough`), never "the newest rows": appends do not move
+    the epoch, and a page cached under a cursor is immutable within one;
+  - for a provider cursor too long to wrap in the page command's 1,024
+    characters, through a short handle the backend holds
+    (`DirectHistoryCursorHandles` in `native-agent-direct-history.ts`, bounded
+    by count and bytes). A handle evicted or lost to a backend restart reads as
+    an expired cursor, and the renderer re-reads the view, which names a new
+    one. A kept view and a cached page keep the provider cursor their handle
+    holds and mint it again each time they are served, so neither hands out a
+    handle the store has since evicted.
+
+  So the joined path now serves only a source without direct pages. Each
+  joined page is counted by why the session's latest view had no direct
+  cursor: `history.joined-v1-page.unpaged-source`,
+  `history.joined-v1-page.unnamed-cursor`, or `history.joined-v1-page` when
+  it had one or none was read.
   [0232](../todo/transcripts-and-observation/0232-direct-history-cursor-minting.md)
-  owns removing it.
-- **The `/messages` fallback.** When `/transcript` answers 404 or 405,
-  `readHttpBridgeTranscriptSnapshot` reads the whole `/messages` body and
-  keeps the newest window itself, so a progress probe there also costs a
-  whole read. That serves bridges before #670 and, until 2026-10-26, every
-  Claude bridge: its `/transcript` read only resident sessions, so after a
-  bridge restart a persisted session answered 404 and only `/messages` loaded
-  it. The Claude summary route now loads the session first, so its 404 means
-  missing. When `/messages` also answers 404 the session is missing and the
-  read is an empty, complete snapshot, not counted as compatibility use.
-  `/messages?limit=` is advisory for the same reason.
+  task 4 owns removing it.
+
+The `/messages` fallback of progressive reads retired on 2026-11-15
+(to-do 0050 task 1; the to-do retired the same day: `git show a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`). Every bridge serves `/transcript`, and the Claude summary route loads
+a persisted session before answering, so a 404 there means the session is
+missing and the read is an empty, complete window. A 405 fails the read: only
+a bridge that predates the route answers it. `/messages` stays for bounded
+`messages({ limit })` reads, where `?limit=` is still advisory.
 
 ## Measuring
 

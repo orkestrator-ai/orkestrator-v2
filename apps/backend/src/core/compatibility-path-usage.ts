@@ -35,8 +35,6 @@ export const COMPATIBILITY_PATH_IDS = [
   "bridge-close.upgrade-required",
   /** A renderer that predates paged tmux transcripts read a whole transcript. */
   "tmux-transcript.whole-read",
-  /** A bridge without `/transcript` was read through its whole `/messages` body. */
-  "bridge-transcript.messages-fallback",
   /**
    * A history page was served from the joined sync-v1 projection while the
    * session's latest view carried a direct cursor, or no view was read: a

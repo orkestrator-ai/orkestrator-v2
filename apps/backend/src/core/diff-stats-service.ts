@@ -174,6 +174,7 @@ export type DiffScanEvent =
 export interface DiffStatsWarning {
   event:
     | "scan.watcher-failed"
+    | "scan.watcher-missed-change"
     | "scan.failed"
     | "scan.target-missing"
     | "scan.freshness-read-failed"
@@ -1114,6 +1115,14 @@ export class DiffStatsService {
         this.restartTimer(entry);
         this.publishSnapshot(entry);
       },
+      onMissedChange: () => {
+        if (!current()) return;
+        this.warn(
+          "scan.watcher-missed-change",
+          entry.target.environmentId,
+          new Error("A safety scan found a change the diff watcher did not report"),
+        );
+      },
       onError: (error) => {
         if (entry.watcherGeneration !== generation) return;
         failedSynchronously = true;
@@ -1439,7 +1448,9 @@ export class DiffStatsService {
     if (previous?.semanticDigest !== semanticDigest) entry.fileListRevision += 1;
     // Both scans ran under the same qualified watcher and nothing dirtied the
     // entry in between (no hint, mutation or refresh advanced the epoch), yet
-    // the list moved: the watcher missed it. Local watchers ignore this.
+    // the list moved: the watcher missed it. Either kind of watcher stops
+    // claiming qualified coverage unless it turns out to have seen the change
+    // (to-do 8171 for local ones), and the entry polls meanwhile.
     if (
       previous &&
       previous.semanticDigest !== semanticDigest &&

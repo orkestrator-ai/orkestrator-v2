@@ -29,6 +29,10 @@ interface Harness {
   watcherClosedAtPath: (worktreePath: string) => boolean;
   failWatch: (environmentId: string) => void;
   qualifyWatch: (environmentId: string) => void;
+  /** How often the service told the target's watcher it missed a change. */
+  unannouncedFor: (environmentId: string) => number;
+  /** The watcher holds a reported change against itself. */
+  missChange: (environmentId: string) => void;
   failWatchAtPath: (worktreePath: string) => void;
   setScan: (scan: (target: DiffStatsTarget) => Promise<DiffScanResult>) => void;
   clock: { value: number };
@@ -62,9 +66,11 @@ function createHarness(
       onChange: () => void;
       onError?: (error: unknown) => void;
       onCoverageChange?: () => void;
+      onMissedChange?: () => void;
       qualified: boolean;
       closed: boolean;
       watching: boolean;
+      unannounced: number;
     }
   >();
   let nextTimerId = 1;
@@ -118,9 +124,11 @@ function createHarness(
         onChange: watcherOptions.onChange,
         onError: watcherOptions.onError,
         onCoverageChange: watcherOptions.onCoverageChange,
+        onMissedChange: watcherOptions.onMissedChange,
         qualified: !options.pendingCoverage,
         closed: false,
         watching: watchable,
+        unannounced: 0,
       };
       watchers.set(key, record);
       if (options.watcherStartError) {
@@ -136,6 +144,9 @@ function createHarness(
         },
         close() {
           record.closed = true;
+        },
+        unannouncedChange() {
+          record.unannounced += 1;
         },
       };
     },
@@ -203,6 +214,14 @@ function createHarness(
       if (!record) throw new Error("No watcher");
       record.qualified = true;
       record.onCoverageChange?.();
+    },
+    unannouncedFor(environmentId) {
+      const key = watcherKeyFor(environmentId);
+      return key ? (watchers.get(key)?.unannounced ?? 0) : 0;
+    },
+    missChange(environmentId) {
+      const key = watcherKeyFor(environmentId);
+      watchers.get(key ?? "")?.onMissedChange?.();
     },
     failWatch(environmentId) {
       const key = watcherKeyFor(environmentId);
@@ -327,6 +346,31 @@ describe("DiffStatsService", () => {
     expect(watched.service.isWatching("env-local")).toBe(true);
     expect(unwatched.intervalFor("env-local")).toBe(15_000);
     expect(unwatched.service.isWatching("env-local")).toBe(false);
+  });
+
+  test("a safety scan that finds an unannounced change tells the local watcher (to-do 8171)", async () => {
+    const harness = createHarness();
+    harness.service.track(localTarget());
+    await settle();
+    expect(harness.unannouncedFor("env-local")).toBe(0);
+
+    // A hinted change is announced: the watcher saw it.
+    harness.setScan(async () => ({ stats: stats(), changes: [{ path: "hinted.ts" }] }));
+    harness.signalChange("env-local");
+    await settle();
+    expect(harness.unannouncedFor("env-local")).toBe(0);
+
+    // The safety tick finds another change no hint announced.
+    harness.setScan(async () => ({ stats: stats(), changes: [{ path: "missed.ts" }] }));
+    harness.clock.value += 120_000;
+    harness.tick("env-local");
+    await settle();
+    expect(harness.unannouncedFor("env-local")).toBe(1);
+
+    harness.missChange("env-local");
+    expect(harness.warnings).toContainEqual(
+      expect.objectContaining({ event: "scan.watcher-missed-change", environmentId: "env-local" }),
+    );
   });
 
   test("containers are polled rather than watched", async () => {

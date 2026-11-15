@@ -730,7 +730,9 @@ export interface ProviderTranscriptSnapshot {
   /**
    * A provider page cursor for the history before the end of `messages`, in
    * the same epoch: its first page holds the window's newest rows again, and
-   * the reader deduplicates them by id. The last resort for a reader none of
+   * the reader deduplicates them by id. It names the window's own end, never
+   * "the newest rows": appends do not move the epoch, and the backend caches a
+   * page under its cursor as immutable within one. The last resort for a reader none of
    * whose kept rows can name a cursor, such as one left holding only the
    * error row of a response whose main row its byte bound dropped (8110).
    */

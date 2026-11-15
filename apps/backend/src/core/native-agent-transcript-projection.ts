@@ -263,7 +263,21 @@ interface ProjectedProgressiveTranscript {
   ledgerRevisedIds?: readonly string[];
   /** The content sequence of the view this projection keeps unchanged, if it keeps one. */
   keptContentSequence?: number;
+  /** What the view's direct `historyCursor` was minted from. */
+  directCursor?: DirectCursorSource;
 }
+
+/**
+ * The input a view's direct cursor was minted from. A kept view mints it again
+ * when it is served, so an overlong provider cursor whose handle the bounded
+ * store has since evicted is held again rather than handed out dead.
+ */
+type DirectCursorSource = {
+  sessionKey: string;
+  providerSessionId: string;
+  historyEpoch: string;
+  providerCursor: string;
+};
 
 /**
  * Why a session's latest progressive view carried no direct cursor, kept only
@@ -326,6 +340,7 @@ type ProgressiveTranscriptEntry = {
   historyEndIndex?: number;
   ledgerRevision?: number;
   ledgerRevisedIds?: readonly string[];
+  directCursor?: DirectCursorSource;
   /**
    * Moves only when the view's content does, not when a held preview, an
    * `unchanged` answer or an artifact overlay re-commits the same content
@@ -622,6 +637,12 @@ export class NativeAgentTranscriptProjection {
   private readonly directHistoryPages: DirectHistoryPageCache<{
     page: NativeAgentMessagePage;
     details: readonly ProjectionDetailRegistration[];
+    /**
+     * The provider's own continuation. The page's `nextCursor` is minted from
+     * it again on every answer, so a held handle the bounded store evicted
+     * after the page was cached is registered again rather than served dead.
+     */
+    providerCursor?: string;
   }>;
   /** Per-conversation publication ledger reads, keyed by ledger revision. */
   private readonly artifactOverlays = new ArtifactOverlayIndex(
@@ -2587,18 +2608,18 @@ export class NativeAgentTranscriptProjection {
       ? snapshot.historyCursor
       : (firstNamedCursor(bounded.messages, snapshot.historyCursorBefore) ??
         snapshot.historyCursorAtEnd);
-    const directHistoryCursor =
+    const directCursorSource: DirectCursorSource | undefined =
       providerHistoryCursor && snapshot.historyEpoch !== undefined
-        ? encodeDirectHistoryCursor(
-            {
-              sessionKey,
-              providerSessionId,
-              historyEpoch: snapshot.historyEpoch,
-              providerCursor: providerHistoryCursor,
-            },
-            this.directHistoryCursorHandles,
-          )
+        ? {
+            sessionKey,
+            providerSessionId,
+            historyEpoch: snapshot.historyEpoch,
+            providerCursor: providerHistoryCursor,
+          }
         : undefined;
+    const directHistoryCursor = directCursorSource
+      ? encodeDirectHistoryCursor(directCursorSource, this.directHistoryCursorHandles)
+      : undefined;
     const localPageable =
       directHistoryCursor !== undefined ||
       bounded.window.canLoadEarlier === true ||
@@ -2762,6 +2783,7 @@ export class NativeAgentTranscriptProjection {
       ...(ledgerRevised.length
         ? { ledgerRevisedIds: ledgerRevised.map((row) => (row as { id: string }).id) }
         : {}),
+      ...(directHistoryCursor && directCursorSource ? { directCursor: directCursorSource } : {}),
     };
   }
 
@@ -2783,6 +2805,11 @@ export class NativeAgentTranscriptProjection {
     overlay: ArtifactOverlay | null,
   ): ProjectedProgressiveTranscript {
     const messages = overlayArtifactParts(previous.value.messages, overlay);
+    // Hold the view's cursor again: a handle is named by a digest of what it
+    // holds, so this re-registers the same handle the view already carries.
+    if (previous.directCursor) {
+      encodeDirectHistoryCursor(previous.directCursor, this.directHistoryCursorHandles);
+    }
     return {
       value:
         messages === previous.value.messages ? previous.value : { ...previous.value, messages },
@@ -2794,6 +2821,7 @@ export class NativeAgentTranscriptProjection {
         : { historyEndIndex: previous.historyEndIndex }),
       ...(previous.ledgerRevision === undefined ? {} : { ledgerRevision: previous.ledgerRevision }),
       ...(previous.ledgerRevisedIds ? { ledgerRevisedIds: previous.ledgerRevisedIds } : {}),
+      ...(previous.directCursor ? { directCursor: previous.directCursor } : {}),
       keptContentSequence: previous.contentSequence,
     };
   }
@@ -2993,7 +3021,8 @@ export class NativeAgentTranscriptProjection {
       .slice(0, 43);
     const current = this.progressiveTranscriptCache.get(key);
     if (!current || current.token !== token) {
-      const bytes = encodedBytesWithMessages(value);
+      const bytes =
+        encodedBytesWithMessages(value) + (projection.directCursor?.providerCursor.length ?? 0);
       if (current) {
         this.progressiveTranscriptBytes -= current.bytes;
         this.transcriptDeltaBases.record(key, current, value);
@@ -3015,6 +3044,7 @@ export class NativeAgentTranscriptProjection {
           ? {}
           : { ledgerRevision: projection.ledgerRevision }),
         ...(projection.ledgerRevisedIds ? { ledgerRevisedIds: projection.ledgerRevisedIds } : {}),
+        ...(projection.directCursor ? { directCursor: projection.directCursor } : {}),
       });
       this.progressiveTranscriptBytes += bytes;
       this.trimProgressiveTranscriptCache();
@@ -4614,15 +4644,43 @@ export class NativeAgentTranscriptProjection {
       ...page,
       messages: overlayArtifactParts(page.messages, this.artifactOverlay(input)).slice(),
     });
+    const mintNextCursor = (providerCursor: string | undefined): string | undefined =>
+      providerCursor
+        ? encodeDirectHistoryCursor(
+            {
+              sessionKey: resolved.key,
+              providerSessionId,
+              historyEpoch: cursor.epoch,
+              providerCursor,
+            },
+            this.directHistoryCursorHandles,
+          )
+        : undefined;
+    /*
+     * Every answer mints its `nextCursor` again from the provider's own
+     * continuation. An overlong one travels as a handle in a bounded store
+     * that evicts on its own schedule, so the cursor cached with the page can
+     * name a handle that is gone; minting registers it again. A short cursor
+     * mints to the same bytes, so this is a no-op for it.
+     */
+    const answer = (value: {
+      page: NativeAgentMessagePage;
+      providerCursor?: string;
+    }): NativeAgentMessagePage => {
+      if (!value.providerCursor) return withArtifacts(value.page);
+      const nextCursor = mintNextCursor(value.providerCursor);
+      if (!nextCursor) throw new Error("Native agent history cursor expired");
+      return withArtifacts({ ...value.page, nextCursor });
+    };
     if (cached) {
       if (this.restoreDetailRegistrations(resolved.key, cached.details)) {
         this.recordProgressiveMetric("transcript", startedAt, "memory", "cached");
-        return withArtifacts(cached.page);
+        return answer(cached);
       }
       // An inline detail body was evicted; only a fresh read registers it again.
       this.directHistoryPages.delete(pageKey);
     }
-    const { page } = await this.directHistoryPages.load(
+    const loaded = await this.directHistoryPages.load(
       { sessionKey: resolved.key, providerSessionId, epoch: cursor.epoch, key: pageKey },
       async () => {
         const sourceStartedAt = monotonicMs();
@@ -4691,17 +4749,7 @@ export class NativeAgentTranscriptProjection {
           trimmedRow = true;
           return bounded.messages[0] ?? message;
         });
-        const nextCursor = providerPage.historyCursor
-          ? encodeDirectHistoryCursor(
-              {
-                sessionKey: resolved.key,
-                providerSessionId,
-                historyEpoch: cursor.epoch,
-                providerCursor: providerPage.historyCursor,
-              },
-              this.directHistoryCursorHandles,
-            )
-          : undefined;
+        const nextCursor = mintNextCursor(providerPage.historyCursor);
         if (providerPage.historyCursor && !nextCursor) {
           throw new Error("Native agent history cursor expired");
         }
@@ -4722,15 +4770,21 @@ export class NativeAgentTranscriptProjection {
           (total, detail) => total + 64 + detail.ref.length + (detail.remote?.locator.length ?? 0),
           0,
         );
+        const providerCursor = providerPage.historyCursor;
         return {
-          value: { page, details },
-          bytes: encodedArrayBytes(page.messages) + detailBytes + (nextCursor?.length ?? 0) + 256,
+          value: { page, details, ...(providerCursor ? { providerCursor } : {}) },
+          bytes:
+            encodedArrayBytes(page.messages) +
+            detailBytes +
+            (nextCursor?.length ?? 0) +
+            (providerCursor?.length ?? 0) +
+            256,
         };
       },
       () => this.host.now(),
     );
     // Callers share the cached page; each gets its own message array.
-    return withArtifacts(page);
+    return answer(loaded);
   }
 
   /**

@@ -559,13 +559,18 @@ removal condition, which is met (checked 2026-11-15).
   - when no kept row can name one, because only an OpenCode inline error row
     remains after its response's main row was byte-omitted, from the window's
     end (`historyCursorAtEnd`): the first page holds the window's rows again,
-    which the renderer drops by id, and the dropped main row with them;
+    which the renderer drops by id, and the dropped main row with them. The
+    cursor names the window's newest row, inclusively (OpenCode's
+    `openCode2CursorThrough`), never "the newest rows": appends do not move
+    the epoch, and a page cached under a cursor is immutable within one;
   - for a provider cursor too long to wrap in the page command's 1,024
     characters, through a short handle the backend holds
     (`DirectHistoryCursorHandles` in `native-agent-direct-history.ts`, bounded
     by count and bytes). A handle evicted or lost to a backend restart reads as
     an expired cursor, and the renderer re-reads the view, which names a new
-    one.
+    one. A kept view and a cached page keep the provider cursor their handle
+    holds and mint it again each time they are served, so neither hands out a
+    handle the store has since evicted.
 
   So the joined path now serves only a source without direct pages. Each
   joined page is counted by why the session's latest view had no direct

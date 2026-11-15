@@ -498,10 +498,13 @@ it. What task 4's removal can now rely on:
   and content epoch (`bridgeTranscriptPageCursorFor`), and OpenCode names its
   kept rows even with no older history. When no kept row can name one (the
   OpenCode error-row case), the view pages from the window's end
-  (`historyCursorAtEnd`, OpenCode's head cursor); the renderer drops the rows
-  it already holds by id. A provider cursor too long to wrap travels as a
-  backend-held handle (`DirectHistoryCursorHandles`), bounded by count and
-  bytes, which reads as an expired cursor once evicted or after a restart.
+  (`historyCursorAtEnd`; for OpenCode a cursor through the window's newest
+  row, so a later window in the same epoch names a different page); the
+  renderer drops the rows it already holds by id. A provider cursor too long
+  to wrap travels as a backend-held handle (`DirectHistoryCursorHandles`),
+  bounded by count and bytes, which reads as an expired cursor once evicted
+  or after a restart. A kept view and a cached page mint their handle again
+  each time they are served, so neither hands out an evicted one.
   Covered by the summary-transcripts, OpenCode history, OpenCode transcript
   snapshot, transcript-v2, direct-history and protocol tests, each failing
   without the change where it pins a projection behaviour.

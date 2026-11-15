@@ -274,27 +274,35 @@ export function openCode2HistoryCursor(id: string, epoch?: string): string | und
 }
 
 /**
- * A cursor for the history from the newest row (before any revert marker), in
- * this backend's own form: the server never sees it, since a page asks the
- * server for its newest rows without a cursor. Its first page holds the
- * window's rows again, which the reader deduplicates by id. It is what a reader
- * pages from when none of its kept rows can name a cursor: an inline error row
- * left after the bound dropped its response's main row (8110).
+ * A cursor for the history at and before row `id` (the window's newest row),
+ * in this backend's own form: the server never sees it, since a page reads
+ * that row and then the server's page strictly before it. Its first page holds
+ * the window's rows again, which the reader deduplicates by id. It is what a
+ * reader pages from when none of its kept rows can name a cursor: an inline
+ * error row left after the bound dropped its response's main row (8110).
+ *
+ * It names a fixed row, not "the newest rows": appends do not move the epoch,
+ * so a cursor meaning "the head" would name a different page as the session
+ * grew, while the backend caches a page under its cursor as immutable within
+ * the epoch, and a page read after an append would hand newer rows to a
+ * reader as older history.
  */
-export function openCode2HeadCursor(epoch: string): string | undefined {
-  const cursor = Buffer.from(JSON.stringify({ head: true, order: "desc", epoch })).toString(
+export function openCode2CursorThrough(id: string, epoch: string): string | undefined {
+  if (!id.startsWith("msg_")) return undefined;
+  const cursor = Buffer.from(JSON.stringify({ through: id, order: "desc", epoch })).toString(
     "base64url",
   );
   return cursor.length <= MAX_CURSOR_LENGTH ? cursor : undefined;
 }
 
-/** The epoch a head cursor was minted in, or undefined for any other cursor. */
-function openCode2HeadCursorEpoch(cursor: string): string | undefined {
+/** The row an inclusive cursor pages through, or undefined for any other cursor. */
+function openCode2ThroughAnchor(cursor: string): string | undefined {
   if (cursor.length === 0 || cursor.length > MAX_CURSOR_LENGTH) return undefined;
   try {
     const body = asRecord(JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")));
-    return body?.head === true && body.order === "desc"
-      ? (nonEmptyString(body.epoch) ?? undefined)
+    const id = nonEmptyString(body?.through);
+    return id?.startsWith("msg_") && body?.order === "desc" && nonEmptyString(body.epoch)
+      ? id
       : undefined;
   } catch {
     return undefined;
@@ -413,7 +421,10 @@ export async function openCode2TranscriptSnapshot(
   const firstKept = rowId(kept[0]);
   const historyCursor =
     olderHistory && firstKept ? openCode2HistoryCursor(firstKept, historyEpoch) : undefined;
-  const historyCursorAtEnd = kept.length > 0 ? openCode2HeadCursor(historyEpoch) : undefined;
+  const newestKept = rowId(kept.at(-1));
+  const historyCursorAtEnd = newestKept
+    ? openCode2CursorThrough(newestKept, historyEpoch)
+    : undefined;
   const shown = new Set(window.map(rowId));
   const revised = revert
     ? { rows: [], ids: new Set<string>() }
@@ -520,7 +531,10 @@ async function revisedRows(
   return { rows, ids };
 }
 
-/** History strictly before `cursor`, newest whole rows first to fill the page. */
+/**
+ * History strictly before `cursor` (or, for an inclusive one, at and before
+ * its row), newest whole rows first to fill the page.
+ */
 export async function openCode2TranscriptPage(
   client: OpenCode2Client,
   state: OpenCode2TranscriptState,
@@ -528,9 +542,9 @@ export async function openCode2TranscriptPage(
   options: { cursor: string; limit: number; targetBytes: number },
   onUnknown?: (type: string) => void,
 ): Promise<ProviderTranscriptPage> {
-  const headEpoch = openCode2HeadCursorEpoch(options.cursor);
-  const anchor = headEpoch === undefined ? openCode2CursorAnchor(options.cursor) : undefined;
-  if (!anchor && headEpoch === undefined) return { status: "expired" };
+  const through = openCode2ThroughAnchor(options.cursor);
+  const anchor = through ?? openCode2CursorAnchor(options.cursor);
+  if (!anchor) return { status: "expired" };
   const session = await client.getSession(sessionId).catch((error: unknown) => {
     if (error instanceof OpenCode2RequestError && error.status === 404) return undefined;
     throw error;
@@ -549,25 +563,21 @@ export async function openCode2TranscriptPage(
     return { status: "expired" };
   const count = readLimit(options.limit);
   let page;
+  let throughRow: OpenCode2Message | undefined;
   try {
-    page = await client.listMessages(
-      sessionId,
-      anchor
-        ? { limit: count + 1, cursor: openCode2HistoryCursor(anchor) }
-        : {
-            // The head: the newest rows, as the window read them.
-            limit: count + 1,
-            order: "desc",
-            ...(revert ? { cursor: openCode2HistoryCursor(revert.messageId) } : {}),
-          },
-    );
+    // An inclusive cursor's own row first: a 404 means it is gone.
+    if (through) throughRow = await client.getMessage(sessionId, through);
+    page = await client.listMessages(sessionId, {
+      limit: through ? count : count + 1,
+      cursor: openCode2HistoryCursor(anchor),
+    });
   } catch (error) {
     if (error instanceof OpenCode2RequestError && (error.status === 404 || error.status === 400)) {
       return { status: "expired" };
     }
     throw new ProviderUnavailableError("OpenCode 2 history page is unavailable", { cause: error });
   }
-  if (anchor && page.messages.length === 0) {
+  if (!through && page.messages.length === 0) {
     // An empty page is the start of history only while its anchor exists.
     try {
       await client.getMessage(sessionId, anchor);
@@ -579,12 +589,14 @@ export async function openCode2TranscriptPage(
       });
     }
   }
-  if (anchor && page.messages.some((message) => rowId(message) === anchor)) {
+  if (page.messages.some((message) => rowId(message) === anchor)) {
     return { status: "expired" };
   }
+  if (through && rowId(throughRow) !== through) return { status: "expired" };
   if (state.historyEpoch(sessionId) !== historyEpoch) return { status: "expired" };
-  const more = page.messages.length > count;
-  const read = page.messages.slice(0, count).reverse();
+  const rows = throughRow ? [throughRow, ...page.messages] : page.messages;
+  const more = rows.length > count;
+  const read = rows.slice(0, count).reverse();
   const groups = normalizeOpenCode2Groups(read, onUnknown);
   const start =
     read.length === 0 ? 0 : newestGroups(groups, { rows: count, targetBytes: options.targetBytes });

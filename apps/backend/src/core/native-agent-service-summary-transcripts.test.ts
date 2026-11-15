@@ -678,6 +678,63 @@ describe("summary transcripts", () => {
     );
   });
 
+  test("a cached page whose continuation handle was evicted mints it again (8110)", async () => {
+    const generation = "g".repeat(600);
+    const history = {
+      messages: Array.from({ length: 250 }, (_, index) => message(`m${index}`)),
+      epoch: 1,
+      revision: 1,
+    };
+    const { stub, legacyMessages } = summaryProvider(history, { generation });
+    await withService(
+      { prefix: "orkestrator-summary-evicted-handle-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const handles = projectionInternals(service).directHistoryCursorHandles;
+        // The first walk reads every page from the provider and caches it.
+        await walkDirectly(service as never, history, () => undefined);
+        const providerReads = stub.transcriptPage!.mock.calls.length;
+        expect(providerReads).toBeGreaterThan(1);
+
+        // Another session's cursors push every handle out of the bounded store.
+        handles.clear();
+        expect(handles.size).toBe(0);
+
+        // A cursor the renderer still holds reads as expired, which it
+        // recovers from by re-reading the view.
+        const update = (await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        } as never)) as { status: string; value: { historyCursor?: string } };
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        const firstPage = (await service.getMessagePage({
+          ...identity,
+          syncVersion: 1,
+          before: update.value.historyCursor!,
+          limit: 60,
+        } as never)) as { nextCursor?: string };
+        handles.clear();
+        await expect(
+          service.getMessagePage({
+            ...identity,
+            syncVersion: 1,
+            before: firstPage.nextCursor!,
+            limit: 60,
+          } as never),
+        ).rejects.toThrow("Native agent history cursor expired");
+
+        // The fresh view walks the cached pages to the first message: each
+        // cached page names its continuation again rather than a dead handle.
+        await walkDirectly(service as never, history, () => undefined);
+        expect(stub.transcriptPage!.mock.calls.length).toBe(providerReads);
+        expect(handles.size).toBeGreaterThan(0);
+        expect(legacyMessages).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   for (const recovery of ["complete view", "direct cursor"] as const) {
     test(`a later ${recovery} clears an earlier joined-page cause`, async () => {
       const history = {

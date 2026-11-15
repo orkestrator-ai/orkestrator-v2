@@ -176,6 +176,76 @@ describe("OpenCode history through the native projection", () => {
     await provider.dispose?.();
   });
 
+  test("a later error-row view in the same epoch pages its own window, not a cached one (8110)", async () => {
+    server = new FakeOpenCode2Server();
+    const fake = server;
+    const provider = openCodeProvider(fake);
+    const failLong = (sessionId: string) =>
+      fake.pushRow(sessionId, {
+        type: "assistant",
+        content: [{ type: "text", text: "x".repeat(600 * 1024) }],
+        error: { type: "provider", message: "The provider failed" },
+        time: { created: 1, completed: 1 },
+      });
+    await withService(
+      { prefix: "orkestrator-opencode-history-error-row-again-", provider: async () => provider },
+      async ({ service }) => {
+        const session = await service.ensureSession(identity);
+        const walk = async () => {
+          const update = await service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow,
+            forceSnapshot: true,
+          });
+          if (update.status !== "snapshot") throw new Error("expected a snapshot");
+          const expected = expectedIds(fake, session.providerSessionId);
+          const held = update.value.messages.map((entry) => (entry as { id: string }).id);
+          expect(held).toEqual(expected.slice(-1));
+          expect(update.value.historyPaging).toBe("direct");
+          const ids = [...held];
+          let cursor = update.value.historyCursor;
+          let pages = 0;
+          while (cursor) {
+            const page = await service.getMessagePage({
+              ...identity,
+              syncVersion: 1,
+              before: cursor,
+              limit: 60,
+            });
+            expect(page.historyEpoch).toBe(update.value.historyEpoch);
+            // The renderer drops rows it already holds by id and prepends the
+            // rest, so a page holding newer rows would misplace them.
+            ids.unshift(
+              ...page.messages
+                .map((entry) => (entry as { id: string }).id)
+                .filter((id) => !ids.includes(id)),
+            );
+            cursor = page.nextCursor;
+            pages += 1;
+            if (!cursor) expect(page.complete).toBe(true);
+            expect(pages).toBeLessThan(20);
+          }
+          expect(ids).toEqual(expected);
+          return update.value.historyEpoch;
+        };
+
+        await seedTurns(fake, provider, session.providerSessionId, 20);
+        failLong(session.providerSessionId);
+        // The first walk caches its pages, the window-end page among them.
+        const epoch = await walk();
+
+        // Another prompt and another long failure: the epoch holds, so a
+        // cursor meaning "the newest rows" would hit the cached page, which
+        // lacks this prompt and this response's main row.
+        await provider.send(session.providerSessionId, "step again", { requestId: "req-again" });
+        failLong(session.providerSessionId);
+        expect(await walk()).toBe(epoch);
+      },
+    );
+    await provider.dispose?.();
+  });
+
   test("a session that fits the window offers no history to load", async () => {
     server = new FakeOpenCode2Server();
     const fake = server;

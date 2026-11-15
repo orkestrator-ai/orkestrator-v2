@@ -25,3 +25,9 @@
   backdrop) does not touch transcript rendering, measurement or this
   fixture. The related history cases are 0207 and 0238. No assertion was
   skipped or weakened.
+
+## Recurrence — 2026-11-15 (Environment Files review fix)
+
+Desktop `a tool row outside the render window remains reachable after a long-session append` (`e2e/StreamingTranscript.spec.ts:115`) failed in `mise run test:logged -- --name browser -- mise run test:browser`: `distanceFromBottom` did not reach 1 within 5 s at line 119. The same desktop worker also failed three neighbours that have no case of their own: `earlier tool block stays mounted during append` (section and tool, line 54; "Execution context was destroyed, most likely because of a navigation" in `waitForFrames`) and `cold fill keeps the long transcript render window bounded` (line 101; `transcript-row-count` not found while waiting for navigation). They are recorded here rather than in new cases because the four-digit flake numbers are exhausted (9999 is the last claim). The complete owner passed alone in `mise run test:logged -- --name browser-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/HtmlPreview.spec.ts e2e/ToolGroupFold.spec.ts e2e/StreamingTranscript.spec.ts` (no StreamingTranscript failure; 67 passed overall). `mise run flaky:recurrence -- 0253 --base f53768371` answered open.
+
+Branch `environment-files-1d94a340e118-r1` at `8dbbf2872`, base `f53768371`, Linux x86_64, Bun 1.4.4. The branch's only `apps/web` change is one Settings help string in `GlobalSettings.sections.tsx`; it changes no component spec and no Playwright config. No assertion, timeout or skip changed.

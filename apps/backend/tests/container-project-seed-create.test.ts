@@ -31,12 +31,18 @@ afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
-// The project's `.env`, `.env.local` and `opencode.json` reach a new container
-// only by `docker cp` of bytes the backend read and checked, never as a bind
-// mount the daemon would resolve on the host. Fake Docker extracts the stdin
+// The project's `.env`, `.env.local`, other Environment Files matches and
+// `opencode.json` reach a new container only by `docker cp` of bytes the
+// backend read and checked, never as a bind mount the daemon would resolve on
+// the host. Fake Docker extracts the stdin
 // archive into a capture directory so the test sees exactly what would enter
 // the container. Every link targets a throwaway file.
-async function createWithProject(project: string, filesToCopy: string[] = [], seeded = false) {
+async function createWithProject(
+  project: string,
+  filesToCopy: string[] = [],
+  seeded = false,
+  envFilePatterns?: string[],
+) {
   const dir = await tempDir("ork-project-seed-create-");
   cleanup.push(dir);
   if (seeded) {
@@ -61,7 +67,7 @@ async function createWithProject(project: string, filesToCopy: string[] = [], se
     }),
     loadConfig: async () => ({
       version: "1.0.0",
-      global: { enabledAgentPlatforms: [] },
+      global: { enabledAgentPlatforms: [], ...(envFilePatterns ? { envFilePatterns } : {}) },
       repositories: { "project-1": { filesToCopy: seeded ? [] : filesToCopy } },
     }),
   });
@@ -120,6 +126,39 @@ test("regular project files are copied into the container, not bind-mounted", as
   expect(await fs.readFile(path.join(capture, "opencode-project-json"), "utf8")).toBe(
     '{"model":"x"}',
   );
+});
+
+test("files the Environment Files setting matches are copied in; escapes are refused", async () => {
+  const project = await tempDir("ork-project-seed-project-");
+  const outside = await tempDir("ork-project-seed-outside-");
+  cleanup.push(project, outside);
+  await fs.writeFile(path.join(outside, "host-secret"), "HOST_ONLY=1\n");
+  await fs.writeFile(path.join(project, ".env"), "A=1\n");
+  await fs.writeFile(path.join(project, ".env.test"), "T=1\n");
+  await fs.mkdir(path.join(project, "config"));
+  await fs.writeFile(path.join(project, "config", "app.env"), "C=1\n");
+  await fs.symlink(path.join(outside, "host-secret"), path.join(project, "config", "leak.env"));
+  await fs.symlink(outside, path.join(project, "linked"));
+
+  const { create, capture } = await createWithProject(project, [], false, [
+    ".env",
+    ".env.*",
+    "config/*.env",
+    "linked/*",
+    "../outside",
+  ]);
+
+  expect(create).not.toContain(outside);
+  expect(create).toContain(
+    "--label orkestrator-project-seed-refused=..%2Foutside=invalid-pattern,linked=symlink,config%2Fleak.env=symlink",
+  );
+  expect(await fs.readFile(path.join(capture, "project-env", ".env"), "utf8")).toBe("A=1\n");
+  expect(await fs.readFile(path.join(capture, "project-files", ".env.test"), "utf8")).toBe("T=1\n");
+  expect(await fs.readFile(path.join(capture, "project-files", "config", "app.env"), "utf8")).toBe(
+    "C=1\n",
+  );
+  expect(await fs.readdir(path.join(capture, "project-files", "config"))).toEqual(["app.env"]);
+  expect(await fs.readdir(path.join(capture, "project-files"))).not.toContain("linked");
 });
 
 test("links, directories and files outside the project never reach the container", async () => {

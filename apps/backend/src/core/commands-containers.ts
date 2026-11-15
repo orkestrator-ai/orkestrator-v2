@@ -33,7 +33,8 @@ import { ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV } from "
 import { pathExists, runCommand } from "./shell.js";
 import {
   copyProjectSeedFilesIntoContainer,
-  PROJECT_SEED_FILES,
+  filesLeftForConfiguredCopy,
+  projectSeedReadPlan,
   projectSeedRefusalLabel,
   readProjectSeedFiles,
 } from "./container-project-seed-files.js";
@@ -286,8 +287,6 @@ export async function createDockerContainer(
     ...(repoConfig.filesToCopy ?? []),
     ...seededFiles,
   ]);
-  const seedNames = new Set<string>(PROJECT_SEED_FILES.map((file) => file.name));
-  const configuredFilesToCopy = allFilesToCopy.filter((name) => !seedNames.has(name));
   if (allFilesToCopy.length > 0 && !project.localPath) {
     throw new Error("Project has files configured to copy, but no local path is set");
   }
@@ -585,15 +584,27 @@ export async function createDockerContainer(
     `${DOCKER_LABEL_INPUTS_REVISION}=${stagedInputs.revision}`,
   );
 
-  // The project's own `.env`, `.env.local` and `opencode.json` are read and
-  // checked now and copied into the stopped container below, never bound: a
-  // bind source is resolved by the daemon on the host, so a committed link
-  // could mount any host path. A refused file is skipped and recorded on the
-  // container for the setup terminal. Command-node fallback seeds go through
-  // the same reader; generic configured-file staging cannot reread these names.
+  // The files the "Environment Files" setting matches (by default `.env` and
+  // `.env.local`) and the project's `opencode.json` are read and checked now
+  // and copied into the stopped container below, never bound: a bind source
+  // is resolved by the daemon on the host, so a committed link could mount
+  // any host path. A refused file is skipped and recorded on the container
+  // for the setup terminal. Command-node fallback seeds go through the same
+  // reader; generic configured-file staging cannot reread what it decided.
+  const seedPlan = projectSeedReadPlan(
+    config.global.envFilePatterns,
+    normalizeConfiguredProjectFiles(repoConfig.filesToCopy ?? []),
+    seededFiles,
+  );
   const projectSeedFiles = project.localPath
-    ? await readProjectSeedFiles(project.localPath, seedRoot, allFilesToCopy)
-    : { accepted: [], refused: [] };
+    ? await readProjectSeedFiles(project.localPath, {
+        envFilePatterns: seedPlan.envFilePatterns,
+        exclude: seedPlan.exclude,
+        fallbackPath: seedRoot,
+        fallbackNames: allFilesToCopy,
+      })
+    : { accepted: [], refused: [], handled: [] };
+  const configuredFilesToCopy = filesLeftForConfiguredCopy(allFilesToCopy, projectSeedFiles);
   for (const { name, reason } of projectSeedFiles.refused) {
     dockerLog.warn("project-seed.refused", { environmentId: environment.id, file: name, reason });
   }

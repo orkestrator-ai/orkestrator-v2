@@ -31,7 +31,7 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "git-mirror.clone-fallback":
         "A new environment could not clone from its project's Git mirror and cloned from the remote.",
       "project-seed.refused":
-        "A project .env, .env.local or opencode.json was not copied into a new container: a link, not a regular file, outside the project, too large or unreadable.",
+        "A project file the Environment Files setting matched (by default .env and .env.local), or opencode.json, was not copied into a new container: a link, not a regular file, outside the project, too large, unreadable, an unusable pattern or over the match bounds. Path and reason only, never contents.",
       "opencode.warm-incomplete": "OpenCode did not finish loading /workspace in a container.",
       "opencode.listener-replaced":
         "The process on a container's OpenCode port (`provider`: `opencode` or `opencode2`) is not the server the backend launched and recorded, so its password was withheld and the next start replaces it. `stage` is `request` when the re-check after a refused connection or an unexpected answer found it; that connection then sends nothing more.",

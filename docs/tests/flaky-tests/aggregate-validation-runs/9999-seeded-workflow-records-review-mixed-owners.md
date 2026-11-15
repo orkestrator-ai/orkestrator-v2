@@ -136,3 +136,25 @@ Evidence (private host temporary storage):
 
 All directories above are under
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/`.
+
+## Recurrence — 2026-11-15 (Environment Files review fix)
+
+`mise run test:full` on `environment-files-1d94a340e118-r1` at `df9bdce8b`,
+base `f53768371` (Linux x86_64, other worktrees' suites holding host slots;
+1,193.6 s of test groups) failed two owners that passed when the runner
+reran each file alone:
+
+| Test | Failure | Isolated rerun |
+| --- | --- | --- |
+| `agent mail store size benchmark > rejects malformed, empty, missing and nonpositive sizes` in `apps/backend/tests/agent-mail-store-size-bench.test.ts` | `this test timed out after 5000ms` (5,009 ms), after "killed 1 dangling process" | Runner's alone rerun passed in 8.3 s. |
+| `documented Vite 7/plugin-react 5 config gates emitted paths` in `apps/desktop/tests/source-hint-emitter-vite.integration.test.ts` | The `serve/development` child exited 143 (SIGTERM) instead of 0 at `:97`, empty stdout and stderr, after 25,031 ms | Runner's alone rerun passed in 5.4 s. |
+
+The Vite case is recorded here rather than in a case of its own because the
+four-digit flake numbers are exhausted (9999 is the last claim); it has no
+earlier case. Exit 143 after 25 s, with no output, is consistent with the
+child dev server being stopped at the test's deadline before it emitted on a
+loaded host; that is a hypothesis, not a confirmed cause. The branch changes
+backend seed-file code, `docker/workspace-setup.sh`, tests and docs; neither
+owner imports a changed file. `mise run flaky:recurrence -- 9999 --base
+f53768371` answered open. No assertion, timeout or skip changed. Evidence:
+`orkestrator-test-run.vonYRa` under the host temporary directory.

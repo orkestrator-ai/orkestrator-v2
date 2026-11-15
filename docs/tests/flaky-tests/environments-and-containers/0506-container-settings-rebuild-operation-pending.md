@@ -49,3 +49,35 @@
 - **Evidence:** `orkestrator-test-run.tLYllM/merge-docker.log.gz` below the host temporary directory; the original aggregate remains failed.
 - **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip changed, and this observation does not establish a cause.
 - **Cleanup:** `dev:stop` and `dev:reset` completed for `merge-main-validation`, removing two exact-owner containers, four volumes, one network and disposable profile state.
+
+## Environment Files review fix — 2026-11-15
+
+- **Branch and base:** `environment-files-1d94a340e118-r1` at `0c3077432`,
+  base `f53768371` (origin/main merged in). The branch changes backend
+  seed-file code, `docker/workspace-setup.sh`, tests, docs and one Settings
+  help text; nothing in the container settings panel.
+- **Original command:** `mise run test:agent:docker:isolated` (two shards,
+  one Playwright worker each, credential-free `--fixture-environments
+  local,container` profiles, rebuilt workspace image) on Linux x86_64 with
+  other worktrees' validation holding host capacity.
+- **Failure:** the desktop case could not find Resources within five seconds
+  (`container-settings.spec.ts:104`, `getByText('Resources', { exact: true })`,
+  element not found).
+- **Original result:** shard one 16 passed, 5 skipped; shard two 10 passed,
+  3 skipped, 1 failed (this case); exit 1. The coordinator scenario that had
+  failed in this branch's earlier validation passed.
+- **Complete unchanged owner:** on a fresh profile started with the runner's
+  own flags,
+  `ORKESTRATOR_AGENT_TEST_PROFILE=envfiles-settings-1d94 ORKESTRATOR_AGENT_TEST_RUN_ID=envfiles-settings-owner2-1d94 ORKESTRATOR_AGENT_TEST_DOCKER=1 mise run test:logged -- --name container-settings-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts container-settings.spec.ts --workers=1`
+  passed all three cases, exit 0 in 30.4 s. (A first attempt on a profile
+  started with `--agent-platforms claude` and no credentials failed every
+  case behind the "Claude Code Is Not Logged In" dialog; that was the
+  profile, not this flake.)
+- **Evidence:** `output/ork-docker-isolated-rerun.log` in the worktree
+  (git-ignored).
+- **Assessment:** recurrence under load; `mise run flaky:recurrence -- 0506`
+  against this base: open, a recurrence. No implementation, assertion,
+  timeout or skip changed.
+- **Cleanup:** `dev:stop` and `dev:reset` completed for
+  `envfiles-settings-1d94`, removing two exact-owner containers, two volumes,
+  one network and disposable profile state.

@@ -77,8 +77,16 @@ import { lowPriorityCommand } from "./process-priority.js";
 import { spawnPty } from "./pty.js";
 import { DOCKER_LABEL_APP, DOCKER_LABEL_APP_VALUE, DOCKER_LABEL_OWNER } from "./constants.js";
 import {
+  filesLeftForConfiguredCopy,
+  PROJECT_ENV_DIRECT_NAMES,
   formatProjectSeedRefusals,
+  projectSeedReadPlan,
+  readProjectSeedFiles,
   readProjectSeedRefusals,
+  rememberWorktreeSeedRefusals,
+  takeWorktreeSeedRefusals,
+  writeProjectSeedFilesToWorktree,
+  type ProjectSeedRefusal,
 } from "./container-project-seed-files.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
@@ -98,7 +106,10 @@ import {
   isContainerRunning,
   parseDockerStatus,
 } from "./commands-container-exec.js";
-import { copyConfiguredProjectFilesToDirectory } from "./commands-project-files.js";
+import {
+  copyConfiguredProjectFilesToDirectory,
+  normalizeConfiguredProjectFiles,
+} from "./commands-project-files.js";
 import {
   evaluateEnvironmentSetupTrust,
   holdEnvironmentSetupForApproval,
@@ -487,17 +498,6 @@ export { getWorktreeBaseDir };
 
 export { readSetupLocalCommands };
 
-/** Whether anything, a dangling link included, is at `target`. */
-async function pathEntryExists(target: string): Promise<boolean> {
-  return fs.lstat(target).then(
-    () => true,
-    (error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return false;
-      throw error;
-    },
-  );
-}
-
 export async function readEnvironmentSetupCommands(environment: Environment): Promise<string[]> {
   if (environment.setupScriptsComplete) return [];
   if (environment.environmentType === "local") {
@@ -589,6 +589,51 @@ export function formatSetupPreparationIntro(environment: Environment): string {
   ].join("\r\n");
 }
 
+/**
+ * The setup terminal of a local environment with no setup commands, opened
+ * only to show what the worktree's creation refused to copy.
+ */
+export function formatSetupNoticeIntro(
+  environment: Environment,
+  notices: readonly string[],
+): string {
+  return [
+    "\r\n",
+    "[orkestrator] No setup commands to run",
+    `[orkestrator] Environment: ${environment.name} (${environment.id})`,
+    `[orkestrator] Target: ${environment.worktreePath ?? environment.id}`,
+    ...notices,
+    "",
+  ].join("\r\n");
+}
+
+/**
+ * A local worktree's refused Environment Files matches are normally shown by
+ * its setup terminal (`spawnSetupTerminal`). With no setup commands there is
+ * no such terminal, so they go to the preparation session when one is open,
+ * or to a setup session opened for them; setup completion then closes it.
+ * Taking them here also frees the pending entry.
+ */
+export async function showWorktreeSeedRefusalsWithoutSetup(
+  environment: Environment,
+  context: CommandContext,
+  preparationSessionId: string | undefined,
+): Promise<void> {
+  if (environment.environmentType !== "local") return;
+  const notices = formatProjectSeedRefusals(takeWorktreeSeedRefusals(environment.id), "worktree");
+  if (notices.length === 0) return;
+  if (preparationSessionId) {
+    context.runtime.terminals.emitOutput(
+      preparationSessionId,
+      `${notices.join("\r\n")}\r\n`,
+      context.emit,
+    );
+    return;
+  }
+  beginSetupPreparationSession(environment, context, formatSetupNoticeIntro(environment, notices));
+  await publishSetupTab(environment.id, context);
+}
+
 /** Terminal output is rendered by xterm.js, which needs CRLF rather than bare LF. */
 export function toTerminalText(output: string): string {
   return output.replace(/\r?\n/g, "\r\n");
@@ -604,6 +649,7 @@ export function toTerminalText(output: string): string {
 export function beginSetupPreparationSession(
   environment: Environment,
   context: CommandContext,
+  intro: string = formatSetupPreparationIntro(environment),
 ): string {
   const sessionId = setupTerminalSessionId(environment.id);
   const terminals = context.runtime.terminals;
@@ -629,7 +675,7 @@ export function beginSetupPreparationSession(
     environmentType: environment.environmentType,
     sessionId,
   });
-  terminals.emitOutput(sessionId, formatSetupPreparationIntro(environment), context.emit);
+  terminals.emitOutput(sessionId, intro, context.emit);
   context.emit(environmentSetupStartedEvent, {
     environment_id: environment.id,
     session_id: sessionId,
@@ -705,6 +751,10 @@ export async function spawnSetupTerminal(
     const shellPath = resolveLocalShellPath();
     const setupCommand = buildSetupTerminalCommand(commands, `${quoteShell(shellPath)} -l`);
     const setupEnvironment = envWithManagedBinaries(context);
+    // Held in memory from the worktree's creation and shown once.
+    introNotices.push(
+      ...formatProjectSeedRefusals(takeWorktreeSeedRefusals(environment.id), "worktree"),
+    );
     terminals.rememberSession(sessionId, {
       kind: "local",
       environmentId: environment.id,
@@ -1046,6 +1096,7 @@ export async function startEnvironmentSetupAfterPreparation(
       worktreePath: current.worktreePath ?? null,
       containerId: current.containerId ?? null,
     });
+    await showWorktreeSeedRefusalsWithoutSetup(current, context, preparationSessionId);
     const updated = await completeEnvironmentSetup(current, context);
     return {
       setupStarted: false,
@@ -1684,7 +1735,9 @@ export async function startEnvironmentOnce(
         (await pathExists(seedRoot)) ? seedRoot : undefined,
         // `initLocalProject` records the checkout itself as a local-only project's remote.
         project.gitUrl === project.localPath,
+        (await storage.loadConfig()).global.envFilePatterns,
       );
+      rememberWorktreeSeedRefusals(environment.id, worktree.envFileRefusals);
       // Seed files are copied once; the staging copy is not kept.
       await fs.rm(seedRoot, { recursive: true, force: true }).catch(() => undefined);
       unpersistedWorktree = {
@@ -2299,7 +2352,15 @@ export async function createLocalWorktree(
   seedRoot?: string,
   /** A `project init` project: no remote, so its own branch is the base. */
   localOnly = false,
-): Promise<{ path: string; branch: string; createdFromCommit: string }> {
+  /** The "Environment Files" setting; omitted means the default `.env`, `.env.local`. */
+  envFilePatterns?: readonly string[],
+): Promise<{
+  path: string;
+  branch: string;
+  createdFromCommit: string;
+  /** Matches refused under the seed-file rules, for the setup terminal. */
+  envFileRefusals: ProjectSeedRefusal[];
+}> {
   const baseDir = worktreeBaseDir ?? getWorktreeBaseDir();
   assertWorktreePathUnlinked(baseDir);
   const recheckBase = captureWorktreePathIdentity(baseDir);
@@ -2358,27 +2419,47 @@ export async function createLocalWorktree(
     await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
     await enableGitScanCaches(worktreePath);
 
-    for (const envFile of [".env", ".env.local"]) {
-      const destination = path.join(worktreePath, envFile);
-      // `lstat`, not `pathExists`: a branch can commit `.env` as a link to a
-      // path that does not exist yet, and following it would write the
-      // user's real `.env` wherever the link points.
-      if (await pathEntryExists(destination)) continue;
-      // The node's own copy wins; a staged seed copy only fills a gap.
-      const own = path.join(projectPath, envFile);
-      const seeded = seedRoot ? path.join(seedRoot, envFile) : null;
-      if (await pathExists(own)) await fs.copyFile(own, destination);
-      else if (seeded && (await pathExists(seeded))) await fs.copyFile(seeded, destination);
+    // The files the "Environment Files" setting matches go through the same
+    // reader as a container's: a regular file inside the project, never a
+    // link, at most 1 MiB, within the match bounds. A path the branch already
+    // has in the worktree, a link included, is left alone, and one behind a
+    // linked directory is refused, so nothing is written outside the
+    // worktree. The node's own copy wins; a staged seed copy only fills a gap.
+    const configuredFiles = normalizeConfiguredProjectFiles(filesToCopy);
+    const seededFiles = seedRoot ? await readSeedManifest(seedRoot) : [];
+    const allFiles = [...new Set([...configuredFiles, ...seededFiles])];
+    const plan = projectSeedReadPlan(envFilePatterns, configuredFiles, seededFiles);
+    // A worktree's opencode.json is its checkout's, unless files-to-copy or
+    // the seed manifest names one: that copy then goes through the generic
+    // configured-file copy below, as before the setting was honoured.
+    const seedOptions = { includeOpenCodeConfig: false };
+    const envFiles = await readProjectSeedFiles(projectPath, {
+      envFilePatterns: plan.envFilePatterns,
+      exclude: plan.exclude,
+      fallbackPath: seedRoot,
+      // A worktree always filled an absent `.env` or `.env.local` from the
+      // staged seed copy, whether or not the seed manifest lists it; the
+      // setting still decides whether either is read at all (a literal
+      // pattern only).
+      fallbackNames: [...new Set([...allFiles, ...PROJECT_ENV_DIRECT_NAMES])],
+      ...seedOptions,
+    });
+    const envFileRefusals = [
+      ...envFiles.refused,
+      ...(await writeProjectSeedFilesToWorktree(worktreePath, envFiles.accepted)),
+    ];
+    for (const { name, reason } of envFileRefusals) {
+      log.warn("project-seed.refused", { worktree: true, file: name, reason });
     }
 
     await copyConfiguredProjectFilesToDirectory(
       projectPath,
       worktreePath,
-      [...new Set([...(filesToCopy ?? []), ...(seedRoot ? await readSeedManifest(seedRoot) : [])])],
+      filesLeftForConfiguredCopy(allFiles, envFiles, seedOptions),
       seedRoot,
     );
 
-    return { path: worktreePath, branch: finalBranch, createdFromCommit };
+    return { path: worktreePath, branch: finalBranch, createdFromCommit, envFileRefusals };
   } catch (error) {
     await cleanupFailedLocalWorktree(projectPath, worktreePath, finalBranch);
     throw error;

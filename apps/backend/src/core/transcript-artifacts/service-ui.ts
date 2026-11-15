@@ -454,14 +454,6 @@ export class ArtifactUiReads {
         artifactError("invalid_input", "Only interactive HTML artifacts have live sessions"),
       );
     }
-    if (!this.ctx.rollout().liveInteractive) {
-      throw new ArtifactFailure(
-        artifactError(
-          "policy_denied",
-          "Live interactive artifacts are disabled; the saved preview remains available",
-        ),
-      );
-    }
     const server = this.ctx.runtime.contentServer;
     if (!server || server.origin() === null) {
       throw new ArtifactFailure(
@@ -507,14 +499,12 @@ export class ArtifactUiReads {
         }),
       // Re-checked on every request the content origin serves: the owner,
       // publication and exact prepared bytes must still be current, the
-      // environment not deleted, live viewing still enabled, and this live
-      // session not closed or revoked. Read-only and fast.
+      // environment not deleted, and this live session not closed or revoked.
+      // Read-only and fast.
       authorize: async () => {
         try {
           if (generation === undefined || !this.liveSessions.has(generation)) return false;
-          if (!this.ctx.rollout().liveInteractive || this.ctx.store.isDeleted(environmentId)) {
-            return false;
-          }
+          if (this.ctx.store.isDeleted(environmentId)) return false;
           const again = this.locate(scope, publicationId);
           return (
             again.revision.artifactId === revision.artifactId &&

@@ -14,8 +14,6 @@ import { ManualTime } from "./recurring-test-support.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { createEnvironment, StorageService } from "./storage.js";
-import { interactionInternals } from "./native-agent-service-test-collaborators.js";
-import type { NativeAgentService } from "./native-agent-service.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 
 function fakeAgentTools(
@@ -282,14 +280,9 @@ test("probes for an agent-created PR on the backend's own agent-idle edge", asyn
   }
 });
 
-test("wires observe-only monitoring and its adoption kill switch from the environment", async () => {
-  const observeKey = "ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY";
-  const killSwitchKey = "ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH";
-  const previousObserve = process.env[observeKey];
-  const previousKillSwitch = process.env[killSwitchKey];
-  const backends: OrkestratorBackend[] = [];
-  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-interaction-env-"));
-  const options = {
+test("shares its multi-review supervisor with the command context", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-multi-review-"));
+  const backend = new OrkestratorBackend({
     dataDir,
     toolchainBinDir: "",
     appRoot: "",
@@ -300,55 +293,15 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
       localServers: async () => [],
       claudeTmuxRuntimes: async () => [],
     },
-  };
-  const monitorOptions = (backend: OrkestratorBackend) => {
-    const nativeAgents = (backend as unknown as { nativeAgents: NativeAgentService }).nativeAgents;
-    const { options } = nativeAgents as unknown as {
-      options: {
-        interactionMonitorMode?: "disabled" | "observe-only";
-        interactionMonitorAdoptionEnabled?: boolean;
-      };
-    };
-    return {
-      ...options,
-      effectiveAdoption: interactionInternals(nativeAgents).interactionMonitorAdoptionEnabled(),
-    };
-  };
-
+  });
   try {
-    delete process.env[observeKey];
-    delete process.env[killSwitchKey];
-    const disabled = new OrkestratorBackend(options);
-    backends.push(disabled);
-    expect(monitorOptions(disabled)).toMatchObject({
-      interactionMonitorMode: "disabled",
-      interactionMonitorAdoptionEnabled: true,
-      effectiveAdoption: true,
-    });
-
-    process.env[observeKey] = "1";
-    process.env[killSwitchKey] = "1";
-    const observeOnly = new OrkestratorBackend({
-      ...options,
-      agentTools: fakeAgentTools(),
-    });
-    backends.push(observeOnly);
-    expect(monitorOptions(observeOnly)).toMatchObject({
-      interactionMonitorMode: "observe-only",
-      interactionMonitorAdoptionEnabled: false,
-      effectiveAdoption: false,
-    });
-    const internals = observeOnly as unknown as {
+    const internals = backend as unknown as {
       context: { multiReviews: unknown };
       multiReviews: unknown;
     };
     expect(internals.context.multiReviews).toBe(internals.multiReviews);
   } finally {
-    if (previousObserve === undefined) delete process.env[observeKey];
-    else process.env[observeKey] = previousObserve;
-    if (previousKillSwitch === undefined) delete process.env[killSwitchKey];
-    else process.env[killSwitchKey] = previousKillSwitch;
-    await Promise.all(backends.map((backend) => backend.shutdown().catch(() => undefined)));
+    await backend.shutdown().catch(() => undefined);
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });

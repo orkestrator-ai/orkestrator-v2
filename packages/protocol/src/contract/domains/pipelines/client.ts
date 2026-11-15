@@ -2,7 +2,7 @@
  * The `pipelines` domain client (plan item 7007; §11.2 "Client adapters"):
  * one function per command (`commandApi`), keyed by command name.
  *
- * - Version 1 sends the envelope (`existingEnvironmentId` and
+ * - Versions 2 and 1 send the envelope (`existingEnvironmentId` and
  *   `deliveryPolicy` on the launches, `requestId` on a feature build, a
  *   restart's `selection` and the unread badge's `expectedLastActivityAt` are
  *   critical) and decodes the results with the schemas in `./schemas.ts`.
@@ -28,6 +28,11 @@ const legacyPipelinesApi = (_call: CommandCall, context: DomainAdapterContext): 
   legacyCommandApi(context, PIPELINES_COMMANDS);
 
 export const pipelinesClient = domainClient(pipelinesDomain, {
+  2: pipelinesApi,
+  // Version 2 only removed `import_legacy_build_pipelines` and
+  // `set_workflow_result_tools_rollout` (2026-11-15), which no client calls,
+  // so version 1 peers take the same API. Adapter 1 goes when the support
+  // floor passes the first Stable release with version 2.
   1: pipelinesApi,
   0: legacyPipelinesApi,
 });

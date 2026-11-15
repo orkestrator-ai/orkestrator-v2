@@ -24,7 +24,7 @@ readings of 7570 task 2, 0050 task 1 and 0232 task 4).
 
 ### Tasks
 
-1. **Manual tests and live checks** (327 items): run each check under
+1. **Manual tests and live checks** (328 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (23 items): make each call
@@ -166,12 +166,12 @@ agent can apply it.
 | CLI and slash commands | 5 | 0 |
 | Containers and environments | 28 | 6 |
 | Coordinator and Multi Review | 83 | 3 |
-| Cross-cutting | 85 | 8 |
+| Cross-cutting | 86 | 8 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 16 | 1 |
 | Transcripts, observation and bandwidth | 27 | 1 |
-| **Total** | 327 | 23 |
+| **Total** | 328 | 23 |
 
 ## Outstanding work
 
@@ -661,6 +661,8 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[7543](../backend-structure/7543-effect-adoption-follow-ups.md) task 2: a coded refusal in a running Electron window.** The renderer strips the `[code …]` prefix from desktop IPC errors (`readableCodedError`), checked only at the renderer client level because the agent fleet host has no display. On a desktop (macOS, or Linux with a display), start a disposable profile with a native window (`mise run dev:test --profile coded-error-qa --fixture --no-agent-credentials --no-headless --fixture-environments local,container`). Trigger a container lifecycle refusal: with Docker stopped, start or rebuild the fixture container environment (`daemon-unavailable`). Trigger an MCP management refusal: in Settings → MCP servers, save a server under a name that already exists, or one with a malformed command. Each error shown must read as plain text, with no `[container-lifecycle …]` or `[mcp-management …]` prefix. Then `mise run dev:stop --profile coded-error-qa` and `mise run dev:reset --profile coded-error-qa`. Record pass or fail per refusal, the OS and the commit in 7543's "Needs verification", or reply to the coordinator.
 - [ ] **4961 (retired) task 1: judge how a capped bulk list reads in the Changes view.** (Background: [Change tracking: retention and backup](../../architecture/change-tracking.md#retention-and-backup); the to-do is in Git history at `14df96544`.) On 2026-11-11 an agent kept one row per file rather than adding one row per bulk directory: the storage a directory row would save stays inside the per-owner bound (about 0.5 MiB per bulk turn for 30 days), and a directory row would be a new row kind for diff bodies, restore and every client. Whether a capped list reads poorly is the part only you can judge. In a disposable `dev:test` profile started with `--fixture --no-agent-credentials`, in a fixture environment, edit two tracked source files and add 2,500 small files under one new directory, then open the Changes view. Record: whether the two source files are easy to find above the bulk directory, whether the "not listed. The totals count them all." notice is clear, and whether you want one row per bulk directory instead. Reply to the coordinator; a "yes" to directory rows becomes a new to-do, starting from the option analysis in 4961.
 - [ ] **[7568](7568-manual-test-checklist.md) ticket "Kanban tickets, show created and last-updated times": check the times by eye.** (Background: [Views](../../architecture/tickets.md#views), "Created and updated times".) In a disposable `dev:test` profile with `--fixture --no-host-seed`, create a ticket and open it: the header shows only "Created just now" beside the Notes line, muted like it, with the exact local time as its tooltip. Edit the title, wait a minute and reopen it: "Updated …" now shows too, and the board card shows "Updated 1m ago" at its bottom left without the card growing, its tooltip giving both exact times; hovering the card still shows the Open button without overlapping it. Check a 390 px wide window too. With a command node and a leaf, edit a synced ticket on either and check both machines show the same Created and Updated times. Record: pass or fail per check, with the date, by replying to the coordinator.
+
+- [ ] **8109 (retired) task 5: run the container app-wiring spec on its new pipeline seed.** (Background: the `import_legacy_build_pipelines` Retired row in [version-compatibility.md](../../architecture/version-compatibility.md#retired); the to-do is in Git history at `a8b89f154`.) The spec's "a pipeline naming the run opens in the container's Build tab" step now stores its finished pipeline through `seedBuildPipeline` (`e2e/agent-testing/backend-store.ts`) instead of the removed command. The building session could not reach a Docker daemon, so the spec was not run. On a host with Docker, start a credential-free profile with a container fixture (`mise run dev:test --profile seed-8109 --fixture --fixture-environments local,container --no-agent-credentials --no-host-seed --headless`), wait for `dev:status --json` to report `ready`, then run `ORKESTRATOR_AGENT_TEST_PROFILE=seed-8109 mise run test:logged -- --name app-wiring -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts container-app-wiring.spec.ts`, and stop and reset the profile afterwards (`dev:stop`, `dev:reset`). Expected: every test in the file passes; the seeded pipeline lists, and its Build tab shows the validation run's two commands. Record: the commit, the pass and fail counts and any failing step's message, as a reply to the coordinator. A failure goes to a new to-do for an agent.
 
 #### Design canvas
 

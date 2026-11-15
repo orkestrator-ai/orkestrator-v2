@@ -152,8 +152,8 @@ scenarios. In the tree on 2026-11-14: `scripts/mixed-version/` (`harness.ts`,
 (the `qualify:mixed-versions` mise task), `scripts/qualify-slash-mixed-versions.ts`,
 `scripts/qualify-design-mixed-versions.ts`, `scripts/design-mixed-version-checks.ts`
 and `scripts/older-release-stack.ts`. `scripts/mixed-version/scenarios/pipelines.ts`
-is one of the callers of `import_legacy_build_pipelines`
-([8109](8109-decided-removal-candidates.md) task 5). To-do 0015 (retired
+no longer calls `import_legacy_build_pipelines`, which was removed on
+2026-11-15 (8109 (retired) task 5). To-do 0015 (retired
 2026-11-14) closed its mixed-version task under the same decision.
 
 **Investigation.** Not started. Check every importer of
@@ -230,8 +230,9 @@ date and "retired by the 2026-11-14 legacy-retirement decision".
 - [7571](7571-removal-candidates-needing-a-decision.md) task 9 and
   [0042](../previews-and-annotations/0042-service-preview-rollout.md) task 8:
   the decisions behind tasks 2 and 3.
-- [8109](8109-decided-removal-candidates.md): the other removals the user
-  decided on 2026-11-14.
+- 8109 (retired 2026-11-15): the other removals the user decided on
+  2026-11-14, now in the Retired table of
+  [version-compatibility.md](../../architecture/version-compatibility.md#retired).
 - The unblocked to-dos listed under task 1.
 
 ## Replaces

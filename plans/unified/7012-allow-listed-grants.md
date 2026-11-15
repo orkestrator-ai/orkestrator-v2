@@ -60,7 +60,7 @@ A workspace grant can run exactly the commands whose definition says `access: "w
   - `admin`: machine-wide diagnostics, counters and operator switches that no client calls.
     - `changes_get_diagnostics` (7006).
     - `get_mcp_management_rollout` and `set_mcp_management_rollout` (7008, the operator kill switch).
-    - `get_agent_interaction_observations`, `reconcile_agent_interactions` and `set_agent_interaction_monitor_adoption` (7001).
+    - `get_agent_interaction_observations`, `reconcile_agent_interactions` and `set_agent_interaction_monitor_adoption` (7001). Removed with the interaction monitor on 2026-11-15 (to-do 8109, retired the same day).
     - `get_workflow_result_metrics` and `get_workflow_result_tools_rollout` (7007; their sibling `set_workflow_result_tools_rollout` was already refused).
     - `get_artifact_metrics`, `get_compatibility_path_usage`, `get_progressive_read_metrics`, `get_recurring_work_diagnostics` and `reconcile_workflow_scheduling` (7009). Settings and the CLI still reach these on another machine with `invoke_on_node` or the full token.
   - `internal`: commands the backend calls in process only.

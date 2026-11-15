@@ -982,7 +982,7 @@ and a frame that gave up all leave the card on its saved preview, and the card
 withholds the document (`withholdArtifactSearchBody`, per occurrence, kept when the
 card scrolls away) so a read in flight or a later Find session cannot write the text
 back. A frame that renders the document again, after Retry or on a remount,
-releases it. Find never counts a match it cannot highlight. The hosted client and the `staticPresentation` switch read nothing,
+releases it. Find never counts a match it cannot highlight. The hosted client and an older backend's `staticPresentation: false` read nothing,
 because their cards never show the text. A publication verified before the text
 was stored, and an older backend, answer `invalid_input`; such a document counts
 once its card has shown it, as before. There is no backfill: one would launch a
@@ -1078,14 +1078,15 @@ convenience publishing tool are out of scope:
 
 ## Rollout
 
-`transcript_artifact_capabilities.rolloutFlags` carries four switches. With
-`richMarkdown` off, text renders and is indexed through the plain Markdown
-path. With `artifactPublication` off, `publish_artifact` is refused while
-existing publications stay readable. With `liveInteractive` off, Run
+`transcript_artifact_capabilities.rolloutFlags` carries four former switches.
+The backend has no off switch for any of them and reports each `true`; the
+fields stay so the capability contract is unchanged. The renderer still honours
+a `false` from an older backend. With `richMarkdown` off, text renders and is
+indexed through the plain Markdown path. With `liveInteractive` off, Run
 interactive is unavailable and saved previews remain. With `staticPresentation`
-off (`ORKESTRATOR_ARTIFACT_STATIC_PRESENTATION=0`), `html-static` cards show
-their saved preview and no document view; it is independent of `liveInteractive`,
-and an older backend that does not send it displays documents as usual. The hosted
+off, `html-static` cards show their saved preview and no document view; it is
+independent of `liveInteractive`, and an older backend that does not send it
+displays documents as usual. The hosted
 client (`apps/web-public`) declares the view unavailable at build time, because
 `vercel.json`'s policy cannot run its frame, so its cards stay on saved previews. No
 switch deletes or rewrites stored records.

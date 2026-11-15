@@ -21,7 +21,7 @@ const policy = resolveNativeAgentExecutionPolicy(
 );
 const CONNECTION = { url: "http://127.0.0.1:43123/mcp", token: "attempt-capability" };
 
-function dispatchDouble(options: { toolsEnabled?: boolean } = {}) {
+function dispatchDouble() {
   const begun: Array<Parameters<ArtifactTurnDispatch["beginTurn"]>[0]> = [];
   const settled: Array<[string, string, string]> = [];
   const dispatch: ArtifactTurnDispatch = {
@@ -32,7 +32,6 @@ function dispatchDouble(options: { toolsEnabled?: boolean } = {}) {
     settleTurn(environmentId, conversationKey, turnId) {
       settled.push([environmentId, conversationKey, turnId]);
     },
-    toolsEnabled: () => options.toolsEnabled ?? true,
   };
   return { dispatch, begun, settled };
 }
@@ -188,12 +187,6 @@ describe("beginWorkflowArtifactTurn", () => {
     // An HTTP bridge without a tool-mode connection has nowhere to carry it.
     expect(beginWorkflowArtifactTurn(dispatch, { ...input, agent: "codex" })).toBeUndefined();
     expect(begun).toEqual([]);
-    // Nor while artifact tools are not served at all.
-    const off = dispatchDouble({ toolsEnabled: false });
-    expect(
-      beginWorkflowArtifactTurn(off.dispatch, { ...input, agent: "claude", agentMcp: CONNECTION }),
-    ).toBeUndefined();
-    expect(off.begun).toEqual([]);
     expect(beginWorkflowArtifactTurn(undefined, { ...input, agent: "opencode" })).toBeUndefined();
   });
 

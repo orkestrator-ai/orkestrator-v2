@@ -45,7 +45,7 @@ Playwright 1.65.0, one worker):
   `d58f114a7` (one worker, other worktrees' runs active on the host):
   **passed** (case 31 of 85; the suite's only failures were two
   service-preview cases);
-- `ORKESTRATOR_AGENT_TEST_RUN_ID=8300-renderer-permissions-repeat mise run test:logged -- --name renderer-permissions-repeat -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts renderer-permissions-electron.spec.ts --repeat-each=3`:
+- `ORKESTRATOR_AGENT_TEST_RUN_ID=8301-renderer-permissions-repeat mise run test:logged -- --name renderer-permissions-repeat -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts renderer-permissions-electron.spec.ts --repeat-each=3`:
   three of three timed out (120 s each).
 
 Totals: two full-suite runs (one pass, one timeout) and four runs of the

@@ -376,7 +376,6 @@ describe("FeaturePlanningService", () => {
       settleTurn: (environmentId: string, conversationKey: string, turnId: string) => {
         settled.push([environmentId, conversationKey, turnId]);
       },
-      toolsEnabled: () => true,
     };
     const context = await harness({ toolMode: true, serviceOptions: { artifactDispatch } });
     try {

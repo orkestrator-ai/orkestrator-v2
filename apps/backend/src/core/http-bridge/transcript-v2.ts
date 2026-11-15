@@ -15,7 +15,7 @@
  */
 import {
   BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES,
-  bridgeTranscriptPageCursorAt,
+  bridgeTranscriptPageCursorFor,
   parseBridgeTranscriptDetailResponse,
   parseBridgeTranscriptPageResponse,
   parseBridgeTranscriptSummaryUpdate,
@@ -84,13 +84,13 @@ function historyEpoch(generation: unknown, contentEpoch: unknown): string {
 
 /**
  * `historyCursorBefore` for a positioned window: a bridge pages by absolute
- * position, so the cursor before any row it sent is the snapshot's cursor
- * moved to that row's position. Positions are indexed on first use only.
+ * position, so the cursor before any row it sent is a cursor for that row's
+ * position (`cursorAt`). Positions are indexed on first use only.
  */
 export function positionedCursorBefore(
   messages: readonly unknown[],
   startIndex: number,
-  historyCursor: string,
+  cursorAt: (position: number) => string | undefined,
 ): (messageId: string) => string | undefined {
   let positions: Map<string, number> | undefined;
   return (messageId) => {
@@ -102,9 +102,31 @@ export function positionedCursorBefore(
       });
     }
     const position = positions.get(messageId);
-    return position === undefined
-      ? undefined
-      : bridgeTranscriptPageCursorAt(historyCursor, position);
+    return position === undefined ? undefined : cursorAt(position);
+  };
+}
+
+type SummaryValue = Extract<
+  ReturnType<typeof parseBridgeTranscriptSummaryUpdate>,
+  { status: "snapshot" }
+>["value"];
+
+/**
+ * Cursors naming positions in a paged window. Every bridge pages through the
+ * shared helper, so a position is named from the snapshot's own generation
+ * and content epoch. That holds when the window starts at the first message
+ * and the bridge sent no cursor: a reader whose byte bound dropped leading
+ * rows still names the first row it kept (8110).
+ */
+function positionCursors(
+  value: SummaryValue,
+): Pick<ProviderTranscriptSnapshot, "historyCursorBefore" | "historyCursorAtEnd"> {
+  const cursorAt = (position: number) =>
+    bridgeTranscriptPageCursorFor(value.generation, value.contentEpoch, position);
+  const atEnd = cursorAt(value.startIndex + value.messages.length);
+  return {
+    historyCursorBefore: positionedCursorBefore(value.messages, value.startIndex, cursorAt),
+    ...(atEnd ? { historyCursorAtEnd: atEnd } : {}),
   };
 }
 
@@ -136,16 +158,8 @@ function summarySnapshot(
     freshness: value.freshness,
     representation: "summary",
     historyPageable: value.capabilities.pages,
-    ...(historyCursor
-      ? {
-          historyCursor,
-          historyCursorBefore: positionedCursorBefore(
-            value.messages,
-            value.startIndex,
-            historyCursor,
-          ),
-        }
-      : {}),
+    ...(historyCursor ? { historyCursor } : {}),
+    ...(value.capabilities.pages ? positionCursors(value) : {}),
     ...(value.historyReconciliationToken
       ? { historyReconciliationToken: value.historyReconciliationToken }
       : {}),

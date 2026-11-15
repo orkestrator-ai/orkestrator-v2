@@ -5,15 +5,16 @@ Checked against `main` at `17d28238c` (2026-11-13).
 ## Task analysis
 
 Analysed 2026-11-13 against `main` at `17d28238c`. Updated 2026-11-14 for the
-user's decisions on tasks 6 and 8.
+user's decisions on tasks 6 and 8, and 2026-11-15 against `main` at
+`a8b89f154` for task 8's workflow.
 
 ### Tasks
 
 5. **Codex live and cold row layout**: a multi-agent v2 turn is one assistant row live but two after a cold reload; scrub the recorded stream, add it as a fixture, then align or document. Status: blocked (waits on 7568: 0031 task 5; the current layouts are pinned by a credential-free test).
 6. **Re-qualification rule after agent bumps**: write the maintainer's chosen rule into `docs/development/upgrade-agents.md`. Status: done (2026-11-14: the user chose the recommended rule; it is in [upgrade-agents.md](../../development/upgrade-agents.md#re-qualify-live-features-after-a-bump)).
-8. **Scheduled CI for platform runs**: add a weekly and `workflow_dispatch` Linux job that runs `mise run test:agent:electron` under `xvfb-run` on GitHub runners, on the container workflow's schedule (the user's choice, 2026-11-14). Status: open.
+8. **Scheduled CI for platform runs**: add a weekly and `workflow_dispatch` Linux job that runs `mise run test:agent:electron` under `xvfb-run` on GitHub runners, on the container workflow's schedule (the user's choice, 2026-11-14). Status: done (2026-11-15: `.github/workflows/electron-qualification.yml`; reading its first runs is 7568, 0031 task 8).
 
-Tasks 2 (the transcript part coverage spec), 9 (Current state and the batching index) and 10 (the `graph-profiles` scenario) were done on 2026-11-13; see [Assumptions and decisions](#assumptions-and-decisions). Their live runs are items in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md#cross-cutting) (0031 tasks 2 and 10).
+Only task 5 is left, and it waits on a 7568 recording, so no agent work remains in this file until that recording exists. Tasks 2 (the transcript part coverage spec), 9 (Current state and the batching index) and 10 (the `graph-profiles` scenario) were done on 2026-11-13; see [Assumptions and decisions](#assumptions-and-decisions). Their live runs are items in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md#cross-cutting) (0031 tasks 2 and 10).
 
 ### 5. Codex live and cold row layout
 
@@ -50,9 +51,11 @@ Tasks 2 (the transcript part coverage spec), 9 (Current state and the batching i
 
 **Context.** The credential-free Electron suite (`mise run test:agent:electron`) is the cheapest platform run to schedule; provider suites spend tokens and need secrets.
 
-**Investigation.** As of `17d28238c`: `container-live-qualification.yml` runs the opt-in live Docker suites against a real Linux Engine on both architectures (weekly, on demand, and on pull requests touching them); `native-application-menu.yml` runs three Electron specs under `xvfb-run` on Linux and on Windows and macOS runners, and the packaged log controls on Linux and macOS, but only on pull requests that touch its paths and on demand, never on a schedule; `validate-bun-runtime.yml` builds the packaged desktop app and the image nightly, with macOS runners; `claude-apparmor-qualification.yml` and `mixed-version-qualification.yml` run weekly. No workflow runs the whole `test:agent:electron` suite, nothing runs a live provider, Docker Desktop or iOS. `validate-bun-runtime.yml` notes the Free plan's limit of five concurrent macOS runners.
+**Investigation.** As of `17d28238c`: `container-live-qualification.yml` runs the opt-in live Docker suites against a real Linux Engine on both architectures (weekly, on demand, and on pull requests touching them); `native-application-menu.yml` runs three Electron specs under `xvfb-run` on Linux and on Windows and macOS runners, and the packaged log controls on Linux and macOS, but only on pull requests that touch its paths and on demand, never on a schedule; `validate-bun-runtime.yml` builds the packaged desktop app and the image nightly, with macOS runners; `claude-apparmor-qualification.yml` and `mixed-version-qualification.yml` run weekly. No workflow ran the whole `test:agent:electron` suite, nothing runs a live provider, Docker Desktop or iOS. `validate-bun-runtime.yml` notes the Free plan's limit of five concurrent macOS runners.
 
-**Decisions.** Which runs become scheduled jobs was the maintainer's call (CI cost and runner choice). The user chose on 2026-11-14 (see Assumptions and decisions): add `mise run test:agent:electron` as a weekly plus `workflow_dispatch` Linux job under `xvfb-run` on GitHub-hosted runners, on the same schedule as `container-live-qualification.yml`. No macOS runner. Live provider suites stay manual: they spend tokens and would need provider secrets in CI. The job is credential-free, so an agent can write it; run it once with `workflow_dispatch` on the branch (or record that the first scheduled run is the evidence) and record the result here. Keep `WAYLAND_DISPLAY` and `ELECTRON_OZONE_PLATFORM_HINT` unset as [agent-testing.md](../../development/agent-testing.md#electron-specs-and-their-display) describes.
+On 2026-11-15 (`main` at `a8b89f154`): the suite's 19 spec files (`playwright.electron.config.ts`) bundle the desktop main process themselves (`scripts/electron-bundle.ts`) and start their own Vite, so the job needs no build step. Their host needs are Xvfb, Electron's shared libraries, `xdotool` and ImageMagick for the native-menu input case (`ORKESTRATOR_NATIVE_MENU_INPUT=1`, as `native-application-menu.yml` sets on Linux) and `vim` for `terminal-input-resume-electron.spec.ts`, which skips without an editor. The opt-in cases stay skipped on the runner: container environments (`ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER`), the transport CPU measurement (`ORKESTRATOR_LOCAL_TRANSPORT_CPU`), the Wayland rendering case, and the macOS-only hidden and locked-screen window cases. The workflow has not run yet: dispatching it needs the file on `main`, so its first result is 7568 (0031 task 8).
+
+**Decisions.** Done 2026-11-15: `.github/workflows/electron-qualification.yml`, pinned by `tests/unit/ci-workflows.test.ts` and described in [agent-testing.md](../../development/agent-testing.md#electron-specs-and-their-display); the choices made are under [Assumptions and decisions](#task-8-a-workflow-of-its-own). Which runs become scheduled jobs was the maintainer's call (CI cost and runner choice). The user chose on 2026-11-14 (see Assumptions and decisions): add `mise run test:agent:electron` as a weekly plus `workflow_dispatch` Linux job under `xvfb-run` on GitHub-hosted runners, on the same schedule as `container-live-qualification.yml`. No macOS runner. Live provider suites stay manual: they spend tokens and would need provider secrets in CI. The job is credential-free, so an agent can write it; run it once with `workflow_dispatch` on the branch (or record that the first scheduled run is the evidence) and record the result here. Keep `WAYLAND_DISPLAY` and `ELECTRON_OZONE_PLATFORM_HINT` unset as [agent-testing.md](../../development/agent-testing.md#electron-specs-and-their-display) describes.
 
 Most features ship with unit, contract and credential-free real-stack coverage
 on Linux. The gate that is missing most often is the same everywhere: a run
@@ -120,12 +123,15 @@ evidence. This file only points at it.
     24.04 against a scripted endpoint) and `mixed-version-qualification.yml`,
     weekly and on demand;
   - `publish-container.yml`: the image and its native amd64 and arm64
-    final-image smoke.
+    final-image smoke;
+  - `electron-qualification.yml` (added 2026-11-15, task 8): the whole
+    `mise run test:agent:electron` suite under `xvfb-run` on one
+    `ubuntu-latest` runner, weekly on the container workflow's schedule, on
+    demand and on pull requests that change it or the suite's membership,
+    with no secrets.
 
-  No workflow runs a live provider, Docker Desktop, iOS or the whole
-  `test:agent:electron` suite, and none runs Electron on a schedule. The user
-  chose on 2026-11-14 to schedule `test:agent:electron` weekly on Linux
-  (task 8); `mixed-version-qualification.yml` retires with the
+  No workflow runs a live provider, Docker Desktop, iOS or Electron on
+  macOS. `mixed-version-qualification.yml` retires with the
   legacy-retirement sweep ([8108](8108-legacy-retirement-sweep.md) task 4).
 - Almost all recorded evidence is from Linux amd64 with Docker Engine 29.7.2,
   taken before the SQLite storage migration (#969) and the October agent
@@ -305,11 +311,11 @@ cited as `NNNN (retired)`.
 | Run | Items in |
 | --- | --- |
 | macOS host with Docker Desktop (Apple Silicon) | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md) |
-| Real Electron window (`mise run test:agent:electron` or a manual pass) | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), 8011 (retired 2026-11-14; [evidence](../../architecture/design-canvas.md#evidence-of-2026-11-14)), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md), to-do 0029 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#the-multi-review-graph)) |
-| Docker live suites and `mise run test:agent:docker` | 7548 (retired; [evidence](../../development/container-qualification.md#gvisor-tap-vsock-host-loopback-7548)), [7549-rootless-docker-cp-refusals.md](../containers-and-environments/7549-rootless-docker-cp-refusals.md), [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), to-do 0040 (retired 2026-11-13; see [mcp-management.md](../../architecture/mcp-management.md#verification-status)), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), 0036 (retired), 0015 (retired; [native-agent-commands.md](../../architecture/native-agent-commands.md#provider-support)), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md) |
+| Real Electron window (`mise run test:agent:electron` or a manual pass; on Linux the credential-free suite also runs weekly in `electron-qualification.yml`) | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), 8011 (retired 2026-11-14; [evidence](../../architecture/design-canvas.md#evidence-of-2026-11-14)), 0050 (retired 2026-11-15; its checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md), to-do 0029 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#the-multi-review-graph)) |
+| Docker live suites and `mise run test:agent:docker` | 7548 (retired; [evidence](../../development/container-qualification.md#gvisor-tap-vsock-host-loopback-7548)), [7549-rootless-docker-cp-refusals.md](../containers-and-environments/7549-rootless-docker-cp-refusals.md), [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), to-do 0040 (retired 2026-11-13; see [mcp-management.md](../../architecture/mcp-management.md#verification-status)), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), 0036 (retired), 0015 (retired; [native-agent-commands.md](../../architecture/native-agent-commands.md#provider-support)), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), 0050 (retired 2026-11-15; its checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)) |
 | Rootless Docker Engine, arm64 live suites, registry pulls | [7390-rootless-restart-remaining-settings.md](../containers-and-environments/7390-rootless-restart-remaining-settings.md) |
 | Two machines or a remote backend | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), 0052 (retired; [remote-bandwidth.md](../../development/remote-bandwidth.md)), [0039-mcp-management.md](../mcp/0039-mcp-management.md), to-do 0040 (retired 2026-11-13; its checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)) |
-| Firefox, Safari, iOS device or simulator, narrow real browser | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0046-embedded-service-previews.md](../previews-and-annotations/0046-embedded-service-previews.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), to-do 0035 (retired 2026-11-10; its iOS run is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md#cross-cutting)), to-do 0029 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#the-multi-review-graph)), to-do 0860 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#shared-flow-graph)) |
+| Firefox, Safari, iOS device or simulator, narrow real browser | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0046-embedded-service-previews.md](../previews-and-annotations/0046-embedded-service-previews.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md), 0050 (retired 2026-11-15; its checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)), to-do 0035 (retired 2026-11-10; its iOS run is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md#cross-cutting)), to-do 0029 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#the-multi-review-graph)), to-do 0860 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#shared-flow-graph)) |
 | Live GitHub (`gh` against a real repository) | [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md) |
 | Stock Linux desktops with AppArmor or SELinux (Ubuntu 24.04 and 26.04; Debian and Fedora optional, best effort); Docker containers done 2026-11-10 (0145 task 4) | [0145-claude-linux-sandbox-apparmor-nested-userns.md](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md), [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md) (to-do 0026, retired), 0190 (retired) ([coordinator.md](../../architecture/coordinator.md#read-only-review-turns-without-a-working-sandbox)) |
 
@@ -317,11 +323,11 @@ Provider runs (credentials needed). Every provider also has items in 0015 (retir
 
 | Provider | Items in |
 | --- | --- |
-| Claude | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), 0003 (retired), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), 0036 (retired), 0223 (retired 2026-11-14; its Cursor and Grok checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)) |
+| Claude | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), 0003 (retired), 0050 (retired 2026-11-15; its checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), 0036 (retired), 0223 (retired 2026-11-14; its Cursor and Grok checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)) |
 | Codex | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), 0003 (retired), 0006 (retired; [agent-engines.md](../../architecture/agent-engines.md#qualification-of-fork-rewind-and-titles)), 0036 (retired), 0223 (retired 2026-11-14; its Cursor and Grok checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)) |
 | OpenCode | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md) |
-| Cursor | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), to-do 0040 (retired 2026-11-13; its checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)), [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), 0006 (retired; [agent-engines.md](../../architecture/agent-engines.md#qualification-of-fork-rewind-and-titles)), [0004-composer-model-parameters.md](../agent-engines/0004-composer-model-parameters.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), 0223 (retired 2026-11-14; its Cursor and Grok checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)) |
-| Grok | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0007-provider-sdk-adoption-backlog.md](../agent-engines/0007-provider-sdk-adoption-backlog.md), the Grok tool-output check (manual-test checklist, 0031 task 4), 0223 (retired 2026-11-14; its Cursor and Grok checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)) |
+| Cursor | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), to-do 0040 (retired 2026-11-13; its checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)), [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), 0006 (retired; [agent-engines.md](../../architecture/agent-engines.md#qualification-of-fork-rewind-and-titles)), [0004-composer-model-parameters.md](../agent-engines/0004-composer-model-parameters.md), 0050 (retired 2026-11-15; its checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)), 0223 (retired 2026-11-14; its Cursor and Grok checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)) |
+| Grok | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), 0050 (retired 2026-11-15; its checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)), [0007-provider-sdk-adoption-backlog.md](../agent-engines/0007-provider-sdk-adoption-backlog.md), the Grok tool-output check (manual-test checklist, 0031 task 4), 0223 (retired 2026-11-14; its Cursor and Grok checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)) |
 | Pi | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), to-do 0040 (retired 2026-11-13; its checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), 0006 (retired; [agent-engines.md](../../architecture/agent-engines.md#qualification-of-fork-rewind-and-titles)), 0223 (retired 2026-11-14; its Cursor and Grok checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)) |
 | Several providers at once (mixed panels) | [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md), [0025-multi-review-panel-value.md](../coordinator-and-multi-review/0025-multi-review-panel-value.md), to-do 0029 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#the-multi-review-graph)) |
 
@@ -793,10 +799,60 @@ checklist's decisions section.
   `xvfb-run` on GitHub runners, on the container workflow's schedule. Live
   provider suites stay manual. Task 8 is open agent work.
 
-## Open questions
+### Task 8: a workflow of its own
 
-- Which runs become scheduled CI jobs is now a decision item in the
-  manual-test checklist (0031 task 8).
+Recorded 2026-11-15 while building task 8, as are the task 8 entries below.
+Options: (a) add a `schedule` and a whole-suite job to
+`native-application-menu.yml`; (b) a separate `electron-qualification.yml`
+(chosen). (a) keeps Electron CI in one file, but that workflow's
+pull-request path list and three-OS matrix exist for the menu specs, and a
+scheduled run there would also start its Windows and macOS legs, which the
+user ruled out. (b) adds one file, with the same pinned actions, Linux
+packages and concurrency shape as the existing qualification workflows.
+
+### Task 8: the runner
+
+Options: `ubuntu-latest` (chosen) or the pinned `ubuntu-24.04` the AppArmor
+workflow uses. `native-application-menu.yml` already runs Electron under
+`xvfb-run` on `ubuntu-latest` with the same package list, so that is the
+combination known to work, and a weekly job is the place that should notice
+a new runner image first. Pinning would keep the image still between runs,
+but would need a deliberate bump to follow `ubuntu-latest` and the menu job.
+
+### Task 8: also on pull requests that change it
+
+The user asked for weekly and on demand. A `workflow_dispatch` run needs the
+workflow on `main`, so with those two triggers alone the first evidence could
+come only after merge. Options: (a) weekly and on demand only; (b) also on
+pull requests that change the workflow, `playwright.electron.config.ts` or
+`electron-display-setup.ts`, skipping drafts (chosen). (b) makes the pull
+request that adds the job run it once, and reruns it when the suite's
+membership or display setup changes; it costs one Linux runner for those
+rare pull requests. Removing the trigger costs nothing if the user prefers
+(the 7568 item says so).
+
+### Task 8: the whole suite, no subset and no retries
+
+The job runs the task itself (`mise run test:agent:electron`) through
+`test:logged`, so a spec added to the config is covered without editing the
+workflow, and a failure is not hidden by a retry; the config already sets
+one worker and no retries. Opt-in cases that need Docker, a CPU measurement
+or macOS stay skipped. `ORKESTRATOR_NATIVE_MENU_INPUT=1` is set because the
+runner's Xvfb display is an isolated desktop, as in the menu workflow.
+`tests/unit/ci-workflows.test.ts` pins the schedule to the container
+workflow's, the `xvfb-run` command with the Wayland variables cleared, the
+package install before it, read-only permissions and the absence of
+secrets.
+
+### Task 8: evidence and the first run
+
+The Playwright output directory (JSON report, traces and failure
+screenshots) is uploaded for 14 days, longer than the menu workflow's 7
+because the job runs only weekly, with `if-no-files-found: warn` so a
+failure before Playwright starts reports that failure rather than a
+missing-artifact error. This change did not run the workflow: dispatching
+it is outward and impossible before merge. Reading the pull request's run
+and the first scheduled run is 7568 (0031 task 8).
 
 ## Needs verification
 
@@ -821,7 +877,7 @@ checklist's decisions section.
 
 - [0030-test-suite-and-ci-health.md](0030-test-suite-and-ci-health.md) for CI gates and
   slow or flaky suites.
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1, 3, 4 and 7, the live run of task 2, the recording of task 5, the decision of task 6, and the remaining live runs of task 10) moved there on 2026-11-10, and the decision of task 8 on 2026-11-13.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1, 3, 4 and 7, the live run of task 2, the recording of task 5, the decision of task 6, and the remaining live runs of task 10) moved there on 2026-11-10, and the decision of task 8 on 2026-11-13 (answered 2026-11-14); reading the first runs of task 8's workflow moved there on 2026-11-15.
 - [version-compatibility.md](../../architecture/version-compatibility.md#the-support-window) for
   old-client and old-bridge runs.
 - [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration)

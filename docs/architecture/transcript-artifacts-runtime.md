@@ -992,7 +992,6 @@ that the model saw it.
 | `ORKESTRATOR_ARTIFACT_CONTENT_ORIGIN`, `…_CONTENT_PORT` | Public content origin for hosted deployments; listener port |
 | `ORKESTRATOR_ARTIFACT_CONTENT_BIND` | Interface of the content listener, honoured only with `…_CONTENT_ORIGIN` and only for a loopback or Tailscale address (default `127.0.0.1`); wildcard or public addresses are refused with a warning |
 | `ORKESTRATOR_ARTIFACT_FRAME_ANCESTORS` | Trusted viewer origins replacing the application origins (the desktop shell is always added) |
-| `ORKESTRATOR_RICH_MARKDOWN`, `ORKESTRATOR_ARTIFACT_PUBLICATION`, `ORKESTRATOR_ARTIFACT_LIVE_INTERACTIVE`, `ORKESTRATOR_ARTIFACT_STATIC_PRESENTATION` | Rollout switches (default on). Turning one off stops new rendering, publication, live execution or the static document view; stored records, source and saved previews stay readable. |
 
 ## Operations
 

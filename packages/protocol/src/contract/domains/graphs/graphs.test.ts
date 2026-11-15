@@ -1,5 +1,5 @@
 /**
- * The `graphs` domain (plan item 7007): its 39 definitions classify reads as
+ * The `graphs` domain (plan item 7007): its 38 definitions classify reads as
  * the routing classifier does, results keep every key the backend sends, the
  * graph guards refine templates and runs tolerantly (an added field or status
  * passes, a broken record does not), and its client sends typed, enveloped
@@ -33,18 +33,18 @@ import {
 } from "./index.js";
 
 describe("graphs definitions", () => {
-  it("defines the domain's 39 commands once each, at version 1", () => {
+  it("defines the domain's 38 commands once each, since version 1", () => {
     const names = GRAPHS_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(39);
-    expect(new Set(names).size).toBe(39);
-    expect(graphsDomain).toMatchObject({ name: "graphs", version: 1, min: 1 });
+    expect(names).toHaveLength(38);
+    expect(new Set(names).size).toBe(38);
+    expect(graphsDomain).toMatchObject({ name: "graphs", version: 2, min: 1 });
     for (const def of GRAPHS_COMMANDS) {
       expect(def.domain).toBe(graphsDomain);
       expect(def.since).toBe(1);
     }
   });
 
-  it("classifies reads with the routing classifier; every command but the ceiling write is a workspace command", () => {
+  it("classifies reads with the routing classifier; every command is a workspace command", () => {
     for (const def of GRAPHS_COMMANDS) {
       expect({ name: def.name, read: def.read }).toEqual({
         name: def.name,
@@ -52,8 +52,7 @@ describe("graphs definitions", () => {
       });
       expect({ name: def.name, access: def.access }).toEqual({
         name: def.name,
-        // The project's capability ceiling is set from Settings only (plan item 7012).
-        access: def.name === "graph_capability_ceiling_set" ? "admin" : "workspace",
+        access: "workspace",
       });
       expect(def.encoded).toBe(false);
     }
@@ -179,7 +178,7 @@ function fakeNode(domains: NegotiatedDomains | undefined, answer: (command: stri
   return { sent, invoked, usage, options };
 }
 
-const GRAPHS_V1 = { graphs: { min: 1, max: 1 } };
+const GRAPHS_V2 = { graphs: { min: 1, max: 2 } };
 
 const launch = {
   ref: { scope: "user", id: "mine" },
@@ -198,24 +197,24 @@ const launched = {
 };
 
 describe("graphs client", () => {
-  it("version 1: typed calls carry the envelope and its critical keys, results decode", async () => {
-    const node = fakeNode(GRAPHS_V1, () => launched);
+  it("version 2: typed calls carry the envelope and its critical keys, results decode", async () => {
+    const node = fakeNode(GRAPHS_V2, () => launched);
     const client = createDomainClient(graphsClient, node.options);
-    expect(client.version()).toBe(1);
+    expect(client.version()).toBe(2);
     await expect(client.api().graph_run_launch(launch)).resolves.toEqual(launched as never);
     expect(node.sent).toEqual([
       {
         command: graphRunLaunchCommand.name,
         args: launch,
-        envelope: { domain: "graphs", version: 1, critical: ["requestId"] },
+        envelope: { domain: "graphs", version: 2, critical: ["requestId"] },
       },
     ]);
     expect(node.invoked).toEqual([]);
     expect(node.usage).toEqual([]);
   });
 
-  it("version 1: a result that does not match its schema is refused", async () => {
-    const node = fakeNode(GRAPHS_V1, () => ({ runId: 7 }));
+  it("version 2: a result that does not match its schema is refused", async () => {
+    const node = fakeNode(GRAPHS_V2, () => ({ runId: 7 }));
     await expect(
       createDomainClient(graphsClient, node.options).api().graph_run_launch(launch),
     ).rejects.toThrow("Invalid result from graph_run_launch");

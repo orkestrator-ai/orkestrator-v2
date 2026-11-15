@@ -30,7 +30,6 @@ import {
   GoalCommandResultSchema,
   GoalDetailSchema,
   InteractionApplyOutcomeSchema,
-  InteractionObservationSchema,
   LiveUpdateSchema,
   MessagePageSchema,
   NativeAgentSessionSchema,
@@ -656,45 +655,6 @@ export const holdNativeAgentInteractionCommand = defineCommand({
   critical: [],
 });
 
-/**
- * The interaction monitor's observations. Diagnostics for the machine's
- * operator; no client of a workspace calls it, so it is `admin`.
- */
-export const getAgentInteractionObservationsCommand = defineCommand({
-  domain: nativeSessionsDomain,
-  name: "get_agent_interaction_observations",
-  since: 1,
-  access: "admin",
-  read: true,
-  args: Schema.Struct({}),
-  result: Schema.Array(InteractionObservationSchema),
-  critical: [],
-});
-
-/** Reconciles every session's interactions, then answers the observations. */
-export const reconcileAgentInteractionsCommand = defineCommand({
-  domain: nativeSessionsDomain,
-  name: "reconcile_agent_interactions",
-  since: 1,
-  access: "admin",
-  read: false,
-  args: Schema.Struct({}),
-  result: Schema.Array(InteractionObservationSchema),
-  critical: [],
-});
-
-/** Turns the interaction monitor's adoption of sessions on or off, machine-wide. */
-export const setAgentInteractionMonitorAdoptionCommand = defineCommand({
-  domain: nativeSessionsDomain,
-  name: "set_agent_interaction_monitor_adoption",
-  since: 1,
-  access: "admin",
-  read: false,
-  args: Schema.Struct({ enabled: Schema.Boolean }),
-  result: Schema.Struct({ enabled: Schema.Boolean }),
-  critical: [],
-});
-
 /** Stops a session's running suborks: one call's, or all of them. */
 export const stopNativeAgentSuborksCommand = defineCommand({
   domain: nativeSessionsDomain,
@@ -771,9 +731,6 @@ export const NATIVE_AGENT_COMMANDS = [
   signOutNativeAgentCommand,
   resolveNativeAgentInteractionCommand,
   holdNativeAgentInteractionCommand,
-  getAgentInteractionObservationsCommand,
-  reconcileAgentInteractionsCommand,
-  setAgentInteractionMonitorAdoptionCommand,
   stopNativeAgentSuborksCommand,
   nativeAgentSuborkTranscriptCommand,
 ] as const;

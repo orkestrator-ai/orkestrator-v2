@@ -16,7 +16,7 @@ collaborators that own it privately, and the service wires them together.
 | `NativeAgentObservationBroker` | `native-agent-observation.ts` | Shared observation records, dispatch and generation fences, next-due provider groups. |
 | `NativeAgentCatalogCache` | `native-agent-catalog-cache.ts` | Per-environment model catalogues and their coalesced refreshes; per-session command catalogues (through `NativeAgentCommandCatalogueCache`). |
 | `NativeAgentTranscriptProjection` | `native-agent-transcript-projection.ts` | The legacy projection cache, sync revisions and history, epochs and in-flight refreshes, tool details, stop notices, pushed titles, the progressive transcript/state/discovery caches and reads, the display-tail scheduler, projected-message and direct-history-page caches, artifact overlays. |
-| `NativeAgentInteractionTracker` | `native-agent-interaction-tracker.ts` | Interaction observations, sweep detections, the observe-only monitor timer and its round-robin cursors, per-session retry back-off, the pending-interaction read cache. |
+| `NativeAgentInteractionTracker` | `native-agent-interaction-tracker.ts` | The pending-interaction read cache: one session's pending approvals and questions, read on demand, and withdrawn when its environment stops. |
 | `NativeAgentLaunchActivityReconciler` | `native-agent-launch-activity-reconciler.ts` | `observedSessionActivity` (the exact turn-edge state machine), activity sweep scheduling and per-group back-off, pending PR-monitor notifications, startup-launch tasks and retry. |
 | `NativeAgentPromptQueueDispatcher` | `native-agent-prompt-queue-dispatcher.ts` | The per-session work fence, mutation-intent counts, unpersisted Stop fences, queue drain tasks with their retry and attempt counts, the keyed queue scheduler, in-flight parked-dispatch settles. |
 | `NativeAgentGoalService` | `native-agent-goal-service.ts` | An index of sessions with a running goal, per-session advance tasks, running checks. All durable goal state is on the session record; see [goals.md](goals.md). |
@@ -38,7 +38,7 @@ moves. A direct steer that misses its turn is handed by the prompt dispatch to
 `native-agent-missed-steer.ts`, which sends it as a new turn or queues it. Its own state is the stop flag, the
 initialization promise, the scan-task set every collaborator's background work
 is tracked in (kept on the service, not the launch reconciler, because the
-projection, interaction monitor, queue drains and launch scan all feed it and
+projection, queue drains and launch scan all feed it and
 shutdown drains it), and the turn-outcome retry bookkeeping.
 
 ## "Continue in…" handoffs
@@ -127,7 +127,6 @@ scan, then starts the keyed queue scheduler on the dispatcher
 (`startKeyedScheduling`). It is the only driver: the reconciler's rollback
 interval was removed (todo 0048 task 13), and
 `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` no longer names this domain.
-The interaction tracker then starts its observe-only monitor if enabled.
 Background work never depends on a renderer being subscribed.
 
 A queue drain sends its head only to a session whose last turn reads idle.

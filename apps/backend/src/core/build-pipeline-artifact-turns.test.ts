@@ -24,7 +24,6 @@ describe("build-pipeline stage turns' artifact authority", () => {
       settleTurn(environmentId, conversationKey, turnId) {
         settled.push([environmentId, conversationKey, turnId]);
       },
-      toolsEnabled: () => true,
     };
     await withPipeline(
       async ({ service, read, provider }) => {

@@ -8,7 +8,8 @@ import type { StorageContext } from "./storage-context.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 import { StorageService } from "./storage.js";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { PersistedNativeAgentTurnOutcome } from "./models.js";
+import type { PersistedBuildPipeline, PersistedNativeAgentTurnOutcome } from "./models.js";
+import { BUILD_PIPELINE_VERSION, isBuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 
 /**
@@ -138,6 +139,47 @@ export function appendNativeAgentTurnOutcome(
       };
     }),
   );
+}
+
+/**
+ * Stores one new build pipeline from outside the backend, as a second backend
+ * process sharing the directory would: through `saveBuildPipeline`, so the
+ * record, its revision and its admission checks are the ones a real pipeline
+ * gets. Real-stack specs use it (through `e2e/agent-testing/backend-store.ts`)
+ * to give a running profile a pipeline in a chosen state without starting a
+ * provider turn; the backend offers no command that writes an arbitrary
+ * snapshot. The snapshot must pass `isBuildPipeline` once it is marked
+ * backend-controlled, must not exist yet, and should be in a finished phase:
+ * nothing schedules a supervisor pass for a pipeline stored this way.
+ */
+export async function seedBuildPipeline(
+  dataDir: string,
+  snapshot: Record<string, unknown>,
+): Promise<PersistedBuildPipeline> {
+  const pipeline = { ...snapshot, controller: "backend", backendRevision: 1 };
+  if (!isBuildPipeline(pipeline)) throw new Error("Not a build pipeline snapshot");
+  // No `init()`: the database opens on first use, and nothing else (config
+  // migrations, snapshots) should run against a live profile's directory.
+  const storage = new StorageService(dataDir, { snapshots: false });
+  try {
+    if (await storage.getBuildPipeline(pipeline.id)) {
+      throw new Error(`Build pipeline ${pipeline.id} already exists`);
+    }
+    const saved = await storage.saveBuildPipeline(
+      pipeline.id,
+      pipeline.projectId,
+      pipeline.environmentId,
+      BUILD_PIPELINE_VERSION,
+      pipeline,
+      0,
+    );
+    if (saved.id !== pipeline.id) {
+      throw new Error(`An active build pipeline already holds this admission: ${saved.id}`);
+    }
+    return saved;
+  } finally {
+    storage.close();
+  }
 }
 
 export function hasStore(dataDir: string, file: string): boolean {

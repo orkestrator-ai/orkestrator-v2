@@ -614,16 +614,36 @@ on `self` and on each node:
   than three intervals (a sleeping host) is no history, not a reading. Windows
   end at the newest reading while sampling is on schedule, so a steady machine
   reads as fully covered; `latestSampleAgeSeconds` says how old that reading is.
-- **Restarts.** History is in memory (`MachineLoadSampler`,
-  `apps/backend/src/core/machine-load.ts`) and starts empty on each start.
-  On 2026-11-14 the user decided to persist it through a database document so
-  the 24-hour figure survives a restart or update (not prompted by an observed
-  misplacement); that is to-do
-  [8104](../todo/coordinator-and-multi-review/8104-persist-machine-load-history.md),
-  and until it lands the coverage field keeps the short figure honest. A bucket a minute for the
-  shorter windows and one every 15 minutes for the longest bound it to about
-  160 buckets, so the 24-hour edge is accurate to 15 minutes. Cost and cadence:
-  [recurring-work.md](recurring-work.md) B29.
+- **Restarts.** History survives a restart or update. `MachineLoadSampler`
+  (`apps/backend/src/core/machine-load.ts`) keeps it in memory and in one
+  row of the `machine-load-history` store (`storage-machine-load-history.ts`;
+  the user's decision of 2026-11-14, built under to-do 8104 (retired
+  2026-11-15)). The row is read once at start, written when a 15-minute
+  period has passed since the last write, and written once more when the
+  backend stops, before storage closes. A crash loses at most the newest
+  15 minutes, which the short windows recover anyway. The time the backend
+  was down holds no buckets, so it is no history and `coveredSeconds` counts
+  only real readings; `latestSampleAgeSeconds` stays `null` until the
+  restarted backend takes its own first reading. Restored readings dated
+  after the current clock are dropped, the rest age out of the windows as
+  usual.
+  - **The document** (`machine-load-history-document.ts`): `version: 1` and
+    the two bucket lists as number tuples `[startMs, endMs, coveredMs,
+    cpuWeighted, ramWeighted]`, numbers only, under 16 KB after days of
+    readings. On load anything malformed (a wrong shape, a bucket wider than
+    its period allows, coverage beyond its span, more than 100%, overlapping
+    or out-of-order buckets), too large (more buckets than the history
+    holds) or from a newer version is discarded whole: history starts empty,
+    `[host] load.history-fresh` logs the reason at warn, and the next write
+    replaces it. A missing row logs the same event at info with
+    `reason=missing`; a restore logs `load.history-restored` with the bucket
+    count. A failed write logs `load.history-save-failed` and is retried at
+    the next period or at stop. All machines update together under the
+    user's 2026-11-14 decision, so no older reader needs an adapter.
+  - **Bounds.** A bucket a minute for the shorter windows and one every 15
+    minutes for the longest bound the history to about 160 buckets, so the
+    24-hour edge is accurate to 15 minutes. Cost and cadence:
+    [recurring-work.md](recurring-work.md) B29.
 - **Machines that cannot answer.** One node never fails or holds up the call:
   each is asked in parallel through `invoke_on_node` with a 2 s limit, and its
   `machine` is otherwise `{ "status": "unavailable", "reason", "detail" }` with

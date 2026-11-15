@@ -314,6 +314,156 @@ daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
 
+## Claude bridge without the SDK's platform binary (2026-11-15)
+
+To-do 6780 (retired on 2026-11-15; in Git history at `git show
+a8b89f154:docs/todo/containers-and-environments/6780-second-claude-binary-in-the-image.md`)
+task 2, efficiency finding DK-10. Every image shipped the Claude Code native
+binary twice: the pinned CLI's (`CLAUDE_CLI_PATH`) and the copy the Claude
+Agent SDK vendors in its platform package. The container bridge never ran the
+SDK's copy: every SDK call passes `pathToClaudeCodeExecutable` from
+`CLAUDE_CLI_PATH` (`claudeExecutableOptions` in
+`bridges/claude-bridge/src/services/session-manager-core.ts`), and the SDK
+(0.3.319, `sdk.mjs`) resolves its own platform binary only when that option is
+unset. The user chose on 2026-11-14 to drop the SDK's copy in the builder.
+
+**Change.** The `bridge-build` stage of `docker/Dockerfile` removes
+`dist/node_modules/@anthropic-ai/claude-agent-sdk-*` (the gnu and musl
+platform packages) and checks that the main `claude-agent-sdk` package's
+`sdk.mjs` is still there; the final stage checks the same of
+`/opt/claude-bridge/dist/node_modules`. The `COPY` of the vendored SDK keeps
+its place ahead of the bundles (DK-7). `tests/unit/version-drift.test.ts`
+("every SDK platform binary is stripped from the vendored runtime tree") pins
+the removal, both checks, `ENV CLAUDE_CLI_PATH` and the bridge passing the
+path. `bridges/claude-bridge/src/sdk-compatibility.test.ts` ("runs the passed
+executable without any platform package, and needs one only when none is
+passed") pins the SDK premise itself: it copies the SDK package alone into a
+temporary tree, as the image ships it, and checks that a passed executable is
+the one spawned and that an unset path fails with `Native CLI binary for
+<platform>-<arch> not found`. Patching the copied `sdk.mjs` to ignore the
+passed path makes it fail.
+
+**Run.** beelink (x86_64, kernel 7.1.8-arch1-3), rootful Docker Engine 29.9.2
+with the containerd image store, worktree
+`orkestrator-v2-20261115-154754-e32e099ead21` from `main` at `a8b89f154`.
+Both images were built with the same build arguments
+(`scripts/docker-image-build-args.ts`): `orkestrator-v2:6780-before` from
+`main`'s Dockerfile and `orkestrator-v2:6780-after` with the change. Pins: CLI
+2.1.319, Agent SDK 0.3.319. Only amd64 was built here; CI's image workflow
+builds and smoke-tests both architectures, and the build-time checks above run
+in both.
+
+**Size.**
+
+| | before | after | saving |
+| --- | --- | --- | --- |
+| Vendored SDK layer (`COPY /opt/bridge-deps/claude-bridge`, `docker history`) | 345 MB | 5.18 MB | 340 MB |
+| `/opt/claude-bridge/dist/node_modules` (`du -sh`) | 330M | 5.0M | |
+| Image content, compressed (`docker image ls --tree`), what a first pull downloads | 1.66 GB | 1.50 GB | about 160 MB |
+| Image disk usage (`docker image inspect .Size`: unpacked plus stored content) | 5,775,417,838 B | 5,272,832,248 B | 502,585,590 B |
+
+No other layer changed size. Both images have 79 layers and the first 31
+`RootFS.Layers` digests are identical, the CLI's npm layer among them; the
+first to differ is the vendored SDK layer, followed only by layers built after
+it. The arm64 platform binary is 297,067,016 bytes against amd64's
+298,229,464, so the saving there is about the same.
+
+**Final-image smoke.** `bash docker/tests/final-image-smoke.sh
+orkestrator-v2:6780-after` passed (31.6 s): all five bridges answered
+`/global/health`, and the manifest's CLI versions matched.
+
+**Container Claude turn on a loopback model.** A container of each image
+(`--network none`, `NETWORK_MODE=full`, labelled, removed afterwards) ran a
+fake Anthropic Messages API on `127.0.0.1:18300` (one streamed `ok`, a
+per-route request count) and a Claude bridge started as the backend starts it:
+`docker exec -u node`, inheriting the image's `ENV`, with only
+`ANTHROPIC_BASE_URL` and a fake `ANTHROPIC_API_KEY` added. Each bridge created
+a session, received `Reply with ok.` with a `requestId`, and was polled until
+the session left `running`.
+
+| Image | Bridge environment | Result |
+| --- | --- | --- |
+| after | image `CLAUDE_CLI_PATH` (`/usr/local/share/npm-global/bin/claude`, 2.1.319) | 202 `processing`, session `idle`, transcript `user: Reply with ok.` / `assistant: ok`, one Messages request at the fake; `POST /global/refresh-catalog` answered `{"ok":true}`; no error lines in the bridge log |
+| after | `CLAUDE_CLI_PATH` unset | the prompt answered `Native CLI binary for linux-x64 not found. Reinstall @anthropic-ai/claude-agent-sdk without --omit=optional, or set options.pathToClaudeCodeExecutable.`; no assistant row and no request at the fake |
+| before | image `CLAUDE_CLI_PATH` | same as the first row |
+| before | `CLAUDE_CLI_PATH` unset | the turn ran on the SDK's own copy and answered `ok` |
+
+The last two rows are the contrast: before the change a bridge without
+`CLAUDE_CLI_PATH` quietly ran a second, unpinned engine; after it, it fails
+with the SDK's own error. The image always sets the variable and the backend
+starts the container bridge through `docker exec`, so a production container
+bridge has it.
+
+**Isolated Docker suite.** `mise run test:logged -- --name
+agent-docker-isolated-6780 -- mise run test:agent:docker:isolated` built the
+workspace image from the change (`orkestrator-v2:dev-4d8f7a0a70c6`, 5.27 GB
+like `6780-after`). Its final-image smoke and the image qualification
+(`tests/claude-config-filter-docker.test.ts`, 1 pass, 1 skip) passed. The
+runner starts no Claude platform (`--agent-platforms
+codex,grok,opencode,cursor,pi`), so it covers the rest of the image, not the
+Claude bridge. Shard 2 passed (11 passed, 3 skipped, 5.3 min). Shard 1 started
+all 21 of its tests and reported no failure, but its last test
+(`container-app-wiring.spec.ts:457`, the coordinator view across switch,
+hidden document, reload and two windows) printed nothing for 300 s.
+`test:logged`'s no-progress watchdog then ended the run (`timeoutReason:
+no-progress`, recorded as an infrastructure error) before Playwright printed
+shard 1's summary. Shard 1 has no pass or fail count. Its last test was not
+rerun alone, so this run neither shows it passing nor makes it a flake. The
+profiles were stopped and reset.
+
+## C22 on Docker Desktop and rootless Docker (2026-11-15)
+
+To-do 6103 (retired on 2026-11-15; in Git history at `git show
+a8b89f154:docs/todo/containers-and-environments/6103-live-suite-failures-seen-during-s0100.md`)
+tracked two live cases that failed during the S-0100 qualification on Docker
+Desktop with images from before that work as well:
+
+- **DNS rotation** (`container-live-egress-conditions.test.ts`) called `node`
+  on the gateway's fixed root PATH and sent a bare word as its first TCP
+  write. Fixed on 2026-11-06: the resolver runs as `/usr/local/bin/node` and
+  the probes send whole lines
+  ([egress name checks on rootful Linux Engine](#egress-name-checks-on-rootful-linux-engine-2026-11-06)).
+- **C22** (`container-live-network.test.ts`, "a restricted runtime reaches
+  only the backend service port and not its siblings") asserted that
+  `ContainerHostReachabilityService.check("manual")` answers `reachable`. The
+  check is Linux-only by design: off Linux it answers `not-applicable` with
+  reason `not-linux` before any Docker work, and `createDockerContainer`
+  asks it for a host address only for a rootless topology, keeping
+  `host-gateway` otherwise. Fixed on 2026-11-11: `expectedHostReachability`
+  expects `reachable` on Linux (Docker Desktop for Linux included, which
+  reports platform `linux`) and `not-applicable`/`not-linux` elsewhere, and a
+  Docker-free case builds the real service for `darwin` and `win32` with a
+  runner that throws if Docker is called, so a change to the off-Linux answer
+  breaks the default suite.
+
+The confirming runs, from `main` at `a8b89f154` (worktree
+`orkestrator-v2-20261115-154928-533d455b8c9b`, branch
+`container-suite-failures-533d455b8c9b-r1`):
+
+- **Docker Desktop:** arktech-mini, macOS 27.2, arm64, Docker Desktop 4.98.0
+  (245422), Engine 29.9.2, context `desktop-linux`. A `git archive` of the
+  commit in a temporary directory under the home directory, dependencies
+  installed with `bun install --frozen-lockfile --ignore-scripts`, Bun 1.4.4
+  through mise, image `ghcr.io/orkestrator-ai/orkestrator-v2:2.38.2-beta`
+  (`sha256:a72497b45c675d5078e991563c7d0fcb58bc2a8480ef026a9909c23a06e844ac`,
+  arm64, `egress-gateway=1`, `egress-filter=1`, `network-policy=3`).
+  `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test
+  ./tests/container-live-network.test.ts` from `apps/backend`: **5 pass,
+  0 fail, 52 assertions, 47.9 s**. C22's live case passed in 14.1 s with the
+  reachability check answering `not-applicable`/`not-linux`; C24 (both
+  cases) and C26 passed. The `git-mirror.refresh-failed` log line in the run
+  is the fixture's `https://example.invalid` project URL, not a failure.
+  `afterAll` found no leftovers; the temporary directory was removed.
+- **Rootless Docker:** beelink (x86_64), `mise run docker:disposable --
+  start --name q6103 --host-loopback --image orkestrator-v2:dev-5f4767c83385`
+  (Engine 29.9.2, slirp4netns, builtin port driver), image capabilities as
+  above. Same command with the daemon's `env` variables: **5 pass, 0 fail,
+  52 assertions, 60.2 s** (JUnit), C22's live case 20.2 s with `reachable`.
+  The `port-conflict` that stopped C22's egress gateway on 2026-11-11
+  ([rootless re-run](#rootless-re-run-on-a-freshly-built-image-2026-11-09))
+  did not recur; since 7549 task 4 the backend chooses rootless automatic
+  host ports itself. The daemon was stopped and removed afterwards.
+
 ## Bridge credential suite on rootless Docker (2026-11-14)
 
 To-do 4982 (retired on 2026-11-14; in Git history at `git show
@@ -2345,8 +2495,8 @@ on rootful Linux Engine, x64.
     expected 0, received 1).
   - The DNS-rotation case in `container-live-egress-conditions.test.ts`. It
     also called `node` on the gateway's fixed root PATH, which lacks
-    `/usr/local/bin` ([6103](../todo/containers-and-environments/6103-live-suite-failures-seen-during-s0100.md)
-    task 2). With only the PATH fixed it failed at its first probe (`:464`).
+    `/usr/local/bin` (6103 (retired) task 2;
+    [C22 on Docker Desktop and rootless Docker](#c22-on-docker-desktop-and-rootless-docker-2026-11-15)). With only the PATH fixed it failed at its first probe (`:464`).
 
   Both now send whole lines, and the resolver runs as `/usr/local/bin/node`.
   CI run 42128741746 (S-0100's PR head `46998097`, Engine 28.0.4,
@@ -2612,7 +2762,8 @@ nf_tables), from worktree `egress-sni-dns` at base `704809a20`. Image
   `container-live-network` 3 pass, 1 fail; `container-live-egress-conditions`
   1 pass, 1 skip (IPv6 not offered), 1 fail. Both failures fail identically
   with the older image and are recorded in
-  [6103](../todo/containers-and-environments/6103-live-suite-failures-seen-during-s0100.md).
+  6103 (retired; see
+  [C22 on Docker Desktop and rootless Docker](#c22-on-docker-desktop-and-rootless-docker-2026-11-15)).
   C23 (`container-live-firewall.test.ts`) was not run here because it
   contacts `example.com`, which is not on the default allowlist; CI runs it.
 - Not run: rootful Linux Engine and rootless Docker

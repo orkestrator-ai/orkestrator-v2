@@ -39,12 +39,6 @@ export interface ArtifactTurnDispatch {
     needsGrant: boolean;
   }): { grant?: string };
   settleTurn(environmentId: string, conversationKey: string, turnId: string): void;
-  /**
-   * Whether artifact tools are served at all (publication rollout). A
-   * workflow turn gets no grant and no artifact server while they are not,
-   * so a bridge never connects to a server that would refuse it.
-   */
-  toolsEnabled?(): boolean;
 }
 
 export type ArtifactTurnInput = Parameters<ArtifactTurnDispatch["beginTurn"]>[0];
@@ -107,11 +101,6 @@ export function beginWorkflowArtifactTurn(
 ): WorkflowArtifactTurnOptions | undefined {
   const opencode = input.agent === "opencode";
   if (!dispatch || (!opencode && !input.agentMcp)) return undefined;
-  try {
-    if (dispatch.toolsEnabled?.() === false) return undefined;
-  } catch {
-    return undefined;
-  }
   const grant = beginArtifactDispatchTurn(dispatch, {
     environmentId: input.environmentId,
     projectId: input.projectId,

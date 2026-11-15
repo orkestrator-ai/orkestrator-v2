@@ -310,8 +310,8 @@ describe("CompatibilityPathUsage", () => {
     const usage = new CompatibilityPathUsage(clock().now);
     const sink = compatibilityPathUsageDatabaseSink(dir);
     usage.attach(sink);
-    usage.record("bridge-transcript.messages-fallback");
-    expect(usage.snapshot().paths["bridge-transcript.messages-fallback"]?.count).toBe(1);
+    usage.record("tmux-transcript.whole-read");
+    expect(usage.snapshot().paths["tmux-transcript.whole-read"]?.count).toBe(1);
     usage.detach(sink);
     await expect(fs.stat(dir)).rejects.toThrow();
   });

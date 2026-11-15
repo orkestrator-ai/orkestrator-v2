@@ -1,6 +1,6 @@
 # Consolidation subprocess-bounds fake CLI never records its pid under load
 
-- **ID:** 9800
+- **ID:** 9820
 - **Status:** open
 - **Date observed:** 2026-11-15
 

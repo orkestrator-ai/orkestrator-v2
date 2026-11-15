@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect, type ReactNode } from "react";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { TerminalProvider, useTerminalContext } from "@/contexts/TerminalContext";
 import { fileDirtyStore } from "@/stores/fileDirtyStore";
@@ -212,13 +212,19 @@ describe("HtmlFileTab", () => {
     }
     /** A read that settles only when the test says so, one per call, in call order. */
     function deferredReads() {
-      const pending: { path: string; resolve: (css: string) => void }[] = [];
-      const read = mock(
-        (path: string) =>
-          new Promise<string>((resolve) => {
-            pending.push({ path, resolve });
-          }),
-      );
+      const pending: {
+        path: string;
+        resolve: (css: string) => void;
+        /** Settles with the read; awaiting it runs after the component's own continuation. */
+        settled: Promise<string>;
+      }[] = [];
+      const read = mock((path: string) => {
+        const settled = new Promise<string>((resolve) => {
+          pending.push({ path, resolve, settled: undefined as never });
+        });
+        pending[pending.length - 1]!.settled = settled;
+        return settled;
+      });
       return { read, pending };
     }
     const NOTICE = /does not run scripts or load external files/;
@@ -270,7 +276,10 @@ describe("HtmlFileTab", () => {
       await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("#000002"));
       // The old set's read settles late and changes nothing.
       pending[0]!.resolve("h1{color:#000001}");
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      // The component subscribed to the read first, so its continuation has run by here.
+      await act(async () => {
+        await pending[0]!.settled;
+      });
       expect(frame().getAttribute("srcdoc")).not.toContain("#000001");
       expect(frame().getAttribute("srcdoc")).toContain("#000002");
     });
@@ -280,7 +289,8 @@ describe("HtmlFileTab", () => {
       const { read, pending } = deferredReads();
       const view = renderWithFiles(read, false);
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      // Effects ran inside render's act; let any read they would have started settle.
+      await act(async () => {});
       expect(read).not.toHaveBeenCalled();
       expect(screen.queryByTitle("Rendered view of docs/report.html") === null).toBe(true);
       expect(screen.queryByText(NOTICE) === null).toBe(true);

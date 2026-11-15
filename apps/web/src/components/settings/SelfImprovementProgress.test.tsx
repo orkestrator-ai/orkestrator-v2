@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   SelfImprovementProgress,
   SelfImprovementRunSummary,
@@ -312,23 +312,25 @@ describe("Settings → Self-improvement while a run is in progress", () => {
       );
 
       await advance(2);
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
       await screen.findByText(new RegExp(`Run ${outcome === "failed" ? "stopped" : "finished"}`));
-      expect(screen.queryByRole("list", { name: "Run stages" })).toBeNull();
+      expect(screen.queryByRole("list", { name: "Run stages" }) === null).toBe(true);
       // The modal let go of the page: nothing left blocking the pointer or hidden from readers.
       await waitFor(() => expect(document.body.style.pointerEvents).not.toBe("none"));
-      expect(document.querySelector("[data-slot='dialog-overlay']")).toBeNull();
+      expect(document.querySelector("[data-slot='dialog-overlay']") === null).toBe(true);
       expect(
-        document.querySelector("[aria-hidden='true'] [aria-label='Review conversations']"),
-      ).toBeNull();
+        document.querySelector("[aria-hidden='true'] [aria-label='Review conversations']") === null,
+      ).toBe(true);
       const toggle = screen.getByRole("switch", { name: "Review conversations" });
-      expect(toggle.closest("[aria-hidden='true']")).toBeNull();
+      expect(toggle.closest("[aria-hidden='true']") === null).toBe(true);
 
       await advance(3);
       await screen.findByRole("list", { name: "Run stages" });
       // A new run (a different start time) shows its stages but leaves the window closed.
-      await new Promise((resolve) => setTimeout(resolve, 60));
-      expect(screen.queryByRole("dialog")).toBeNull();
+      // Whatever would reopen the window runs in the effects of the render that
+      // showed the stages; flush them before asserting it did not.
+      await act(async () => {});
+      expect(screen.queryByRole("dialog") === null).toBe(true);
     });
   }
 });

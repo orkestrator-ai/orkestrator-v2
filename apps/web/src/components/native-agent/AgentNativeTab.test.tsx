@@ -4569,4 +4569,37 @@ describe("AgentNativeTab", () => {
       expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)).toBeUndefined(),
     );
   });
+
+  test("shows the sent message and who the wait is on while the first dispatch is pending", async () => {
+    seedUnassignedDefaultCatalog();
+    let releaseDispatch!: () => void;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      await dispatchGate;
+      return { outcome: "accepted", requestId: input.requestId };
+    });
+    const tabId = "tab-first-prompt-pending-view";
+    seedUnassignedPane(tabId);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Please look at the failing build" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    // The prompt is on screen as a sent message, not a bare centred label.
+    const pending = await screen.findByTestId("first-prompt-pending");
+    expect(pending.textContent).toContain("Please look at the failing build");
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    // Once the tab is saved, the wait is named for the agent being started.
+    await waitFor(() =>
+      expect(within(pending).getByRole("status").textContent).toMatch(/^Starting .+…$/),
+    );
+    expect(screen.getByTestId("first-prompt-pending-detail").textContent).toContain(
+      "Your tab is saved",
+    );
+
+    releaseDispatch();
+    await waitFor(() => expect(screen.queryByTestId("first-prompt-pending")).toBeNull());
+  });
 });

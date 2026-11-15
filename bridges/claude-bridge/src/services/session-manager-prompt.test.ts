@@ -382,6 +382,44 @@ describe("sendPrompt", () => {
     ]);
   });
 
+  test("does not hold the turn for agent discovery, and patches the init snapshot when it lands", async () => {
+    let release!: (agents: Array<{ name: string; description: string }>) => void;
+    queryControlOverrides.supportedAgents = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    const session = createSession("slow agent discovery");
+    track(session.id);
+    const { events, stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "hello");
+      const call = await nextQueryCall();
+      call.push({
+        type: "system",
+        subtype: "init",
+        session_id: "sdk-slow-agents",
+        mcp_servers: [],
+        plugins: [],
+        slash_commands: [],
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      // The CLI answers `supportedAgents` only once it has booted. The turn
+      // must not wait for that answer to start consuming the stream.
+      await promptPromise;
+      expect(getSessionInitData(session.id)?.agents).toEqual([]);
+
+      release([{ name: "reviewer", description: "Reviews changes" }]);
+      await waitFor(() =>
+        getSessionInitData(session.id)?.agents?.some((agent) => agent.name === "reviewer"),
+      );
+      const inits = events.filter((event) => event.type === "session.init");
+      expect(inits.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      stop();
+    }
+  });
+
   test("falls back to no agents when provider discovery fails", async () => {
     queryControlOverrides.supportedAgents = async () => {
       throw new Error("agent discovery failed");

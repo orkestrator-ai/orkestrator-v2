@@ -29,6 +29,7 @@ import {
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { type AgentNativeTabProps, findNativeAgentAdapter } from "./adapter";
 import { UnassignedNativeAgentComposer } from "./AgentNativeTab.helpers";
+import { FirstPromptPending, type FirstPromptPendingState } from "./FirstPromptPending";
 import { SharedNativeAgentController } from "./AgentNativeTab.controller";
 import { PreviewLinkSourceContext } from "@/components/chat/link-source-context";
 
@@ -84,9 +85,11 @@ async function persistFirstPromptDraftToLockedProvider(
 
 export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTabProps) {
   const pendingFirstPrompt = useRef<Parameters<typeof dispatchNativeAgentIntent>[0] | null>(null);
-  // Whether `pendingFirstPrompt` holds a prompt, for the saving label. Written
-  // alongside every assignment to the ref.
-  const [startingFirstPrompt, setStartingFirstPrompt] = useState(false);
+  // What `pendingFirstPrompt` holds, drawn as an already-sent message while the
+  // backend answers. Written alongside every assignment to the ref.
+  const [firstPromptPending, setFirstPromptPending] = useState<FirstPromptPendingState | null>(
+    null,
+  );
   const [awaitingDurability, setAwaitingDurability] = useState(false);
   const [durabilityError, setDurabilityError] = useState<string | null>(null);
   const linkSource = useMemo(
@@ -147,6 +150,10 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
         // saving. Session creation and dispatch belong to this backend request;
         // neither waits for the controller or a transcript projection to mount.
         if (submission) {
+          // The tab is saved; what remains is the agent starting up.
+          setFirstPromptPending((current) =>
+            current ? { ...current, phase: "starting" } : current,
+          );
           composeDrafts.getState().updateDraft(sessionKey, {
             submissionPending: true,
             submissionError: undefined,
@@ -202,7 +209,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
             });
           }
           pendingFirstPrompt.current = null;
-          setStartingFirstPrompt(false);
+          setFirstPromptPending(null);
         }
         setPendingDurabilityOperation(null);
         setAwaitingDurability(false);
@@ -210,6 +217,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
         log.warn("provider-lock.persist-failed", { error: formatLogError(error) });
         setDurabilityError("The agent choice is locked, but could not be saved.");
         setAwaitingDurability(false);
+        setFirstPromptPending(null);
         if (submission) {
           composeDrafts.getState().updateDraft(sessionKey, {
             submissionPending: false,
@@ -280,7 +288,20 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
           filename: attachment.name,
         })),
       };
-      setStartingFirstPrompt(true);
+      // Drawn on this frame: the message and what is being waited on appear the
+      // moment the person presses send, before anything is saved or dispatched.
+      setFirstPromptPending({
+        platform,
+        phase: "saving",
+        text: prompt,
+        attachments: (draft?.attachments ?? []).map((attachment) => ({
+          path: attachment.path,
+          name: attachment.name,
+          previewUrl: attachment.previewUrl,
+        })),
+        startedAt: Date.now(),
+        createdAt: new Date().toISOString(),
+      });
       composeStore.updateDraft(sessionKey, {
         requestId,
         submissionPending: true,
@@ -302,7 +323,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
       if (!lockedPlatform) {
         composeStore.updateDraft(sessionKey, { submissionPending: false });
         pendingFirstPrompt.current = null;
-        setStartingFirstPrompt(false);
+        setFirstPromptPending(null);
         setDurabilityError("This tab could not be locked to an agent.");
         setPendingDurabilityOperation(null);
         setAwaitingDurability(false);
@@ -476,9 +497,10 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
     );
   }
   if (awaitingDurability) {
+    if (firstPromptPending) return <FirstPromptPending pending={firstPromptPending} />;
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        {startingFirstPrompt ? "Starting agent…" : "Saving agent choice…"}
+        Saving agent choice…
       </div>
     );
   }

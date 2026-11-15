@@ -342,6 +342,30 @@ async function readSupportedAgents(
   }
 }
 
+/**
+ * Record the CLI's agent list when it answers, off the prompt path.
+ *
+ * `init` reads `runtime.supportedAgents`, and the CLI can emit it before this
+ * answer lands. A list that arrives after the snapshot was captured is patched
+ * into it and announced again, so the init snapshot is still authoritative.
+ */
+function publishSupportedAgents(
+  launched: ClaudeRuntime,
+  queryIterator: ReturnType<typeof query>,
+): void {
+  if (typeof queryIterator.supportedAgents !== "function") return;
+  void readSupportedAgents(queryIterator).then((agents) => {
+    if (!agents) return;
+    launched.supportedAgents = agents;
+    const { session } = launched;
+    const init = session.initData;
+    if (session.claudeRuntime !== launched || !init) return;
+    if (JSON.stringify(init.agents) === JSON.stringify(agents)) return;
+    init.agents = agents;
+    eventEmitter.emit({ type: "session.init", sessionId: session.id, data: init });
+  });
+}
+
 /** The SDK has the turn: start its per-turn reads and hand it the abort. */
 function markQueryStarted(turn: TurnState, testHooks: PromptTestHooks | undefined): void {
   const { session, sessionId, abortController, diagnostics } = turn;
@@ -419,10 +443,11 @@ export async function runTurnOnRuntime(
   if (!turn.runtime) {
     if (!(await prepareLaunch(turn))) return false;
     const { launched, queryIterator, markEnded } = launchClaudeRuntime(turn, plan);
-    if (typeof queryIterator.supportedAgents === "function") {
-      const agents = await readSupportedAgents(queryIterator);
-      if (agents) launched.supportedAgents = agents;
-    }
+    // The prompt is already held in the SDK's input, so nothing here has to wait
+    // for the CLI to boot. `supportedAgents()` can only be answered once it has,
+    // which is seconds on a cold start: awaiting it held the dispatch (and the
+    // person's screen) for the whole boot.
+    publishSupportedAgents(launched, queryIterator);
     void consumeClaudeRuntime(launched, queryIterator, markEnded);
   }
   markQueryStarted(turn, testHooks);

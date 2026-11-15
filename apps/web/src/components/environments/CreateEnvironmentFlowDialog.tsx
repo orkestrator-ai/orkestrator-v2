@@ -182,6 +182,8 @@ export function CreateEnvironmentFlowDialog({
   const scope = useScopesWithCommandFallback().scope;
   const dockerAvailable = useDockerAvailability();
   const [isCreating, setIsCreating] = useState(false);
+  // What the busy button is doing, so a slow step reads as a named step.
+  const [createStage, setCreateStage] = useState<string | null>(null);
   const [pendingCredentialWarning, setPendingCredentialWarning] =
     useState<PendingGitHubCredentialWarning | null>(null);
   const mountedRef = useRef(true);
@@ -278,6 +280,9 @@ export function CreateEnvironmentFlowDialog({
     if (!projectId || !canCreateEnvironment(options.environmentType)) return false;
 
     setIsCreating(true);
+    setCreateStage(
+      options.environmentType === "local" ? "Creating git worktree…" : "Creating environment…",
+    );
     try {
       const request = resolveEnvironmentCreateRequest(options);
       const environment = await createEnvironment(
@@ -292,6 +297,7 @@ export function CreateEnvironmentFlowDialog({
         ...(request.worktreeBaseDir ? ([undefined, request.worktreeBaseDir] as const) : []),
       );
 
+      setCreateStage("Saving agent settings…");
       const agentSettings = resolveEnvironmentAgentSettings(options);
       const launchSettings = resolveEnvironmentAgentLaunchSettings(options);
       const configuredEnvironment = await nodeBackend.updateEnvironmentAgentSettings(
@@ -369,6 +375,7 @@ export function CreateEnvironmentFlowDialog({
     };
     activePreflightRef.current = preflight;
     setIsCreating(true);
+    setCreateStage("Checking GitHub access…");
     const result = await Promise.race([
       nodeBackend.getContainerGitHubCredentialStatus().then(
         (status) => ({ status }),
@@ -497,6 +504,7 @@ export function CreateEnvironmentFlowDialog({
         onCreate={handleCreate}
         onCreateFeatureBuild={handleCreateFeatureBuild}
         isLoading={isCreating}
+        loadingLabel={createStage ?? undefined}
         projectId={projectId}
         projectName={projectName}
         localEnvironmentAvailable={localEnvironmentAvailable}

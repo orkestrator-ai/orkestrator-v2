@@ -47,10 +47,10 @@ test("CI status announces running, failed, and successful completion", async ({ 
   await page.getByRole("button", { name: "Complete successfully" }).click();
   await expect(status).toHaveText("4 of 4 CI checks passed; all checks complete");
   await expect(status).toHaveAttribute("data-state", "passed");
-  await expect(visualStatus).toHaveClass(/text-green-600/);
+  await expect(visualStatus).toHaveClass(/text-success/);
   await expect(visualStatus.locator('[data-status-icon="passed"]')).toBeVisible();
   expect(await visualStatus.evaluate((element) => getComputedStyle(element).color)).toBe(
-    await colorForClass(page, "text-green-600"),
+    await colorForClass(page, "text-success"),
   );
 });
 
@@ -90,8 +90,10 @@ test("CI status applies each dark-theme state color", async ({ page }) => {
   );
 
   await page.getByRole("button", { name: "Complete successfully" }).click();
-  await expect(status).toHaveClass(/dark:text-green-400/);
+  // The passed state uses the theme's success token, which has no dark:
+  // variant; the reference span resolves it in the same dark tree.
+  await expect(status).toHaveClass(/text-success/);
   expect(await status.evaluate((element) => getComputedStyle(element).color)).toBe(
-    await colorForClass(page, "text-green-400"),
+    await colorForClass(page, "text-success"),
   );
 });

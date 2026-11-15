@@ -4,6 +4,7 @@ import { FakeOpenCode2Server } from "./fake-server.test-support.js";
 import {
   OpenCode2TranscriptState,
   openCode2CursorAnchor,
+  openCode2CursorThrough,
   openCode2HistoryCursor,
   openCode2TranscriptPage,
   openCode2TranscriptSnapshot,
@@ -228,6 +229,116 @@ describe("OpenCode 2 transcript windows", () => {
         targetBytes: 1e6,
       }),
     ).toMatchObject({ status: "page", messages: [], complete: true });
+  });
+
+  test("a window at the first message still names a cursor before each kept row (8110)", async () => {
+    const { client, state, sessionId, ids } = await setup(4);
+    const window = snapshot(
+      await openCode2TranscriptSnapshot(client, state, sessionId, {
+        limit: 10,
+        targetBytes: 1e6,
+      }),
+    );
+    expect(window.complete).toBe(true);
+    expect(window.historyCursor).toBeUndefined();
+    // A reader whose own bound dropped the first two rows pages them back.
+    const cursor = window.historyCursorBefore!(ids[2]!);
+    expect(cursor).toBe(openCode2HistoryCursor(ids[2]!, window.historyEpoch));
+    const page = await openCode2TranscriptPage(client, state, sessionId, {
+      cursor: cursor!,
+      limit: 10,
+      targetBytes: 1e6,
+    });
+    if (page.status !== "page") throw new Error("expected a page");
+    expect(page.messages.map((row) => (row as { id: string }).id)).toEqual(ids.slice(0, 2));
+    expect(page.complete).toBe(true);
+  });
+
+  test("the window-end cursor pages the window's newest rows again, then older ones (8110)", async () => {
+    const { client, state, sessionId, ids } = await setup(7);
+    const window = snapshot(
+      await openCode2TranscriptSnapshot(client, state, sessionId, {
+        limit: 3,
+        targetBytes: 1e6,
+      }),
+    );
+    expect(window.historyCursorAtEnd).toBe(
+      openCode2CursorThrough(ids.at(-1)!, window.historyEpoch!),
+    );
+    expect(openCode2CursorAnchor(window.historyCursorAtEnd!)).toBeUndefined();
+    const seen: string[] = [];
+    let cursor = window.historyCursorAtEnd;
+    let pages = 0;
+    while (cursor) {
+      const page = await openCode2TranscriptPage(client, state, sessionId, {
+        cursor,
+        limit: 4,
+        targetBytes: 1e6,
+      });
+      if (page.status !== "page") throw new Error("expected a page");
+      expect(page.historyEpoch).toBe(window.historyEpoch!);
+      // The first page starts at the newest row, the ones the reader holds.
+      if (pages === 0) expect((page.messages.at(-1) as { id: string }).id).toBe(ids.at(-1)!);
+      seen.unshift(...page.messages.map((row) => (row as { id: string }).id));
+      cursor = page.historyCursor;
+      pages += 1;
+      if (!cursor) expect(page.complete).toBe(true);
+    }
+    expect(seen).toEqual(ids);
+    // Minted for another epoch, it expires like any other cursor.
+    expect(
+      await openCode2TranscriptPage(client, state, sessionId, {
+        cursor: openCode2CursorThrough(ids.at(-1)!, "another-epoch")!,
+        limit: 4,
+        targetBytes: 1e6,
+      }),
+    ).toEqual({ status: "expired" });
+    // So does one whose row the server no longer has.
+    expect(
+      await openCode2TranscriptPage(client, state, sessionId, {
+        cursor: openCode2CursorThrough("msg_gone", window.historyEpoch!)!,
+        limit: 4,
+        targetBytes: 1e6,
+      }),
+    ).toEqual({ status: "expired" });
+  });
+
+  test("the window-end cursor names the window it was minted from, not the session's head (8110)", async () => {
+    const { server, client, state, sessionId, ids } = await setup(5);
+    const options = { limit: 3, targetBytes: 1e6 };
+    const first = snapshot(await openCode2TranscriptSnapshot(client, state, sessionId, options));
+    // Rows appended after the window was read do not move the epoch...
+    const appended = [
+      server.pushRow(sessionId, { type: "user", text: "u5", time: { created: 2_000 } }),
+      server.pushRow(sessionId, {
+        type: "assistant",
+        content: [{ type: "text", text: "a6" }],
+        time: { created: 2_001 },
+      }),
+    ];
+    state.invalidate(sessionId);
+    const second = snapshot(await openCode2TranscriptSnapshot(client, state, sessionId, options));
+    expect(second.historyEpoch).toBe(first.historyEpoch);
+    // ...but each window names its own end, so a page cached under one cursor
+    // can never answer for the other.
+    expect(second.historyCursorAtEnd).not.toBe(first.historyCursorAtEnd);
+    // The earlier cursor still pages from its own window's end: no newer row
+    // reaches its reader as older history.
+    const page = await openCode2TranscriptPage(client, state, sessionId, {
+      cursor: first.historyCursorAtEnd!,
+      limit: 10,
+      targetBytes: 1e6,
+    });
+    if (page.status !== "page") throw new Error("expected a page");
+    expect(page.messages.map((row) => (row as { id: string }).id)).toEqual(ids);
+    expect(page.complete).toBe(true);
+    const latest = await openCode2TranscriptPage(client, state, sessionId, {
+      cursor: second.historyCursorAtEnd!,
+      limit: 10,
+      targetBytes: 1e6,
+    });
+    if (latest.status !== "page") throw new Error("expected a page");
+    expect(latest.messages.map((row) => (row as { id: string }).id)).toEqual([...ids, ...appended]);
   });
 
   test("a session the server does not have is an empty, complete window", async () => {

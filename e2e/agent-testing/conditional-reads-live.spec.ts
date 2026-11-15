@@ -199,10 +199,27 @@ async function signIn(page: Page, status: Status): Promise<Invoke> {
   };
 }
 
-/** The profile backend's own toolchain directory, from its command line. */
+/**
+ * The profile backend's own toolchain directory, from its command line.
+ * Linux reads the exact argv from `/proc`. macOS has no `/proc`, and `ps`
+ * joins argv with spaces while the profile's data directory has one in it
+ * ("Application Support"), so the value is the text after the flag that
+ * starts with the data directory, up to the next option.
+ */
 function toolchainBinDir(status: Status): string {
-  const argv = readFileSync(`/proc/${status.pids!.backend}/cmdline`, "utf8").split("\0");
-  const directory = argv[argv.indexOf("--toolchain-bin-dir") + 1];
+  const pid = status.pids!.backend!;
+  let directory: string | undefined;
+  if (process.platform === "linux") {
+    const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+    directory = argv[argv.indexOf("--toolchain-bin-dir") + 1];
+  } else {
+    const args = execFileSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8" });
+    const start = args.indexOf(`--toolchain-bin-dir ${status.dataDir!}`);
+    if (start >= 0) {
+      const rest = args.slice(start + "--toolchain-bin-dir ".length);
+      directory = rest.split(/ --|\n/)[0]?.trimEnd();
+    }
+  }
   if (!directory?.startsWith(status.dataDir!)) throw new Error("toolchain is not the profile's");
   return directory;
 }

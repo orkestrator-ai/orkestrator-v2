@@ -1,0 +1,71 @@
+name: Electron qualification
+
+# The whole credential-free Electron suite (`mise run test:agent:electron`,
+# e2e/agent-testing/playwright.electron.config.ts) in real Electron windows on
+# a disposable Xvfb display (docs/development/agent-testing.md, "Electron specs
+# and their display"). Pull requests run only the few specs in
+# native-application-menu.yml, so main, preload, IPC and window regressions
+# elsewhere in the suite otherwise show up only when someone qualifies by hand
+# (docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md,
+# task 8). Weekly on the container live qualification's schedule, on demand,
+# and on pull requests that change this workflow or the suite's membership.
+# No secrets: every spec runs against loopback fixtures, and no provider is
+# signed in.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/workflows/electron-qualification.yml"
+      - "e2e/agent-testing/playwright.electron.config.ts"
+      - "e2e/agent-testing/electron-display-setup.ts"
+
+# Only pull request runs supersede each other. Scheduled and manual runs need
+# unique groups so a newer pending run cannot replace an older one.
+concurrency:
+  group: electron-qualification-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  linux:
+    name: Electron suite (ubuntu-latest, Xvfb)
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+      - run: bun install --frozen-lockfile
+      - name: Install Electron runtime
+        run: bun apps/desktop/node_modules/electron/install.js
+      - name: Install isolated Linux desktop tools
+        # Xvfb for the display, xdotool and ImageMagick for the native menu
+        # input case, vim for the terminal input resume spec, and Electron's
+        # shared libraries.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes xvfb xdotool imagemagick vim libgtk-3-0 libnss3 libasound2t64
+      - name: Run the Electron suite
+        env:
+          ORKESTRATOR_AGENT_TEST_RUN_ID: electron-qualification
+          # The runner's Xvfb display is an isolated desktop, so the native
+          # menu case may send OS input to it.
+          ORKESTRATOR_NATIVE_MENU_INPUT: "1"
+        # `xvfb-run` sets only DISPLAY; clearing the Wayland variables keeps
+        # Electron on X11 even if a runner image ever sets them.
+        run: env -u WAYLAND_DISPLAY -u ELECTRON_OZONE_PLATFORM_HINT xvfb-run -a mise run test:logged -- --name electron-suite -- mise run test:agent:electron
+      - name: Upload Electron suite evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: electron-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/agent-testing/electron-qualification/electron
+          if-no-files-found: warn
+          retention-days: 14

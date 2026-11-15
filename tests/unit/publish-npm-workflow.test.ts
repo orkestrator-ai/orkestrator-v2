@@ -96,9 +96,87 @@ describe("npm publish workflow", () => {
     expect(steps.some((step) => step.with && "registry-url" in step.with)).toBe(false);
   });
 
+  test("lets Chromium's sandbox start before the smoke test, never by dropping it", () => {
+    const names = steps.map((step) => step.name);
+    const allow = names.indexOf("Allow unprivileged user namespaces on the disposable runner");
+    const publish = steps.findIndex(
+      (step) => step.run?.trim() === "bun scripts/publish-cli.ts --ci",
+    );
+    expect(allow).toBeGreaterThan(-1);
+    expect(allow).toBeLessThan(publish);
+    expect(steps[allow]?.run).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
+    expect(source).not.toMatch(/no-sandbox|chromiumSandbox:\s*false/);
+  });
+
+  test("installs the pinned Playwright Chromium before the smoke test", () => {
+    const install = steps.findIndex(
+      (step) => step.name === "Install the pinned Playwright Chromium",
+    );
+    const publish = steps.findIndex(
+      (step) => step.run?.trim() === "bun scripts/publish-cli.ts --ci",
+    );
+    expect(install).toBeGreaterThan(-1);
+    expect(install).toBeLessThan(publish);
+    expect(steps[install]?.run).toContain("bunx playwright install --with-deps chromium");
+  });
+
   test("refuses a tag that is not a merged release of this package's version", () => {
     const check = steps.find((step) => step.name === "Check the tag is a merged release");
     expect(check?.run).toContain("packages/cli/package.json");
     expect(check?.run).toContain("git merge-base --is-ancestor HEAD origin/main");
+  });
+});
+
+describe("pull-request smoke test of the npm package", () => {
+  const smokeSource = readFileSync(
+    path.resolve(import.meta.dir, "../../.github/workflows/smoke-npm-package.yml"),
+    "utf8",
+  );
+  const smoke = Bun.YAML.parse(smokeSource) as Workflow & {
+    on: { pull_request?: { types?: string[]; paths?: string[] } };
+  };
+  const smokeSteps = Object.values(smoke.jobs).flatMap((job) => job.steps ?? []);
+  const PREPARATION = [
+    "Allow unprivileged user namespaces on the disposable runner",
+    "Install the pinned Playwright Chromium",
+  ];
+
+  test("prepares the runner exactly as the publish workflow does", () => {
+    for (const name of PREPARATION) {
+      const here = smokeSteps.find((step) => step.name === name);
+      const there = steps.find((step) => step.name === name);
+      expect({ name, run: here?.run }).toEqual({ name, run: there?.run });
+    }
+  });
+
+  test("runs the packed smoke test and can publish nothing", () => {
+    expect(smokeSteps.some((step) => step.run?.trim() === "mise run smoke:cli")).toBe(true);
+    expect(smoke.permissions).toEqual({});
+    for (const job of Object.values(smoke.jobs)) {
+      expect(job.permissions).toEqual({ contents: "read" });
+      expect(job.environment).toBeUndefined();
+    }
+    expect(smokeSource).not.toMatch(/secrets\./);
+    for (const step of smokeSteps) {
+      expect(step.run ?? "").not.toMatch(/npm publish|publish-cli\.ts/);
+    }
+  });
+
+  test("runs on pull requests that touch what the publish smoke test exercises", () => {
+    const paths = smoke.on.pull_request?.paths ?? [];
+    for (const required of [
+      ".github/workflows/publish-npm.yml",
+      "packages/cli/**",
+      "scripts/publish-cli.ts",
+    ]) {
+      expect(paths).toContain(required);
+    }
+    expect(smoke.on.pull_request?.types).toContain("ready_for_review");
+  });
+
+  test("pins every action to a commit", () => {
+    for (const step of smokeSteps.filter((candidate) => candidate.uses)) {
+      expect(step.uses).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
+    }
   });
 });

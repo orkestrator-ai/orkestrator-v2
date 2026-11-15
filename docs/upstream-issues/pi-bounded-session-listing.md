@@ -2,10 +2,10 @@
 
 **Tracker:** Pi, <https://github.com/earendil-works/pi/issues> (the `repository` field of `@earendil-works/pi-coding-agent`, package directory `packages/coding-agent`)
 **Status:** draft
-**Source:** [5980](../todo/agent-engines/5980-pi-session-list-read-cost.md) task 1; filed through the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)'s "file the upstream reports marked ready" item; measurements from 5480 (deleted) task 3 (`git show a87ca4cac^:docs/todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md`)
+**Source:** [5980](../todo/agent-engines/5980-pi-session-list-read-cost.md) task 2; filed through the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)'s "file the upstream reports marked ready" item; measurements from 5480 (deleted) task 3 (`git show a87ca4cac^:docs/todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md`)
 **Filed:** —
 
-Decision (2026-11-14, the user): until Pi ships a bounded listing, the bridge reads only the session headers it needs, falling back to Pi's listing API on a format it does not recognise, and it switches to the upstream API when that ships.
+Decision (2026-11-14, the user): until Pi ships a bounded listing, the bridge reads only the session headers it needs, falling back to Pi's listing API on a format it does not recognise, and it switches to the upstream API when that ships. The header reader shipped on 2026-11-15 (`bridges/pi-bridge/src/session-headers.ts`, 5980 task 1); switching is 5980 task 2.
 
 ## Issue text
 
@@ -26,13 +26,21 @@ Measured with Pi 1.4.0, Bun 1.4.4, Apple M1 Max (10 cores, 32 GiB, internal SSD)
 | 200 KiB | 8.8 GB | 41,943 | 11.1-11.2 s | 1.7-1.9 GB |
 | 10 MiB | 17.2 GB | 1,638 | 22.3-22.9 s | 3.6-4.9 GB |
 
+Re-measured with Pi 1.5.0, Bun 1.4.4, Linux x86-64 (12 cores, 30 GiB), on a shared machine, in a fresh process per run (times include importing the SDK):
+
+| Session file | History | Files | Listing took | Peak RSS |
+| --- | --- | --- | --- | --- |
+| 1 MiB | 2.1 GB | 2,048 | 20.4-20.6 s | 1.49-1.50 GB |
+| 1 MiB | 4.1 GB | 4,096 | 40.0 s | 2.45-2.54 GB |
+| 10 MiB | 4.1 GB | 410 | 39.9-40.9 s | 2.57-2.58 GB |
+
 File size made little difference at the same total, so bytes, not session count, set the cost. Throughput varied about sixfold on the same machine (about 820 MB/s down to 120-150 MB/s); the cause was not isolated. How much of the memory is `allMessagesText` was not isolated either.
 
 **Expected.** A way to list the newest N sessions whose cost does not grow with the whole history, for example `SessionManager.list(cwd, { limit, includeAllMessagesText: false, signal, onProgress })`. Ordering by last activity may still need each file's tail, but not every message's text.
 
 **Actual.** In 1.5.0 `buildSessionInfo` streams each file line by line, parses every entry, and pushes every message's text into `allMessagesText`; `list` maps every `.jsonl` file (10 at a time) before sorting by `modified`. There is no limit and no way to skip the text.
 
-**Versions.** Measured on Pi 1.4.0. Current pin: `@earendil-works/pi-coding-agent` 1.5.0 (`bridges/pi-bridge/package.json`), whose `list`, `listAll` and `SessionInfo` were read for this report.
+**Versions.** Measured on Pi 1.4.0 (macOS) and 1.5.0 (Linux). Current pin: `@earendil-works/pi-coding-agent` 1.5.0 (`bridges/pi-bridge/package.json`), whose `list`, `listAll` and `SessionInfo` were read for this report.
 
 **Impact.** A host that shows a resume picker caps the listing with a timeout. A history past it can never be listed, because a read that times out fills no cache, and below it the read can cost several GB of memory each time the picker opens.
 
@@ -43,9 +51,9 @@ None known; the sources record no search. Search terms: `SessionManager.list`, `
 ## Before filing
 
 - [ ] Confirm the tracker: the package's `repository` field and the toolchain's release URL both name `earendil-works/pi`.
-- [ ] Re-measure at least one row on the current pin (1.5.0 streams lines where 1.4.0 was recorded as reading whole files, so the memory figures may differ) and update the table and version line.
+- [x] Re-measure at least one row on the current pin (1.5.0 streams lines where 1.4.0 was recorded as reading whole files, so the memory figures may differ) and update the table and version line. Done 2026-11-15 on Linux (5980 task 1's measurement).
 - [ ] Search for duplicates.
 
 ## After filing
 
-Record the URL and date under **Filed**, set **Status** to `filed`, and record the URL in [5980](../todo/agent-engines/5980-pi-session-list-read-cost.md)'s Assumptions and decisions (task 1).
+Record the URL and date under **Filed**, set **Status** to `filed`, and record the URL in [5980](../todo/agent-engines/5980-pi-session-list-read-cost.md)'s Assumptions and decisions (task 2).

@@ -243,3 +243,39 @@ done
 
 Kill a leftover `docker events --filter event=oom` only if its scope's
 `orkestrator-v2` main process is gone.
+
+## 7. A native dialog during a quit (macOS SIGSEGV)
+
+Unlike the rest of this page, this was found on macOS: on mbp3's real display
+on 2026-11-15 (to-do 6303, retired that day). A main-process exception raised
+during `will-quit`, after every window had closed, opened the uncaught-exception
+dialog on a newly created host window (`native-dialogs.ts` gives every macOS
+dialog a parent). In 2 of 5 runs Electron 45.2.3 then died with SIGSEGV
+(`EXC_BAD_ACCESS`, `KERN_INVALID_ADDRESS`) before the essential log recorded
+`essential.stopped`; in the other 3 the host window failed to load
+(`ERR_FAILED` on its `data:` page) and the dialog was refused as `open-failed`.
+A hidden window created at the same point on its own did not crash (3 of 3),
+and an exception raised at `before-quit`, while the window still existed,
+showed its sheet on that window and the quit finished with code 0.
+
+What it looks like:
+
+| Where | What is there |
+| --- | --- |
+| Electron's launcher output | `Electron exited with signal SIGSEGV`, then the wrapper exits with code 1 |
+| Essential log | `desktop` `uncaught-exception` and `backend` `shutdown.finished`, but no `logging` `essential.stopped` |
+| `~/Library/Logs/DiagnosticReports/Electron-*.ips` | Faulting thread `CrBrowserMain`: a nested AppKit event loop entered from JavaScript, then `-[NSWindow _setOcclusionStateIsVisible:]` posting a notification whose observer calls into Node frames that are being torn down. Electron's framework has no public symbols, so the Node frame names are only the nearest exports |
+
+Fixed: once `before-quit` has fired, `createNativeDialogs` cancels any dialog
+that would need a new host window (macOS) or a windowless box (elsewhere),
+logging `desktop.dialog` `quitting-cancelled` with its source and response; a
+dialog with an open window still opens on it. A host window that was still
+being created when the quit began counts as new: the dialogs waiting on it are
+cancelled once it settles and it is closed, and the desktop's host factory
+refuses to create one once the quit has begun. Electron lists the host from the
+moment it is constructed, so it is registered as a host then, before it loads:
+a still-loading host handed back as the focused or current window, or by a
+caller, goes through the same cancellation instead of counting as an open
+window. The uncaught exception itself is
+still logged first. `apps/desktop/tests/native-dialogs.test.ts` and the final
+close of `e2e/agent-testing/renderer-log-boundary-electron.spec.ts` pin it.

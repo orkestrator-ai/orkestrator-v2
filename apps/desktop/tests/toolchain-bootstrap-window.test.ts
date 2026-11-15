@@ -326,6 +326,34 @@ describe("toolchain bootstrap window", () => {
     expect(loadedHtml).toContain("<body></body>");
   });
 
+  test("reports the dialog host as soon as it is constructed, before it loads", async () => {
+    // Electron lists the window from construction on; native dialogs must know
+    // it as their host while it is still loading.
+    let finishLoad!: () => void;
+    class SlowBrowserWindow {
+      readonly webContents = {
+        setWindowOpenHandler: mock(() => undefined),
+        on: mock(() => undefined),
+        once: mock(() => undefined),
+      };
+      readonly loadURL = mock(() => new Promise<void>((resolve) => (finishLoad = resolve)));
+      readonly isDestroyed = mock(() => false);
+      readonly close = mock(() => undefined);
+    }
+    const reported: unknown[] = [];
+    const created = createDialogHostWindow({
+      BrowserWindowCtor: SlowBrowserWindow as never,
+      dirname: "/app/electron",
+      platform: "darwin",
+      onCreated: (window) => reported.push(window),
+    });
+    await Bun.sleep(0);
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toBeInstanceOf(SlowBrowserWindow);
+    finishLoad();
+    expect(await created).toBe(reported[0] as never);
+  });
+
   test("closes and rejects when the bootstrap preload fails", async () => {
     let preloadErrorListener: ((_event: unknown, path: string, error: Error) => void) | undefined;
     class FailingBrowserWindow {

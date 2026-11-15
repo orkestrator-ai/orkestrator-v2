@@ -1,11 +1,12 @@
 /**
  * What `GET /session/list` answers while no session file has changed, for up to 30 s.
  *
- * `SessionManager.list` reads and parses every session file in full, and Pi
- * does not export the per-file step, so the result can only be kept whole: one
- * changed file parses them all again. Unchanged costs one directory listing and
- * one `stat` per file. The stamp is a fixed-size digest, so a huge directory
- * retains no more than a small one.
+ * A list reads a head and tail window of the newest session files
+ * (`session-headers.ts`), or every file in full when it falls back to
+ * `SessionManager.list`, and the result is kept whole: one changed file reads
+ * them again. Unchanged costs one directory listing and one `stat` per file.
+ * The stamp is a fixed-size digest, so a huge directory retains no more than a
+ * small one.
  */
 import { createHash } from "node:crypto";
 import { readdir, stat } from "node:fs/promises";

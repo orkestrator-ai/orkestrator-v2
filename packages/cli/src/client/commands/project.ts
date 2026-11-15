@@ -291,7 +291,7 @@ export const projectCommands: CommandSpec[] = [
     action: "project.remove",
     summary: "Remove a project registration; --cascade deletes its environments first.",
     description:
-      "Without --cascade a project that still has environments is refused (exit 8). With --cascade the backend deletes each environment through the normal lifecycle, one by one, reports a result for each, and removes the registration only if all were deleted (otherwise the operation is partial and the project is kept). The checkout on disk and any remote repository are never deleted. --wait observes a cascade until it ends.",
+      "Without --cascade a project that still has environments is refused (exit 8). With --cascade the backend deletes each environment through the normal lifecycle, one by one, reports a result for each, and removes the registration only if all were deleted (otherwise the operation is partial and the project is kept). Removing the registration also deletes the project's tickets and their images, project notes and feature plans on that machine. The checkout on disk and any remote repository are never deleted. --wait observes a cascade until it ends.",
     positionals: [{ name: "project", required: true }],
     options: [
       {

@@ -2,18 +2,19 @@ import { afterEach, beforeEach, describe, expect, jest, spyOn, test } from "bun:
 import { appendFile, mkdtemp, rm, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import {
   listResumableSessions,
   sessionListReadSettledForTests,
   setSessionListTimeoutForTests,
 } from "./agent-session.js";
 import { workingDirectory } from "./config.js";
+import * as headers from "./session-headers.js";
 import { SESSION_LIST_CACHE_TTL_MS } from "./session-list-cache.js";
 import { TimeoutError } from "./timeout.js";
 
 let directory: string;
-let list: ReturnType<typeof spyOn<typeof SessionManager, "list">>;
+/** Each call is one read of the session files; a kept list makes none. */
+let list: ReturnType<typeof spyOn<typeof headers, "listSessionsFromHeaders">>;
 const previousSessionDirectory = process.env.PI_SESSION_DIR;
 
 function sessionLine(id: string): string {
@@ -45,7 +46,7 @@ async function writeSession(name: string, text: string): Promise<string> {
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "pi-bridge-session-list-"));
   process.env.PI_SESSION_DIR = directory;
-  list = spyOn(SessionManager, "list");
+  list = spyOn(headers, "listSessionsFromHeaders");
 });
 
 afterEach(async () => {
@@ -77,9 +78,16 @@ describe("the resumable session list", () => {
     async (partial) => {
       const firstPath = await writeSession("one", "first prompt");
       const secondPath = await writeSession("two", "second prompt");
-      const complete = await SessionManager.list(workingDirectory, directory);
+      const complete = await headers.listSessionsFromHeaders({
+        directory,
+        cwd: workingDirectory,
+        limit: 200,
+      });
       list.mockClear();
-      list.mockResolvedValueOnce(partial ? complete.slice(0, 1) : []);
+      list.mockResolvedValueOnce({
+        ...complete,
+        sessions: partial ? complete.sessions.slice(0, 1) : [],
+      });
       const clock = spyOn(performance, "now").mockReturnValue(1_000);
       try {
         const first = await listResumableSessions();
@@ -133,20 +141,17 @@ describe("the resumable session list", () => {
   });
 
   test("a list too large to keep is read each time, bounded as before", async () => {
-    list.mockImplementation(
-      async () =>
-        Array.from({ length: 500 }, (_, index) => ({
-          path: `/sessions/${index}.jsonl`,
-          id: String(index),
-          cwd: workingDirectory,
-          name: "n".repeat(64 * 1024),
-          created: new Date(1_000),
-          modified: new Date(2_000),
-          messageCount: 1,
-          firstMessage: "hello",
-          allMessagesText: "hello",
-        })) as SessionInfo[],
-    );
+    list.mockImplementation(async () => ({
+      sessions: Array.from({ length: 500 }, (_, index) => ({
+        path: `/sessions/${index}.jsonl`,
+        name: "n".repeat(64 * 1024),
+        created: new Date(1_000),
+        modified: new Date(2_000),
+        firstMessage: "hello",
+      })),
+      filesRead: 500,
+      bytesRead: 0,
+    }));
 
     expect(await listResumableSessions()).toHaveLength(200);
     await listResumableSessions();
@@ -161,7 +166,7 @@ describe("the resumable session list", () => {
     let signal: AbortSignal | undefined;
     let started!: () => void;
     const listStarted = new Promise<void>((resolve) => (started = resolve));
-    list.mockImplementation((_cwd, _dir, _progress, given) => {
+    list.mockImplementation(({ signal: given }) => {
       signal = given;
       started();
       return new Promise((_, reject) => {

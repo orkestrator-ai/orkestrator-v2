@@ -6,7 +6,7 @@ import { STARTUP_FAILED_TEXT } from "./electron-startup-recovery";
 
 /**
  * Shared by the two live fixtures of `electron-startup-recovery.integration.test.ts`
- * (to-do 7062 task 2): a private network namespace, a module fan-out server
+ * (to-do 7062 (retired) task 2): a private network namespace, a module fan-out server
  * and bounded bursts of interface churn.
  *
  * The qualification asserts exactly one reload, so the churn must be over

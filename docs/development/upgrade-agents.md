@@ -1732,6 +1732,18 @@ Dockerfile pins the same archive digests the manifest does.
    loader. Confirm
    that with `rg builtInExtensions node_modules/@earendil-works/pi-coding-agent/dist`
    on each bump.
+
+   The resume list reads Pi's session files itself (`src/session-headers.ts`,
+   to-do 5980) instead of calling `SessionManager.list`, which reads every
+   file in full. Re-read `buildSessionInfo` and `list` in
+   `dist/core/session-manager.js` on each bump; `src/session-headers.test.ts`
+   fails when the reader stops agreeing with `SessionManager.list` on files
+   the pinned SDK wrote, or when `CURRENT_SESSION_VERSION` moves past
+   `KNOWN_SESSION_VERSIONS`. A new version needs the reader checked against
+   it first: until then every list falls back to Pi's full read. If Pi has
+   shipped a bounded listing
+   ([upstream request](../upstream-issues/pi-bounded-session-listing.md)),
+   switch to it and retire the reader (5980 task 2).
 8. Rebuild the vendored bridge and run its suite. Like the Claude and Cursor SDK
    bridges, the build keeps the SDK external and a `vendor` step copies it into
    `dist/node_modules` — the SDK compiles extension TypeScript with jiti and

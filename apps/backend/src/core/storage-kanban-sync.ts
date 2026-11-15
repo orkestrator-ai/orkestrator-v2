@@ -643,6 +643,45 @@ function pruneTombstones(store: KanbanSyncStore): void {
   }
 }
 
+/**
+ * Forgets one of this node's projects after the project was removed here
+ * (to-do 5820): its replica links (so a re-added copy of the repository can
+ * pair with the command node again), its tombstones and pruned cursor, each
+ * leaf's pairing with it, and its conflicts, which quote ticket text. Nothing
+ * is queued and no tombstone is written: removing a project on one machine
+ * removes that machine's rows, not the shared board. A leaf's changes already
+ * queued for a command node stay queued, because they name the command
+ * node's project, which still exists. Returns whether anything changed.
+ */
+export function forgetSyncProject(store: KanbanSyncStore, projectId: string): boolean {
+  let changed = false;
+  for (const [key, link] of Object.entries(store.replicas)) {
+    if (link.projectId !== projectId) continue;
+    delete store.replicas[key];
+    changed = true;
+  }
+  for (const [id, tombstone] of Object.entries(store.tombstones)) {
+    if (tombstone.projectId !== projectId) continue;
+    delete store.tombstones[id];
+    changed = true;
+  }
+  if (projectId in store.prunedThrough) {
+    delete store.prunedThrough[projectId];
+    changed = true;
+  }
+  for (const peer of Object.values(store.peers)) {
+    if (!isRecord(peer.projects) || !(projectId in peer.projects)) continue;
+    delete peer.projects[projectId];
+    changed = true;
+  }
+  const conflicts = store.conflicts.filter((conflict) => conflict.projectId !== projectId);
+  if (conflicts.length !== store.conflicts.length) {
+    store.conflicts = conflicts;
+    changed = true;
+  }
+  return changed;
+}
+
 /*
  * The command node's side.
  */

@@ -134,10 +134,16 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
 - A tool variant Pi adds — or a custom tool from a project extension, whose
   shape this bridge cannot know at all — must degrade to a plain card, never
   throw. These branches run mid-turn.
-- `GET /session/list` is kept while no session file changes
-  (`session-list-cache.ts`), because Pi parses every file in full and does not
-  export the per-file step. A timeout aborts the read and answers 504 with a
-  fixed message; it is never an empty list.
+- `GET /session/list` reads a head and tail window of the newest session
+  files (`session-headers.ts`) rather than calling `SessionManager.list`,
+  which reads every file in full. It is a second reader of Pi's private
+  format: anything it does not recognise (a header version, an entry shape)
+  hands the whole list to `SessionManager.list`, and
+  `session-headers.test.ts` compares it with Pi's own listing on files the
+  pinned SDK wrote, so recheck it on every Pi bump. Where it differs from Pi
+  by design is listed at the top of the module. The answer is kept while no
+  session file changes (`session-list-cache.ts`). A timeout aborts the read
+  and answers 504 with a fixed message; it is never an empty list.
 - The conversation lives in Pi's own JSONL session file, not in this bridge.
   Losing the bridge's state costs a rendered transcript; it never costs the
   conversation. That is why `detachSession` keeps `sessionFile` and why a

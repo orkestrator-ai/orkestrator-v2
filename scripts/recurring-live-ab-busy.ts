@@ -103,6 +103,16 @@ export const BUSY_ROWS = {
   // ≤ 2 s after the save settles, timed from the write: 2.4 s (0048 decision M1).
   "burst-badge": { budgetMs: 2_400, side: "client", label: "Burst: change badge shows it" },
   "burst-clear": { budgetMs: 2_400, side: "client", label: "Burst removed: badge back" },
+  // The next round's burst writes as many one-line files into every
+  // environment, so a removal the backend rescanned only together with it
+  // would leave the numbers unchanged and the burst uncounted. Without
+  // clients nothing else waited for it, and on a Mac whose watcher misses
+  // events (to-do 8171, retired) a round can be shorter than the poll.
+  "burst-clear-backend": {
+    budgetMs: null,
+    side: "backend",
+    label: "Burst removed: every environment rescanned",
+  },
   // The next burst writes as many one-line files into the turn environment,
   // so a removal the backend only rescanned together with it would leave the
   // numbers unchanged and the burst uncounted (to-do 7765, retired).
@@ -933,7 +943,29 @@ export async function measureBusy(
           }
           const clearAt = runtime.now();
           runtime.removeBurst(worktrees, burstPath);
+          const backendClear =
+            statsBefore === null
+              ? Promise.resolve(null)
+              : until(
+                  "burst-clear-backend",
+                  clearAt,
+                  async () => {
+                    const stats = await readDiffStats();
+                    return (
+                      stats !== null &&
+                      environments.every((entry) => {
+                        const before = statsBefore.get(entry.id);
+                        const current = stats.get(entry.id);
+                        // An environment unreadable before the burst has no baseline.
+                        if (!before) return true;
+                        return !!current && current.files <= before.files;
+                      })
+                    );
+                  },
+                  BACKEND_WAIT_MS,
+                );
           await watchBadges("burst-clear", clearAt, (additions, base) => (additions ?? 0) <= base);
+          if (statsBefore !== null) record("burst-clear-backend", await backendClear);
 
           // 2. An active turn held at the model, and a prompt queued behind it.
           fakeModel.release(queued);

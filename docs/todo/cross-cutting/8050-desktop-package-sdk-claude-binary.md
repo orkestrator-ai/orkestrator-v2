@@ -75,7 +75,7 @@ have ever run, even if by accident.
   - **In `vendor.ts`, behind an option the desktop and CLI builds pass
     (recommended if task 1 finds no caller).**
     - Pros: one place; the image's `rm -rf` could then become the same option.
-    - Cons: the bridge's own development runs (`bun run build` in a checkout)
+    - Cons: the bridge's own development runs (`bun run --cwd bridges/claude-bridge build`)
       must keep the platform package if any probe relies on it, which task 1
       has to confirm.
   - **In the electron-builder filter (`build.extraResources`).**

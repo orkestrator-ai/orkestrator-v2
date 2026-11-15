@@ -296,9 +296,17 @@ installs them from the registry before a publish.
 The image also builds and installs every bridge tree: `claude-bridge`,
 `codex-bridge`, `acp-bridge`, `pi-bridge`, and `cursor-bridge`. The Claude
 bridge vendors the Agent SDK and its platform packages, then the Docker build
-removes the musl variants so glibc resolves the correct native package; the Pi
-and Cursor SDK bridges vendor their own SDKs the same way, for the reasons in
-their sections below. Container bridge startup uses the commands on the image's
+removes every platform package (`claude-agent-sdk-linux-<arch>` and its
+`-musl` variant), keeping only the main `claude-agent-sdk` package. The image
+therefore has one Claude Code binary, the pinned CLI at `CLAUDE_CLI_PATH`: the
+SDK looks for its own binary only when `pathToClaudeCodeExecutable` is unset,
+and the bridge always sets it from that variable. A container bridge started
+without `CLAUDE_CLI_PATH` fails with the SDK's `Native CLI binary for
+linux-<arch> not found` error rather than running an unpinned engine. The
+saving (about 340 MB unpacked per architecture) and its qualification are in
+[container-qualification.md](container-qualification.md#claude-bridge-without-the-sdks-platform-binary-2026-11-15).
+The Pi and Cursor SDK bridges vendor their own SDKs the same way (keeping
+their platform packages), for the reasons in their sections below. Container bridge startup uses the commands on the image's
 `PATH`; the Codex bridge records the selected command in `CODEX_PATH`.
 
 A bridge that builds must also be listed in the root `package.json`'s
@@ -722,6 +730,22 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    SDK does not declare. `sdk-compatibility.test.ts` probes that
    `getSettings` still exists; if `ModelInfo` ever gains an Ultracode flag,
    gate the toggle on it instead of on `xhigh` support.
+
+   Re-check that the SDK still looks for its own platform binary only when
+   `pathToClaudeCodeExecutable` is unset. The container image ships no SDK
+   platform package (see [Container environments](#container-environments)),
+   so an SDK that resolved its binary even when given a path would fail every
+   container turn. At 0.3.319 the only lookup in `sdk.mjs` sits behind
+   `if(!<pathToClaudeCodeExecutable>)` and throws `Native CLI binary for
+   <platform>-<arch> not found` when it finds nothing.
+   `bridges/claude-bridge/src/sdk-compatibility.test.ts` (slow tier, so run
+   it by path or through `mise run test:full`) pins both halves against the
+   new SDK: it copies the SDK package alone into a temporary tree, as the
+   image ships it, and checks that a passed executable is the one spawned and
+   that an unset path fails with that error. After the image is built, the
+   container Claude turn recorded in
+   [container-qualification.md](container-qualification.md#claude-bridge-without-the-sdks-platform-binary-2026-11-15)
+   is the end-to-end proof.
 
    Check whether `SlashCommand` in the new `sdk.d.ts` has gained a marker for
    terminal-only commands (at 0.3.322 it is still
@@ -1708,6 +1732,18 @@ Dockerfile pins the same archive digests the manifest does.
    loader. Confirm
    that with `rg builtInExtensions node_modules/@earendil-works/pi-coding-agent/dist`
    on each bump.
+
+   The resume list reads Pi's session files itself (`src/session-headers.ts`,
+   to-do 5980) instead of calling `SessionManager.list`, which reads every
+   file in full. Re-read `buildSessionInfo` and `list` in
+   `dist/core/session-manager.js` on each bump; `src/session-headers.test.ts`
+   fails when the reader stops agreeing with `SessionManager.list` on files
+   the pinned SDK wrote, or when `CURRENT_SESSION_VERSION` moves past
+   `KNOWN_SESSION_VERSIONS`. A new version needs the reader checked against
+   it first: until then every list falls back to Pi's full read. If Pi has
+   shipped a bounded listing
+   ([upstream request](../upstream-issues/pi-bounded-session-listing.md)),
+   switch to it and retire the reader (5980 task 2).
 8. Rebuild the vendored bridge and run its suite. Like the Claude and Cursor SDK
    bridges, the build keeps the SDK external and a `vendor` step copies it into
    `dist/node_modules` — the SDK compiles extension TypeScript with jiti and

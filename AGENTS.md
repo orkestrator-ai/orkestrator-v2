@@ -1306,9 +1306,9 @@ else is rejected outright. `full` mode skips the firewall entirely.
   (`packages/protocol/src/network-allowlist.ts`): GitHub, npm, Bun, mise, the
   Anthropic API, the VS Code marketplace, Context7, and Playwright's CDN. It
   omits `sentry.io`, `statsig.anthropic.com` and `statsig.com`: Claude Code,
-  Codex, OpenCode, Pi and Grok completed fake-provider turns with those hosts refused
-  (`container-live-telemetry-hosts.test.ts`, to-do 6100). Cursor live
-  qualification remains outstanding (to-do 7420). Allowing a service that takes
+  Codex, OpenCode, Pi, Grok and the Cursor SDK (against a loopback Cursor
+  backend, to-do 7420) completed fake-provider turns with those hosts refused
+  (`container-live-telemetry-hosts.test.ts`, to-do 6100). Allowing a service that takes
   events for any project creates a channel out. It is the only
   default list. The renderer seeds its
   unloaded config from the same constant, and the firewall's fallback for a

@@ -502,10 +502,20 @@ checks or deriving them from the criterion results. A restart that rewinds to
 an earlier round drops what later rounds recorded and the verification of the
 round it reruns. Restarting at or before Review, or explicitly retrying Review,
 also discards that round's superseded issues; restarting Address Findings or a later
-stage preserves the round's issues and resolutions. On any rewind or review
-retry, narrative sections and update history are cleared conservatively:
-they have no per-attempt snapshots to restore, so stages rebuild the brief
-instead of showing superseded work as current. Every field is bounded
+stage preserves the round's issues and resolutions. A restart clears only what
+the restarted step and the steps after it write, so what earlier steps
+recorded stays. The narrative sections (summary, problem or objective,
+context, solution, what was done, decisions, not done), the tests and the
+update history are cleared only when Build itself runs again, since Build is
+the stage that writes them. Restarting Fix, Review, Address Findings, Verify,
+Ship or conflict resolution keeps them: those stages amend the brief in place,
+and a restart does not rewind the code, so what they recorded still describes
+the worktree the restarted step continues on. "Rewind code to here" is the
+exception: it clears the narrative, tests and update history because they may
+describe dropped commits, and discards the target round's issues and verification
+because their resolutions and verdict may no longer apply
+(`pruneKeyInformationAfterRewind`).
+The update timestamp moves only when a restart removed something. Every field is bounded
 (`KEY_INFORMATION_LIMITS`, about 200 KB at worst) and checked by
 `isBuildPipeline`.
 
@@ -605,10 +615,60 @@ no report left to consolidate.
 
 "Restart reviewer" (`restart_build_pipeline_reviewer`) runs one reviewer again in
 any state, as in Multi Review. In the running review its peers carry on and a
-started consolidation is discarded. Once the pipeline has moved past the pass, it
-rewinds to the panel: the steps after it are superseded and the others' reports
-stay in use. Only the current round's panel can do this, because a later round
-has changed the code, and "Restart from here" reruns the whole pass.
+started consolidation is discarded. See
+[Rerunning one reviewer after consolidation](#rerunning-one-reviewer-after-consolidation)
+for a pass that has already consolidated.
+
+### Rerunning one reviewer after consolidation
+
+Once a pass has consolidated, one reviewer slot can still run again on its own
+(to-do 8103 (retired)). "Restart reviewer" on any reviewer of the pass, or
+"Retry reviewer" on a failed one while the consolidated pass is still live,
+rewinds the round to the panel instead of rerunning it
+(`build-pipeline-reviewer-rerun.ts`, through `restartLocatedStage` with
+`rerunReviewer`):
+
+- **The other slots are kept.** Their sessions are not superseded and their
+  reports stay current. The panel is the live `reviewFanout` when the pass
+  still holds its report, otherwise it is rebuilt from the reviewer sessions
+  and the Consolidation's `sessionlessReviewers` summary (`panelFromSessions`),
+  with the pass's own `workspaceBaseline`. The kept reports are what the
+  re-consolidation reads, so no other reviewer runs again.
+- **The rerun slot gets a new attempt.** Its record is queued under a fresh
+  result slot and its next session is `…:attempt-<n>` in the same pass. The
+  earlier session stays as that slot's earlier attempt, as after a live retry.
+  A slot that never had a session (it failed to start) is named by its record
+  id and the rewind is anchored on its pass's Consolidation. It reruns with the
+  reasoning effort and Fast/Normal choice it launched with, which the
+  Consolidation's `sessionlessReviewers` entry records (`reasoningEffort`,
+  `fastMode`); an entry written before they were recorded falls back to the
+  slot's configured selection. The key of an earlier attempt still names its
+  slot.
+- **Consolidation and everything after it are superseded.** One
+  `PipelineRewind` supersedes the old Consolidation, Address Findings and every
+  later step of the round; `structuredReview`, the verdict and the delivery
+  decision are cleared as for any rewind, and the round's
+  `roundReviewReports` copy goes stale. The pass consolidates again once the
+  rerun settles, and Address Findings then runs on the new report.
+- **A running later step refuses it.** While a step after the pass runs, the
+  request is refused ("Pause the pipeline, then restart the reviewer"); a
+  paused, failed or finished pipeline is rerun directly. The live pass itself
+  is not a later step, even once it has consolidated. The rerun never stops a
+  running step as a side effect of a reviewer button.
+- **Only the current round.** A reviewer of an earlier round is refused,
+  because a later round has changed the code; "Restart from here" reruns the
+  whole pass.
+- **The graph keeps the panel together.** The rerun slot stays in its pass's
+  reviewer column beside the kept reports, the superseded steps are one
+  "Previous attempt" node after it, and the re-consolidation follows as the
+  same pass's Consolidation (a session naming the last pass's identity rejoins
+  and reopens it in `pipelineFlowModel`, so pausing the rerun marks that
+  panel's Consolidation paused rather than opening an empty second pass). A failed reviewer that never started still offers
+  "Restart reviewer" from its Consolidation's summary.
+
+Everything is backend state on the pipeline record, so a reload or a switch to
+another environment rehydrates the same graph and the rerun carries on in the
+background.
 
 A worktree that moves during a review marks the review stale and stops nothing
 ([review preparation](review-preparation.md#read-only-reviewers-and-the-git-guard)):
@@ -783,11 +843,10 @@ pipeline never prunes the backup refs. A code rewind that ages out of the
 keeps the rest of the panel, discards a started consolidation, and resumes a
 review that failed or paused. The failed attempt's session stays as history
 under its key; the retry gets `…:attempt-2`. The retry keeps the slot's agent,
-model and effort, so a reviewer that failed on a bad model id fails again. It
-is refused once the pass has consolidated ("restart the review stage to rerun
-it"): after that only a restart from a reviewer or Consolidation reruns the
-pass, and it reruns the whole panel. A per-slot rerun after consolidation would
-need a supersede rule by panel slot beside the round rule, and is not built.
+model and effort, so a reviewer that failed on a bad model id fails again. Once
+the pass has consolidated, the retry reruns the slot as
+[Rerunning one reviewer after consolidation](#rerunning-one-reviewer-after-consolidation)
+describes; "Restart from here" on a reviewer still reruns the whole panel.
 
 ## Delivery after Verify
 

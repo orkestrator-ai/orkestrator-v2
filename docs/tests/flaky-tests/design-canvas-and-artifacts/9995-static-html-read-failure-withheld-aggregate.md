@@ -94,3 +94,14 @@ assertion can run between them when a loaded host delays the second.
 Reproduce it first before changing the test. If the gap is real, Find could
 briefly see a failed document's text, which is a product question, not a
 test budget.
+
+## Recurrence 2026-11-15 (base a8b89f154)
+
+The project-removal review fix (`ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run
+test`, default worker plan, host slots shared with other worktrees) failed
+the sibling test `a frame over the element limit and a read over the budget
+both withhold the document` again on the same `artifactSearchBodyWithheld`
+assertion (57 ms). The aggregate runner's lone rerun of the unchanged file:
+`PASSED ALONE (2.1s)`. The branch changes backend storage only; the web
+component imports none of it. `mise run flaky:recurrence -- 9995 --base
+a8b89f154` answered open.

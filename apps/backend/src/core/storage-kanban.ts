@@ -33,6 +33,7 @@ import {
   type TicketLabelSummary,
 } from "@orkestrator/protocol/ticket-labels";
 import { KanbanBoardStore, normalizeKanbanTask } from "./storage-kanban-board.js";
+import { forgetSyncProject } from "./storage-kanban-sync.js";
 
 export { normalizeKanbanTask } from "./storage-kanban-board.js";
 
@@ -132,7 +133,7 @@ export class KanbanRepository {
     private readonly files: StorageFiles,
     private readonly board: KanbanBoardStore,
   ) {
-    this.labelCatalogue = new KanbanLabelCatalogueStore(context, files);
+    this.labelCatalogue = new KanbanLabelCatalogueStore(context, files, board.removal);
   }
 
   async getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
@@ -186,6 +187,8 @@ export class KanbanRepository {
       throw new Error("Kanban task initial comments need a requestId");
     }
     return this.board.enqueue(async () => {
+      // Under the Kanban lease, which project removal's delete also takes.
+      this.board.removal.assertAcceptsContent(projectId);
       const tasks = await this.board.loadTasks();
       const labels =
         initial.labels === undefined
@@ -626,6 +629,154 @@ export class KanbanRepository {
     });
   }
 
+  /**
+   * Fences a project's content for its removal: from now on no ticket, sync
+   * snapshot, label, note or feature plan can be added for it
+   * (`KanbanProjectRemovalStore.fence`).
+   */
+  fenceProjectContent(projectId: string): void {
+    this.board.removal.fence(projectId);
+  }
+
+  /** Lifts the fence of a removal that failed and kept the project. */
+  releaseProjectContentFence(projectId: string): void {
+    this.board.removal.release(projectId);
+  }
+
+  /**
+   * Deletes what one project holds here, for project removal (to-do 5820):
+   * its tickets and their image files, the delivery sidecars of its deleted
+   * tickets, its label catalogue, its notes, its feature plans, and the sync
+   * bookkeeping that names it (`forgetSyncProject`). Other projects' rows are
+   * left as stored. `removeProject` fences the project first
+   * (`fenceProjectContent`), so nothing can add content behind this.
+   *
+   * The tickets go without a sync stamp: no deletion is queued for a command
+   * node and no tombstone is written, so the shared board and other
+   * machines' copies stay as they are, and a re-added copy of the repository
+   * syncs the board's tickets again. Kanban tickets are not linked to Linear
+   * or GitHub issues, so nothing reaches either. Every delete prunes the
+   * stores' retired JSON archives and the WAL is scrubbed afterwards.
+   *
+   * The image ids are journaled in the commit that deletes their tickets and
+   * unlinked from the journal, so a file that cannot be unlinked is still
+   * found by a retry or after a restart. Throws when an image file or a
+   * sidecar could not be removed, so the caller keeps the project and a
+   * retry finishes the job.
+   */
+  async deleteProjectContent(projectId: string): Promise<void> {
+    if (!projectId.trim()) throw new Error("Project ID must not be blank");
+    const imagesLeft = await this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
+      const removed = tasks.filter((task) => task.projectId === projectId);
+      const kept = tasks.filter((task) => task.projectId !== projectId);
+      const loaded = await this.board.loadSyncStore();
+      const syncChanged = !loaded.fresh && forgetSyncProject(loaded.store, projectId);
+      if (removed.length || syncChanged) {
+        await this.context.atomically(async () => {
+          if (removed.length) {
+            await this.context.saveSensitiveJson(this.files.kanbanFile(), kept);
+            await this.board.removal.journalImageDeletions(
+              projectId,
+              removed.flatMap((task) => (task.images ?? []).map((image) => image.id)),
+            );
+          }
+          if (syncChanged) {
+            await this.context.saveSensitiveJson(this.files.kanbanSyncFile(), loaded.store);
+          }
+        });
+        if (removed.length) this.context.changes.announce("kanban", projectId);
+      }
+      // Also finishes what an earlier removal left journaled.
+      return this.board.removal.replayImageDeletions(kept);
+    });
+    const sidecarsLeft = await this.board.removal.removeDeliverySidecars(projectId);
+    this.labelCatalogue.delete(projectId);
+    const removeProjectRows = <T extends { projectId?: unknown }>(rows: T[]): number => {
+      if (!Array.isArray(rows)) return 0;
+      let removed = 0;
+      for (let index = rows.length - 1; index >= 0; index -= 1) {
+        if (rows[index]?.projectId !== projectId) continue;
+        rows.splice(index, 1);
+        removed += 1;
+      }
+      return removed;
+    };
+    const notes = this.context.updateStore(
+      this.files.projectNotesFile(),
+      (): ProjectNotes[] => [],
+      removeProjectRows,
+      { sensitive: true },
+    );
+    if (notes) this.context.changes.announce("project-notes", projectId);
+    const plans = this.context.updateStore(
+      this.files.featurePlansFile(),
+      (): FeaturePlan[] => [],
+      removeProjectRows,
+      { sensitive: true },
+    );
+    if (plans) this.context.changes.announce("feature-plan", projectId);
+    this.context.scrubDeletedDatabaseContent();
+    if (imagesLeft || sidecarsLeft) {
+      throw new Error(
+        `Could not delete ${imagesLeft} ticket image file(s) and ${sidecarsLeft} deleted-ticket record(s) of project ${projectId}; retry removing the project`,
+      );
+    }
+  }
+
+  /**
+   * Deletes the Linear and GitHub completion comment records of these
+   * pipelines (to-do 5820 task 2). A record only spares a finished pipeline
+   * a second scan of the issue's comments, and posting always scans for the
+   * run's marker first, so a record whose pipeline is gone has no use left.
+   * Returns how many records were removed.
+   */
+  async deleteCompletionCommentsForPipelines(pipelineIds: Iterable<string>): Promise<number> {
+    const ids = new Set(pipelineIds);
+    if (!ids.size) return 0;
+    type Records = Array<{ pipelineId?: unknown }>;
+    const named = (records: Records) =>
+      Array.isArray(records) && records.some((record) => ids.has(record?.pipelineId as string));
+    const remove = (records: Records): number => {
+      if (!Array.isArray(records)) return 0;
+      let count = 0;
+      for (let index = records.length - 1; index >= 0; index -= 1) {
+        if (!ids.has(records[index]?.pipelineId as string)) continue;
+        records.splice(index, 1);
+        count += 1;
+      }
+      return count;
+    };
+    let removed = 0;
+    // A read first, so a pipeline with no record writes nothing.
+    if (
+      named(
+        await this.context.loadJson<Records>(this.files.linearCompletionCommentsFile(), () => []),
+      )
+    ) {
+      removed += this.context.updateStore(
+        this.files.linearCompletionCommentsFile(),
+        (): Records => [],
+        remove,
+        { sensitive: true },
+      );
+    }
+    if (
+      named(
+        await this.context.loadJson<Records>(this.files.githubCompletionCommentsFile(), () => []),
+      )
+    ) {
+      removed += this.context.updateStore(
+        this.files.githubCompletionCommentsFile(),
+        (): Records => [],
+        remove,
+        { sensitive: true },
+      );
+    }
+    if (removed) this.context.scrubDeletedDatabaseContent();
+    return removed;
+  }
+
   async addKanbanComment(
     taskId: string,
     text: string,
@@ -785,6 +936,7 @@ export class KanbanRepository {
       this.files.projectNotesFile(),
       (): ProjectNotes[] => [],
       (notes) => {
+        this.board.removal.assertAcceptsContent(projectId);
         let existing = notes.find((candidate) => candidate.projectId === projectId);
         if (!existing) {
           existing = { projectId, content, updatedAt: nowIso() };
@@ -829,6 +981,7 @@ export class KanbanRepository {
   async createFeaturePlan(projectId: string, id: string = randomUUID()): Promise<FeaturePlan> {
     return this.mutateFeaturePlans(
       (plans) => {
+        this.board.removal.assertAcceptsContent(projectId);
         const existing = plans.find((plan) => plan.id === id);
         if (existing) {
           if (existing.projectId !== projectId)

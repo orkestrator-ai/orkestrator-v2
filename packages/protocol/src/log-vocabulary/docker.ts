@@ -67,7 +67,11 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "recovery.clear-terminals-failed":
         "Terminal sessions could not be cleared after a recovery restore.",
       "github-ranges.seed-not-copied":
-        "The GitHub ranges seed could not be copied into a container, so its firewall fetches them.",
+        "The GitHub ranges seed could not be copied into a container created before the seed directory was bound, so its firewall fetches them.",
+      "github-ranges.seed-copied-before-boot":
+        "A container created before the GitHub ranges seed directory was bound was given a fresh copy of the seed before it booted.",
+      "github-ranges.seed-directory-unavailable":
+        "The GitHub ranges seed directory could not be created, so a new restricted container is created without it and its firewall fetches the ranges itself.",
       "availability.probe-failed":
         "Docker is not available; written when the diagnostic changes. Fixed-shape metadata only: messages can hold daemon endpoints.",
       "start.port-collision-retrying":

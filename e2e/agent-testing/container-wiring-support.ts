@@ -53,6 +53,29 @@ export async function invoke<T>(command: string, args: Record<string, unknown> =
   return payload.result as T;
 }
 
+/**
+ * Stores one finished build pipeline in the profile's database, the way a
+ * second backend process would (`seedBuildPipeline` through
+ * `backend-store.ts`, under Bun). The running backend reads it on its next
+ * read; nothing schedules a turn for it. Returns the stored id.
+ */
+export function seedBuildPipeline(snapshot: Record<string, unknown>): string {
+  const { dataDir } = profileStatus();
+  if (!dataDir) throw new Error("dev:status returned no dataDir");
+  const result = spawnSync(
+    "bun",
+    [
+      path.join(import.meta.dirname, "backend-store.ts"),
+      dataDir,
+      "build-pipelines.json",
+      "seed-pipeline",
+    ],
+    { cwd: repositoryRoot, encoding: "utf8", input: JSON.stringify(snapshot) },
+  );
+  if (result.status !== 0) throw new Error(result.stderr || "backend-store seed-pipeline failed");
+  return (JSON.parse(result.stdout) as { id: string }).id;
+}
+
 /** `environmentChangeResourceKey` in `@orkestrator/protocol/change-resources`. */
 function environmentChangeKey(environmentId: string): string {
   return `environment-net/environment/${encodeURIComponent(environmentId)}/live`;

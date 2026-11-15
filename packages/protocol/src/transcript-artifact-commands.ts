@@ -56,10 +56,14 @@ export interface TranscriptArtifactCapabilities {
   };
   /** Why live interactive viewing is off on this backend, when it is. */
   liveInteractiveReason?: string;
-  /** Live interactive viewing is enabled (rollout control). */
+  /** Live interactive viewing is available (the content server is serving). */
   liveInteractive: boolean;
   /** Dedicated content listener origin for executable documents, when serving. */
   contentOrigin: string | null;
+  /**
+   * Former rollout switches. Current backends have no off switch and report
+   * every field `true`; older backends may still report one `false`.
+   */
   rolloutFlags: {
     richMarkdown: boolean;
     artifactPublication: boolean;

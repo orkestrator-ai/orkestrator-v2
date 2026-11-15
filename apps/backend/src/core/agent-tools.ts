@@ -903,7 +903,7 @@ async function createAgentToolServer(
   // Artifact tools are ordinary tools of this general server only; the
   // workflow-result branches above returned without them. Environment-wide
   // credentials must additionally present a per-turn artifact grant.
-  const artifactTools = artifacts?.toolsEnabled() ? artifacts : null;
+  const artifactTools = artifacts ?? null;
   const server = new McpServer(
     { name: "orkestrator", version: "1.0.0" },
     {
@@ -1403,7 +1403,7 @@ export class AgentToolsServer {
   }
 
   hasTranscriptArtifactTools(): boolean {
-    return this.transcriptArtifactToolHost?.toolsEnabled() === true;
+    return this.transcriptArtifactToolHost !== null;
   }
 
   hasWebAnnotationTools(): boolean {
@@ -1509,7 +1509,7 @@ export class AgentToolsServer {
       return;
     }
     const host = this.transcriptArtifactToolHost;
-    if (!host?.toolsEnabled() || typeof host.authenticateArtifactGrant !== "function") {
+    if (!host || typeof host.authenticateArtifactGrant !== "function") {
       request.resume();
       jsonResponse(response, 404, { error: "Artifact tools are not enabled" });
       return;

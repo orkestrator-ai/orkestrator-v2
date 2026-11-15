@@ -30,12 +30,13 @@ import {
 } from "./index.js";
 import { CoordinatorSnapshotSchema } from "./schemas-project.js";
 
-/** The 68 commands of the project part. */
+/** The 69 commands of the project part. */
 const NAMES = [
   "address_coordinator_multi_review_action",
   "adopt_coordinator_workflow",
   "answer_controller_worker_question",
   "answer_project_worker_question",
+  "apply_controller_root_patch",
   "apply_project_root_changes",
   "ask_coordinator_suborks",
   "assert_coordinator_delegation_available",
@@ -109,6 +110,7 @@ const NAMES = [
  */
 const INTERNAL = new Set([
   "answer_controller_worker_question",
+  "apply_controller_root_patch",
   "ask_coordinator_suborks",
   "launch_coordinator_environment",
   "open_coordinator_delegation",
@@ -145,6 +147,7 @@ const INTERNAL = new Set([
 const CRITICAL: Record<string, readonly string[]> = {
   answer_controller_worker_question: ["revision"],
   answer_project_worker_question: ["revision"],
+  apply_controller_root_patch: ["sha256"],
   launch_coordinator_environment: ["requestId"],
   open_coordinator_delegation: ["requestId"],
   restart_controller_build_pipeline_step: ["requestId", "stepId", "selection"],

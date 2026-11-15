@@ -114,7 +114,10 @@ import {
   ensureEnvironmentNetwork,
   ingressPorts,
 } from "./container-network.js";
-import { copyGithubRangesSeed, githubRangesSeed } from "./github-ranges-cache.js";
+import {
+  githubRangesSeedMountArguments,
+  prepareGithubRangesSeedBind,
+} from "./github-ranges-cache.js";
 import { rememberNetworkOwner } from "./container-network-owner.js";
 import {
   DOCKER_LABEL_EGRESS_GATEWAY,
@@ -641,7 +644,6 @@ export async function createDockerContainer(
   // The namespace owner publishes: the gateway when there is one.
   if (enforcement !== "gateway") args.push(...publishArgs);
   let gatewayId: string | null = null;
-  let inContainerGithubSeed: string | null = null;
   // Network policy 2: the environment's own network, IPv6 disabled, and a
   // firewall that allows the host only on the backend's service port and
   // inbound connections only on the published ports. Never the shared
@@ -651,11 +653,19 @@ export async function createDockerContainer(
     const network = await ensureEnvironmentNetwork(context, environment.id);
     const servicePort = context.agentTools?.servicePort?.() ?? null;
     // GitHub's ranges, fetched at most hourly by the backend, so restricted
-    // boots and restarts do not each call GitHub's rate-limited endpoint.
-    const githubSeed =
+    // boots and restarts do not each call GitHub's rate-limited endpoint. The
+    // seed directory is bound read-only into whichever container runs the
+    // firewall, and the start path refreshes it before each boot (to-do 7549
+    // task 2), so no boot depends on a `docker cp` into a stopped container.
+    const githubSeedDirectory =
       environment.networkAccessMode === "full"
         ? null
-        : await githubRangesSeed(context.storage.getDataDir());
+        : await prepareGithubRangesSeedBind(context.storage.getDataDir());
+    if (environment.networkAccessMode !== "full" && !githubSeedDirectory) {
+      dockerLog.warn("github-ranges.seed-directory-unavailable", {
+        environmentId: environment.id,
+      });
+    }
     const policyEnvironment = {
       ORKESTRATOR_NETWORK_POLICY: String(networkPolicy),
       ORKESTRATOR_HOST_SERVICE_PORTS: servicePort ? String(servicePort) : "",
@@ -676,7 +686,7 @@ export async function createDockerContainer(
         publishArguments: publishArgs,
         addHostGateway: addHostGatewayAlias,
         hostAliasTarget,
-        githubSeed,
+        githubSeedDirectory,
         policyEnvironment: {
           NETWORK_MODE: "restricted",
           ALLOWED_DOMAINS: allowedDomainsValue,
@@ -698,8 +708,7 @@ export async function createDockerContainer(
         "ORKESTRATOR_EGRESS=gateway",
       );
     } else {
-      // Copied in once the container exists (`copyGithubRangesSeed`), never bound.
-      inContainerGithubSeed = githubSeed;
+      if (githubSeedDirectory) args.push(...githubRangesSeedMountArguments(githubSeedDirectory));
       args.push("--network", network, "--sysctl", "net.ipv6.conf.all.disable_ipv6=1");
     }
     args.push(
@@ -758,7 +767,6 @@ export async function createDockerContainer(
   if (gitMirrorAccess && gitMirrorArguments.length > 0) {
     scheduleProjectGitMirrorRefresh(context, project, gitMirrorAccess);
   }
-  if (inContainerGithubSeed) await copyGithubRangesSeed(containerId, inContainerGithubSeed);
   // Earlier revisions no container binds any more (recovery copies keep
   // theirs) are removed. Best effort: a failure only leaves a revision for
   // the next creation or the environment's deletion to remove.

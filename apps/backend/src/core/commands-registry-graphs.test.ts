@@ -66,7 +66,6 @@ describe("graph template commands", () => {
       "graph_template_export",
       "graph_template_trust",
       "graph_capability_ceiling_get",
-      "graph_capability_ceiling_set",
     ]) {
       expect(commands.has(name)).toBe(true);
     }
@@ -173,10 +172,8 @@ describe("graph template commands", () => {
     expect(
       pushing.diagnostics.some((diagnostic) => diagnostic.code === "capability-remote-write"),
     ).toBe(true);
-    await run("graph_capability_ceiling_set", {
-      projectId: fixture.projectId,
-      ceiling: { deny: ["network"] },
-    });
+    // The ceiling is an operator setting with no command that writes it.
+    await fixture.service.setCeiling(fixture.projectId, { deny: ["network"] });
     const draft = await run<GraphTemplateCompileResponse>("graph_template_compile", {
       template: sampleGraphTemplate("draft"),
       projectId: fixture.projectId,
@@ -262,43 +259,20 @@ describe("graph template commands", () => {
     ).toBe("invalid-request");
   });
 
-  test("graph_capability_ceiling_get and _set", async () => {
+  test("graph_capability_ceiling_get reads the default and a stored ceiling", async () => {
     const initial = await run<GraphProjectCeiling>("graph_capability_ceiling_get", {
       projectId: fixture.projectId,
     });
     expect(initial).toMatchObject({ isDefault: true, revision: 0 });
-    const set = await run<GraphProjectCeiling>("graph_capability_ceiling_set", {
-      projectId: fixture.projectId,
-      ceiling: { deny: ["network"], allow: ["web.search"] },
-      expectedRevision: 0,
-    });
-    expect(set).toMatchObject({
-      ceiling: { deny: ["network"], allow: ["web.search"] },
-      isDefault: false,
-      revision: 1,
-    });
+    await fixture.service.setCeiling(fixture.projectId, { deny: ["network"] }, 0);
     expect(
-      await refused("graph_capability_ceiling_set", {
+      await run<GraphProjectCeiling>("graph_capability_ceiling_get", {
         projectId: fixture.projectId,
-        ceiling: { deny: ["git.push"] },
       }),
-    ).toBe("invalid-ceiling");
-    expect(
-      await refused("graph_capability_ceiling_set", {
-        projectId: fixture.projectId,
-        ceiling: null,
-        expectedRevision: 0,
-      }),
-    ).toBe("revision-conflict");
-    expect(
-      await run<GraphProjectCeiling>("graph_capability_ceiling_set", {
-        projectId: fixture.projectId,
-        ceiling: null,
-      }),
-    ).toMatchObject({ isDefault: true, revision: 2 });
-    expect(await refused("graph_capability_ceiling_set", { projectId: fixture.projectId })).toBe(
-      "invalid-request",
-    );
+    ).toMatchObject({ ceiling: { deny: ["network"] }, isDefault: false, revision: 1 });
     expect(await refused("graph_capability_ceiling_get", {})).toBe("invalid-request");
+  });
+  test("graph_capability_ceiling_set is not registered", () => {
+    expect(commands.has("graph_capability_ceiling_set")).toBe(false);
   });
 });

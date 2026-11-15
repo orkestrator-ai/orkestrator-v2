@@ -2,7 +2,6 @@ import { parseGraphTemplateRef, type GraphTemplateRef } from "@orkestrator/proto
 import { GRAPH_ID_PATTERN, GRAPH_TEMPLATE_BOUNDS } from "@orkestrator/protocol/graphs/grammar";
 import {
   graphCapabilityCeilingGetCommand,
-  graphCapabilityCeilingSetCommand,
   graphTemplateCompileCommand,
   graphTemplateDeleteCommand,
   graphTemplateDuplicateCommand,
@@ -178,15 +177,6 @@ export function registerGraphTemplateCommands(register: CommandRegistrar): void 
 
   register(graphCapabilityCeilingGetCommand, async (args, context) => {
     return service(context).getCeiling(projectIdArg(args.projectId, true));
-  });
-
-  register(graphCapabilityCeilingSetCommand, async (args, context) => {
-    if (args.ceiling === undefined) invalid("ceiling is required (null resets it to the default)");
-    return service(context).setCeiling(
-      projectIdArg(args.projectId, true),
-      args.ceiling,
-      revisionArg(args.expectedRevision, "expectedRevision"),
-    );
   });
 
   // Item 405: share bundles, signing keys and the project template review.

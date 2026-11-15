@@ -226,4 +226,16 @@ describe("asNativeAgentSessionAction", () => {
       asNativeAgentSessionAction({ kind: "steer", text: "focus", turnRequestId: "x".repeat(513) }),
     ).toThrow("at most 512 bytes");
   });
+
+  test("carries the run a steer was written for (to-do 8107 (retired))", () => {
+    expect(
+      asNativeAgentSessionAction({ kind: "steer", text: "focus", expectedRunId: "run-1" }),
+    ).toEqual({ kind: "steer", text: "focus", expectedRunId: "run-1" });
+    expect(() =>
+      asNativeAgentSessionAction({ kind: "steer", text: "focus", expectedRunId: " " }),
+    ).toThrow();
+    expect(() =>
+      asNativeAgentSessionAction({ kind: "steer", text: "focus", expectedRunId: "x".repeat(513) }),
+    ).toThrow("expectedRunId to be at most 512 bytes");
+  });
 });

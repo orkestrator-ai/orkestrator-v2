@@ -808,7 +808,11 @@ export const listProjectRootChangesCommand = defineCommand({
   critical: [],
 });
 
-/** Runs only from an approved `apply-root-changes` request. */
+/**
+ * Runs only from an approved `apply-root-changes` request. With `nodeId`, the
+ * worker is on that node (as `nodeProjectId`): the patch is built here and
+ * sent to it through `apply_controller_root_patch` (to-do 0395 (retired) task 2).
+ */
 export const applyProjectRootChangesCommand = defineCommand({
   domain: coordinatorDomain,
   name: "apply_project_root_changes",
@@ -819,9 +823,30 @@ export const applyProjectRootChangesCommand = defineCommand({
     paths: optionalUnknown,
     projectId: Schema.String,
     environmentId: Schema.String,
+    nodeId: optionalUnknown,
+    nodeName: optionalUnknown,
+    nodeProjectId: optionalUnknown,
+    requestKey: optionalUnknown,
   }),
   result: ApplyRootChangesOutcomeSchema,
   critical: [],
+});
+
+/** A command node's approved root-changes patch, applied to a worker here (node link only). */
+export const applyControllerRootPatchCommand = defineCommand({
+  domain: coordinatorDomain,
+  name: "apply_controller_root_patch",
+  since: 1,
+  access: "internal",
+  read: false,
+  args: Schema.Struct({
+    projectId: Schema.String,
+    environmentId: Schema.String,
+    patch: optionalUnknown,
+    sha256: optionalUnknown,
+  }),
+  result: ApplyRootChangesOutcomeSchema,
+  critical: ["sha256"],
 });
 
 /** Stops the turn in one worker tab (also the Work panel's, with `stoppedBy: "user"`). */
@@ -1234,6 +1259,7 @@ export const COORDINATOR_PROJECT_COMMANDS = [
   requestCoordinatorRootChangesCommand,
   listProjectRootChangesCommand,
   applyProjectRootChangesCommand,
+  applyControllerRootPatchCommand,
   stopCoordinatorWorkerTurnCommand,
   listCoordinatorWorkerCommandsCommand,
   runCoordinatorWorkerCommandCommand,

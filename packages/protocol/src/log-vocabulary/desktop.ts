@@ -115,6 +115,8 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
       "open-failed": "A dialog could not open; it was answered as cancelled.",
       opening: "A native dialog is opening.",
       "preview-beforeunload-ignored": "A browser preview's beforeunload handler was ignored.",
+      "quitting-cancelled":
+        "A dialog with no open window to attach to was cancelled because the app is quitting.",
       "renderer-beforeunload-cancelled": "A renderer's beforeunload handler cancelled an unload.",
     },
   },

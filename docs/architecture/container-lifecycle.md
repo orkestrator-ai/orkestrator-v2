@@ -1250,24 +1250,50 @@ three policy inputs the root bootstrap captures once, root-owned:
 | `/etc/orkestrator/host-service-ports` | Host TCP ports the workload may call (the agent-tools port) |
 | `/etc/orkestrator/ingress-ports` | Container ports Docker publishes (bridges, entry and mapped ports) |
 
-GitHub's published ranges come from a backend seed (`github-ranges-cache.ts`,
-refreshed at most hourly and copied into the created container, or its egress
-gateway, at `/etc/orkestrator-seed/github-ranges` with `docker cp` before the
-first start) when it is under a day old, else a live
-fetch cached in the container, else either copy under a week old; with none
-the firewall fails closed. Reachability is verified against `github.com`, not
-the rate-limited API. The report's `githubRanges` says which source applied.
-The seed is copied rather than bound because a rootless daemon may be unable
-to mount a read-only file bind from a `nosuid`/`nodev` filesystem; a file
-bind already pinned the seed as it was at creation (the backend replaces it by
-rename), so nothing is lost. A failed copy leaves the container to fetch the
-ranges itself.
+GitHub's published ranges come from a backend seed (`github-ranges-cache.ts`)
+when it is under a day old, else a live fetch cached in the container, else
+either copy under a week old; with none the firewall fails closed.
+Reachability is verified against `github.com`, not the rate-limited API. The
+report's `githubRanges` says which source applied. The fetch is anonymous and
+stays so (the user's decision of 2026-11-14): no GitHub credential goes near a
+restricted container's root phase, so the seed is what keeps boots off
+`api.github.com/meta`'s 60-an-hour, per-address allowance.
 
-Why copy the seed and classify the rest (decided 2026-10-26, todo 0109). The
-GitHub ranges seed is the only single-file bind outside the input revision;
-it is not a secret and nothing revokes it, so copying it in costs nothing a
-bind gave. Staged-input file binds stay binds, because revocation empties
-them in place. Any other refused remount is classified rather than worked
+The seed lives alone in `<data directory>/github-ranges-seed/github-ranges`,
+and whichever container runs the firewall (the egress gateway, or a
+restricted runtime without one) binds that directory read-only at
+`/etc/orkestrator-seed` (`githubRangesSeedMountArguments`). The backend
+refreshes it at most hourly, one fetch at a time and none for five minutes
+after a failed one, when it creates such a container and again just before
+the start path boots one (`deliverGithubRangesSeedBeforeBoot`,
+`github-ranges-seed-delivery.ts`, called from
+`startContainerWithAgentAccounts` for the runtime and through
+`prepareEgressGatewayForStart`'s `beforeGatewayBoot` for its gateway). It
+writes the new file beside the directory and renames it in, so a container
+never sees a partial file, and a directory bind (unlike the file bind before
+0109) shows each boot the file the directory holds then. Docker never boots
+these containers on its own, so every boot reads a seed under an hour old
+whenever the backend could reach GitHub in the last hour. A seed an older
+backend kept at `<data directory>/github-ranges.txt` is moved into the
+directory on first use.
+
+A container created before the bind has no seed directory; it was given a
+copy at creation, and the start path gives it a fresh copy (`docker cp`,
+best effort, `github-ranges.seed-copied-before-boot`) before each boot until
+it is rebuilt. A failed copy leaves it to fetch the ranges itself.
+
+Why bind the seed directory, and classify the rest (decided 2026-10-26,
+todo 0109; the seed's delivery changed by
+[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 2 on 2026-11-15). 0109 replaced the seed's file bind with a copy for the
+start-time refusal below; a copy into a container that is not running is what
+a rootless daemon then refused as busy, and a copy, like the file bind, pinned
+the seed as it was at creation, so restarts more than a day later fetched.
+The directory bind removes both: it is an ordinary read-only directory bind
+from the data directory, like the input revision every runtime already has,
+so it adds no start-time exposure a runtime did not have (a gateway gains
+one), and it follows the backend's renames. Staged-input file binds stay
+binds, because revocation empties them in place. Any other refused remount is classified rather than worked
 around, reusing `unsupported-topology` so older clients still parse it. The
 start-time refusal pattern comes from the 2026-10-25 report and has not been
 captured from a start; the 2026-11-09 rootless run captured the same refusal
@@ -1329,12 +1355,14 @@ failure: configured project files and project seed files fail creation
 with `unsupported-topology` and the remedy (move Orkestrator's data
 directory or run Docker rootful), a rebuild's copy step likewise, the
 boot record read reports `boot-record-copy-refused` instead of
-`container-exited`, and the best-effort GitHub seed logs
+`container-exited`, and the best-effort GitHub seed copy (only for a
+container created before the seed directory bind) logs
 `refusal=read-only-bind-remount`. The CLI hides the daemon's answer for a
 copy into a directory (`must be a directory`), so a failed copy asks once
 more with a copy out of a path that cannot exist.
 
-Those three copies into a created container go through `copyIntoContainer`,
+Those three copies into a created container (the GitHub seed only for a
+container created before its bind) go through `copyIntoContainer`,
 which also handles a daemon that cannot mount the container's filesystem
 because it is busy (`failed to mount … device or resource busy`, seen once,
 on beelink2's rootless daemon on 2026-11-09, and not reproduced since,
@@ -1469,7 +1497,7 @@ and the Network section says whether a root terminal can change the rules.
   report. It holds everything that belongs to a namespace: the environment
   network, `net.ipv6.conf.all.disable_ipv6=1`, the published ports, the
   Linux Engine `host.docker.internal` alias (the runtime shares its
-  `/etc/hosts` and `resolv.conf`), the GitHub seed (copied in) and the policy
+  `/etc/hosts` and `resolv.conf`), the GitHub seed directory (bound read-only) and the policy
   environment. It carries the owner label, role `egress-gateway`,
   `orkestrator-egress-environment` and `orkestrator-egress-workload` (the
   runtime's name), and neither the app label nor `environment-id`, so no

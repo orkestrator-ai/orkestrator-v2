@@ -13,6 +13,7 @@ import {
   memoryLifecycleContext,
   tempDir,
   withDockerScript,
+  writeGithubRangesSeedFixture,
 } from "./container-lifecycle-fixtures";
 
 // Which container a rootless create gives backend-chosen host ports and the
@@ -114,7 +115,7 @@ async function fixture(capabilities: Record<string, number>) {
       repositories: {},
     }),
   });
-  await fs.writeFile(path.join(dataDir, "github-ranges.txt"), "# fixture\n203.0.113.0/24\n");
+  await writeGithubRangesSeedFixture(dataDir, "# fixture\n203.0.113.0/24\n");
   const home = await directory("ork-rootless-ports-home-");
   setEnvironment("ORKESTRATOR_AGENT_TEST_HOST_HOME", home);
   setEnvironment(AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV, path.join(home, ".claude"));

@@ -17,6 +17,7 @@ import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import { clearKanbanLifecycleOwnership } from "./kanban-merge-closure.js";
 import { KanbanBoardStore, normalizeKanbanTask } from "./storage-kanban-board.js";
+
 import {
   acceptsFieldChange,
   assignTicketContent,
@@ -139,6 +140,9 @@ export class KanbanSyncRepository {
     liveIds?: readonly string[];
   }): Promise<{ cursor: number; applied: number }> {
     return this.board.enqueue(async () => {
+      // Under the Kanban lease, which project removal's delete also takes, so
+      // a snapshot racing the removal cannot recreate its tickets or link.
+      this.board.removal.assertAcceptsContent(input.projectId);
       const tasks = await this.board.loadTasks();
       const { store } = await this.board.loadSyncStore();
       const key = replicaLinkKey(input.controllerId, input.projectId);
@@ -518,7 +522,14 @@ export class KanbanSyncRepository {
         nodeId: input.nodeId,
         ...(input.nodeName ? { nodeName: input.nodeName } : {}),
       });
-      const items = [...input.items].sort((left, right) => left.seq - right.seq);
+      const sorted = [...input.items].sort((left, right) => left.seq - right.seq);
+      // A change for a project being removed here stays queued on the leaf,
+      // as one for an unknown project does (`NodeTicketSync`); so does every
+      // change after it, keeping the outbox in order.
+      const fenced = sorted.findIndex(
+        (item) => item.seq > peer.appliedSeq && this.board.removal.fenced(item.sourceProjectId),
+      );
+      const items = fenced < 0 ? sorted : sorted.slice(0, fenced);
       for (const item of items) {
         if (item.seq <= peer.appliedSeq) continue;
         peer.appliedSeq = item.seq;
@@ -736,6 +747,8 @@ export class KanbanSyncRepository {
     cursor: number,
   ): Promise<void> {
     await this.board.enqueue(async () => {
+      // A project being removed keeps no pairing (`forgetSyncProject`).
+      if (this.board.removal.fenced(projectId)) return;
       const { store } = await this.board.loadSyncStore();
       const peer = store.peers[nodeId] ?? { appliedSeq: 0, projects: {} };
       const previous = peer.projects[projectId];

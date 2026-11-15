@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import {
+  GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
+  STATIC_HTML_FRAME_DOCUMENT,
+} from "@orkestrator/protocol/renderer-content-security-policy";
+import {
+  type VercelConfig,
+  vercelHeadersFor,
+  vercelRewriteFor,
+  vercelSourcePattern,
+} from "../vercel-routing";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const read = (name: string) => readFileSync(path.join(packageRoot, name), "utf8");
@@ -39,19 +49,19 @@ describe("public client deployment configuration", () => {
   });
 
   test("serves the SPA without proxying backend traffic and applies browser hardening headers", () => {
-    const config = JSON.parse(read("vercel.json")) as {
-      outputDirectory: string;
-      rewrites: Array<{ source: string; destination: string }>;
-      headers: Array<{ headers: Array<{ key: string; value: string }> }>;
-    };
+    const config = readVercelConfig();
     expect(config.outputDirectory).toBe("dist");
     expect(config.rewrites).toEqual([{ source: "/(.*)", destination: "/index.html" }]);
-    const headers = config.headers.flatMap((entry) => entry.headers);
-    expect(headers).toContainEqual({ key: "Referrer-Policy", value: "no-referrer" });
-    expect(headers).toContainEqual({ key: "X-Content-Type-Options", value: "nosniff" });
+    for (const probe of ["/", "/connect", "/connect/", "/static-html-frame.html"]) {
+      expect(vercelRewriteFor(config, probe)).toBe("/index.html");
+    }
+    for (const probe of ["/", "/index.html", "/assets/index-abc.js", "/static-html-frame.html"]) {
+      const headers = vercelHeadersFor(config, probe);
+      expect(headers).toContainEqual({ key: "Referrer-Policy", value: "no-referrer" });
+      expect(headers).toContainEqual({ key: "X-Content-Type-Options", value: "nosniff" });
+    }
 
-    const csp = headers.find((header) => header.key === "Content-Security-Policy")?.value;
-    if (!csp) throw new Error("Expected a Content-Security-Policy header");
+    const csp = appPolicy(config);
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("script-src 'self'");
     expect(csp).toContain("frame-ancestors 'none'");
@@ -59,9 +69,78 @@ describe("public client deployment configuration", () => {
     // The user picks the backend origin at runtime, so connect-src must allow HTTPS broadly.
     expect(csp).toContain("connect-src 'self' https: wss:");
     expect(read("index.html")).toContain('<script type="module" src="/src/main.tsx"></script>');
-    // This policy cannot run the static document frame, and the build says so.
-    expect(read("vite.config.ts")).toContain(
-      '"import.meta.env.ORKESTRATOR_STATIC_HTML_PRESENTATION": JSON.stringify("unavailable")',
+  });
+
+  test("serves the static document frame under its own sandboxed rule and nothing else", () => {
+    const config = readVercelConfig();
+    const framePath = `/${STATIC_HTML_FRAME_DOCUMENT}`;
+    // A second matching policy would be enforced as well, and its `script-src
+    // 'self'` would refuse the frame's hash-pinned bootstrap.
+    expect(policiesFor(config, framePath)).toEqual([GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY]);
+
+    // Every other path, including ones that only resemble the frame's, gets
+    // exactly the strict application policy and never the sandbox one as well.
+    // The trailing-slash and uppercase forms are different paths to Vercel
+    // (strict, case-sensitive matching) and are served the application shell.
+    for (const probe of [
+      "/",
+      "/index.html",
+      "/releases",
+      "/connect/",
+      "/connect/deep/route",
+      "/assets/index-abc.js",
+      "/design-frame.html",
+      `${framePath}/`,
+      `${framePath}/nested`,
+      `${framePath}x`,
+      framePath.toUpperCase(),
+      `${framePath.toUpperCase()}/`,
+      `/x${framePath}`,
+      `/assets${framePath}`,
+      "/static-html-frameXhtml",
+    ]) {
+      expect({ probe, policies: policiesFor(config, probe) }).toEqual({
+        probe,
+        policies: [appPolicy(config)],
+      });
+    }
+  });
+
+  test("matches header sources the way Vercel compiles them: strict and case-sensitive", () => {
+    // `sourceToRegex` in @vercel/routing-utils passes `strict: true, sensitive: true`.
+    const frame = vercelSourcePattern(`/${STATIC_HTML_FRAME_DOCUMENT}`);
+    expect(frame.test(`/${STATIC_HTML_FRAME_DOCUMENT}`)).toBe(true);
+    expect(frame.test(`/${STATIC_HTML_FRAME_DOCUMENT}/`)).toBe(false);
+    expect(frame.test(`/${STATIC_HTML_FRAME_DOCUMENT.toUpperCase()}`)).toBe(false);
+    const anyPath = vercelSourcePattern("/(.*)");
+    for (const probe of ["/", "/connect", "/connect/", "/a/b/"]) {
+      expect(anyPath.test(probe)).toBe(true);
+    }
+    expect(vercelSourcePattern("/assets/(.*)").test("/Assets/x.js")).toBe(false);
+  });
+
+  test("the hosted build emits the frame document instead of declaring the view unavailable", () => {
+    const viteConfig = read("vite.config.ts");
+    expect(viteConfig).toContain(
+      'import { staticHtmlFramePlugin } from "../web/vite-plugin-renderer-security";',
     );
+    expect(viteConfig).toContain("staticHtmlFramePlugin()");
+    expect(viteConfig).not.toContain("ORKESTRATOR_STATIC_HTML_PRESENTATION");
   });
 });
+
+function readVercelConfig(): VercelConfig {
+  return JSON.parse(read("vercel.json")) as VercelConfig;
+}
+
+function policiesFor(config: VercelConfig, pathname: string): string[] {
+  return vercelHeadersFor(config, pathname)
+    .filter((header) => header.key === "Content-Security-Policy")
+    .map((header) => header.value);
+}
+
+function appPolicy(config: VercelConfig): string {
+  const [policy, ...others] = policiesFor(config, "/");
+  if (!policy || others.length > 0) throw new Error("Expected one policy for /");
+  return policy;
+}

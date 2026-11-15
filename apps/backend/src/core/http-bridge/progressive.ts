@@ -34,6 +34,7 @@ import {
   boundedJson,
   sessionSnapshotBudget,
   bridgeFetch,
+  bridgeSnapshotTurnRunId,
   normalizeProviderAuthNotice,
   normalizeProviderReadiness,
 } from "./transport.js";
@@ -327,10 +328,12 @@ export async function readHttpBridgeSessionState(input: {
     input.agent === "claude" || input.agent === "pi"
       ? claudeTurnActivityFromPayload(payload)
       : undefined;
+  const turnRunId = status === "running" ? bridgeSnapshotTurnRunId(payload) : undefined;
   return {
     status,
     phase,
     ...(turnActivity ? { turnActivity } : {}),
+    ...(turnRunId ? { turnRunId } : {}),
     ...(typeof payload.resumableSessionId === "string" && payload.resumableSessionId.trim()
       ? { resumableSessionId: payload.resumableSessionId.trim() }
       : input.agent === "codex" && typeof payload.threadId === "string" && payload.threadId.trim()

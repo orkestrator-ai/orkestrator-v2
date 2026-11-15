@@ -1,5 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, copyFile, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { READ_ONLY_TOOLS, WAITING_TOOLS } from "./services/read-only-policy.js";
@@ -712,6 +723,105 @@ describe("Claude Agent SDK runtime compatibility", () => {
       }
     },
     15_000,
+  );
+
+  // The container image ships only the main SDK package: the builder deletes
+  // every claude-agent-sdk-* platform package, because the bridge always passes
+  // the pinned CLI (`claudeExecutableOptions()` from CLAUDE_CLI_PATH). That is
+  // only safe while the SDK runs the executable it is given and looks up its
+  // own platform binary solely when none is passed. This rebuilds the image's
+  // layout (the SDK package alone, no platform package resolvable) and pins
+  // both halves, so an SDK that ignores the passed path, or resolves its binary
+  // unconditionally, fails here instead of breaking every container turn.
+  // See docs/development/container-qualification.md.
+  test.concurrent(
+    "runs the passed executable without any platform package, and needs one only when none is passed",
+    async () => {
+      const sdkRoot = await realpath(
+        join(import.meta.dir, "..", "node_modules", "@anthropic-ai", "claude-agent-sdk"),
+      );
+      const fixtureDir = await realpath(await mkdtemp(join(tmpdir(), "claude-sdk-no-platform-")));
+      try {
+        const scope = join(fixtureDir, "node_modules", "@anthropic-ai");
+        await mkdir(scope, { recursive: true });
+        await cp(sdkRoot, join(scope, "claude-agent-sdk"), { recursive: true, dereference: true });
+        expect(await readdir(scope)).toEqual(["claude-agent-sdk"]);
+
+        const marker = join(fixtureDir, "spawned.txt");
+        const executable = join(fixtureDir, "fake-claude");
+        await writeFile(
+          executable,
+          '#!/bin/sh\nprintf "%s" "$0" > "$FAKE_CLAUDE_MARKER"\nexit 3\n',
+        );
+        await chmod(executable, 0o755);
+
+        const probeFile = join(fixtureDir, "probe.mjs");
+        await writeFile(
+          probeFile,
+          `
+          import { query } from "@anthropic-ai/claude-agent-sdk";
+          async function attempt(options) {
+            try {
+              const request = query({
+                prompt: "executable path probe",
+                options: { maxTurns: 1, ...options },
+              });
+              for await (const _ of request) {}
+              return { error: null };
+            } catch (error) {
+              return { error: String(error?.message ?? error) };
+            }
+          }
+          const explicit = await attempt({
+            pathToClaudeCodeExecutable: process.env.FAKE_CLAUDE_EXECUTABLE,
+          });
+          const unset = await attempt({});
+          console.log(JSON.stringify({ explicit, unset }));
+        `,
+        );
+
+        const env: Record<string, string> = {};
+        for (const [key, value] of Object.entries(process.env)) {
+          if (value !== undefined && key !== "NODE_PATH" && key !== "CLAUDE_CLI_PATH") {
+            env[key] = value;
+          }
+        }
+        // --no-install: a missing platform package must stay missing rather
+        // than being fetched by Bun's auto-install.
+        const probe = Bun.spawn([process.execPath, "--no-install", probeFile], {
+          cwd: fixtureDir,
+          env: {
+            ...env,
+            FAKE_CLAUDE_EXECUTABLE: executable,
+            FAKE_CLAUDE_MARKER: marker,
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const [stdout, stderr, exitCode] = await Promise.all([
+          new Response(probe.stdout).text(),
+          new Response(probe.stderr).text(),
+          probe.exited,
+        ]);
+        expect(exitCode, stderr).toBe(0);
+        const result = JSON.parse(stdout) as {
+          explicit: { error: string | null };
+          unset: { error: string | null };
+        };
+
+        // Passed path: the SDK spawned exactly that executable (the fake then
+        // exits, so the turn itself fails) and never looked for its own copy.
+        expect(await readFile(marker, "utf8")).toBe(executable);
+        expect(result.explicit.error ?? "").not.toContain("Native CLI binary");
+
+        // No path: the SDK needs a platform package, which is what the image
+        // no longer carries, and says so rather than running anything else.
+        expect(result.unset.error).toMatch(/Native CLI binary for \S+ not found/);
+      } finally {
+        await rm(fixtureDir, { recursive: true, force: true });
+      }
+    },
+    30_000,
   );
 
   // The bridge recognises the CLI's resume scan by its exact summary. If an

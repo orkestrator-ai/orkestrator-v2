@@ -55,9 +55,10 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
+| Live GitHub ranges seed bind | same command, `./tests/container-live-github-seed.test.ts`; `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED=<file>` supplies the ranges, otherwise the backend fetches them once | The firewall container binds the seed directory read-only, its boot reports `githubRanges: seed`, and after a stop and a rename of a refreshed seed into the directory the next boot through the start path loads the new range, with no `extract-to-dir` event on the container ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md) task 2) |
 | Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart (on a rootless daemon with `live-restore` on, the containers' surviving processes are counted, probed and killed before the backend restarts them). Point that command only at a disposable daemon. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep the restart's observations. |
 | Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep its topology line: whether the daemon is rootless, how Docker names its DNS upstreams in the gateway, and the gateway's nat redirections. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
-| Live agent CLIs without telemetry hosts | same command, `./tests/container-live-telemetry-hosts.test.ts`; set `ORKESTRATOR_TELEMETRY_HOSTS_TRACE=<file>` to record each turn's lookups and connections | With `sentry.io`, `statsig.anthropic.com`, `statsig.com` and the CLIs' Sentry ingest hosts refused, Claude Code (print, Agent SDK stream-json, a provider error), Codex (a turn and a provider error), OpenCode and Pi each finish a turn against a fake provider on the runtime's loopback within 90 s. No credentials and no provider turns; outside traffic only to registry.npmjs.org (OpenCode installs its provider package) and GitHub (to-do 6100) |
+| Live agent CLIs without telemetry hosts | same command, `./tests/container-live-telemetry-hosts.test.ts`; set `ORKESTRATOR_TELEMETRY_HOSTS_TRACE=<file>` to record each turn's lookups and connections | With `sentry.io`, `statsig.anthropic.com`, `statsig.com` and the CLIs' Sentry ingest hosts refused, Claude Code (print, Agent SDK stream-json, a provider error), Codex (a turn and a provider error), OpenCode, Pi, Grok and the Cursor SDK (a turn and a provider error, against a loopback Cursor backend through `CURSOR_BACKEND_URL`; 7420) each finish a turn against a fake provider on the runtime's loopback within 90 s. No credentials and no provider turns; outside traffic only to registry.npmjs.org (OpenCode installs its provider package) and GitHub (to-do 6100) |
 | Live rootless loopback | same command, `./tests/container-live-rootless-loopback.test.ts`, plus `ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=disabled` (printed by the [disposable daemon](#disposable-docker-daemon)); skips unless `docker info` also reports rootless, so the Linux Engine workflow lists it but it skips on the rootful runners | On a rootless daemon refusing host loopback (RootlessKit's default): host discovery reports `blocked` with the rootless remediation, and a restricted runtime behind its gateway cannot reach a host listener |
 | Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; on derived images that do not declare `egress-gateway`, so the firewall stays in the runtime), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run. On a rootless daemon put `TMPDIR` on a filesystem mounted without `nosuid`/`nodev`: from `/tmp` the two firewall-failure boots report `boot-record-copy-refused` (before 2026-11-10, `container-exited`), because the daemon refuses `docker cp` from those containers ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)) |
 | Live copy refusal | `ORKESTRATOR_COPY_REFUSAL_TEST_IMAGE=<image with sleep>` and a rootless `DOCKER_HOST`, `./tests/docker-copy-refusal-docker.test.ts` | Every `docker cp` the backend runs against a runtime (project seed files, configured project files, the GitHub seed, the boot record) against a container with a read-only bind from a `nosuid`/`nodev` directory (`/tmp`, or `ORKESTRATOR_COPY_REFUSAL_NOSUID_DIR`) is the typed refusal ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md) task 1) |
@@ -313,6 +314,137 @@ against a fake Docker CLI: the run arguments and inner configuration, outer
 daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
+
+## GitHub ranges seed directory bind on beelink (2026-11-15)
+
+To-do [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 2: the GitHub ranges seed is bound as a directory into the container that
+runs the firewall instead of being copied in, and refreshed before each boot.
+Run in worktree `orkestrator-v2-20261115-154905-9a38fe722162` (branch
+`github-ranges-seed-9a38fe722162-r1`, from `main` at `a8b89f154`), with the
+existing image `orkestrator-v2:dev-4d8f7a0a70c6` (the change needs no image
+change; the firewall already read `/etc/orkestrator-seed/github-ranges`).
+
+- **Host:** beelink (kernel 7.1.8-arch1-3, x86_64), `/tmp` a `nosuid,nodev`
+  tmpfs. No `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED`, so each run's backend
+  fetched GitHub's ranges once, anonymously, as for a host's first restricted
+  container.
+- **Rootful Engine 29.9.2** (the host daemon, containerd image store):
+  `container-live-github-seed.test.ts` 1 pass, 0 fail, 10 expects (about 16 s).
+- **Rootless Engine 29.9.2** (`mise run docker:disposable -- start --name
+  s7549`, containerd image store, slirp4netns), data directory under the
+  `nosuid,nodev` `/tmp`: 1 pass, 0 fail, 10 expects (11.4 s). So a gateway
+  starts with the read-only seed bind from such a filesystem, as runtimes
+  already did with their input revision.
+- **What each run showed:** the gateway's `/etc/orkestrator-seed` mount was
+  read-only with the data directory's `github-ranges-seed` as its source; the
+  first boot reported `state: applied`, `githubRanges: seed`; after the
+  runtime and gateway stopped and a refreshed seed with an added
+  `198.51.100.0/24` was renamed into the directory, the next boot through
+  `startContainerWithAgentAccounts` again reported `seed` and the gateway's
+  `allowed-domains` set held `198.51.100.0/24`; `docker events` showed no
+  `extract-to-dir` on the gateway.
+- **Not run:** the rootless overlay2 image store, Docker Desktop (moved to
+  [7568](../todo/manual-test/7568-manual-test-checklist.md)), and a repeat of
+  the full `container-live-firewall.test.ts` on the rootless daemon (started,
+  then interrupted when the session moved accounts; no result).
+
+## Claude bridge without the SDK's platform binary (2026-11-15)
+
+To-do 6780 (retired on 2026-11-15; in Git history at `git show
+a8b89f154:docs/todo/containers-and-environments/6780-second-claude-binary-in-the-image.md`)
+task 2, efficiency finding DK-10. Every image shipped the Claude Code native
+binary twice: the pinned CLI's (`CLAUDE_CLI_PATH`) and the copy the Claude
+Agent SDK vendors in its platform package. The container bridge never ran the
+SDK's copy: every SDK call passes `pathToClaudeCodeExecutable` from
+`CLAUDE_CLI_PATH` (`claudeExecutableOptions` in
+`bridges/claude-bridge/src/services/session-manager-core.ts`), and the SDK
+(0.3.319, `sdk.mjs`) resolves its own platform binary only when that option is
+unset. The user chose on 2026-11-14 to drop the SDK's copy in the builder.
+
+**Change.** The `bridge-build` stage of `docker/Dockerfile` removes
+`dist/node_modules/@anthropic-ai/claude-agent-sdk-*` (the gnu and musl
+platform packages) and checks that the main `claude-agent-sdk` package's
+`sdk.mjs` is still there; the final stage checks the same of
+`/opt/claude-bridge/dist/node_modules`. The `COPY` of the vendored SDK keeps
+its place ahead of the bundles (DK-7). `tests/unit/version-drift.test.ts`
+("every SDK platform binary is stripped from the vendored runtime tree") pins
+the removal, both checks, `ENV CLAUDE_CLI_PATH` and the bridge passing the
+path. `bridges/claude-bridge/src/sdk-compatibility.test.ts` ("runs the passed
+executable without any platform package, and needs one only when none is
+passed") pins the SDK premise itself: it copies the SDK package alone into a
+temporary tree, as the image ships it, and checks that a passed executable is
+the one spawned and that an unset path fails with `Native CLI binary for
+<platform>-<arch> not found`. Patching the copied `sdk.mjs` to ignore the
+passed path makes it fail.
+
+**Run.** beelink (x86_64, kernel 7.1.8-arch1-3), rootful Docker Engine 29.9.2
+with the containerd image store, worktree
+`orkestrator-v2-20261115-154754-e32e099ead21` from `main` at `a8b89f154`.
+Both images were built with the same build arguments
+(`scripts/docker-image-build-args.ts`): `orkestrator-v2:6780-before` from
+`main`'s Dockerfile and `orkestrator-v2:6780-after` with the change. Pins: CLI
+2.1.319, Agent SDK 0.3.319. Only amd64 was built here; CI's image workflow
+builds and smoke-tests both architectures, and the build-time checks above run
+in both.
+
+**Size.**
+
+| | before | after | saving |
+| --- | --- | --- | --- |
+| Vendored SDK layer (`COPY /opt/bridge-deps/claude-bridge`, `docker history`) | 345 MB | 5.18 MB | 340 MB |
+| `/opt/claude-bridge/dist/node_modules` (`du -sh`) | 330M | 5.0M | |
+| Image content, compressed (`docker image ls --tree`), what a first pull downloads | 1.66 GB | 1.50 GB | about 160 MB |
+| Image disk usage (`docker image inspect .Size`: unpacked plus stored content) | 5,775,417,838 B | 5,272,832,248 B | 502,585,590 B |
+
+No other layer changed size. Both images have 79 layers and the first 31
+`RootFS.Layers` digests are identical, the CLI's npm layer among them; the
+first to differ is the vendored SDK layer, followed only by layers built after
+it. The arm64 platform binary is 297,067,016 bytes against amd64's
+298,229,464, so the saving there is about the same.
+
+**Final-image smoke.** `bash docker/tests/final-image-smoke.sh
+orkestrator-v2:6780-after` passed (31.6 s): all five bridges answered
+`/global/health`, and the manifest's CLI versions matched.
+
+**Container Claude turn on a loopback model.** A container of each image
+(`--network none`, `NETWORK_MODE=full`, labelled, removed afterwards) ran a
+fake Anthropic Messages API on `127.0.0.1:18300` (one streamed `ok`, a
+per-route request count) and a Claude bridge started as the backend starts it:
+`docker exec -u node`, inheriting the image's `ENV`, with only
+`ANTHROPIC_BASE_URL` and a fake `ANTHROPIC_API_KEY` added. Each bridge created
+a session, received `Reply with ok.` with a `requestId`, and was polled until
+the session left `running`.
+
+| Image | Bridge environment | Result |
+| --- | --- | --- |
+| after | image `CLAUDE_CLI_PATH` (`/usr/local/share/npm-global/bin/claude`, 2.1.319) | 202 `processing`, session `idle`, transcript `user: Reply with ok.` / `assistant: ok`, one Messages request at the fake; `POST /global/refresh-catalog` answered `{"ok":true}`; no error lines in the bridge log |
+| after | `CLAUDE_CLI_PATH` unset | the prompt answered `Native CLI binary for linux-x64 not found. Reinstall @anthropic-ai/claude-agent-sdk without --omit=optional, or set options.pathToClaudeCodeExecutable.`; no assistant row and no request at the fake |
+| before | image `CLAUDE_CLI_PATH` | same as the first row |
+| before | `CLAUDE_CLI_PATH` unset | the turn ran on the SDK's own copy and answered `ok` |
+
+The last two rows are the contrast: before the change a bridge without
+`CLAUDE_CLI_PATH` quietly ran a second, unpinned engine; after it, it fails
+with the SDK's own error. The image always sets the variable and the backend
+starts the container bridge through `docker exec`, so a production container
+bridge has it.
+
+**Isolated Docker suite.** `mise run test:logged -- --name
+agent-docker-isolated-6780 -- mise run test:agent:docker:isolated` built the
+workspace image from the change (`orkestrator-v2:dev-4d8f7a0a70c6`, 5.27 GB
+like `6780-after`). Its final-image smoke and the image qualification
+(`tests/claude-config-filter-docker.test.ts`, 1 pass, 1 skip) passed. The
+runner starts no Claude platform (`--agent-platforms
+codex,grok,opencode,cursor,pi`), so it covers the rest of the image, not the
+Claude bridge. Shard 2 passed (11 passed, 3 skipped, 5.3 min). Shard 1 started
+all 21 of its tests and reported no failure, but its last test
+(`container-app-wiring.spec.ts:457`, the coordinator view across switch,
+hidden document, reload and two windows) printed nothing for 300 s.
+`test:logged`'s no-progress watchdog then ended the run (`timeoutReason:
+no-progress`, recorded as an infrastructure error) before Playwright printed
+shard 1's summary. Shard 1 has no pass or fail count. Its last test was not
+rerun alone, so this run neither shows it passing nor makes it a flake. The
+profiles were stopped and reset.
 
 ## C22 on Docker Desktop and rootless Docker (2026-11-15)
 
@@ -2111,8 +2243,61 @@ The opt-in packet trace recorded no outside DNS or TCP activity during Grok's
 turn, and no removed telemetry or ingest name during any turn. This is a
 trace observation; the test asserts DNS refusal and bounded turn completion.
 The local trace is `output/agent-testing/telemetry-review/trace-with-grok.json`.
-Cursor still has no live turn in this suite, and native arm64 execution
-remains unverified (7420 tasks 2 and 4).
+Cursor had no live turn in this suite until 2026-11-15 (below); native arm64
+execution remains unverified (7420 task 4).
+
+### Cursor SDK turn against a loopback Cursor backend (2026-11-15)
+
+To-do 7420 task 2. The Cursor SDK has no CLI and no provider setting, but it
+sends every backend call to `CURSOR_BACKEND_URL` (default
+`https://api2.cursor.sh`), so the suite's fake provider now also answers, under
+`/cursor`, the calls a local agent's turn makes: the API-key exchange and the
+model list (JSON), six unary Connect RPCs (privacy mode, team settings, team
+repositories, server config, Statsig bootstrap, analytics events; each takes
+an empty protobuf message), and `AgentService/RunSSE`, which streams an
+`InteractionUpdate` text delta "ok" and `turn_ended` once the run request
+arrives through `BidiService/BidiAppend`. Under `/cursor/broken` that stream
+ends on a Connect `internal` error. The SDK's Statsig bootstrap and analytics
+go to the Cursor backend, not to a Statsig host.
+
+- **Host:** omarchy-hp (Omarchy Linux, x86_64), host Docker Engine 29.9.1
+  rootful, with the test-only network shim
+  (`apps/desktop/scripts/dev/docker-qualification-bin`). Every container and
+  network the run made carried its private owner label and was removed by it.
+- **Image:** `orkestrator-v2:dev-ca9f88454633` (`sha256:462a044c85be…`,
+  amd64, created 2026-11-11): Claude Code 2.1.319, codex-cli 0.167.0,
+  OpenCode 2.2.6, Pi 1.5.0, Grok 1.0.77 and Cursor SDK 1.3.1, the versions
+  `docker/Dockerfile` and the Cursor bridge pin at `main` `a8b89f154`.
+- **Client:** a script importing the Cursor bridge's own vendored SDK
+  (`/opt/cursor-bridge/dist/node_modules/@cursor/sdk`) creates a local agent,
+  sends one prompt, waits for the run and disposes the agent (which flushes
+  its analytics), with a fake API key and an isolated `HOME`.
+
+| Turn | Result | Time | Names looked up during the turn |
+| --- | --- | --- | --- |
+| Cursor SDK local agent | run `finished`, result `ok`, exit 0 | 1.8 s | none |
+| Cursor SDK, backend fails the run | run `error` (`[internal] fake provider failure`) after the SDK's own four attempts, exit 1 | 16.9 s | none |
+
+The suite passed with the packet trace (77.0 s; the other nine turns
+0.9–7.6 s) and again without it (73.0 s). The trace recorded no DNS lookup and
+no outside connection during either Cursor turn, nor during the Pi and Grok
+turns; the fake counted one served run, one failed run per attempt and three
+analytics posts. The local trace is
+`output/agent-testing/telemetry-7420/trace-with-cursor.json`. The test asserts
+the run's status and result, that the fake served the run, DNS refusal of the
+telemetry names and the 90 s bound. Native arm64 execution remains unverified
+(7420 task 4).
+
+After review the same day, Cursor runs were given counters of their own
+(`cursor`, `cursor-broken`). Before that, the SDK's four attempts at a failed
+run counted under the `broken` key that the Claude and Codex error turns
+share, and could satisfy their check. Each of those two error turns now
+asserts its own count of failed requests. The fake now refuses a run whose
+request id is empty, or has not arrived through `BidiAppend` within 5 s,
+with a Connect `failed_precondition` error, and the test asserts that no run
+was refused. Same host and image: the suite passed (64.4 s, no trace). With
+the fake's `BidiAppendRequest` field number deliberately changed, the Cursor
+turn failed with that error, which shows that a renumbering fails the suite.
 
 ## Rootless daemon restart on a disposable daemon (2026-11-06)
 
@@ -3817,8 +4002,14 @@ re-baselined on 2026-10-28
 the runtime's own path keeps its budget of 21. The egress gateway, a second
 container since 2026-10-25, adds 6 fixed calls: its create, the GitHub seed
 copy, the runtime's state inspect, the gateway's inspect, its start, and the
-first firewall read. Its firewall polls, one call each, must fit in the old
-headroom.
+first firewall read. (Since 2026-11-15 the seed directory is bound rather
+than copied, [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 2: the creation's seed copy is gone, and a gateway that is not running
+is inspected once just before its start so its seed can be refreshed. The
+gateway still adds 6 fixed calls to a fresh start, and the runtime behind it
+adds none, so the target is unchanged. `bootRuntime` calls the same seed
+helpers as the production start.) Its firewall polls, one call each, must fit
+in the old headroom.
 
 | Measure (median unless stated) | Report field | Target |
 | --- | --- | --- |

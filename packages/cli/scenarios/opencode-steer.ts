@@ -19,7 +19,7 @@ import {
 } from "./harness.js";
 
 /**
- * OpenCode steer through the public CLI on a scripted model (to-do 7905
+ * OpenCode steer through the public CLI on a scripted model (to-do 7905 (retired)
  * task 4): no credentials, no remote model, nothing billed.
  *
  * The scenario backend gets the pinned OpenCode binaries (installed into its

@@ -1546,13 +1546,19 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                           "steer",
                           async ({ isCurrent, sessionIdentity: actionIdentity }) => {
                             const text = steerText.trim();
+                            // The turn this box shows (to-do 8107 (retired)).
+                            const expectedRunId = neutralProjection.turn.runId;
                             const outcome = await backendForScope(
                               nodeScope,
                             ).performNativeAgentSessionAction({
                               environmentId: activeSession.environmentId,
                               agent: activeSession.provider,
                               logicalSessionKey: activeSession.sessionKey,
-                              action: { kind: "steer", text },
+                              action: {
+                                kind: "steer",
+                                text,
+                                ...(expectedRunId ? { expectedRunId } : {}),
+                              },
                             });
                             if (outcome.outcome === "unknown") {
                               throw new Error(

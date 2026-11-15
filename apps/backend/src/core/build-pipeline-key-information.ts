@@ -15,6 +15,7 @@ import {
   isSupersededPipelineSession,
   type BuildPipeline,
   type PipelineCriterionResult,
+  type PipelineRestartRequest,
   type PipelineSession,
   type TaskSnapshotCriterion,
 } from "@orkestrator/protocol/build-pipeline";
@@ -27,6 +28,7 @@ import {
   type KeyInformationPatch,
 } from "@orkestrator/protocol/build-pipeline-key-information";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import { PHASE_ORDER, restartStepOrder } from "./build-pipeline-rewind.js";
 import type { PersistedBuildPipeline } from "./models.js";
 
 /** How long an update waits for a supervisor pass to release the pipeline. */
@@ -171,39 +173,54 @@ export function recordVerdictInKeyInformation(
 }
 
 /**
- * After a restart rewinds the pipeline to `iteration`, drops what later rounds
- * recorded, and that round's verification unless the restart is past it (the
- * PR stages run after a passing verification). Issues in the restarted round
- * survive only when its accepted review is retained. Narrative fields are
- * cleared because they have no restorable per-attempt provenance.
+ * After a restart rewinds the pipeline to `iteration`, drops only what the
+ * restarted step and the steps after it record; what earlier steps wrote is
+ * kept, because the restart does not run them again.
+ *
+ * - Later rounds' issues and verifications are dropped.
+ * - The restarted round's issues are dropped when Review runs again (a
+ *   restart at or before Review), and kept with their resolutions otherwise.
+ * - The restarted round's verification is dropped unless the restart is past
+ *   Verify (the PR stages run after a passing verification).
+ * - The narrative sections, tests and update history are cleared only when
+ *   Build itself runs again, since Build is the stage that writes them. Fix,
+ *   Address and Verify amend them in place, and the code is not rewound by a
+ *   restart, so what they recorded still describes the worktree the restarted
+ *   step continues on. A code rewind is the exception: without section-level
+ *   commit provenance, clear the narrative, tests and updates, and discard
+ *   the target round's issues and verification as potentially superseded.
  */
 export function pruneKeyInformationAfterRewind(
   pipeline: BuildPipeline,
   iteration: number,
-  keepRoundVerification: boolean,
-  keepRoundIssues = true,
+  restart: PipelineRestartRequest,
+  codeRewound = false,
 ): void {
   const info = pipeline.keyInformation;
   if (!info) return;
+  const order = restartStepOrder(restart);
+  const keepRoundIssues = !codeRewound && order > PHASE_ORDER.review;
+  const keepRoundVerification = !codeRewound && order > PHASE_ORDER.verify;
+  const before = JSON.stringify(info);
   info.issues = info.issues.filter(
     (entry) => entry.round < iteration || (entry.round === iteration && keepRoundIssues),
   );
-  // Narrative sections have no per-attempt provenance or restorable snapshots.
-  // Clear them conservatively rather than presenting superseded work as current.
-  info.framing = "problem";
-  delete info.summary;
-  delete info.statement;
-  delete info.context;
-  delete info.solution;
-  info.workDone = [];
-  info.decisions = [];
-  info.notDone = [];
-  info.tests = [];
-  info.updates = [];
-  info.updatedAt = new Date().toISOString();
   info.verifications = info.verifications.filter(
     (entry) => entry.round < iteration || (entry.round === iteration && keepRoundVerification),
   );
+  if (codeRewound || (restart.kind === "session" && restart.phase === "build")) {
+    info.framing = "problem";
+    delete info.summary;
+    delete info.statement;
+    delete info.context;
+    delete info.solution;
+    info.workDone = [];
+    info.decisions = [];
+    info.notDone = [];
+    info.tests = [];
+    info.updates = [];
+  }
+  if (JSON.stringify(info) !== before) info.updatedAt = new Date().toISOString();
 }
 
 /**

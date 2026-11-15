@@ -93,6 +93,9 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   kanban: { kind: "array", owner: ownerField("projectId") },
   "kanban-sync": { kind: "document" },
   "kanban-labels": { kind: "array", key: "projectId" },
+  // Image files a project removal still has to unlink, one row per image id
+  // (`storage-kanban-project-removal.ts`); content-free.
+  "kanban-image-deletions": { kind: "record" },
   "project-notes": { kind: "array", key: "projectId" },
   "feature-plans": { kind: "array", owner: ownerField("projectId") },
   "linear-auth": { kind: "document" },

@@ -640,7 +640,14 @@ export function fourReviewers() {
   ];
 }
 
-export function startInput(reviewers?: Array<{ agent: BuildPipelineAgent; model?: string }>) {
+export function startInput(
+  reviewers?: Array<{
+    agent: BuildPipelineAgent;
+    model?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+  }>,
+) {
   return {
     taskId: "task-1",
     projectId: "project-1",

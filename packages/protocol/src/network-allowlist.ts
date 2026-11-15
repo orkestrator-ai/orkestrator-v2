@@ -73,11 +73,11 @@ export function allowlistForNetworkPolicy(
  * It carries no telemetry hosts. `sentry.io`, `statsig.anthropic.com` and
  * `statsig.com` came from Anthropic's reference dev-container firewall and
  * were removed (to-do 6100): with them refused, Claude Code, Codex, OpenCode,
- * Pi and Grok finished turns against a fake provider
+ * Pi, Grok and the Cursor SDK (against a loopback Cursor backend, to-do 7420)
+ * finished turns against a fake provider
  * (`apps/backend/tests/container-live-telemetry-hosts.test.ts`). The opt-in
  * packet trace recorded no lookups of these hosts during those turns; the
- * test assertions check refusal and bounded turn completion. Cursor
- * live qualification remains outstanding (to-do 7420). Sentry accepts events
+ * test assertions check refusal and bounded turn completion. Sentry accepts events
  * for whatever project a request names, so allowing it creates a channel out
  * of the container.
  */

@@ -6,7 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { closeElectronWithin } from "../../e2e/agent-testing/design-electron-cleanup";
+import {
+  closeElectron,
+  closeElectronWithin,
+} from "../../e2e/agent-testing/design-electron-cleanup";
 import {
   ownedProcessGroupLeaders,
   ownProcessGroup,
@@ -97,88 +100,138 @@ describe("Electron spec process ownership", () => {
     }
   });
 
-  test("stopping a group terminates its leader before signalling the members", async () => {
-    // Chromium's shape: a leader that must outlive its helpers. A group-wide
-    // SIGTERM kills Electron's GPU process under a live browser, which then
-    // aborts with "GPU process isn't usable" and dumps core. The leader checks
-    // on SIGTERM whether its helper was already signalled.
-    const root = await mkdtemp(path.join(os.tmpdir(), "process-cleanup-order-"));
-    const helperTerm = path.join(root, "helper-term");
-    const leaderSaw = path.join(root, "leader-saw");
-    const helper = `
-      process.on("SIGTERM", () => {
-        require("node:fs").writeFileSync(${JSON.stringify(helperTerm)}, "");
-        process.exit(0);
-      });
+  test.each(["group", "electron"] as const)(
+    "%s cleanup terminates its leader before signalling the members",
+    async (cleanup) => {
+      // Chromium's shape: a leader that must outlive its helpers. A group-wide
+      // SIGTERM kills Electron's GPU process under a live browser, which then
+      // aborts with "GPU process isn't usable" and dumps core. The leader checks
+      // on SIGTERM whether its helper was already signalled.
+      const root = await mkdtemp(path.join(os.tmpdir(), "process-cleanup-order-"));
+      const helperTerm = path.join(root, "helper-term");
+      const leaderSaw = path.join(root, "leader-saw");
+      const helper = `
+      // Deliberately start later than the old 300ms readiness guess.
+      setTimeout(() => {
+        process.on("SIGTERM", () => {
+          require("node:fs").writeFileSync(${JSON.stringify(helperTerm)}, "");
+          process.exit(0);
+        });
+        console.log("ready");
+      }, 500);
       setInterval(() => {}, 1000);
     `;
-    const leader = `
+      const leader = `
       const { existsSync, writeFileSync } = require("node:fs");
-      const helper = require("node:child_process").spawn(process.execPath, ["--eval", ${JSON.stringify(helper)}], { stdio: "ignore" });
+      const helper = require("node:child_process").spawn(process.execPath, ["--eval", ${JSON.stringify(helper)}], { stdio: ["ignore", "pipe", "ignore"] });
       process.on("SIGTERM", () => {
         setTimeout(() => {
           writeFileSync(${JSON.stringify(leaderSaw)}, existsSync(${JSON.stringify(helperTerm)}) ? "signalled" : "alive");
           process.exit(0);
         }, 200);
       });
-      console.log(helper.pid);
+      const lines = require("node:readline").createInterface({ input: helper.stdout });
+      lines.once("line", (line) => {
+        if (line === "ready") console.log(helper.pid);
+        lines.close();
+      });
       setInterval(() => {}, 1000);
     `;
-    const child = ownProcessGroup(
-      spawn(process.execPath, ["--eval", leader], {
-        detached: true,
-        stdio: ["ignore", "pipe", "ignore"],
-      }),
-    );
-    try {
-      const member = Number(await firstLine(child));
-      // The helper's handler must be installed before the stop begins.
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      await stopProcessGroup(child);
-      expect(await readFile(leaderSaw, "utf8")).toBe("alive");
-      // The member left behind was then asked to stop, not killed outright.
-      expect(existsSync(helperTerm)).toBe(true);
-      expect(processAlive(member)).toBe(false);
-      expect(processAlive(-child.pid!)).toBe(false);
-    } finally {
-      if (processAlive(-child.pid!)) signalProcess(-child.pid!, "SIGKILL");
-      await rm(root, { recursive: true, force: true });
-    }
-  }, 20_000);
+      const child = ownProcessGroup(
+        spawn(process.execPath, ["--eval", leader], {
+          detached: true,
+          stdio: ["ignore", "pipe", "ignore"],
+        }),
+      );
+      const realKill = process.kill;
+      const termSignals: Array<{ pid: number; rootAlive: boolean }> = [];
+      const kill = spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (signal === "SIGTERM") termSignals.push({ pid, rootAlive: processAlive(child.pid!) });
+        return realKill(pid, signal);
+      });
+      try {
+        const member = Number(await firstLine(child));
+        // The leader forwards readiness only after the helper installs its handler.
+        if (cleanup === "group") {
+          await stopProcessGroup(child);
+        } else {
+          const app = { evaluate: async () => {}, close: async () => {} };
+          await expect(closeElectron(app as never, [child.pid!, member], 1_000)).rejects.toThrow(
+            "Owned processes did not exit",
+          );
+        }
+        if (cleanup === "electron") {
+          expect(termSignals).toEqual([
+            { pid: child.pid!, rootAlive: true },
+            { pid: member, rootAlive: false },
+          ]);
+        }
+        expect(await readFile(leaderSaw, "utf8")).toBe("alive");
+        // The member left behind was then asked to stop, not killed outright.
+        expect(existsSync(helperTerm)).toBe(true);
+        expect(processAlive(member)).toBe(false);
+        expect(processAlive(-child.pid!)).toBe(false);
+      } finally {
+        kill.mockRestore();
+        await stopProcessGroup(child, 1_000);
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+    20_000,
+  );
 
-  test("a leader that ignores SIGTERM is killed with its group, never SIGTERMed as a group", async () => {
-    const child = ownProcessGroup(
-      spawn(
-        process.execPath,
-        [
-          "--eval",
-          `
+  test.each(["group", "electron"] as const)(
+    "%s cleanup kills a leader that ignores SIGTERM without SIGTERMing helpers",
+    async (cleanup) => {
+      const child = ownProcessGroup(
+        spawn(
+          process.execPath,
+          [
+            "--eval",
+            `
           const helper = require("node:child_process").spawn("sleep", ["600"], { stdio: "ignore" });
           process.on("SIGTERM", () => {});
           console.log(helper.pid);
           setInterval(() => {}, 1000);
         `,
-        ],
-        { detached: true, stdio: ["ignore", "pipe", "ignore"] },
-      ),
-    );
-    const realKill = process.kill;
-    const groupSignals: string[] = [];
-    const kill = spyOn(process, "kill").mockImplementation((pid, signal) => {
-      if (pid < 0 && signal !== 0) groupSignals.push(String(signal));
-      return realKill(pid, signal);
-    });
-    try {
-      const member = Number(await firstLine(child));
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      await stopProcessGroup(child, 500);
-      expect(groupSignals).toEqual(["SIGKILL"]);
-      expect(processAlive(member)).toBe(false);
-    } finally {
-      kill.mockRestore();
-      if (processAlive(-child.pid!)) signalProcess(-child.pid!, "SIGKILL");
-    }
-  }, 20_000);
+          ],
+          { detached: true, stdio: ["ignore", "pipe", "ignore"] },
+        ),
+      );
+      const realKill = process.kill;
+      const groupSignals: string[] = [];
+      const individualSignals: Array<[number, string]> = [];
+      const kill = spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid < 0 && signal !== 0) groupSignals.push(String(signal));
+        if (pid > 0 && signal !== 0) individualSignals.push([pid, String(signal)]);
+        return realKill(pid, signal);
+      });
+      try {
+        const member = Number(await firstLine(child));
+        if (cleanup === "group") {
+          await stopProcessGroup(child, 500);
+          expect(groupSignals).toEqual(["SIGKILL"]);
+        } else {
+          const app = { evaluate: async () => {}, close: async () => {} };
+          await expect(closeElectron(app as never, [child.pid!, member], 500)).rejects.toThrow(
+            "Owned processes did not exit",
+          );
+          expect(individualSignals).toEqual([
+            [child.pid!, "SIGTERM"],
+            [child.pid!, "SIGKILL"],
+            [member, "SIGKILL"],
+          ]);
+          expect(groupSignals).toEqual([]);
+        }
+        expect(processAlive(child.pid!)).toBe(false);
+        expect(processAlive(member)).toBe(false);
+      } finally {
+        kill.mockRestore();
+        await stopProcessGroup(child, 1_000);
+      }
+    },
+    20_000,
+  );
 
   test("a close that never settles is bounded and the Electron tree is killed", async () => {
     const electronProcess = spawnShellWithChild(false);

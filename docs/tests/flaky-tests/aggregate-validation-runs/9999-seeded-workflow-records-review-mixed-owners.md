@@ -44,3 +44,16 @@ exit 0, 3.7 s. The branch changes the writer lease, the OpenCode provider and
 agent-testing helpers; the bench imports none of them.
 `mise run flaky:recurrence -- 9999 --base dc90609bf` answered open.
 
+
+## Recurrence — 2026-11-15 (messages history recovery review repairs)
+
+`ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test` on `messages-history-recovery-8fd703ff5288-r1` at `97a468e06`, base `a8b89f1541e7abb6af36d45121593ae14640a3ca` (Linux x86_64, beelink2, host load average about 40 on 16 cores from other worktrees' suites; 385.9 s of test groups), failed the store-size bench's
+`rejects malformed, empty, missing and nonpositive sizes` and
+`rejects exhaustion including the warm-up sample before measuring`, each on
+its 5 s deadline, with an empty child stderr reported between tests (backend:
+18,471 pass, 2 fail). The runner's own rerun of the file alone passed (4.0 s,
+"likely a load flake"). The branch changes transcript paging (the native
+projection, the OpenCode snapshot, the HTTP bridge reader) and docs; the
+bench imports none of them. `mise run flaky:recurrence -- 9999 --base
+a8b89f1541e7abb6af36d45121593ae14640a3ca` answered open. No assertion,
+timeout or skip changed.

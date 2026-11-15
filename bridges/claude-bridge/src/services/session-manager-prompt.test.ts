@@ -382,6 +382,107 @@ describe("sendPrompt", () => {
     ]);
   });
 
+  test("does not hold the turn for agent discovery, and patches the init snapshot when it lands", async () => {
+    let release!: (agents: Array<{ name: string; description: string }>) => void;
+    queryControlOverrides.supportedAgents = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    const session = createSession("slow agent discovery");
+    track(session.id);
+    const { events, stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "hello");
+      const call = await nextQueryCall();
+      call.push({
+        type: "system",
+        subtype: "init",
+        session_id: "sdk-slow-agents",
+        mcp_servers: [],
+        plugins: [],
+        slash_commands: [],
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      // The CLI answers `supportedAgents` only once it has booted. The turn
+      // must not wait for that answer to start consuming the stream.
+      await promptPromise;
+      expect(getSessionInitData(session.id)?.agents).toEqual([]);
+
+      release([{ name: "reviewer", description: "Reviews changes" }]);
+      await waitFor(() =>
+        getSessionInitData(session.id)?.agents?.some((agent) => agent.name === "reviewer"),
+      );
+      const inits = events.filter((event) => event.type === "session.init");
+      expect(inits.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      stop();
+    }
+  });
+
+  test("a late agent list from an ended runtime leaves the replacement's init snapshot alone", async () => {
+    let releaseStale!: (agents: Array<{ name: string; description: string }>) => void;
+    queryControlOverrides.supportedAgents = () =>
+      new Promise((resolve) => {
+        releaseStale = resolve;
+      });
+    const session = createSession("stale agent discovery");
+    track(session.id);
+    const { events, stop } = captureEvents();
+    const initPush = (sdkSessionId: string) => ({
+      type: "system",
+      subtype: "init",
+      session_id: sdkSessionId,
+      mcp_servers: [],
+      plugins: [],
+      slash_commands: [],
+    });
+    try {
+      const firstPrompt = sendPrompt(session.id, "first");
+      const firstCall = await nextQueryCall();
+      firstCall.push(initPush("sdk-stale-agents"));
+      firstCall.push({ type: "result", subtype: "success" });
+      firstCall.finish();
+      await firstPrompt;
+      // The first CLI goes away before its agent list ever arrives.
+      const first = getSession(session.id)!.claudeRuntime;
+      if (first) {
+        first.abortController.abort();
+        await first.ended;
+      }
+      expect(getSession(session.id)!.claudeRuntime).toBeUndefined();
+
+      queryControlOverrides.supportedAgents = async () => [
+        { name: "current", description: "From the replacement CLI" },
+      ];
+      const secondPrompt = sendPrompt(session.id, "second");
+      const secondCall = await nextQueryCall();
+      await waitFor(() => getSession(session.id)?.claudeRuntime !== undefined);
+      const replacement = getSession(session.id)!.claudeRuntime!;
+      await waitFor(() => replacement.supportedAgents.some((agent) => agent.name === "current"));
+      secondCall.push(initPush("sdk-stale-agents"));
+      secondCall.push({ type: "result", subtype: "success" });
+      secondCall.finish();
+      await secondPrompt;
+      await waitFor(() =>
+        getSessionInitData(session.id)?.agents?.some((agent) => agent.name === "current"),
+      );
+      const initsBefore = events.filter((event) => event.type === "session.init").length;
+      const snapshotBefore = JSON.stringify(getSessionInitData(session.id));
+
+      releaseStale([{ name: "stale", description: "From the ended CLI" }]);
+      // The late answer is handled through promise callbacks alone, so one
+      // macrotask turn has run all of them.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(JSON.stringify(getSessionInitData(session.id))).toBe(snapshotBefore);
+      expect(replacement.supportedAgents.map((agent) => agent.name)).toEqual(["current"]);
+      expect(events.filter((event) => event.type === "session.init").length).toBe(initsBefore);
+    } finally {
+      stop();
+    }
+  });
+
   test("falls back to no agents when provider discovery fails", async () => {
     queryControlOverrides.supportedAgents = async () => {
       throw new Error("agent discovery failed");

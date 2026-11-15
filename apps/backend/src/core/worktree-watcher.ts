@@ -97,10 +97,13 @@ export const WATCH_IGNORED_REMEASURE_MS = 60_000;
 export const WATCH_MISS_GRACE_MS = 3_000;
 
 /**
- * How long a watcher that missed a change stays unqualified at least. It is
+ * How long a watcher that missed a change stays unqualified at least, counted
+ * from its latest miss: while it is distrusted its owner polls, and a poll
+ * that finds a change before any event does counts as another miss. It is
  * qualified again by the first event it delivers after this, so one that
- * receives nothing (macOS with an `fseventsd` that has stopped delivering,
- * to-do 8171) leaves its owner polling for as long as that lasts.
+ * receives nothing, or receives events only after the polls have found their
+ * changes (macOS with a saturated `fseventsd`, to-do 8171), leaves its owner
+ * polling for as long as that lasts.
  */
 export const WATCH_DISTRUST_MS = 300_000;
 
@@ -178,7 +181,8 @@ export interface WorktreeWatcher {
    * (`container-worktree-signal.ts`), and so do local ones: unless an event
    * arrives within {@link WATCH_MISS_GRACE_MS}, a local watcher withdraws
    * qualified coverage until it delivers an event again, at least
-   * {@link WATCH_DISTRUST_MS} later (to-do 8171).
+   * {@link WATCH_DISTRUST_MS} after its latest miss. Owners also report the
+   * changes their polls find while it is distrusted (to-do 8171).
    */
   unannouncedChange?(): void;
 }
@@ -412,17 +416,39 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     if (distrustedAt !== undefined && now() - distrustedAt >= distrustMs) setDistrusted(false);
   };
 
+  /** Everything qualified coverage needs except trust in delivery. */
+  const coveredApartFromTrust = () =>
+    watchEstablished &&
+    !closed &&
+    !unreadable &&
+    oversized.length === 0 &&
+    metadataCovered &&
+    treeCovered &&
+    unestablished === 0;
+
   /**
    * The owner's scan found a change no hint announced. A burst still settling
    * here, or an event arriving within the grace, means the watcher saw it and
    * the scan merely came first.
+   *
+   * A distrusted watcher's owner polls, and a poll that finds a change before
+   * any event does restarts the distrust: a saturated `fseventsd` still hands
+   * out a few events tens of seconds late, and each of those would otherwise
+   * restore coverage that the next change then waits out the safety scan for
+   * (measured on arktech-mini, to-do 8171). A watcher left unqualified by
+   * something else (an unreadable directory, a tree left out) is not covering
+   * the change, so its miss proves nothing about delivery.
    */
   const suspectMiss = () => {
-    if (closed || distrustedAt !== undefined || missTimer || timer) return;
+    if (!coveredApartFromTrust() || missTimer || timer) return;
     const seen = deliveries;
     missTimer = setTimeout(() => {
       missTimer = undefined;
       if (closed || deliveries !== seen || timer) return;
+      if (distrustedAt !== undefined) {
+        distrustedAt = now();
+        return;
+      }
       options.onMissedChange?.();
       setDistrusted(true);
     }, missGraceMs);
@@ -936,16 +962,7 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       return watchEstablished && !closed;
     },
     get qualified() {
-      return (
-        watchEstablished &&
-        !closed &&
-        !unreadable &&
-        distrustedAt === undefined &&
-        oversized.length === 0 &&
-        metadataCovered &&
-        treeCovered &&
-        unestablished === 0
-      );
+      return distrustedAt === undefined && coveredApartFromTrust();
     },
     close,
     unannouncedChange: suspectMiss,

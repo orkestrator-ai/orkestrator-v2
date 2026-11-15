@@ -101,9 +101,6 @@ test("a missed change no event explains withdraws coverage until the watcher del
   await until(() => context.hints.length === 1);
   expect(context.hints[0]?.paths).toEqual(["src/a.ts"]);
   expect(context.watcher.qualified).toBe(false);
-  // A distrusted watcher is not suspected again.
-  context.watcher.unannouncedChange?.();
-  expect(grace!.pendingCount()).toBe(0);
 
   // The first event after it restores coverage.
   context.advance(30_000);
@@ -111,6 +108,51 @@ test("a missed change no event explains withdraws coverage until the watcher del
   expect(context.watcher.qualified).toBe(true);
   expect(context.coverageChanges()).toBe(3);
   await until(() => context.hints.length === 2);
+});
+
+test("a poll that finds a change before any event restarts the distrust", async () => {
+  const context = mainCheckout();
+  await until(() => context.watcher.qualified === true);
+  context.watcher.unannouncedChange?.();
+  expect(grace!.advance()).toBe(1);
+  expect(context.watcher.qualified).toBe(false);
+
+  // 50 s in, the owner's poll finds another change no event announced: the
+  // late events of a saturated fseventsd must not earn trust back.
+  context.advance(50_000);
+  context.watcher.unannouncedChange?.();
+  expect(grace!.advance()).toBe(1);
+  // Reported once per spell of distrust, not per poll.
+  expect(context.misses()).toBe(1);
+  expect(context.coverageChanges()).toBe(2);
+
+  // 60 s after the first miss, but only 10 s after the latest: still polling.
+  context.advance(10_000);
+  context.emit("src/late.ts");
+  expect(context.watcher.qualified).toBe(false);
+  await until(() => context.hints.length === 1);
+
+  // A poll's change an event explains within the grace is forgiven.
+  context.watcher.unannouncedChange?.();
+  context.emit("src/seen.ts");
+  expect(grace!.advance()).toBe(1);
+  await until(() => context.hints.length === 2);
+
+  // 60 s after the latest unforgiven miss, the first event restores coverage.
+  context.advance(50_000);
+  context.emit("src/b.ts");
+  expect(context.watcher.qualified).toBe(true);
+  expect(context.coverageChanges()).toBe(3);
+});
+
+test("a watcher not yet covering the tree ignores a change its owner found", async () => {
+  const context = mainCheckout();
+  // Git's paths are still being resolved, so nothing is covered yet.
+  expect(context.watcher.qualified).toBe(false);
+  context.watcher.unannouncedChange?.();
+  expect(grace!.pendingCount()).toBe(0);
+  await until(() => context.watcher.qualified === true);
+  expect(context.misses()).toBe(0);
 });
 
 test("an event within the grace forgives the suspected miss", async () => {

@@ -373,6 +373,34 @@ describe("DiffStatsService", () => {
     );
   });
 
+  test("a polling local entry tells its watcher what its polls find first (to-do 8171)", async () => {
+    // An unqualified watcher (distrusted after a miss) leaves the entry polling.
+    const harness = createHarness({ pendingCoverage: true });
+    harness.service.track(localTarget());
+    await settle();
+    expect(harness.intervalFor("env-local")).toBe(15_000);
+
+    // A poll finds a change no hint announced: the watcher decides whether
+    // that keeps it distrusted.
+    harness.setScan(async () => ({ stats: stats(), changes: [{ path: "polled.ts" }] }));
+    harness.clock.value += 15_000;
+    harness.tick("env-local");
+    await settle();
+    expect(harness.unannouncedFor("env-local")).toBe(1);
+
+    // A change a hint announced (a late event) says nothing either way.
+    harness.setScan(async () => ({ stats: stats(), changes: [{ path: "hinted.ts" }] }));
+    harness.signalChange("env-local");
+    await settle();
+    expect(harness.unannouncedFor("env-local")).toBe(1);
+
+    // A poll that finds nothing new is no miss.
+    harness.clock.value += 15_000;
+    harness.tick("env-local");
+    await settle();
+    expect(harness.unannouncedFor("env-local")).toBe(1);
+  });
+
   test("containers are polled rather than watched", async () => {
     const harness = createHarness();
     harness.service.track(containerTarget());

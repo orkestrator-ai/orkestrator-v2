@@ -1,6 +1,0 @@
-{
-  "scripts": {
-    "setup": "bun install",
-    "run": "mise run dev"
-  }
-}

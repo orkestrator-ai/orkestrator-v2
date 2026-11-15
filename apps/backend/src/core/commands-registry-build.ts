@@ -19,7 +19,6 @@ import {
   getBuildPipelineCommand,
   getBuildPipelineSessionProjectionCommand,
   getBuildPipelineWorkerTranscriptCommand,
-  importLegacyBuildPipelinesCommand,
   launchBuildPipelineCommand,
   listBuildPipelinesCommand,
   pauseBuildPipelineCommand,
@@ -279,17 +278,6 @@ export function registerBuildPipelineCommands(
     return context.buildPipelines.retryCompletionComment(
       asNonBlankString(pipelineId, "pipelineId"),
     );
-  });
-  register(importLegacyBuildPipelinesCommand, ({ projectId, snapshots }, context) => {
-    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
-    const id = asNonBlankString(projectId, "projectId");
-    if (!Array.isArray(snapshots)) {
-      throw new Error("Expected snapshots to be an array");
-    }
-    if (snapshots.length > 100) {
-      throw new Error("Legacy build pipeline import is limited to 100 snapshots");
-    }
-    return context.buildPipelines.importLegacy(id, snapshots);
   });
   /**
    * Control state for one pipeline. Transcript bodies are never embedded:

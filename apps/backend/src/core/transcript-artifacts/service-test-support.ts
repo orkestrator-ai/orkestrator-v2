@@ -24,7 +24,6 @@ import type {
 } from "./contracts.js";
 import { sha256Hex } from "./hashing.js";
 import type { ArtifactCallerScope } from "./owner.js";
-import type { ArtifactRolloutFlags } from "./service-context.js";
 import { TranscriptArtifactService, type TranscriptArtifactServiceOptions } from "./service.js";
 
 /** A tiny but signature-valid PNG body (the service checks signature and bounds only). */
@@ -350,7 +349,6 @@ export interface Harness {
   preparer: FakePreparer;
   content: FakeContentServer;
   clock: { now: number };
-  flags: ArtifactRolloutFlags;
   /** Content-free change hints the service announced, in order. */
   announcements: Array<{ environmentId: string; conversationKey: string }>;
   call(
@@ -402,12 +400,6 @@ export async function createHarness(
   const preparer = new FakePreparer();
   const content = new FakeContentServer();
   const clock = { now: Date.now() };
-  const flags: ArtifactRolloutFlags = {
-    richMarkdown: true,
-    artifactPublication: true,
-    liveInteractive: true,
-    staticPresentation: true,
-  };
   const services: TranscriptArtifactService[] = [];
   const announcements: Array<{ environmentId: string; conversationKey: string }> = [];
   const make = (extra: Partial<TranscriptArtifactServiceOptions> = {}) => {
@@ -423,7 +415,6 @@ export async function createHarness(
       runtime: { runner, preparer, contentServer: content },
       now: () => clock.now,
       syncDirectories: false,
-      rollout: () => flags,
       ...overrides,
       ...extra,
     });
@@ -438,7 +429,6 @@ export async function createHarness(
     preparer,
     content,
     clock,
-    flags,
     announcements,
     async call(name, args, scope = TAB) {
       const response = await harness.service.handleTool(name, scope, args);

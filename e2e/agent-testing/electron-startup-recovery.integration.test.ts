@@ -35,7 +35,7 @@ test.skipIf(process.platform !== "linux")(
 const ELECTRON = path.resolve(import.meta.dirname, "../../apps/desktop/node_modules/.bin/electron");
 
 // The same churn against a real headless Electron window, watched as the
-// Electron specs watch theirs (to-do 7062 task 2). No display, no Docker.
+// Electron specs watch theirs (to-do 7062 (retired) task 2). No display, no Docker.
 test.skipIf(process.platform !== "linux" || !existsSync(ELECTRON))(
   "a real headless Electron window recovers a network-changed startup through watchElectronStartup",
   async () => {

@@ -232,12 +232,6 @@ export const CodeRewindPreviewSchema = modelRecord<BuildPipelineCodeRewindPrevie
   blocked: optionalString,
 });
 
-/** `import_legacy_build_pipelines`. */
-export const ImportLegacyBuildPipelinesResultSchema = Schema.Struct({
-  importedIds: mutableArray(Schema.String),
-  skipped: Schema.Finite,
-});
-
 /** `create_feature_build`: the ticket and pipeline it made (or a retry's same pair). */
 export const CreateFeatureBuildResultSchema = modelRecord<CreateFeatureBuildResult>()({
   taskId: Schema.String,

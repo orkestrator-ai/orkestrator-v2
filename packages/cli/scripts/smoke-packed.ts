@@ -171,8 +171,20 @@ async function probePackedPreview(installedRoot: string): Promise<void> {
         !result.svg?.includes("<svg") || !result.svg.includes("PackedAgent") ||
         !result.svg.includes("PreviewWorker") || !(result.svgElements > 0) ||
         /<script\\b|<foreignObject\\b|\\son[a-z]+\\s*=/i.test(result.svg)) {
+      // The worker reports every launch failure as one sandbox message, so
+      // launch the same Chromium the same way here to show the real cause.
+      let launchError = "launched without error";
+      try {
+        const browser = await chromium.launch({ headless: true, chromiumSandbox: true, executablePath, timeout: 15000 });
+        await browser.close();
+      } catch (error) {
+        launchError = String(error?.message ?? error).slice(0, 4000);
+      }
       throw new Error("Installed Mermaid preview did not return sanitized SVG: " +
-        JSON.stringify(result?.failure ?? { ok: result?.ok }));
+        JSON.stringify(result?.failure ?? { ok: result?.ok }) +
+        "\\nChromium: " + executablePath +
+        "\\nDirect launch: " + launchError +
+        "\\nWorker stderr (tail): " + stderr.slice(-2000));
     }
     console.log("installed preview worker rendered sanitized Mermaid SVG");
   `,

@@ -157,23 +157,6 @@ describe("artifact tools over the real MCP server", () => {
     expect(h.service.store.environmentIds()).toEqual([]);
   });
 
-  test("are withdrawn when publication is rolled back, without touching stored records", async () => {
-    const connection = server.connection(ENV, PROJECT, "host", "tab-1");
-    const created = textOnly(
-      await call(connection, "create_artifact", {
-        requestKey: key(),
-        draft: { title: "c", summary: "", payload: { kind: "chart", spec: SAMPLE_CHART } },
-      }),
-    );
-    h.flags.artifactPublication = false;
-    const names: string[] = (
-      await rpc(connection.url, connection.token, "tools/list")
-    ).result.tools.map((tool: { name: string }) => tool.name);
-    expect(names).not.toContain("create_artifact");
-    expect(h.service.store.records(ENV).get("head", created.artifactId)).not.toBeNull();
-    expect(h.service.capabilities().authoring).toBe(false);
-  });
-
   test("create → preview → inspect (image block) → publish end to end, text content only", async () => {
     const connection = server.connection(ENV, PROJECT, "host", "tab-1");
     const created = textOnly(

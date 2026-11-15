@@ -36,6 +36,7 @@ export default defineConfig({
     "pull-request-pane-electron.spec.ts",
     "window-visibility-polls-electron.spec.ts",
     "hidden-dialogs-electron.spec.ts",
+    "startup-recovery-electron.spec.ts",
   ],
   workers: 1,
   timeout: 120_000,

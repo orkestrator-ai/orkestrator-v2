@@ -52,6 +52,7 @@ on:
       - "apps/backend/src/core/container-apt-packages.ts"
       - "apps/backend/src/core/egress-gateway.ts"
       - "apps/backend/src/core/github-ranges-cache.ts"
+      - "apps/backend/src/core/github-ranges-seed-delivery.ts"
       - "apps/backend/scripts/github-ranges-seed.ts"
       - "docker/artifact-preview-worker/**"
       - "apps/backend/src/core/transcript-artifacts/preview-container.test.ts"
@@ -197,6 +198,12 @@ jobs:
         env:
           ORKESTRATOR_LIVE_GITHUB_RANGES_SEED: ""
         run: mise run test:logged -- --name firewall-without-seed -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-firewall.test.ts --parallel=1 --test-name-pattern 'restricted boot fetches GitHub ranges without a workflow seed'
+
+      # The seed directory bind (to-do 7549 task 2): a restart reads the
+      # seed as the backend last refreshed it, with no copy and no fetch.
+      - name: Live GitHub ranges seed bind
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name github-seed-bind -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-github-seed.test.ts --parallel=1
 
       # IPv6 on an attached network and DNS rotation. The daemon-restart case
       # needs a disposable daemon and stays a manual run (docs/development/

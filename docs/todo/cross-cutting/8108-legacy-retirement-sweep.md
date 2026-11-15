@@ -31,14 +31,14 @@ one list, the sweep will miss paths or two workers will remove the same one.
 names every path with its owner and removal condition, and its Retired table
 records what went. `apps/backend/src/core/compatibility-path-usage.ts` names
 about fifty counted paths (for example `bridge-close.upgrade-required`,
-`bridge-transcript.messages-fallback`, `history.joined-v1-page`,
+`tmux-transcript.whole-read`, `history.joined-v1-page`,
 `preview.legacy-loopback-route`, `preview.tunnel-v1`, `machine-load.older-node`,
 the `retired-command.*` names and `relayed-node-event.legacy-stream`). Domain
 contracts keep client adapters for older domain versions
 (`packages/protocol/src/contract/client-adapters.ts`; see
 [Client adapters](../../architecture/version-compatibility.md#client-adapters)).
 To-dos that already own a removal and were unblocked on 2026-11-14:
-[0050](../transcripts-and-observation/0050-transcript-history-efficiency.md),
+0050 (task 1 done and the file retired on 2026-11-15),
 [0232](../transcripts-and-observation/0232-direct-history-cursor-minting.md),
 [7570](7570-compatibility-paths-waiting-on-the-floor.md),
 [0078](0078-legacy-prompt-queue-claim-state.md),
@@ -152,8 +152,8 @@ scenarios. In the tree on 2026-11-14: `scripts/mixed-version/` (`harness.ts`,
 (the `qualify:mixed-versions` mise task), `scripts/qualify-slash-mixed-versions.ts`,
 `scripts/qualify-design-mixed-versions.ts`, `scripts/design-mixed-version-checks.ts`
 and `scripts/older-release-stack.ts`. `scripts/mixed-version/scenarios/pipelines.ts`
-is one of the callers of `import_legacy_build_pipelines`
-([8109](8109-decided-removal-candidates.md) task 5). To-do 0015 (retired
+no longer calls `import_legacy_build_pipelines`, which was removed on
+2026-11-15 (8109 (retired) task 5). To-do 0015 (retired
 2026-11-14) closed its mixed-version task under the same decision.
 
 **Investigation.** Not started. Check every importer of
@@ -230,8 +230,9 @@ date and "retired by the 2026-11-14 legacy-retirement decision".
 - [7571](7571-removal-candidates-needing-a-decision.md) task 9 and
   [0042](../previews-and-annotations/0042-service-preview-rollout.md) task 8:
   the decisions behind tasks 2 and 3.
-- [8109](8109-decided-removal-candidates.md): the other removals the user
-  decided on 2026-11-14.
+- 8109 (retired 2026-11-15): the other removals the user decided on
+  2026-11-14, now in the Retired table of
+  [version-compatibility.md](../../architecture/version-compatibility.md#retired).
 - The unblocked to-dos listed under task 1.
 
 ## Replaces

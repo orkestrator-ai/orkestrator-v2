@@ -61,7 +61,6 @@ const changingWrites: Array<[string, Record<string, unknown>]> = [
     },
   ],
   ["patch_global_config", { patch: { defaultNetworkMode: "full" } }],
-  ["set_workflow_result_tools_rollout", { mode: "enabled" }],
   ["web_annotations_rollout_set", { mode: "enabled" }],
   ["set_container_resource_limits", { memoryMb: 1024 }],
   ["docker_cleanup_preview", {}],

@@ -21,7 +21,7 @@
  * Measurements are command names, counts and byte totals. Prompts, transcript
  * text, tokens and session ids never reach the output.
  */
-import { expect, test, type Page, type Request } from "./browser-test";
+import { expect, test, fetchModulesOutsideChromium, type Page, type Request } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
@@ -53,6 +53,8 @@ const WINDOW_MS = 40_000;
 /** Lets the turn reach its wait and the first reads of the turn settle. */
 const SETTLE_MS = 6_000;
 const SLEEP_SECONDS = 75;
+/** The two-viewer case also opens a second page before its window. */
+const TWO_VIEWER_SLEEP_SECONDS = 110;
 const TURN_DEADLINE_MS = 5 * 60_000;
 
 test.describe.configure({ mode: "serial" });
@@ -228,9 +230,25 @@ async function prepareTab(page: Page) {
       },
     },
   });
+  await openEnvironment(page, status, fixture!, created);
+  const identity = {
+    environmentId: created.id,
+    agent: "claude" as const,
+    logicalSessionKey: `env-${created.id}:${TAB_ID}`,
+  };
+  return { status, invoke, environment: created, identity, fixture: fixture! };
+}
+
+/** Opens the profile's window on one environment, as a person would. */
+async function openEnvironment(
+  page: Page,
+  status: Status,
+  fixture: Project,
+  environment: Environment,
+) {
   await page.goto(status.browserUrl!);
-  const expand = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
-  const entry = page.getByText(created.name, { exact: true }).first();
+  const expand = page.getByRole("button", { name: `Expand project ${fixture.name}` });
+  const entry = page.getByText(environment.name, { exact: true }).first();
   await expect(expand.or(entry)).toBeVisible({ timeout: 60_000 });
   for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
     const button = page.getByRole("button", { name: label, exact: true });
@@ -239,12 +257,6 @@ async function prepareTab(page: Page) {
   if (await expand.isVisible()) await expand.click();
   await page.mouse.move(1100, 20);
   await entry.click({ timeout: 15_000 });
-  const identity = {
-    environmentId: created.id,
-    agent: "claude" as const,
-    logicalSessionKey: `env-${created.id}:${TAB_ID}`,
-  };
-  return { status, invoke, environment: created, identity, fixture: fixture! };
 }
 
 async function send(page: Page, prompt: string) {
@@ -463,6 +475,61 @@ test.describe("Requests of a visible running agent tab", () => {
       });
     } finally {
       await context.setOffline(false);
+      await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
+      await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+    }
+  });
+
+  /*
+   * The same workload with a second page on the same tab, in its own browser
+   * context (a second client, as two windows or a window and a phone would
+   * be). The baseline for to-do 8102: what each extra viewer of a quiet
+   * running turn costs today.
+   */
+  test("running-quiet-two-viewers: two visible pages on one tab", async ({ page, browser }) => {
+    test.setTimeout(TURN_DEADLINE_MS + 5 * 60_000);
+    page.setDefaultTimeout(15_000);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    const { status, invoke, environment, identity, fixture } = await prepareTab(page);
+    const secondContext = await browser.newContext({
+      storageState: await page.context().storageState(),
+    });
+    try {
+      await fetchModulesOutsideChromium(secondContext);
+      const first = recordSessionRequests(page, identity.logicalSessionKey);
+      const turn = sumMarker("TWOVIEWDONE");
+      await send(page, sleepPrompt(TWO_VIEWER_SLEEP_SECONDS, turn.ask));
+      await expect
+        .poll(() => turnPhase(invoke, identity), { timeout: 90_000, intervals: [500] })
+        .toBe("running");
+      const second = await secondContext.newPage();
+      second.setDefaultTimeout(15_000);
+      await second.setViewportSize({ width: 1440, height: 1000 });
+      const secondRequests = recordSessionRequests(second, identity.logicalSessionKey);
+      await openEnvironment(second, status, fixture, environment);
+      await expect(second.getByTestId("shared-native-compose-bar")).toBeVisible({
+        timeout: 90_000,
+      });
+      await page.waitForTimeout(SETTLE_MS);
+
+      const before = await readGatewayMetrics(page, status);
+      const from = Date.now();
+      await page.waitForTimeout(WINDOW_MS);
+      const to = Date.now();
+      const after = await readGatewayMetrics(page, status);
+      const phaseAtEnd = await turnPhase(invoke, identity);
+      expect(phaseAtEnd, "the turn ended inside the measurement window").toBe("running");
+      const viewers = {
+        first: summarize(first, from, to),
+        second: summarize(secondRequests, from, to),
+      };
+      expect(viewers.second.requests, "the second page never read the session").toBeGreaterThan(0);
+      record("running-quiet-two-viewers", { viewers, gateway: commandDelta(before, after) });
+      await expect(second.getByText(turn.marker).first()).toBeVisible({
+        timeout: TURN_DEADLINE_MS,
+      });
+    } finally {
+      await secondContext.close().catch(() => undefined);
       await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
       await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
     }

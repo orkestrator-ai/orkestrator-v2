@@ -9,6 +9,7 @@ import {
 } from "@orkestrator/protocol/renderer-content-security-policy";
 import {
   rendererSecurityPlugin,
+  staticHtmlFramePlugin,
   withRendererContentSecurityPolicy,
 } from "../../vite-plugin-renderer-security";
 
@@ -73,4 +74,54 @@ test("generateBundle uses runnerImport and emits hash-pinned production frame do
     expect(asset.source).not.toContain("script-src 'unsafe-inline'");
     expect(asset.source).toContain("connect-src 'none'");
   }
+});
+
+test("the hosted client's plugin emits only the static frame document and adds no meta policy", async () => {
+  const plugin = staticHtmlFramePlugin();
+  expect(plugin.apply).toBe("build");
+  // The hosted client's document policy is a Vercel header, not a <meta> tag.
+  expect(plugin.transformIndexHtml).toBeUndefined();
+  if (typeof plugin.config !== "function") throw new Error("Expected config hook");
+  expect(plugin.config.call({} as never, {}, {} as never)).toEqual({
+    define: {
+      "import.meta.env.ORKESTRATOR_STATIC_HTML_FRAME_DOCUMENT": JSON.stringify(
+        STATIC_HTML_FRAME_DOCUMENT,
+      ),
+    },
+  });
+
+  const emitted: Array<{ type: string; fileName: string; source: string }> = [];
+  const hook = plugin.generateBundle;
+  if (typeof hook !== "function") throw new Error("Expected generateBundle hook");
+  await hook.call(
+    {
+      emitFile: (asset: any) => {
+        emitted.push(asset);
+        return "asset";
+      },
+    } as never,
+    {} as never,
+    {},
+    false,
+  );
+  expect(emitted.map((asset) => asset.fileName)).toEqual([STATIC_HTML_FRAME_DOCUMENT]);
+
+  // The same document the desktop and gateway builds ship.
+  const shared: Array<{ fileName: string; source: string }> = [];
+  const sharedHook = rendererSecurityPlugin().generateBundle;
+  if (typeof sharedHook !== "function") throw new Error("Expected generateBundle hook");
+  await sharedHook.call(
+    {
+      emitFile: (asset: any) => {
+        shared.push(asset);
+        return "asset";
+      },
+    } as never,
+    {} as never,
+    {},
+    false,
+  );
+  expect(emitted[0]!.source).toBe(
+    shared.find((asset) => asset.fileName === STATIC_HTML_FRAME_DOCUMENT)!.source,
+  );
 });

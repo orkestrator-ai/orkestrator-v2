@@ -288,6 +288,20 @@ export function bridgeSnapshotTurnRunId(
   return candidate && Buffer.byteLength(candidate, "utf8") <= 512 ? candidate : undefined;
 }
 
+/**
+ * {@link bridgeSnapshotTurnRunId} as a snapshot field, only when the snapshot
+ * as a whole says it is running: a transcript-sourced status that has already
+ * left `running` must not publish the status route's older turn id.
+ */
+export function bridgeSnapshotTurnRunIdField(
+  status: unknown,
+  payload: Record<string, unknown> | null | undefined,
+): { turnRunId?: string } {
+  if (status !== "running") return {};
+  const turnRunId = bridgeSnapshotTurnRunId(payload);
+  return turnRunId ? { turnRunId } : {};
+}
+
 /** The most a Claude bridge's whole session resource may decode to. */
 export const CLAUDE_SESSION_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
 

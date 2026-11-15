@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseGraphLaunchRequest } from "@orkestrator/protocol/graphs/launch";
 import { publicSuccessEnvelope } from "@orkestrator/protocol/public-api";
+import { schedulerPausedMessage } from "@orkestrator/protocol/scheduled-jobs";
 import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/testing/public-api-fixtures";
 import {
   captureIo,
@@ -360,4 +361,66 @@ test("schedule CLI refuses a malformed graph schedule before submission", async 
     expect(run.err).toContain(message);
   }
   expect(inputs()).toHaveLength(0);
+});
+
+async function listFixture(scheduler: unknown) {
+  const box = await createSandbox();
+  const gateway = await startFakeGateway(
+    defaultResponder({
+      "schedule.list": publicSuccessEnvelope("schedule.list", {
+        schedules: [],
+        total: 0,
+        offset: 0,
+        ...(scheduler === undefined ? {} : { scheduler }),
+      }),
+    }),
+  );
+  cleanups.push(
+    () => box.cleanup(),
+    () => gateway.stop(),
+  );
+  const dir = await box.publishDescriptor(gateway);
+  await box.run(["connection", "add", "local", "--data-dir", dir, "--default", "--no-check"]);
+  return box;
+}
+
+for (const reason of ["writer-lease-lost", "another-backend", "newer-data-directory"] as const) {
+  test(`schedule list says schedules are not firing (${reason})`, async () => {
+    const box = await listFixture({ firing: false, reason });
+    const message = schedulerPausedMessage(reason);
+    const human = await box.run(["schedule", "list"]);
+    expect(human.code).toBe(0);
+    expect(human.out).toBe("(none)\n");
+    expect(human.err).toContain(`warning: ${message}\n`);
+    const json = await box.run(["schedule", "list", "--output", "json"]);
+    expect(json.code).toBe(0);
+    const parsed = JSON.parse(json.out) as {
+      ok: boolean;
+      result: { scheduler?: unknown };
+      warnings?: string[];
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.result.scheduler).toEqual({ firing: false, reason });
+    expect(parsed.warnings).toEqual([message]);
+  });
+}
+
+test("schedule list prints no notice on a backend that fires, or that gives no status", async () => {
+  for (const scheduler of [{ firing: true }, undefined]) {
+    const box = await listFixture(scheduler);
+    const human = await box.run(["schedule", "list"]);
+    expect(human.code).toBe(0);
+    expect(human.err).not.toContain("warning:");
+    const json = await box.run(["schedule", "list", "--output", "json"]);
+    const parsed = JSON.parse(json.out) as { result: { scheduler?: unknown }; warnings?: unknown };
+    expect(parsed.result.scheduler).toEqual(scheduler);
+    expect(parsed).not.toHaveProperty("warnings");
+  }
+});
+
+test("schedule list treats a pause reason it does not know as a pause", async () => {
+  const box = await listFixture({ firing: false, reason: "a-future-reason" });
+  const human = await box.run(["schedule", "list"]);
+  expect(human.code).toBe(0);
+  expect(human.err).toContain("warning: Schedules do not fire on this backend.\n");
 });

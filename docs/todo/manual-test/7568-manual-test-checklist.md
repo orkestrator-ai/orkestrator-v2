@@ -24,7 +24,7 @@ readings of 7570 task 2, 0050 task 1 and 0232 task 4).
 
 ### Tasks
 
-1. **Manual tests and live checks** (327 items): run each check under
+1. **Manual tests and live checks** (328 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (23 items): make each call
@@ -163,7 +163,7 @@ agent can apply it.
 | Area | Manual tests and live checks | Decisions, approvals and outward actions |
 | --- | --- | --- |
 | Agent engines and provider SDKs | 68 | 3 |
-| CLI and slash commands | 5 | 0 |
+| CLI and slash commands | 6 | 0 |
 | Containers and environments | 28 | 6 |
 | Coordinator and Multi Review | 83 | 3 |
 | Cross-cutting | 85 | 8 |
@@ -171,7 +171,7 @@ agent can apply it.
 | MCP | 10 | 1 |
 | Service previews and web annotations | 16 | 1 |
 | Transcripts, observation and bandwidth | 27 | 1 |
-| **Total** | 327 | 23 |
+| **Total** | 328 | 23 |
 
 ## Outstanding work
 
@@ -375,6 +375,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[0014](../cli-and-slash-commands/0014-cli-qualification.md) task 4: token cost of a live run.** The manifest records usage since 2026-11-11 (0014 task 4): each live result's `usage`, also printed as a `usage:` line. Run one paid `mise run test:cli:scenarios -- --scenario live-session --provider <claude|codex|opencode>` per qualified provider with its API-key credentials and `ORKESTRATOR_SCENARIO_MODEL` pinned. Record: input/output and cache tokens and `costUsd` (or `unpricedTokens` for Codex) per provider and model from the manifest's `results[].usage`, in 0014's "Evidence log".
 - [ ] **0017 (retired) task 5: new `live-session` steps on Codex.** (Background: [public-cli.md](../../architecture/public-cli.md#targeted-scenarios).) With `CODEX_API_KEY` or `OPENAI_API_KEY` (API key, not OAuth) and the provider default model, run `mise run test:cli:scenarios -- --scenario live-session --provider codex`, then the same with `--environment-type container --docker-image orkestrator-v2:dev-<worktree hash>` after `mise run docker:build:dev`. Record: pass/fail for the `--literal`, `--attach` (Codex refuses non-image files, so the refusal path), `--enqueue` and refusal stages, local and container, with the resolved model and manifest path, in 0014's "Evidence log".
 - [ ] **0015 (retired) task 4: shared and linked skills in a container picker with Grok and Cursor logins.** On a `dev:test` profile with `--fixture --credential-source claude --credential-source grok --credential-source cursor`, an image from `mise run docker:build:dev`, and a fixture home with `~/.agents/skills/<x>` plus a linked skill under `~/.claude/skills`, open a container environment's Claude, Grok and Cursor tabs and their `/` picker. This also covers task 3's unrun browser picker check (user Claude skills and Grok commands). Record: per provider, whether the shared skill, the linked skill, a user Claude skill and a Grok command are listed, in [native-agent-commands.md](../../architecture/native-agent-commands.md#provider-support) (0015 was retired on 2026-11-14), or reply to the coordinator.
+- [ ] **8105 (retired) task 1: `orkestrator schedule list` on a backend that does not fire.** (Background: [scheduled-jobs.md](../../architecture/scheduled-jobs.md#exactly-once).) Repeat 5160 task 3's setup: two isolated backends on one throwaway data directory, never the real one, with scheduling on and one schedule saved. Against the backend that is not the writer, run `orkestrator schedule list`, then `orkestrator schedule list --output json`; against the writer run both again. Check that the non-writer prints the list with exit 0 and one `warning:` line on stderr in Settings → Schedules' words ("Schedules fire in another Orkestrator…"), that the JSON envelope carries `result.scheduler` `{ firing: false, reason: "another-backend" }` and the same text in `warnings`, and that the writer prints no warning and answers `{ firing: true }`. Record: the output and exit code of each run, the backend versions and the date, in reply to the coordinator.
 - [ ] **5560 (retired) task 1: typical `attention --follow` page size on a real follower.** (Background: [control-mcp-voice.md](../../architecture/control-mcp-voice.md#hearing-about-work-without-asking).) During ordinary use on a host where sessions already wait for approval, sample `orkestrator attention --json | wc -c` a few times a day over several days. Record: the typical and largest non-empty page size and item counts, in reply to the coordinator; if the typical non-empty page is above about 10 KiB, an agent opens a to-do for the conditional read described in control-mcp-voice.md.
 
 #### Containers and environments

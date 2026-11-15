@@ -160,7 +160,11 @@ after now.
   (`{ firing: true }`, or `firing: false` with `writer-lease-lost`,
   `another-backend` or `newer-data-directory`), and Settings → Schedules
   shows a notice from `schedulerPausedMessage` when it does not and there are
-  schedules. A lost lease is final until a restart; losing it announces a
+  schedules. The public `schedule.list` result carries the same `scheduler`
+  (omitted, like the command's, after a clean lease release), and
+  `orkestrator schedule list` prints that notice as a warning (stderr in human
+  and ID output, the envelope's `warnings` in JSON) whenever it is
+  `firing: false`; listing still succeeds with exit 0. A lost lease is final until a restart; losing it announces a
   `scheduled-job` change, so an open Settings view rereads. A backend that
   started without the lease (`another-backend`) keeps trying every heartbeat
   and takes it once its holder stops refreshing it for 30 s, which is what a
@@ -567,9 +571,13 @@ executing at once per backend.
   operator's graph schedule fires once through the launch service as the
   schedule; an unlaunchable template, a malformed request and other owners are
   refused at creation; a removed template pauses the schedule.
+- `apps/backend/src/core/public-api/actions-schedules.test.ts`:
+  `schedule.list`'s `scheduler` for each writer-lease state.
 - `packages/cli/tests/schedule-command.test.ts`: the flags of every action
   kind, `--graph` included (the stored request the backend's parser accepts
-  unchanged), and refusals before anything is sent.
+  unchanged), refusals before anything is sent, and `schedule list`'s
+  not-firing warning for each reason (stderr and JSON `warnings`), none when
+  firing or without a status.
 - `apps/backend/src/core/scheduled-jobs/coordinator-schedules.test.ts`: the
   real Control MCP endpoint: a coordinator's "wake me at 03:12", a scheduled
   launch through its own `launch_environment`, side-agent refusal, listing

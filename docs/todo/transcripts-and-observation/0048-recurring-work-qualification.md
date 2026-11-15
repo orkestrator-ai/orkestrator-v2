@@ -2885,7 +2885,7 @@ collide with other tasks' decisions.
   fetch.
 - [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md): the
   multi-review rollback gates and benchmark.
-- [0050-transcript-history-efficiency.md](0050-transcript-history-efficiency.md):
+- 0050 (retired 2026-11-15; `git show a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`):
   activity-sweep latency against real bridges.
 - [web-page-annotations.md](../../architecture/web-page-annotations.md):
   annotation capture polling (`SELECTION_POLL_MS` in `useAnnotationCapture.ts`)

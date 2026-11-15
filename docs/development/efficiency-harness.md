@@ -221,6 +221,9 @@ harness, the recurring-work A/B in
   and event-loop lag of a real backend or bridge under load (the `resources`
   figures cover only the harness process); workloads with several active
   review sessions. Those gaps
-  are tracked in
-  [0050-transcript-history-efficiency.md](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md)
+  are covered by the live runs in
+  [native-transcripts.md](../architecture/native-transcripts.md#measuring),
+  the real-provider paging runs in the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+  (to-do 0050, retired 2026-11-15, tracked them before)
   and [remote-bandwidth.md](remote-bandwidth.md).

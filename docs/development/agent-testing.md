@@ -2362,8 +2362,9 @@ that session, and graceful shutdown rejects all held sends and clears their poll
 A cancellation before send is a rejection; one after acceptance keeps an ambiguous
 outcome for reconciliation. The live test re-arms the before-send marker after the
 second crash, so even a bridge-deduplicated resend fails the no-resend assertion.
-Results are in
-[0050](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md#qualification-results-2026-11-10-pre-acceptance-dispatch-window).
+Results are in to-do 0050 (retired 2026-11-15), section "Qualification
+results (2026-11-10): pre-acceptance dispatch window":
+`git show a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`.
 
 A spec that restarts a profile builds the launcher's arguments with
 `devTestRestartArgs` (`e2e/agent-testing/profile-restart-args.ts`): a
@@ -2405,8 +2406,9 @@ scripted turn:
 | `large-window` | 26 rounds of 30 KB | ten rounds in, when the window is near 512 KiB |
 | `trimmed-head` | one 150 s response at 20 KB/s | 600,000 characters (`E10_READY_CHARS` moves it) |
 
-Each run measures 20 s with one viewer, 20 s with a second page on the same
-tab and 30 s idle, and writes counts, bytes and milliseconds (no content,
+It runs on Linux and macOS (it finds the profile's toolchain directory from
+the backend's command line, through `/proc` or `ps`). Each run measures 20 s
+with one viewer, 20 s with a second page on the same tab and 30 s idle, and writes counts, bytes and milliseconds (no content,
 token or session id) to
 `output/agent-testing/<run id>/conditional-reads[-codex][-<scenario>].json`.
 Non-baseline scenarios add the whole turn's bridge totals and the exact
@@ -2779,8 +2781,10 @@ MCP tool.
 `e2e/agent-testing/agent-tab-requests-live.spec.ts` counts what one visible
 Claude tab sends while its turn is in a foreground wait (the `running-quiet`
 workload), then drops the page's connection during a second running turn and
-checks the view recovers without a reload. It has its own opt-in and uses the
-host's Claude credentials:
+checks the view recovers without a reload. `running-quiet-two-viewers` counts
+the same workload with a second browser context open on the same tab, each
+viewer separately. It has its own opt-in and uses the host's Claude
+credentials:
 
 ```bash
 mise run dev:test --profile qa-tab-requests --fixture --credential-source claude --agent-platforms claude
@@ -2797,7 +2801,10 @@ It knows nothing about which commands the renderer sends, so the same file
 measures two commits. Results are appended to
 `output/agent-testing/<run id>/agent-tab-requests.json`: command names, counts
 and byte totals, per round and per second, from both the page and the gateway's
-`/__orkestrator/metrics`.
+`/__orkestrator/metrics`. Add `--grep running-quiet` to run only the two
+`running-quiet` cases. The push event layer's before-measurement (to-do
+[8102](../todo/transcripts-and-observation/8102-push-event-layer.md#the-polling-baseline-2026-11-15))
+was taken with them and with the conditional-reads spec below.
 
 ### Live revision tokens with inactive views
 

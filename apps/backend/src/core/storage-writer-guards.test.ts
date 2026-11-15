@@ -357,6 +357,7 @@ describe("StorageService store writers", () => {
       "graphTemplates",
       "kanban",
       "linear",
+      "machineLoadHistory",
       "nodes",
       "previewServices",
       "publicOperations",

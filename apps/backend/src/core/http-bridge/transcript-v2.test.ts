@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   bridgeTranscriptPage,
+  bridgeTranscriptPageCursorAt,
   bridgeTranscriptSummaryUpdate,
   readBridgeTranscriptDetail,
 } from "@orkestrator/protocol/node/bridge-transcript-summary";
@@ -156,6 +157,38 @@ describe("bridge transcript v2 negotiation", () => {
     );
   });
 
+  test("a window at the first message names positions from its generation and epoch (8110)", async () => {
+    // Both rows fit, so the bridge starts at the first message and sends no cursor.
+    const { provider } = bridge(2, { pages: true });
+    const snapshot = await (provider as NativeAgentRuntimeProvider).transcriptSnapshot!(
+      "session-1",
+      { limit: 10, targetBytes: 2 * 1024 * 1024, representation: "summary" },
+    );
+    if ("unchanged" in snapshot) throw new Error("expected a snapshot");
+    expect(snapshot.historyStartIndex).toBe(0);
+    expect(snapshot.historyCursor).toBeUndefined();
+    expect(snapshot.historyPageable).toBe(true);
+    // Nothing is before the first row; the second names the first.
+    expect(snapshot.historyCursorBefore!("prompt")).toBeUndefined();
+    const before = snapshot.historyCursorBefore!("m1")!;
+    const page = await (provider as NativeAgentRuntimeProvider).transcriptPage!("session-1", {
+      cursor: before,
+      limit: 10,
+      targetBytes: 512 * 1024,
+    });
+    expect(page).toMatchObject({ status: "page", historyStartIndex: 0, complete: true });
+    if (page?.status !== "page") throw new Error("expected a page");
+    expect(page.messages.map((row) => (row as { id: string }).id)).toEqual(["prompt"]);
+    // The end of the window pages the whole window again.
+    const again = await (provider as NativeAgentRuntimeProvider).transcriptPage!("session-1", {
+      cursor: snapshot.historyCursorAtEnd!,
+      limit: 10,
+      targetBytes: 2 * 1024 * 1024,
+    });
+    if (again?.status !== "page") throw new Error("expected a page");
+    expect(again.messages.map((row) => (row as { id: string }).id)).toEqual(["prompt", "m1"]);
+  });
+
   test("a cursor before a later row of the window pages exactly the rows before it", () => {
     const history = Array.from({ length: 12 }, (_, index) => ({
       id: `r${index}`,
@@ -174,7 +207,7 @@ describe("bridge transcript v2 negotiation", () => {
     const before = positionedCursorBefore(
       update.value.messages,
       update.value.startIndex,
-      update.value.historyCursor!,
+      (position) => bridgeTranscriptPageCursorAt(update.value.historyCursor!, position),
     );
     expect(before("r7")).toBe(update.value.historyCursor);
     const page = bridgeTranscriptPage(history, {

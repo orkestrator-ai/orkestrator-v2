@@ -117,6 +117,65 @@ describe("OpenCode history through the native projection", () => {
     await provider.dispose?.();
   });
 
+  test("a view left holding only a failed response's error row pages directly (8110)", async () => {
+    server = new FakeOpenCode2Server();
+    const fake = server;
+    const provider = openCodeProvider(fake);
+    await withService(
+      { prefix: "orkestrator-opencode-history-error-row-", provider: async () => provider },
+      async ({ service }) => {
+        const session = await service.ensureSession(identity);
+        await seedTurns(fake, provider, session.providerSessionId, 20);
+        // The newest response failed after writing more text than the live
+        // window's byte target: OpenCode keeps its group (main row and error
+        // row) whole, and the projection's byte bound keeps only the error row.
+        fake.pushRow(session.providerSessionId, {
+          type: "assistant",
+          content: [{ type: "text", text: "x".repeat(600 * 1024) }],
+          error: { type: "provider", message: "The provider failed" },
+          time: { created: 1, completed: 1 },
+        });
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        const expected = expectedIds(fake, session.providerSessionId);
+        const held = update.value.messages.map((entry) => (entry as { id: string }).id);
+        expect(held).toEqual(expected.slice(-1));
+        expect(update.value.historyPaging).toBe("direct");
+        expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
+
+        const ids = [...held];
+        let cursor = update.value.historyCursor;
+        let pages = 0;
+        while (cursor) {
+          const page = await service.getMessagePage({
+            ...identity,
+            syncVersion: 1,
+            before: cursor,
+            limit: 60,
+          });
+          expect(page.historyEpoch).toBe(update.value.historyEpoch);
+          // The first page holds the error row again; the renderer drops it by id.
+          ids.unshift(
+            ...page.messages
+              .map((entry) => (entry as { id: string }).id)
+              .filter((id) => !ids.includes(id)),
+          );
+          cursor = page.nextCursor;
+          pages += 1;
+          if (!cursor) expect(page.complete).toBe(true);
+          expect(pages).toBeLessThan(20);
+        }
+        expect(ids).toEqual(expected);
+      },
+    );
+    await provider.dispose?.();
+  });
+
   test("a session that fits the window offers no history to load", async () => {
     server = new FakeOpenCode2Server();
     const fake = server;

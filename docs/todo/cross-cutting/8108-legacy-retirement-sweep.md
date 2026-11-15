@@ -31,7 +31,7 @@ one list, the sweep will miss paths or two workers will remove the same one.
 names every path with its owner and removal condition, and its Retired table
 records what went. `apps/backend/src/core/compatibility-path-usage.ts` names
 about fifty counted paths (for example `bridge-close.upgrade-required`,
-`bridge-transcript.messages-fallback`, `history.joined-v1-page`,
+`tmux-transcript.whole-read`, `history.joined-v1-page`,
 `preview.legacy-loopback-route`, `preview.tunnel-v1`, `machine-load.older-node`,
 the `retired-command.*` names and `relayed-node-event.legacy-stream`). Domain
 contracts keep client adapters for older domain versions

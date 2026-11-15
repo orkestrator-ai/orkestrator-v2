@@ -11,6 +11,7 @@ import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { describe, expect, mock, test } from "bun:test";
 import {
   bridgeTranscriptPage,
+  bridgeTranscriptPageCursorFor,
   bridgeTranscriptSummaryUpdate,
   readBridgeTranscriptDetail,
 } from "@orkestrator/protocol/node/bridge-transcript-summary";
@@ -54,10 +55,17 @@ function summaryProvider(
     /** Rows the bridge changed recently, newest first. */
     revised?: string[];
   },
-  /** `pages: false` is a bridge without page routes; `nameCursors: false` one naming no later row. */
-  bridge: { pages?: boolean; nameCursors?: boolean } = {},
+  /**
+   * `pages: false` is a bridge without page routes; `nameCursors: false` a
+   * pageable source that can name no position in its window (only its own
+   * `historyCursor`). `generation` sets the bridge generation, whose length
+   * sets the length of every cursor.
+   */
+  bridge: { pages?: boolean; nameCursors?: boolean; generation?: string } = {},
 ) {
-  const generation = "g1";
+  const generation = bridge.generation ?? "g1";
+  // As `historyEpoch` in `http-bridge/transcript-v2.ts` forms it.
+  const historyEpoch = () => `${generation.slice(0, 63)}:${history.epoch}`;
   const transcriptSnapshot = async (
     _sessionId: string,
     options: { limit: number; targetBytes: number; knownSourceToken?: string },
@@ -81,23 +89,26 @@ function summaryProvider(
       sourceToken: update.token,
       complete: update.value.complete,
       generation,
-      historyEpoch: `${generation}:${history.epoch}`,
+      historyEpoch: historyEpoch(),
       freshness: "current",
       representation: "summary",
       historyPageable: bridge.pages ?? true,
-      ...(update.value.historyCursor
-        ? {
-            historyCursor: update.value.historyCursor,
-            ...(bridge.nameCursors === false
-              ? {}
-              : {
-                  historyCursorBefore: positionedCursorBefore(
-                    update.value.messages,
-                    update.value.startIndex,
-                    update.value.historyCursor,
-                  ),
-                }),
-          }
+      ...(update.value.historyCursor ? { historyCursor: update.value.historyCursor } : {}),
+      // As `positionCursors` in `http-bridge/transcript-v2.ts` names them.
+      ...((bridge.pages ?? true) && bridge.nameCursors !== false
+        ? (() => {
+            const cursorAt = (position: number) =>
+              bridgeTranscriptPageCursorFor(generation, history.epoch, position);
+            const atEnd = cursorAt(update.value.startIndex + update.value.messages.length);
+            return {
+              historyCursorBefore: positionedCursorBefore(
+                update.value.messages,
+                update.value.startIndex,
+                cursorAt,
+              ),
+              ...(atEnd ? { historyCursorAtEnd: atEnd } : {}),
+            };
+          })()
         : {}),
       ...(update.value.revisedMessages ? { revisedMessages: update.value.revisedMessages } : {}),
       ...(update.value.historyReconciliationToken
@@ -132,7 +143,7 @@ function summaryProvider(
       ...(page.nextCursor ? { historyCursor: page.nextCursor } : {}),
       complete: page.complete,
       truncated: page.truncated,
-      historyEpoch: `${generation}:${history.epoch}`,
+      historyEpoch: historyEpoch(),
       representation: "summary",
     };
   };
@@ -465,16 +476,6 @@ describe("summary transcripts", () => {
       { nameCursors: false },
       { base: 0, unpaged: 0, unnamed: 1 },
     ],
-    [
-      "a pageable source starting at its first message whose projected rows exceed the byte bound",
-      75,
-      (index: number) => ({
-        ...message(`m${index}`, shortCalls(index)),
-        content: "c".repeat(4_000),
-      }),
-      { pages: true },
-      { base: 0, unpaged: 0, unnamed: 1 },
-    ],
   ] as const) {
     test(`a joined page after ${name} counts under its own cause`, async () => {
       const history = {
@@ -543,6 +544,139 @@ describe("summary transcripts", () => {
       );
     });
   }
+
+  // The three cases that used to reach joined paging with no direct cursor
+  // (8110): each now pages directly from the view, walking back to the first
+  // message with no gap, no repeat, no joined page and no whole read.
+  const walkDirectly = async (
+    service: {
+      getTranscriptUpdate: (input: never) => Promise<unknown>;
+      getMessagePage: (input: never) => Promise<unknown>;
+    },
+    history: { messages: TestMessage[] },
+    expectView: (view: {
+      messages: unknown[];
+      historyCursor?: string;
+      historyPaging?: string;
+    }) => void,
+  ) => {
+    const before = joinedCounts();
+    const update = (await service.getTranscriptUpdate({
+      ...identity,
+      viewVersion: 1,
+      liveWindow,
+      forceSnapshot: true,
+    } as never)) as {
+      status: string;
+      value: {
+        messages: unknown[];
+        historyCursor?: string;
+        historyPaging?: string;
+        historyEpoch: string;
+        messageWindow?: { canLoadEarlier?: boolean };
+      };
+    };
+    if (update.status !== "snapshot") throw new Error("expected a snapshot");
+    expectView(update.value);
+    expect(update.value.historyPaging).toBe("direct");
+    expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
+    const held = update.value.messages.map((entry) => (entry as TestMessage).id);
+    const ids: string[] = [...held];
+    let cursor = update.value.historyCursor;
+    let pages = 0;
+    while (cursor) {
+      const page = (await service.getMessagePage({
+        ...identity,
+        syncVersion: 1,
+        before: cursor,
+        limit: 60,
+      } as never)) as {
+        messages: unknown[];
+        historyEpoch: string;
+        nextCursor?: string;
+        complete: boolean;
+      };
+      expect(page.historyEpoch).toBe(update.value.historyEpoch);
+      // The renderer drops rows it already holds by id.
+      const fresh = page.messages
+        .map((entry) => (entry as TestMessage).id)
+        .filter((id) => !ids.includes(id));
+      ids.unshift(...fresh);
+      cursor = page.nextCursor;
+      pages += 1;
+      if (!cursor) expect(page.complete).toBe(true);
+      expect(pages).toBeLessThan(40);
+    }
+    expect(ids).toEqual(history.messages.map((entry) => entry.id));
+    expect(joinedCounts()).toEqual(before);
+  };
+
+  test("a view at the first message whose projected rows exceed the byte bound pages directly (8110)", async () => {
+    // 75 rows fit the bridge's window whole, so it starts at the first message
+    // and sends no cursor; projected, they exceed the backend's byte bound.
+    const history = {
+      messages: Array.from({ length: 75 }, (_, index) => ({
+        ...message(`m${index}`, shortCalls(index)),
+        content: "c".repeat(4_000),
+      })),
+      epoch: 1,
+      revision: 1,
+    };
+    const { stub, legacyMessages, interactiveSnapshot } = summaryProvider(history);
+    await withService(
+      { prefix: "orkestrator-summary-first-message-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const sent = await stub.provider.transcriptSnapshot!("provider-session", {
+          limit: liveWindow.messages,
+          targetBytes: liveWindow.targetBytes,
+        });
+        if ("unchanged" in sent) throw new Error("expected a snapshot");
+        expect(sent.historyStartIndex).toBe(0);
+        expect(sent.messages).toHaveLength(75);
+        expect(sent.historyCursor).toBeUndefined();
+        await walkDirectly(service as never, history, (view) => {
+          expect(view.messages.length).toBeLessThan(75);
+          expect((view.messages[0] as TestMessage).id).not.toBe("m0");
+        });
+        expect(stub.transcriptPage).toHaveBeenCalled();
+        expect(legacyMessages).not.toHaveBeenCalled();
+        expect(interactiveSnapshot).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  test("a provider cursor too long to wrap is named by a handle and pages directly (8110)", async () => {
+    // A long bridge generation makes every page cursor long enough that the
+    // backend's wrapper would exceed the page command's 1,024-character bound.
+    const generation = "g".repeat(600);
+    const history = {
+      messages: Array.from({ length: 250 }, (_, index) => message(`m${index}`)),
+      epoch: 1,
+      revision: 1,
+    };
+    const { stub, legacyMessages, interactiveSnapshot } = summaryProvider(history, {
+      generation,
+    });
+    await withService(
+      { prefix: "orkestrator-summary-long-cursor-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const sent = await stub.provider.transcriptSnapshot!("provider-session", {
+          limit: liveWindow.messages,
+          targetBytes: liveWindow.targetBytes,
+        });
+        if ("unchanged" in sent) throw new Error("expected a snapshot");
+        expect(sent.historyCursor!.length).toBeGreaterThan(700);
+        await walkDirectly(service as never, history, (view) => {
+          expect(view.historyCursor!.length).toBeLessThanOrEqual(1024);
+        });
+        expect(projectionInternals(service).directHistoryCursorHandles.size).toBeGreaterThan(0);
+        expect(legacyMessages).not.toHaveBeenCalled();
+        expect(interactiveSnapshot).not.toHaveBeenCalled();
+      },
+    );
+  });
 
   for (const recovery of ["complete view", "direct cursor"] as const) {
     test(`a later ${recovery} clears an earlier joined-page cause`, async () => {

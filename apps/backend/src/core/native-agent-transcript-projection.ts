@@ -156,6 +156,7 @@ import {
 import {
   DirectHistoryPageCache,
   decodeHistoryCursor,
+  DirectHistoryCursorHandles,
   encodeDirectHistoryCursor,
 } from "./native-agent-direct-history.js";
 import {
@@ -267,8 +268,10 @@ interface ProjectedProgressiveTranscript {
 /**
  * Why a session's latest progressive view carried no direct cursor, kept only
  * to attribute the joined pages that follow (0232 item 3): a source with no
- * direct pages retires with the `/messages` fallback, while a source that
- * pages but named or wrapped no cursor needs direct recovery first.
+ * direct pages, or one that pages but still named or wrapped no cursor. The
+ * `/messages` fallback that made the first common retired (0050 task 1), and
+ * the second's known causes have direct recovery (8110), so both should be
+ * quiet; joined paging itself retires with 0232 task 4.
  */
 type DirectHistoryGap = "unpaged-source" | "unnamed-cursor";
 /** Sessions whose gap is kept; a view with a direct cursor removes its entry. */
@@ -486,6 +489,8 @@ export class NativeAgentTranscriptProjection {
   private projectionHistoryBytes = 0;
   /** By session key: why its latest progressive view had no direct cursor. */
   private readonly directHistoryGaps = new Map<string, DirectHistoryGap>();
+  /** Provider cursors too long to wrap, named by handle (8110). */
+  private readonly directHistoryCursorHandles = new DirectHistoryCursorHandles();
   /**
    * When each projection key's current run of `missing` provider reads began.
    *
@@ -778,6 +783,7 @@ export class NativeAgentTranscriptProjection {
       directHistoryPages: this.directHistoryPages,
       projectionHistory: this.projectionHistory,
       directHistoryGaps: this.directHistoryGaps,
+      directHistoryCursorHandles: this.directHistoryCursorHandles,
       updateProjectionHistory: (...args: Parameters<typeof this.updateProjectionHistory>) =>
         this.updateProjectionHistory(...args),
       toolDetailCache: this.toolDetailCache,
@@ -819,6 +825,8 @@ export class NativeAgentTranscriptProjection {
       projectionRefreshes: this.projectionRefreshes.size,
       projectionRefreshDescriptors: this.projectionRefreshDescriptors.size,
       directHistoryGaps: this.directHistoryGaps.size,
+      directHistoryCursorHandles: this.directHistoryCursorHandles.size,
+      directHistoryCursorHandleBytes: this.directHistoryCursorHandles.bytes,
       stopNotices: this.stopNotices.size,
       toolDetails: this.toolDetailCache.size,
       toolDetailBytes: this.toolDetailCacheBytes,
@@ -943,6 +951,7 @@ export class NativeAgentTranscriptProjection {
     this.progressiveMetrics.clear();
     this.projectedMessages.clear();
     this.directHistoryPages.clear();
+    this.directHistoryCursorHandles.clear();
     this.artifactOverlays.clear();
     const drained = await displayTailDrain;
     if (drained.skipped > 0) {
@@ -2564,24 +2573,31 @@ export class NativeAgentTranscriptProjection {
      * (or, for a provider that pages by message, the first kept row a page can
      * end at). Rows between the view's start and that position come back on
      * the first page as well, and the client deduplicates them by id; rows the
-     * bound dropped come back after them. If only an OpenCode inline error row
-     * remains, no whole-message boundary can name a cursor: joined paging
-     * must recover its dropped main row. Without this, the client could only
-     * page by minting a joined cursor, a whole transcript read (0232).
+     * bound dropped come back after them. A window at the first message names
+     * one too, although it carries no `historyCursor` of its own (8110).
+     *
+     * When no kept row can name a cursor (only an OpenCode inline error row
+     * remains, its response's main row dropped by the bound), the cursor at
+     * the window's end pages the whole window again: the client deduplicates
+     * the rows it holds and the dropped ones come back with them. Without
+     * these, the client could only page by minting a joined cursor, a whole
+     * transcript read (0232).
      */
-    const providerHistoryCursor = !snapshot.historyCursor
-      ? undefined
-      : viewStartsAtSnapshot
-        ? snapshot.historyCursor
-        : firstNamedCursor(bounded.messages, snapshot.historyCursorBefore);
+    const providerHistoryCursor = viewStartsAtSnapshot
+      ? snapshot.historyCursor
+      : (firstNamedCursor(bounded.messages, snapshot.historyCursorBefore) ??
+        snapshot.historyCursorAtEnd);
     const directHistoryCursor =
       providerHistoryCursor && snapshot.historyEpoch !== undefined
-        ? encodeDirectHistoryCursor({
-            sessionKey,
-            providerSessionId,
-            historyEpoch: snapshot.historyEpoch,
-            providerCursor: providerHistoryCursor,
-          })
+        ? encodeDirectHistoryCursor(
+            {
+              sessionKey,
+              providerSessionId,
+              historyEpoch: snapshot.historyEpoch,
+              providerCursor: providerHistoryCursor,
+            },
+            this.directHistoryCursorHandles,
+          )
         : undefined;
     const localPageable =
       directHistoryCursor !== undefined ||
@@ -4559,10 +4575,11 @@ export class NativeAgentTranscriptProjection {
     const resolved = await this.host.resolveProjectionSession(input);
     if (!resolved) throw new Error("Native agent history is unavailable");
     const providerSessionId = resolved.session.providerSessionId;
-    const cursor = decodeHistoryCursor(input.before, {
-      sessionKey: resolved.key,
-      providerSessionId,
-    });
+    const cursor = decodeHistoryCursor(
+      input.before,
+      { sessionKey: resolved.key, providerSessionId },
+      this.directHistoryCursorHandles,
+    );
     if (cursor.version !== 2) throw new Error("Native agent history cursor expired");
     const transcriptPage = resolved.provider.transcriptPage?.bind(resolved.provider);
     if (!transcriptPage) {
@@ -4675,12 +4692,15 @@ export class NativeAgentTranscriptProjection {
           return bounded.messages[0] ?? message;
         });
         const nextCursor = providerPage.historyCursor
-          ? encodeDirectHistoryCursor({
-              sessionKey: resolved.key,
-              providerSessionId,
-              historyEpoch: cursor.epoch,
-              providerCursor: providerPage.historyCursor,
-            })
+          ? encodeDirectHistoryCursor(
+              {
+                sessionKey: resolved.key,
+                providerSessionId,
+                historyEpoch: cursor.epoch,
+                providerCursor: providerPage.historyCursor,
+              },
+              this.directHistoryCursorHandles,
+            )
           : undefined;
         if (providerPage.historyCursor && !nextCursor) {
           throw new Error("Native agent history cursor expired");
@@ -5345,6 +5365,7 @@ export class NativeAgentTranscriptProjection {
     // history may be reused, and a page read still in flight is not admitted.
     this.projectedMessages.forgetSession(key);
     this.directHistoryPages.forgetSession(key);
+    this.directHistoryCursorHandles.forgetSession(key);
     this.toolDetailEncodings.forgetSession(key);
     // The identity behind this key changed, so the grace the previous session
     // had spent says nothing about the new one. A tab that resumes into a

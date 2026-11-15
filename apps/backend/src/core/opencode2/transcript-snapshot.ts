@@ -273,6 +273,34 @@ export function openCode2HistoryCursor(id: string, epoch?: string): string | und
   return cursor.length <= MAX_CURSOR_LENGTH ? cursor : undefined;
 }
 
+/**
+ * A cursor for the history from the newest row (before any revert marker), in
+ * this backend's own form: the server never sees it, since a page asks the
+ * server for its newest rows without a cursor. Its first page holds the
+ * window's rows again, which the reader deduplicates by id. It is what a reader
+ * pages from when none of its kept rows can name a cursor: an inline error row
+ * left after the bound dropped its response's main row (8110).
+ */
+export function openCode2HeadCursor(epoch: string): string | undefined {
+  const cursor = Buffer.from(JSON.stringify({ head: true, order: "desc", epoch })).toString(
+    "base64url",
+  );
+  return cursor.length <= MAX_CURSOR_LENGTH ? cursor : undefined;
+}
+
+/** The epoch a head cursor was minted in, or undefined for any other cursor. */
+function openCode2HeadCursorEpoch(cursor: string): string | undefined {
+  if (cursor.length === 0 || cursor.length > MAX_CURSOR_LENGTH) return undefined;
+  try {
+    const body = asRecord(JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")));
+    return body?.head === true && body.order === "desc"
+      ? (nonEmptyString(body.epoch) ?? undefined)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The row a history cursor pages before, or undefined for a cursor this provider never mints. */
 export function openCode2CursorAnchor(cursor: string): string | undefined {
   if (cursor.length === 0 || cursor.length > MAX_CURSOR_LENGTH) return undefined;
@@ -385,6 +413,7 @@ export async function openCode2TranscriptSnapshot(
   const firstKept = rowId(kept[0]);
   const historyCursor =
     olderHistory && firstKept ? openCode2HistoryCursor(firstKept, historyEpoch) : undefined;
+  const historyCursorAtEnd = kept.length > 0 ? openCode2HeadCursor(historyEpoch) : undefined;
   const shown = new Set(window.map(rowId));
   const revised = revert
     ? { rows: [], ids: new Set<string>() }
@@ -404,9 +433,14 @@ export async function openCode2TranscriptSnapshot(
     revision,
     historyEpoch,
     sourceToken,
-    ...(historyCursor
-      ? { historyCursor, historyCursorBefore: cursorBefore(kept, keptGroups, historyEpoch) }
+    ...(historyCursor ? { historyCursor } : {}),
+    // Named for every kept row a page can end at, also when the window starts
+    // at the first message: a reader whose byte bound drops leading rows still
+    // pages from the first one it kept (8110).
+    ...(kept.length > 0
+      ? { historyCursorBefore: cursorBefore(kept, keptGroups, historyEpoch) }
       : {}),
+    ...(historyCursorAtEnd ? { historyCursorAtEnd } : {}),
     ...(revised.rows.length > 0 ? { revisedMessages: revised.rows } : {}),
     ...(reconciliation ? { historyReconciliationToken: reconciliation } : {}),
   };
@@ -494,8 +528,9 @@ export async function openCode2TranscriptPage(
   options: { cursor: string; limit: number; targetBytes: number },
   onUnknown?: (type: string) => void,
 ): Promise<ProviderTranscriptPage> {
-  const anchor = openCode2CursorAnchor(options.cursor);
-  if (!anchor) return { status: "expired" };
+  const headEpoch = openCode2HeadCursorEpoch(options.cursor);
+  const anchor = headEpoch === undefined ? openCode2CursorAnchor(options.cursor) : undefined;
+  if (!anchor && headEpoch === undefined) return { status: "expired" };
   const session = await client.getSession(sessionId).catch((error: unknown) => {
     if (error instanceof OpenCode2RequestError && error.status === 404) return undefined;
     throw error;
@@ -515,17 +550,24 @@ export async function openCode2TranscriptPage(
   const count = readLimit(options.limit);
   let page;
   try {
-    page = await client.listMessages(sessionId, {
-      limit: count + 1,
-      cursor: openCode2HistoryCursor(anchor),
-    });
+    page = await client.listMessages(
+      sessionId,
+      anchor
+        ? { limit: count + 1, cursor: openCode2HistoryCursor(anchor) }
+        : {
+            // The head: the newest rows, as the window read them.
+            limit: count + 1,
+            order: "desc",
+            ...(revert ? { cursor: openCode2HistoryCursor(revert.messageId) } : {}),
+          },
+    );
   } catch (error) {
     if (error instanceof OpenCode2RequestError && (error.status === 404 || error.status === 400)) {
       return { status: "expired" };
     }
     throw new ProviderUnavailableError("OpenCode 2 history page is unavailable", { cause: error });
   }
-  if (page.messages.length === 0) {
+  if (anchor && page.messages.length === 0) {
     // An empty page is the start of history only while its anchor exists.
     try {
       await client.getMessage(sessionId, anchor);
@@ -537,7 +579,9 @@ export async function openCode2TranscriptPage(
       });
     }
   }
-  if (page.messages.some((message) => rowId(message) === anchor)) return { status: "expired" };
+  if (anchor && page.messages.some((message) => rowId(message) === anchor)) {
+    return { status: "expired" };
+  }
   if (state.historyEpoch(sessionId) !== historyEpoch) return { status: "expired" };
   const more = page.messages.length > count;
   const read = page.messages.slice(0, count).reverse();

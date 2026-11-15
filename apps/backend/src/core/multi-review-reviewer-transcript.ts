@@ -13,7 +13,8 @@ import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revis
  * previous response. When the provider says nothing changed, the response
  * carries no messages at all. Every reviewer provider (`HttpBridgeProvider`,
  * `OpenCodeProvider`) has that surface; a bridge that predates `/transcript`
- * is served lower down, by `readHttpBridgeTranscriptSnapshot`. The
+ * is no longer read around (its `/messages` fallback retired 2026-11-15,
+ * 0050 task 1). The
  * count-bounded compatibility read for providers without it was retired on
  * 2026-10-25, so such a provider's read now fails instead.
  *

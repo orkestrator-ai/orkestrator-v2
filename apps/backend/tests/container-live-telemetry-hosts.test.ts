@@ -96,7 +96,13 @@ afterAll(async () => {
  * descriptors (`AgentServerMessage` 1 = interaction_update;
  * `InteractionUpdate` 1 = text_delta, 14 = turn_ended; `TextDeltaUpdate`
  * 1 = text; `BidiAppendRequest` 2 = request_id; `BidiRequestId` 1 =
- * request_id), so an SDK bump that renumbers them fails this turn.
+ * request_id). An SDK bump that renumbers them fails this turn: a renumbered
+ * reply field leaves the run with no "ok", and a run whose request id is
+ * empty, or never arrives through `BidiAppend` within 5 s, gets a Connect
+ * `failed_precondition` error instead of a reply (counted as
+ * `cursor-unmatched`). Cursor runs count under keys of their own (`cursor`,
+ * `cursor-broken`), so the SDK's retries of a failed run cannot stand in
+ * for another CLI's turn.
  */
 const FAKE_PROVIDER = String.raw`
 const counts = {};
@@ -138,13 +144,17 @@ const cursor = async (request, url) => {
   }
   if (route === "/agent.v1.AgentService/RunSSE") {
     const id = new TextDecoder().decode(first(body.subarray(5), 1));
-    count(broken ? "broken" : "cursor");
+    count(broken ? "cursor-broken" : "cursor");
     const stream = new ReadableStream({ async start(controller) {
-      if (!appended.has(id)) await new Promise((resolve) => { waiting.set(id, resolve); setTimeout(resolve, 5000); });
+      if (id && !appended.has(id)) await new Promise((resolve) => { waiting.set(id, resolve); setTimeout(resolve, 5000); });
       waiting.delete(id);
-      if (broken) {
-        const error = { error: { code: "internal", message: "fake provider failure" } };
-        controller.enqueue(frame(2, new TextEncoder().encode(JSON.stringify(error))));
+      const fail = (code, message) =>
+        controller.enqueue(frame(2, new TextEncoder().encode(JSON.stringify({ error: { code, message } }))));
+      if (!id || !appended.has(id)) {
+        count("cursor-unmatched");
+        fail("failed_precondition", "fake backend: no BidiAppend for run request id");
+      } else if (broken) {
+        fail("internal", "fake provider failure");
       } else {
         controller.enqueue(frame(0, new Uint8Array(field(1, field(1, field(1, utf8("ok")))))));
         controller.enqueue(frame(0, new Uint8Array(field(1, field(14, [])))));
@@ -534,13 +544,18 @@ async function probe(
     .find((event) => event.type === "result");
   expect(result).toMatchObject({ is_error: false, result: "ok" });
   // A turn the provider fails: the path that reports errors. It has to end
-  // promptly and say so, not wait on Sentry.
+  // promptly and say so, not wait on Sentry. The count of failed requests
+  // proves the turn reached the fake rather than failing locally.
+  const beforeClaudeError = await counts();
   expect(
     await turn("claude-error", "claude -p 'Reply with ok.'", {
       ...claude,
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${PORT}/broken/anthropic`,
     }),
   ).toMatch(/\nrc=1$/);
+  expect(((await counts()).broken ?? 0) - (beforeClaudeError.broken ?? 0)).toBeGreaterThanOrEqual(
+    1,
+  );
 
   // Codex against a Responses provider of its own.
   await write(
@@ -569,6 +584,7 @@ async function probe(
       FAKE_API_KEY: "fake-not-a-key",
     }),
   ).toMatch(/\nok\nrc=0$/);
+  const beforeCodexError = await counts();
   expect(
     await turn(
       "codex-error",
@@ -576,6 +592,7 @@ async function probe(
       { CODEX_HOME: `${PROBE}/codex-home`, FAKE_API_KEY: "fake-not-a-key" },
     ),
   ).toMatch(/\nrc=1$/);
+  expect(((await counts()).broken ?? 0) - (beforeCodexError.broken ?? 0)).toBeGreaterThanOrEqual(1);
 
   // OpenCode through an OpenAI-compatible provider of its own.
   await write(
@@ -671,6 +688,8 @@ async function probe(
       cursorEnv("/cursor"),
     ),
   ).toMatch(/finished ok\nrc=0$/);
+  const afterCursor = await counts();
+  expect((afterCursor.cursor ?? 0) - (beforeCursor.cursor ?? 0)).toBeGreaterThanOrEqual(1);
   expect(
     await turn(
       "cursor-error",
@@ -678,9 +697,12 @@ async function probe(
       cursorEnv("/cursor/broken"),
     ),
   ).toMatch(/error .*fake provider failure\nrc=1$/);
-  const afterCursor = await counts();
-  expect((afterCursor.cursor ?? 0) - (beforeCursor.cursor ?? 0)).toBeGreaterThanOrEqual(1);
-  expect((afterCursor.broken ?? 0) - (beforeCursor.broken ?? 0)).toBeGreaterThanOrEqual(1);
+  const afterCursorError = await counts();
+  expect(
+    (afterCursorError["cursor-broken"] ?? 0) - (afterCursor["cursor-broken"] ?? 0),
+  ).toBeGreaterThanOrEqual(1);
+  // Every Cursor run carried a request id that arrived through BidiAppend.
+  expect(afterCursorError["cursor-unmatched"] ?? 0).toBe(0);
 
   // Every turn reached the fake provider rather than finishing locally.
   await mark("end");

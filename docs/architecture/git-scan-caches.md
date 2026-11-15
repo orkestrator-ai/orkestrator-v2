@@ -279,9 +279,13 @@ still settling, the local watcher withdraws qualified coverage, logs
 `scan.watcher-missed-change` once per spell of distrust, and the environment polls every 15 s
 (`DIFF_POLL_INTERVAL_MS`) instead of waiting for the 120 s safety scan. While
 it is distrusted the service also reports the changes its polls find before
-any event, and each such miss restarts the distrust. The first event the
-watcher delivers `WATCH_DISTRUST_MS` (5 min) after its latest miss restores
-coverage. A watcher unqualified for another reason (an unreadable directory, a
+any event, starting with the first poll after the demotion, and each such
+miss restarts the distrust. The first event the watcher delivers
+`WATCH_DISTRUST_MS` (5 min) after its latest miss restores coverage, even one
+no view cares about (a Git object write). Changes made while it was distrusted
+were never announced, so before coverage is announced the watcher sends an
+unknown-path hint that dirties both views; otherwise a file tree walked under
+the earlier qualified coverage would count as valid again. A watcher unqualified for another reason (an unreadable directory, a
 tree left out) ignores these reports. The cost is that of an unwatched
 worktree, for as long as delivery stays late; a healthy host loses at most
 5 min of watching after an unlucky race between a poll and a settling burst.

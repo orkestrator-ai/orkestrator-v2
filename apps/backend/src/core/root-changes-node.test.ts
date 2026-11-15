@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,6 +11,7 @@ import { CoordinatorService } from "./coordinator-service.js";
 import { NodeOutcomeUnknownError, NodeUnavailableError } from "./nodes/index.js";
 import { MAX_NODE_ROOT_CHANGE_PATCH_BYTES } from "./root-changes-node.js";
 import { runCommand } from "./shell.js";
+import * as shell from "./shell.js";
 import { StorageService, createEnvironment, createProject } from "./storage.js";
 
 // The command node's checkout, coordinator, receipts and approval command run
@@ -274,6 +275,108 @@ describe("an approved patch applied on another node", () => {
     );
     expect(routed).toHaveLength(0);
   }, 30_000);
+
+  test("a selection past the local 32 MiB cap still gets the node limit's refusal", async () => {
+    await writeFile(
+      path.join(checkout, "huge.txt"),
+      "abcdefghijklmnopqrstuvwxyz0123456789\n".repeat(Math.ceil((33 * 1024 * 1024) / 37)),
+    );
+    await expect(applyOnLeaf(["huge.txt"])).rejects.toThrow(
+      /larger than 16 MiB; at most 16 MiB can be sent to Build box\. .*Nothing was sent\./,
+    );
+    expect(routed).toHaveLength(0);
+  }, 30_000);
+
+  for (const [label, config] of [
+    ["diff.mnemonicPrefix", [["diff.mnemonicPrefix", "true"]]],
+    [
+      "custom diff.srcPrefix and diff.dstPrefix",
+      [
+        ["diff.srcPrefix", "SRC/"],
+        ["diff.dstPrefix", "DST/"],
+      ],
+    ],
+    ["diff.noprefix", [["diff.noprefix", "true"]]],
+  ] as const)
+    test(`the checkout's ${label} does not change the patch the node reads`, async () => {
+      for (const [key, value] of config) await git(checkout, "config", key, value);
+      const outcome = await applyOnLeaf(["edited.txt", "removed.txt", "new.bin"]);
+      expect(outcome.outcomeUnknown).toBeUndefined();
+      expect(outcome.files.toSorted()).toEqual(["edited.txt", "new.bin", "removed.txt"]);
+      const patch = Buffer.from(routed[0]!.args.patch as string, "base64").toString("utf8");
+      const headers = patch.split("\n").filter((line) => line.startsWith("diff --git "));
+      expect(headers.toSorted()).toEqual([
+        "diff --git a/edited.txt b/edited.txt",
+        "diff --git a/new.bin b/new.bin",
+        "diff --git a/removed.txt b/removed.txt",
+      ]);
+      expect(await readFile(path.join(workerPath, "edited.txt"), "utf8")).toBe("one\ntwo\nthree\n");
+      expect(await readFile(path.join(workerPath, "new.bin"))).toEqual(
+        Buffer.from([0, 1, 2, 255, 0, 10]),
+      );
+      expect(await readFile(path.join(workerPath, "removed.txt")).catch(() => null)).toBeNull();
+    });
+
+  test("a container worker there gets the patch through docker exec, check then apply", async () => {
+    await leaf.updateEnvironment(workerId, {
+      environmentType: "containerized",
+      containerId: "leaf-container",
+    });
+    const original = shell.runCommand;
+    const docker: string[][] = [];
+    // The container's /workspace is the worker's worktree here: run the git
+    // command docker would have run inside it, with the same stdin.
+    const command = spyOn(shell, "runCommand").mockImplementation(
+      async (executable, args = [], options) => {
+        if (executable !== "docker") return original(executable, args, options);
+        docker.push(args);
+        return original("git", args.slice(args.indexOf("git") + 1), {
+          ...options,
+          cwd: workerPath,
+        });
+      },
+    );
+    try {
+      const outcome = await applyOnLeaf(["edited.txt", "removed.txt", "new.bin"]);
+      expect(outcome.files.toSorted()).toEqual(["edited.txt", "new.bin", "removed.txt"]);
+    } finally {
+      command.mockRestore();
+    }
+    expect(docker).toEqual([
+      [
+        "exec",
+        "-u",
+        "node",
+        "-w",
+        "/workspace",
+        "-i",
+        "leaf-container",
+        "git",
+        "apply",
+        "--check",
+        "--binary",
+        "-",
+      ],
+      [
+        "exec",
+        "-u",
+        "node",
+        "-w",
+        "/workspace",
+        "-i",
+        "leaf-container",
+        "git",
+        "apply",
+        "--binary",
+        "-",
+      ],
+    ]);
+    expect(await readFile(path.join(workerPath, "edited.txt"), "utf8")).toBe("one\ntwo\nthree\n");
+    expect(await readFile(path.join(workerPath, "new.bin"))).toEqual(
+      Buffer.from([0, 1, 2, 255, 0, 10]),
+    );
+    expect(await readFile(path.join(workerPath, "removed.txt")).catch(() => null)).toBeNull();
+  });
 
   test("a lost answer settles outcome-unknown and is not resent", async () => {
     link = "lose-answer";

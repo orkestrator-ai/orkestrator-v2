@@ -3834,6 +3834,9 @@ node's project), and the dialog names the node. After approval,
 `apply_project_root_changes` builds the patch here exactly as above, then
 `root-changes-node.ts` sends it in one node-link call to
 `apply_controller_root_patch` on that node, base64-encoded with its SHA-256.
+The patch's headers are always `a/` and `b/` whatever the checkout's
+`diff.mnemonicPrefix`, `diff.noprefix` or `diff.srcPrefix`/`dstPrefix`, since
+that node reads the file list from them.
 That node checks that the worker belongs to its copy of the project and is
 not its checkout, refuses a patch whose digest does not match, and runs the
 same `git apply --check` and `git apply` under the same lock and fence a
@@ -3841,7 +3844,9 @@ local apply takes. The command is `internal` (node-link only, never through a
 workspace grant) and the coordinator's invoker refuses it by name.
 Refusals, all with nothing sent:
 
-- a patch over 16 MiB (`MAX_NODE_ROOT_CHANGE_PATCH_BYTES`): it travels inside
+- a patch over 16 MiB (`MAX_NODE_ROOT_CHANGE_PATCH_BYTES`), however large:
+  the capture stops at that limit, so a selection past the local 32 MiB cap
+  gets the same message. It travels inside
   one invoke body, which a gateway caps at 48 MiB, and within one node-link
   call's 60-second budget, so the cap leaves room for base64 and a slow link;
   the message says to pick fewer files or commit and push them;

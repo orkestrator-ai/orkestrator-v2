@@ -71,16 +71,17 @@ export async function applyRootChangesOnNode(
   const portal = context.nodePortal;
   if (!portal || !isBackendId(input.nodeId))
     throw new Error("Cross-node changes are not available in this backend. Nothing was sent.");
+  // The build itself stops at the node limit, so any larger selection, even
+  // one past the local 32 MiB cap, gets this node-specific refusal.
   const { patch, files } = await buildSelectedRootChangesPatch(
     context.storage,
     input.projectId,
     input.paths,
+    {
+      maxBytes: MAX_NODE_ROOT_CHANGE_PATCH_BYTES,
+      message: `The selected changes are larger than ${MAX_NODE_ROOT_CHANGE_PATCH_BYTES / MIB} MiB; at most ${MAX_NODE_ROOT_CHANGE_PATCH_BYTES / MIB} MiB can be sent to ${input.nodeName}. Pick fewer files, or commit and push them instead. Nothing was sent.`,
+    },
   );
-  if (patch.length > MAX_NODE_ROOT_CHANGE_PATCH_BYTES) {
-    throw new Error(
-      `The selected changes are ${(patch.length / MIB).toFixed(1)} MiB; at most ${MAX_NODE_ROOT_CHANGE_PATCH_BYTES / MIB} MiB can be sent to ${input.nodeName}. Pick fewer files, or commit and push them instead. Nothing was sent.`,
-    );
-  }
   let routed: Awaited<ReturnType<typeof portal.invokeOnNode>>;
   try {
     routed = await portal.invokeOnNode({

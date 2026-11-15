@@ -7,7 +7,7 @@ import type { Environment } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
 import { runGitWithFsmonitorFallback } from "./git-fsmonitor.js";
-import { runCommand, runCommandBuffer } from "./shell.js";
+import { CommandFailedError, runCommand, runCommandBuffer } from "./shell.js";
 import { containerExecArgs } from "./tmux-shared.js";
 
 /**
@@ -29,6 +29,19 @@ export const MAX_ROOT_CHANGE_SELECTION = 500;
 export const MAX_ROOT_CHANGE_PATCH_BYTES = 32 * 1024 * 1024;
 
 const READ_ONLY_GIT_ENV = { GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSPECS: "1" };
+
+/** The largest patch a caller accepts, and how it refuses a larger one. */
+export interface RootChangesPatchLimit {
+  maxBytes: number;
+  /** The whole refusal: it must name no file content. */
+  message: string;
+}
+
+/** A worker on this node. Another node's limit is `root-changes-node.ts`'s. */
+export const LOCAL_ROOT_CHANGES_PATCH_LIMIT: RootChangesPatchLimit = {
+  maxBytes: MAX_ROOT_CHANGE_PATCH_BYTES,
+  message: "The selected changes are larger than 32 MiB; pick fewer files.",
+};
 
 /** Parse `git status --porcelain=v1 -z --no-renames --untracked-files=all`. */
 export function parseRootChangeStatus(output: string): {
@@ -96,11 +109,21 @@ export async function listRootChanges(root: string): Promise<RootChangesListing>
  * `paths` must already be checked against `listRootChanges`; untracked ones
  * are named separately so they can be marked intent-to-add in the scratch
  * index and show up as new files.
+ *
+ * The capture stops as soon as the patch passes `limit.maxBytes`, and the
+ * refusal is the caller's own message whatever the size, so a selection far
+ * over the limit reads the same as one just over it.
+ *
+ * The headers are always `a/` and `b/`: the checkout's own
+ * `diff.mnemonicPrefix`, `diff.noprefix` or `diff.srcPrefix`/`dstPrefix`
+ * would otherwise reach the patch, and the receiving node reads the file
+ * list from those headers (`patchPaths`).
  */
 export async function buildRootChangesPatch(
   root: string,
   paths: readonly string[],
   untracked: readonly string[],
+  limit: RootChangesPatchLimit = LOCAL_ROOT_CHANGES_PATCH_LIMIT,
 ): Promise<Buffer> {
   const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "orkestrator-root-changes-"));
   try {
@@ -145,17 +168,19 @@ export async function buildRootChangesPatch(
         "--no-ext-diff",
         "--no-textconv",
         "--no-color",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
         "HEAD",
         "--",
         ...paths,
       ],
-      { cwd: root, env, timeoutMs: 120_000 },
-    ).catch(() => {
+      { cwd: root, env, timeoutMs: 120_000, maxOutputBytes: limit.maxBytes },
+    ).catch((error: unknown) => {
+      if (error instanceof CommandFailedError && error.outputLimitExceeded)
+        throw new Error(limit.message);
       throw new Error("Could not capture the selected changes; pick fewer files and retry.");
     });
-    if (diff.stdout.length > MAX_ROOT_CHANGE_PATCH_BYTES) {
-      throw new Error("The selected changes are larger than 32 MiB; pick fewer files.");
-    }
+    if (diff.stdout.length > limit.maxBytes) throw new Error(limit.message);
     return diff.stdout;
   } finally {
     await fs.rm(scratch, { recursive: true, force: true });
@@ -256,6 +281,7 @@ export async function buildSelectedRootChangesPatch(
   storage: CommandContext["storage"],
   projectId: string,
   paths: readonly string[],
+  limit: RootChangesPatchLimit = LOCAL_ROOT_CHANGES_PATCH_LIMIT,
 ): Promise<{ patch: Buffer; files: string[] }> {
   const root = await resolveProjectGitRoot(storage, projectId);
   const listing = await listRootChanges(root);
@@ -269,7 +295,7 @@ export async function buildSelectedRootChangesPatch(
     );
   }
   const untracked = selected.filter((file) => changed.get(file)!.status === "untracked");
-  const patch = await buildRootChangesPatch(root, selected, untracked);
+  const patch = await buildRootChangesPatch(root, selected, untracked, limit);
   if (patch.length === 0) throw new Error("The selected files have no changes to apply.");
   return { patch, files: patchPaths(patch) };
 }

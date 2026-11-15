@@ -755,3 +755,12 @@ Branch `container-live-evidence-4156bad5e3b0-r1` at `eedd4f1ba`, base `17d28238c
 
 No implementation, assertion, timeout or skip changed between these runs. The failure count followed the host's load; the cause is unconfirmed.
 
+
+## Recurrence — 2026-11-15 (legacy-retirement sweep review repairs)
+
+Branch `legacy-retirement-8d61cbbc6765-r1` at `957d14c7c`, base `a8b89f1541e7abb6af36d45121593ae14640a3ca`, Linux x86_64, Bun 1.4.4. The branch's web changes do not touch these owners: its only change under `apps/web/src/components/chat` is a comment, and it changes none of the specs below or the component config.
+
+- `mise run test:logged -- --name test-browser-rerun -- mise run test:browser` (default workers, one retry): 5 failed, 154 skipped, 1,745 passed (22.0 m). Failed on both attempts: desktop `CoordinatorActions.spec.ts:4` ("floating actions fit their icon, reopen with keyboard, and navigate": `getByTestId('anchor')` stayed empty instead of "assistant" for 5 s), desktop `TranscriptArrival.spec.ts:293` ("an entry entrance settles together with the automatic three-call fold": 89 against a limit of 1), desktop `ToolGroupFold.spec.ts:201` ("a live group growing below a released reader preserves their place with no-preference motion") and both projects' `ToolGroupFold.spec.ts:127` (recorded in [1012](1012-live-tool-fold-threshold-gap.md)). Neither `CoordinatorActions` nor `TranscriptArrival` failed in the same branch's review-preparation browser run.
+- The three owning files together with one worker: `mise run test:logged -- --name browser-failing-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/CoordinatorActions.spec.ts e2e/TranscriptArrival.spec.ts --workers=1` passed (exit 0, 254.7 s).
+
+No implementation, assertion, timeout or skip changed. The cause is unconfirmed.

@@ -193,6 +193,31 @@ test("matching never descends through a linked directory", async () => {
   expect(summary(result)).toEqual([["real/.env", "project-files/real/.env", "R=1\n"]]);
 });
 
+test("a wildcard folder lists a literal file only where it exists", async () => {
+  const project = await tempDir();
+  const packages = ENV_FILE_PATTERN_LIMITS.matches + 8;
+  for (let i = 0; i < packages; i += 1)
+    await mkdir(path.join(project, "apps", `pkg${i}`), { recursive: true });
+  await files(project, { "apps/pkg7/.env": "ONLY=1\n" });
+
+  const found = await findEnvFilePatternCandidates(project, ["apps/*/.env", "missing.env"]);
+  // A wholly literal pattern is still listed when absent (it may be seeded).
+  expect(found.candidates).toEqual([
+    { name: "apps/pkg7/.env", literal: false },
+    { name: "missing.env", literal: true },
+  ]);
+
+  const result = await readProjectSeedFiles(project, {
+    envFilePatterns: ["apps/*/.env"],
+    includeOpenCodeConfig: false,
+  });
+  expect(result.refused).toEqual([]);
+  expect(summary(result)).toEqual([["apps/pkg7/.env", "project-files/apps/pkg7/.env", "ONLY=1\n"]]);
+  // A command node's file at a folder without one stays with the generic copy.
+  expect(result.handled).toEqual(["apps/pkg7/.env"]);
+  expect(filesLeftForConfiguredCopy(["apps/pkg1/.env"], result)).toEqual(["apps/pkg1/.env"]);
+});
+
 test("a matched directory and an oversized file are refused, the rest copied", async () => {
   const project = await tempDir();
   await mkdir(path.join(project, "a.env"));

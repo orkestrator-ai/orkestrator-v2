@@ -588,6 +588,51 @@ export function formatSetupPreparationIntro(environment: Environment): string {
   ].join("\r\n");
 }
 
+/**
+ * The setup terminal of a local environment with no setup commands, opened
+ * only to show what the worktree's creation refused to copy.
+ */
+export function formatSetupNoticeIntro(
+  environment: Environment,
+  notices: readonly string[],
+): string {
+  return [
+    "\r\n",
+    "[orkestrator] No setup commands to run",
+    `[orkestrator] Environment: ${environment.name} (${environment.id})`,
+    `[orkestrator] Target: ${environment.worktreePath ?? environment.id}`,
+    ...notices,
+    "",
+  ].join("\r\n");
+}
+
+/**
+ * A local worktree's refused Environment Files matches are normally shown by
+ * its setup terminal (`spawnSetupTerminal`). With no setup commands there is
+ * no such terminal, so they go to the preparation session when one is open,
+ * or to a setup session opened for them; setup completion then closes it.
+ * Taking them here also frees the pending entry.
+ */
+export async function showWorktreeSeedRefusalsWithoutSetup(
+  environment: Environment,
+  context: CommandContext,
+  preparationSessionId: string | undefined,
+): Promise<void> {
+  if (environment.environmentType !== "local") return;
+  const notices = formatProjectSeedRefusals(takeWorktreeSeedRefusals(environment.id), "worktree");
+  if (notices.length === 0) return;
+  if (preparationSessionId) {
+    context.runtime.terminals.emitOutput(
+      preparationSessionId,
+      `${notices.join("\r\n")}\r\n`,
+      context.emit,
+    );
+    return;
+  }
+  beginSetupPreparationSession(environment, context, formatSetupNoticeIntro(environment, notices));
+  await publishSetupTab(environment.id, context);
+}
+
 /** Terminal output is rendered by xterm.js, which needs CRLF rather than bare LF. */
 export function toTerminalText(output: string): string {
   return output.replace(/\r?\n/g, "\r\n");
@@ -603,6 +648,7 @@ export function toTerminalText(output: string): string {
 export function beginSetupPreparationSession(
   environment: Environment,
   context: CommandContext,
+  intro: string = formatSetupPreparationIntro(environment),
 ): string {
   const sessionId = setupTerminalSessionId(environment.id);
   const terminals = context.runtime.terminals;
@@ -628,7 +674,7 @@ export function beginSetupPreparationSession(
     environmentType: environment.environmentType,
     sessionId,
   });
-  terminals.emitOutput(sessionId, formatSetupPreparationIntro(environment), context.emit);
+  terminals.emitOutput(sessionId, intro, context.emit);
   context.emit(environmentSetupStartedEvent, {
     environment_id: environment.id,
     session_id: sessionId,
@@ -1049,6 +1095,7 @@ export async function startEnvironmentSetupAfterPreparation(
       worktreePath: current.worktreePath ?? null,
       containerId: current.containerId ?? null,
     });
+    await showWorktreeSeedRefusalsWithoutSetup(current, context, preparationSessionId);
     const updated = await completeEnvironmentSetup(current, context);
     return {
       setupStarted: false,
@@ -2381,12 +2428,16 @@ export async function createLocalWorktree(
     const seededFiles = seedRoot ? await readSeedManifest(seedRoot) : [];
     const allFiles = [...new Set([...configuredFiles, ...seededFiles])];
     const plan = projectSeedReadPlan(envFilePatterns, configuredFiles, seededFiles);
+    // A worktree's opencode.json is its checkout's, unless files-to-copy or
+    // the seed manifest names one: that copy then goes through the generic
+    // configured-file copy below, as before the setting was honoured.
+    const seedOptions = { includeOpenCodeConfig: false };
     const envFiles = await readProjectSeedFiles(projectPath, {
       envFilePatterns: plan.envFilePatterns,
       exclude: plan.exclude,
       fallbackPath: seedRoot,
       fallbackNames: allFiles,
-      includeOpenCodeConfig: false,
+      ...seedOptions,
     });
     const envFileRefusals = [
       ...envFiles.refused,
@@ -2399,7 +2450,7 @@ export async function createLocalWorktree(
     await copyConfiguredProjectFilesToDirectory(
       projectPath,
       worktreePath,
-      filesLeftForConfiguredCopy(allFiles, envFiles),
+      filesLeftForConfiguredCopy(allFiles, envFiles, seedOptions),
       seedRoot,
     );
 

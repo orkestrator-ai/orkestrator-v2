@@ -116,7 +116,8 @@ export interface EnvFilePatternCandidates {
   /**
    * Relative paths (`/`-separated) to read, in pattern order, each once. A
    * literal pattern's path is listed whether or not it exists; only an absent
-   * literal may be filled from a command node's staged copy.
+   * literal may be filled from a command node's staged copy. A path reached
+   * through a wildcard folder is listed only when something exists there.
    */
   candidates: { name: string; literal: boolean }[];
   /** A pattern that could not be used, or a linked directory on the way. */
@@ -166,6 +167,7 @@ async function walk(
   segments: readonly PatternSegment[],
   state: WalkState,
   found: string[],
+  throughWildcard = false,
 ): Promise<void> {
   if (state.scanLimitReached) return;
   const [segment, ...rest] = segments;
@@ -173,6 +175,19 @@ async function walk(
   const directory = path.join(root, ...relative);
   if (rest.length === 0) {
     if (!segment.wildcard) {
+      // A wholly literal pattern lists its path either way (only an absent
+      // literal may be filled from a staged copy). Reached through a wildcard
+      // folder (`apps/*/.env`), only a path that exists is a match: every
+      // folder without the file would otherwise count against the bounds.
+      const name = path.join(directory, segment.text);
+      if (
+        throughWildcard &&
+        !(await fs.lstat(name).then(
+          () => true,
+          () => false,
+        ))
+      )
+        return;
       found.push([...relative, segment.text].join("/"));
       return;
     }
@@ -200,7 +215,7 @@ async function walk(
       continue;
     }
     if (!child.directory) continue;
-    await walk(root, next, rest, state, found);
+    await walk(root, next, rest, state, found, throughWildcard || segment.wildcard);
   }
 }
 

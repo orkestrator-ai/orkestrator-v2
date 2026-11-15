@@ -36,8 +36,10 @@ import { runCommand } from "./shell.js";
 const PROJECT_ENV_DIRECT_NAMES: ReadonlySet<string> = new Set([".env", ".env.local"]);
 
 /**
- * Names that always go through this reader, never the generic
- * files-to-copy staging (which follows links inside the project).
+ * Names that go through this reader, never the generic files-to-copy staging
+ * (which follows links inside the project). A local worktree's reader skips
+ * `opencode.json`, so there it stays with that staging
+ * (`filesLeftForConfiguredCopy`).
  */
 export const RESERVED_PROJECT_SEED_NAMES: ReadonlySet<string> = new Set([
   ".env",
@@ -281,12 +283,24 @@ export function projectSeedReadPlan(
   };
 }
 
-/** The files-to-copy entries the generic staging still copies after this reader. */
+/**
+ * The files-to-copy entries the generic staging still copies after this
+ * reader. `.env` and `.env.local` never go to that staging. `opencode.json`
+ * stays with it when the reader did not take it (`includeOpenCodeConfig:
+ * false`, a local worktree): an untracked or command-node copy listed in
+ * files-to-copy is not in the worktree's checkout, and dropping it would lose
+ * a file that list asked for.
+ */
 export function filesLeftForConfiguredCopy(
   filesToCopy: readonly string[],
   read: Pick<ReadProjectSeedFiles, "handled">,
+  options: Pick<ReadProjectSeedFilesOptions, "includeOpenCodeConfig"> = {},
 ): string[] {
-  const handled = new Set([...read.handled, ...RESERVED_PROJECT_SEED_NAMES]);
+  const includeOpenCode = options.includeOpenCodeConfig ?? true;
+  const reserved = [...RESERVED_PROJECT_SEED_NAMES].filter(
+    (name) => includeOpenCode || name !== PROJECT_OPENCODE_SEED.name,
+  );
+  const handled = new Set([...read.handled, ...reserved]);
   return filesToCopy.filter((name) => !handled.has(name));
 }
 
@@ -338,8 +352,11 @@ export async function writeProjectSeedFilesToWorktree(
  * Copies accepted seed files into a created, not yet started container, at
  * the paths the image's setup reads (`/project-env/<name>` for `.env` and
  * `/.env.local`, `/project-files/<path>` for every other match, which the
- * setup copies into `/workspace/<path>`, and `/opencode-project-json`). Archive ownership is explicit: docker cp's
- * default root ownership would make 0700/0600 inputs unreadable on old images.
+ * setup copies into `/workspace/<path>`, and `/opencode-project-json`). The
+ * setup refuses a committed link on the destination path
+ * (`copy_project_file_into_workspace` in `docker/workspace-setup.sh`).
+ * Archive ownership is explicit: docker cp's default root ownership would
+ * make 0700/0600 inputs unreadable on old images.
  */
 export async function copyProjectSeedFilesIntoContainer(
   containerId: string,

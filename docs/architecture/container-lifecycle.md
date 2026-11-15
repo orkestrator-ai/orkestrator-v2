@@ -1154,6 +1154,14 @@ them as a link to a host path, and Docker resolves a bind source on the host
   files `0600` and directories `0700`. An archive with explicit ownership is
   sent through `docker cp -a`, so delivery works even on images without the
   staged-input relay. Nothing re-reads the checkout.
+- `workspace-setup.sh` writes each of them into `/workspace` with
+  `copy_project_file_into_workspace`. `/workspace` is the cloned branch, so
+  it can commit a link where a folder or the file should be
+  (`config -> /home/node/.codex`). Every existing folder on the path must be
+  a real directory and the file absent or a regular file; anything else is
+  skipped with a `Skipped <path>` line, never written through. Staged paths
+  are read NUL-delimited, so a name with leading or trailing spaces is copied
+  exactly.
 - A refused file is skipped, never a failed environment. The refusal
   (`symlink`, `not-a-file`, `outside-project`, `too-large`,
   `changed-while-reading`, `unreadable`, `unsafe-name`, `invalid-pattern`,
@@ -1166,7 +1174,8 @@ them as a link to a host path, and Docker resolves a bind source on the host
   re-reads and re-checks the files; a container that predates the label
   shows nothing.
 - `.env`, `.env.local`, `opencode.json` and every match are excluded from
-  generic configured-file staging. A configured file the repository's own
+  generic configured-file staging (for a local worktree, `opencode.json` is
+  not: see below). A configured file the repository's own
   files-to-copy list names is left to that staging; `.env` or `.env.local` in
   that list (or a command node's staged manifest) is read here as a literal
   pattern even when the setting omits it, as it always was. A command-node
@@ -1175,15 +1184,20 @@ them as a link to a host path, and Docker resolves a bind source on the host
   never reads the fallback. Other configured files still use
   `stageConfiguredProjectFilesForContainer` (realpath-confined, `docker cp`
   into `/project-files`).
-- A new local worktree gets the same matches (not `opencode.json`, which its
-  checkout has) through the same reader (`createLocalWorktree`). A path the
+- A new local worktree gets the same matches through the same reader
+  (`createLocalWorktree`). Its `opencode.json` is the checkout's, unless
+  files-to-copy or a command node's staged manifest names one: that copy then
+  goes through the generic configured-file copy, as before the setting was
+  honoured. A path the
   branch already has in the worktree, a link included, is left alone, as
   `.env` always was; one behind a linked or non-directory parent is refused
   as `linked-destination`. New files are created `0600` with `O_EXCL`, so a
   final link is never followed. The refusals are logged as
   `environment project-seed.refused` and held in memory until the
   environment's setup terminal prints them once (a backend restart in
-  between loses only that notice).
+  between loses only that notice). An environment with no setup commands
+  has no setup terminal, so its refusals are printed in a setup session
+  opened only for them (`showWorktreeSeedRefusalsWithoutSetup`).
 
 #### Environment file patterns: security review
 
@@ -1200,8 +1214,8 @@ file outside the project, follow a link, or fill a container.
 | Which names a wildcard matches | Not a name starting with `.` unless the segment does (as in a shell), so `*` never picks up `.ssh` or `.npmrc`; never `.git`, so Git's credentials and hooks cannot be named at all. |
 | Where matches come from | The project checkout only (`project.localPath`, through its real path), never the worktree a branch produced. A command node's staged copy fills only an absent literal. |
 | Directories, links, devices, escapes | Matching never descends through a linked directory: the link is reported as `symlink` and its contents are not listed. Every matched path then passes the per-file reader above: a link, a directory, a FIFO or device, a real path outside the project, more than 1 MiB, or a file swapped while it was read is refused and reported. A matched name with a control character or backslash is refused as `unsafe-name` (it would be printed in the setup terminal and copied by a line-based loop). Names in the label are URI-encoded and parsed back only when printable. |
-| Bounds | At most 32 matched files and 4 MiB in total (each file also at most 1 MiB), and at most 5,000 directory entries examined across wildcard listings. Over any bound, none of the matches is copied and one aggregate refusal says which bound (`opencode.json` is not a match and is unaffected). Copying up to the bound was rejected: which files arrive would depend on listing order, silently. |
-| Files staged by other paths | Matches land only below `/project-env/` (for `.env`, `.env.local`) and `/project-files/`, and from there only under `/workspace`, so a pattern cannot reach a staged credential (`/claude-config`, `/codex-home`, …) or `/opencode-project-json`. A match that names a committed file overwrites the container's copy with the project folder's, as configured files do; in a local worktree the committed file is kept. |
+| Bounds | A wildcard folder followed by a literal name (`apps/*/.env`) lists only the folders where that name exists, so folders without the file do not count. At most 32 matched files and 4 MiB in total (each file also at most 1 MiB), and at most 5,000 directory entries examined across wildcard listings. Over any bound, none of the matches is copied and one aggregate refusal says which bound (`opencode.json` is not a match and is unaffected). Copying up to the bound was rejected: which files arrive would depend on listing order, silently. |
+| Files staged by other paths | Matches land only below `/project-env/` (for `.env`, `.env.local`) and `/project-files/`, and from there only under `/workspace`, so a pattern cannot reach a staged credential (`/claude-config`, `/codex-home`, …) or `/opencode-project-json`. The setup's copy into `/workspace` refuses a committed link (or non-directory) on the destination path, so a branch cannot redirect a match to `/home/node/.codex` or any other path outside the workspace. A match that names a committed file overwrites the container's copy with the project folder's, as configured files do; in a local worktree the committed file is kept. |
 | Restricted and full network modes | No difference: the copy happens before the container starts and does not use the network. A copied secret can leave through any allowed host in either mode, exactly as `.env` could. |
 | Stored settings that differ from the default | Honoured as written; refused matches show in the setup terminal. An empty setting copies no `.env` (unless files-to-copy names it). |
 | Rootless `docker cp` refusals | Every match travels in the one seed archive, so the refusals of [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md) apply to it exactly as to `.env`: no extra copy call. |

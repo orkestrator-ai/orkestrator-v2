@@ -841,6 +841,41 @@ project_input() {
         printf '/%s\n' "$1"
     fi
 }
+# Copies one staged project file to the same relative path in the workspace.
+# The workspace is the cloned branch, which can commit a link where a folder
+# or the file should be (`config -> /home/node/.codex`); following it would
+# write project content outside the workspace. Every existing folder on the
+# way must be a real directory and the file absent or a regular file. Returns
+# 1 for a refused path (nothing written) and the cp status for a failed copy.
+copy_project_file_into_workspace() {
+    local source="$1" rel_path="$2" workspace="$3"
+    local remaining="$rel_path" current="$workspace" part
+    case "/$rel_path/" in
+        *//* | */./* | */../*) return 1 ;;
+    esac
+    while [ "${remaining#*/}" != "$remaining" ]; do
+        part="${remaining%%/*}"
+        remaining="${remaining#*/}"
+        current="$current/$part"
+        if [ -L "$current" ]; then
+            return 1
+        elif [ -e "$current" ]; then
+            [ -d "$current" ] || return 1
+        else
+            mkdir -- "$current" || return 1
+        fi
+    done
+    current="$current/$remaining"
+    if [ -L "$current" ] || { [ -e "$current" ] && [ ! -f "$current" ]; }; then
+        return 1
+    fi
+    cp -- "$source" "$current"
+}
+
+report_refused_workspace_copy() {
+    echo -e "  ${YELLOW}Skipped $1: the workspace has a link or a non-directory on its path${NC}"
+}
+
 PROJECT_ENV_INPUT="$(project_input project-env)"
 OPENCODE_PROJECT_JSON_INPUT="$(project_input opencode-project-json)"
 
@@ -849,20 +884,26 @@ echo ""
 echo -e "${BLUE}>>> Setting up environment files <<<${NC}"
 
 if [ -d "$PROJECT_ENV_INPUT" ]; then
-    if [ -f "$PROJECT_ENV_INPUT/.env" ]; then
-        cp "$PROJECT_ENV_INPUT/.env" /workspace/.env
-        echo -e "  ${GREEN}Copied .env from project folder${NC}"
-    fi
-    if [ -f "$PROJECT_ENV_INPUT/.env.local" ]; then
-        cp "$PROJECT_ENV_INPUT/.env.local" /workspace/.env.local
-        echo -e "  ${GREEN}Copied .env.local from project folder${NC}"
-    fi
+    for env_name in .env .env.local; do
+        [ -f "$PROJECT_ENV_INPUT/$env_name" ] || continue
+        if copy_project_file_into_workspace "$PROJECT_ENV_INPUT/$env_name" "$env_name" /workspace; then
+            echo -e "  ${GREEN}Copied $env_name from project folder${NC}"
+        else
+            report_refused_workspace_copy "$env_name"
+        fi
+    done
 elif [ -f /env/.env ]; then
-    cp /env/.env /workspace/.env
-    echo -e "  ${GREEN}Copied .env file${NC}"
+    if copy_project_file_into_workspace /env/.env .env /workspace; then
+        echo -e "  ${GREEN}Copied .env file${NC}"
+    else
+        report_refused_workspace_copy .env
+    fi
 elif [ -f /env/.env.local ]; then
-    cp /env/.env.local /workspace/.env
-    echo -e "  ${GREEN}Copied .env.local file${NC}"
+    if copy_project_file_into_workspace /env/.env.local .env /workspace; then
+        echo -e "  ${GREEN}Copied .env.local file${NC}"
+    else
+        report_refused_workspace_copy .env
+    fi
 else
     echo "  No .env files to copy"
 fi
@@ -875,23 +916,24 @@ if [ -d /project-files ]; then
     # Find all files in /project-files and copy them preserving relative paths
     cd /project-files
     FILE_COUNT=0
-    # Use process substitution to avoid subshell, ensuring FILE_COUNT persists
-    while read -r file; do
+    # Process substitution avoids a subshell, so FILE_COUNT persists. Names
+    # are NUL-delimited and read with IFS= so leading or trailing spaces
+    # survive (the backend refuses control characters in staged names).
+    while IFS= read -r -d '' file; do
         # Remove leading ./ from path
         rel_path="${file#./}"
-        dest="/workspace/$rel_path"
-        dest_dir=$(dirname "$dest")
-
-        # Create parent directories if needed
-        if [ ! -d "$dest_dir" ]; then
-            mkdir -p "$dest_dir"
+        copy_status=0
+        copy_project_file_into_workspace "/project-files/$rel_path" "$rel_path" /workspace ||
+            copy_status=$?
+        if [ "$copy_status" -eq 0 ]; then
+            echo -e "  ${GREEN}Copied $rel_path${NC}"
+            FILE_COUNT=$((FILE_COUNT + 1))
+        elif [ "$copy_status" -eq 1 ]; then
+            report_refused_workspace_copy "$rel_path"
+        else
+            exit "$copy_status"
         fi
-
-        # Copy the file
-        cp "/project-files/$rel_path" "$dest"
-        echo -e "  ${GREEN}Copied $rel_path${NC}"
-        FILE_COUNT=$((FILE_COUNT + 1))
-    done < <(find . -type f)
+    done < <(find . -type f -print0)
 
     if [ "$FILE_COUNT" -eq 0 ]; then
         echo "  No additional files to copy"
@@ -904,20 +946,27 @@ if [ -f "$OPENCODE_PROJECT_JSON_INPUT" ]; then
     echo -e "${BLUE}>>> Setting up OpenCode configuration <<<${NC}"
 
     # Copy to workspace root
-    cp "$OPENCODE_PROJECT_JSON_INPUT" /workspace/opencode.json
-
-    # Add default model attribute if missing (use OPENCODE_MODEL env var or fallback to default)
-    if ! jq -e '.model' /workspace/opencode.json > /dev/null 2>&1; then
-        DEFAULT_MODEL="${OPENCODE_MODEL:-opencode/claude-sonnet-5}"
-        echo -e "  ${YELLOW}No model specified, adding default: $DEFAULT_MODEL${NC}"
-        jq --arg model "$DEFAULT_MODEL" '. + {"model": $model}' /workspace/opencode.json > /tmp/opencode.json.tmp
-        mv /tmp/opencode.json.tmp /workspace/opencode.json
+    opencode_copy_status=0
+    copy_project_file_into_workspace "$OPENCODE_PROJECT_JSON_INPUT" opencode.json /workspace ||
+        opencode_copy_status=$?
+    if [ "$opencode_copy_status" -eq 1 ]; then
+        report_refused_workspace_copy opencode.json
+    elif [ "$opencode_copy_status" -ne 0 ]; then
+        exit "$opencode_copy_status"
     else
-        MODEL=$(jq -r '.model' /workspace/opencode.json)
-        echo -e "  ${GREEN}Using configured model: $MODEL${NC}"
-    fi
+        # Add default model attribute if missing (use OPENCODE_MODEL env var or fallback to default)
+        if ! jq -e '.model' /workspace/opencode.json > /dev/null 2>&1; then
+            DEFAULT_MODEL="${OPENCODE_MODEL:-opencode/claude-sonnet-5}"
+            echo -e "  ${YELLOW}No model specified, adding default: $DEFAULT_MODEL${NC}"
+            jq --arg model "$DEFAULT_MODEL" '. + {"model": $model}' /workspace/opencode.json > /tmp/opencode.json.tmp
+            mv /tmp/opencode.json.tmp /workspace/opencode.json
+        else
+            MODEL=$(jq -r '.model' /workspace/opencode.json)
+            echo -e "  ${GREEN}Using configured model: $MODEL${NC}"
+        fi
 
-    echo -e "  ${GREEN}opencode.json ready${NC}"
+        echo -e "  ${GREEN}opencode.json ready${NC}"
+    fi
 fi
 
 # Run orkestrator-ai.json setup script if present

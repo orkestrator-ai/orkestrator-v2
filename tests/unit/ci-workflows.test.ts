@@ -49,6 +49,7 @@ describe("CI workflow contracts", () => {
       "container-live-qualification",
       "native-application-menu",
       "claude-apparmor-qualification",
+      "electron-qualification",
     ]) {
       const parsed = Bun.YAML.parse(read(`.github/workflows/${name}.yml`)) as {
         on: { pull_request?: { types?: string[] } };
@@ -90,6 +91,7 @@ describe("CI workflow contracts", () => {
     "validate-bun-runtime",
     "container-live-qualification",
     "claude-apparmor-qualification",
+    "electron-qualification",
   ]) {
     test(`${name} only coalesces pull request runs`, () => {
       const { concurrency } = workflow(name);
@@ -230,6 +232,39 @@ describe("CI workflow contracts", () => {
       );
     }
     expect(steps.some((step) => step.run === "mise run download:claude")).toBe(true);
+  });
+
+  test("the whole Electron suite runs weekly on Linux under Xvfb, with no secrets", () => {
+    const source = read(".github/workflows/electron-qualification.yml");
+    const parsed = Bun.YAML.parse(source) as {
+      on: { schedule?: { cron: string }[]; workflow_dispatch?: unknown };
+    } & Workflow;
+    // The user's choice (to-do 0031 task 8): weekly on the container live
+    // qualification's schedule, and on demand.
+    const container = Bun.YAML.parse(
+      read(".github/workflows/container-live-qualification.yml"),
+    ) as { on: { schedule: { cron: string }[] } };
+    expect(parsed.on.schedule).toEqual(container.on.schedule);
+    expect("workflow_dispatch" in parsed.on).toBe(true);
+    const jobs = Object.values(parsed.jobs);
+    expect(jobs.length).toBe(1);
+    const job = jobs[0]!;
+    expect(job["runs-on"]).toMatch(/^ubuntu-/);
+    expect(job.permissions).toEqual({ contents: "read" });
+    const steps = job.steps!;
+    const suite = steps.findIndex((step) => (step.run ?? "").includes("test:agent:electron"));
+    expect(suite).toBeGreaterThanOrEqual(0);
+    // The whole suite, not a chosen subset of its specs.
+    expect(steps[suite]!.run).toMatch(/mise run test:agent:electron$/);
+    // A disposable display, never a Wayland compositor the runner might name.
+    expect(steps[suite]!.run).toContain(
+      "env -u WAYLAND_DISPLAY -u ELECTRON_OZONE_PLATFORM_HINT xvfb-run -a ",
+    );
+    const install = steps.findIndex((step) => /apt-get install .*xvfb/.test(step.run ?? ""));
+    expect(install).toBeGreaterThanOrEqual(0);
+    expect(install).toBeLessThan(suite);
+    // Credential-free: no secret reaches the job.
+    expect(source).not.toContain("secrets.");
   });
 
   test("the scheduled live job runs every opt-in live container suite", () => {

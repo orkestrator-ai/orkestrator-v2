@@ -232,6 +232,7 @@ export function CreateEnvironmentFlowDialog({
 
     if (mountedRef.current && (preflight || cancellableWarning)) {
       setIsCreating(false);
+      setCreateStage(null);
     }
   }, [settleCredentialWarning]);
 
@@ -346,6 +347,7 @@ export function CreateEnvironmentFlowDialog({
       return true;
     } finally {
       setIsCreating(false);
+      setCreateStage(null);
     }
   };
 
@@ -387,11 +389,22 @@ export function CreateEnvironmentFlowDialog({
     if (activePreflightRef.current === preflight) {
       activePreflightRef.current = null;
     }
-    if (result === PREFLIGHT_CANCELLED) return false;
-    if (!mountedRef.current || !open || preflight.projectId !== projectId) {
+    // Every way out that does not enter `create()` hands the button back,
+    // unless a newer preflight has already taken it over.
+    const releaseBusy = () => {
+      if (!mountedRef.current || activePreflightRef.current !== null) return;
+      setIsCreating(false);
+      setCreateStage(null);
+    };
+    if (result === PREFLIGHT_CANCELLED) {
+      releaseBusy();
       return false;
     }
-    setIsCreating(false);
+    if (!mountedRef.current || !open || preflight.projectId !== projectId) {
+      releaseBusy();
+      return false;
+    }
+    releaseBusy();
     if (!canCreateEnvironment(environmentType)) return false;
 
     const status = "status" in result ? result.status : null;
@@ -429,6 +442,7 @@ export function CreateEnvironmentFlowDialog({
   const performFeatureBuild = async (input: CreateFeatureBuildInput): Promise<boolean> => {
     if (!projectId) return false;
     setIsCreating(true);
+    setCreateStage("Starting build…");
     try {
       const result = await nodeBackend.createFeatureBuild(input);
       // Selecting the environment is what mounts its terminal surface. An
@@ -448,6 +462,7 @@ export function CreateEnvironmentFlowDialog({
       return false;
     } finally {
       setIsCreating(false);
+      setCreateStage(null);
     }
   };
 

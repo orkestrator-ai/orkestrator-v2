@@ -86,7 +86,8 @@ async function persistFirstPromptDraftToLockedProvider(
 export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTabProps) {
   const pendingFirstPrompt = useRef<Parameters<typeof dispatchNativeAgentIntent>[0] | null>(null);
   // What `pendingFirstPrompt` holds, drawn as an already-sent message while the
-  // backend answers. Written alongside every assignment to the ref.
+  // backend answers. Written alongside every assignment to the ref, and kept
+  // with it through a failed save so Retry save shows the same message.
   const [firstPromptPending, setFirstPromptPending] = useState<FirstPromptPendingState | null>(
     null,
   );
@@ -119,6 +120,13 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
       const environment = paneLayouts.getState().environments.get(props.data.environmentId);
       const sessionKey = createSessionKey(props.data.environmentId, props.tabId);
       const submission = operation === "send" ? pendingFirstPrompt.current : null;
+      // A retry after a failed save is a new wait on the same message: show it
+      // again from the saving step, timed from this attempt.
+      if (submission) {
+        setFirstPromptPending((current) =>
+          current ? { ...current, phase: "saving", startedAt: Date.now() } : current,
+        );
+      }
       if (!environment) {
         setDurabilityError("The locked agent tab is no longer available to save.");
         setAwaitingDurability(false);
@@ -217,7 +225,8 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
         log.warn("provider-lock.persist-failed", { error: formatLogError(error) });
         setDurabilityError("The agent choice is locked, but could not be saved.");
         setAwaitingDurability(false);
-        setFirstPromptPending(null);
+        // The prompt is retained for Retry save, so its pending view is too:
+        // the ref and the state are only cleared where the prompt is dropped.
         if (submission) {
           composeDrafts.getState().updateDraft(sessionKey, {
             submissionPending: false,

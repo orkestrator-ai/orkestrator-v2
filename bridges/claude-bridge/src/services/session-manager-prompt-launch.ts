@@ -355,11 +355,15 @@ function publishSupportedAgents(
 ): void {
   if (typeof queryIterator.supportedAgents !== "function") return;
   void readSupportedAgents(queryIterator).then((agents) => {
-    if (!agents) return;
-    launched.supportedAgents = agents;
+    // An answer from a process that has since ended or been replaced describes
+    // a CLI nobody can reach any more: it must not touch the snapshot the
+    // replacement published.
+    if (!agents || launched.state === "ended") return;
     const { session } = launched;
+    if (session.claudeRuntime !== launched) return;
+    launched.supportedAgents = agents;
     const init = session.initData;
-    if (session.claudeRuntime !== launched || !init) return;
+    if (!init) return;
     if (JSON.stringify(init.agents) === JSON.stringify(agents)) return;
     init.agents = agents;
     eventEmitter.emit({ type: "session.init", sessionId: session.id, data: init });

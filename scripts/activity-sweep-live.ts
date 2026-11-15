@@ -1,7 +1,8 @@
 /**
  * Live check: latency of the backend's activity sweep against real bridge
- * processes (docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md,
- * qualification "Activity-sweep p50/p95 for 1, 10 and 100 sessions").
+ * processes (to-do 0050, retired 2026-11-15, qualification "Activity-sweep
+ * p50/p95 for 1, 10 and 100 sessions"; read it with `git show
+ * a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`).
  *
  * For each bridge (Codex and Claude) the script starts a real bridge process
  * on loopback with a throwaway home, creates 100 sessions (no prompt is ever

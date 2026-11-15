@@ -244,6 +244,8 @@ interface CreateEnvironmentDialogProps {
    */
   onCreate: (options: ClaudeOptions) => Promise<void | boolean>;
   isLoading?: boolean;
+  /** Names the step in progress on the busy submit button. */
+  loadingLabel?: string;
   /** Project ID for persisting draft prompt text */
   projectId?: string | null;
   /** Project name displayed in the dialog title */
@@ -271,6 +273,7 @@ export function CreateEnvironmentDialog({
   onCreate,
   onCreateFeatureBuild,
   isLoading = false,
+  loadingLabel,
   projectId,
   projectName,
   defaultPortMappings = EMPTY_PORT_MAPPINGS,
@@ -2218,7 +2221,7 @@ export function CreateEnvironmentDialog({
             className="h-9 px-5 font-bold shadow-[0_8px_24px_rgba(59,130,246,0.22)]"
           >
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Create Environment
+            {isLoading && loadingLabel ? loadingLabel : "Create Environment"}
           </Button>
         </DialogFooter>
       </DialogContent>

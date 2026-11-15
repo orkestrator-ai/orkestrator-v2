@@ -481,7 +481,7 @@ describe("build stage transcript reads while a turn runs", () => {
     );
   });
 
-  for (const mode of ["v2", "v1", "legacy"] as const) {
+  for (const mode of ["v2", "v1"] as const) {
     test(`${mode} HTTP checkpoints retain revisions before the probe window`, async () => {
       await withService(
         async (context) => {
@@ -497,7 +497,7 @@ describe("build stage transcript reads while a turn runs", () => {
           const wire = httpProvider((url) => {
             const parsed = new URL(url);
             if (parsed.pathname.endsWith("/messages")) return Response.json({ messages });
-            if (parsed.pathname.endsWith("/transcript") && mode !== "legacy") {
+            if (parsed.pathname.endsWith("/transcript")) {
               const options = {
                 sessionIdentity: "build",
                 generation: "g",
@@ -543,11 +543,11 @@ describe("build stage transcript reads while a turn runs", () => {
             representation: "summary",
           });
           expect("unchanged" in snapshot).toBe(false);
-          if ("unchanged" in snapshot) throw new Error("Expected legacy snapshot body");
+          if ("unchanged" in snapshot) throw new Error("Expected a snapshot body");
           expect(snapshot.messages).toHaveLength(8);
           if (mode === "v2") expect(snapshot.revisedMessages).toEqual([messages[0]]);
           else expect(snapshot.revisedMessages).toBeUndefined();
-          expect(snapshot.sourceToken === undefined).toBe(mode === "legacy");
+          expect(snapshot.sourceToken).toBeDefined();
         },
         { transcriptPersistIntervalMs: 0 },
       );

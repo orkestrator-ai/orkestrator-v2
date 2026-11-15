@@ -72,6 +72,31 @@ export async function openCode2RunId(client: OpenCode2Client, sessionId: string)
   return openCode2RunIdFrom(sessionId, await newest(client, sessionId, "idle"));
 }
 
+/**
+ * The newest `idle` row as a run boundary for {@link openCode2SessionState}:
+ * `null` before the first run settles, `false` when it could not be read.
+ */
+export type OpenCode2RunBoundary = OpenCode2Message | null | false;
+
+/**
+ * Read the run boundary. A snapshot reads it before the lifecycle status, never
+ * after: boundaries only move forward, so a boundary read first can name only
+ * the run the status then reports or an earlier one. An earlier one is a
+ * mismatch at the steer check, which queues the steer. Read after the status,
+ * a run that settled in between would lend its own terminal row as the anchor
+ * of a snapshot still showing it running, and that anchor is the next run's
+ * id, so a steer from the stale view would join the next run.
+ */
+export function openCode2RunBoundary(
+  client: OpenCode2Client,
+  sessionId: string,
+): Promise<OpenCode2RunBoundary> {
+  return newest(client, sessionId, "idle").then(
+    (row) => row ?? null,
+    () => false as const,
+  );
+}
+
 function modelId(value: unknown): { modelId?: string; reasoningId?: string } {
   const model = asRecord(value);
   const provider = nonEmptyString(model?.providerID);
@@ -96,12 +121,16 @@ async function newest(
  * State for `sessionStateSnapshot` and the head of `interactiveSnapshot`.
  * `status` is the provider's lifecycle answer; `recentRows` (oldest first),
  * when the caller already read them, replaces the one-row assistant read.
+ * `runBoundary` is the boundary {@link openCode2RunBoundary} read *before*
+ * `status`; without one an active snapshot names no run, because a boundary
+ * read here, after the status, can belong to the next run.
  */
 export async function openCode2SessionState(
   client: OpenCode2Client,
   sessionId: string,
   status: ProviderStatus,
   recentRows?: readonly OpenCode2Message[],
+  runBoundary?: OpenCode2RunBoundary,
 ): Promise<OpenCode2SessionState> {
   let session: OpenCode2Session;
   try {
@@ -118,19 +147,17 @@ export async function openCode2SessionState(
     recentRows
       ? Promise.resolve(recentRows.filter((row) => row.type === "assistant"))
       : newest(client, sessionId, "assistant").then((row) => (row ? [row] : [])),
-    // A failed run's reason, or the boundary that names the running run. The
-    // run id is optional metadata: an unreadable boundary leaves it out.
+    // A failed run's reason. The running run's boundary was read before the
+    // status (`runBoundary`), never here.
     settled && session.outcome === "failed"
       ? newest(client, sessionId, "idle")
-      : active
-        ? newest(client, sessionId, "idle").then(
-            (row) => row ?? null,
-            () => false as const,
-          )
-        : Promise.resolve(undefined),
+      : Promise.resolve(undefined),
   ]);
+  // The run id is optional metadata: an unreadable or absent boundary leaves it out.
   const turnRunId =
-    active && idle !== false ? openCode2RunIdFrom(sessionId, idle ?? undefined) : undefined;
+    active && runBoundary !== undefined && runBoundary !== false
+      ? openCode2RunIdFrom(sessionId, runBoundary ?? undefined)
+      : undefined;
   const last = assistant.at(-1);
   const lastModel = modelId(asRecord(last)?.model);
   const sessionModel = modelId(session.model);

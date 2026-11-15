@@ -460,12 +460,15 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
 
   /** Status, usage, model and terminal outcome; never the transcript. */
   async sessionState(sessionId: string) {
-    return this.reads.sessionState(sessionId, await this.lifecycleStatus(sessionId));
+    // The run boundary first, then the status (`openCode2RunBoundary`).
+    const runBoundary = await this.reads.runBoundary(sessionId);
+    return this.reads.sessionState(sessionId, await this.lifecycleStatus(sessionId), runBoundary);
   }
 
   /** {@link sessionState} plus the newest normalized rows. */
   async interactiveState(sessionId: string) {
-    return this.reads.interactive(sessionId, await this.lifecycleStatus(sessionId));
+    const runBoundary = await this.reads.runBoundary(sessionId);
+    return this.reads.interactive(sessionId, await this.lifecycleStatus(sessionId), runBoundary);
   }
 
   refreshUsage(sessionId: string) {

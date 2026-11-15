@@ -116,6 +116,11 @@ export class FakeOpenCode2Server {
   readonly withdrawals: Array<{ sessionId: string; inputId: string }> = [];
   /** Fail the next inbox withdraw with this status. */
   failNextWithdraw?: number;
+  /**
+   * Called with every request's method and path before the fake answers it, so
+   * a test can change state between two reads of one snapshot.
+   */
+  onRequest?: (method: string, path: string) => void;
   /** `/api/model`; tests replace it. The default is one fixture model with variants. */
   models: Array<Record<string, unknown>> = [
     fakeOpenCode2Model("fixture", "fixture", ["low", "high"]),
@@ -484,6 +489,7 @@ export class FakeOpenCode2Server {
       request.method === "GET" || request.method === "DELETE" ? "" : await request.text();
     const body = text ? (JSON.parse(text) as Record<string, unknown>) : undefined;
     this.calls.push({ method: request.method, path, ...(body ? { body } : {}) });
+    this.onRequest?.(request.method, path);
     const ok = (data: unknown) => Response.json({ data });
     const notFound = () =>
       Response.json({ _tag: "SessionNotFoundError", message: "missing" }, { status: 404 });

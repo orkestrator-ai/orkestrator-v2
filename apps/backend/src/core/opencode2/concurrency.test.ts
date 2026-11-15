@@ -274,6 +274,52 @@ describe("a steer sent while a card is parked (to-do 7905 (retired) task 3)", ()
 });
 
 describe("the run a view shows (to-do 8107 (retired))", () => {
+  for (const read of ["sessionState", "interactiveState"] as const) {
+    test(`a run that ends while ${read} is read is not the run its snapshot names`, async () => {
+      server = new FakeOpenCode2Server();
+      const p = provider(server);
+      const id = await p.createSession("build", `boundary-${read}`);
+      await p.send(id, "first", { requestId: "edge-1" });
+
+      // The first run settles after the snapshot read the status, before it
+      // read the session, so the snapshot still shows the first run running.
+      let armed = true;
+      server.onRequest = (method, path) => {
+        if (armed && method === "GET" && path === `/api/session/${id}`) {
+          armed = false;
+          server!.finishRun(id);
+        }
+      };
+      const stale = await p[read](id);
+      server.onRequest = undefined;
+      expect(armed).toBe(false);
+      expect(stale.status).toBe("running");
+      expect(stale.turnRunId).toBeString();
+
+      await p.send(id, "second", { requestId: "edge-2" });
+      const current = await p.activeSteerRun(id);
+      expect(current.state).toBe("running");
+      expect(current).not.toEqual({ state: "running", runId: stale.turnRunId! });
+
+      // A steer written from the stale view cannot join the second run.
+      expect(
+        await p.performSessionAction(id, {
+          kind: "steer",
+          text: "for the first",
+          requestId: `edge-steer-${read}`,
+          expectedRunId: stale.turnRunId!,
+        }),
+      ).toEqual({ outcome: "mismatch" });
+      server.finishRun(id);
+      expect(timeline(server, id)).toEqual([
+        "user:first",
+        "idle:succeeded",
+        "user:second",
+        "idle:succeeded",
+      ]);
+    });
+  }
+
   test("the state snapshot names the same run the steer check does, and a new one after a turn ends", async () => {
     server = new FakeOpenCode2Server();
     const p = provider(server);

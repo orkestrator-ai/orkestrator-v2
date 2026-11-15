@@ -45,6 +45,34 @@ async function staticHtmlFrameHtml(): Promise<string> {
 }
 
 /**
+ * The static HTML frame document on its own, for a client whose host serves its
+ * document policy as a header and so gets no `<meta>` policy from this build:
+ * the hosted client (`apps/web-public`), whose `vercel.json` gives this path its
+ * own sandboxed rule. Production builds only, like `rendererSecurityPlugin`; a
+ * dev server keeps the `srcdoc` bootstrap.
+ */
+export function staticHtmlFramePlugin(): Plugin {
+  return {
+    name: "orkestrator-static-html-frame",
+    apply: "build",
+    config: () => ({
+      define: {
+        "import.meta.env.ORKESTRATOR_STATIC_HTML_FRAME_DOCUMENT": JSON.stringify(
+          STATIC_HTML_FRAME_DOCUMENT,
+        ),
+      },
+    }),
+    async generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: STATIC_HTML_FRAME_DOCUMENT,
+        source: await staticHtmlFrameHtml(),
+      });
+    },
+  };
+}
+
+/**
  * Production builds only: the dev server's React preamble is an inline script
  * the policy would refuse, and a dev frame keeps using `srcdoc`.
  */

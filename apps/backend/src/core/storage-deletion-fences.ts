@@ -20,3 +20,11 @@ export function markDeletion(database: StorageDatabase, scope: string, id: strin
   rows.put(key, "0");
   rows.put(key, JSON.stringify(deletionFence(database)));
 }
+/**
+ * Lifts one tombstone. Caller holds the transaction. Only for a fence whose
+ * deletion was abandoned while its owner still exists (a project removal that
+ * failed and kept the project); a completed deletion's tombstone stays.
+ */
+export function clearDeletion(database: StorageDatabase, scope: string, id: string): void {
+  database.rows(STORE).delete(`${scope}/${id}`);
+}

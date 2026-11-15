@@ -112,6 +112,15 @@ export class FakeOpenCode2Server {
   readonly interrupts: string[] = [];
   /** Session ids `DELETE /api/session/:id` reached, in order. */
   readonly deletions: string[] = [];
+  /** Inbox items `DELETE /api/session/:id/inbox/:inputId` removed, in order. */
+  readonly withdrawals: Array<{ sessionId: string; inputId: string }> = [];
+  /** Fail the next inbox withdraw with this status. */
+  failNextWithdraw?: number;
+  /**
+   * Called with every request's method and path before the fake answers it, so
+   * a test can change state between two reads of one snapshot.
+   */
+  onRequest?: (method: string, path: string) => void;
   /** `/api/model`; tests replace it. The default is one fixture model with variants. */
   models: Array<Record<string, unknown>> = [
     fakeOpenCode2Model("fixture", "fixture", ["low", "high"]),
@@ -480,6 +489,7 @@ export class FakeOpenCode2Server {
       request.method === "GET" || request.method === "DELETE" ? "" : await request.text();
     const body = text ? (JSON.parse(text) as Record<string, unknown>) : undefined;
     this.calls.push({ method: request.method, path, ...(body ? { body } : {}) });
+    this.onRequest?.(request.method, path);
     const ok = (data: unknown) => Response.json({ data });
     const notFound = () =>
       Response.json({ _tag: "SessionNotFoundError", message: "missing" }, { status: 404 });
@@ -793,6 +803,17 @@ export class FakeOpenCode2Server {
       return new Response(null, { status: 204 });
     }
     if (rest === "inbox") return ok(session.inbox);
+    const inboxItem = /^inbox\/([^/]+)$/.exec(rest);
+    if (inboxItem && request.method === "DELETE") {
+      const failure = this.failNextWithdraw;
+      this.failNextWithdraw = undefined;
+      if (failure) return Response.json({ _tag: "Refused" }, { status: failure });
+      const at = session.inbox.findIndex((item) => item.id === inboxItem[1]);
+      if (at < 0) return Response.json({ _tag: "NotFound", message: "input" }, { status: 404 });
+      session.inbox.splice(at, 1);
+      this.withdrawals.push({ sessionId: session.id, inputId: inboxItem[1]! });
+      return new Response(null, { status: 204 });
+    }
     if (rest === "model") {
       session.model = body!.model;
       return new Response(null, { status: 204 });
@@ -800,7 +821,7 @@ export class FakeOpenCode2Server {
     if (rest === "interrupt") {
       this.interrupts.push(session.id);
       const interrupted = session.running;
-      // A stop leaves a steer held behind a card in the inbox (to-do 8100).
+      // A stop leaves a steer held behind a card in the inbox (to-do 8100 (retired)).
       const held = this.takeHeldSteers(session);
       if (interrupted) this.finishRun(session.id, "interrupted");
       session.inbox.push(...held);

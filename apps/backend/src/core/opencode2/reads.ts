@@ -23,7 +23,9 @@ import type { OpenCode2Event } from "./events.js";
 import { OpenCode2InteractionAdapter } from "./interactions.js";
 import {
   hydrateOpenCode2Subagents,
+  openCode2RunBoundary,
   openCode2SessionState,
+  type OpenCode2RunBoundary,
   type OpenCode2SessionState,
 } from "./session-state.js";
 import { normalizeOpenCode2Transcript } from "./transcript.js";
@@ -91,21 +93,31 @@ export class OpenCode2SessionReads {
     );
   }
 
-  sessionState(sessionId: string, status: ProviderStatus): Promise<OpenCode2SessionState> {
-    return openCode2SessionState(this.client, sessionId, status);
+  /** The run boundary, read before the lifecycle status (`openCode2RunBoundary`). */
+  runBoundary(sessionId: string): Promise<OpenCode2RunBoundary> {
+    return openCode2RunBoundary(this.client, sessionId);
+  }
+
+  sessionState(
+    sessionId: string,
+    status: ProviderStatus,
+    runBoundary?: OpenCode2RunBoundary,
+  ): Promise<OpenCode2SessionState> {
+    return openCode2SessionState(this.client, sessionId, status, undefined, runBoundary);
   }
 
   /** State plus the newest rows (normalized, sub-agents hydrated), for `interactiveSnapshot`. */
   async interactive(
     sessionId: string,
     status: ProviderStatus,
+    runBoundary?: OpenCode2RunBoundary,
   ): Promise<
     OpenCode2SessionState & { messages: Record<string, unknown>[]; messagesComplete: boolean }
   > {
     const rows = await this.newestRows(sessionId, OPENCODE2_TRANSCRIPT_READ_LIMIT + 1);
     const complete = rows.length <= OPENCODE2_TRANSCRIPT_READ_LIMIT;
     const window = rows.slice(-OPENCODE2_TRANSCRIPT_READ_LIMIT);
-    const state = await openCode2SessionState(this.client, sessionId, status, window);
+    const state = await openCode2SessionState(this.client, sessionId, status, window, runBoundary);
     const messages = await hydrateOpenCode2Subagents(
       this.client,
       normalizeOpenCode2Transcript(window, (type) => this.recordUnknown(type)),

@@ -32,6 +32,19 @@ const desktopLog = createLogger("desktop");
  * so its dialogs are cancelled too, unless a test has replaced
  * `dialog.showMessageBox` to answer them.
  *
+ * Once the app is quitting, a dialog that has no open window to attach to is
+ * cancelled too (`quitting-cancelled`), rather than given a new host window or
+ * a windowless box. A host still being created when the quit begins counts as
+ * new: every dialog waiting on it is cancelled once it settles, and the host
+ * is closed. The host is known as one from the moment it is constructed, so a
+ * caller or `currentWindow` handing back that still-loading window cannot pass
+ * it off as an ordinary parent. A window created after the quit has closed every other
+ * fails to load, and on macOS a dialog opened on one after `will-quit` killed
+ * Electron with SIGSEGV before the essential log was stopped (2 of 5 runs on
+ * a real display; to-do 6303, retired, and docs/debugging/process-crashes-and-kills.md
+ * section 7). The exit follows within seconds anyway,
+ * and an uncaught exception has already been logged by then.
+ *
  * Log lines name the dialog's source and never its text, which can carry paths
  * and errors.
  */
@@ -89,8 +102,18 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
    * Electron's own box, which would crash the process.
    */
   noDisplay?: boolean;
+  /**
+   * True once the app has begun quitting (`before-quit`): a dialog that needs a
+   * new window then is cancelled instead.
+   */
+  quitting?: () => boolean;
   currentWindow(): Window | null;
-  createHostWindow(): Promise<Window>;
+  /**
+   * Opens a host window. `onCreated` must be called as soon as the window is
+   * constructed, before it has loaded: Electron lists it from then on, so
+   * `currentWindow` may return it while it is still pending.
+   */
+  createHostWindow(onCreated: (window: Window) => void): Promise<Window>;
   /** Tells someone away from the app that a dialog is waiting for them. */
   requestAttention(window: Window, message: string): void;
   /** Monotonic milliseconds. */
@@ -106,28 +129,42 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
     dialog.showMessageBox === routed ? original : dialog.showMessageBox;
 
   const records: DialogRecord[] = [];
-  let host: { window: Promise<Window>; users: number } | null = null;
+  /**
+   * The shared host window. `readyBeforeQuit` is set only once the window has
+   * been created and loaded while the app was not quitting: a host still being
+   * created, or one that finished after the quit began, is a new window.
+   */
+  type HostLease = { window: Promise<Window>; users: number; readyBeforeQuit: Window | null };
+  let host: HostLease | null = null;
   const hostWindows = new WeakSet<Window>();
 
-  const acquireHost = (): Promise<Window> => {
-    host ??= {
-      window: createHostWindow().then((created) => {
-        hostWindows.add(created);
-        return created;
-      }),
-      users: 0,
-    };
-    host.users += 1;
-    return host.window;
+  const registerHost = (created: Window): void => {
+    hostWindows.add(created);
   };
 
-  const releaseHost = (): void => {
-    if (!host) return;
-    host.users -= 1;
-    if (host.users > 0) return;
-    const { window } = host;
-    host = null;
-    void window
+  const acquireHost = (): HostLease => {
+    if (!host) {
+      const lease: HostLease = {
+        // Runs after `lease` is assigned: the promise settles asynchronously.
+        window: createHostWindow(registerHost).then((created) => {
+          hostWindows.add(created);
+          if (!options.quitting?.()) lease.readyBeforeQuit = created;
+          return created;
+        }),
+        users: 0,
+        readyBeforeQuit: null,
+      };
+      host = lease;
+    }
+    host.users += 1;
+    return host;
+  };
+
+  const releaseHost = (lease: HostLease): void => {
+    lease.users -= 1;
+    if (lease.users > 0) return;
+    if (host === lease) host = null;
+    void lease.window
       .then((created) => {
         if (!created.isDestroyed()) created.close();
       })
@@ -185,24 +222,50 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
       return { response, checkboxChecked: false };
     }
     const requested = usable(window);
+    const cancelWhileQuitting = (): MessageBoxResult => {
+      const response = dialogOptions.cancelId ?? 0;
+      log.info("quitting-cancelled", { source, response });
+      return { response, checkboxChecked: false };
+    };
     // Elsewhere a windowless box does not hold the main thread, and a parent
     // would newly block that window, so the caller's choice stands.
-    if (platform !== "darwin")
+    if (platform !== "darwin") {
+      if (!requested && options.quitting?.()) return cancelWhileQuitting();
       return open(source, dialogOptions, requested, parentState(requested));
+    }
     const parent = requested ?? usable(currentWindow());
-    // The host also appears in Electron's window list and may be supplied by
-    // the caller. Every dialog using it must hold a lease until it settles.
-    // A retiring host also goes through acquisition, which creates a new one.
+    // The host also appears in Electron's window list, from construction on,
+    // and may be supplied by the caller. Every dialog using it, even one still
+    // loading, must hold a lease until it settles, and goes through the quit
+    // checks below. A retiring host also goes through acquisition, which
+    // creates a new one.
     if (parent && !hostWindows.has(parent))
       return open(source, dialogOptions, parent, parentState(parent));
+    // Acquisition would create a window; never during a quit. A host still
+    // being created counts as new: it would finish after the quit began.
+    if (options.quitting?.() && !usable(host?.readyBeforeQuit)) return cancelWhileQuitting();
+    const lease = acquireHost();
     try {
-      return await open(source, dialogOptions, await acquireHost(), "host");
+      let acquired: Window;
+      try {
+        acquired = await lease.window;
+      } catch (error) {
+        // The quit began while the host was being created and refused it.
+        if (options.quitting?.()) return cancelWhileQuitting();
+        throw error;
+      }
+      // The quit may have begun while this dialog waited for the host: open
+      // only on one that was ready before it and is still open.
+      if (options.quitting?.() && usable(lease.readyBeforeQuit) !== acquired) {
+        return cancelWhileQuitting();
+      }
+      return await open(source, dialogOptions, acquired, "host");
     } catch (error) {
       // Never fall back to a windowless box: refuse, as if it were cancelled.
       log.error("open-failed", { source, error: formatLogError(error) });
       return { response: dialogOptions.cancelId ?? 0, checkboxChecked: false };
     } finally {
-      releaseHost();
+      releaseHost(lease);
     }
   };
 
@@ -240,6 +303,29 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
       const last = overlapping.at(-1);
       return last ? `; dialog ${last.source} (parent: ${last.parent}) was open` : "";
     },
+  };
+}
+
+/**
+ * The desktop's host-window factory, refusing to create a window once the app
+ * is quitting: a window created after the quit has closed every other fails to
+ * load (6303, retired). The quit may begin while it waits for `whenReady`, so
+ * it checks before and after.
+ */
+export function quitGuardedHostWindowFactory<Window>(options: {
+  whenReady: () => Promise<unknown>;
+  quitting: () => boolean;
+  productName: string;
+  create: (onCreated: (window: Window) => void) => Promise<Window>;
+}): (onCreated: (window: Window) => void) => Promise<Window> {
+  const refuse = (): never => {
+    throw new Error(`${options.productName} is quitting`);
+  };
+  return async (onCreated) => {
+    if (options.quitting()) refuse();
+    await options.whenReady();
+    if (options.quitting()) refuse();
+    return options.create(onCreated);
   };
 }
 

@@ -75,6 +75,7 @@ import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import type { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
 import type { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
 import {
+  PHASE_ORDER,
   pruneRoundReviewReports,
   recordRewind,
   restartStepOrder,
@@ -777,7 +778,10 @@ export class BuildPipelineLifecycle {
       }
       candidate.reviewRetryRequested = true;
       delete candidate.delivery;
-      pruneKeyInformationAfterRewind(candidate, candidate.iteration, false, false);
+      pruneKeyInformationAfterRewind(candidate, candidate.iteration, {
+        kind: "session",
+        phase: "review",
+      });
       discardSessionReviewReports(candidate);
       // Preparation archives the cancelled run with its sealed failure summary
       // before deleting the package. Keep that evidence until then.
@@ -1294,15 +1298,7 @@ export class BuildPipelineLifecycle {
         : candidate.restartRequest!;
       const selectedPhase =
         restart.kind === "session" ? restart.phase : restart.implementationPhase;
-      const selectedOrder = {
-        build: 0,
-        fix: 0,
-        review: 2,
-        address: 3,
-        verify: 4,
-        pr: 5,
-        "resolve-conflicts": 6,
-      }[selectedPhase];
+      const selectedOrder = PHASE_ORDER[selectedPhase];
 
       if (selectedOrder <= 1) {
         delete candidate.reviewPackage;
@@ -1348,13 +1344,7 @@ export class BuildPipelineLifecycle {
           isPanelReviewerSession(session, session.reviewPassId),
       );
       pruneRoundReviewReports(candidate);
-      pruneKeyInformationAfterRewind(
-        candidate,
-        iteration,
-        restart.kind === "session" &&
-          (restart.phase === "pr" || restart.phase === "resolve-conflicts"),
-        selectedOrder > 2,
-      );
+      pruneKeyInformationAfterRewind(candidate, iteration, restart, Boolean(code));
       if (
         supersededSessions > 0 ||
         code ||

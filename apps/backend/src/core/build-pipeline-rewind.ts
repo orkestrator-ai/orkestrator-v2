@@ -23,7 +23,7 @@ import {
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
 /** Position of a step within one round, in the order the loop runs them. */
-const PHASE_ORDER: Record<PipelineSessionPhase, number> = {
+export const PHASE_ORDER: Readonly<Record<PipelineSessionPhase, number>> = {
   build: 0,
   fix: 0,
   review: 2,

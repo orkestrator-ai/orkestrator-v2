@@ -395,8 +395,8 @@ failure (D24, `9ef37bfd1`). Afterwards, headless without a private network
 namespace: the two owning tests 10 of 10 each, the owner without the
 [to-do 7061, retired 2026-11-10](../../architecture/browser-previews.md#desktop-tunnel) case 21 of 21, the seeded
 spec 6 of 6, and 10 separate cold launches 10 of 10. The other Electron specs'
-first-title waits are
-[7062](../cross-cutting/7062-electron-specs-recover-network-changed-startup.md).
+first-title waits were 7062 (retired 2026-11-15; see
+[agent-testing.md](../../development/agent-testing.md#electron-specs-and-their-display)).
 
 Service previews shipped in #831 (`4f02156b`). Each previewed application gets
 a backend-owned service identity, carried by a desktop tunnel, private HTTPS
@@ -1921,7 +1921,7 @@ Commands were `mise run test:logged -- --name <name> -- bunx playwright test
   tests; `bun check -p e2e/agent-testing/tsconfig.json`, `oxlint` and
   `bun fmt` on the changed files passed.
 - Not run: forced network churn (it would abort other builds' loads on this
-  host; 7062 task 2), and a full `mise run test:agent:electron`.
+  host; 7062 (retired) task 2), and a full `mise run test:agent:electron`.
 - Cleanup: each spec removed its temporary profile root; no Electron,
   backend or Vite process of these runs is left. No Docker resources were
   created.
@@ -2163,7 +2163,7 @@ Recorded 2026-11-06 for task 11 (the 0622 window-close symptom), on branch
   `getRendererRequestAuthorization` answers `null` for a released scope; (b)
   the gateway request hooks catch a throwing lookup and still call back; (c)
   keep the scope bound until the window's requests drain. Chose (a) and (b),
-  as [6303](../cross-cutting/6303-window-close-during-request-throws.md)
+  as 6303 (retired 2026-11-15; `git show a8b89f154:docs/todo/cross-cutting/6303-window-close-during-request-throws.md`)
   recommended (a). Pros: (a) covers every caller of the lookup (the window
   hook, the preview views' hook, realms and `window-workspace-target.ts`).
   The window hook's local gateway fallback also uses a nonthrowing bound-scope

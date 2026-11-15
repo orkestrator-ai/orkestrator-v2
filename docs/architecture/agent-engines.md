@@ -796,7 +796,10 @@ its SDK were retired on 2026-11-11: there is no 1.x server, no
   server. The generic supervisor (`startLocalServer` in `commands-servers.ts`)
   owns the process under `opencode:<environmentId>`, so it is stopped with the
   environment, on backend shutdown and on a worktree move, reaped after a
-  backend crash (`local-server-reaper.ts`) and, for a coordinator, replaced once
+  backend crash (`local-server-reaper.ts`, at the next backend's start; on
+  Linux an orphan whose live parent is `systemd`, the `systemd --user`
+  subreaper, counts as orphaned; any other live parent may own it and is left
+  alone) and, for a coordinator, replaced once
   idle when its research setting changes. `opencode2/host-launch.ts` builds the
   launch: its own `OPENCODE_DB` and configuration directory under
   Orkestrator's data directory (never the user's `opencode.db`), a mirror of
@@ -922,9 +925,13 @@ All three passed at 2.2.6 on Linux x86_64 (host 2026-11-11, container
 one server, a steer racing a permission or question card and steer through
 the public CLI passed on scripted models on 2026-11-14
 (`opencode2-concurrency.live.test.ts`, `opencode2-steer-cards.live.test.ts`,
-the `opencode-steer` CLI scenario); a runtime without an egress gateway is
-still to run, in to-do
-[7905](../todo/agent-engines/7905-opencode2-untested-paths.md). A run whose
+the `opencode-steer` CLI scenario; to-do 7905 (retired)). A runtime without
+an egress gateway is not qualified: the current image puts every restricted
+runtime behind one (`egress-gateway.test.ts`), so that topology exists only on
+runtimes from an older image, whose support is retired. A stop withdraws the
+user's own steers still waiting in the session's inbox (behind a card), so the
+next prompt runs alone; mail and queued steers stay and are delivered first
+(to-do 8100 (retired), `opencode2-steer-cards.live.test.ts`). A run whose
 server is stopped under it (a backend restart reaps the server, a crash)
 is never resumed by plain `opencode serve`; the provider reports it as a
 restart interruption (`opencode2/restart-cut.ts`,

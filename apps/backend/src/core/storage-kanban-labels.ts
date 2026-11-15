@@ -6,6 +6,7 @@ import {
   TICKET_LABEL_LIMITS,
   type TicketLabelDefinition,
 } from "@orkestrator/protocol/ticket-labels";
+import type { KanbanProjectRemovalStore } from "./storage-kanban-project-removal.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { KanbanLabelCatalogue } from "./storage-shared-core.js";
@@ -61,7 +62,18 @@ export class KanbanLabelCatalogueStore {
   constructor(
     private readonly context: StorageContext,
     private readonly files: StorageFiles,
+    private readonly removal: KanbanProjectRemovalStore,
   ) {}
+
+  /** Removes a project's catalogue, an unreadable one included. */
+  delete(projectId: string): void {
+    this.context.updateStoreRow<void>(
+      this.files.kanbanLabelsFile(),
+      projectId,
+      () => ({ result: undefined, delete: true }),
+      { unreadableRow: "replace" },
+    );
+  }
 
   list(projectId: string): TicketLabelDefinition[] {
     return storedLabels(this.context.loadStoreRow(this.files.kanbanLabelsFile(), projectId));
@@ -77,6 +89,8 @@ export class KanbanLabelCatalogueStore {
       this.files.kanbanLabelsFile(),
       projectId,
       (current) => {
+        // Inside the row's transaction, so a removal's delete cannot pass it.
+        this.removal.assertAcceptsContent(projectId);
         const labels = storedLabels(current);
         const index = labels.findIndex(
           (label) => ticketLabelKey(label.name) === ticketLabelKey(input.name),

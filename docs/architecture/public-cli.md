@@ -244,7 +244,7 @@ not advertise at its version before sending it.
 | `project create --path P --github-private` | `project.create` | `createProjectFromScratch`: `git init`, **private GitHub repository**, push | metadata, filesystem, external |
 | `project init --path P` | `project.init` | `initLocalProject`: `git init -b main`, one empty commit, **no remote** | metadata, filesystem |
 | `project update ID` | `project.update` | revision-checked storage patch | metadata only — no directory move, no `.git/config` rewrite |
-| `project remove ID [--cascade [--wait]]` | `project.remove` | `delete_environment` per environment (cascade), then removal fence + `cleanupProjectForRemoval` | registration only, plus the environments with `--cascade`; refused with environments otherwise |
+| `project remove ID [--cascade [--wait]]` | `project.remove` | `delete_environment` per environment (cascade), then removal fence + `cleanupProjectForRemoval` | registration, with the project's tickets, ticket images, notes and feature plans on that machine ([tickets.md](tickets.md#sync-across-machines)); the result reports `effects: "registration-and-local-content"`, plus the environments with `--cascade`; refused with environments otherwise |
 | `project config get/set/unset` | `project.config.get/set` | config lock, content revision | metadata |
 | `environment list/get` | `environment.list/get` | environment snapshot (no Docker sync) | read |
 | `environment create` | `environment.create` | `create_environment` (control request ID + fingerprint) | metadata |
@@ -1012,7 +1012,7 @@ loopback model (`scripts/opencode2-steer-probe.ts`) that holds the turn's first
 request open while `session steer` redirects it, an exact retry replays the same
 operation, another text under the key is `request-conflict`, and the turn ends
 on the steer's reply once. It is what qualifies OpenCode's `steer: true` here
-(to-do 7905 task 4). The container matrix adds
+(to-do 7905 (retired) task 4). The container matrix adds
 `foreign-owner`: a container and two volumes (one mounted, one unmounted)
 carrying every label of the scenario's environment except its owner
 (`orkestrator-owner`) sit beside it while `environment start`, `exec`, `list`,

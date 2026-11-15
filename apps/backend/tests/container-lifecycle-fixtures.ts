@@ -1,13 +1,13 @@
 import { eventSink } from "../src/core/backend-emit.js";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, promises as fs } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CommandContext } from "../src/core/commands-context.js";
 import type { Environment } from "../src/core/models.js";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks.js";
 import { BackendRuntime } from "../src/core/backend-runtime.js";
-import { GITHUB_RANGES_FILE } from "../src/core/github-ranges-cache.js";
+import { githubRangesSeedFile } from "../src/core/github-ranges-cache.js";
 
 /**
  * Small, dependency-free fixtures for container lifecycle suites. They avoid
@@ -56,15 +56,27 @@ export function seedLiveGithubRanges(
   seed = process.env.ORKESTRATOR_LIVE_GITHUB_RANGES_SEED?.trim(),
 ): boolean {
   if (!seed || !existsSync(dataDir)) return false;
-  const target = path.join(dataDir, GITHUB_RANGES_FILE);
+  const target = githubRangesSeedFile(dataDir);
   if (existsSync(target)) return false;
   try {
+    mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
     copyFileSync(seed, target);
     return true;
   } catch {
     // Best effort: let the backend fetch ranges when the CI seed is unavailable.
     return false;
   }
+}
+
+/** Writes a GitHub ranges seed where the backend serves it from, so a create does not fetch. */
+export async function writeGithubRangesSeedFixture(
+  dataDir: string,
+  contents: string,
+): Promise<string> {
+  const target = githubRangesSeedFile(dataDir);
+  await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o755 });
+  await fs.writeFile(target, contents);
+  return target;
 }
 
 export function memoryLifecycleContext(

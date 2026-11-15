@@ -370,3 +370,85 @@ test.each(["idle", "mismatch"] as const)(
     );
   },
 );
+
+describe("a steer bound to the turn the view showed (to-do 8107 (retired))", () => {
+  test("is queued, never steered, when another turn has started since", async () => {
+    const stub = steerProvider({ active: "running", status: () => "running" });
+    await withService(
+      { prefix: "ork-bound-steer-replaced-", provider: async () => stub.provider },
+      async ({ service, storage }) => {
+        const identity = identityFor("bound-replaced");
+        await service.ensureSession(identity);
+
+        const outcome = await service.performProjectionAction({
+          ...identity,
+          action: { kind: "steer", text: "For the first turn", expectedRunId: "cursor-run-0" },
+        });
+
+        expect(outcome).toMatchObject({ outcome: "applied", deliveredAs: "queued" });
+        // The running turn never saw it.
+        expect(stub.performSessionAction).not.toHaveBeenCalled();
+        expect(stub.send).not.toHaveBeenCalled();
+        expect((await storage.getPromptQueue(queueKeyFor(identity)))?.messages).toMatchObject([
+          { id: outcome.requestId, text: "For the first turn" },
+        ]);
+        expect(
+          (await storage.getNativeAgentSession(keyFor(identity)))?.pendingSteer,
+        ).toBeUndefined();
+      },
+    );
+  });
+
+  test("joins the turn it was written for, marked as the user's own", async () => {
+    const stub = steerProvider({ active: "running", status: () => "running" });
+    await withService(
+      { prefix: "ork-bound-steer-same-", provider: async () => stub.provider },
+      async ({ service, storage }) => {
+        const identity = identityFor("bound-same");
+        await service.ensureSession(identity);
+
+        const outcome = await service.performProjectionAction({
+          ...identity,
+          action: { kind: "steer", text: "Narrow it", expectedRunId: "cursor-run-1" },
+        });
+
+        expect(outcome).toEqual({ outcome: "applied" });
+        expect(stub.performSessionAction).toHaveBeenCalledTimes(1);
+        expect(stub.performSessionAction.mock.calls[0]![1]).toMatchObject({
+          kind: "steer",
+          text: "Narrow it",
+          expectedRunId: "cursor-run-1",
+          // A stop before it lands may withdraw it (to-do 8100 (retired)).
+          origin: "user",
+        });
+        expect(await storage.getPromptQueue(queueKeyFor(identity))).toBeNull();
+      },
+    );
+  });
+
+  test("with refuse-on-miss is refused and sends nothing", async () => {
+    const stub = steerProvider({ active: "running", status: () => "running" });
+    await withService(
+      { prefix: "ork-bound-steer-refuse-", provider: async () => stub.provider },
+      async ({ service, storage }) => {
+        const identity = identityFor("bound-refuse");
+        await service.ensureSession(identity);
+
+        const outcome = await service.performProjectionAction({
+          ...identity,
+          action: {
+            kind: "steer",
+            text: "Only that run",
+            expectedRunId: "cursor-run-0",
+            onMissedTurn: "refuse",
+          },
+        });
+
+        expect(outcome).toEqual({ outcome: "mismatch" });
+        expect(stub.performSessionAction).not.toHaveBeenCalled();
+        expect(stub.send).not.toHaveBeenCalled();
+        expect(await storage.getPromptQueue(queueKeyFor(identity))).toBeNull();
+      },
+    );
+  });
+});

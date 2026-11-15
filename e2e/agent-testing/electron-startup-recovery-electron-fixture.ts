@@ -20,7 +20,7 @@ import {
 } from "./electron-startup-recovery-live-support";
 
 /**
- * The Electron half of to-do 7062 task 2: a real headless Electron window,
+ * The Electron half of to-do 7062 (retired) task 2: a real headless Electron window,
  * launched and watched the way the Electron specs do (`watchElectronStartup`
  * straight after `electron.launch`, then `waitForTitle` on `firstWindow()`),
  * loses its module fan-out to a real `ERR_NETWORK_CHANGED` and recovers with

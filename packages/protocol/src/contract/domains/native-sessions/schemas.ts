@@ -417,6 +417,13 @@ export const PendingSteerSchema = openRecord({
   expectedRunId: Schema.String,
   onMissedTurn: Schema.optional(Schema.Literals(["refuse", "new-turn"])),
   turnRequestId: optionalString,
+  /**
+   * `user`: a redirect the user typed for the running turn (composer, Agent
+   * Info, public CLI). A provider that holds steers until a step boundary
+   * withdraws it when that turn is stopped first (to-do 8100 (retired)). Absent for
+   * mail, queue and pipeline steers, which must still reach the agent.
+   */
+  origin: Schema.optional(Schema.Literal("user")),
   state: Schema.Literals(["prepared", "unknown"]),
   /** Source reservation survives until delivery or definitive non-delivery. */
   sourceQueue: Schema.optional(Schema.Literal(true)),

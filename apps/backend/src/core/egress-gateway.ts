@@ -8,7 +8,7 @@ import { runCommand } from "./shell.js";
 import { egressGatewayOf, forgetNetworkOwner } from "./container-network-owner.js";
 import { startDockerContainer } from "./container-start.js";
 import { PROBE_WINDOW_MS, boundedWaitScript, probeIterations } from "./container-readiness.js";
-import { copyGithubRangesSeed } from "./github-ranges-cache.js";
+import { githubRangesSeedMountArguments } from "./github-ranges-cache.js";
 import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 
 export { egressGatewayOf, networkOwnerContainer } from "./container-network-owner.js";
@@ -120,7 +120,11 @@ export interface EgressGatewaySpec {
   addHostGateway: boolean;
   /** What the alias names: Docker's `host-gateway` unless rootless needs RootlessKit's host. */
   hostAliasTarget?: string;
-  githubSeed: string | null;
+  /**
+   * The GitHub ranges seed directory, bound read-only so every boot reads
+   * the seed the backend last refreshed (`prepareGithubRangesSeedBind`).
+   */
+  githubSeedDirectory: string | null;
   /** `-e NAME=value` policy values the gateway records and enforces. */
   policyEnvironment: Readonly<Record<string, string>>;
   /** Apply the gateway's own memory and PID budget (when the daemon can). */
@@ -171,6 +175,7 @@ export function egressGatewayCreateArguments(spec: EgressGatewaySpec): string[] 
     "--sysctl",
     "net.ipv6.conf.all.disable_ipv6=1",
     ...spec.publishArguments,
+    ...(spec.githubSeedDirectory ? githubRangesSeedMountArguments(spec.githubSeedDirectory) : []),
     ...Object.entries(spec.policyEnvironment).flatMap(([name, value]) => [
       "-e",
       `${name}=${value}`,
@@ -259,15 +264,13 @@ async function containerExists(nameOrId: string): Promise<boolean | null> {
  * other same-named container is left alone and reported.
  */
 export async function createEgressGateway(spec: EgressGatewaySpec): Promise<string> {
-  // The GitHub seed is copied in before the first start, never bound
-  // (`copyGithubRangesSeed`).
-  const create = async () => {
-    const id = (
+  // The GitHub seed directory is bound, never copied in: a copy into a
+  // container that is not running is what a rootless daemon refused (to-do
+  // 7549 task 2), and a bind shows each boot the seed as last refreshed.
+  const create = async () =>
+    (
       await runCommand("docker", egressGatewayCreateArguments(spec), { timeoutMs: 120_000 })
     ).stdout.trim();
-    if (spec.githubSeed) await copyGithubRangesSeed(id, spec.githubSeed);
-    return id;
-  };
   try {
     return await create();
   } catch (error) {
@@ -400,7 +403,17 @@ function startError(error: unknown): unknown {
  */
 export async function prepareEgressGatewayForStart(
   workloadId: string,
-  options: { timeoutMs?: number; pollMs?: number; windowMs?: number } = {},
+  options: {
+    timeoutMs?: number;
+    pollMs?: number;
+    windowMs?: number;
+    /**
+     * Runs just before the gateway boots (a start, or the restart of one
+     * whose firewall failed); the start path refreshes the GitHub seed
+     * there. It must not throw.
+     */
+    beforeGatewayBoot?: (gatewayId: string) => Promise<unknown>;
+  } = {},
 ): Promise<"none" | "ready" | "restarted-gateway"> {
   const gatewayId = await egressGatewayOf(workloadId);
   if (!gatewayId) return "none";
@@ -414,6 +427,7 @@ export async function prepareEgressGatewayForStart(
   const firewall = gateway.running ? await gatewayFirewallState(gatewayId) : null;
   const retryFailed = firewall === "failed";
   if (!gateway.running || retryFailed) {
+    await options.beforeGatewayBoot?.(gatewayId).catch(() => undefined);
     await startDockerContainer(gatewayId, { verb: retryFailed ? "restart" : "start" }).catch(
       (error: unknown) => {
         throw startError(error);

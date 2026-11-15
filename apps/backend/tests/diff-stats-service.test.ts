@@ -29,6 +29,7 @@ interface Harness {
   watcherClosedAtPath: (worktreePath: string) => boolean;
   failWatch: (environmentId: string) => void;
   qualifyWatch: (environmentId: string) => void;
+  demoteWatch: (environmentId: string) => void;
   /** How often the service told the target's watcher it missed a change. */
   unannouncedFor: (environmentId: string) => number;
   /** The watcher holds a reported change against itself. */
@@ -213,7 +214,26 @@ function createHarness(
       const record = key ? watchers.get(key) : undefined;
       if (!record) throw new Error("No watcher");
       record.qualified = true;
-      record.onCoverageChange?.();
+      // A coverage change reschedules the interval outside track().
+      schedulingFor = environmentId;
+      try {
+        record.onCoverageChange?.();
+      } finally {
+        schedulingFor = undefined;
+      }
+    },
+    demoteWatch(environmentId) {
+      const key = watcherKeyFor(environmentId);
+      const record = key ? watchers.get(key) : undefined;
+      if (!record) throw new Error("No watcher");
+      record.qualified = false;
+      // A coverage change reschedules the interval outside track().
+      schedulingFor = environmentId;
+      try {
+        record.onCoverageChange?.();
+      } finally {
+        schedulingFor = undefined;
+      }
     },
     unannouncedFor(environmentId) {
       const key = watcherKeyFor(environmentId);
@@ -399,6 +419,38 @@ describe("DiffStatsService", () => {
     harness.tick("env-local");
     await settle();
     expect(harness.unannouncedFor("env-local")).toBe(1);
+  });
+
+  test("the first poll after a demotion reports the change it finds first (to-do 8171)", async () => {
+    const harness = createHarness();
+    harness.service.track(localTarget());
+    await settle();
+
+    // Two qualified safety scans, the second finding a change no hint announced.
+    harness.clock.value += 120_000;
+    harness.tick("env-local");
+    await settle();
+    harness.setScan(async () => ({ stats: stats(), changes: [{ path: "missed.ts" }] }));
+    harness.clock.value += 120_000;
+    harness.tick("env-local");
+    await settle();
+    expect(harness.unannouncedFor("env-local")).toBe(1);
+
+    // The watcher withdraws coverage, so the entry polls.
+    harness.demoteWatch("env-local");
+    expect(harness.intervalFor("env-local")).toBe(15_000);
+
+    // The first poll's previous scan is the qualified one; a change it finds
+    // before any event still restarts the distrust, not only the second poll's.
+    harness.setScan(async () => ({ stats: stats(), changes: [{ path: "polled.ts" }] }));
+    harness.clock.value += 15_000;
+    harness.tick("env-local");
+    await settle();
+    expect(harness.unannouncedFor("env-local")).toBe(2);
+
+    // Trust restored: back to the safety cadence.
+    harness.qualifyWatch("env-local");
+    expect(harness.intervalFor("env-local")).toBe(120_000);
   });
 
   test("containers are polled rather than watched", async () => {

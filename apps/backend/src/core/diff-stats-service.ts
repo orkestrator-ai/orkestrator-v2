@@ -1453,10 +1453,11 @@ export class DiffStatsService {
     // (to-do 8171 for local ones), and the entry polls meanwhile. A local
     // watcher is also told about the changes those polls find first, which
     // keeps one whose events arrive late distrusted; it ignores them when it
-    // is unqualified for another reason.
+    // is unqualified for another reason. The first poll after a demotion
+    // counts too: its previous scan is the qualified one that found the miss,
+    // and skipping it would extend the distrust one poll late.
     const trustedBoth = attempt.qualified && previous?.qualified === true;
-    const pollingLocal =
-      target.kind === "local" && !attempt.qualified && previous?.qualified === false;
+    const pollingLocal = target.kind === "local" && !attempt.qualified;
     if (
       previous &&
       previous.semanticDigest !== semanticDigest &&

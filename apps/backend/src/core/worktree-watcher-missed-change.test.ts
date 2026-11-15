@@ -3,9 +3,19 @@ import {
   installControlledTimeout,
   type ControlledTimeout,
 } from "../../../../tests/helpers/controlled-timeout.js";
+import { eventSink } from "./backend-emit.js";
+import { SharedWatcherRegistry } from "./change-tracking/shared-physical-work.js";
+import {
+  DIFF_POLL_INTERVAL_MS,
+  DIFF_SAFETY_NET_INTERVAL_MS,
+  DiffStatsService,
+} from "./diff-stats-service.js";
+import { ManualTime } from "./recurring-test-support.js";
+import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { WatchHandle } from "./watch-host.js";
 import {
   startWorktreeWatcher,
+  WATCH_DISTRUST_MS,
   type StartWatch,
   type WorktreeChangeHint,
   type WorktreeWatcher,
@@ -187,4 +197,134 @@ test("closing during the grace decides nothing", async () => {
   expect(grace!.pendingCount()).toBe(0);
   expect(context.misses()).toBe(0);
   expect(context.coverageChanges()).toBe(1);
+});
+
+/**
+ * The real watcher behind the shared registry inside the real scan owner, on
+ * one manual clock: a miss moves the entry from the safety scan to polling and
+ * back, and a file tree cached under the earlier qualified coverage is not
+ * served again once trust returns on an event no view cares about.
+ */
+function scanOwnerWithRealWatcher() {
+  grace = installControlledTimeout(GRACE_MS, { label: "missed-change grace" });
+  const time = new ManualTime(1_000_000);
+  let emit: (eventType: string, filename: string | null) => void = () => undefined;
+  const start: StartWatch = (_target, listener) => {
+    emit = listener;
+    const handle: WatchHandle = { on: () => handle, close: () => undefined };
+    return handle;
+  };
+  const registry = new SharedWatcherRegistry((options) =>
+    startWorktreeWatcher({
+      ...options,
+      settleMs: 20,
+      missGraceMs: GRACE_MS,
+      distrustMs: WATCH_DISTRUST_MS,
+      now: time.now,
+      startWatch: start,
+      resolveGitPaths: async () => ({ gitDir: "/wt/.git", commonDir: "/wt/.git", linked: false }),
+    }),
+  );
+  const intervals: number[] = [];
+  const warnings: string[] = [];
+  let files = ["old.txt"];
+  let tree = ["old.txt"];
+  let walks = 0;
+  const service = new DiffStatsService({
+    scan: async () => ({
+      stats: {
+        additions: files.length,
+        deletions: 0,
+        filesChanged: files.length,
+        truncated: false,
+      },
+      changes: files.map((path) => ({ path, status: "M", additions: 1, deletions: 0 })),
+    }),
+    walkTree: async () => {
+      walks += 1;
+      return tree.map((name) => ({ name, path: name, isDirectory: false }));
+    },
+    emit: eventSink(() => undefined),
+    startWatcher: registry.startWatcher,
+    onWarning: (warning) => warnings.push(warning.event),
+    metrics: new RecurringWorkMetrics({ enabled: false }),
+    localScanMinGapMs: 0,
+    now: () => new Date(time.now()).toISOString(),
+    monotonicNow: time.now,
+    schedule: (callback, intervalMs) => {
+      intervals.push(intervalMs);
+      return time.setInterval(callback, intervalMs);
+    },
+    cancel: (timer) => time.clear(timer),
+    delay: (callback, delayMs) => time.setTimeout(callback, delayMs),
+    cancelDelay: (timer) => time.clear(timer),
+  });
+  services.push(service);
+  const lookup = { worktreePath: "/wt" };
+  return {
+    time,
+    service,
+    intervals,
+    warnings,
+    emit: (filename: string) => emit("change", filename),
+    readTree: async () => (await service.readTree({ lookup })).tree as Array<{ name: string }>,
+    setFiles: (next: string[]) => {
+      files = next;
+    },
+    setTree: (next: string[]) => {
+      tree = next;
+    },
+    walks: () => walks,
+  };
+}
+
+const services: DiffStatsService[] = [];
+afterEach(() => {
+  for (const service of services.splice(0)) service.shutdown();
+});
+
+test("trust regained on an ignored event reconciles the views cached before the miss", async () => {
+  const owner = scanOwnerWithRealWatcher();
+  owner.service.track({
+    environmentId: "env-local",
+    kind: "local",
+    worktreePath: "/wt",
+    comparisonRef: "main",
+  });
+  await until(() => owner.intervals.at(-1) === DIFF_SAFETY_NET_INTERVAL_MS);
+
+  // A safety scan under qualified coverage; the next one finds a change no
+  // event announced.
+  await owner.time.advance(DIFF_SAFETY_NET_INTERVAL_MS);
+  owner.setFiles(["old.txt", "missed.ts"]);
+  await owner.time.advance(DIFF_SAFETY_NET_INTERVAL_MS);
+
+  // The Files panel walks the tree during the grace, still under qualified
+  // coverage, so the walk is cached as covered by this watcher.
+  expect((await owner.readTree()).map((entry) => entry.name)).toEqual(["old.txt"]);
+  expect(owner.walks()).toBe(1);
+
+  // After the grace the watcher withdraws coverage and the entry polls.
+  expect(grace!.advance()).toBe(1);
+  expect(owner.warnings).toContain("scan.watcher-missed-change");
+  expect(owner.service.isWatching("env-local")).toBe(true);
+  expect(owner.intervals.at(-1)).toBe(DIFF_POLL_INTERVAL_MS);
+
+  // While distrusted, a Git-invisible file appears without any event, and the
+  // quiet polls give the watcher no further miss.
+  owner.setTree(["old.txt", "ignored-generated.txt"]);
+  await owner.time.advance(WATCH_DISTRUST_MS + 1);
+  expect(grace!.pendingCount()).toBe(0);
+  expect(owner.intervals.at(-1)).toBe(DIFF_POLL_INTERVAL_MS);
+
+  // Trust returns on a Git object write, which no view cares about. The tree
+  // cached under the earlier coverage must not count as valid again.
+  owner.emit(".git/objects/ab/cdef");
+  expect(owner.intervals.at(-1)).toBe(DIFF_SAFETY_NET_INTERVAL_MS);
+  await owner.time.advance(0);
+  expect((await owner.readTree()).map((entry) => entry.name)).toEqual([
+    "old.txt",
+    "ignored-generated.txt",
+  ]);
+  expect(owner.walks()).toBe(2);
 });

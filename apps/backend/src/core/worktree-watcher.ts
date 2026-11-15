@@ -410,10 +410,22 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     else if (!unreadable) options.onCoverageChange?.();
   };
 
-  /** Every platform event is proof of delivery, relevant to a view or not. */
+  /**
+   * Every platform event is proof of delivery, relevant to a view or not.
+   *
+   * Trust comes back on whichever event arrives first, and that may be one no
+   * view cares about (Git writing an object). Whatever changed while the
+   * watcher was distrusted was never announced, and a view cached under its
+   * earlier qualified coverage (the file tree, which nothing reads while the
+   * Files panel is closed) would otherwise count as valid again the moment
+   * coverage returns. So the owner is told "anything may have changed" first,
+   * dirtying both views, and only then is coverage announced.
+   */
   const noteDelivery = () => {
     deliveries += 1;
-    if (distrustedAt !== undefined && now() - distrustedAt >= distrustMs) setDistrusted(false);
+    if (distrustedAt === undefined || now() - distrustedAt < distrustMs) return;
+    if (!closed) options.onChange();
+    setDistrusted(false);
   };
 
   /** Everything qualified coverage needs except trust in delivery. */

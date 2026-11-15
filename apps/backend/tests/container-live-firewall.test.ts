@@ -20,7 +20,7 @@ import { prepareEgressGatewayForStart, stopRuntimeContainer } from "../src/core/
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { removeLabelledResources } from "./container-live-cleanup";
-import { GITHUB_RANGES_FILE, readGithubRangesSeed } from "../src/core/github-ranges-cache";
+import { githubRangesSeedFile, readGithubRangesSeed } from "../src/core/github-ranges-cache";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
@@ -188,7 +188,7 @@ describe("C23 allowlist edits, refresh and revocation", () => {
       const { environmentNetworkPolicy } = await import("../src/core/container-network");
       const environment = lifecycleEnvironment({ id: `unseeded-${RUN}` });
       const { context } = firewallContext([environment]);
-      const seed = path.join(dataDir, GITHUB_RANGES_FILE);
+      const seed = githubRangesSeedFile(dataDir);
       expect(await readGithubRangesSeed(seed)).toBeNull();
       const resolved = await resolveDockerImage(IMAGE);
       if (resolved.kind !== "present") throw new Error("qualification image missing");

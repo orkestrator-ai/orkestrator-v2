@@ -378,8 +378,9 @@ describe("unknown sessions", () => {
   });
 
   // A persisted session that is not resident (after a bridge restart) used
-  // to answer 404 here, and only the backend's `/messages` fallback loaded it.
-  // The summary route now materializes it, so 404 means missing (0050 item 3).
+  // to answer 404 here, and only the backend's since-retired `/messages`
+  // fallback loaded it. The summary route now materializes it, so 404 means
+  // missing (0050 item 3), which the backend relies on (0050 task 1).
   test("the summary route materializes a persisted session, serves its preview, then hydrates", async () => {
     const bridgeId = track(`session-${PERSISTED_SDK_ID}`);
     mockSdkGetSessionInfo.mockImplementation(async () => sdkSessionInfo());

@@ -84,7 +84,11 @@ policies would both be enforced, and the general one's `script-src 'self'`
 refuses the frame's hash-pinned bootstrap. Every other path, the frame path
 with a trailing segment included, keeps the strict policy with
 `frame-ancestors 'none'`. `apps/web-public/src/config.test.ts` checks which
-policy each path matches; whether a real Vercel deployment applies the rules
+policy each path matches (`apps/web-public/vercel-routing.ts` models Vercel's
+matching), and the public-site browser suite serves the built client with
+those rules (`e2e/public-site/vercel-static-server.ts`):
+`static-html-frame.spec.ts` checks that a page under the strict policy renders
+a report in the frame. Whether a real Vercel deployment applies the rules
 that way is on the manual-test checklist (7568, 4650 task 1). A build whose host
 policy cannot run the frame declares the view unavailable
 (`ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable`,

@@ -5,6 +5,7 @@ import {
   GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
   STATIC_HTML_FRAME_DOCUMENT,
 } from "@orkestrator/protocol/renderer-content-security-policy";
+import { type VercelConfig, vercelHeadersFor, vercelRewriteFor } from "../vercel-routing";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const read = (name: string) => readFileSync(path.join(packageRoot, name), "utf8");
@@ -46,8 +47,11 @@ describe("public client deployment configuration", () => {
     const config = readVercelConfig();
     expect(config.outputDirectory).toBe("dist");
     expect(config.rewrites).toEqual([{ source: "/(.*)", destination: "/index.html" }]);
+    for (const probe of ["/", "/connect", "/connect/", "/static-html-frame.html"]) {
+      expect(vercelRewriteFor(config, probe)).toBe("/index.html");
+    }
     for (const probe of ["/", "/index.html", "/assets/index-abc.js", "/static-html-frame.html"]) {
-      const headers = headersFor(config, probe);
+      const headers = vercelHeadersFor(config, probe);
       expect(headers).toContainEqual({ key: "Referrer-Policy", value: "no-referrer" });
       expect(headers).toContainEqual({ key: "X-Content-Type-Options", value: "nosniff" });
     }
@@ -105,50 +109,12 @@ describe("public client deployment configuration", () => {
   });
 });
 
-type Header = { key: string; value: string };
-type VercelConfig = {
-  outputDirectory: string;
-  rewrites: Array<{ source: string; destination: string }>;
-  headers: Array<{ source: string; headers: Header[] }>;
-};
-
 function readVercelConfig(): VercelConfig {
   return JSON.parse(read("vercel.json")) as VercelConfig;
 }
 
-/**
- * Vercel matches `source` with path-to-regexp 6: case-insensitive, an optional
- * trailing slash, and a parenthesised group taken as a raw regular expression.
- * The repository has no path-to-regexp 6 to call, so this is the subset these
- * rules use; whether the deployed rules apply as matched here is the
- * manual-test checklist's check on a real deployment (7568, 4650 task 1).
- */
-function vercelSourcePattern(source: string): RegExp {
-  let pattern = "";
-  let depth = 0;
-  for (let index = 0; index < source.length; index++) {
-    const character = source[index]!;
-    if (character === "\\" && depth > 0) {
-      pattern += character + source[++index];
-      continue;
-    }
-    if (character === "(") depth++;
-    if (depth > 0) pattern += character;
-    else pattern += character.replace(/[.*+?^${}|[\]\\/]/g, "\\$&");
-    if (character === ")") depth--;
-  }
-  if (depth !== 0) throw new Error(`Unbalanced source ${source}`);
-  return new RegExp(`^${pattern}(?:\\/)?$`, "i");
-}
-
-function headersFor(config: VercelConfig, pathname: string): Header[] {
-  return config.headers
-    .filter((rule) => vercelSourcePattern(rule.source).test(pathname))
-    .flatMap((rule) => rule.headers);
-}
-
 function policiesFor(config: VercelConfig, pathname: string): string[] {
-  return headersFor(config, pathname)
+  return vercelHeadersFor(config, pathname)
     .filter((header) => header.key === "Content-Security-Policy")
     .map((header) => header.value);
 }

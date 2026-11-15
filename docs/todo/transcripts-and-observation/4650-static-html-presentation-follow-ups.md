@@ -17,7 +17,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, on the branch that added the 
 
 **Context.** Before 2026-11-15, `apps/web-public/vercel.json` set `script-src 'self'` and `frame-ancestors 'none'` on `/(.*)`, and its Vite build did not use `rendererSecurityPlugin`, so there was no emitted frame document. A `srcdoc` frame inherits the parent policy, so the bootstrap could not run, and the build declared `ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable`.
 
-**Investigation.** Approval to relax the hosted policy for that path was given by the user on 2026-11-14 (see Assumptions and decisions). Built on 2026-11-15: the hosted build emits `static-html-frame.html` (`staticHtmlFramePlugin` in `apps/web/vite-plugin-renderer-security.ts`), `vercel.json` gives `/static-html-frame.html` the gateway's frame policy and excludes exactly that path from the general rule (`/((?!static-html-frame\.html$).*)`), and the build no longer declares the view unavailable. `bun run --cwd apps/web-public build` emitted the document with its hash-pinned script. Locally, the built `dist` served by a small Bun server that applied `vercel.json`'s rules as `config.test.ts` reads them, in headless Chromium: a same-origin page under the strict policy framed the document with `sandbox="allow-scripts"`, the frame rendered a report through `StaticHtmlFrameSession`, its text was selectable, and `/` still received `frame-ancestors 'none'`. With the general rule left as `/(.*)` (both policies on the frame path) the frame never reported `ready`. That local server is not Vercel: whether Vercel matches the rules this way is the manual-test checklist's check (7568).
+**Investigation.** Approval to relax the hosted policy for that path was given by the user on 2026-11-14 (see Assumptions and decisions). Built on 2026-11-15: the hosted build emits `static-html-frame.html` (`staticHtmlFramePlugin` in `apps/web/vite-plugin-renderer-security.ts`), `vercel.json` gives `/static-html-frame.html` the gateway's frame policy and excludes exactly that path from the general rule (`/((?!static-html-frame\.html$).*)`), and the build no longer declares the view unavailable. `bun run --cwd apps/web-public build` emitted the document with its hash-pinned script. Locally, the built `dist` served by a small Bun server that applied `vercel.json`'s rules as `config.test.ts` reads them, in headless Chromium: a same-origin page under the strict policy framed the document with `sandbox="allow-scripts"`, the frame rendered a report through `StaticHtmlFrameSession`, its text was selectable, and `/` still received `frame-ancestors 'none'`. With the general rule left as `/(.*)` (both policies on the frame path) the frame never reported `ready`. That experiment is now automated: the public-site browser suite serves its build through `e2e/public-site/vercel-static-server.ts`, which applies `vercel.json`'s headers and rewrites with the same matcher `config.test.ts` uses (`apps/web-public/vercel-routing.ts`), and `e2e/public-site/static-html-frame.spec.ts` checks each path's policy and that a page under the strict policy renders a report in the frame with selectable text; with the general rule set back to `/(.*)` both of its tests fail. That local server is not Vercel: whether Vercel matches the rules this way is the manual-test checklist's check (7568).
 
 **Decisions.**
 
@@ -139,12 +139,23 @@ All three went to 5780 (retired 2026-11-11, all three tasks done; `git show 498b
 - **Excluding the frame path from the general rule.**
   - **A negative lookahead in the general rule's source, `/((?!static-html-frame\.html$).*)` (chosen).**
     - Pros: holds whether Vercel merges or replaces matching rules, because only one rule matches the frame path; every other path, including `/static-html-frame.html/anything`, keeps the strict policy.
-    - Cons: a regular expression in a deployed policy; `config.test.ts` reads it with a hand-written subset of path-to-regexp 6, since the repository has no copy of that version.
+    - Cons: a regular expression in a deployed policy; `config.test.ts` and the public-site suite's server read it with a hand-written subset of path-to-regexp 6 (`apps/web-public/vercel-routing.ts`), since the repository has no copy of that version.
   - **A more specific rule listed after `/(.*)`.**
     - Pros: simpler sources.
     - Cons: Vercel applies every matching rule, so the frame would get both policies and the strict `script-src 'self'` would refuse its bootstrap; the local merge run above showed the frame never starting.
 - **Where the hosted plugin lives.** `staticHtmlFramePlugin` sits beside `rendererSecurityPlugin` and reuses its document builder, so the hosted client ships byte-for-byte the document the desktop and gateway builds ship (a test compares them). It adds no `<meta>` policy to the hosted `index.html`, whose policy stays the Vercel header, and emits no design frame document (out of this task's scope).
 - **The unavailable switch stays.** `staticHtmlPresentationSupported` and `ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable` remain as the one-line way back to saved previews if the Vercel check finds the rules do not apply as built; no build sets it now.
+
+### Task 1: browser coverage under the hosted headers (2026-11-15)
+
+Review found that nothing automated served the built hosted client under `vercel.json`'s headers and checked the frame starts; `config.test.ts` only checked which rule each path matches, and the public-site suite used `vite preview`, which sends no headers.
+
+- **Serve the public-site suite through a Bun server that applies `vercel.json` (chosen).** `e2e/public-site/vercel-static-server.ts` serves the build with Vercel's file-then-rewrite order and every matching header rule, so the existing public-site tests now also run under the strict policy, and `static-html-frame.spec.ts` drives the real `StaticHtmlFrameSession` handshake against the emitted document.
+  - Pros: proves the built document and the built rules work together in Chromium, in the default `test:browser` run; the matcher is shared with `config.test.ts`, so the two cannot disagree.
+  - Cons: it is still the repository's model of Vercel's matching, not Vercel; the manual check (7568) stays.
+- **Keep `vite preview` and add a separate header-applying server only for the frame spec.**
+  - Pros: leaves the existing tests' server unchanged.
+  - Cons: two servers to build and keep in step, and the rest of the public site would stay untested under its deployed policy.
 
 ## Related
 

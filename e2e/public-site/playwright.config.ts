@@ -20,7 +20,12 @@ const baseURL = `http://127.0.0.1:${port}`;
 const distDirectory = path.join(repositoryRoot, "output/playwright/public-site-dist");
 
 // Serve the built public entrypoint, including its real lazy-loaded chunks and
-// SPA fallback. The pre-connection flow does not require a backend or credentials.
+// SPA fallback, with vercel.json's header rules and rewrites applied
+// (vercel-static-server.ts) so the browser enforces the policies a deployment
+// sends; `vite preview` sends none. The pre-connection flow does not require a
+// backend or credentials.
+const server = path.join(import.meta.dirname, "vercel-static-server.ts");
+const vercelConfig = path.join(repositoryRoot, "apps/web-public/vercel.json");
 export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: "*.spec.ts",
@@ -30,7 +35,7 @@ export default defineConfig({
   reporter: "line",
   outputDir: path.join(repositoryRoot, "output/playwright/public-site"),
   webServer: {
-    command: `bun check && bunx vite build --outDir "${distDirectory}" --emptyOutDir && bunx vite preview --outDir "${distDirectory}" --host 127.0.0.1 --port ${port} --strictPort`,
+    command: `bun check && bunx vite build --outDir "${distDirectory}" --emptyOutDir && bun "${server}" --dist "${distDirectory}" --config "${vercelConfig}" --port ${port}`,
     cwd: path.join(repositoryRoot, "apps/web-public"),
     url: baseURL,
     reuseExistingServer: false,

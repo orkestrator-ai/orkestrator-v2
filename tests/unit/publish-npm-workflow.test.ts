@@ -96,6 +96,18 @@ describe("npm publish workflow", () => {
     expect(steps.some((step) => step.with && "registry-url" in step.with)).toBe(false);
   });
 
+  test("lets Chromium's sandbox start before the smoke test, never by dropping it", () => {
+    const names = steps.map((step) => step.name);
+    const allow = names.indexOf("Allow unprivileged user namespaces on the disposable runner");
+    const publish = steps.findIndex(
+      (step) => step.run?.trim() === "bun scripts/publish-cli.ts --ci",
+    );
+    expect(allow).toBeGreaterThan(-1);
+    expect(allow).toBeLessThan(publish);
+    expect(steps[allow]?.run).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
+    expect(source).not.toMatch(/no-sandbox|chromiumSandbox:\s*false/);
+  });
+
   test("refuses a tag that is not a merged release of this package's version", () => {
     const check = steps.find((step) => step.name === "Check the tag is a merged release");
     expect(check?.run).toContain("packages/cli/package.json");

@@ -88,6 +88,8 @@ import {
   bridgeFetch,
   normalizeProviderAuthNotice,
   normalizeProviderReadiness,
+  bridgeSnapshotTurnRunId,
+  bridgeSnapshotTurnRunIdField,
   fetchSessionSnapshot,
   readProviderActivityObservation,
   resolvePromptAttachments,
@@ -325,11 +327,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ),
     );
     if (status?.status !== "running") return { state: "idle" };
-    const candidateRunId = nonEmptyString(status.turnId);
-    const runId =
-      candidateRunId && Buffer.byteLength(candidateRunId, "utf8") <= 512
-        ? candidateRunId
-        : undefined;
+    const runId = bridgeSnapshotTurnRunId(status);
     return runId ? { state: "running", runId } : { state: "unknown" };
   }
 
@@ -735,6 +733,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           : {}),
         composer: composer as unknown as NativeAgentComposerState,
         ...(readiness ? { readiness } : {}),
+        ...bridgeSnapshotTurnRunIdField(status, payload),
         providerRevision: providerRevision as number,
         ...commandCatalogueRevisionField(payload?.commandRevision),
         ...(contextUsage ? { contextUsage } : {}),
@@ -864,6 +863,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ...(typeof config?.fastMode === "boolean" ? { fastMode: config.fastMode } : {}),
         },
         ...(phase ? { phase } : {}),
+        ...bridgeSnapshotTurnRunIdField(status, payload),
         ...(typeof payload.turnStartedAt === "string" &&
         Number.isFinite(Date.parse(payload.turnStartedAt))
           ? { turnStartedAt: Date.parse(payload.turnStartedAt) }
@@ -973,6 +973,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ...(typeof payload.turnStartedAt === "number" && Number.isFinite(payload.turnStartedAt)
         ? { turnStartedAt: payload.turnStartedAt }
         : {}),
+      ...bridgeSnapshotTurnRunIdField(status, payload),
       // Claude publishes its inventory revision on `GET /session/:id`, as the
       // other bridges do on `/status`; without it this path never revalidates
       // on `commands_changed`.

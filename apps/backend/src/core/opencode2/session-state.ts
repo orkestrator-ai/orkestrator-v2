@@ -16,8 +16,8 @@
  * - **Model** from the session's current model and the newest response's.
  *
  * The state read costs `GET /api/session/:id` plus one-row reads of the
- * newest assistant row (and, after a failed run, the newest idle row), so it
- * never reads the transcript itself.
+ * newest assistant row (and, after a failed run or while one runs, the newest
+ * idle row), so it never reads the transcript itself.
  */
 import type {
   NativeAgentContextUsage,
@@ -52,6 +52,49 @@ export interface OpenCode2SessionState {
   sessionReasoningId?: string;
   lastAssistantModelId?: string;
   lastAssistantReasoningId?: string;
+  /** The running run's id ({@link openCode2RunId}) while the session is running or waiting. */
+  turnRunId?: string;
+}
+
+/**
+ * The id of a session's current run: the session plus the newest `idle` row
+ * before it (the run boundary), `start` before the first run settles. The
+ * steer check (`activeSteerRun`) and the session projection read it the same
+ * way, one one-row read, so the run a view shows is the run a steer is
+ * checked against (to-do 8107 (retired)) however long the run's history grows.
+ */
+export function openCode2RunIdFrom(sessionId: string, newestIdle: OpenCode2Message | undefined) {
+  return `${sessionId}:${newestIdle?.id ?? "start"}`;
+}
+
+/** {@link openCode2RunIdFrom} with its own one-row read of the newest `idle` row. */
+export async function openCode2RunId(client: OpenCode2Client, sessionId: string): Promise<string> {
+  return openCode2RunIdFrom(sessionId, await newest(client, sessionId, "idle"));
+}
+
+/**
+ * The newest `idle` row as a run boundary for {@link openCode2SessionState}:
+ * `null` before the first run settles, `false` when it could not be read.
+ */
+export type OpenCode2RunBoundary = OpenCode2Message | null | false;
+
+/**
+ * Read the run boundary. A snapshot reads it before the lifecycle status, never
+ * after: boundaries only move forward, so a boundary read first can name only
+ * the run the status then reports or an earlier one. An earlier one is a
+ * mismatch at the steer check, which queues the steer. Read after the status,
+ * a run that settled in between would lend its own terminal row as the anchor
+ * of a snapshot still showing it running, and that anchor is the next run's
+ * id, so a steer from the stale view would join the next run.
+ */
+export function openCode2RunBoundary(
+  client: OpenCode2Client,
+  sessionId: string,
+): Promise<OpenCode2RunBoundary> {
+  return newest(client, sessionId, "idle").then(
+    (row) => row ?? null,
+    () => false as const,
+  );
 }
 
 function modelId(value: unknown): { modelId?: string; reasoningId?: string } {
@@ -78,12 +121,16 @@ async function newest(
  * State for `sessionStateSnapshot` and the head of `interactiveSnapshot`.
  * `status` is the provider's lifecycle answer; `recentRows` (oldest first),
  * when the caller already read them, replaces the one-row assistant read.
+ * `runBoundary` is the boundary {@link openCode2RunBoundary} read *before*
+ * `status`; without one an active snapshot names no run, because a boundary
+ * read here, after the status, can belong to the next run.
  */
 export async function openCode2SessionState(
   client: OpenCode2Client,
   sessionId: string,
   status: ProviderStatus,
   recentRows?: readonly OpenCode2Message[],
+  runBoundary?: OpenCode2RunBoundary,
 ): Promise<OpenCode2SessionState> {
   let session: OpenCode2Session;
   try {
@@ -95,14 +142,22 @@ export async function openCode2SessionState(
     throw new ProviderUnavailableError("OpenCode 2 session state is unavailable", { cause: error });
   }
   const settled = status === "idle";
+  const active = status === "running" || status === "blocked";
   const [assistant, idle] = await Promise.all([
     recentRows
       ? Promise.resolve(recentRows.filter((row) => row.type === "assistant"))
       : newest(client, sessionId, "assistant").then((row) => (row ? [row] : [])),
+    // A failed run's reason. The running run's boundary was read before the
+    // status (`runBoundary`), never here.
     settled && session.outcome === "failed"
       ? newest(client, sessionId, "idle")
       : Promise.resolve(undefined),
   ]);
+  // The run id is optional metadata: an unreadable or absent boundary leaves it out.
+  const turnRunId =
+    active && runBoundary !== undefined && runBoundary !== false
+      ? openCode2RunIdFrom(sessionId, runBoundary ?? undefined)
+      : undefined;
   const last = assistant.at(-1);
   const lastModel = modelId(asRecord(last)?.model);
   const sessionModel = modelId(session.model);
@@ -138,6 +193,7 @@ export async function openCode2SessionState(
     ...(status === "running" && typeof busy === "number" && busy > 0
       ? { turnStartedAt: busy }
       : {}),
+    ...(turnRunId ? { turnRunId } : {}),
     ...(sessionModel.modelId ? { sessionModelId: sessionModel.modelId } : {}),
     ...(sessionModel.reasoningId ? { sessionReasoningId: sessionModel.reasoningId } : {}),
     ...(lastModel.modelId ? { lastAssistantModelId: lastModel.modelId } : {}),

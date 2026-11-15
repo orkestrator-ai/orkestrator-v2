@@ -26,8 +26,11 @@
  *    reached the model exactly once: Claude, Codex and Pi by their scripted
  *    model's count of the text in what it was sent (`MARKER_WATCH_PATH` in
  *    `idle-observation-fake-claude.ts`), Cursor by the fake SDK's own record.
- *    A receipt alone is not delivery. This pins today's behaviour; binding a
- *    composer steer to the turn the user saw is to-do 8107.
+ *    A receipt alone is not delivery. These steers name no run, so this is
+ *    the unbound path. The composer and Agent Info send the run their view
+ *    showed (`expectedRunId`, to-do 8107 (retired)), and such a steer meeting
+ *    a replaced turn is queued as the next turn instead
+ *    (`native-agent-service-missed-steer.test.ts`).
  *
  * And one Claude case for the stop after several turns: a background task is
  * started, two follow-ups are written into the same warm CLI (its runtime

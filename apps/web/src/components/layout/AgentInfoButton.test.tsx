@@ -4601,6 +4601,34 @@ describe("AgentInfoButton backend-owned steering", () => {
     expect(mockToastSuccess).toHaveBeenCalledWith("Sent to the active turn");
   });
 
+  test("binds the steer to the turn the box shows (to-do 8107 (retired))", async () => {
+    seedRunningCodex();
+    const key = createSessionKey(ENVIRONMENT_ID, TAB_ID);
+    const store = appCommandStore(nativeAgentProjectionStore).getState();
+    store.setProjection(key, {
+      ...store.projections.get(key)!,
+      turn: { phase: "running", runId: "codex-turn-7" },
+      revision: 2,
+    });
+    steerOutcome({ outcome: "applied" });
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    const input = screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "use the new schema" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+
+    await waitFor(() =>
+      expect(
+        nativeInvokeMock.mock.calls.find(
+          ([command]) => command === "perform_native_agent_session_action",
+        )?.[1],
+      ).toMatchObject({
+        action: { kind: "steer", text: "use the new schema", expectedRunId: "codex-turn-7" },
+      }),
+    );
+  });
+
   test("keeps the text while backend-owned recovery is unresolved", async () => {
     seedRunningCodex();
     steerOutcome({ outcome: "unknown", requestId: "opaque-backend-id" });

@@ -580,11 +580,19 @@ export function asNativeAgentSessionAction(value: unknown): NativeAgentSessionAc
       if (turnRequestId !== undefined && Buffer.byteLength(turnRequestId, "utf8") > 512) {
         throw new Error("Expected action.turnRequestId to be at most 512 bytes");
       }
+      const expectedRunId =
+        raw.expectedRunId === undefined
+          ? undefined
+          : asNonBlankString(raw.expectedRunId, "action.expectedRunId");
+      if (expectedRunId !== undefined && Buffer.byteLength(expectedRunId, "utf8") > 512) {
+        throw new Error("Expected action.expectedRunId to be at most 512 bytes");
+      }
       return {
         kind,
         text: asNonBlankString(raw.text, "action.text"),
         ...(onMissedTurn ? { onMissedTurn } : {}),
         ...(turnRequestId ? { turnRequestId } : {}),
+        ...(expectedRunId ? { expectedRunId } : {}),
       };
     }
     default:

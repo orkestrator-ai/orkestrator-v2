@@ -64,7 +64,7 @@ export function providerCapabilities(agent: AgentPlatform): PublicProviderCapabi
     completion: completion.support,
     completionNote: completion.note,
     // OpenCode's steer is qualified through the public CLI on a scripted model
-    // (`opencode-steer` CLI scenario, to-do 7905 task 4).
+    // (`opencode-steer` CLI scenario, to-do 7905 (retired) task 4).
     steer: native.actions?.steer === true,
     stop: true,
     resume: native.resume,

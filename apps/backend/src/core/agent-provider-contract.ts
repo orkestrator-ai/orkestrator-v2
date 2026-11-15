@@ -443,6 +443,12 @@ export type ProviderNativeAgentSessionAction =
       text: string;
       requestId: string;
       expectedRunId: string;
+      /**
+       * `user`: the user typed it for this run, so a stop before it lands
+       * withdraws it where the provider holds steers (OpenCode's inbox; to-do
+       * 8100 (retired)). Mail and queued steers leave it out and are never withdrawn.
+       */
+      origin?: "user";
     };
 
 export interface ProviderCreateSessionOptions {
@@ -656,6 +662,12 @@ export interface ProviderInteractiveSnapshot {
   turnStartedAt?: number;
   /** What the provider reports doing inside the running turn, when it does. */
   turnActivity?: NativeAgentTurnActivity;
+  /**
+   * The running turn's id, the same one {@link NativeAgentRuntimeProvider.activeSteerRun}
+   * answers, while the turn runs. The projection publishes it so a steer is
+   * bound to the turn the view showed (to-do 8107 (retired)).
+   */
+  turnRunId?: string;
   contextUsage?: NativeAgentContextUsage;
   policy?: NativeAgentExecutionPolicy;
   rateLimits?: NativeAgentRateLimitWindow[];

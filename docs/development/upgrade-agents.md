@@ -296,9 +296,17 @@ installs them from the registry before a publish.
 The image also builds and installs every bridge tree: `claude-bridge`,
 `codex-bridge`, `acp-bridge`, `pi-bridge`, and `cursor-bridge`. The Claude
 bridge vendors the Agent SDK and its platform packages, then the Docker build
-removes the musl variants so glibc resolves the correct native package; the Pi
-and Cursor SDK bridges vendor their own SDKs the same way, for the reasons in
-their sections below. Container bridge startup uses the commands on the image's
+removes every platform package (`claude-agent-sdk-linux-<arch>` and its
+`-musl` variant), keeping only the main `claude-agent-sdk` package. The image
+therefore has one Claude Code binary, the pinned CLI at `CLAUDE_CLI_PATH`: the
+SDK looks for its own binary only when `pathToClaudeCodeExecutable` is unset,
+and the bridge always sets it from that variable. A container bridge started
+without `CLAUDE_CLI_PATH` fails with the SDK's `Native CLI binary for
+linux-<arch> not found` error rather than running an unpinned engine. The
+saving (about 340 MB unpacked per architecture) and its qualification are in
+[container-qualification.md](container-qualification.md#claude-bridge-without-the-sdks-platform-binary-2026-11-15).
+The Pi and Cursor SDK bridges vendor their own SDKs the same way (keeping
+their platform packages), for the reasons in their sections below. Container bridge startup uses the commands on the image's
 `PATH`; the Codex bridge records the selected command in `CODEX_PATH`.
 
 A bridge that builds must also be listed in the root `package.json`'s
@@ -722,6 +730,17 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    SDK does not declare. `sdk-compatibility.test.ts` probes that
    `getSettings` still exists; if `ModelInfo` ever gains an Ultracode flag,
    gate the toggle on it instead of on `xhigh` support.
+
+   Re-check that the SDK still looks for its own platform binary only when
+   `pathToClaudeCodeExecutable` is unset. The container image ships no SDK
+   platform package (see [Container environments](#container-environments)),
+   so an SDK that resolved its binary even when given a path would fail every
+   container turn. At 0.3.319 the only lookup in `sdk.mjs` sits behind
+   `if(!<pathToClaudeCodeExecutable>)` and throws `Native CLI binary for
+   <platform>-<arch> not found` when it finds nothing. After the image is
+   built, the container Claude turn recorded in
+   [container-qualification.md](container-qualification.md#claude-bridge-without-the-sdks-platform-binary-2026-11-15)
+   is the proof.
 
    Check whether `SlashCommand` in the new `sdk.d.ts` has gained a marker for
    terminal-only commands (at 0.3.322 it is still

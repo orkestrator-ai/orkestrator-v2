@@ -78,6 +78,7 @@ import { spawnPty } from "./pty.js";
 import { DOCKER_LABEL_APP, DOCKER_LABEL_APP_VALUE, DOCKER_LABEL_OWNER } from "./constants.js";
 import {
   filesLeftForConfiguredCopy,
+  PROJECT_ENV_DIRECT_NAMES,
   formatProjectSeedRefusals,
   projectSeedReadPlan,
   readProjectSeedFiles,
@@ -2436,7 +2437,11 @@ export async function createLocalWorktree(
       envFilePatterns: plan.envFilePatterns,
       exclude: plan.exclude,
       fallbackPath: seedRoot,
-      fallbackNames: allFiles,
+      // A worktree always filled an absent `.env` or `.env.local` from the
+      // staged seed copy, whether or not the seed manifest lists it; the
+      // setting still decides whether either is read at all (a literal
+      // pattern only).
+      fallbackNames: [...new Set([...allFiles, ...PROJECT_ENV_DIRECT_NAMES])],
       ...seedOptions,
     });
     const envFileRefusals = [

@@ -33,7 +33,7 @@ import { runCommand } from "./shell.js";
  */
 
 /** The image's setup reads these two from `/project-env/<name>`. */
-const PROJECT_ENV_DIRECT_NAMES: ReadonlySet<string> = new Set([".env", ".env.local"]);
+export const PROJECT_ENV_DIRECT_NAMES: ReadonlySet<string> = new Set([".env", ".env.local"]);
 
 /**
  * Names that go through this reader, never the generic files-to-copy staging

@@ -363,13 +363,13 @@ test("schedule CLI refuses a malformed graph schedule before submission", async 
   expect(inputs()).toHaveLength(0);
 });
 
-async function listFixture(scheduler: unknown) {
+async function listFixture(scheduler: unknown, schedules: unknown[] = []) {
   const box = await createSandbox();
   const gateway = await startFakeGateway(
     defaultResponder({
       "schedule.list": publicSuccessEnvelope("schedule.list", {
-        schedules: [],
-        total: 0,
+        schedules,
+        total: schedules.length,
         offset: 0,
         ...(scheduler === undefined ? {} : { scheduler }),
       }),
@@ -404,6 +404,27 @@ for (const reason of ["writer-lease-lost", "another-backend", "newer-data-direct
     expect(parsed.warnings).toEqual([message]);
   });
 }
+
+test("schedule list --output id prints the IDs on stdout and the notice on stderr", async () => {
+  const schedule = {
+    id: "sched-1",
+    name: "nightly",
+    state: "active",
+    nextFireAt: null,
+    ownerLabel: "operator",
+  };
+  const paused = await listFixture({ firing: false, reason: "another-backend" }, [schedule]);
+  const ids = await paused.run(["schedule", "list", "--output", "id"]);
+  expect(ids.code).toBe(0);
+  expect(ids.out).toBe("sched-1\n");
+  expect(ids.err).toContain(`warning: ${schedulerPausedMessage("another-backend")}\n`);
+
+  const firing = await listFixture({ firing: true }, [schedule]);
+  const quiet = await firing.run(["schedule", "list", "--output", "id"]);
+  expect(quiet.code).toBe(0);
+  expect(quiet.out).toBe("sched-1\n");
+  expect(quiet.err).not.toContain("warning:");
+});
 
 test("schedule list prints no notice on a backend that fires, or that gives no status", async () => {
   for (const scheduler of [{ firing: true }, undefined]) {

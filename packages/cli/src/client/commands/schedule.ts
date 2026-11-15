@@ -415,6 +415,7 @@ export const scheduleCommands: CommandSpec[] = [
       { name: "offset", kind: "integer", valueName: "N", description: "Rows to skip." },
       { name: "limit", kind: "integer", valueName: "N", description: "Rows (max 200)." },
     ],
+    idOutput: "schedule IDs, one per line",
     async run(context, parsed) {
       const session = await context.session();
       const options = parsed.options;
@@ -434,6 +435,7 @@ export const scheduleCommands: CommandSpec[] = [
         action: "schedule.list",
         result: page,
         ...(notice ? { warnings: [notice] } : {}),
+        ids: page.schedules.map((job) => job.id),
         connection: session.identity,
         human: table(
           ["ID", "NAME", "STATE", "NEXT FIRE", "OWNER", "LAST"],

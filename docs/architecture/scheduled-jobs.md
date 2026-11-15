@@ -163,7 +163,8 @@ after now.
   schedules. The public `schedule.list` result carries the same `scheduler`
   (omitted, like the command's, after a clean lease release), and
   `orkestrator schedule list` prints that notice as a warning (stderr in human
-  and ID output, the envelope's `warnings` in JSON) whenever it is
+  and ID output, where `--output id` prints the schedule IDs one per line; the
+  envelope's `warnings` in JSON) whenever it is
   `firing: false`; listing still succeeds with exit 0. A lost lease is final until a restart; losing it announces a
   `scheduled-job` change, so an open Settings view rereads. A backend that
   started without the lease (`another-backend`) keeps trying every heartbeat
@@ -576,8 +577,8 @@ executing at once per backend.
 - `packages/cli/tests/schedule-command.test.ts`: the flags of every action
   kind, `--graph` included (the stored request the backend's parser accepts
   unchanged), refusals before anything is sent, and `schedule list`'s
-  not-firing warning for each reason (stderr and JSON `warnings`), none when
-  firing or without a status.
+  not-firing warning for each reason (stderr and JSON `warnings`), on stderr
+  beside the IDs in `--output id`, none when firing or without a status.
 - `apps/backend/src/core/scheduled-jobs/coordinator-schedules.test.ts`: the
   real Control MCP endpoint: a coordinator's "wake me at 03:12", a scheduled
   launch through its own `launch_environment`, side-agent refusal, listing

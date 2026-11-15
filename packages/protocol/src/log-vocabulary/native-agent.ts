@@ -16,7 +16,6 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
       "job.pr-refresh-rollback-failed": "Rolling back a pull request refresh for a job failed.",
       "job.resend-queue-failed": "A resend could not be queued for a job.",
       "interaction.requests-dropped": "Interaction requests that could not be mapped were dropped.",
-      "interaction.observe-failed": "Observing a session's interactions failed. Error class only.",
       "human-prompt.listener-failed": "A human prompt listener threw; the others still run.",
       "question.attention-record-failed":
         "Attention for an async question could not be recorded; the transcript stays readable.",

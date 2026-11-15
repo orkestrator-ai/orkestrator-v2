@@ -67,7 +67,7 @@ function text(id: string, content: string) {
 }
 
 /** A bridge whose revision advances for any change, content or not. */
-function bridge(mode: "v2" | "v1" | "legacy", output = "x".repeat(700 * 1024)) {
+function bridge(mode: "v2" | "v1" | "missing", output = "x".repeat(700 * 1024)) {
   const state: { messages: unknown[]; revision: number } = {
     messages: transcript(output),
     revision: 1,
@@ -81,7 +81,7 @@ function bridge(mode: "v2" | "v1" | "legacy", output = "x".repeat(700 * 1024)) {
       return Response.json({ messages: state.messages });
     }
     if (parsed.pathname.endsWith("/transcript")) {
-      if (mode === "legacy") return new Response("", { status: 404 });
+      if (mode === "missing") return new Response("", { status: 404 });
       const options = {
         sessionIdentity: "session-1",
         generation: "g",
@@ -232,11 +232,10 @@ test("v1: an oversized tail still exposes a late update to an earlier message", 
   expect(fake.legacyReads).toHaveLength(3);
 });
 
-test("a bridge without the conditional route keeps the measured legacy fallback", async () => {
-  const fake = bridge("legacy");
+test("a bridge whose /transcript answers 404 reads no legacy history", async () => {
+  // The `/messages` fallback retired (0050 task 1): a 404 is a missing session.
+  const fake = bridge("missing");
   await expect(fake.observe()).resolves.toMatchObject({ baselineEstablished: true });
   await expect(fake.observe()).resolves.toMatchObject({ probed: true, changed: false });
-  fake.state.messages = transcript("moved");
-  await expect(fake.observe()).resolves.toMatchObject({ probed: true, changed: true });
-  expect(fake.legacyReads).toHaveLength(3);
+  expect(fake.legacyReads).toHaveLength(0);
 });

@@ -38,7 +38,6 @@ import type {
   InspectNativeAgentSessionInput,
   NativeAgentProjectionInput,
   NativeAgentServiceOptions,
-  AgentInteractionObservation,
   NativeAgentAuthStatus,
   NativeAgentMcpServerAction,
   NativeAgentProjectionUpdateInput,
@@ -549,29 +548,6 @@ export class NativeAgentService {
     return this.launches.sessionStoppedMidTurn(environmentId, agent, logicalSessionKey);
   }
 
-  /**
-   * Operational kill switch. Existing adopted sessions keep reconciling so a
-   * request already observed is not stranded; no new session is adopted.
-   */
-  setInteractionMonitorAdoptionEnabled(enabled: boolean): void {
-    return this.interactions.setInteractionMonitorAdoptionEnabled(enabled);
-  }
-
-  /** Bounded, content-free evidence suitable for diagnostics and tests. */
-  getInteractionObservations(): AgentInteractionObservation[] {
-    return this.interactions.getInteractionObservations();
-  }
-
-  /**
-   * Reconcile provider-owned pending requests without applying policy.
-   *
-   * This is deliberately independent of renderer lifecycle and uses only
-   * authoritative snapshots. Polling adapters have no subscribe/replay gap:
-   * anything that arrives after one snapshot is recovered by the next.
-   */
-  reconcileAgentInteractions(): Promise<void> {
-    return this.interactions.reconcileAgentInteractions();
-  }
   private initialization: Promise<void> | null = null;
   private stopped = false;
 
@@ -814,12 +790,8 @@ export class NativeAgentService {
     });
     this.interactions = new NativeAgentInteractionTracker({
       storage,
-      options,
-      evictProvider: (session, provider) => this.providerRegistry.evict(session, provider),
       now: () => this.now(),
-      isStopped: () => this.stopped,
       observeProvider: (input) => this.observeProvider(input),
-      trackScan: (task) => this.trackScan(task),
       cachedProjectionSnapshot: (environmentId, agent, logicalSessionKey) =>
         this.projections.cachedProjectionSnapshot(environmentId, agent, logicalSessionKey),
     });
@@ -1472,7 +1444,6 @@ export class NativeAgentService {
           }
         : {}),
     });
-    await this.interactions.start();
   }
 
   /**
@@ -1568,10 +1539,8 @@ export class NativeAgentService {
             policy: input.policy,
             initialPromptPresentation: input.initialPromptPresentation,
           });
-          void this.interactions.reconcileAgentInteractions().catch(() => undefined);
           return enriched;
         }
-        void this.interactions.reconcileAgentInteractions().catch(() => undefined);
         return existing;
       }
       await this.storage.invalidateNativeAgentSession(key, existing.providerSessionId);
@@ -1632,7 +1601,6 @@ export class NativeAgentService {
       },
       () => this.createProviderSession(provider, input),
     );
-    void this.interactions.reconcileAgentInteractions().catch(() => undefined);
     // A concurrent ensure may have created the session first, with its own
     // controls; only report a substitution this session actually carries.
     return modelSubstitution && session.controls?.modelId === modelSubstitution.modelId
@@ -1747,7 +1715,6 @@ export class NativeAgentService {
           initialPromptPresentation: input.initialPromptPresentation,
           expectedProviderSessionId: input.expectedProviderSessionId,
         });
-        void this.interactions.reconcileAgentInteractions().catch(() => undefined);
         return session;
       },
     );
@@ -2622,7 +2589,6 @@ export class NativeAgentService {
     this.unsubscribeObservationWakeups?.();
     this.unsubscribeObservationWakeups = null;
     this.promptQueues.stopScheduling();
-    this.interactions.stop();
     await Promise.allSettled([
       ...this.projections.pendingRefreshes(),
       ...this.catalogs.pendingWork(),

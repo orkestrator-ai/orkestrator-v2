@@ -1962,11 +1962,14 @@ has always run, with the same validation and the same domain results.
 
 ### Rollout and rollback
 
-Admission is a backend-owned setting, `global.workflowResultTools`, not a
-user-facing transport choice. It carries a master switch plus per-provider and
-per-result-kind lists, and is read through `get_workflow_result_tools_rollout`
-and `set_workflow_result_tools_rollout`. The gate is evaluated once, when an
-attempt is admitted, and the outcome is persisted on the attempt.
+Admission is a backend-owned setting, `global.workflowResultTools` in
+`config.json`, not a user-facing transport choice. It carries a master switch
+plus per-provider and per-result-kind lists, and is read through
+`get_workflow_result_tools_rollout`; no command writes it (the unused
+`set_workflow_result_tools_rollout` was removed on 2026-11-15), so an operator
+edits the file. The backend re-reads it before each admission. The gate is
+evaluated once, when an attempt is admitted, and the outcome is persisted on
+the attempt.
 
 The setting can only narrow the qualified set, never widen it. Qualification is
 a property of the code: naming an unqualified provider here has no effect,

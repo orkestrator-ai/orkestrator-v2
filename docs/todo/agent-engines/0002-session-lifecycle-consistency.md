@@ -16,6 +16,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 Done 2026-10-31 on `main` at `931e5541`; see "Assumptions and decisions". The analysis below is kept for the decisions it records.
 
+**Superseded 2026-11-15.** The legacy-retirement sweep (8108 (retired)) removed what this task kept: `BridgeCloseUnsupportedError`, `TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER`, the `bridge-close.upgrade-required` counter and the restart notice. A 404 or 405 from the close route now rejects with `BridgeClosePendingError` like any other unconfirmed close: the teardown intent stays, the reconcile sweep retries it, no `DELETE` is sent and no restart notice is shown (`apps/backend/src/core/bridge-session-close.ts`; `docs/architecture/version-compatibility.md`, Retired). The browser test named below now asserts that contract: "closing a Claude tab whose bridge does not confirm the close keeps it pending and never deletes the conversation" (`e2e/CloseRetention.spec.ts`). The paths and line numbers in the Investigation are as they were on 2026-10-27.
+
 **Problem.** The backend still carries a compatibility path for bridges that predate `POST /session/:id/close`. It is dead weight inside the support window and a place where a destructive `DELETE` can still be sent.
 
 **Context.** Decided in 0034: the support-window floor is v2.21.0 and every v2.21.0 bridge has the close route (#853). The register row is `docs/architecture/version-compatibility.md:112`, which already says "The window allows it now". Only unpublished source builds predate the route.
@@ -113,11 +115,12 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
     (`commands-registry-teardown.ts`) and `HttpBridgeProvider.closeSession`
     both call `closeBridgeSessionRetaining`
     (`apps/backend/src/core/bridge-session-close.ts`).
-  - A 404 or 405 from the close route means the bridge predates it. On every
-    platform that raises `BridgeCloseUnsupportedError`, which carries
-    `TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER`, and no `DELETE` is sent. The
-    renderer then shows the restart notice
-    (`apps/web/src/lib/tab-teardown-notice.ts`).
+  - A 404 or 405 from the close route is an unconfirmed close like any other
+    failure: `closeBridgeSessionRetaining` rejects with
+    `BridgeClosePendingError`, the teardown intent stays for the reconcile
+    sweep, and no `DELETE` is sent. The renderer only logs the pending
+    teardown (`apps/web/src/lib/tab-teardown-notice.ts`); the restart notice
+    was retired on 2026-11-15.
   - OpenCode closes through `OpenCode2Provider.closeSession`
     (`apps/backend/src/core/opencode2/provider.ts`), which interrupts and
     forgets the session and never deletes the conversation. The 1.x close
@@ -316,10 +319,10 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
       On return both cards are withdrawn; they stay gone after close and
       reload, and the resumed conversation offers nothing to answer. The
       dead requests are never answered on the new process's behalf.
-    - *Old Claude bridge*: a stale bridge answering 404 to the close route.
-      Closing the tab shows the "Restart the environment to finish closing
-      this tab" toast, the intent stays pending through the sweep, no
-      `DELETE` is ever sent, and the tab stays closed across a reload.
+    - *Unconfirmed Claude close*: a bridge answering 404 to the close route.
+      Closing the tab leaves the intent pending through the sweep, no
+      `DELETE` is ever sent, no restart notice appears (retired 2026-11-15),
+      and the tab stays closed across a reload.
     - *Pi startup interrupt*: the Pi fake engine holds `AgentSession.prompt`
       before Pi accepts it (`FAKE_PI_STARTUP_GATE`). Stop, switch away,
       return and reload, then release: the turn settles without an answer,
@@ -338,9 +341,11 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
 
 1. **Retire the legacy close fallback.** Done 2026-10-31: the `DELETE` fallback,
    `LEGACY_DELETE_RETAINS_HISTORY` and the `bridge-close.legacy-delete` counter
-   are gone. A 404 or 405 from the close route is reported as an old bridge
-   that needs a restart. The `bridge-upgrade-required` path and its browser test
-   stay, as decided under Task analysis.
+   are gone. The `bridge-upgrade-required` path that the Task analysis kept
+   was removed on 2026-11-15 by the legacy-retirement sweep (8108 (retired)):
+   a 404 or 405 from the close route now keeps the close pending like any
+   other unconfirmed close, with no restart notice, and its browser test
+   asserts that instead.
 
 ### Qualification
 
@@ -591,6 +596,12 @@ bounded-state occupancy in `/runtime-health`) are decided below.
   outside the lock, so it does not lengthen anyone else's start.
 
 ### The legacy close fallback is retired; the restart notice stays (Code item 1, 2026-10-31)
+
+- **Superseded 2026-11-15.** The legacy-retirement sweep (8108 (retired))
+  removed the restart notice, its marker, `BridgeCloseUnsupportedError` and the
+  `bridge-close.upgrade-required` counter. A 404 or 405 now keeps the close
+  pending like any other unconfirmed close. The record below is kept as the
+  2026-10-31 decision.
 
 - **Does the window allow it?** Yes. The Backend → bridges rule covers every
   bridge in the window, whose floor is v2.21.0. Checked at the tags v2.21.0,

@@ -648,13 +648,14 @@ test("closing a Cursor tab while its agent is still starting does no late work, 
   expect((await vendor(request)).cursorSdk.slice(sdkBefore)).toHaveLength(2);
 });
 
-test("closing a Claude tab on a bridge from before the close route keeps the conversation and asks for a restart", async ({
+test("closing a Claude tab whose bridge does not confirm the close keeps it pending and never deletes the conversation", async ({
   page,
   request,
 }) => {
-  // The host's Claude bridge answers 404 to `POST /session/:id/close`, as every
-  // Claude bridge did before the route existed. Its legacy DELETE deletes the
-  // conversation, so the backend must never fall back to it.
+  // The host's Claude bridge answers 404 to `POST /session/:id/close`. A close
+  // that is not affirmed stays pending like any other failure: no DELETE
+  // fallback (an old Claude bridge's DELETE deleted the conversation) and no
+  // restart notice, which was retired with the older-bridge support.
   const tabId = "agent-claude-first";
   const providerSessionId = `claude-${uniqueMarker("cursor")}`;
   const requestsBefore = (await bridgeRequests(request, "claude")).length;
@@ -672,32 +673,30 @@ test("closing a Claude tab on a bridge from before the close route keeps the con
         })
       ).tabTeardownIntents ?? {},
     );
-
-  await page.getByRole("button", { name: /^Close / }).click();
-  await expect(page.getByText("Restart the environment to finish closing this tab")).toBeVisible({
-    timeout: 30_000,
-  });
-  await expect(page.getByText(/The conversation was kept/)).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Close / })).toHaveCount(0);
-
-  const sent = await bridgeRequests(request, "claude", requestsBefore);
-  expect(sent).toContain(`POST /session/${providerSessionId}/close`);
-  expect(sent.filter((line) => line.startsWith("DELETE"))).toEqual([]);
-  // The close stays journaled for after the restart.
-  expect(await pendingCloses()).toEqual([tabId]);
-
-  // The sweep retries it against the same old bridge: still no DELETE, still
-  // pending, and the tab stays closed across a reload.
-  await invoke(request, "reconcile_tab_teardowns", {});
-  expect(
+  const deletes = async () =>
     (await bridgeRequests(request, "claude", requestsBefore)).filter((line) =>
       line.startsWith("DELETE"),
-    ),
-  ).toEqual([]);
+    );
+
+  await page.getByRole("button", { name: /^Close / }).click();
+  await expect(page.getByRole("button", { name: /^Close / })).toHaveCount(0);
+  await expect
+    .poll(async () => bridgeRequests(request, "claude", requestsBefore), { timeout: 30_000 })
+    .toContain(`POST /session/${providerSessionId}/close`);
+  expect(await deletes()).toEqual([]);
+  // The close stays journaled for the reconcile sweep.
+  await expect.poll(pendingCloses).toEqual([tabId]);
+  await expect(page.getByText(/Restart the environment/)).toHaveCount(0);
+
+  // The sweep retries it against the same bridge: still no DELETE, still
+  // pending, and the tab stays closed across a reload.
+  await invoke(request, "reconcile_tab_teardowns", {});
+  expect(await deletes()).toEqual([]);
   expect(await pendingCloses()).toEqual([tabId]);
   await page.reload();
   await expect(page.getByRole("button", { name: "New agent tab" })).toBeEnabled();
   await expect(page.getByRole("button", { name: /^Close / })).toHaveCount(0);
+  await expect(page.getByText(/Restart the environment/)).toHaveCount(0);
 });
 
 test("steering a Cursor turn whose steer history is full is refused, the turn carries on and the draft survives", async ({

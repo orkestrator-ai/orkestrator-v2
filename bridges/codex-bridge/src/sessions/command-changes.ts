@@ -90,17 +90,26 @@ export async function readCommandChanges(
 /** Login journals adopted per bridge start; the rest wait for the next start. */
 export const MAX_ADOPTED_COMMAND_CHANGE_JOURNALS = 4_096;
 
+/** Suffix a merged login journal is renamed to, so a later start skips it. */
+const ADOPTED_JOURNAL_SUFFIX = ".adopted";
+
 /**
  * Part of the one-time upgrade at bridge start (`login-state-adoption.ts`):
  * the per-thread journals a bridge before the shared state directory wrote
  * into this login's own `command-changes` directory. A call id the shared
  * journal lacks is appended to it; the shared journal keeps the call ids it
- * already holds. Once every file is merged the directory is renamed
- * `command-changes.adopted` and never read again. A rerun after a crash
- * appends nothing twice, since the ids it appended are then held. Returns the
- * number of journals merged.
+ * already holds. Each source file is renamed `<name>.jsonl.adopted` once it
+ * is merged, so a start that reaches the per-start limit leaves only the
+ * unmerged files for the next one. Once a start finds none left, the
+ * directory is renamed `command-changes.adopted` and never read again. A
+ * rerun after a crash appends nothing twice, since the ids it appended are
+ * then held. Returns the number of journals merged.
  */
-export async function adoptLoginCommandChanges(codexHome: string, source: string): Promise<number> {
+export async function adoptLoginCommandChanges(
+  codexHome: string,
+  source: string,
+  limit = MAX_ADOPTED_COMMAND_CHANGE_JOURNALS,
+): Promise<number> {
   const target = join(codexBridgeStateDir(codexHome), "command-changes");
   if (source === target) return 0;
   let names: string[];
@@ -110,18 +119,24 @@ export async function adoptLoginCommandChanges(codexHome: string, source: string
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
     throw error;
   }
-  const batch = names.slice(0, MAX_ADOPTED_COMMAND_CHANGE_JOURNALS);
+  const batch = names.slice(0, limit);
   for (const name of batch) {
     // A file name is a folded thread id, which folds to itself.
     const threadId = name.slice(0, -".jsonl".length);
     const journal = commandChangeJournalFor(codexHome, threadId);
-    if (!journal) continue;
-    const legacy = await new CommandChangeJournal(join(source, name)).read();
-    if (legacy.size === 0) continue;
-    const current = await journal.read();
-    for (const [id, change] of legacy) {
-      if (!current.has(id)) await journal.append(id, change);
+    const path = join(source, name);
+    if (journal) {
+      const legacy = await new CommandChangeJournal(path).read();
+      if (legacy.size > 0) {
+        const current = await journal.read();
+        for (const [id, change] of legacy) {
+          if (!current.has(id)) await journal.append(id, change);
+        }
+      }
     }
+    // Retired only after its records are appended; a file no thread id
+    // names has nothing to merge and is retired with the rest.
+    await rename(path, `${path}${ADOPTED_JOURNAL_SUFFIX}`);
   }
   if (batch.length === names.length) await rename(source, `${source}.adopted`);
   return batch.length;

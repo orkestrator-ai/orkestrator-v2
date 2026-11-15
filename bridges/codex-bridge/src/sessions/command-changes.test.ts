@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
@@ -192,6 +192,38 @@ describe("journal", () => {
       expect(existsSync(`${source}.adopted`)).toBe(true);
       expect(await adoptLoginCommandChanges(account, source)).toBe(0);
       expect(await readCommandChanges(account, "thread-1")).toEqual(expected);
+    } finally {
+      if (saved === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
+      else process.env.CODEX_BRIDGE_STATE_DIR = saved;
+    }
+  });
+
+  test("adoption past the per-start limit carries on at the next start", async () => {
+    const host = await temporaryCodexHome();
+    const account = await temporaryCodexHome();
+    const saved = process.env.CODEX_BRIDGE_STATE_DIR;
+    const source = join(account, "orkestrator-bridge", "command-changes");
+    const threads = ["thread-a", "thread-b", "thread-c"];
+    try {
+      delete process.env.CODEX_BRIDGE_STATE_DIR;
+      for (const thread of threads)
+        await recordCommandChanges(account, thread, `call-${thread}`, change);
+
+      process.env.CODEX_BRIDGE_STATE_DIR = join(host, "orkestrator-bridge");
+      // A limit of two stands in for MAX_ADOPTED_COMMAND_CHANGE_JOURNALS + 1 journals.
+      expect(await adoptLoginCommandChanges(account, source, 2)).toBe(2);
+      expect(existsSync(source)).toBe(true);
+      expect((await readdir(source)).filter((name) => name.endsWith(".jsonl"))).toHaveLength(1);
+
+      expect(await adoptLoginCommandChanges(account, source, 2)).toBe(1);
+      expect(existsSync(source)).toBe(false);
+      expect(existsSync(`${source}.adopted`)).toBe(true);
+      for (const thread of threads) {
+        expect(await readCommandChanges(account, thread)).toEqual(
+          new Map([[`call-${thread}`, change]]),
+        );
+      }
+      expect(await adoptLoginCommandChanges(account, source, 2)).toBe(0);
     } finally {
       if (saved === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
       else process.env.CODEX_BRIDGE_STATE_DIR = saved;

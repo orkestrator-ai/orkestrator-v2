@@ -777,7 +777,10 @@ export class BuildPipelineLifecycle {
       }
       candidate.reviewRetryRequested = true;
       delete candidate.delivery;
-      pruneKeyInformationAfterRewind(candidate, candidate.iteration, false, false);
+      pruneKeyInformationAfterRewind(candidate, candidate.iteration, {
+        kind: "session",
+        phase: "review",
+      });
       discardSessionReviewReports(candidate);
       // Preparation archives the cancelled run with its sealed failure summary
       // before deleting the package. Keep that evidence until then.
@@ -1348,13 +1351,7 @@ export class BuildPipelineLifecycle {
           isPanelReviewerSession(session, session.reviewPassId),
       );
       pruneRoundReviewReports(candidate);
-      pruneKeyInformationAfterRewind(
-        candidate,
-        iteration,
-        restart.kind === "session" &&
-          (restart.phase === "pr" || restart.phase === "resolve-conflicts"),
-        selectedOrder > 2,
-      );
+      pruneKeyInformationAfterRewind(candidate, iteration, restart);
       if (
         supersededSessions > 0 ||
         code ||

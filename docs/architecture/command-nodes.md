@@ -916,7 +916,11 @@ is in [agent-accounts.md](agent-accounts.md#shared-readings).
   creates a request the user reviews in the same copy dialog, where the
   location and files are settled before approving; the outcome wakes the
   coordinator. `request_root_changes` uses the same request flow (kind
-  `apply-root-changes`) for a worker on the coordinator's own node; see
+  `apply-root-changes`) for a worker on the coordinator's own node or, with
+  `nodeId`, on a leaf: the request and its approval stay on the command node,
+  the patch is built from the command node's checkout after approval, and
+  only that patch (at most 16 MiB) crosses the link to the leaf's
+  `apply_controller_root_patch`; see
   [coordinator.md](coordinator.md#worker-surfaces). So does
   `propose_agents_md_update` (kind `update-agents-md`): the request and its
   review stay on the command node, and with `nodeId` the section is read and

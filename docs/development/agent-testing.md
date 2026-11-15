@@ -4213,7 +4213,7 @@ verdict are in `coordinator-live-research.ts`;
 `coordinator-live-research.test.ts` runs the orchestration over a scripted
 command transport.
 
-The `surfaces` case (to-do 0395 task 4) proves the worker-surface tools on a
+The `surfaces` case (to-do 0395 (retired) task 4) proves the worker-surface tools on a
 real stack. It runs only on Claude, so other platforms record a skip: the tools
 are Control MCP calls, so one provider covers them. It waits at most four step
 budgets:

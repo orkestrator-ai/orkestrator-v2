@@ -25,8 +25,10 @@ import type { ProjectHomeMessage } from "@orkestrator/protocol/project-home-mess
  *   files (or keys) to nodes.
  * - `reveal-env-value`: show one `.env` value in plain text.
  * - `apply-root-changes`: apply a patch of the project checkout's
- *   uncommitted changes to one worker on this node. The coordinator names
- *   the worker and may suggest files; the user picks the files.
+ *   uncommitted changes to one worker, on this node or (with the target's
+ *   `nodeProjectId`) on a connected node, which receives a patch built here
+ *   after the approval. The coordinator names the worker and may suggest
+ *   files; the user picks the files.
  * - `update-agents-md`: open a pull request changing only the
  *   `## Orkestrator` section of the project's root AGENTS.md, on the node
  *   that owns the project copy. The user may edit the entries while
@@ -88,6 +90,12 @@ export interface NodeActionTarget {
   environmentId?: string;
   environmentName?: string;
   projectId?: string;
+  /**
+   * `apply-root-changes` on another node: that node's copy of `projectId`,
+   * which owns the worker. `projectId` stays this node's project, whose
+   * checkout the patch is built from.
+   */
+  nodeProjectId?: string;
   projectName?: string;
   /** Absolute location on the node, for a new project. */
   location?: string;

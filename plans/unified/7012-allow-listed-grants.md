@@ -116,7 +116,7 @@ A workspace grant can run exactly the commands whose definition says `access: "w
   - Aggregate suite left to review preparation.
 - **For the orchestrator:**
   - Report §10.2 still describes the deny-lists as current. It could say they were replaced in 7012 by the registry's `access: "workspace"` allow-list, failing closed, with `invoke_on_node`'s routing exclusions kept as `NODE_ROUTING_EXCLUDED_COMMANDS`.
-  - `docs/todo/coordinator-and-multi-review/0395-…` still names `NODE_EXCLUDED_COMMANDS`.
+  - `docs/todo/coordinator-and-multi-review/0395-…` still names `NODE_EXCLUDED_COMMANDS`. (That to-do was retired on 2026-11-15.)
 
 ## Work log
 

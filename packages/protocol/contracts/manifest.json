@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1004,
-    "defined": 1004,
+    "commands": 1005,
+    "defined": 1005,
     "untyped": 0,
     "events": 45
   },
@@ -352,6 +352,15 @@
       "argsDigest": "sha256:899d146880f566105249ca59935fe14fcfde85cff3e65d884f3a1ea11d9d868e",
       "resultDigest": "sha256:db8a58a4030483aa11cfdcc207769190e65cf9c022828bdf7c032de6caea5748"
     },
+    "apply_controller_root_patch": {
+      "domain": "coordinator",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["sha256"],
+      "argsDigest": "sha256:8f40388d1ad831905dd42eda820cc548fe06706363cb57731a6343c6952c3f59",
+      "resultDigest": "sha256:2380b36c32f55a9306d78f221b021ef9c21e6e5d81b90e890ab3aebfb6866a5a"
+    },
     "apply_env_keys": {
       "domain": "nodes",
       "since": 1,
@@ -403,8 +412,8 @@
       "access": "internal",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:54ef9090c54d34ba5f053a0e4aed9a01aa9f26dfdba75cdf3d2950f7bf31e493",
-      "resultDigest": "sha256:2e461ba400982ae370940789c877ad9a69ddaa59082aa5e51054843b61c0abe8"
+      "argsDigest": "sha256:e6f2f9f4754e594411aeb892794e00dc26fcfc85f95e3abcfdec49cac41488f2",
+      "resultDigest": "sha256:2380b36c32f55a9306d78f221b021ef9c21e6e5d81b90e890ab3aebfb6866a5a"
     },
     "apply_shared_usage_readings": {
       "domain": "accounts",

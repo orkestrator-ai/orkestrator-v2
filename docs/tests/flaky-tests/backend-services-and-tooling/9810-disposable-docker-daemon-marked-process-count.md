@@ -1,6 +1,6 @@
 # Disposable Docker daemon lifecycle saw one marked process instead of two, under load (`tests/unit/disposable-docker-daemon.test.ts`)
 
-- **ID:** 9800
+- **ID:** 9810
 - **Status:** open
 - **Date observed:** 2026-11-15
 - **Base:** `a8b89f1541e7abb6af36d45121593ae14640a3ca`.

@@ -55,6 +55,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
+| Live GitHub ranges seed bind | same command, `./tests/container-live-github-seed.test.ts`; `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED=<file>` supplies the ranges, otherwise the backend fetches them once | The firewall container binds the seed directory read-only, its boot reports `githubRanges: seed`, and after a stop and a rename of a refreshed seed into the directory the next boot through the start path loads the new range, with no `extract-to-dir` event on the container ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md) task 2) |
 | Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart (on a rootless daemon with `live-restore` on, the containers' surviving processes are counted, probed and killed before the backend restarts them). Point that command only at a disposable daemon. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep the restart's observations. |
 | Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep its topology line: whether the daemon is rootless, how Docker names its DNS upstreams in the gateway, and the gateway's nat redirections. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
 | Live agent CLIs without telemetry hosts | same command, `./tests/container-live-telemetry-hosts.test.ts`; set `ORKESTRATOR_TELEMETRY_HOSTS_TRACE=<file>` to record each turn's lookups and connections | With `sentry.io`, `statsig.anthropic.com`, `statsig.com` and the CLIs' Sentry ingest hosts refused, Claude Code (print, Agent SDK stream-json, a provider error), Codex (a turn and a provider error), OpenCode and Pi each finish a turn against a fake provider on the runtime's loopback within 90 s. No credentials and no provider turns; outside traffic only to registry.npmjs.org (OpenCode installs its provider package) and GitHub (to-do 6100) |
@@ -313,6 +314,40 @@ against a fake Docker CLI: the run arguments and inner configuration, outer
 daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
+
+## GitHub ranges seed directory bind on beelink (2026-11-15)
+
+To-do [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 2: the GitHub ranges seed is bound as a directory into the container that
+runs the firewall instead of being copied in, and refreshed before each boot.
+Run in worktree `orkestrator-v2-20261115-154905-9a38fe722162` (branch
+`github-ranges-seed-9a38fe722162-r1`, from `main` at `a8b89f154`), with the
+existing image `orkestrator-v2:dev-4d8f7a0a70c6` (the change needs no image
+change; the firewall already read `/etc/orkestrator-seed/github-ranges`).
+
+- **Host:** beelink (kernel 7.1.8-arch1-3, x86_64), `/tmp` a `nosuid,nodev`
+  tmpfs. No `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED`, so each run's backend
+  fetched GitHub's ranges once, anonymously, as for a host's first restricted
+  container.
+- **Rootful Engine 29.9.2** (the host daemon, containerd image store):
+  `container-live-github-seed.test.ts` 1 pass, 0 fail, 10 expects (about 16 s).
+- **Rootless Engine 29.9.2** (`mise run docker:disposable -- start --name
+  s7549`, containerd image store, slirp4netns), data directory under the
+  `nosuid,nodev` `/tmp`: 1 pass, 0 fail, 10 expects (11.4 s). So a gateway
+  starts with the read-only seed bind from such a filesystem, as runtimes
+  already did with their input revision.
+- **What each run showed:** the gateway's `/etc/orkestrator-seed` mount was
+  read-only with the data directory's `github-ranges-seed` as its source; the
+  first boot reported `state: applied`, `githubRanges: seed`; after the
+  runtime and gateway stopped and a refreshed seed with an added
+  `198.51.100.0/24` was renamed into the directory, the next boot through
+  `startContainerWithAgentAccounts` again reported `seed` and the gateway's
+  `allowed-domains` set held `198.51.100.0/24`; `docker events` showed no
+  `extract-to-dir` on the gateway.
+- **Not run:** the rootless overlay2 image store, Docker Desktop (moved to
+  [7568](../todo/manual-test/7568-manual-test-checklist.md)), and a repeat of
+  the full `container-live-firewall.test.ts` on the rootless daemon (started,
+  then interrupted when the session moved accounts; no result).
 
 ## Claude bridge without the SDK's platform binary (2026-11-15)
 
@@ -3914,8 +3949,14 @@ re-baselined on 2026-10-28
 the runtime's own path keeps its budget of 21. The egress gateway, a second
 container since 2026-10-25, adds 6 fixed calls: its create, the GitHub seed
 copy, the runtime's state inspect, the gateway's inspect, its start, and the
-first firewall read. Its firewall polls, one call each, must fit in the old
-headroom.
+first firewall read. (Since 2026-11-15 the seed directory is bound rather
+than copied, [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 2: the creation's seed copy is gone, and a gateway that is not running
+is inspected once just before its start so its seed can be refreshed. The
+gateway still adds 6 fixed calls to a fresh start, and the runtime behind it
+adds none, so the target is unchanged. `bootRuntime` calls the same seed
+helpers as the production start.) Its firewall polls, one call each, must fit
+in the old headroom.
 
 | Measure (median unless stated) | Report field | Target |
 | --- | --- | --- |

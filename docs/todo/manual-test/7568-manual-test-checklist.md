@@ -24,10 +24,10 @@ readings of 7570 task 2, 0050 task 1 and 0232 task 4).
 
 ### Tasks
 
-1. **Manual tests and live checks** (328 items): run each check under
+1. **Manual tests and live checks** (329 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
-2. **Decisions, approvals and outward actions** (23 items): make each call
+2. **Decisions, approvals and outward actions** (24 items): make each call
    or take each action under
    [Decisions, approvals and outward actions](#decisions-approvals-and-outward-actions)
    and record it. Status: open.
@@ -170,8 +170,8 @@ agent can apply it.
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 16 | 1 |
-| Transcripts, observation and bandwidth | 27 | 1 |
-| **Total** | 328 | 23 |
+| Transcripts, observation and bandwidth | 27 | 2 |
+| **Total** | 329 | 24 |
 
 ## Outstanding work
 
@@ -840,6 +840,7 @@ None open (both answered on 2026-11-14).
 
 #### Transcripts, observation and bandwidth
 
+- [ ] **[8102](../transcripts-and-observation/8102-push-event-layer.md) task 1: review the push event layer design before anything is built.** Read 8102's "The design (draft for review)" (D1 to D13) and its polling baseline under Current state: a quiet running Claude tab sends 2.1 to 2.2 requests a second per viewer, a second viewer doubles it, and each streaming poll costs five bridge requests per viewer. The recommendations to approve or change: one subscription set per client on the existing event stream, set by a command (D3); frames that carry only a change signal, after which the client reads with the existing conditional reads (D4); recovery by one monotonic per-connection sequence and re-subscription, not by the replay ring (D4, D5); a 500 ms per-key throttle with leading edge (D6); every bridge moving a state revision that also covers its side routes (D7); a 30 s recovery poll while the channel is healthy (D8); for other nodes, a subscription controller on the command node that shares one leaf subscription across its windows (D10); the migration order, bridge revisions first (D9); and the five open questions. Record: approve, approve with changes (say which), or reject, in 8102's Assumptions and decisions (or reply to the coordinator). Approval unblocks 8102 tasks 2 to 5.
 - [ ] **2681 (retired) task 5: delete the preview-worker leftovers on GitHub.** The pull route is gone (behaviour: [transcript-artifacts-runtime.md](../../architecture/transcript-artifacts-runtime.md#preview-worker)). Check `git ls-remote --heads origin 'preview-worker-pin/*'`, then decide whether to delete the remote branch `preview-worker-pin/cfbafc5d238e4eb3232bf` and, if nothing else uses it, the GHCR package `ghcr.io/orkestrator-ai/orkestrator-v2/artifact-preview-worker` (needs package admin rights). Record: reply to the coordinator with deleted or kept for each, and the date.
 
 ## Constraints and rationale

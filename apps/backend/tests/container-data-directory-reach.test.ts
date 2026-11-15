@@ -11,6 +11,7 @@ import {
   memoryLifecycleContext,
   tempDir,
   withDockerScript,
+  writeGithubRangesSeedFixture,
 } from "./container-lifecycle-fixtures";
 
 // The accepted risk in docs/architecture/storage.md ("Provider secrets at rest")
@@ -117,10 +118,7 @@ async function fixture(
       repositories: {},
     }),
   });
-  await fs.writeFile(
-    path.join(dataDir, "github-ranges.txt"),
-    "# github-ranges fixture\n203.0.113.0/24\n",
-  );
+  await writeGithubRangesSeedFixture(dataDir, "# github-ranges fixture\n203.0.113.0/24\n");
   const empty = await directory("ork-reach-home-");
   setEnvironment("ORKESTRATOR_AGENT_TEST_HOST_HOME", empty);
   setEnvironment(AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV, path.join(empty, ".claude"));

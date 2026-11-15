@@ -21,7 +21,10 @@ import { commandInvocationCount, observeCommandInvocations, runCommand } from ".
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import { egressGatewayOf } from "../src/core/container-network-owner";
-import { prepareEgressGatewayForStart } from "../src/core/egress-gateway";
+import {
+  deliverRuntimeSeedBeforeBoot,
+  prepareEgressGatewayWithSeed,
+} from "../src/core/github-ranges-seed-delivery";
 import { startDockerContainer } from "../src/core/container-start";
 import {
   attributeCalls,
@@ -96,12 +99,15 @@ function recordDockerCalls() {
  * Starts a runtime the way `startContainerWithAgentAccounts`
  * (`agent-accounts-containers.ts`) does, without its login staging,
  * timing its three steps: the egress gateway brought up to an applied
- * firewall, the runtime's `docker start`, and its entrypoint to current-boot
- * readiness.
+ * firewall (with the gateway's GitHub ranges seed refreshed before it boots),
+ * the runtime's own seed delivery and `docker start`, and its entrypoint to
+ * current-boot readiness. The seed calls are the production helpers, so the
+ * Docker calls counted here are the ones a user's start makes.
  */
 async function bootRuntime(
   containerId: string,
   step: (name: string) => void = () => undefined,
+  networkAccessMode: "restricted" | "full" = "restricted",
 ): Promise<Record<BootStep, number>> {
   const steps = {} as Record<BootStep, number>;
   let at = performance.now();
@@ -111,9 +117,10 @@ async function bootRuntime(
     at = now;
   };
   step("boot.gateway");
-  await prepareEgressGatewayForStart(containerId);
+  const gateway = await prepareEgressGatewayWithSeed(dataDir, containerId);
   mark("gateway");
   step("boot.runtimeStart");
+  await deliverRuntimeSeedBeforeBoot(dataDir, containerId, { gateway, networkAccessMode });
   // The production start, so a rootless daemon's automatic-port collision is
   // retried here as it is for users rather than failing the run.
   await startDockerContainer(containerId, { timeoutMs: 120_000 });
@@ -254,7 +261,7 @@ async function freshRuntime(id: string, mode: "restricted" | "full", attribute =
     );
     phases.create = create.ms;
     containerId = create.value;
-    const boot = await timed(() => bootRuntime(containerId, (name) => recorder?.step(name)));
+    const boot = await timed(() => bootRuntime(containerId, (name) => recorder?.step(name), mode));
     phases.startToReady = boot.ms;
     for (const step of BOOT_STEPS) phases[`startToReady.${step}`] = boot.value[step];
     dockerCalls = storageStep.dockerCalls + create.dockerCalls + boot.dockerCalls;
@@ -282,6 +289,7 @@ async function freshRuntime(id: string, mode: "restricted" | "full", attribute =
   return {
     fixture,
     containerId,
+    mode,
     phases,
     dockerCalls,
     callBreakdown: recorder
@@ -374,6 +382,7 @@ describe("container baselines", () => {
       const warmCalls: number[] = [];
       const warmBreakdowns: Array<Record<string, number>> = [];
       const containerId = last!.containerId;
+      const warmMode = last!.mode;
       // Cached since the fresh start above, so this lookup runs no Docker call.
       const warmIds: CallIdentities = {
         runtime: [containerId],
@@ -386,7 +395,7 @@ describe("container baselines", () => {
         });
         warm.stop.push(stop.ms);
         const recorder = recordDockerCalls();
-        const start = await timed(() => bootRuntime(containerId, recorder.step)).finally(
+        const start = await timed(() => bootRuntime(containerId, recorder.step, warmMode)).finally(
           recorder.stop,
         );
         warm.start.push(start.ms);

@@ -15,13 +15,14 @@ import {
 } from "../src/core/commands-containers";
 import { resetResourceCaches } from "../src/core/container-resources";
 import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/docker-image";
-import { formatGithubRangesSeed, GITHUB_RANGES_FILE } from "../src/core/github-ranges-cache";
+import { formatGithubRangesSeed } from "../src/core/github-ranges-cache";
 import { CONTAINER_GIT_MIRROR_MOUNT } from "../src/core/project-git-mirror";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,
   tempDir,
   withDockerScript,
+  writeGithubRangesSeedFixture,
 } from "./container-lifecycle-fixtures";
 
 const cleanup: string[] = [];
@@ -46,10 +47,7 @@ async function createCommand(options: {
   cleanup.push(dir);
   // A fresh GitHub ranges seed, so a restricted policy-2+ create reads it
   // instead of asking api.github.com/meta, which timed these out (flake 9978).
-  await fs.writeFile(
-    path.join(dir, GITHUB_RANGES_FILE),
-    formatGithubRangesSeed(["203.0.113.0/24"], Date.now()),
-  );
+  await writeGithubRangesSeedFixture(dir, formatGithubRangesSeed(["203.0.113.0/24"], Date.now()));
   const manifest = path.join(dir, "image-manifest.json");
   await fs.writeFile(
     manifest,

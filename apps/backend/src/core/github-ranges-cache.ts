@@ -34,11 +34,33 @@ const log = createLogger("docker");
  * access beyond GitHub.
  */
 
-export const GITHUB_RANGES_FILE = "github-ranges.txt";
+/**
+ * The seed lives alone in its own directory under the data directory, and
+ * restricted runtimes and egress gateways bind that directory read-only at
+ * {@link GITHUB_RANGES_SEED_DIRECTORY} (to-do 7549 task 2). A directory bind
+ * shows the container whatever file the directory holds at each boot, so a
+ * seed the backend replaces by rename reaches every later restart, and no
+ * `docker cp` into a container that is not running is needed.
+ */
+export const GITHUB_RANGES_SEED_DIRNAME = "github-ranges-seed";
+/** The seed's file name, the same on the host and in the container. */
+export const GITHUB_RANGES_SEED_FILENAME = "github-ranges";
+/** Where backends before the directory bind kept the seed; moved on first use. */
+export const LEGACY_GITHUB_RANGES_FILE = "github-ranges.txt";
 const REFRESH_AFTER_MS = 60 * 60_000;
 const USABLE_FOR_MS = 7 * 24 * 60 * 60_000;
+/** After a failed fetch, starts and creates serve the old seed this long without asking again. */
+export const GITHUB_RANGES_RETRY_AFTER_FAILURE_MS = 5 * 60_000;
 const MAX_RANGES = 4_096;
 const CIDR = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/;
+
+export function githubRangesSeedDirectory(dataDir: string): string {
+  return path.join(dataDir, GITHUB_RANGES_SEED_DIRNAME);
+}
+
+export function githubRangesSeedFile(dataDir: string): string {
+  return path.join(githubRangesSeedDirectory(dataDir), GITHUB_RANGES_SEED_FILENAME);
+}
 
 export function validIpv4Cidr(value: string): boolean {
   const match = CIDR.exec(value);
@@ -75,21 +97,78 @@ export function formatGithubRangesSeed(ranges: readonly string[], fetchedAt: num
 type Fetcher = (url: string, init: { signal: AbortSignal }) => Promise<Response>;
 
 /**
+ * Creates the seed directory (world-readable: the container's root reads it,
+ * which a rootless daemon maps to the backend's user and a rootful one to
+ * host root) and moves a seed an older backend kept at the data directory's
+ * top level into it. Returns the directory, or null when it cannot be made,
+ * in which case containers are created without the bind and fetch the ranges
+ * themselves.
+ */
+export async function ensureGithubRangesSeedDirectory(dataDir: string): Promise<string | null> {
+  const directory = githubRangesSeedDirectory(dataDir);
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o755 });
+    await chmod(directory, 0o755);
+  } catch {
+    return null;
+  }
+  const file = githubRangesSeedFile(dataDir);
+  const present = await stat(file).then(
+    () => true,
+    () => false,
+  );
+  if (!present) {
+    // A rename keeps the old seed's mtime, so its age still decides whether
+    // it is refreshed.
+    await rename(path.join(dataDir, LEGACY_GITHUB_RANGES_FILE), file).catch(() => undefined);
+  }
+  return directory;
+}
+
+// One fetch per seed file at a time, and none for a while after one failed:
+// several creates and starts at once share one request to GitHub's
+// anonymous, per-address allowance instead of each spending one.
+const inFlight = new Map<string, Promise<string | null>>();
+const lastFailedFetch = new Map<string, number>();
+
+/**
  * Returns the seed file's path when a usable seed exists (refreshing it when
  * older than an hour), or null. Never throws: without a seed the container
  * falls back to fetching the ranges itself.
  */
-export async function githubRangesSeed(
+export function githubRangesSeed(
   dataDir: string,
   options: { now?: () => number; fetcher?: Fetcher } = {},
 ): Promise<string | null> {
+  const file = githubRangesSeedFile(dataDir);
+  const pending = inFlight.get(file);
+  if (pending) return pending;
+  const work = refreshGithubRangesSeed(dataDir, file, options).finally(() => {
+    inFlight.delete(file);
+  });
+  inFlight.set(file, work);
+  return work;
+}
+
+async function refreshGithubRangesSeed(
+  dataDir: string,
+  file: string,
+  options: { now?: () => number; fetcher?: Fetcher },
+): Promise<string | null> {
   const now = options.now ?? Date.now;
-  const file = path.join(dataDir, GITHUB_RANGES_FILE);
+  if (!(await ensureGithubRangesSeedDirectory(dataDir))) return null;
   const age = await stat(file).then(
     (info) => now() - info.mtimeMs,
     () => Number.POSITIVE_INFINITY,
   );
   if (age < REFRESH_AFTER_MS) return file;
+  // Keep serving the previous seed while it is still reasonably fresh.
+  const fallback = age < USABLE_FOR_MS ? file : null;
+  const failedAt = lastFailedFetch.get(file);
+  if (failedAt !== undefined) {
+    const since = now() - failedAt;
+    if (since >= 0 && since < GITHUB_RANGES_RETRY_AFTER_FAILURE_MS) return fallback;
+  }
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
@@ -105,27 +184,52 @@ export async function githubRangesSeed(
     }
     const ranges = parseGithubMeta(text.slice(0, 1024 * 1024));
     if (!ranges) throw new Error("malformed");
-    await mkdir(dataDir, { recursive: true });
-    const temporary = `${file}.${process.pid}.tmp`;
+    // Written beside the bound directory, not in it, so a container never
+    // sees a partial file; the rename into it is atomic on one filesystem.
+    const temporary = path.join(dataDir, `.${GITHUB_RANGES_SEED_FILENAME}.${process.pid}.tmp`);
     await writeFile(temporary, formatGithubRangesSeed(ranges, now()), { mode: 0o644 });
+    await chmod(temporary, 0o644);
     await rename(temporary, file);
+    lastFailedFetch.delete(file);
     return file;
   } catch {
-    // Keep serving the previous seed while it is still reasonably fresh.
-    return age < USABLE_FOR_MS ? file : null;
+    lastFailedFetch.set(file, now());
+    return fallback;
   }
+}
+
+/**
+ * Docker arguments binding the seed directory read-only where the firewall
+ * reads it. `--mount` fails on a missing source rather than creating one.
+ */
+export function githubRangesSeedMountArguments(directory: string): string[] {
+  return ["--mount", `type=bind,src=${directory},dst=${GITHUB_RANGES_SEED_DIRECTORY},readonly`];
+}
+
+/**
+ * Prepares a new restricted runtime's or gateway's seed: refreshes it (at
+ * most hourly) and returns the directory to bind, or null when the directory
+ * cannot be made. The directory is bound even when no seed could be fetched,
+ * so a later start that refreshes it reaches the container.
+ */
+export async function prepareGithubRangesSeedBind(
+  dataDir: string,
+  options: { now?: () => number; fetcher?: Fetcher } = {},
+): Promise<string | null> {
+  await githubRangesSeed(dataDir, options);
+  return ensureGithubRangesSeedDirectory(dataDir);
 }
 
 /** The directory the firewall reads the seed from (`docker/firewall-domains.sh`). */
 export const GITHUB_RANGES_SEED_DIRECTORY = "/etc/orkestrator-seed";
 
 /**
- * Copies the seed into a created, not yet started, container rather than
- * binding it. A rootless daemon cannot mount a read-only bind from a
- * filesystem whose `nosuid`/`nodev` flags its user namespace cannot clear,
- * and nothing is lost: the seed is replaced by rename, so a file bind already
- * showed the container the seed as it was when it was created. Best effort:
- * a container without a seed fetches the ranges itself.
+ * Copies the seed into a container that does not bind the seed directory:
+ * one created before the bind (to-do 7549 task 2), until it is rebuilt.
+ * Best effort: a container without a seed fetches the ranges itself. The
+ * copy goes through the daemon's archive path, which a rootless daemon may
+ * refuse (a read-only bind on a `nosuid`/`nodev` filesystem, or a busy
+ * snapshot of a container that is not running); new containers avoid it.
  */
 export async function copyGithubRangesSeed(
   containerId: string,

@@ -12,7 +12,7 @@ mbp3"). This file keeps the agent work that run left.
 
 ### Tasks
 
-1. **Register the run's flakes**: five cases failed in the full suite and passed when rerun alone, and none could be filed. Status: open.
+1. **Register the run's flakes**: six tests need flake cases (four that failed in the full suite and passed when rerun alone, and two that failed only in the reruns); none could be filed. Status: open.
 2. **Name a lost window focus in the keyboard annotation case**: the case fails with a bare "inactive" focus result when another application takes the key window during the run. Status: open.
 
 ### 1. Register the run's flakes
@@ -20,8 +20,11 @@ mbp3"). This file keeps the agent work that run left.
 **Problem.** The full-suite run on `mbp3` failed seven cases. One was a defect
 in the spec, fixed in 2181's change (`renderer-permissions-electron.spec.ts`).
 One depends on the desktop's focus (task 2). The other five passed when their
-owning file or case was rerun alone, which makes them flakes, but none has a
-case in [`docs/tests/flaky-tests/`](../../tests/flaky-tests/0000-index.md): the
+owning file or case was rerun alone, which makes them flakes. One of those, the
+seeded preview case, already has a flake case (below). The other four, and two
+tests that failed only in the reruns (`:3140` and `:456` in the table), make
+the six table rows below, and none of the six has a case in
+[`docs/tests/flaky-tests/`](../../tests/flaky-tests/0000-index.md): the
 flake numbers given to that pipeline (9850 to 9859) were all claimed by then,
 and the four-digit register's highest number, 9999, is also taken.
 
@@ -61,10 +64,10 @@ window-visibility spec is one line longer, so its cases are at lines 457 and
 
 **Decisions.**
 
-- **How should the five be filed?**
+- **How should the six be filed?**
   - **One case per test, in its group folder, as soon as numbers are free (recommended).**
     - Pros: each test is found by name in its group index, which is how the register is searched.
-    - Cons: five numbers; one more pipeline-level allocation is needed.
+    - Cons: six numbers; one more pipeline-level allocation is needed.
   - **One aggregate case for the run, like the branch-validation cases in `aggregate-validation-runs/`.**
     - Pros: one number.
     - Cons: a later failure of one of these tests is not found by searching for its name in its own group.

@@ -219,7 +219,8 @@ file could be added without taking a number given to other work. They are
 recorded in Current state and in
 [8300](8300-electron-suite-on-a-shared-mac-desktop.md) task 1, which files
 them once numbers are free. The seeded preview case already had a case
-(9902), which took its observation. The keyboard annotation case failed alone
+(9902), which took its observation, so 8300 task 1 files the other four plus
+two tests that failed only in the reruns: six cases. The keyboard annotation case failed alone
 too, because the window lost the key focus mid-run on a desktop shared with
 the user's app and other worktrees' Electron runs; 8300 task 2 makes that
 failure say so, and 7568 has its run at an idle Mac.

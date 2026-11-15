@@ -30,9 +30,12 @@ const legacyPipelinesApi = (_call: CommandCall, context: DomainAdapterContext): 
 export const pipelinesClient = domainClient(pipelinesDomain, {
   2: pipelinesApi,
   // Version 2 only removed `import_legacy_build_pipelines` and
-  // `set_workflow_result_tools_rollout` (2026-11-15), which no client calls,
-  // so version 1 peers take the same API. Adapter 1 goes when the support
-  // floor passes the first Stable release with version 2.
+  // `set_workflow_result_tools_rollout` (2026-11-15), which no current client
+  // calls, so version 1 peers take the same API. Renderers v2.21.0 to
+  // v2.38.1-beta still send the import once at startup while the browser holds
+  // the legacy `orkestrator-build-pipelines` localStorage key; they log the
+  // `unknown-command` and keep the key. Adapter 1 goes when the support floor
+  // passes the first Stable release with version 2.
   1: pipelinesApi,
   0: legacyPipelinesApi,
 });

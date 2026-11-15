@@ -91,3 +91,24 @@ test("refuses a snapshot that is not a pipeline, and an id that already exists",
     "seeded-2",
   ]);
 });
+
+test("refuses a pipeline whose admission an active pipeline already holds", async () => {
+  const { dataDir, storage } = await runningStorage();
+  const active = (id: string) =>
+    ({
+      ...finishedPipeline(id),
+      phase: "building",
+      error: undefined,
+      admissionKey: "admission-1",
+    }) as unknown as Record<string, unknown>;
+  await seedBuildPipeline(dataDir, active("seeded-3"));
+
+  // saveBuildPipeline answers a colliding first admission with the holder's
+  // record rather than an error; the seed must not report that as stored.
+  await expect(seedBuildPipeline(dataDir, active("seeded-4"))).rejects.toThrow(
+    "An active build pipeline already holds this admission: seeded-3",
+  );
+  expect((await storage.listBuildPipelines("project-1")).map((record) => record.id)).toEqual([
+    "seeded-3",
+  ]);
+});

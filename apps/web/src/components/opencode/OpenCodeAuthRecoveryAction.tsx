@@ -56,7 +56,7 @@ export function OpenCodeAuthRecoveryAction({
 
   if (signedIn) {
     return (
-      <p role="status" className="flex items-center gap-2 text-xs text-emerald-400">
+      <p role="status" className="flex items-center gap-2 text-xs text-success">
         <Check aria-hidden="true" className="size-3.5" />
         {containerId
           ? `Signed in to ${label}. This environment's container copies the login in when it starts, so restart it before resending.`

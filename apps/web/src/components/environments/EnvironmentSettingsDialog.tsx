@@ -170,7 +170,7 @@ function AgentExtensionIcon({
 
 function ExtensionStatusIcon({ status }: { status: backend.AgentExtensionItem["status"] }) {
   if (status === "connected") {
-    return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />;
+    return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />;
   }
   if (status === "failed") {
     return <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />;
@@ -1085,7 +1085,7 @@ export function EnvironmentSettingsDialog({
                 </>
               ) : (
                 <>
-                  <Shield className="h-4 w-4 text-green-500 shrink-0" />
+                  <Shield className="h-4 w-4 text-success shrink-0" />
                   <div>
                     <div className="font-medium text-sm">Restricted Network Access</div>
                     <div className="text-xs text-muted-foreground">
@@ -1149,7 +1149,7 @@ export function EnvironmentSettingsDialog({
                     {testResults.map((result, i) => (
                       <div key={i} className="flex items-start gap-2">
                         {result.resolvable ? (
-                          <CheckCircle2 className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
+                          <CheckCircle2 className="h-4 w-4 text-success mt-0.5 shrink-0" />
                         ) : result.valid ? (
                           <AlertCircle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" />
                         ) : (

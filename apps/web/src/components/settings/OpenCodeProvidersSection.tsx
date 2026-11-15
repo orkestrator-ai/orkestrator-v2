@@ -64,7 +64,7 @@ function ProviderRow({
           </p>
           <p
             className={`mt-0.5 flex items-center gap-1.5 text-xs ${
-              provider.connected ? "text-emerald-400" : "text-muted-foreground"
+              provider.connected ? "text-success" : "text-muted-foreground"
             }`}
           >
             {provider.connected ? <Check className="h-3 w-3" /> : null}
@@ -269,7 +269,7 @@ export function OpenCodeProvidersSection() {
       ) : null}
       {login.error ? <p className="text-xs text-destructive">{login.error}</p> : null}
       {notice ? (
-        <p role="status" className="flex items-center gap-2 text-xs text-emerald-400">
+        <p role="status" className="flex items-center gap-2 text-xs text-success">
           <Check className="h-3.5 w-3.5" />
           {notice}
         </p>

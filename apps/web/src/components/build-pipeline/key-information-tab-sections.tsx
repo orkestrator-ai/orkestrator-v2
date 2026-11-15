@@ -68,7 +68,7 @@ export function WorkDoneList({ items }: { items: string[] }) {
     <ul className="flex max-w-[85ch] flex-col gap-2">
       {items.map((item, index) => (
         <li key={index} className="flex items-start gap-2.5 text-sm leading-6">
-          <CheckCircle2 aria-hidden className="mt-1 size-4 shrink-0 text-emerald-500/80" />
+          <CheckCircle2 aria-hidden className="mt-1 size-4 shrink-0 text-success/80" />
           <span className="min-w-0 break-words">{item}</span>
         </li>
       ))}
@@ -113,13 +113,13 @@ export function DecisionCards({ decisions }: { decisions: KeyInformationDecision
                       key={optionIndex}
                       className={cn(
                         "flex flex-col rounded-md border p-3",
-                        chosen ? "border-emerald-500/50 bg-emerald-500/5" : "border-border/50",
+                        chosen ? "border-success/50 bg-success/5" : "border-border/50",
                       )}
                     >
                       <div className="flex items-start gap-2">
                         <span className="min-w-0 flex-1 text-sm break-words">{option.option}</span>
                         {chosen ? (
-                          <span className="shrink-0 rounded border border-emerald-500/40 px-1.5 py-px text-[10px] font-medium text-emerald-400 uppercase">
+                          <span className="shrink-0 rounded border border-success/40 px-1.5 py-px text-[10px] font-medium text-success uppercase">
                             Chosen
                           </span>
                         ) : null}
@@ -130,7 +130,7 @@ export function DecisionCards({ decisions }: { decisions: KeyInformationDecision
                             <li key={`p${proIndex}`} className="flex items-start gap-1.5">
                               <Plus
                                 aria-label="Pro"
-                                className="mt-0.5 size-3.5 shrink-0 text-emerald-400"
+                                className="mt-0.5 size-3.5 shrink-0 text-success"
                               />
                               <span className="min-w-0 break-words text-foreground/85">{pro}</span>
                             </li>
@@ -158,7 +158,7 @@ export function DecisionCards({ decisions }: { decisions: KeyInformationDecision
               </div>
             ) : null}
             {decision.rationale ? (
-              <div className="mt-3 rounded-md border-l-2 border-emerald-500/40 bg-muted/20 px-3 py-2">
+              <div className="mt-3 rounded-md border-l-2 border-success/40 bg-muted/20 px-3 py-2">
                 <div className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
                   Why
                 </div>
@@ -315,7 +315,7 @@ export function VerificationRounds({
             verification.passed === false
               ? "border-failure/40"
               : verification.passed
-                ? "border-emerald-500/40"
+                ? "border-success/40"
                 : "border-border/60",
           )}
         >
@@ -323,7 +323,7 @@ export function VerificationRounds({
             {verification.passed === undefined ? (
               <CircleDashed className="size-4 shrink-0 text-muted-foreground" />
             ) : verification.passed ? (
-              <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+              <CheckCircle2 className="size-4 shrink-0 text-success" />
             ) : (
               <XCircle className="size-4 shrink-0 text-failure" />
             )}
@@ -350,7 +350,7 @@ export function VerificationRounds({
                 >
                   {check.passed ? (
                     <CheckCircle2
-                      className="mt-0.5 size-3.5 shrink-0 text-emerald-500"
+                      className="mt-0.5 size-3.5 shrink-0 text-success"
                       aria-label="Passed"
                     />
                   ) : (

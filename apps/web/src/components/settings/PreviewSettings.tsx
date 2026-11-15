@@ -374,7 +374,7 @@ export function PreviewSettings() {
           <div
             className={
               detail.available
-                ? "rounded-md border border-emerald-500/30 p-2 text-xs"
+                ? "rounded-md border border-success/30 p-2 text-xs"
                 : "rounded-md border border-amber-500/30 p-2 text-xs"
             }
           >

@@ -128,7 +128,7 @@ function getBuildPhaseDisplay(phase: BuildPhase): { label: string; className: st
     case "paused":
       return { label: "Paused", className: "bg-amber-500/15 text-amber-400 border-amber-500/30" };
     case "complete":
-      return { label: "Complete", className: "bg-green-500/15 text-green-400 border-green-500/30" };
+      return { label: "Complete", className: "bg-success/15 text-success border-success/30" };
     case "failed":
       return { label: "Failed", className: "bg-red-500/15 text-red-400 border-red-500/30" };
   }

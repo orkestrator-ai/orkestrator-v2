@@ -398,7 +398,7 @@ function IdentityView({
                               <span className="text-amber-400"> · signed out</span>
                             ) : null}
                             {isActive ? (
-                              <span className="text-emerald-400"> · active</span>
+                              <span className="text-success"> · active</span>
                             ) : (
                               <button
                                 type="button"

@@ -52,7 +52,7 @@ interface SummaryTile {
 
 const TILE_TONE: Record<SummaryTile["tone"], string> = {
   neutral: "text-foreground",
-  good: "text-emerald-400",
+  good: "text-success",
   bad: "text-failure",
   warn: "text-amber-300",
 };

@@ -28,7 +28,7 @@ export const KEY_INFORMATION_TEST_RESULT: Record<
   KeyInformationTestResult,
   { label: string; icon: LucideIcon; className: string }
 > = {
-  passed: { label: "Passed", icon: CheckCircle2, className: "text-emerald-500" },
+  passed: { label: "Passed", icon: CheckCircle2, className: "text-success" },
   failed: { label: "Failed", icon: XCircle, className: "text-failure" },
   skipped: { label: "Skipped", icon: MinusCircle, className: "text-muted-foreground" },
   "not-run": { label: "Not run", icon: CircleDashed, className: "text-muted-foreground" },
@@ -39,7 +39,7 @@ export const KEY_INFORMATION_ISSUE_STATUS: Record<
   { label: string; className: string }
 > = {
   open: { label: "Open", className: "border-amber-500/30 text-amber-300/90" },
-  resolved: { label: "Resolved", className: "border-emerald-500/30 text-emerald-400" },
+  resolved: { label: "Resolved", className: "border-success/30 text-success" },
   "partially-resolved": {
     label: "Partially resolved",
     className: "border-amber-500/30 text-amber-300/90",

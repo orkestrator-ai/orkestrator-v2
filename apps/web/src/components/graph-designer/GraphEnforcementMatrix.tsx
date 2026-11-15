@@ -84,7 +84,7 @@ export function GraphEnforcementMatrix({
                 <td className="py-0.5">
                   <span
                     className={cn(
-                      judgement.tier === "enforced" && "text-emerald-300",
+                      judgement.tier === "enforced" && "text-success",
                       judgement.tier === "provider-configured" && "text-sky-300",
                       judgement.tier === "advisory" && "text-amber-300",
                     )}

@@ -122,9 +122,7 @@ export function CoordinatorIsolationBadge({
           data-context-revision={contextRevision}
           className={cn(
             "flex min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-xs focus-hairline",
-            caution
-              ? "text-amber-200 hover:text-amber-100"
-              : "text-emerald-200 hover:text-emerald-100",
+            caution ? "text-amber-200 hover:text-amber-100" : "text-success hover:text-success/80",
           )}
         >
           <Icon className="size-3.5 shrink-0" aria-hidden="true" />
@@ -134,9 +132,7 @@ export function CoordinatorIsolationBadge({
               data-coordinator-tier-pill={tier}
               className={cn(
                 "shrink-0 rounded-full border px-1.5 py-px text-[10px] leading-4 font-medium",
-                caution
-                  ? "border-amber-400/40 text-amber-200"
-                  : "border-emerald-400/35 text-emerald-200",
+                caution ? "border-amber-400/40 text-amber-200" : "border-success/35 text-success",
               )}
             >
               <span className="max-sm:sr-only">Read-only · </span>
@@ -156,7 +152,7 @@ export function CoordinatorIsolationBadge({
           run in build pipelines or prompt environments.
         </p>
         {tier && platform ? (
-          <p className={caution ? "text-amber-200" : "text-emerald-200"}>
+          <p className={caution ? "text-amber-200" : "text-success"}>
             {platform}&apos;s read-only protection is {tierLabel?.toLowerCase()}.{" "}
             {COORDINATOR_TIER_MEANINGS[tier]}
           </p>

@@ -398,7 +398,7 @@ export function BugReportSheet({ scope }: { scope?: NodeScope | null } = {}) {
             you to approve. Closing this panel keeps the report.
           </SheetDescription>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className="flex items-center gap-1.5 rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-200">
+            <span className="flex items-center gap-1.5 rounded-md border border-success/25 bg-success/10 px-2 py-0.5 text-[11px] text-success">
               <LockKeyhole className="size-3" aria-hidden="true" />
               Writes only to its scratch folder · asks before commands
             </span>
@@ -657,7 +657,7 @@ function FiledNotice({
   reveal: (path: string) => Promise<void>;
 }) {
   return (
-    <div className="shrink-0 space-y-2 border-b border-border/70 bg-emerald-500/5 px-4 py-3 text-sm">
+    <div className="shrink-0 space-y-2 border-b border-border/70 bg-success/5 px-4 py-3 text-sm">
       <p className="font-medium">Issue filed. Thank you!</p>
       <button
         type="button"

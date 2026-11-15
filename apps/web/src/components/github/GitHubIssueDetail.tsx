@@ -866,7 +866,7 @@ export function GitHubIssueDetailContent({
                   </span>
                 )}
                 {selectedPipeline?.completionCommentStatus === "posted" && (
-                  <span className="inline-flex items-center gap-1 text-xs text-green-500">
+                  <span className="inline-flex items-center gap-1 text-xs text-success">
                     <Check className="h-3 w-3" />
                     Completion comment posted
                   </span>

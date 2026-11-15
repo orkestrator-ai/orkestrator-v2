@@ -279,7 +279,7 @@ export function AnnotationList({
                     <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
                       <span
                         className={cn(
-                          item.state === "resolved" && "text-emerald-300",
+                          item.state === "resolved" && "text-success",
                           item.state === "open" && "text-foreground/80",
                         )}
                       >

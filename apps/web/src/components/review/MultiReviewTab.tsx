@@ -223,7 +223,7 @@ function isBusyPhase(phase: MultiReviewPhase): boolean {
 
 const AUTO_PR_NOTICE_TONE_CLASS = {
   muted: "border-border/60 bg-muted/30 text-muted-foreground",
-  success: "border-emerald-500/25 bg-emerald-500/5 text-foreground/85",
+  success: "border-success/25 bg-success/5 text-foreground/85",
   warning: "border-amber-500/30 bg-amber-500/8 text-amber-500",
 } as const;
 

@@ -242,10 +242,7 @@ function IntegrityNote({ preview }: { preview: GraphTemplateSharePreview }) {
   return (
     <p
       data-graph-share-integrity={preview.integrity}
-      className={cn(
-        "flex items-start gap-1.5 text-xs",
-        signed ? "text-emerald-300" : "text-amber-300",
-      )}
+      className={cn("flex items-start gap-1.5 text-xs", signed ? "text-success" : "text-amber-300")}
     >
       <Icon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
       <span>{text}</span>

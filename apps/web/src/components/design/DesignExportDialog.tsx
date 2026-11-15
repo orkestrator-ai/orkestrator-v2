@@ -520,7 +520,7 @@ export function DesignExportDialog({
           {receipt && (
             <div role="status" className="grid gap-1 text-xs">
               <p className="flex items-center gap-1">
-                <CheckCircle2 className="size-3 text-emerald-500" /> Exported revision{" "}
+                <CheckCircle2 className="size-3 text-success" /> Exported revision{" "}
                 {receipt.revision} to {receipt.relativePath}
               </p>
               {Math.max(projection.revision, receipt.currentRevision) > receipt.revision && (

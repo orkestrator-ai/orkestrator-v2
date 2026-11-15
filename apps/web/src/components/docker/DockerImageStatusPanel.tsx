@@ -171,7 +171,7 @@ export function DockerImageStatusPanel() {
         <div className="space-y-3 rounded-md border border-zinc-700 bg-zinc-800/50 p-3 text-sm">
           <div className="flex items-center gap-2">
             {dockerReachable ? (
-              <CheckCircle2 className="h-4 w-4 text-green-500" aria-hidden="true" />
+              <CheckCircle2 className="h-4 w-4 text-success" aria-hidden="true" />
             ) : (
               <XCircle className="h-4 w-4 text-destructive" aria-hidden="true" />
             )}
@@ -188,7 +188,7 @@ export function DockerImageStatusPanel() {
             <>
               <div className="flex items-center gap-2">
                 {healthy ? (
-                  <CheckCircle2 className="h-4 w-4 text-green-500" aria-hidden="true" />
+                  <CheckCircle2 className="h-4 w-4 text-success" aria-hidden="true" />
                 ) : image.state === "legacy" || image.state === "missing" ? (
                   <AlertCircle className="h-4 w-4 text-yellow-500" aria-hidden="true" />
                 ) : (

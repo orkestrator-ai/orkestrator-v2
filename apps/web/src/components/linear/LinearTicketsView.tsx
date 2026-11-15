@@ -890,7 +890,7 @@ export function LinearTicketsViewContent({
                         </span>
                       )}
                       {selectedPipeline?.completionCommentStatus === "posted" && (
-                        <span className="inline-flex items-center gap-1 text-xs text-green-500">
+                        <span className="inline-flex items-center gap-1 text-xs text-success">
                           <Check className="h-3 w-3" />
                           Linear comment posted
                         </span>

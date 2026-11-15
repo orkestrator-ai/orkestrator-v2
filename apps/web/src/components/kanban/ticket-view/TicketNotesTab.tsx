@@ -29,7 +29,7 @@ const log = createLogger("web.kanban");
 
 const TONE: Record<TicketPrTone, string> = {
   neutral: "border-border/70 bg-muted/30 text-foreground",
-  good: "border-emerald-500/40 bg-emerald-500/10 text-emerald-400",
+  good: "border-success/40 bg-success/10 text-success",
   warn: "border-amber-500/40 bg-amber-500/10 text-amber-300",
   bad: "border-failure/40 bg-failure/10 text-failure",
   merged: "border-violet-500/40 bg-violet-500/10 text-violet-300",

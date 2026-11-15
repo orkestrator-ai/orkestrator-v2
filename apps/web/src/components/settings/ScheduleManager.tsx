@@ -67,7 +67,7 @@ function errorText(error: unknown): string {
 const OUTCOME_STYLES: Record<ScheduleFire["state"], string> = {
   pending: "border-amber-500/40 text-amber-300",
   running: "border-cyan-500/40 text-cyan-300",
-  succeeded: "border-emerald-500/40 text-emerald-300",
+  succeeded: "border-success/40 text-success",
   failed: "border-red-500/40 text-red-300",
   skipped: "border-zinc-600 text-zinc-400",
 };

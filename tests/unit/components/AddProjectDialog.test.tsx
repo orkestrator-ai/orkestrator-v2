@@ -146,7 +146,7 @@ describe("AddProjectDialog", () => {
         "git@github.com:acme/typed.git",
       ),
     );
-    expect(screen.getByLabelText(/Git URL/).className).toContain("border-green-500");
+    expect(screen.getByLabelText(/Git URL/).className).toContain("border-success");
   });
 
   test("leaves the Git URL alone when a typed path has no valid remote", async () => {
@@ -244,7 +244,7 @@ describe("AddProjectDialog", () => {
       expect(urlInput.value).toBe("manual-invalid-url");
       await act(async () => manualValidation.resolve(false));
       expect(urlInput.className).toContain("border-destructive");
-      expect(urlInput.className).not.toContain("border-green-500");
+      expect(urlInput.className).not.toContain("border-success");
       expect(screen.getByText("Enter a valid Git URL (SSH or HTTPS format)")).toBeTruthy();
     },
   );
@@ -318,7 +318,7 @@ describe("AddProjectDialog", () => {
     await waitForDetection();
     expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1);
     expect(urlInput.value).toBe("https://github.com/acme/manual.git");
-    expect(urlInput.className).toContain("border-green-500");
+    expect(urlInput.className).toContain("border-success");
     expect(screen.queryByRole("alert") === null).toBe(true);
   });
 
@@ -533,7 +533,7 @@ describe("AddProjectDialog", () => {
     await act(async () => resolveSecond?.(true));
     await act(async () => resolveFirst?.(false));
 
-    expect(gitUrlInput.className).toContain("border-green-500");
+    expect(gitUrlInput.className).toContain("border-success");
     expect(screen.queryByText("Enter a valid Git URL (SSH or HTTPS format)") === null).toBe(true);
   });
 

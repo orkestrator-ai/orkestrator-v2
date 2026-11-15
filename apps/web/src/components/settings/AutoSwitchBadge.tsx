@@ -16,7 +16,7 @@ export function AutoSwitchBadge({
     );
   }
   return state.mode === "automatic" ? (
-    <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-500">
+    <span className="rounded bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success">
       Automatic
     </span>
   ) : (

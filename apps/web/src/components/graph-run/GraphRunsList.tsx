@@ -30,7 +30,7 @@ const STATUS_TONE: Record<GraphRunSummary["status"], string> = {
   running: "text-cyan-300",
   waiting: "text-amber-300",
   paused: "text-amber-300",
-  complete: "text-green-300",
+  complete: "text-success",
   failed: "text-failure",
   cancelling: "text-muted-foreground",
   cancelled: "text-muted-foreground",

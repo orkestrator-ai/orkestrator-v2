@@ -42,7 +42,7 @@ function borderClass(payload: JsonPayload): string {
     case "review-findings":
       return "border-cyan-500/25";
     case "verification":
-      return payload.verdict.complete ? "border-emerald-500/25" : "border-red-500/30";
+      return payload.verdict.complete ? "border-success/25" : "border-red-500/30";
     default:
       return "border-border/50";
   }

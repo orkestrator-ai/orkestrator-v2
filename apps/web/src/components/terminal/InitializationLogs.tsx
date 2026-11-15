@@ -180,7 +180,7 @@ function ContainerInitializationLogs({
                             line.includes("Success") ||
                             line.includes("ready") ||
                             line.includes("Ready")
-                          ? "text-green-400"
+                          ? "text-success"
                           : "text-foreground/80",
                 )}
               >

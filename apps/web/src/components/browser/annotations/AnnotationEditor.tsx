@@ -353,7 +353,7 @@ export function AnnotationEditor({
         </div>
       )}
       {saveState.status === "saved" && (
-        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-emerald-300">
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-success">
           <CheckCircle2 className="h-3 w-3" aria-hidden />
           <span>
             Saved

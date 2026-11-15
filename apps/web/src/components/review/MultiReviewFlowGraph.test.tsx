@@ -688,7 +688,7 @@ describe("flow graph nodes", () => {
       "cargo skipped",
       "test",
     ]);
-    expect(chips[0]!.className).toContain("text-green-300");
+    expect(chips[0]!.className).toContain("text-success");
     expect(chips[2]!.className).toContain("text-failure");
   });
 

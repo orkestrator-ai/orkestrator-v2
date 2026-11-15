@@ -36,7 +36,7 @@ export function PullRequestCheckStatus({
           ? "text-red-600 dark:text-red-400"
           : state === "running"
             ? "text-amber-700 dark:text-amber-400"
-            : "text-green-600 dark:text-green-400",
+            : "text-success",
         className,
       )}
     >

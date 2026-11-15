@@ -45,7 +45,7 @@ export function GraphReviewDiff({ diff }: { diff: GraphTemplateReviewDiff }) {
     <div data-graph-review-diff="" className="flex flex-col gap-1">
       <p className="text-xs text-muted-foreground">
         Since the approved version <span className="font-mono">{shortDigest(diff.fromDigest)}</span>
-        : <span className="text-emerald-300">+{diff.additions}</span>{" "}
+        : <span className="text-success">+{diff.additions}</span>{" "}
         <span className="text-failure">−{diff.deletions}</span>
         {diff.truncated ? " (not every line is shown)" : ""}
       </p>
@@ -60,7 +60,7 @@ export function GraphReviewDiff({ diff }: { diff: GraphTemplateReviewDiff }) {
                   data-diff-line={line.type}
                   className={cn(
                     "px-2 whitespace-pre-wrap break-all",
-                    line.type === "add" && "bg-emerald-500/10 text-emerald-300",
+                    line.type === "add" && "bg-success/10 text-success",
                     line.type === "remove" && "bg-red-500/10 text-red-300",
                     line.type === "no-newline" && "text-muted-foreground",
                   )}

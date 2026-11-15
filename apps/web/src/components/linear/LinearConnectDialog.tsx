@@ -174,7 +174,7 @@ function ResultLine({ result }: { result: MachineResult }) {
       );
     case "connected":
       return (
-        <span className="inline-flex items-center gap-1 text-green-600 dark:text-green-500">
+        <span className="inline-flex items-center gap-1 text-success">
           <Check className="h-3 w-3" />
           Connected{result.viewerName ? ` as ${result.viewerName}` : ""}
         </span>

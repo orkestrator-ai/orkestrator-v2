@@ -202,7 +202,7 @@ export function GraphCapabilitiesEditor({ node }: { node: GraphAgentNode }) {
                 </td>
                 <td
                   className={
-                    denied.has(name) ? "py-0.5 text-muted-foreground" : "py-0.5 text-emerald-300"
+                    denied.has(name) ? "py-0.5 text-muted-foreground" : "py-0.5 text-success"
                   }
                 >
                   {name === "web.search"

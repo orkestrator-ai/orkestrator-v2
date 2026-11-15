@@ -212,7 +212,7 @@ export function NetworkWhitelistDialog({
               </>
             ) : (
               <>
-                <Shield className="h-4 w-4 text-green-500" />
+                <Shield className="h-4 w-4 text-success" />
                 <div>
                   <div className="font-medium text-sm">Restricted Network Access</div>
                   <div className="text-xs text-muted-foreground">
@@ -297,7 +297,7 @@ export function NetworkWhitelistDialog({
                   {testResults.map((result, i) => (
                     <div key={i} className="flex items-start gap-2">
                       {result.resolvable ? (
-                        <CheckCircle2 className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
+                        <CheckCircle2 className="h-4 w-4 text-success mt-0.5 shrink-0" />
                       ) : result.valid ? (
                         <AlertCircle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" />
                       ) : (

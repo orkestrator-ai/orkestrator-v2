@@ -24,7 +24,7 @@ import {
 } from "./graph-launch-model";
 
 const TIER_CLASSES = {
-  enforced: "text-emerald-400",
+  enforced: "text-success",
   "provider-configured": "text-amber-300",
   advisory: "text-red-300",
 } as const;

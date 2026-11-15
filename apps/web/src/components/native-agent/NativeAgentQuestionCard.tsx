@@ -287,7 +287,7 @@ export function NativeAgentQuestionCard({
                   )}
                 >
                   {isAnswered(answerFor(entry)) ? (
-                    <Check className="size-3 text-emerald-400" aria-label="Answered" />
+                    <Check className="size-3 text-success" aria-label="Answered" />
                   ) : null}
                   {tabLabel(entry, entryIndex)}
                 </button>

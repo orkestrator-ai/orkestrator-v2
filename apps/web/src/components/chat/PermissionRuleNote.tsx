@@ -42,7 +42,7 @@ export function PermissionRuleNote({
       className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
       data-testid="permission-rule-note"
     >
-      <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
+      <ShieldCheck className="h-3.5 w-3.5 text-success" aria-hidden="true" />
       <span>
         Approved once by your rule <code className="font-mono">{application.pattern}</code> (
         {application.scope === "environment" ? "this environment" : "this project"})

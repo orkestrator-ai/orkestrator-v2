@@ -99,7 +99,7 @@ export const GRAPH_NODE_KIND_ICONS: Readonly<Record<GraphNodeKind, LucideIcon>> 
 });
 
 const ENFORCEMENT_TONE: Readonly<Record<GraphEnforcementTier, string>> = Object.freeze({
-  enforced: "border-emerald-500/40 text-emerald-300",
+  enforced: "border-success/40 text-success",
   "provider-configured": "border-sky-500/40 text-sky-300",
   advisory: "border-amber-500/40 text-amber-300",
 });

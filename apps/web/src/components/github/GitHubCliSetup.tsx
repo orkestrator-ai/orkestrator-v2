@@ -263,7 +263,7 @@ export function GitHubCliSetup({
   } else {
     body = (
       <p className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Check className="h-3.5 w-3.5 text-emerald-400" />
+        <Check className="h-3.5 w-3.5 text-success" />
         The GitHub CLI is installed and signed in.
       </p>
     );

@@ -141,7 +141,7 @@ export function TodoToolPart({
                       )}
                     >
                       {todo.status === "completed" ? (
-                        <CheckSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-500" />
+                        <CheckSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
                       ) : (
                         <Square
                           className={cn(

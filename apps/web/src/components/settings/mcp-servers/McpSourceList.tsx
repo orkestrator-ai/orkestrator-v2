@@ -36,7 +36,7 @@ const STATUS_TEXT: Record<McpDefinitionStatus, string> = {
 };
 
 const STATUS_TONE: Record<McpDefinitionStatus, string> = {
-  effective: "border-emerald-500/30 text-emerald-300",
+  effective: "border-success/30 text-success",
   shadowed: "border-white/15 text-muted-foreground",
   disabled: "border-white/15 text-muted-foreground",
   "policy-excluded": "border-amber-500/30 text-amber-300",

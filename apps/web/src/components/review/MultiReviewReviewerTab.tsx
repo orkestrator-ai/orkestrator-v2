@@ -960,7 +960,7 @@ export function MultiReviewReviewerTab({
           {running ? (
             <Loader2 className="size-4 animate-spin text-primary" />
           ) : snapshot?.status === "completed" ? (
-            <CheckCircle2 className="size-4 text-emerald-500" />
+            <CheckCircle2 className="size-4 text-success" />
           ) : snapshot?.status === "failed" ? (
             <AlertCircle className="size-4 text-destructive" />
           ) : null}

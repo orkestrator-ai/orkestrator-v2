@@ -121,7 +121,7 @@ export function GraphMcpServersEditor({
                 </td>
                 <td
                   className={
-                    granted.has(name) ? "py-0.5 text-emerald-300" : "py-0.5 text-muted-foreground"
+                    granted.has(name) ? "py-0.5 text-success" : "py-0.5 text-muted-foreground"
                   }
                 >
                   {granted.has(name) ? "granted" : denied.has(`mcp:${name}`) ? "denied" : "off"}

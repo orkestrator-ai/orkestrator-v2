@@ -419,7 +419,7 @@ function AccountRow({
             <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
               <span className="truncate">{account.label}</span>
               {login.isActive ? (
-                <span className="flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-500">
+                <span className="flex items-center gap-1 rounded bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success">
                   <Check className="h-3 w-3" />
                   Active
                 </span>

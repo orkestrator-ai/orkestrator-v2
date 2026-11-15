@@ -1481,7 +1481,7 @@ The container cases cannot use the loopback-only namespace: Docker publishes
 container ports in the host's, and the pool-exhaustion shim needs a default
 route. In the host namespace they first failed twice at startup on 2340.
 Options: record them as blocked in a new to-do; adopt the existing
-`waitForRendererStart` recovery in this spec's launcher, which to-do 7062 task 1
+`waitForRendererStart` recovery in this spec's launcher, which to-do 7062 (retired) task 1
 already proposes for it. Chose the recovery. Pros: the existing, unit-tested
 helper reloads only after a network-change module failure, so any other
 startup failure still fails. Cons: it covers startup only; a full host-namespace

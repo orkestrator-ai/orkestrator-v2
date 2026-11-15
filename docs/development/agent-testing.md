@@ -1752,6 +1752,33 @@ failure check looks for the startup heading's presence, not its visibility:
 headless Ozone ignores a window's constructor size, so until a spec sizes it
 the window is 1x1 and the heading has no box.
 
+Two tests cover the recovery outside the unit tests
+(`electron-startup-recovery.test.ts`):
+
+- `startup-recovery-electron.spec.ts`, part of `test:agent:electron`, runs on
+  any display, macOS included. Main's protocol handler fails a real Electron
+  window's first module fan-out with Chromium's own `net::ERR_NETWORK_CHANGED`
+  (net error -21), and the spec watches the window the way the other specs do.
+  The window must recover with exactly one reload and a `startup-recovery`
+  annotation. A different network error must get no reload, and an abort on
+  every load must fail after three reloads. The abort is injected, not caused
+  by an interface change: on a Mac changing an interface needs root and would
+  abort every other Chromium on the host. Docker Desktop keeps its networks
+  inside its VM, so the specs are not expected to meet the abort on macOS at
+  all.
+- `electron-startup-recovery.integration.test.ts` (Linux only) does cause the
+  abort by changing interfaces, inside a private user and network namespace
+  that no other build can see. It covers both real Chromium and a real
+  headless Electron window, and its fixtures hold the module responses and
+  let the network settle, so that exactly one reload is measured:
+
+```bash
+mise run test:logged -- --name startup-live -- bun test ./e2e/agent-testing/electron-startup-recovery.integration.test.ts --parallel=1
+```
+
+On a macOS display (mbp3, 2026-11-15) the whole suite printed no
+`[startup-recovery]` line apart from the covering spec's own, as expected.
+
 `design-canvas-electron.spec.ts`, `electron-cleanup.spec.ts`,
 `web-annotations-electron.spec.ts`, `service-preview-seeded-electron.spec.ts`,
 `terminal-input-resume-electron.spec.ts` and

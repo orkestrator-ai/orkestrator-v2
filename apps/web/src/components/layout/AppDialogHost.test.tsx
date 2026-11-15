@@ -260,6 +260,9 @@ describe("AppDialogHost", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog.textContent).toContain("remove app from your projects");
     expect(dialog.textContent).toContain(
+      "Its tickets and their images, project notes and feature plans on this machine are deleted too",
+    );
+    expect(dialog.textContent).toContain(
       "This project has 1 environment that will also be deleted",
     );
 

@@ -1734,6 +1734,22 @@ spec report a launch timeout. The Wayland rendering case in
 run under that command. The packaged-app specs are always headless on Linux (see
 [Packaged-app Electron spec](#packaged-app-electron-spec)).
 
+CI runs that same command, over the whole suite, in
+`.github/workflows/electron-qualification.yml`: weekly on the container live
+qualification's schedule (Mondays 04:17 UTC), on demand (`workflow_dispatch`),
+and on pull requests that change the workflow, `playwright.electron.config.ts`
+or `electron-display-setup.ts`. It uses one GitHub-hosted `ubuntu-latest`
+runner and no secrets, sets `ORKESTRATOR_NATIVE_MENU_INPUT=1` (the runner's
+Xvfb display is an isolated desktop) and uploads
+`output/agent-testing/electron-qualification/electron` (the Playwright JSON
+report, traces and failure screenshots) for 14 days. The opt-in cases stay
+skipped there: container environments, the transport CPU measurement and the
+macOS-only window cases. There is no macOS leg; macOS, live providers and
+Docker Desktop stay manual (to-do
+[0031](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md)
+task 8). `native-application-menu.yml` still runs its three menu specs on
+pull requests on Linux, Windows and macOS.
+
 A development window loads its renderer's modules from Vite, and on Linux
 Chromium aborts them with `net::ERR_NETWORK_CHANGED` when another build's
 Docker work changes a host interface (flake
@@ -2390,8 +2406,9 @@ scripted turn:
 | `large-window` | 26 rounds of 30 KB | ten rounds in, when the window is near 512 KiB |
 | `trimmed-head` | one 150 s response at 20 KB/s | 600,000 characters (`E10_READY_CHARS` moves it) |
 
-Each run measures 20 s with one viewer, 20 s with a second page on the same
-tab and 30 s idle, and writes counts, bytes and milliseconds (no content,
+It runs on Linux and macOS (it finds the profile's toolchain directory from
+the backend's command line, through `/proc` or `ps`). Each run measures 20 s
+with one viewer, 20 s with a second page on the same tab and 30 s idle, and writes counts, bytes and milliseconds (no content,
 token or session id) to
 `output/agent-testing/<run id>/conditional-reads[-codex][-<scenario>].json`.
 Non-baseline scenarios add the whole turn's bridge totals and the exact
@@ -2764,8 +2781,10 @@ MCP tool.
 `e2e/agent-testing/agent-tab-requests-live.spec.ts` counts what one visible
 Claude tab sends while its turn is in a foreground wait (the `running-quiet`
 workload), then drops the page's connection during a second running turn and
-checks the view recovers without a reload. It has its own opt-in and uses the
-host's Claude credentials:
+checks the view recovers without a reload. `running-quiet-two-viewers` counts
+the same workload with a second browser context open on the same tab, each
+viewer separately. It has its own opt-in and uses the host's Claude
+credentials:
 
 ```bash
 mise run dev:test --profile qa-tab-requests --fixture --credential-source claude --agent-platforms claude
@@ -2782,7 +2801,10 @@ It knows nothing about which commands the renderer sends, so the same file
 measures two commits. Results are appended to
 `output/agent-testing/<run id>/agent-tab-requests.json`: command names, counts
 and byte totals, per round and per second, from both the page and the gateway's
-`/__orkestrator/metrics`.
+`/__orkestrator/metrics`. Add `--grep running-quiet` to run only the two
+`running-quiet` cases. The push event layer's before-measurement (to-do
+[8102](../todo/transcripts-and-observation/8102-push-event-layer.md#the-polling-baseline-2026-11-15))
+was taken with them and with the conditional-reads spec below.
 
 ### Live revision tokens with inactive views
 

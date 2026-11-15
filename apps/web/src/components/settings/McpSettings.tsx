@@ -402,7 +402,7 @@ export function McpSettings() {
       }
       actions={
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <CircleDot className={cn("h-3.5 w-3.5", available && "text-emerald-400")} />
+          <CircleDot className={cn("h-3.5 w-3.5", available && "text-success")} />
           {available ? "Listening locally" : "Not available"}
         </div>
       }

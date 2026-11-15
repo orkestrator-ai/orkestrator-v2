@@ -146,7 +146,7 @@ function MarkdownListItem({ className, children, ...props }: HTMLAttributes<HTML
           aria-hidden="true"
           data-task-list-icon="true"
           data-state="checked"
-          className="mt-0.5 h-4 w-4 shrink-0 text-green-500"
+          className="mt-0.5 h-4 w-4 shrink-0 text-success"
         />
       ) : (
         <Square

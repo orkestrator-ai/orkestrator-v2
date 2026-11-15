@@ -228,7 +228,7 @@ export function SeverityChips({
 }
 
 const VALIDATION_CHIP_CLASS: Record<ReviewValidationResult["status"], string> = {
-  passed: "bg-success/10 text-green-300",
+  passed: "bg-success/10 text-success",
   skipped: "bg-elevated text-muted-foreground",
   failed: "bg-failure/12 text-failure",
   incomplete: "bg-failure/12 text-failure",

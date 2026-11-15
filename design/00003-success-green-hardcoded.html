@@ -11,7 +11,7 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00003</p>
       <h1>00003 · Replace hard-coded green and emerald classes with the success token</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="in-progress">In progress</span>
         <span class="pill sev-high">High</span>
         <span class="pill">Color tokens</span>
         <span class="pill evidence-badge" data-evidence-badge data-complete="false"
@@ -271,36 +271,36 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >Before images captured on <b>unmodified</b> code for every slot below, and committed
             under <code>design/images/00003/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >Type-check and the owning tests pass (commands below);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
@@ -312,7 +312,7 @@ mise run lint</code></pre>
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
           >
         </li>
@@ -330,9 +330,102 @@ mise run lint</code></pre>
         image pair, anything deferred.
       </p>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <b>Hit classification</b> (158 raw hits in <code>.tsx</code> plus 4 files in
+          <code>.ts</code>; 118 lines in 84 <code>.tsx</code> files and 2 lines in
+          <code>key-information-format.ts</code> changed):
+          <ul>
+            <li>
+              <b>Success, replaced with <code>success</code>:</b> diff additions (agents.md dialog,
+              graph template review, file diff), check icons and “passed”, “complete”, “resolved”,
+              “enforced”, “in sync”, “connected”, “signed in” and “active” text, chosen option
+              frames, goal complete (pill and tile), mail “finished”, bug report chip and band,
+              annotation result and resolved, review strengths, the
+              <code>bg-success/10 text-green-300</code> pairs in the flow graph, and light/dark
+              pairs such as <code>text-green-600 dark:text-green-400</code> in
+              <code>PullRequestCheckStatus.tsx</code>.
+            </li>
+            <li>
+              <b>Identity, kept:</b> <code>AgentModelPicker.tsx</code>,
+              <code>AgentIcons.tsx</code> (Codex emerald, OpenCode green), the Codex icon in
+              <code>McpSettings.tsx:599</code>, <code>usage-format.ts</code> and the Input series in
+              <code>UsageSummary.tsx</code>. These tell platforms apart (the Platform Hue
+              Exception).
+            </li>
+            <li>
+              <b>Kind, kept:</b> <code>RichCallout.tsx</code> (callout kind),
+              <code>FileIcon.tsx</code> (file type), <code>ticket-label-style.ts</code> and
+              <code>machine-colors.ts</code> (user-chosen label and machine colors),
+              <code>ComposerIconPicker.tsx</code> (plan mode),
+              <code>GitHubIssueCard.tsx</code> (GitHub's open-issue green).
+            </li>
+            <li>
+              <b>Action, kept:</b> the green merge buttons in <code>MergePrDialog.tsx</code>,
+              <code>ActionBar.view.tsx</code> and <code>AutoMergeToggleButton.tsx</code>, the “Merge
+              PR” icon in <code>EnvironmentRow.tsx</code> and the Allow button in
+              <code>ClaudeTmuxChatTab.parts.tsx</code>. They are call-to-action fills, not status.
+              Whether they should become a primary action color is a separate decision.
+            </li>
+            <li>
+              <b>Status dots, left for task 00004:</b> <code>StatusIndicator.tsx</code>,
+              <code>TicketSyncStrip.tsx</code>, <code>KanbanBoard.tsx</code>,
+              <code>KanbanCard.tsx:82</code>, <code>LinearIssueBoard.tsx</code>,
+              <code>SuborkGroup.tsx</code>, <code>NodeSnapshotPreview.tsx</code>,
+              <code>PreviewServicePicker.tsx</code>, <code>AgentInfoButton.panels.tsx</code>,
+              <code>ClaudeTmuxChatTab.tsx</code>, <code>ServerConnectionSwitcher.tsx</code>,
+              <code>PreviewSettings.tsx:53</code> and the ping dot in
+              <code>GlobalSettings.sections.tsx</code>.
+            </li>
+          </ul>
+        </li>
+        <li>
+          <b>Decisions chosen:</b>
+          <ul>
+            <li>
+              Replace every success hit, not only the ten listed sites (recommended: the page's own
+              Approach says to classify every hit, and a partial pass leaves the same diff line two
+              greens). Alternative, ten sites only: smaller diff, but leaves about 100 raw greens.
+            </li>
+            <li>
+              Collapse the lighter shades used on tinted frames (<code>-200</code>,
+              <code>-300</code>) to plain <code>text-success</code> (recommended: one pair rule).
+              Alternative, a lighter success tint token: more control, but a second green.
+            </li>
+            <li>
+              Keep the merge action buttons (recommended: out of scope, they are actions).
+              Alternative, move them to <code>bg-success</code>: it would make an action look like a
+              status.
+            </li>
+          </ul>
+        </li>
+        <li>
+          <b>What changed per image pair:</b> the additions in the agents.md dialog and the graph
+          template review were two different greens (<code>emerald-300</code> text on an
+          <code>emerald-500/10</code> tint) and are now <code>rgb(94, 227, 155)</code> on the
+          <code>success/10</code> tint in both (checked with <code>getComputedStyle</code>). The
+          graph header count “+3” and the goal pill, bug report chip and band moved from
+          <code>emerald</code> to the same mint. Layout, spacing and text are unchanged. Removals
+          still use <code>red-300</code> in both places; that is task 00002.
+        </li>
+        <li>
+          <b>How the images were captured (not the live app):</b> none of the four states could be
+          reached safely in a fixture profile: the agents.md approval needs a coordinator proposal,
+          the bug report band needs a real GitHub issue to be filed, a goal needs a live agent run,
+          and the graph review needs a shared template. Each image shows the real component, with
+          the real stylesheet, in the <code>design-00003</code> profile's renderer, on a throwaway
+          harness page (since removed) fed representative props, and for the dialog a stubbed
+          preview response. The after images were taken after a restart of the profile, because its
+          Vite server does not pick up edits to existing files on this volume. No page reload or
+          narrow viewport check was done, so the task stays In progress.
+        </li>
+        <li>
+          <b>Tests:</b> updated class assertions in <code>AddProjectDialog.test.tsx</code>,
+          <code>CoordinatorPanel.outcome.test.tsx</code>, <code>ActionBar.test.tsx</code>,
+          <code>QuestionCard.test.tsx</code> and <code>MultiReviewFlowGraph.test.tsx</code>. Not
+          run: the full suite, and the guards stage of <code>mise run test:changed</code> fails on
+          <code>HtmlFileTab.test.tsx</code>, <code>SelfImprovementProgress.test.tsx</code> and
+          <code>e2e/HtmlPreview.spec.ts</code>, files this change does not touch.
+        </li>
       </ul>
 
       <footer>

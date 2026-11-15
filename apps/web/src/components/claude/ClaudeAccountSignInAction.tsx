@@ -50,7 +50,7 @@ export function ClaudeAccountSignInAction({
 
   if (signedInHere) {
     return (
-      <p role="status" className="flex items-center gap-2 text-xs text-emerald-400">
+      <p role="status" className="flex items-center gap-2 text-xs text-success">
         <Check aria-hidden="true" className="size-3.5" />
         Signed in to Claude.
       </p>

@@ -485,7 +485,7 @@ function DockerSettingsPanel() {
                       ) : null}
                       <div className="flex items-center gap-1">
                         {isRunning ? (
-                          <CheckCircle2 className="h-4 w-4 text-green-500" />
+                          <CheckCircle2 className="h-4 w-4 text-success" />
                         ) : (
                           <XCircle className="h-4 w-4 text-muted-foreground" />
                         )}

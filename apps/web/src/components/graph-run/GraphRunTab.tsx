@@ -130,7 +130,7 @@ const RUN_STATUS_CLASS: Record<GraphRun["status"], string> = {
   running: "border-cyan-400/25 bg-cyan-400/8 text-cyan-300",
   waiting: "border-amber-400/40 bg-amber-400/10 text-amber-300",
   paused: "border-amber-400/30 text-amber-300",
-  complete: "border-success/30 bg-success/8 text-green-300",
+  complete: "border-success/30 bg-success/8 text-success",
   failed: "border-failure/30 bg-failure/8 text-failure",
   cancelling: "border-border text-muted-foreground",
   cancelled: "border-border text-muted-foreground",

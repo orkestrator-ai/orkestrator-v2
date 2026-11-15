@@ -157,7 +157,7 @@ const STATUS_TEXT: Record<ChangeFileStatus, string> = {
 };
 
 function statusIcon(status: ChangeFileStatus | null): ReactNode {
-  if (status === "added") return <FilePlus className="h-3 w-3 text-green-500" />;
+  if (status === "added") return <FilePlus className="h-3 w-3 text-success" />;
   if (status === "deleted") return <FileX className="h-3 w-3 text-red-500" />;
   return <FileCode className="h-3 w-3" />;
 }
@@ -712,7 +712,7 @@ function DiffHeader({
             <span
               className={cn(
                 isMobile ? "sr-only" : "shrink-0 rounded px-1.5 py-0.5 text-xs",
-                !isMobile && status === "added" && "bg-green-500/20 text-green-400",
+                !isMobile && status === "added" && "bg-success/20 text-success",
                 !isMobile && status === "modified" && "bg-yellow-500/20 text-yellow-400",
                 !isMobile && status === "deleted" && "bg-red-500/20 text-red-400",
                 !isMobile && status === "renamed" && "bg-blue-500/20 text-blue-300",
@@ -748,7 +748,7 @@ function DiffHeader({
               {showFileCount && (
                 <span className="mr-1.5">{formatFileCount(measurement.totals.changedFiles)}</span>
               )}
-              {additions && <span className="text-green-400">{additions}</span>}
+              {additions && <span className="text-success">{additions}</span>}
               {additions && deletions && " "}
               {deletions && <span className="text-red-400">{deletions}</span>}
             </span>

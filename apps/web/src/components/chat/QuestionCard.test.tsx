@@ -663,7 +663,7 @@ describe("QuestionCard multi-question navigation", () => {
     );
 
     expect(screen.getByText("0/2 answered")).toBeTruthy();
-    expect(container.querySelector("svg.ml-auto.text-green-500") === null).toBe(true);
+    expect(container.querySelector("svg.ml-auto.text-success") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "1b" }));
     expect(screen.getByText("1/2 answered")).toBeTruthy();
@@ -672,7 +672,7 @@ describe("QuestionCard multi-question navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.click(screen.getByRole("button", { name: "2a" }));
     expect(screen.getByText("2/2 answered")).toBeTruthy();
-    expect(container.querySelector("svg.ml-auto.text-green-500")).toBeTruthy();
+    expect(container.querySelector("svg.ml-auto.text-success")).toBeTruthy();
     expect(screen.getByText("2 of 2")).toBeTruthy();
   });
 

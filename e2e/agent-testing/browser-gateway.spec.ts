@@ -409,7 +409,7 @@ test.describe("host path browsing", () => {
       await expect(dialog.getByRole("button", { name: "Add project", exact: true })).toBeDisabled();
       await pathInput.fill(repository);
       await expect(urlInput).toHaveValue(detectedUrl, { timeout: 10_000 });
-      await expect(urlInput).toHaveClass(/border-green-500/);
+      await expect(urlInput).toHaveClass(/border-success/);
 
       // An explicit picker action inspects the same path immediately in a browser.
       await urlInput.fill("");

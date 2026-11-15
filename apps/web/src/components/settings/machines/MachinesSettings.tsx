@@ -621,7 +621,7 @@ function updateStatusText(
 const STATUS_TONE_CLASS = {
   muted: "text-zinc-500",
   active: "text-sky-300",
-  good: "text-emerald-300",
+  good: "text-success",
   bad: "text-red-300",
 } as const;
 
@@ -713,7 +713,7 @@ function MachineRow({
       data-testid="machine-row"
       data-machine={entry.key}
       className={cn(
-        entry.current && "bg-emerald-500/[0.035]",
+        entry.current && "bg-success/[0.035]",
         dragging && "relative z-10 bg-zinc-900 shadow-lg",
       )}
     >
@@ -740,9 +740,7 @@ function MachineRow({
             <div className="flex flex-wrap items-center gap-2">
               <span className="min-w-0 truncate font-medium text-zinc-100">{entry.name}</span>
               {entry.current ? (
-                <Badge className="border-emerald-500/25 bg-emerald-500/10 text-emerald-300">
-                  This window
-                </Badge>
+                <Badge className="border-success/25 bg-success/10 text-success">This window</Badge>
               ) : null}
               {entry.role === "self" ? (
                 leaf ? (

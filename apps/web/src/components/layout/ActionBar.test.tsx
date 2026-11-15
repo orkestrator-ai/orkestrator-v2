@@ -6005,7 +6005,7 @@ describe("ActionBar pull request actions", () => {
       name: "passed",
       summary: { passed: 4, total: 4, pending: 0 },
       label: "4 of 4 CI checks passed; all checks complete",
-      colorClass: "text-green-600",
+      colorClass: "text-success",
       state: "passed",
     },
     {

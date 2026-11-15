@@ -103,8 +103,8 @@ const TONES: Record<
   success: {
     icon: CircleCheck,
     label: "Status: finished",
-    frame: "border-emerald-400/25 bg-emerald-400/[0.04]",
-    accent: "text-emerald-300",
+    frame: "border-success/25 bg-success/[0.04]",
+    accent: "text-success",
   },
   failure: {
     icon: CircleX,

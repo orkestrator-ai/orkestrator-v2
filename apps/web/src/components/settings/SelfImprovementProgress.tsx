@@ -45,7 +45,7 @@ export function useNow(active: boolean, intervalMs = 1000): number {
 }
 
 const MARK_CLASS: Record<SelfImprovementStageState, string> = {
-  done: "border-emerald-500/70 bg-emerald-500/15 text-emerald-400",
+  done: "border-success/70 bg-success/15 text-success",
   running: "border-sky-400/80 bg-sky-500/10 text-sky-300",
   pending: "border-zinc-600 text-transparent",
   skipped: "border-dashed border-zinc-700 text-zinc-500",
@@ -92,7 +92,7 @@ function took(stage: SelfImprovementStage): string | null {
 }
 
 const LIVENESS_CLASS = {
-  active: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+  active: "border-success/30 bg-success/10 text-success",
   waiting: "border-sky-500/30 bg-sky-500/10 text-sky-200",
   quiet: "border-amber-500/40 bg-amber-500/10 text-amber-300",
 } as const;

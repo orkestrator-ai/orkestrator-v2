@@ -255,7 +255,7 @@ export function BuildChatTab({
               {active ? (
                 <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
               ) : pipeline.phase === "complete" ? (
-                <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
+                <CheckCircle2 className="h-3 w-3 shrink-0 text-success" />
               ) : pipeline.phase === "failed" ? (
                 <AlertCircle className="h-3 w-3 shrink-0 text-destructive" />
               ) : (

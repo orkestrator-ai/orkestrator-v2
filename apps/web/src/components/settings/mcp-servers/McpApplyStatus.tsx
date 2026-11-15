@@ -37,7 +37,7 @@ const TONE: Partial<Record<McpApplyState, string>> = {
   "blocked-policy": "text-amber-300",
   queued: "text-blue-300",
   applying: "text-blue-300",
-  applied: "text-emerald-300",
+  applied: "text-success",
 };
 
 const KIND_TEXT: Record<McpOperationSnapshot["kind"], string> = {

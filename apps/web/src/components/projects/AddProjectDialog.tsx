@@ -411,7 +411,7 @@ export function AddProjectDialog({
                     onChange={(event) => void setAndValidateGitUrl(event.target.value)}
                     className={cn(
                       isValidUrl === false && "border-destructive",
-                      isValidUrl === true && "border-green-500",
+                      isValidUrl === true && "border-success",
                     )}
                     disabled={isLoading}
                   />

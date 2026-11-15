@@ -434,9 +434,9 @@ export function AutoPipelineTab({
           {state?.phase === "promoted" && (
             <p
               role="status"
-              className="flex items-start gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm"
+              className="flex items-start gap-2 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm"
             >
-              <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-400" />
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
               Auto-pipeline started. The ticket was created and the pipeline continues from Review.
               You can close this tab.
             </p>

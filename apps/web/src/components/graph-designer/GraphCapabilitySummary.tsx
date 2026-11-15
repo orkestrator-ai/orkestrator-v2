@@ -38,7 +38,7 @@ export function GraphCompileCounts({ compile }: { compile: GraphTemplateCompileS
       {compile.errors > 0 ? (
         <span className="text-failure">{compile.errors} errors</span>
       ) : (
-        <span className="text-emerald-300">compiles</span>
+        <span className="text-success">compiles</span>
       )}
       {compile.warnings > 0 ? (
         <span className="text-amber-300">{compile.warnings} warnings</span>

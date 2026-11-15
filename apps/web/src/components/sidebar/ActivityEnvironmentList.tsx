@@ -193,7 +193,7 @@ export function ActivityEnvironmentList({
                 className="flex h-7 items-center gap-1.5 rounded-md px-2 font-mono text-[11px] tabular-nums text-zinc-400"
                 aria-label={`${totalCount} ${totalCount === 1 ? "environment" : "environments"}`}
               >
-                <Boxes className="h-3.5 w-3.5 text-emerald-500" aria-hidden="true" />
+                <Boxes className="h-3.5 w-3.5 text-success" aria-hidden="true" />
                 <span>{totalCount}</span>
               </div>
             </TooltipTrigger>

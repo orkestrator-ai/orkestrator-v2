@@ -11,7 +11,7 @@ import { useCoordinatorPullRequestLink } from "@/lib/coordinator-pull-request-wa
 import { cn } from "@/lib/utils";
 
 const TONE_CLASS: Record<AgentMailNoticeTone, string> = {
-  success: "text-emerald-400",
+  success: "text-success",
   failure: "text-red-400",
   attention: "text-amber-400",
   info: "text-sky-400",

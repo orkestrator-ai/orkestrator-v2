@@ -269,9 +269,7 @@ export function DeviceConnectionSection({
                   <span className="min-w-0 flex-1 truncate font-mono text-zinc-300">
                     {route.label}
                   </span>
-                  {route.active ? (
-                    <span className="text-[11px] text-emerald-300">In use</span>
-                  ) : null}
+                  {route.active ? <span className="text-[11px] text-success">In use</span> : null}
                   {!route.supported ? (
                     <span className="text-zinc-500">Needs desktop SSH support</span>
                   ) : null}

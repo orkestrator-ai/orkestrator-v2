@@ -81,11 +81,7 @@ function TicketList({
       <p
         className={cn(
           "text-xs font-medium",
-          tone === "good"
-            ? "text-emerald-400"
-            : tone === "warn"
-              ? "text-amber-400"
-              : "text-foreground",
+          tone === "good" ? "text-success" : tone === "warn" ? "text-amber-400" : "text-foreground",
         )}
       >
         {title}

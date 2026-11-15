@@ -172,7 +172,7 @@ export function CoordinatorToolbar({
           <span
             className={cn(
               "text-xs text-muted-foreground",
-              git?.remoteState === "fresh" && !git.lastError && "text-emerald-300",
+              git?.remoteState === "fresh" && !git.lastError && "text-success",
             )}
           >
             {git?.remoteState === "fresh" && !git.lastError ? (

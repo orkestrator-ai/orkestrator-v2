@@ -600,7 +600,7 @@ export function AnnotationThread({
       {annotation.state === "resolved" && (
         <section
           aria-label="Resolution"
-          className="space-y-1 rounded border border-emerald-500/30 bg-emerald-500/5 p-2 text-[11px]"
+          className="space-y-1 rounded border border-success/30 bg-success/5 p-2 text-[11px]"
         >
           <p>
             Resolved{" "}

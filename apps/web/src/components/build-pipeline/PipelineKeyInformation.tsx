@@ -336,7 +336,7 @@ function panelSections(info: BuildPipelineKeyInformation): PanelSection[] {
                         key={optionIndex}
                         className={cn(
                           "rounded border px-2 py-1.5",
-                          chosen ? "border-emerald-500/40 bg-emerald-500/5" : "border-border/40",
+                          chosen ? "border-success/40 bg-success/5" : "border-border/40",
                         )}
                       >
                         <div className="flex items-center gap-1.5">
@@ -344,7 +344,7 @@ function panelSections(info: BuildPipelineKeyInformation): PanelSection[] {
                             <KeyInformationText text={option.option} />
                           </span>
                           {chosen ? (
-                            <span className="shrink-0 rounded border border-emerald-500/40 px-1 text-[11px] text-emerald-400">
+                            <span className="shrink-0 rounded border border-success/40 px-1 text-[11px] text-success">
                               Chosen
                             </span>
                           ) : null}
@@ -463,7 +463,7 @@ function panelSections(info: BuildPipelineKeyInformation): PanelSection[] {
                 {verification.passed === undefined ? (
                   <CircleDashed className="size-4 shrink-0 text-muted-foreground" />
                 ) : verification.passed ? (
-                  <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+                  <CheckCircle2 className="size-4 shrink-0 text-success" />
                 ) : (
                   <XCircle className="size-4 shrink-0 text-failure" />
                 )}
@@ -487,7 +487,7 @@ function panelSections(info: BuildPipelineKeyInformation): PanelSection[] {
                     <li key={index} className="flex items-start gap-2">
                       {check.passed ? (
                         <CheckCircle2
-                          className="mt-0.5 size-4 shrink-0 text-emerald-500"
+                          className="mt-0.5 size-4 shrink-0 text-success"
                           aria-label="Passed"
                         />
                       ) : (
@@ -559,7 +559,7 @@ function ProsCons({ pros, cons }: { pros: string[]; cons: string[] }) {
       {pros.length > 0 ? (
         <ul className="flex flex-col gap-0.5">
           {pros.map((pro, index) => (
-            <li key={index} className="break-words text-emerald-400/90">
+            <li key={index} className="break-words text-success/90">
               + <KeyInformationText text={pro} />
             </li>
           ))}

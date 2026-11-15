@@ -380,7 +380,7 @@ export function AgentsMdApprovalDialog({
                         data-diff={line.type}
                         className={cn(
                           "whitespace-pre-wrap",
-                          line.type === "add" && "bg-emerald-500/10 text-emerald-300",
+                          line.type === "add" && "bg-success/10 text-success",
                           line.type === "remove" && "bg-red-500/10 text-red-300 line-through",
                           line.type === "same" && "text-muted-foreground",
                         )}

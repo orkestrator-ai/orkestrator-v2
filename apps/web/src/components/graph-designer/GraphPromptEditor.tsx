@@ -333,7 +333,7 @@ export function GraphPromptEditor({ node }: { node: GraphAgentNode }) {
           <div className="flex flex-col gap-1" data-graph-prompt-size={over ? "over" : "ok"}>
             <div className="h-1.5 w-full overflow-hidden rounded bg-border/60" aria-hidden>
               <div
-                className={cn("h-full", over ? "bg-failure" : "bg-emerald-400/80")}
+                className={cn("h-full", over ? "bg-failure" : "bg-success/80")}
                 style={{ width: `${Math.min(100, (inputBytes / ceilingBytes) * 100)}%` }}
               />
             </div>

@@ -24,7 +24,7 @@ export function PipelineNeedsALook({ followUps }: { followUps: readonly Pipeline
   if (followUps.length === 0) {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <CheckCircle2 aria-hidden className="size-4 shrink-0 text-emerald-400" />
+        <CheckCircle2 aria-hidden className="size-4 shrink-0 text-success" />
         Nothing was flagged for a person to look at.
       </p>
     );

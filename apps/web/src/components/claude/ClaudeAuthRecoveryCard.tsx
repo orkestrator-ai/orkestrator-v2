@@ -154,7 +154,7 @@ export function ClaudeAuthRecoveryCard({
         </p>
 
         {signedIn ? (
-          <p role="status" className="mt-3 flex items-center gap-2 text-xs text-emerald-400">
+          <p role="status" className="mt-3 flex items-center gap-2 text-xs text-success">
             <Check aria-hidden="true" className="size-3.5" />
             {automaticResend
               ? "Signed in. Sending your message again…"

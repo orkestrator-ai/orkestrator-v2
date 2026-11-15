@@ -798,7 +798,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 htmlFor="use-host-github-credentials"
                 className="flex items-center gap-2 text-sm font-medium"
               >
-                <Terminal className="h-3.5 w-3.5 text-emerald-400" />
+                <Terminal className="h-3.5 w-3.5 text-success" />
                 Use host GitHub CLI credentials
               </Label>
               <p className="text-xs leading-relaxed text-muted-foreground">
@@ -816,7 +816,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </div>
 
           {useHostGitHubCredentials ? (
-            <div className="space-y-3 border-t border-zinc-800 bg-emerald-500/[0.04] px-4 py-3">
+            <div className="space-y-3 border-t border-zinc-800 bg-success/[0.04] px-4 py-3">
               <p className="text-xs text-muted-foreground">
                 Host CLI authentication is selected.
                 {global.githubTokenConfigured
@@ -1084,7 +1084,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 htmlFor="use-host-claude-credentials"
                 className="flex items-center gap-2 text-sm font-medium"
               >
-                <Terminal className="h-3.5 w-3.5 text-emerald-400" />
+                <Terminal className="h-3.5 w-3.5 text-success" />
                 Use host Claude Code credentials
               </Label>
               <p className="text-xs leading-relaxed text-muted-foreground">
@@ -1102,7 +1102,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </div>
 
           {useHostClaudeCredentials ? (
-            <div className="border-t border-zinc-800 bg-emerald-500/[0.04] px-4 py-3">
+            <div className="border-t border-zinc-800 bg-success/[0.04] px-4 py-3">
               <p className="text-xs text-muted-foreground">
                 Containers reuse your host login. The credential is written owner-only and refreshed
                 on every start.
@@ -1952,7 +1952,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             {testResults.map((result, i) => (
               <div key={i} className="flex items-center gap-1">
                 {result.resolvable ? (
-                  <CheckCircle2 className="h-3 w-3 text-green-500" />
+                  <CheckCircle2 className="h-3 w-3 text-success" />
                 ) : result.valid ? (
                   <AlertCircle className="h-3 w-3 text-yellow-500" />
                 ) : (

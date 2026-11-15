@@ -58,7 +58,7 @@ function StateBadge({ state }: { state: NativeAgentAuthState }) {
       className={cn(
         "flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium",
         signedIn
-          ? "bg-emerald-500/10 text-emerald-500"
+          ? "bg-success/10 text-success"
           : unknown
             ? "bg-zinc-500/10 text-muted-foreground"
             : "bg-amber-500/10 text-amber-500",

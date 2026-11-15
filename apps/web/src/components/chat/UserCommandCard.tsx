@@ -28,7 +28,7 @@ function statusLabel(command: UserCommandRecord): { text: string; className: str
       return { text: "Failed to run", className: "border-destructive/50 text-destructive" };
     case "exited":
       return command.exitCode === 0
-        ? { text: "Exit 0", className: "border-emerald-500/40 text-emerald-300" }
+        ? { text: "Exit 0", className: "border-success/40 text-success" }
         : {
             text: `Exit ${command.exitCode ?? "?"}`,
             className: "border-amber-500/40 text-amber-300",

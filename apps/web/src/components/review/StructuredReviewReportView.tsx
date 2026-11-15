@@ -589,7 +589,7 @@ function ReportArticle({
                 ? "border-red-500/35 bg-red-500/8 text-red-300"
                 : report.riskProfile.overallRisk === "medium"
                   ? "border-amber-500/35 bg-amber-500/8 text-amber-300"
-                  : "border-emerald-500/30 bg-emerald-500/8 text-emerald-300",
+                  : "border-success/30 bg-success/8 text-success",
             )}
           >
             {report.riskProfile.overallRisk} risk
@@ -640,7 +640,7 @@ function ReportArticle({
         />
       </Section>
 
-      <Section title="Strengths" icon={<CheckCircle2 className="size-4 text-emerald-400" />}>
+      <Section title="Strengths" icon={<CheckCircle2 className="size-4 text-success" />}>
         <List
           columns
           items={report.strengths}
@@ -668,7 +668,7 @@ function ReportArticle({
             className={cn(
               "shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold",
               report.verdict.ready === "yes"
-                ? "border-emerald-500/35 bg-emerald-500/8 text-emerald-300"
+                ? "border-success/35 bg-success/8 text-success"
                 : report.verdict.ready === "with-fixes"
                   ? "border-amber-500/35 bg-amber-500/8 text-amber-300"
                   : "border-red-500/35 bg-red-500/8 text-red-300",

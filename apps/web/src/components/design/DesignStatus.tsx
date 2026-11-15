@@ -188,7 +188,7 @@ export function DesignSaveIndicator({ projection }: { projection: DesignProjecti
   };
   const icon =
     state === "saved" ? (
-      <CheckCircle2 className="size-3 text-emerald-500" />
+      <CheckCircle2 className="size-3 text-success" />
     ) : state === "saving" || state === "loading" || state === "stale" ? (
       <Loader2 className="size-3 animate-spin" />
     ) : state === "offline" ? (

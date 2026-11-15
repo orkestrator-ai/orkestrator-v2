@@ -1351,7 +1351,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
               ? "border-amber-400/30 bg-amber-400/[0.06] text-amber-300"
               : saveStatus.tone === "pending"
                 ? "border-border/60 bg-zinc-900/50 text-muted-foreground"
-                : "border-emerald-500/20 bg-emerald-500/[0.04] text-emerald-400/90",
+                : "border-success/20 bg-success/[0.04] text-success/90",
           )}
         >
           {saveStatus.text}

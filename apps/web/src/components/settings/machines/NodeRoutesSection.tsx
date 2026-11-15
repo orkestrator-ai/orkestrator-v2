@@ -115,7 +115,7 @@ export function NodeRoutesSection({
               {routeText(route)}
             </span>
             {route.id === activeRouteId ? (
-              <span className="text-[11px] text-emerald-300">In use</span>
+              <span className="text-[11px] text-success">In use</span>
             ) : null}
             <Switch
               checked={route.enabled}

@@ -630,7 +630,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       name: /Changes run in isolated environments/,
     });
     expect(badge.getAttribute("data-coordinator-isolation-badge")).toBe("enforced");
-    expect(badge.className).toContain("emerald");
+    expect(badge.className).toContain("success");
     expect(badge.textContent).toContain("Read-only · Enforced");
     expect(badge.textContent).not.toContain("dvisory");
     expect(screen.queryByText("Read-only coordinator") === null).toBe(true);

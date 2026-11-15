@@ -46,7 +46,7 @@ const STATE_TEXT: Record<McpEnvironmentOverlayState["state"], string> = {
 };
 
 const STATE_TONE: Record<McpEnvironmentOverlayState["state"], string> = {
-  "in-sync": "border-emerald-500/30 text-emerald-300",
+  "in-sync": "border-success/30 text-success",
   pending: "border-amber-500/30 text-amber-300",
   diverged: "border-amber-500/30 text-amber-300",
   conflict: "border-amber-500/30 text-amber-300",

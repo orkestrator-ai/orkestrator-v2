@@ -31,7 +31,7 @@ export const GOAL_STATUS_STYLES: Record<
   claimed: { icon: CircleHelp, frame: "border-amber-400/30 bg-amber-400/[0.06] text-amber-200" },
   complete: {
     icon: CircleCheck,
-    frame: "border-emerald-400/30 bg-emerald-400/[0.06] text-emerald-200",
+    frame: "border-success/30 bg-success/[0.06] text-success",
   },
 };
 

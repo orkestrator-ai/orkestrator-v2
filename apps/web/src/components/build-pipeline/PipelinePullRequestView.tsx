@@ -49,7 +49,7 @@ export function pipelineCheckSummary(checks: PrCheckSummary): string {
 }
 
 const CHECK_TONE: Record<PipelineCheckState, string> = {
-  passing: "text-green-400",
+  passing: "text-success",
   failing: "text-failure",
   pending: "text-amber-400",
 };

@@ -176,7 +176,7 @@ export function CursorSdkSignIn({ credentialRevision, onCredentialChange }: Curs
 
       <div className="flex flex-wrap items-center gap-2">
         {auth?.authenticated ? (
-          <span className="flex items-center gap-1.5 text-xs text-emerald-500">
+          <span className="flex items-center gap-1.5 text-xs text-success">
             <Check className="h-3.5 w-3.5" />
             {describeSource(auth)}
           </span>

@@ -699,7 +699,7 @@ export function QuestionCard({
         <span className="inline-flex items-center gap-1.5">
           {questionCount === 1 ? "1 question" : `${answeredCount}/${questionCount} answered`}
           {questionCount > 1 && answeredCount === questionCount && (
-            <Check className="ml-auto h-3.5 w-3.5 text-green-500" aria-hidden />
+            <Check className="ml-auto h-3.5 w-3.5 text-success" aria-hidden />
           )}
         </span>
       }
@@ -776,7 +776,7 @@ export function QuestionCard({
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
                 )}
               >
-                {isAnswered && !isActive && <Check className="h-3 w-3 text-green-500" />}
+                {isAnswered && !isActive && <Check className="h-3 w-3 text-success" />}
                 {q.header || `Question ${index + 1}`}
               </button>
             );

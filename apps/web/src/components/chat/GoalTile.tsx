@@ -137,7 +137,7 @@ const STATUS_TONES: Record<
   { icon: typeof Info; className: string; label: string }
 > = {
   neutral: { icon: Info, className: "text-muted-foreground", label: "Goal" },
-  success: { icon: CircleCheck, className: "text-emerald-400", label: "Goal passed" },
+  success: { icon: CircleCheck, className: "text-success", label: "Goal passed" },
   failure: { icon: CircleX, className: "text-red-400", label: "Goal check failed" },
   attention: { icon: CircleAlert, className: "text-amber-400", label: "Goal needs attention" },
 };

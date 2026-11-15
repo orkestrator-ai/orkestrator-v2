@@ -38,7 +38,7 @@ function TrustBadge({ summary }: { summary: GraphTemplateSummary }) {
       className={cn(
         "inline-flex items-center gap-1 rounded border px-1 text-[10px] leading-4",
         trust === "trusted"
-          ? "border-emerald-500/40 text-emerald-300"
+          ? "border-success/40 text-success"
           : "border-amber-500/40 text-amber-300",
       )}
       title={

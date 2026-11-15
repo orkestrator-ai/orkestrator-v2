@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { claudeConnection, codexConnection, httpProvider } from "../agent-provider-test-support.js";
+import {
+  claudeConnection,
+  codexConnection,
+  cursorConnection,
+  httpProvider,
+} from "../agent-provider-test-support.js";
 
 /** A session resource larger than the 512 KiB the state read used to allow. */
 function largeSessionBody() {
@@ -48,5 +53,41 @@ describe("HTTP bridge session state read", () => {
     await expect(provider.sessionStateSnapshot!("session-1")).rejects.toThrow(
       "codex session state read is oversized",
     );
+  });
+});
+
+describe("the running turn's id (to-do 8107 (retired))", () => {
+  function provider(body: Record<string, unknown>, connection = codexConnection) {
+    return httpProvider((url) => {
+      if (url.endsWith("/runtime-health")) return new Response(null, { status: 404 });
+      if (url.endsWith("/config")) return Response.json({});
+      return Response.json(body);
+    }, connection).provider;
+  }
+
+  test("is the same turnId the steer check reads, while the turn runs", async () => {
+    const running = provider({ status: "running", turnId: "turn-7" });
+    expect((await running.sessionStateSnapshot!("session-1")).turnRunId).toBe("turn-7");
+    expect(await running.activeSteerRun!("session-1")).toEqual({
+      state: "running",
+      runId: "turn-7",
+    });
+    const cursor = provider({ status: "running", turnId: "turn-8" }, cursorConnection);
+    expect((await cursor.sessionStateSnapshot!("session-1")).turnRunId).toBe("turn-8");
+  });
+
+  test("is left out when idle, absent or oversized", async () => {
+    for (const body of [
+      { status: "idle", turnId: "turn-7" },
+      { status: "running" },
+      { status: "running", turnId: "x".repeat(513) },
+    ]) {
+      expect((await provider(body).sessionStateSnapshot!("session-1")).turnRunId).toBeUndefined();
+    }
+  });
+
+  test("is published by Claude's session resource", async () => {
+    const claude = provider({ status: "running", turnId: "claude-turn" }, claudeConnection);
+    expect((await claude.sessionStateSnapshot!("session-1")).turnRunId).toBe("claude-turn");
   });
 });

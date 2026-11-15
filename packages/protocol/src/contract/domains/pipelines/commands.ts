@@ -32,7 +32,6 @@ import {
   CreateDebugBuildResultSchema,
   CreateFeatureBuildResultSchema,
   GetBuildPipelineResultSchema,
-  ImportLegacyBuildPipelinesResultSchema,
   ListBuildPipelinesResultSchema,
   PipelineWorkerTranscriptSchema,
   RemoveQueuedBuildPipelineMessageResultSchema,
@@ -378,18 +377,6 @@ export const retryBuildPipelineCompletionCommentCommand = pipelineControl(
   "retry_build_pipeline_completion_comment",
 );
 
-export const importLegacyBuildPipelinesCommand = defineCommand({
-  domain: pipelinesDomain,
-  name: "import_legacy_build_pipelines",
-  since: 1,
-  access: "workspace",
-  read: false,
-  // `Expected snapshots to be an array`, as the handler said; it bounds the count itself.
-  args: Schema.Struct({ projectId: Schema.String, snapshots: mutableArray(Schema.Unknown) }),
-  result: ImportLegacyBuildPipelinesResultSchema,
-  critical: [],
-});
-
 // --------------------------------------------------------------- reads and records
 
 export const getBuildPipelineCommand = defineCommand({
@@ -536,18 +523,6 @@ export const getWorkflowResultToolsRolloutCommand = defineCommand({
   critical: [],
 });
 
-export const setWorkflowResultToolsRolloutCommand = defineCommand({
-  domain: pipelinesDomain,
-  name: "set_workflow_result_tools_rollout",
-  since: 1,
-  access: "admin",
-  read: false,
-  // Each is checked with its own message (`enabled must be a boolean`, ...).
-  args: Schema.Struct({ enabled: checked, providers: checked, kinds: checked }),
-  result: WorkflowResultToolsSettingsSchema,
-  critical: [],
-});
-
 export const PIPELINES_COMMANDS = [
   autoPipelineSourcesCommand,
   draftAutoPipelineCommand,
@@ -579,7 +554,6 @@ export const PIPELINES_COMMANDS = [
   restartBuildPipelineCurrentStepCommand,
   retryBuildPipelineInteractionFailureCommand,
   retryBuildPipelineCompletionCommentCommand,
-  importLegacyBuildPipelinesCommand,
   getBuildPipelineCommand,
   getBuildPipelineSessionProjectionCommand,
   getBuildPipelineWorkerTranscriptCommand,
@@ -590,5 +564,4 @@ export const PIPELINES_COMMANDS = [
   setEnvironmentUnreadCommand,
   getWorkflowResultMetricsCommand,
   getWorkflowResultToolsRolloutCommand,
-  setWorkflowResultToolsRolloutCommand,
 ] as const;

@@ -155,4 +155,22 @@ describe("main hidden-window wiring", () => {
     expect(dialogOptions).toMatch(/\bhiddenWindows,/);
     expect(dialogOptions).toMatch(/BrowserWindowCtor: WindowCtor/);
   });
+
+  test("native dialogs and their host factory share main's quit state", () => {
+    // The quit guard itself is unit-tested in native-dialogs.test.ts; this
+    // pins that main hands both of them the real quit state and lets the host
+    // report its window before it loads (6303, retired).
+    const dialogOptions = source.match(
+      /createNativeDialogs<BrowserWindow>\(\{([\s\S]*?)\n\}\);/,
+    )?.[1];
+    expect(dialogOptions).toBeDefined();
+    expect(dialogOptions).toMatch(/^  quitting: quitReopen\.isQuitting,$/m);
+    const factory = dialogOptions?.match(
+      /createHostWindow: quitGuardedHostWindowFactory<BrowserWindow>\(\{([\s\S]*?)\n {2}\}\),/,
+    )?.[1];
+    expect(factory).toBeDefined();
+    expect(factory).toMatch(/whenReady: \(\) => app\.whenReady\(\),/);
+    expect(factory).toMatch(/quitting: quitReopen\.isQuitting,/);
+    expect(factory).toMatch(/createDialogHostWindow\(\{[^}]*\bonCreated\b[^}]*\}\)/);
+  });
 });

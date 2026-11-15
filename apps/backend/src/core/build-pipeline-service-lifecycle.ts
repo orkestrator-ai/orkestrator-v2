@@ -40,7 +40,6 @@ import {
   TICKET_SECTION_LIMITS,
   type DeliveryPolicy,
 } from "@orkestrator/protocol/ticket-sections";
-import { backfillBuildPipelineReviewReports } from "./storage-record-upgrades.js";
 import type { KanbanTask } from "./storage-shared-core.js";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import type { Environment, PersistedBuildPipeline } from "./models.js";
@@ -76,6 +75,7 @@ import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import type { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
 import type { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
 import {
+  PHASE_ORDER,
   pruneRoundReviewReports,
   recordRewind,
   restartStepOrder,
@@ -616,65 +616,6 @@ export class BuildPipelineLifecycle {
     return started;
   }
 
-  async importLegacy(
-    projectId: string,
-    snapshots: unknown[],
-  ): Promise<{ importedIds: string[]; skipped: number }> {
-    const importedIds: string[] = [];
-    let skipped = 0;
-    if (!projectId.trim() || !Array.isArray(snapshots)) {
-      return { importedIds, skipped: Array.isArray(snapshots) ? snapshots.length : 0 };
-    }
-    for (const snapshot of snapshots) {
-      if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
-        skipped += 1;
-        continue;
-      }
-      // A localStorage snapshot can predate `testResults.notRun`, the one old
-      // shape the database migration upgrades for stored records.
-      const normalized = {
-        ...(backfillBuildPipelineReviewReports(snapshot) as Record<string, unknown>),
-        controller: "backend",
-        backendRevision: 0,
-      };
-      if (!isBuildPipeline(normalized) || normalized.projectId !== projectId) {
-        skipped += 1;
-        continue;
-      }
-      if (await this.ctx.storage.getBuildPipeline(normalized.id)) {
-        skipped += 1;
-        continue;
-      }
-      if (normalized.environmentId) {
-        const environment = await this.ctx.storage.getEnvironment(normalized.environmentId);
-        if (
-          !environment ||
-          environment.projectId !== projectId ||
-          environment.deletionRequestedAt ||
-          (environment.buildPipelineId !== undefined &&
-            environment.buildPipelineId !== normalized.id)
-        ) {
-          skipped += 1;
-          continue;
-        }
-      }
-      // save() short-circuits when an active pipeline already holds this
-      // admission key and returns that record instead. Treating the returned id
-      // as imported would report a pipeline that was never persisted and then
-      // schedule a supervisor pass for it.
-      const admitted = await this.ctx.save(normalized, 0);
-      if (admitted.id !== normalized.id) {
-        skipped += 1;
-        continue;
-      }
-      importedIds.push(normalized.id);
-      if (isActiveBuildPhase(normalized.phase) && this.ctx.options.autoAdvance !== false) {
-        void this.stageSupervisor.runLocked(normalized.id);
-      }
-    }
-    return { importedIds, skipped };
-  }
-
   /** Immediate supervisor pass, also useful for deterministic backend tests. */
   advanceNow(pipelineId: string): Promise<void> {
     return this.stageSupervisor.runLocked(pipelineId);
@@ -845,7 +786,10 @@ export class BuildPipelineLifecycle {
       }
       candidate.reviewRetryRequested = true;
       delete candidate.delivery;
-      pruneKeyInformationAfterRewind(candidate, candidate.iteration, false, false);
+      pruneKeyInformationAfterRewind(candidate, candidate.iteration, {
+        kind: "session",
+        phase: "review",
+      });
       discardSessionReviewReports(candidate);
       // Preparation archives the cancelled run with its sealed failure summary
       // before deleting the package. Keep that evidence until then.
@@ -1372,15 +1316,7 @@ export class BuildPipelineLifecycle {
         : candidate.restartRequest!;
       const selectedPhase =
         restart.kind === "session" ? restart.phase : restart.implementationPhase;
-      const selectedOrder = {
-        build: 0,
-        fix: 0,
-        review: 2,
-        address: 3,
-        verify: 4,
-        pr: 5,
-        "resolve-conflicts": 6,
-      }[selectedPhase];
+      const selectedOrder = PHASE_ORDER[selectedPhase];
 
       if (selectedOrder <= 1) {
         delete candidate.reviewPackage;
@@ -1426,13 +1362,7 @@ export class BuildPipelineLifecycle {
           isPanelReviewerSession(session, session.reviewPassId),
       );
       pruneRoundReviewReports(candidate);
-      pruneKeyInformationAfterRewind(
-        candidate,
-        iteration,
-        restart.kind === "session" &&
-          (restart.phase === "pr" || restart.phase === "resolve-conflicts"),
-        selectedOrder > 2,
-      );
+      pruneKeyInformationAfterRewind(candidate, iteration, restart, Boolean(code));
       if (
         supersededSessions > 0 ||
         code ||

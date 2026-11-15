@@ -54,14 +54,22 @@ RUN cd bridges/cursor-bridge && bun run build && rm -rf node_modules \
 # ACP, like Codex below, bundles every dependency into dist/index.js.
 COPY bridges/acp-bridge bridges/acp-bridge
 RUN cd bridges/acp-bridge && bun run build && rm -rf node_modules
-# Claude: the SDK stays external and `vendor` copies it into dist/node_modules.
-# The SDK picks its native binary by libc; on this glibc base it resolves the
-# gnu variant, so the unused musl variant (~225 MB) is dropped. An Alpine/musl
-# base would invert this.
+# Claude: the SDK stays external and `vendor` copies it into dist/node_modules
+# together with its platform packages (`claude-agent-sdk-linux-<arch>` and
+# `-musl`), each holding a ~300 MB Claude Code binary. Every one is dropped and
+# the main `claude-agent-sdk` package kept: the SDK looks for its own binary
+# only when `pathToClaudeCodeExecutable` is unset, and the bridge always sets it
+# from CLAUDE_CLI_PATH (the pinned CLI below, `claudeExecutableOptions` in
+# bridges/claude-bridge/src/services/session-manager-core.ts). A bridge started
+# without CLAUDE_CLI_PATH therefore fails with the SDK's "Native CLI binary ...
+# not found" error rather than running a second, unpinned engine. Size and
+# qualification: docs/development/container-qualification.md, "Claude bridge
+# without the SDK's platform binary".
 COPY bridges/claude-bridge bridges/claude-bridge
 RUN cd bridges/claude-bridge && bun run build \
  && rm -rf node_modules \
- && rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl \
+ && rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-* \
+ && test -s dist/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs \
  && mkdir -p /opt/bridge-deps && mv dist/node_modules /opt/bridge-deps/claude-bridge
 COPY bridges/codex-bridge bridges/codex-bridge
 RUN cd bridges/codex-bridge && bun run build && rm -rf node_modules
@@ -452,7 +460,8 @@ RUN for bridge in claude codex acp pi cursor; do \
  && test -d /opt/claude-bridge/dist/node_modules/@anthropic-ai \
  && test -d /opt/pi-bridge/dist/node_modules \
  && test -d /opt/cursor-bridge/dist/node_modules \
- && ! ls -d /opt/claude-bridge/dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl 2>/dev/null
+ && test -s /opt/claude-bridge/dist/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs \
+ && ! ls -d /opt/claude-bridge/dist/node_modules/@anthropic-ai/claude-agent-sdk-* 2>/dev/null
 
 COPY docker/starship.toml /etc/starship.toml
 COPY docker/container-git-aliases.zsh /etc/orkestrator/git-aliases.zsh

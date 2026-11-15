@@ -34,10 +34,10 @@ import {
   boundedJson,
   sessionSnapshotBudget,
   bridgeFetch,
+  bridgeSnapshotTurnRunId,
   normalizeProviderAuthNotice,
   normalizeProviderReadiness,
 } from "./transport.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 
 export interface LegacyTranscriptSnapshot {
   messages: unknown[];
@@ -116,35 +116,9 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
     knownSourceToken?: string;
     representation?: "summary";
   };
-  readLegacy: () => Promise<LegacyTranscriptSnapshot>;
   /** Present when summaries may be requested; records what the bridge answered. */
   capabilities?: HttpBridgeTranscriptCapabilities;
 }): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
-  /*
-   * `/transcript` answered 404 or 405. Not only an older bridge: every Claude
-   * bridge before 0050 item 3 answered 404 for a persisted session that was
-   * not resident yet, and only `/messages` loads one. So this path stays until
-   * the support-window floor reaches the first Stable release whose Claude
-   * bridge materializes on `/transcript`. A session `/messages` cannot find
-   * either is simply missing, and is not counted as compatibility use.
-   *
-   * `readLegacy` asks for the newest `limit` rows. `complete` then rests on
-   * `truncated`, which every bridge sets when `?limit=` cut rows and the
-   * legacy read sets when it had to cut them itself.
-   */
-  const legacyFallback = async (): Promise<ProviderTranscriptSnapshot> => {
-    const legacy = await input.readLegacy();
-    if (!legacy.missing) compatibilityPathUsage.record("bridge-transcript.messages-fallback");
-    return {
-      messages:
-        legacy.messages.length > input.options.limit
-          ? legacy.messages.slice(-input.options.limit)
-          : legacy.messages,
-      complete: !legacy.truncated && legacy.messages.length <= input.options.limit,
-      ...(legacy.revision === undefined ? {} : { revision: legacy.revision }),
-      freshness: "current",
-    };
-  };
   if (
     input.options.representation === "summary" &&
     input.capabilities?.supports("summaries") === true
@@ -154,11 +128,11 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
       input.capabilities.markSupported("summaries");
       return summary.result;
     }
+    if (summary.response.status === 404 || summary.response.status === 405) {
+      return transcriptRouteAbsent(input.agent, summary.response.status);
+    }
     // An older bridge ignored `version=2` and answered v1: that body is still
     // a valid answer to this read, so use it rather than asking again.
-    if (summary.response.status === 404 || summary.response.status === 405) {
-      return legacyFallback();
-    }
     input.capabilities.markUnsupported("summaries");
     return mapV1TranscriptBody(input.agent, summary.body);
   }
@@ -174,7 +148,9 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
     {},
     input.fetchImpl,
   );
-  if (response.status === 404 || response.status === 405) return legacyFallback();
+  if (response.status === 404 || response.status === 405) {
+    return transcriptRouteAbsent(input.agent, response.status);
+  }
   assertOk(response, `${input.agent} progressive transcript read`);
   const body = asRecord(
     await boundedJson(response, `${input.agent} progressive transcript read`, {
@@ -182,6 +158,27 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
     }),
   );
   return mapV1TranscriptBody(input.agent, body);
+}
+
+/**
+ * `/transcript` answered 404 or 405. Every bridge serves the route, and the
+ * Claude bridge loads a persisted session that is not resident before it
+ * answers, so a 404 means the bridge holds no such session: an empty,
+ * complete window, as OpenCode answers for a session it does not hold.
+ *
+ * The whole-body `/messages` fallback that older bridges needed here retired
+ * on 2026-11-15 under the user's legacy-retirement decision (0050 task 1);
+ * every bridge and container image is updated together. A 405 can only come
+ * from a bridge that predates the route, which this backend no longer reads
+ * around: the read fails, and a bridge restart picks up the current bridge.
+ */
+function transcriptRouteAbsent(agent: HttpBridgeAgent, status: number): ProviderTranscriptSnapshot {
+  if (status === 405) {
+    throw new ProviderUnavailableError(
+      `${agent} bridge predates the transcript route; restart the bridge to update it`,
+    );
+  }
+  return { messages: [], complete: true, freshness: "current" };
 }
 
 function mapV1TranscriptBody(
@@ -331,10 +328,12 @@ export async function readHttpBridgeSessionState(input: {
     input.agent === "claude" || input.agent === "pi"
       ? claudeTurnActivityFromPayload(payload)
       : undefined;
+  const turnRunId = status === "running" ? bridgeSnapshotTurnRunId(payload) : undefined;
   return {
     status,
     phase,
     ...(turnActivity ? { turnActivity } : {}),
+    ...(turnRunId ? { turnRunId } : {}),
     ...(typeof payload.resumableSessionId === "string" && payload.resumableSessionId.trim()
       ? { resumableSessionId: payload.resumableSessionId.trim() }
       : input.agent === "codex" && typeof payload.threadId === "string" && payload.threadId.trim()

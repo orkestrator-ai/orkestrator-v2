@@ -9,6 +9,10 @@ import type { StructuredOutputResult } from "@orkestrator/protocol/structured-ou
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
+import {
+  applyAgentKeyInformationUpdate,
+  recordReviewIssuesInKeyInformation,
+} from "./build-pipeline-key-information.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import { EnvironmentUnavailableError } from "./workspace-code-rewind.js";
@@ -379,6 +383,71 @@ describe("rewinding the code to a step", () => {
       expect(isBuildPipeline(completed)).toBe(true);
     });
   });
+
+  test.each(["review", "verify"] as const)(
+    "a code rewind to round 0's %s clears later Fix evidence before dispatch",
+    async (phase) => {
+      const fake = fakeGit();
+      await withService(
+        async (service, storage, provider, _invocations, controls) => {
+          fake.worktree.controls = controls;
+          const { started, completed } = await completedOnC3(service, storage, controls);
+          const target = completed.sessions.find((session) => session.phase === phase)!;
+          await mutateStored(storage, started.id, (snapshot) => {
+            snapshot.iteration = 2;
+            snapshot.phase = "fixing";
+            recordReviewIssuesInKeyInformation(
+              snapshot,
+              { iteration: 0 },
+              {
+                issues: [{ title: "Dropped fix", severity: "P1" }] as never,
+              },
+            );
+            applyAgentKeyInformationUpdate(snapshot, {
+              summary: "Superseded summary",
+              solution: "Superseded solution",
+              workDone: ["Superseded Fix work"],
+              decisions: [{ decision: "Superseded choice", options: [], chosen: "A" }],
+              tests: [{ name: "Superseded test", result: "passed" }],
+            });
+            snapshot.phase = "complete";
+          });
+          expect((await pipeline(storage, started.id)).keyInformation?.workDone).toEqual([
+            "Superseded Fix work",
+          ]);
+          const send = provider.send.bind(provider);
+          let dispatches = 0;
+          const spy = spyOn(provider, "send").mockImplementation(async (...args) => {
+            const saved = await pipeline(storage, started.id);
+            expect(controls.currentHead).toBe(target.headAtStart!);
+            expect(saved.keyInformation).toMatchObject({
+              framing: "problem",
+              workDone: [],
+              decisions: [],
+              tests: [],
+              updates: [],
+              issues: [],
+              verifications: [],
+            });
+            expect(saved.keyInformation?.summary).toBeUndefined();
+            expect(saved.keyInformation?.solution).toBeUndefined();
+            dispatches++;
+            await send(...args);
+          });
+          try {
+            const rewound = await service.rewindCode(started.id, target.sessionKey, C3);
+            expect(rewound.iteration).toBe(0);
+            expect(rewound.rewinds?.at(-1)?.code?.to).toBe(target.headAtStart!);
+            expect(dispatches).toBeGreaterThan(0);
+            expect(isBuildPipeline(rewound)).toBe(true);
+          } finally {
+            spy.mockRestore();
+          }
+        },
+        { environmentGit: fake.git },
+      );
+    },
+  );
 
   test("the preview names the dropped commits, the upstream and the pull request", async () => {
     const { git, worktree } = fakeGit();

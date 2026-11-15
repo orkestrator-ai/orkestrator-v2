@@ -2,10 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import {
+  argv0IsKnownSubreaper,
   detachedProcessHandle,
   isPidAlive,
+  liveParentRole,
   parseProcessIdentity,
+  readLinuxProcessArgv0,
   readHostTmuxSessions,
   reapOrphanedClaudeTmuxRuntimes,
   reapOrphanedLocalServers,
@@ -132,6 +136,143 @@ describe("reapOrphanedLocalServers", () => {
     expect(reaped).toEqual([
       { environmentId: "env-1", kind: "codex", pid: 4242, outcome: "skipped-live-owner" },
     ]);
+  });
+
+  // To-dos 8101 and 8093 (retired): on a Linux desktop an orphan is adopted by the
+  // session's subreaper (`systemd --user`), not PID 1, so its parent is alive.
+  describe("an orphan adopted by a Linux subreaper", () => {
+    /** Parented to this test process (definitely alive), whose argv[0] is faked. */
+    function adoptedLeader(pid: number, commandLine: string): ProcessIdentity {
+      return { parentPid: process.pid, processGroupId: pid, commandLine };
+    }
+
+    test("is reaped and its record cleared, for every server kind", async () => {
+      const parents: number[] = [];
+      const { options, updates, terminated } = makeOptions(
+        [environment({ opencodePid: 901, localOpencodePort: 5000, codexBridgePid: 903 })],
+        {
+          identities: new Map([
+            [901, adoptedLeader(901, COMMAND_LINES.opencode)],
+            [903, adoptedLeader(903, COMMAND_LINES.codex)],
+          ]),
+        },
+      );
+      const reaped = await reapOrphanedLocalServers({
+        ...options,
+        platform: "linux",
+        readParentArgv0: async (pid) => {
+          parents.push(pid);
+          return "/usr/lib/systemd/systemd";
+        },
+      });
+
+      expect(parents).toEqual([process.pid, process.pid]);
+      expect(terminated.sort()).toEqual([901, 903]);
+      expect(reaped.map((entry) => [entry.kind, entry.outcome])).toEqual([
+        ["opencode", "reaped"],
+        ["codex", "reaped"],
+      ]);
+      expect(updates).toEqual([
+        { environmentId: "env-1", fields: { opencodePid: null, localOpencodePort: null } },
+        { environmentId: "env-1", fields: { codexBridgePid: null, localCodexPort: null } },
+      ]);
+    });
+
+    test("still refuses one that does not lead its own process group", async () => {
+      const { options, updates, terminated } = makeOptions(
+        [environment({ codexBridgePid: 4242 })],
+        {
+          identities: new Map([
+            [
+              4242,
+              { parentPid: process.pid, processGroupId: 900, commandLine: COMMAND_LINES.codex },
+            ],
+          ]),
+        },
+      );
+      const reaped = await reapOrphanedLocalServers({
+        ...options,
+        platform: "linux",
+        readParentArgv0: async () => "/usr/lib/systemd/systemd",
+      });
+      expect(terminated).toEqual([]);
+      expect(updates).toEqual([]);
+      expect(reaped.map((entry) => entry.outcome)).toEqual(["skipped-not-group-leader"]);
+    });
+
+    test("leaves a server alone whose live parent is not a known subreaper", async () => {
+      // A backend under each launcher (Electron's child, dev and packaged with
+      // an install path with spaces, `dev:test`, the CLI's `serve` and its
+      // systemd unit), and parents that are not Bun at all but may still own
+      // the server: a shell's background `opencode serve` job or a native
+      // supervisor that a recycled PID now names. None is evidence of adoption.
+      const parents = [
+        "bun",
+        "/home/user/.local/share/mise/installs/bun/1.4.4/bin/bun",
+        "/opt/Orkestrator AI/resources/bin/bun",
+        "/usr/local/bin/bun-debug",
+        "/usr/bin/node",
+        "/bin/bash",
+        "-zsh",
+        "/usr/bin/fish",
+        "/usr/bin/tmux",
+        "/usr/bin/supervisord",
+        "/usr/bin/tini",
+      ];
+      for (const argv0 of parents) {
+        const { options, updates, terminated } = makeOptions(
+          [environment({ opencodePid: 4242, localOpencodePort: 5000 })],
+          { identities: new Map([[4242, adoptedLeader(4242, COMMAND_LINES.opencode)]]) },
+        );
+        const reaped = await reapOrphanedLocalServers({
+          ...options,
+          platform: "linux",
+          readParentArgv0: async () => argv0,
+        });
+        expect({ argv0, terminated, updates }).toEqual({ argv0, terminated: [], updates: [] });
+        expect(reaped.map((entry) => entry.outcome)).toEqual(["skipped-live-owner"]);
+      }
+    });
+
+    test("keeps the record when the parent cannot be identified", async () => {
+      for (const readParentArgv0 of [
+        async () => null,
+        async () => {
+          throw new Error("EACCES");
+        },
+      ]) {
+        const { options, updates, terminated } = makeOptions(
+          [environment({ codexBridgePid: 4242 })],
+          { identities: new Map([[4242, adoptedLeader(4242, COMMAND_LINES.codex)]]) },
+        );
+        const reaped = await reapOrphanedLocalServers({
+          ...options,
+          platform: "linux",
+          readParentArgv0,
+        });
+        expect(terminated).toEqual([]);
+        expect(updates).toEqual([]);
+        expect(reaped.map((entry) => entry.outcome)).toEqual(["skipped-unreadable"]);
+      }
+    });
+
+    test("off Linux, any live parent still counts as an owner", async () => {
+      let read = false;
+      const { options, terminated } = makeOptions([environment({ codexBridgePid: 4242 })], {
+        identities: new Map([[4242, adoptedLeader(4242, COMMAND_LINES.codex)]]),
+      });
+      const reaped = await reapOrphanedLocalServers({
+        ...options,
+        platform: "darwin",
+        readParentArgv0: async () => {
+          read = true;
+          return "/usr/lib/systemd/systemd";
+        },
+      });
+      expect(read).toBe(false);
+      expect(terminated).toEqual([]);
+      expect(reaped.map((entry) => entry.outcome)).toEqual(["skipped-live-owner"]);
+    });
   });
 
   test("keeps the record when the kill fails so a later startup can retry", async () => {
@@ -707,5 +848,58 @@ describe("detachedProcessHandle", () => {
   test("kill() delivers signal 0 successfully to a live process", () => {
     // Signal 0 performs the permission/existence check without terminating.
     expect(detachedProcessHandle(process.pid).kill(0)).toBe(true);
+  });
+});
+
+describe("argv0IsKnownSubreaper", () => {
+  test("accepts only systemd, under any path", () => {
+    for (const argv0 of ["systemd", "/usr/lib/systemd/systemd", "/lib/systemd/systemd"]) {
+      expect({ argv0, adopter: argv0IsKnownSubreaper(argv0) }).toEqual({ argv0, adopter: true });
+    }
+    for (const argv0 of [
+      "bun",
+      "/opt/Orkestrator AI/resources/bin/bun",
+      "node",
+      "/bin/bash",
+      "-bash",
+      "/usr/bin/supervisord",
+      "tini",
+      "/sbin/init",
+      "systemd-run",
+      "/usr/lib/systemd/systemd-logind",
+      "",
+    ]) {
+      expect({ argv0, adopter: argv0IsKnownSubreaper(argv0) }).toEqual({ argv0, adopter: false });
+    }
+  });
+});
+
+describe("liveParentRole", () => {
+  test("reads a subreaper as an adopter on Linux only", async () => {
+    const systemd = async () => "/usr/lib/systemd/systemd";
+    expect(await liveParentRole(fakePid(1), { platform: "linux", readArgv0: systemd })).toBe(
+      "adopter",
+    );
+    expect(await liveParentRole(fakePid(1), { platform: "darwin", readArgv0: systemd })).toBe(
+      "owner",
+    );
+  });
+
+  test("reads any other live parent as an owner, a shell included", async () => {
+    const bash = async () => "/bin/bash";
+    expect(await liveParentRole(fakePid(1), { platform: "linux", readArgv0: bash })).toBe("owner");
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("readLinuxProcessArgv0", () => {
+  test("reads this process's argv[0] whole", async () => {
+    const argv0 = await readLinuxProcessArgv0(process.pid);
+    expect(argv0).not.toBeNull();
+    expect(argv0IsKnownSubreaper(argv0!)).toBe(false);
+    expect(argv0!.length).toBeGreaterThan(0);
+  });
+
+  test("answers null for a PID that names no process", async () => {
+    expect(await readLinuxProcessArgv0(fakePid(7))).toBeNull();
   });
 });

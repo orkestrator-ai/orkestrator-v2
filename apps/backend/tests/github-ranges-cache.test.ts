@@ -2,9 +2,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
+  GITHUB_RANGES_RETRY_AFTER_FAILURE_MS,
+  LEGACY_GITHUB_RANGES_FILE,
   copyGithubRangesSeed,
+  formatGithubRangesSeed,
   githubRangesSeed,
+  githubRangesSeedDirectory,
+  githubRangesSeedFile,
+  githubRangesSeedMountArguments,
   parseGithubMeta,
+  prepareGithubRangesSeedBind,
   readGithubRangesSeed,
   validIpv4Cidr,
 } from "../src/core/github-ranges-cache";
@@ -63,7 +70,7 @@ describe("GitHub ranges seed", () => {
       throw new Error("must not fetch");
     };
     const served = await githubRangesSeed(dataDir, { fetcher });
-    expect(served).toBe(path.join(dataDir, "github-ranges.txt"));
+    expect(served).toBe(githubRangesSeedFile(dataDir));
     expect((await readGithubRangesSeed(served!))?.ranges).toHaveLength(2);
     expect(calls).toBe(0);
   });
@@ -73,7 +80,7 @@ describe("GitHub ranges seed", () => {
     cleanup.push(dir);
     // A missing source makes the real copyFileSync throw, without global mocks.
     expect(seedLiveGithubRanges(dir, path.join(dir, "missing.txt"))).toBe(false);
-    expect(await readGithubRangesSeed(path.join(dir, "github-ranges.txt"))).toBeNull();
+    expect(await readGithubRangesSeed(githubRangesSeedFile(dir))).toBeNull();
     let calls = 0;
     const served = await githubRangesSeed(dir, {
       fetcher: async () => {
@@ -82,7 +89,7 @@ describe("GitHub ranges seed", () => {
       },
     });
     expect(calls).toBe(1);
-    expect(served).toBe(path.join(dir, "github-ranges.txt"));
+    expect(served).toBe(githubRangesSeedFile(dir));
     expect((await readGithubRangesSeed(served!))?.ranges).toEqual([
       "192.30.252.0/22",
       "140.82.112.0/20",
@@ -100,7 +107,7 @@ describe("GitHub ranges seed", () => {
       return up ? new Response(META) : new Response("rate limited", { status: 403 });
     };
     const first = await githubRangesSeed(dir, { fetcher, now: () => now });
-    expect(first).toBe(path.join(dir, "github-ranges.txt"));
+    expect(first).toBe(githubRangesSeedFile(dir));
     expect((await readGithubRangesSeed(first!))?.ranges).toEqual([
       "192.30.252.0/22",
       "140.82.112.0/20",
@@ -117,7 +124,106 @@ describe("GitHub ranges seed", () => {
     expect(await githubRangesSeed(dir, { fetcher, now: () => now })).toBeNull();
   });
 
-  test("is copied into a created container, never bound, and a failed copy is not fatal", async () => {
+  test("lives alone in a world-readable directory, written by an atomic rename into it", async () => {
+    const dir = await tempDir("ork-gh-seed-dir-");
+    cleanup.push(dir);
+    const served = await githubRangesSeed(dir, { fetcher: async () => new Response(META) });
+    const directory = githubRangesSeedDirectory(dir);
+    expect(served).toBe(path.join(directory, "github-ranges"));
+    expect((await fs.stat(directory)).mode & 0o777).toBe(0o755);
+    expect((await fs.stat(served!)).mode & 0o777).toBe(0o644);
+    // The bound directory never holds a partial or temporary file.
+    expect(await fs.readdir(directory)).toEqual(["github-ranges"]);
+    expect((await fs.readdir(dir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    expect(githubRangesSeedMountArguments(directory)).toEqual([
+      "--mount",
+      `type=bind,src=${directory},dst=/etc/orkestrator-seed,readonly`,
+    ]);
+  });
+
+  test("moves an older backend's top-level seed into the directory, keeping its age", async () => {
+    const dir = await tempDir("ork-gh-seed-legacy-");
+    cleanup.push(dir);
+    const legacy = path.join(dir, LEGACY_GITHUB_RANGES_FILE);
+    await fs.writeFile(legacy, formatGithubRangesSeed(["192.30.252.0/22"], Date.now()));
+    let calls = 0;
+    const fetcher = async () => {
+      calls += 1;
+      return new Response(META);
+    };
+    const served = await githubRangesSeed(dir, { fetcher });
+    expect(served).toBe(githubRangesSeedFile(dir));
+    expect(calls).toBe(0);
+    expect((await readGithubRangesSeed(served!))?.ranges).toEqual(["192.30.252.0/22"]);
+    await expect(fs.stat(legacy)).rejects.toThrow();
+
+    // A legacy seed past the hour is still refreshed after the move.
+    const old = await tempDir("ork-gh-seed-legacy-old-");
+    cleanup.push(old);
+    const oldLegacy = path.join(old, LEGACY_GITHUB_RANGES_FILE);
+    await fs.writeFile(oldLegacy, formatGithubRangesSeed(["192.30.252.0/22"], 0));
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000);
+    await fs.utimes(oldLegacy, twoHoursAgo, twoHoursAgo);
+    await githubRangesSeed(old, { fetcher });
+    expect(calls).toBe(1);
+    expect((await readGithubRangesSeed(githubRangesSeedFile(old)))?.ranges).toEqual([
+      "192.30.252.0/22",
+      "140.82.112.0/20",
+    ]);
+  });
+
+  test("concurrent requests share one fetch, and a failed fetch is not repeated for a while", async () => {
+    const dir = await tempDir("ork-gh-seed-flight-");
+    cleanup.push(dir);
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow = async () => {
+      calls += 1;
+      await gate;
+      return new Response(META);
+    };
+    const together = [1, 2, 3].map(() => githubRangesSeed(dir, { fetcher: slow }));
+    release();
+    expect(new Set(await Promise.all(together))).toEqual(new Set([githubRangesSeedFile(dir)]));
+    expect(calls).toBe(1);
+
+    const failing = await tempDir("ork-gh-seed-backoff-");
+    cleanup.push(failing);
+    let failures = 0;
+    let now = Date.now();
+    const refused = async () => {
+      failures += 1;
+      return new Response("rate limited", { status: 403 });
+    };
+    expect(await githubRangesSeed(failing, { fetcher: refused, now: () => now })).toBeNull();
+    now += GITHUB_RANGES_RETRY_AFTER_FAILURE_MS - 1;
+    expect(await githubRangesSeed(failing, { fetcher: refused, now: () => now })).toBeNull();
+    expect(failures).toBe(1);
+    now += 1;
+    expect(
+      await githubRangesSeed(failing, { fetcher: async () => new Response(META), now: () => now }),
+    ).toBe(githubRangesSeedFile(failing));
+    expect(failures).toBe(1);
+  });
+
+  test("a new container's bind is the directory, even when no seed could be fetched", async () => {
+    const dir = await tempDir("ork-gh-seed-bind-");
+    cleanup.push(dir);
+    const directory = await prepareGithubRangesSeedBind(dir, {
+      fetcher: async () => new Response("rate limited", { status: 403 }),
+    });
+    expect(directory).toBe(githubRangesSeedDirectory(dir));
+    expect(await fs.readdir(directory!)).toEqual([]);
+    // A data directory that cannot hold it gives no bind, and the firewall fetches.
+    const file = path.join(dir, "not-a-directory");
+    await fs.writeFile(file, "");
+    expect(await prepareGithubRangesSeedBind(file)).toBeNull();
+  });
+
+  test("is copied into a container created before the bind, and a failed copy is not fatal", async () => {
     const dir = await tempDir("ork-github-seed-copy-");
     cleanup.push(dir);
     const seed = path.join(dir, "github-ranges.txt");

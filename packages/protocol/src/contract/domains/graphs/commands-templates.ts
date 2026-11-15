@@ -156,21 +156,6 @@ export const graphCapabilityCeilingGetCommand = defineCommand({
   critical: [],
 });
 
-/**
- * `admin`: the machine's ceiling on what graph runs may do, which a workspace
- * grant has always been refused (plan item 7012).
- */
-export const graphCapabilityCeilingSetCommand = defineCommand({
-  domain: graphsDomain,
-  name: "graph_capability_ceiling_set",
-  since: 1,
-  access: "admin",
-  read: false,
-  args: Schema.Struct({ projectId: checked, ceiling: checked, expectedRevision: checked }),
-  result: GraphProjectCeilingSchema,
-  critical: ["expectedRevision"],
-});
-
 // --------------------------------------------------------------- sharing (item 405)
 
 export const graphTemplateShareExportCommand = defineCommand({
@@ -251,7 +236,6 @@ export const GRAPH_TEMPLATE_COMMANDS = [
   graphTemplateExportCommand,
   graphTemplateTrustCommand,
   graphCapabilityCeilingGetCommand,
-  graphCapabilityCeilingSetCommand,
   graphTemplateShareExportCommand,
   graphTemplateShareImportCommand,
   graphSharingKeysCommand,

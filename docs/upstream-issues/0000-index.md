@@ -30,4 +30,4 @@ A title, then **Tracker**, **Status**, **Source** and **Filed**; then `## Issue 
 | [moby-rootless-docker-cp-readonly-bind.md](moby-rootless-docker-cp-readonly-bind.md) | github.com/moby/moby | draft | [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md) task 1 |
 | [bun-fsevents-rebuild-loses-events.md](bun-fsevents-rebuild-loses-events.md) | github.com/oven-sh/bun | draft | [7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md) task 2 |
 | [bun-nested-tick-loses-child-process-events.md](bun-nested-tick-loses-child-process-events.md) | github.com/oven-sh/bun | draft | 4260 (retired) task 1; [6900](../todo/cross-cutting/6900-reproduce-lost-child-event-on-pipe-capture.md) tasks 1, 3 and 4 |
-| [pi-bounded-session-listing.md](pi-bounded-session-listing.md) | github.com/earendil-works/pi | draft | [5980](../todo/agent-engines/5980-pi-session-list-read-cost.md) task 1 |
+| [pi-bounded-session-listing.md](pi-bounded-session-listing.md) | github.com/earendil-works/pi | draft | [5980](../todo/agent-engines/5980-pi-session-list-read-cost.md) task 2 |

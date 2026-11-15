@@ -2431,6 +2431,40 @@ describe("native agent progressive remainder", () => {
     );
   });
 
+  test("publishes the running turn's id for a steer to bind to (to-do 8107 (retired))", async () => {
+    let status: "running" | "blocked" | "idle" = "running";
+    const stub = createProviderStub("claude", {
+      sessionStateSnapshot: async () => ({ status, phase: status, turnRunId: "turn-9" }),
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-turn-run-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:progressive-turn-run",
+        };
+        await service.ensureSession(identity);
+        const running = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        if (running.status !== "snapshot") throw new Error("expected snapshot");
+        expect(running.value.turn.runId).toBe("turn-9");
+
+        // A turn waiting on a card is still the same run, and still named.
+        status = "blocked";
+        const blocked = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        if (blocked.status !== "snapshot") throw new Error("expected snapshot");
+        expect(blocked.value.turn.phase).toBe("blocked");
+        expect(blocked.value.turn.runId).toBe("turn-9");
+
+        // An ended turn names no run, so no steer can be bound to it.
+        status = "idle";
+        const idle = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        if (idle.status !== "snapshot") throw new Error("expected snapshot");
+        expect(idle.value.turn.runId).toBeUndefined();
+      },
+    );
+  });
+
   test("returns unchanged for an OpenCode state read whose transcript is stable", async () => {
     // The session's lifetime ledger, as OpenCode 2 reports it.
     const session = {

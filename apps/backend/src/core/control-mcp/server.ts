@@ -593,6 +593,7 @@ export class ControlMcpServer {
         "resolve_node_action_request",
         // Runs only from the user's approval of an `apply-root-changes` request.
         "apply_project_root_changes",
+        "apply_controller_root_patch",
         // Runs only from the user's approval of an `update-agents-md` request.
         "open_project_agents_md_pr",
         // Run only from the user's approval of an `answer-worker-question`

@@ -119,6 +119,14 @@ export class StorageFiles {
     return this.file("kanban-labels.json");
   }
 
+  /**
+   * Image files a project removal still has to unlink, keyed by image id;
+   * content-free, written whole and only under the Kanban lease.
+   */
+  kanbanImageDeletionsFile(): string {
+    return this.file("kanban-image-deletions.json");
+  }
+
   projectNotesFile(): string {
     return this.file("project-notes.json");
   }

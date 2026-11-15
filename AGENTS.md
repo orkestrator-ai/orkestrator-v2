@@ -1011,9 +1011,10 @@ When touching any of them:
   session 200 `missing`/`expired`, never 404; absent `version` stays v1.
   The summary route's 404 must mean the session does not exist: load a
   persisted session that is not resident before answering, as `/messages`
-  does (Claude materializes it). Older Claude bridges did not, which is why
-  the backend's `/messages` fallback stays until the support window passes
-  them ([version-compatibility.md](docs/architecture/version-compatibility.md#register)).
+  does (Claude materializes it). The backend relies on it: its `/messages`
+  fallback for older Claude bridges retired on 2026-11-15, so a 404 there is
+  read as a missing session
+  ([version-compatibility.md](docs/architecture/version-compatibility.md#retired)).
 
 ### Native slash commands
 
@@ -1305,9 +1306,9 @@ else is rejected outright. `full` mode skips the firewall entirely.
   (`packages/protocol/src/network-allowlist.ts`): GitHub, npm, Bun, mise, the
   Anthropic API, the VS Code marketplace, Context7, and Playwright's CDN. It
   omits `sentry.io`, `statsig.anthropic.com` and `statsig.com`: Claude Code,
-  Codex, OpenCode, Pi and Grok completed fake-provider turns with those hosts refused
-  (`container-live-telemetry-hosts.test.ts`, to-do 6100). Cursor live
-  qualification remains outstanding (to-do 7420). Allowing a service that takes
+  Codex, OpenCode, Pi, Grok and the Cursor SDK (against a loopback Cursor
+  backend, to-do 7420) completed fake-provider turns with those hosts refused
+  (`container-live-telemetry-hosts.test.ts`, to-do 6100). Allowing a service that takes
   events for any project creates a channel out. It is the only
   default list. The renderer seeds its
   unloaded config from the same constant, and the firewall's fallback for a

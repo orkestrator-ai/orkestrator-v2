@@ -187,7 +187,7 @@ Durations are not reference figures.
   ([to-do 7061, retired 2026-11-10](../../../architecture/browser-previews.md#desktop-tunnel)).
   Before the fix and without contention it had passed 10 of 10.
 - Also closes the throw in
-  [to-do 6303](../../../todo/cross-cutting/6303-window-close-during-request-throws.md)
+  to-do 6303 (retired 2026-11-15; `git show a8b89f154:docs/todo/cross-cutting/6303-window-close-during-request-throws.md`)
   task 1, which saw the same exception when a window closed while starting.
 
 

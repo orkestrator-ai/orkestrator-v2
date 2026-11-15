@@ -208,6 +208,62 @@ describe("the user picks which uncommitted changes a coordinator's worker gets",
     );
     await waitFor(() => expect(screen.queryByTestId("root-changes-request") === null).toBe(true));
   });
+
+  test("a worker on another node is named with its node; the files are still this checkout's", async () => {
+    const resolved: Array<Record<string, unknown>> = [];
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "list_project_root_changes") {
+        // The picker lists this node's checkout, never the leaf's copy.
+        expect(args).toEqual({ projectId: "project-1" });
+        return {
+          files: [{ path: "src/a.ts", status: "modified" }],
+          truncated: false,
+          conflicts: 0,
+          headCommit: "a".repeat(40),
+        };
+      }
+      if (command === "resolve_node_action_request") {
+        resolved.push(args);
+        return { ...args, state: "executed", result: { code: "applied", message: "Applied." } };
+      }
+      return undefined;
+    });
+    render(
+      <RootChangesApprovalDialog
+        request={
+          {
+            requestId: "req-remote",
+            kind: "apply-root-changes",
+            state: "pending",
+            targets: [
+              {
+                nodeId: "bk_leaf",
+                nodeName: "Build box",
+                environmentId: "worker-9",
+                environmentName: "auth-fix",
+                projectId: "project-1",
+                nodeProjectId: "leaf-project-1",
+                files: ["src/a.ts"],
+              },
+            ],
+            requestedBy: { projectId: "project-1" },
+          } as NodeActionRequestView
+        }
+        onSettled={() => {}}
+      />,
+    );
+    const dialog = await screen.findByTestId("root-changes-request");
+    expect(dialog.textContent).toContain("Apply uncommitted changes to “auth-fix” on Build box?");
+    expect(dialog.textContent).toContain("The worker is on Build box");
+    expect(dialog.textContent).toContain("up to 16 MiB");
+    await screen.findByRole("checkbox", { name: "src/a.ts" });
+    fireEvent.click(screen.getByRole("button", { name: "Apply 1 file" }));
+    await waitFor(() =>
+      expect(resolved).toEqual([
+        { requestId: "req-remote", decision: "approve", approval: { paths: ["src/a.ts"] } },
+      ]),
+    );
+  });
 });
 
 const rootRequest = {

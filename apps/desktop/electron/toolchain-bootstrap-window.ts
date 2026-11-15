@@ -219,6 +219,8 @@ async function createBootstrapHtmlWindow(options: {
   title: string;
   html: string;
   platform?: NodeJS.Platform;
+  /** Called with the window as soon as it is constructed, before it loads. */
+  onCreated?: (window: BrowserWindowType) => void;
 }): Promise<BrowserWindowType> {
   const window = new options.BrowserWindowCtor({
     title: options.title,
@@ -232,6 +234,7 @@ async function createBootstrapHtmlWindow(options: {
       sandbox: true,
     },
   });
+  options.onCreated?.(window);
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   const preloadReady = new Promise<void>((_resolve, reject) => {
@@ -280,6 +283,11 @@ export async function createDialogHostWindow(options: {
   BrowserWindowCtor: BrowserWindowConstructor;
   dirname: string;
   platform?: NodeJS.Platform;
+  /**
+   * Called as soon as the window is constructed: Electron lists it from then
+   * on, while it is still loading, and native dialogs must know it as a host.
+   */
+  onCreated?: (window: BrowserWindowType) => void;
 }): Promise<BrowserWindowType> {
   return createBootstrapHtmlWindow({
     ...options,

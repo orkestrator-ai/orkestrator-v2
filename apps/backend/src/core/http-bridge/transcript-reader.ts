@@ -63,8 +63,6 @@ export class HttpBridgeTranscriptReader {
       fetchImpl: this.fetchImpl,
       sessionId,
       options,
-      // The fallback keeps only the newest `limit` rows, so it asks for no more.
-      readLegacy: () => this.legacy(sessionId, options.limit),
       capabilities: this.capabilities,
     });
   }

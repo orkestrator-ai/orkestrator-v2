@@ -1,8 +1,8 @@
 /**
  * Live check: how fast a Codex bridge stops after the backend that spawned it
  * dies mid-turn, and what the next bridge reports for that turn
- * (docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md,
- * Code item 6).
+ * (to-do 0050, retired 2026-11-15, Code item 6; read it with `git show
+ * a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`).
  *
  * A `sleep` process stands in for the backend (`ORKESTRATOR_PARENT_PID`). The
  * script starts a real bridge and app-server on a throwaway `CODEX_HOME`

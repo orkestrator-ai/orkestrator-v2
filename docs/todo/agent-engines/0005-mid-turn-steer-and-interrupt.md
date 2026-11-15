@@ -25,7 +25,7 @@ and rerun the same day on top of `b392ecead`.
 6. **Grok steer**: ACP has no mid-turn input; interjection stays behind its unsafe flag. Status: blocked (ACP / Grok).
 7. **Inactive-path steer qualification on Claude and Cursor**: parameterise the Codex inactive-path steer spec by platform for Claude and Cursor (steer, switch away, return, reload). Status: done (2026-11-13: `e2e/agent-testing/steer-inactive-live.spec.ts` runs it for Codex on a real model and for Claude and Cursor on scripted models; both passed; see "Inactive-path steer on scripted models"). The runs with real Claude and Cursor logins are in 7568.
 8. **Warm Claude CLI app-path qualification**: follow-up, mode and permission changes, parked approval and MCP change on one CLI through the app. Status: done (2026-11-10, loopback model; see "One warm CLI through the app"). The same reads with a real login moved to 7568 (2026-11-10).
-10. **A steer that misses its turn starts a new turn, on every provider**: the owner's rule (2026-11-08). Status: done (built 2026-11-08 against `main` at `02f55ea9b`, see "A missed steer becomes the next turn"; checked live on the real Claude, Codex, Cursor and Pi bridges with scripted models on 2026-11-14, with the stop after several turns, which found and fixed a Claude bridge defect; see "Missed steer and a stop after several turns on real bridges"). A steer that meets a turn other than the one the user saw still joins it; that is [8107](8107-steer-bound-to-the-turn-it-was-written-for.md).
+10. **A steer that misses its turn starts a new turn, on every provider**: the owner's rule (2026-11-08). Status: done (built 2026-11-08 against `main` at `02f55ea9b`, see "A missed steer becomes the next turn"; checked live on the real Claude, Codex, Cursor and Pi bridges with scripted models on 2026-11-14, with the stop after several turns, which found and fixed a Claude bridge defect; see "Missed steer and a stop after several turns on real bridges"). A composer or Agent Info steer that meets a turn other than the one the user saw is queued as the next turn since 2026-11-15 (8107 (retired): the projection publishes the running turn's id and the steer sends it back as `expectedRunId`).
 
 ### 1. Collapse Claude task-to-process maps
 
@@ -397,7 +397,8 @@ at-most-once dispatch.
   2026-11-11, containers 2026-11-13). Steer through the public CLI and the
   coordinator's deliver-now was allowed for OpenCode on 2026-11-14, once a
   scripted-model CLI scenario qualified it
-  ([7905](7905-opencode2-untested-paths.md) task 4).
+  (7905 (retired) task 4). A stop withdraws the user's own OpenCode steers
+  still waiting in the session's inbox (8100 (retired), 2026-11-15).
 - **Grok steer** stays off. ACP v1 has no mid-turn input, and the Grok
   interjection extension stays behind its unsafe flag until an ACP equivalent
   exists.
@@ -982,10 +983,11 @@ and the real Cursor bridge over its fake SDK (the task 7 entry swap).
   unless the run changes inside that one request. It does not meet the
   owner's rule for a steer written for an earlier turn ("never steered into a
   turn it was not written for"), because the composer sends no run. Recorded
-  as [8107](8107-steer-bound-to-the-turn-it-was-written-for.md) rather than
-  built here: it needs a run id in the session projection and a new optional
-  field on the steer action, a contract change beyond this check. The spec
-  pins today's behaviour so 8107 has to change it deliberately.
+  as 8107 (retired) rather than built here. Built on 2026-11-15: the session
+  projection publishes the running turn's id (`turn.runId`) and the composer
+  and Agent Info send it back as `expectedRunId`, so a steer meeting a
+  different turn is queued as the next one. The spec's steers send no run, so
+  it still pins the unbound path.
 - **Pi's queue in the projection.** While Pi holds the steer, the projection's
   `queue` lists it (Pi's `providerQueue` is merged in). The checks read the
   backend's own prompt queue (`get_prompt_queue`) for "queued as the next
@@ -1129,9 +1131,9 @@ records its result here.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the Claude and Cursor runs.
 - [platform-inconsistencies.md](../../architecture/platform-inconsistencies.md).
-- [8107](8107-steer-bound-to-the-turn-it-was-written-for.md): a steer that
-  meets a turn other than the one the user saw is queued instead of joining it
-  (found by task 10's live check).
+- 8107 (retired, 2026-11-15): a steer that meets a turn other than the one
+  the user saw is queued instead of joining it (found by task 10's live
+  check); its final state is in Git history before the retiring commit.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the real-login part of task 7, the real-login reads of task 8, task 9) moved there on 2026-11-10.
 
 ## Replaces

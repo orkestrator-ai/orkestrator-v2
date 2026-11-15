@@ -13,9 +13,15 @@
  *   - its command line must contain every marker of one of the marker sets for
  *     the recorded server kind (a recycled PID belonging to a stranger must
  *     never be signalled),
- *   - it must actually be orphaned (`ppid == 1`). A bridge whose parent is
- *     still alive belongs to another live backend sharing this data dir, and
- *     killing it would break that instance, and
+ *   - it must actually be orphaned. A bridge whose parent is a live backend
+ *     belongs to another backend sharing this data dir, and killing it would
+ *     break that instance. An orphan is adopted by PID 1, or on Linux by the
+ *     nearest live *subreaper* (`systemd --user` on a desktop session), so a
+ *     live parent other than PID 1 still counts as an owner unless it is
+ *     positively identified as a subreaper: on Linux its `argv[0]` must name
+ *     `systemd`, which never spawns a server itself (see `liveParentRole`).
+ *     Any other live parent, a shell or native supervisor included, may own
+ *     the server, so it is left alone; elsewhere any live parent counts, and
  *   - it must be its own process-group leader (`pgid == pid`). Termination
  *     signals the group, so a PID that leads no group would spray SIGKILL
  *     across an unrelated group. Every bridge is spawned `detached`, which
@@ -354,6 +360,72 @@ export interface ProcessIdentity {
 }
 
 /**
+ * Whether a live parent is a known subreaper: positive evidence that it
+ * *adopted* a recorded server rather than spawned it.
+ *
+ * `argv[0]` comes from `/proc/<pid>/cmdline`, split on NUL, so an install path
+ * with spaces is read whole; a `ps` command column cannot tell its words apart.
+ * The list is deliberately narrow. `systemd` (the `systemd --user` session
+ * manager, or a container's init seen from the host) never spawns an
+ * Orkestrator server itself, so a server under it was reparented when its
+ * backend died: the desktop equivalent of a PID 1 parent. Any other live
+ * parent may own the server, a shell's background `opencode serve` or a
+ * native supervisor included, even when it is not a Bun program, so it is
+ * left alone (at worst the old leak) rather than read as an adopter.
+ */
+export function argv0IsKnownSubreaper(argv0: string): boolean {
+  return path.basename(argv0.trim()) === "systemd";
+}
+
+/** `argv[0]` of a Linux process, or null when it is gone or has none (a zombie). */
+export async function readLinuxProcessArgv0(pid: number): Promise<string | null> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(`/proc/${pid}/cmdline`, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ESRCH") return null;
+    throw error;
+  }
+  const argv0 = raw.split("\0")[0] ?? "";
+  return argv0.length > 0 ? argv0 : null;
+}
+
+export type LiveParentRole = "owner" | "adopter" | "unreadable";
+
+/**
+ * Classifies the live, non-init parent of a recorded server.
+ *
+ *   - `owner`: it may be the process that spawned the server, another backend
+ *     sharing this data dir or something that is not ours at all (a shell job
+ *     that a recycled PID now names). Off Linux every live parent is an owner:
+ *     there is no subreaper there (macOS hands orphans to launchd, PID 1).
+ *   - `adopter`: on Linux, a known subreaper (`argv0IsKnownSubreaper`). It
+ *     never spawns a server itself, so a server under it was reparented when
+ *     its backend died. Only this positive identification relaxes the
+ *     live-parent protection.
+ *   - `unreadable`: the parent's `argv[0]` could not be read; the record is
+ *     kept for a later startup.
+ */
+export async function liveParentRole(
+  parentPid: number,
+  options: {
+    platform?: NodeJS.Platform;
+    readArgv0?: (pid: number) => Promise<string | null>;
+  } = {},
+): Promise<LiveParentRole> {
+  if ((options.platform ?? process.platform) !== "linux") return "owner";
+  let argv0: string | null;
+  try {
+    argv0 = await (options.readArgv0 ?? readLinuxProcessArgv0)(parentPid);
+  } catch {
+    return "unreadable";
+  }
+  if (argv0 === null) return "unreadable";
+  return argv0IsKnownSubreaper(argv0) ? "adopter" : "owner";
+}
+
+/**
  * Parses one `ps -o ppid=,pgid=,command=` row.
  *
  * Exported for tests: the shape of this output is the reaper's only evidence
@@ -454,6 +526,10 @@ export interface ReapOrphanedLocalServersOptions {
   };
   /** Injected in tests. */
   readIdentity?: (pid: number) => Promise<ProcessIdentity | null>;
+  /** Injected in tests: `argv[0]` of a live parent (Linux only). */
+  readParentArgv0?: (pid: number) => Promise<string | null>;
+  /** Injected in tests; defaults to `process.platform`. */
+  platform?: NodeJS.Platform;
   terminate?: typeof terminateProcessTree;
 }
 
@@ -509,11 +585,26 @@ export async function reapOrphanedLocalServers(
           continue;
         }
 
+        let adoptedBySubreaper = false;
         if (identity.parentPid > 1 && isPidAlive(identity.parentPid)) {
-          // Still parented to a live process: another backend instance sharing
-          // this data dir owns it. Not ours to kill, not stale to clear.
-          record("skipped-live-owner");
-          continue;
+          const role = await liveParentRole(identity.parentPid, {
+            platform: options.platform,
+            readArgv0: options.readParentArgv0,
+          });
+          if (role === "owner") {
+            // Still parented to what may be another backend instance sharing
+            // this data dir. Not ours to kill, not stale to clear.
+            record("skipped-live-owner");
+            continue;
+          }
+          if (role === "unreadable") {
+            log.warn("reaper.server-parent-unidentified", { kind: server.kind, pid });
+            record("skipped-unreadable");
+            continue;
+          }
+          // A Linux subreaper (`systemd --user`) adopted it when its backend
+          // died: as orphaned as a PID 1 parent (to-dos 8101 and 8093, retired).
+          adoptedBySubreaper = true;
         }
 
         if (identity.processGroupId !== pid) {
@@ -534,6 +625,7 @@ export async function reapOrphanedLocalServers(
           kind: server.kind,
           pid,
           environmentId: environment.id,
+          adoptedBySubreaper,
         });
         const exited = await terminate(detachedProcessHandle(pid), {
           graceMs: REAP_GRACE_MS,

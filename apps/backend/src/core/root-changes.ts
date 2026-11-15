@@ -3,10 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import type { RootChangeFile } from "@orkestrator/protocol/coordinator-surfaces";
 import type { CommandContext } from "./commands-context.js";
+import type { Environment } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
 import { runGitWithFsmonitorFallback } from "./git-fsmonitor.js";
-import { runCommand, runCommandBuffer } from "./shell.js";
+import { CommandFailedError, runCommand, runCommandBuffer } from "./shell.js";
 import { containerExecArgs } from "./tmux-shared.js";
 
 /**
@@ -28,6 +29,19 @@ export const MAX_ROOT_CHANGE_SELECTION = 500;
 export const MAX_ROOT_CHANGE_PATCH_BYTES = 32 * 1024 * 1024;
 
 const READ_ONLY_GIT_ENV = { GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSPECS: "1" };
+
+/** The largest patch a caller accepts, and how it refuses a larger one. */
+export interface RootChangesPatchLimit {
+  maxBytes: number;
+  /** The whole refusal: it must name no file content. */
+  message: string;
+}
+
+/** A worker on this node. Another node's limit is `root-changes-node.ts`'s. */
+export const LOCAL_ROOT_CHANGES_PATCH_LIMIT: RootChangesPatchLimit = {
+  maxBytes: MAX_ROOT_CHANGE_PATCH_BYTES,
+  message: "The selected changes are larger than 32 MiB; pick fewer files.",
+};
 
 /** Parse `git status --porcelain=v1 -z --no-renames --untracked-files=all`. */
 export function parseRootChangeStatus(output: string): {
@@ -95,11 +109,21 @@ export async function listRootChanges(root: string): Promise<RootChangesListing>
  * `paths` must already be checked against `listRootChanges`; untracked ones
  * are named separately so they can be marked intent-to-add in the scratch
  * index and show up as new files.
+ *
+ * The capture stops as soon as the patch passes `limit.maxBytes`, and the
+ * refusal is the caller's own message whatever the size, so a selection far
+ * over the limit reads the same as one just over it.
+ *
+ * The headers are always `a/` and `b/`: the checkout's own
+ * `diff.mnemonicPrefix`, `diff.noprefix` or `diff.srcPrefix`/`dstPrefix`
+ * would otherwise reach the patch, and the receiving node reads the file
+ * list from those headers (`patchPaths`).
  */
 export async function buildRootChangesPatch(
   root: string,
   paths: readonly string[],
   untracked: readonly string[],
+  limit: RootChangesPatchLimit = LOCAL_ROOT_CHANGES_PATCH_LIMIT,
 ): Promise<Buffer> {
   const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "orkestrator-root-changes-"));
   try {
@@ -144,17 +168,19 @@ export async function buildRootChangesPatch(
         "--no-ext-diff",
         "--no-textconv",
         "--no-color",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
         "HEAD",
         "--",
         ...paths,
       ],
-      { cwd: root, env, timeoutMs: 120_000 },
-    ).catch(() => {
+      { cwd: root, env, timeoutMs: 120_000, maxOutputBytes: limit.maxBytes },
+    ).catch((error: unknown) => {
+      if (error instanceof CommandFailedError && error.outputLimitExceeded)
+        throw new Error(limit.message);
       throw new Error("Could not capture the selected changes; pick fewer files and retry.");
     });
-    if (diff.stdout.length > MAX_ROOT_CHANGE_PATCH_BYTES) {
-      throw new Error("The selected changes are larger than 32 MiB; pick fewer files.");
-    }
+    if (diff.stdout.length > limit.maxBytes) throw new Error(limit.message);
     return diff.stdout;
   } finally {
     await fs.rm(scratch, { recursive: true, force: true });
@@ -238,90 +264,129 @@ export interface ApplyRootChangesOutcome {
   files: string[];
 }
 
+/** Refuses an empty or oversized selection before anything is read. */
+export function assertRootChangeSelection(paths: readonly string[]): void {
+  if (paths.length === 0) throw new Error("Pick at least one file.");
+  if (paths.length > MAX_ROOT_CHANGE_SELECTION) {
+    throw new Error(`Pick at most ${MAX_ROOT_CHANGE_SELECTION} files.`);
+  }
+}
+
 /**
- * Apply the user's selection of the checkout's changes to a worker.
+ * The patch of exactly the picked files, built from the project's checkout on
+ * this node. Refuses any path the checkout no longer reports as changed and
+ * a selection with nothing to apply. Reads the checkout only.
+ */
+export async function buildSelectedRootChangesPatch(
+  storage: CommandContext["storage"],
+  projectId: string,
+  paths: readonly string[],
+  limit: RootChangesPatchLimit = LOCAL_ROOT_CHANGES_PATCH_LIMIT,
+): Promise<{ patch: Buffer; files: string[] }> {
+  const root = await resolveProjectGitRoot(storage, projectId);
+  const listing = await listRootChanges(root);
+  if (!listing.headCommit) throw new Error("The checkout has no commit to diff against.");
+  const changed = new Map(listing.files.map((file) => [file.path, file]));
+  const selected = Array.from(new Set(paths));
+  const unknown = selected.filter((file) => !changed.has(file));
+  if (unknown.length > 0) {
+    throw new Error(
+      `${unknown.length} selected file${unknown.length === 1 ? " is" : "s are"} no longer changed in the checkout; reopen the request to pick again.`,
+    );
+  }
+  const untracked = selected.filter((file) => changed.get(file)!.status === "untracked");
+  const patch = await buildRootChangesPatch(root, selected, untracked, limit);
+  if (patch.length === 0) throw new Error("The selected files have no changes to apply.");
+  return { patch, files: patchPaths(patch) };
+}
+
+/**
+ * Run `operation` on one worker of `projectId` that may receive a patch, with
+ * check/apply pairs serialized: a namespaced durable lock across approvals
+ * and backend processes, and the runtime fence that also excludes worker
+ * moves. The worker is re-read inside both.
+ */
+export async function withReceivingWorker<T>(
+  context: CommandContext,
+  projectId: string,
+  environmentId: string,
+  operation: (environment: Environment) => Promise<T>,
+): Promise<T> {
+  return context.storage.withProjectCreationLock(`root-changes:${environmentId}`, async () => {
+    const release = context.runtime.environments.fence.beginMutation(environmentId);
+    try {
+      const environment = await context.storage.getEnvironment(environmentId);
+      if (!environment || environment.projectId !== projectId) {
+        throw new Error("The worker environment is not in this project.");
+      }
+      if (isProjectHomeEnvironment(environment)) {
+        throw new Error("The project checkout cannot receive its own changes.");
+      }
+      if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting") {
+        throw new Error("The worker environment is being deleted.");
+      }
+      return await operation(environment);
+    } finally {
+      release();
+    }
+  });
+}
+
+/** `git apply --check`, then `git apply`, in the worker: all of the patch or none of it. */
+export async function applyPatchInWorker(environment: Environment, patch: Buffer): Promise<void> {
+  if (environment.environmentType === "local") {
+    if (!environment.worktreePath) throw new Error("The worker has no worktree.");
+    for (const args of [
+      ["apply", "--check", "--binary", "-"],
+      ["apply", "--binary", "-"],
+    ]) {
+      await runCommand("git", args, {
+        cwd: environment.worktreePath,
+        stdin: patch,
+        timeoutMs: 120_000,
+      }).catch((error: unknown) => {
+        throw new Error(`The changes do not apply to the worker: ${gitFailure(error)}`);
+      });
+    }
+    return;
+  }
+  if (environment.status !== "running" || !environment.containerId) {
+    throw new Error("Start the worker container before applying changes to it.");
+  }
+  for (const args of [
+    ["git", "apply", "--check", "--binary", "-"],
+    ["git", "apply", "--binary", "-"],
+  ]) {
+    await runCommand("docker", containerExecArgs(environment.containerId, args, true), {
+      stdin: patch,
+      timeoutMs: 120_000,
+    }).catch((error: unknown) => {
+      throw new Error(`The changes do not apply to the worker: ${gitFailure(error)}`);
+    });
+  }
+}
+
+/**
+ * Apply the user's selection of the checkout's changes to a worker on this
+ * node.
  *
  * Refuses the project home (that would be the checkout itself), any path the
  * checkout does not currently report as changed, and a patch that does not
- * apply cleanly; in each case the worker is left untouched.
+ * apply cleanly; in each case the worker is left untouched. A worker on
+ * another node is `root-changes-node.ts`'s.
  */
 export async function applyRootChanges(
   context: CommandContext,
   input: ApplyRootChangesInput,
 ): Promise<ApplyRootChangesOutcome> {
-  if (input.paths.length === 0) throw new Error("Pick at least one file.");
-  if (input.paths.length > MAX_ROOT_CHANGE_SELECTION) {
-    throw new Error(`Pick at most ${MAX_ROOT_CHANGE_SELECTION} files.`);
-  }
-  // A namespaced durable lock serializes check/apply pairs across approvals
-  // and backend processes; the runtime fence also excludes worker moves.
-  return context.storage.withProjectCreationLock(
-    `root-changes:${input.environmentId}`,
-    async () => {
-      const release = context.runtime.environments.fence.beginMutation(input.environmentId);
-      try {
-        const environment = await context.storage.getEnvironment(input.environmentId);
-        if (!environment || environment.projectId !== input.projectId) {
-          throw new Error("The worker environment is not in this project.");
-        }
-        if (isProjectHomeEnvironment(environment)) {
-          throw new Error("The project checkout cannot receive its own changes.");
-        }
-        if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting") {
-          throw new Error("The worker environment is being deleted.");
-        }
-        const root = await resolveProjectGitRoot(context.storage, input.projectId);
-        const listing = await listRootChanges(root);
-        if (!listing.headCommit) throw new Error("The checkout has no commit to diff against.");
-        const changed = new Map(listing.files.map((file) => [file.path, file]));
-        const selected = Array.from(new Set(input.paths));
-        const unknown = selected.filter((file) => !changed.has(file));
-        if (unknown.length > 0) {
-          throw new Error(
-            `${unknown.length} selected file${unknown.length === 1 ? " is" : "s are"} no longer changed in the checkout; reopen the request to pick again.`,
-          );
-        }
-        const untracked = selected.filter((file) => changed.get(file)!.status === "untracked");
-        const patch = await buildRootChangesPatch(root, selected, untracked);
-        if (patch.length === 0) throw new Error("The selected files have no changes to apply.");
-        const files = patchPaths(patch);
-
-        if (environment.environmentType === "local") {
-          if (!environment.worktreePath) throw new Error("The worker has no worktree.");
-
-          for (const args of [
-            ["apply", "--check", "--binary", "-"],
-            ["apply", "--binary", "-"],
-          ]) {
-            await runCommand("git", args, {
-              cwd: environment.worktreePath,
-              stdin: patch,
-              timeoutMs: 120_000,
-            }).catch((error: unknown) => {
-              throw new Error(`The changes do not apply to the worker: ${gitFailure(error)}`);
-            });
-          }
-          return { files };
-        }
-
-        if (environment.status !== "running" || !environment.containerId) {
-          throw new Error("Start the worker container before applying changes to it.");
-        }
-        for (const args of [
-          ["git", "apply", "--check", "--binary", "-"],
-          ["git", "apply", "--binary", "-"],
-        ]) {
-          await runCommand("docker", containerExecArgs(environment.containerId, args, true), {
-            stdin: patch,
-            timeoutMs: 120_000,
-          }).catch((error: unknown) => {
-            throw new Error(`The changes do not apply to the worker: ${gitFailure(error)}`);
-          });
-        }
-        return { files };
-      } finally {
-        release();
-      }
-    },
-  );
+  assertRootChangeSelection(input.paths);
+  return withReceivingWorker(context, input.projectId, input.environmentId, async (environment) => {
+    const { patch, files } = await buildSelectedRootChangesPatch(
+      context.storage,
+      input.projectId,
+      input.paths,
+    );
+    await applyPatchInWorker(environment, patch);
+    return { files };
+  });
 }

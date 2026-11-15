@@ -215,7 +215,11 @@ describe("HtmlFileTab", () => {
       const pending: {
         path: string;
         resolve: (css: string) => void;
-        /** Settles with the read; awaiting it runs after the component's own continuation. */
+        /**
+         * Settles with the read. Awaiting it alone does not wait for the component:
+         * its `Promise.all` continuation runs several microtasks later. Await it
+         * inside `act`, whose async flush drains pending work through a macrotask.
+         */
         settled: Promise<string>;
       }[] = [];
       const read = mock((path: string) => {
@@ -276,7 +280,10 @@ describe("HtmlFileTab", () => {
       await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("#000002"));
       // The old set's read settles late and changes nothing.
       pending[0]!.resolve("h1{color:#000001}");
-      // The component subscribed to the read first, so its continuation has run by here.
+      // The component's Promise.all continuation runs several microtasks after the read
+      // settles. act's async flush drains pending work through a macrotask, so that
+      // continuation has run before the assertions. Keep the await inside act: outside
+      // it the assertions could run first and pass without testing the discard.
       await act(async () => {
         await pending[0]!.settled;
       });

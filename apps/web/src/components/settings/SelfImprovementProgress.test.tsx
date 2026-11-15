@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   SelfImprovementProgress,
   SelfImprovementRunSummary,
@@ -285,8 +285,10 @@ describe("Settings → Self-improvement while a run is in progress", () => {
       ];
       let index = 0;
       let hold = true;
+      let reads = 0;
       // The first read is the page's load; each later poll moves on only when released.
       const next = () => {
+        reads += 1;
         const value = sequence[index]!;
         if (!hold && index < sequence.length - 1) {
           index += 1;
@@ -326,10 +328,10 @@ describe("Settings → Self-improvement while a run is in progress", () => {
 
       await advance(3);
       await screen.findByRole("list", { name: "Run stages" });
-      // A new run (a different start time) shows its stages but leaves the window closed.
-      // Whatever would reopen the window runs in the effects of the render that
-      // showed the stages; flush them before asserting it did not.
-      await act(async () => {});
+      // A new run (a different start time) shows its stages but leaves the window
+      // closed, across later polls that each re-render the same run.
+      const readsAtNewRun = reads;
+      await waitFor(() => expect(reads).toBeGreaterThanOrEqual(readsAtNewRun + 2));
       expect(screen.queryByRole("dialog") === null).toBe(true);
     });
   }

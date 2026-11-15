@@ -91,9 +91,16 @@ test("an inlined sibling stylesheet applies under the CSP and sandbox, and loads
   const frame = page.frameLocator("iframe");
   await expect(frame.locator("#styled")).toBeVisible();
   await expect(frame.locator("#styled")).toHaveCSS("color", "rgb(1, 2, 3)");
-  // The frame's load event fires once every subresource it asked for has loaded or failed.
-  const frameHandle = await page.locator("iframe").elementHandle();
-  await (await frameHandle!.contentFrame())!.waitForLoadState("load");
+  // Two frames after the styled element painted, every fetch its document would
+  // start (links, imports, background images) has been issued to the router.
+  await frame
+    .locator("body")
+    .evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
   // The inlined text's own imports and remote URLs are still refused by the CSP,
   // and neither the inlined nor the disabled sheet is ever fetched.
   expect(requests).toEqual([]);

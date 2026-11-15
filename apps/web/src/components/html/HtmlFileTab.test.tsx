@@ -212,23 +212,13 @@ describe("HtmlFileTab", () => {
     }
     /** A read that settles only when the test says so, one per call, in call order. */
     function deferredReads() {
-      const pending: {
-        path: string;
-        resolve: (css: string) => void;
-        /**
-         * Settles with the read. Awaiting it alone does not wait for the component:
-         * its `Promise.all` continuation runs several microtasks later. Await it
-         * inside `act`, whose async flush drains pending work through a macrotask.
-         */
-        settled: Promise<string>;
-      }[] = [];
-      const read = mock((path: string) => {
-        const settled = new Promise<string>((resolve) => {
-          pending.push({ path, resolve, settled: undefined as never });
-        });
-        pending[pending.length - 1]!.settled = settled;
-        return settled;
-      });
+      const pending: { path: string; resolve: (css: string) => void }[] = [];
+      const read = mock(
+        (path: string) =>
+          new Promise<string>((resolve) => {
+            pending.push({ path, resolve });
+          }),
+      );
       return { read, pending };
     }
     const NOTICE = /does not run scripts or load external files/;
@@ -280,12 +270,10 @@ describe("HtmlFileTab", () => {
       await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("#000002"));
       // The old set's read settles late and changes nothing.
       pending[0]!.resolve("h1{color:#000001}");
-      // The component's Promise.all continuation runs several microtasks after the read
-      // settles. act's async flush drains pending work through a macrotask, so that
-      // continuation has run before the assertions. Keep the await inside act: outside
-      // it the assertions could run first and pass without testing the discard.
+      // The late read settles through promise callbacks alone, so one macrotask
+      // turn has run all of them and any render they cause.
       await act(async () => {
-        await pending[0]!.settled;
+        await new Promise((resolve) => setTimeout(resolve, 0));
       });
       expect(frame().getAttribute("srcdoc")).not.toContain("#000001");
       expect(frame().getAttribute("srcdoc")).toContain("#000002");
@@ -296,8 +284,11 @@ describe("HtmlFileTab", () => {
       const { read, pending } = deferredReads();
       const view = renderWithFiles(read, false);
 
-      // Effects ran inside render's act; let any read they would have started settle.
-      await act(async () => {});
+      // The render's effects have run inside `act`; an inactive tab's effect
+      // returns before reading, so nothing can still be on its way.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
       expect(read).not.toHaveBeenCalled();
       expect(screen.queryByTitle("Rendered view of docs/report.html") === null).toBe(true);
       expect(screen.queryByText(NOTICE) === null).toBe(true);

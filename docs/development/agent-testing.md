@@ -1734,6 +1734,22 @@ spec report a launch timeout. The Wayland rendering case in
 run under that command. The packaged-app specs are always headless on Linux (see
 [Packaged-app Electron spec](#packaged-app-electron-spec)).
 
+CI runs that same command, over the whole suite, in
+`.github/workflows/electron-qualification.yml`: weekly on the container live
+qualification's schedule (Mondays 04:17 UTC), on demand (`workflow_dispatch`),
+and on pull requests that change the workflow, `playwright.electron.config.ts`
+or `electron-display-setup.ts`. It uses one GitHub-hosted `ubuntu-latest`
+runner and no secrets, sets `ORKESTRATOR_NATIVE_MENU_INPUT=1` (the runner's
+Xvfb display is an isolated desktop) and uploads
+`output/agent-testing/electron-qualification/electron` (the Playwright JSON
+report, traces and failure screenshots) for 14 days. The opt-in cases stay
+skipped there: container environments, the transport CPU measurement and the
+macOS-only window cases. There is no macOS leg; macOS, live providers and
+Docker Desktop stay manual (to-do
+[0031](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md)
+task 8). `native-application-menu.yml` still runs its three menu specs on
+pull requests on Linux, Windows and macOS.
+
 A development window loads its renderer's modules from Vite, and on Linux
 Chromium aborts them with `net::ERR_NETWORK_CHANGED` when another build's
 Docker work changes a host interface (flake

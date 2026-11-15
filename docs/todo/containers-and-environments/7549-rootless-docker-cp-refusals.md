@@ -560,7 +560,12 @@ minutes after a failure. Why: Docker never boots these containers on its own
 its runtime), so the start path sees every boot; a timer would fetch for
 hosts with no restricted containers and needs its own stop. The cost is one
 `docker inspect` per booted firewall container and, when the seed is over an
-hour old, one fetch of at most 15 s before the start.
+hour old, one fetch of at most 15 s before the start. A runtime behind a
+gateway, or one whose environment is in full mode, is not inspected for the
+seed (`deliverRuntimeSeedBeforeBoot`); only a runtime with no environment
+record, whose mode is unknown, is inspected without running a firewall. The
+container benchmark's `bootRuntime` calls the same helpers, so its Docker
+call counts include these inspects.
 
 ### Task 2: keep the copy only for containers created before the bind (2026-11-15)
 

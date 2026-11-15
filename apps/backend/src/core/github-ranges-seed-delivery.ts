@@ -1,5 +1,9 @@
 import { DOCKER_LABEL_RESOURCE_ROLE } from "./constants.js";
-import { DOCKER_LABEL_EGRESS_GATEWAY, EGRESS_GATEWAY_ROLE } from "./egress-gateway.js";
+import {
+  DOCKER_LABEL_EGRESS_GATEWAY,
+  EGRESS_GATEWAY_ROLE,
+  prepareEgressGatewayForStart,
+} from "./egress-gateway.js";
 import {
   GITHUB_RANGES_SEED_DIRECTORY,
   copyGithubRangesSeed,
@@ -105,4 +109,41 @@ export async function deliverGithubRangesSeedBeforeBoot(
     log.info("github-ranges.seed-copied-before-boot", { containerId: containerId.slice(0, 12) });
   }
   return copied ? "copied" : "not-copied";
+}
+
+/**
+ * Brings a runtime's egress gateway up for a start, as
+ * {@link prepareEgressGatewayForStart} does, refreshing the gateway's seed
+ * just before it boots. The production start path and the container
+ * benchmark share it so the benchmark counts the same Docker calls.
+ */
+export function prepareEgressGatewayWithSeed(
+  dataDir: string,
+  containerId: string,
+): ReturnType<typeof prepareEgressGatewayForStart> {
+  return prepareEgressGatewayForStart(containerId, {
+    beforeGatewayBoot: (gatewayId) => deliverGithubRangesSeedBeforeBoot(dataDir, gatewayId),
+  });
+}
+
+/**
+ * The runtime's own seed delivery before it boots. A runtime behind a gateway
+ * (`gateway` is not `"none"`) or in full mode runs no firewall of its own, so
+ * it is answered `not-firewall` without the inspect: only a container that
+ * runs the firewall pays for one. A runtime whose mode is unknown (no
+ * environment record) is inspected. Skipping only ever costs freshness: a
+ * firewall that finds no usable seed fetches GitHub's ranges itself and still
+ * fails closed.
+ */
+export async function deliverRuntimeSeedBeforeBoot(
+  dataDir: string,
+  containerId: string,
+  options: {
+    gateway: Awaited<ReturnType<typeof prepareEgressGatewayForStart>>;
+    networkAccessMode?: string | null;
+  },
+  dependencies: SeedDeliveryDependencies = {},
+): Promise<GithubSeedDelivery> {
+  if (options.gateway !== "none" || options.networkAccessMode === "full") return "not-firewall";
+  return deliverGithubRangesSeedBeforeBoot(dataDir, containerId, dependencies);
 }

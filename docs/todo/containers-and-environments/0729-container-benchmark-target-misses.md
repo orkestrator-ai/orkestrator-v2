@@ -45,7 +45,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 - The 15 in 0022 was measured on Docker Desktop arm64 on 2026-10-25, before the egress gateway (`c55807f9`, #1279, 2026-10-25 19:58 UTC). No CI figure exists from before the gateway, so 15 to 26 mixes a platform change with the gateway.
 - A restricted runtime now has a second container: the gateway's create (`createEgressGateway`, `apps/backend/src/core/egress-gateway.ts:246-277`), and in `prepareEgressGatewayForStart` (`:354-400`) its lookup, inspection, start, firewall wait and a final inspect all count. This is the likely source of most of the jump, not yet counted call by call.
 - The firewall wait polls every 250 ms and spends two calls per unfinished poll, `gatewayFirewallState` and `inspectGateway` (`waitForEgressGatewayFirewall`, `:304-334`). The count therefore depends on how long the gateway's firewall takes to apply: one more poll is exactly two more calls. That fits the 0058 x64 run moving between 26 and 28 before 0109, and 0109's steady 28.
-- 0109 also added one `docker cp` per gateway create, `copyGithubRangesSeed` (`egress-gateway.ts:253`, `apps/backend/src/core/github-ranges-cache.ts:120-133`), when a GitHub ranges seed exists. Whether the benchmark's context has a seed is unconfirmed. (Since 2026-11-15, [7549](7549-rootless-docker-cp-refusals.md) task 2, gateways and in-container-firewall runtimes bind the seed directory instead, so creation makes no seed copy; the start path adds one `docker inspect` per booted firewall container, and a copy only for a container created before the bind.)
+- 0109 also added one `docker cp` per gateway create, `copyGithubRangesSeed` (`egress-gateway.ts:253`, `apps/backend/src/core/github-ranges-cache.ts:120-133`), when a GitHub ranges seed exists. Whether the benchmark's context has a seed is unconfirmed. (Since 2026-11-15, [7549](7549-rootless-docker-cp-refusals.md) task 2, gateways and in-container-firewall runtimes bind the seed directory instead, so creation makes no seed copy; the start path adds one `docker inspect` per booted firewall container (a runtime behind a gateway or in full mode adds none), and a copy only for a container created before the bind.)
 - Certainty: the totals are confirmed; the attribution is likely but unmeasured.
 
 **Decisions.**
@@ -178,9 +178,11 @@ reachable (task 5). The cause was found on Docker Desktop instead.
   calls to 10 or 11. The target is now ≤ 27, re-baselined as 21 for the
   runtime's own path plus the gateway's 6 fixed calls (create, seed copy,
   the runtime's state inspect, the gateway's inspect and start, and the
-  first firewall read; the seed copy went on 2026-11-15, when
+  first firewall read; on 2026-11-15
   [7549](7549-rootless-docker-cp-refusals.md) task 2 bound the seed
-  directory instead, so a gateway now adds 5 and the target is unchanged).
+  directory instead, so the seed copy was replaced by one inspect of a
+  stopped gateway before its start, a gateway still adds 6 and the target is
+  unchanged).
   The old code's 28 still misses it. CI's
   decomposition predicts 24 to 26 after the change; the first CI run of this
   change confirms it.

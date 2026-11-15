@@ -3800,8 +3800,12 @@ container since 2026-10-25, adds 6 fixed calls: its create, the GitHub seed
 copy, the runtime's state inspect, the gateway's inspect, its start, and the
 first firewall read. (Since 2026-11-15 the seed directory is bound rather
 than copied, [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
-task 2, so the gateway adds 5; the target was left as it was.) Its firewall polls, one call each, must fit in the old
-headroom.
+task 2: the creation's seed copy is gone, and a gateway that is not running
+is inspected once just before its start so its seed can be refreshed. The
+gateway still adds 6 fixed calls to a fresh start, and the runtime behind it
+adds none, so the target is unchanged. `bootRuntime` calls the same seed
+helpers as the production start.) Its firewall polls, one call each, must fit
+in the old headroom.
 
 | Measure (median unless stated) | Report field | Target |
 | --- | --- | --- |

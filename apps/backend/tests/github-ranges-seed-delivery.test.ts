@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   deliverGithubRangesSeedBeforeBoot,
+  deliverRuntimeSeedBeforeBoot,
   parseSeedConsumer,
   type SeedDeliveryDependencies,
 } from "../src/core/github-ranges-seed-delivery";
@@ -128,5 +129,39 @@ describe("a fresh seed before each boot", () => {
     expect(await deliverGithubRangesSeedBeforeBoot("/data", "abc123", throwing.dependencies)).toBe(
       "not-copied",
     );
+  });
+});
+
+describe("a runtime's own seed before it boots", () => {
+  test("a runtime behind a gateway or in full mode is not inspected", async () => {
+    for (const options of [
+      { gateway: "ready" as const },
+      { gateway: "restarted-gateway" as const },
+      { gateway: "none" as const, networkAccessMode: "full" },
+    ]) {
+      const { calls, dependencies } = fakes(RUNTIME_IN_CONTAINER_LEGACY);
+      expect(await deliverRuntimeSeedBeforeBoot("/data", "abc123", options, dependencies)).toBe(
+        "not-firewall",
+      );
+      expect(calls.inspect).toEqual([]);
+      expect(calls.seed).toEqual([]);
+      expect(calls.copy).toEqual([]);
+    }
+  });
+
+  test("a runtime with no gateway is inspected, also when its mode is unknown", async () => {
+    for (const networkAccessMode of ["restricted", undefined, null]) {
+      const { calls, dependencies } = fakes(RUNTIME_IN_CONTAINER_LEGACY);
+      expect(
+        await deliverRuntimeSeedBeforeBoot(
+          "/data",
+          "abc123",
+          { gateway: "none", networkAccessMode },
+          dependencies,
+        ),
+      ).toBe("copied");
+      expect(calls.inspect).toHaveLength(1);
+      expect(calls.copy).toEqual([["abc123", "/data/github-ranges-seed/github-ranges"]]);
+    }
   });
 });

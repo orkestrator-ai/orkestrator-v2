@@ -416,6 +416,9 @@ describe("Orkestrator control MCP server", () => {
       "answer_controller_worker_question",
       "resolve_native_agent_interaction",
       "resolve_node_action_request",
+      // Root changes reach a worker only from the user's approval.
+      "apply_project_root_changes",
+      "apply_controller_root_patch",
       // Setup commands run on the host; only the user approves them.
       "approve_environment_setup",
       "approve_project_setup_commands",

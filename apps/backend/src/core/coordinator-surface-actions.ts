@@ -34,6 +34,7 @@ import {
 import type { Environment } from "./models.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
 import { applyRootChanges, listRootChanges } from "./root-changes.js";
+import { applyRootChangesOnNode } from "./root-changes-node.js";
 import {
   editWorkerTabWithTeardown,
   launchWorkerTerminal,
@@ -59,9 +60,12 @@ import {
  * take the caller's `requestId` through `withCoordinatorReceipt`.
  *
  * The terminal, browser, tab-edit, PR and Resolve commands also take `nodeId` for a
- * worker on a connected node (todo 0395): the receipt stays here, the node
+ * worker on a connected node (to-do 0395, retired): the receipt stays here, the node
  * validates its own worker and runs the work through its `*_controller_*`
  * command, with IDs derived from this receipt's key so a retry replays there.
+ * The root-changes request takes `nodeId` too: the request and its approval
+ * stay here, and the approved patch, built from this node's checkout, is sent
+ * to `apply_controller_root_patch` there (`root-changes-node.ts`).
  */
 
 type JsonRecord = Record<string, unknown>;
@@ -146,6 +150,19 @@ async function remoteNode(
   return nodeId && (await context.nodes?.status())?.nodeId !== nodeId
     ? coordinatorNodeTarget(context, caller, nodeId)
     : undefined;
+}
+
+/** A worker of this project on another node: its ID and the name the user sees. */
+async function remoteWorker(
+  remote: CoordinatorNodeTarget,
+  environmentId: string,
+): Promise<{ id: string; name: string }> {
+  const environment = await remote.environment(environmentId);
+  return {
+    id: environmentId,
+    name:
+      typeof environment.name === "string" && environment.name ? environment.name : environmentId,
+  };
 }
 
 export function registerCoordinatorSurfaceActions(
@@ -496,7 +513,11 @@ export function registerCoordinatorSurfaceActions(
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the request");
     const requestId = asNonBlankString(input.requestId, "requestId");
-    const environment = await requireCoordinatorWorker(context, caller, input.environmentId);
+    // A worker on another node gets a patch built here after approval (to-do 0395 (retired) task 2).
+    const remote = await remoteNode(context, caller, optionalText(input.nodeId, "nodeId", 200));
+    const environment = remote
+      ? await remoteWorker(remote, asNonBlankString(input.environmentId, "environmentId"))
+      : await requireCoordinatorWorker(context, caller, input.environmentId);
     const reason = asNonBlankString(input.reason, "reason").trim().slice(0, 500);
     const files = input.files === undefined ? [] : input.files;
     if (
@@ -523,17 +544,29 @@ export function registerCoordinatorSurfaceActions(
       {
         requestId,
         action: "request-root-changes",
-        payload: { environmentId: environment.id, files, reason },
+        payload: {
+          environmentId: environment.id,
+          files,
+          reason,
+          ...(remote ? { nodeId: remote.nodeId } : {}),
+        },
       },
       async () => {
-        const self = await run<JsonRecord>(context, "get_node_status", {});
+        const self = remote ? null : await run<JsonRecord>(context, "get_node_status", {});
         const created = await run<JsonRecord>(context, "create_node_action_request", {
           requestId: `root-changes-coordinator-${requestKey(caller, requestId)}`,
           kind: "apply-root-changes",
           targets: [
             {
-              nodeId: self.nodeId,
-              nodeName: "this machine",
+              // `projectId` is this node's project, whose checkout the user
+              // picks from; `nodeProjectId` is the copy that owns the worker.
+              ...(remote
+                ? {
+                    nodeId: remote.nodeId,
+                    nodeName: remote.nodeName,
+                    nodeProjectId: remote.projectId,
+                  }
+                : { nodeId: self!.nodeId, nodeName: "this machine" }),
               environmentId: environment.id,
               environmentName: environment.name,
               projectId: caller.projectId,
@@ -554,6 +587,7 @@ export function registerCoordinatorSurfaceActions(
           environmentId: environment.id,
           approvalRequestId: created.requestId,
           state: "pending",
+          ...(remote ? { nodeId: remote.nodeId } : {}),
         };
       },
     );
@@ -574,10 +608,20 @@ export function registerCoordinatorSurfaceActions(
     const paths = args.paths;
     if (!Array.isArray(paths) || !paths.every((entry) => typeof entry === "string"))
       throw new Error("Expected paths");
-    return applyRootChanges(context, {
+    const input = {
       projectId: asNonBlankString(args.projectId, "projectId"),
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       paths: paths as string[],
-    });
+    };
+    // A worker on another node: the patch is built here and sent there.
+    if (args.nodeId !== undefined)
+      return applyRootChangesOnNode(context, {
+        ...input,
+        nodeId: asNonBlankString(args.nodeId, "nodeId"),
+        nodeName: asNonBlankString(args.nodeName, "nodeName"),
+        nodeProjectId: asNonBlankString(args.nodeProjectId, "nodeProjectId"),
+        requestKey: asNonBlankString(args.requestKey, "requestKey"),
+      });
+    return applyRootChanges(context, input);
   });
 }

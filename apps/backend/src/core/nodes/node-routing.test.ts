@@ -46,6 +46,7 @@ test("controller PR publication is node-link only, never workspace-grant access"
 
 test("controller worker surfaces are node-link only, never workspace-grant access", () => {
   for (const command of [
+    "apply_controller_root_patch",
     "launch_controller_terminal",
     "open_controller_browser",
     "edit_controller_worker_tab",

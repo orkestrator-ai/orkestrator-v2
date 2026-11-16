@@ -304,7 +304,7 @@ export function getToolExpansionKey(
  * not the row: the row that holds it is renamed under it. Codex's first
  * replay after live streaming gives every row a new id while the calls inside
  * keep theirs, and coalescing renames a row whenever earlier rows merge in
- * front of it (to-do 7270). The open tool group is keyed the same way. A call
+ * front of it (#2064). The open tool group is keyed the same way. A call
  * without a provider id falls back to its row-scoped part key.
  *
  * No row-scoped alias is kept for an id-keyed call: the store is in memory, so

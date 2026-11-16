@@ -1,5 +1,5 @@
 /**
- * Todo 7567 task 2: the agent-mail presence pass reads each environment row
+ * #2131: the agent-mail presence pass reads each environment row
  * once and hands it to the delivery gate. These tests drive the real
  * `NativeAgentService.mailInjectPresence` with and without that row, so a gate
  * that ignored the row (or read it again) fails here rather than passing

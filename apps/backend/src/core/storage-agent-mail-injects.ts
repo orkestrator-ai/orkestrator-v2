@@ -381,7 +381,7 @@ export class AgentMailInjects {
           // Mail a budget held stays held: only the user's Resume (or the
           // drain, for the hourly limit) releases it, whichever main it is on.
           // Replacing the main is not a Resume, and releasing it here let two
-          // coordinators' loop restart in the new main (to-do 2900).
+          // coordinators' loop restart in the new main (#2075).
           if (message.placement !== "stored" && !isAgentMailBudgetHeld(message)) {
             const owed =
               message.coordinatorDelegationId !== undefined &&

@@ -1,6 +1,6 @@
 /**
  * The build pipeline's prompt dispatch window, crashed live at both of its
- * backend-side points (to-do 0050 task 3), on a real `dev:test --fixture`
+ * backend-side points (#2086), on a real `dev:test --fixture`
  * profile whose Pi talks to a loopback fake model: no login, nothing billed.
  *
  * Opt-in (`ORKESTRATOR_AGENT_TEST_DISPATCH_HOLD=1`): it `SIGKILL`s the

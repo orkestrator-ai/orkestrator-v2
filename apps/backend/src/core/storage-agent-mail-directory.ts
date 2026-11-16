@@ -704,7 +704,7 @@ export class AgentMailboxDirectory {
             continue;
           // A closed main's budget-held mail keeps its hold: the next main
           // takes it over still held (`moveClosedCoordinatorMail`), so only
-          // the user's Resume releases it, never replacing the main (2900).
+          // the user's Resume releases it, never replacing the main (#2075).
           if (
             mailbox.ownerKind === "coordinator" &&
             mailbox.coordinatorRole !== "side" &&

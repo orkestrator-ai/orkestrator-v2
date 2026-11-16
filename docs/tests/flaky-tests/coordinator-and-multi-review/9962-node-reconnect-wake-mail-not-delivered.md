@@ -58,7 +58,7 @@ the send itself rather than adding microtask rounds.
 
 - **Base:** `17d28238c098b4443d1289df5c4ed75e7cc2802e`; `mise run flaky:recurrence -- 9962 --base 17d28238c --registry-ref origin/main` answered open.
 - **Observed head:** branch `remove-dead-bridge-be98778b92d1-r1` at
-  `5d3ddf201` (7571 removals). It changes no coordinator, node-coordination
+  `5d3ddf201` (7571 (retired) removals). It changes no coordinator, node-coordination
   or agent-mail file.
 - **Failure:** the same assertion, `expect(world.received(main)).toHaveLength(1)`
   received length 0 at line 390 (82.72 ms), after a

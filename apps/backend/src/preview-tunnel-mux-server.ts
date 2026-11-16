@@ -21,8 +21,7 @@ import {
 } from "@orkestrator/protocol/preview-services";
 import type { PreviewWebSocket } from "@orkestrator/protocol/node/preview-websocket";
 
-import type { AuthenticatedPreviewAccess } from "./core/preview-access.js";
-import type { PreviewRuntime } from "./core/preview-runtime.js";
+import type { AuthenticatedPreviewAccess, PreviewRuntime } from "./core/previews/index.js";
 import type { PreviewAdmission, PreviewSlot } from "./preview-admission.js";
 import type { PreviewMetrics } from "./preview-metrics.js";
 import { connectPreviewUpstream, type PreviewUpstreamOptions } from "./preview-upstream.js";

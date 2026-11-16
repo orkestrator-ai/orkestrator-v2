@@ -25,7 +25,7 @@ import type { BackendEmit } from "./backend-emit.js";
 
 export type CommandContext = {
   design?: import("./design/index.js").DesignService;
-  previews?: import("./preview-runtime.js").PreviewRuntime;
+  previews?: import("./previews/index.js").PreviewRuntime;
   mcpManagement?: import("./mcp-management/index.js").McpManagementService;
   webAnnotations?: import("./web-annotations/index.js").WebAnnotationService;
   /** Transcript artifacts: durable revisions, receipts and publications. */

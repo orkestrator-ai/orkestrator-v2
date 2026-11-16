@@ -1,5 +1,5 @@
 import { previewServicesChangedEvent } from "@orkestrator/protocol/contract/domains/events";
-import type { BackendEmit } from "./backend-emit.js";
+import type { BackendEmit } from "../backend-emit.js";
 import { randomBytes } from "node:crypto";
 
 import {
@@ -26,13 +26,13 @@ import {
 } from "@orkestrator/protocol/preview-services";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 
-import type { Environment } from "./models.js";
+import type { Environment } from "../models.js";
 import type {
   LoadedPreviewServiceStore,
   PreviewMutationRecord,
   PreviewServiceStore,
   PreviewServicesStorage,
-} from "./storage-preview-services.js";
+} from "../storage-preview-services.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("preview");

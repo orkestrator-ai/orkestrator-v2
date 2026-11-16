@@ -576,7 +576,7 @@ describe("paths named outside a test and its helpers", () => {
 });
 
 /**
- * To-do 6920: a backend test's import graph holds over a thousand files, so a
+ * #2026: a backend test's import graph holds over a thousand files, so a
  * change to one widely shared module reached at any depth made most failures
  * `related`. Only a changed file within MAX_RELATED_IMPORT_HOPS of the test's
  * own code is; a distant one is `undetermined`, never `unrelated`.

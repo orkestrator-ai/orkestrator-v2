@@ -36,7 +36,7 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("pull-request");
 
-/** What a node summary relays about an environment's PR monitor (todo 0796). */
+/** What a node summary relays about an environment's PR monitor (#1470). */
 export interface RelayedPrMonitorHealth {
   prMonitorConfirmed?: true;
   prViewerCanMerge?: boolean;

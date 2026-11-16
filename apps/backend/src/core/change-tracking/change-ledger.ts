@@ -1364,7 +1364,7 @@ export class ChangeLedger {
    * finished turn's history reads only its selected measurement, so the
    * provisional one its end superseded is kept only for a reader paging it
    * as it was superseded; the hourly pass then prunes it to the selection
-   * (todo 4960). A turn whose end recovery is still pending is skipped: a
+   * (#1937). A turn whose end recovery is still pending is skipped: a
    * later recovery capture can still publish for it. Reads the owner index
    * for `owner_kind = 'turn'` and each turn's boundary row by key.
    */

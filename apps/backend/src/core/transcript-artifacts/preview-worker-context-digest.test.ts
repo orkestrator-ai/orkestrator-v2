@@ -54,7 +54,7 @@ describe("what the worker bundle holds", () => {
     // verifying side's use of it reaches the bundle.
     expect(bundle).toContain("createStaticHtmlSanitizer");
     // The text Find searches before a document is shown is read at verification
-    // with a copy of the frame's walk, not with the presentation runtime (5780).
+    // with a copy of the frame's walk, not with the presentation runtime (#2155).
     expect(bundle).toContain("staticHtmlDocumentText");
     for (const name of [
       "installStaticHtmlPresentationRuntime",

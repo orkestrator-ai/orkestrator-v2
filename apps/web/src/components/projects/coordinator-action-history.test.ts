@@ -119,6 +119,36 @@ test("incomplete, changed and cyclic history refuses partial results", async () 
     ).rejects.toThrow();
   }
 });
+
+test("overlapping pages retain one row per id and preserve the newer action evidence", async () => {
+  const updatedQuestion = {
+    ...question,
+    parts: [{ ...question.parts[0]!, toolArgs: { title: "Updated question" } }],
+  };
+  const cursors: string[] = [];
+  const history = await recoverActionHistory(
+    [updatedQuestion, message("tail")],
+    "first",
+    "epoch",
+    async (cursor) => {
+      cursors.push(cursor);
+      return {
+        syncVersion: 1,
+        messages:
+          cursor === "first"
+            ? [message("middle"), question, message("tail")]
+            : [message("oldest"), message("middle")],
+        historyEpoch: "epoch",
+        ...(cursor === "first" ? { nextCursor: "second" } : {}),
+        complete: cursor !== "first",
+        truncated: cursor === "first",
+      };
+    },
+  );
+  expect(cursors).toEqual(["first", "second"]);
+  expect(history.map((row) => row.id)).toEqual(["oldest", "middle", "old-question", "tail"]);
+  expect(coordinatorActionCards(history).map((card) => card.title)).toEqual(["Updated question"]);
+});
 export const blockingQuestion: AgentInteractionRequest = {
   version: 1,
   id: "request-1",

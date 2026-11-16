@@ -24,6 +24,7 @@ import { positionedCursorBefore } from "./http-bridge/transcript-v2.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { collaborators, projectionInternals } from "./native-agent-service-test-collaborators.js";
+import { DIRECT_PAGE_ROW_MAX_BYTES } from "./native-agent-projection-helpers.js";
 
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 
@@ -720,6 +721,65 @@ describe("summary transcripts", () => {
           limit: 60,
         });
         expect(second.rowsTrimmed).toBe(true);
+      },
+    );
+  });
+
+  test("backend row trimming remains explicit on fresh and cached direct pages", async () => {
+    const history = {
+      messages: Array.from({ length: 150 }, (_, index) => message(`m${index}`)),
+      epoch: 1,
+      revision: 1,
+    };
+    const { stub } = summaryProvider(history);
+    const raw = {
+      ...message("oversized"),
+      parts: [
+        {
+          // Non-image attachments stay inline rather than entering the image
+          // detail cache, and can exceed the direct page's per-row ceiling.
+          type: "file",
+          content: "enormous.pdf",
+          fileUrl: `data:application/pdf;base64,${"c".repeat(DIRECT_PAGE_ROW_MAX_BYTES)}`,
+        },
+      ],
+    };
+    const transcriptPage = mock(async () => ({
+      status: "page" as const,
+      messages: [raw],
+      historyEpoch: "g1:1",
+      complete: true,
+      truncated: false,
+    }));
+    const provider = { ...stub.provider, transcriptPage };
+    await withService(
+      { prefix: "orkestrator-backend-trimmed-", provider: async () => provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        const input = {
+          ...identity,
+          syncVersion: 1 as const,
+          before: update.value.historyCursor!,
+          limit: 60,
+        };
+        const first = await service.getMessagePage(input);
+        expect(first).toMatchObject({ complete: true, truncated: true, rowsTrimmed: true });
+        expect(first.messages).toHaveLength(1);
+        expect(first.messages[0]).toMatchObject({ id: "oversized" });
+        expect(Buffer.byteLength(JSON.stringify(first.messages[0]))).toBeLessThanOrEqual(
+          DIRECT_PAGE_ROW_MAX_BYTES,
+        );
+        const cached = await service.getMessagePage(input);
+        expect(cached).toEqual(first);
+        expect(cached.rowsTrimmed).toBe(true);
+        expect(transcriptPage).toHaveBeenCalledTimes(1);
       },
     );
   });

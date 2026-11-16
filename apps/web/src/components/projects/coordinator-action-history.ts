@@ -58,6 +58,7 @@ export async function recoverActionHistory(
   let bytes = new TextEncoder().encode(JSON.stringify(evidence)).byteLength;
   if (bytes > 8 * 1024 * 1024) throw new Error("Action history evidence limit");
   const visited = new Set<string>();
+  const heldIds = new Set(evidence.map((message) => message.id));
   while (cursor && !stopped()) {
     if (visited.has(cursor) || visited.size >= 10_000)
       throw new Error("Action history cursor limit");
@@ -68,7 +69,13 @@ export async function recoverActionHistory(
     // row makes the page unfit to prove an action done.
     if (page.historyEpoch !== epoch || page.rowsTrimmed)
       throw new Error("Action history changed or truncated");
-    const older = pageEvidence(page.messages);
+    // Direct pages can overlap the tail or a newer page. Preserve the newer
+    // evidence (including revised action state), once per normalized row id.
+    const older = pageEvidence(page.messages).filter((message) => {
+      if (heldIds.has(message.id)) return false;
+      heldIds.add(message.id);
+      return true;
+    });
     bytes += new TextEncoder().encode(JSON.stringify(older)).byteLength;
     if (bytes > 8 * 1024 * 1024) throw new Error("Action history evidence limit");
     evidence = [...older, ...evidence];

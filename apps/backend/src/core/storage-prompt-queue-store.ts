@@ -9,7 +9,7 @@ import { isNonBlankString, isPersistedPromptQueue, isRecord, nowIso } from "./st
 /** What a queue mutation does with its row: leave it, or replace it with `value`. */
 export type PromptQueueUpdate<T> = { result: T; value?: PersistedPromptQueue };
 
-/** The claim recovery and validation {@link PromptQueueStore.loadPromptQueues} applies to a row. */
+/** The legacy-claim restore and validation {@link PromptQueueStore.loadPromptQueues} applies to a row. */
 function decodePromptQueueRow(queueKey: string, stored: unknown): PersistedPromptQueue | undefined {
   const restored = restoreLegacyPromptQueueClaims({ [queueKey]: stored }) as Record<
     string,
@@ -20,8 +20,8 @@ function decodePromptQueueRow(queueKey: string, stored: unknown): PersistedPromp
 }
 
 /**
- * The prompt-queue store: its lease, row reads and row writes, and recovery of
- * the delivery claims an older backend left behind. Most operations on queued
+ * The prompt-queue store: its lease, row reads and row writes, and the restore
+ * of delivery claims an older backend left on disk. Most operations on queued
  * items live in `PromptsRepository`; a queued steer's reservation and
  * settlement in `NativeAgentDeliveries`.
  */
@@ -101,11 +101,6 @@ export class PromptQueueStore {
     previous?: PersistedPromptQueue,
   ): PersistedPromptQueue {
     this.validatePromptQueueMessages(messages);
-    // A stale whole-list save must not publish a second copy of a live claim.
-    const claimedId = previous?.outstandingClaim?.message.id;
-    if (isNonBlankString(claimedId)) {
-      messages = messages.filter((candidate) => !isRecord(candidate) || candidate.id !== claimedId);
-    }
     const failedMessageStillUnchanged =
       previous?.dispatchError !== undefined &&
       messages.some(
@@ -121,7 +116,6 @@ export class PromptQueueStore {
       environmentId,
       messages,
       ...(previous?.jobReceipts ? { jobReceipts: previous.jobReceipts } : {}),
-      ...(previous?.outstandingClaim ? { outstandingClaim: previous.outstandingClaim } : {}),
       ...(previous?.inFlight ? { inFlight: previous.inFlight } : {}),
       ...(failedMessageStillUnchanged ? { dispatchError: previous!.dispatchError } : {}),
       ...(removedOrigins.length > 0 ? { removedOrigins } : {}),
@@ -158,11 +152,7 @@ export class PromptQueueStore {
     const existing = previous?.removedOrigins ?? [];
     if (!previous) return existing;
     const kept = new Set<unknown>();
-    for (const candidate of [
-      ...messages,
-      previous.outstandingClaim?.message,
-      previous.inFlight?.message,
-    ]) {
+    for (const candidate of [...messages, previous.inFlight?.message]) {
       if (isRecord(candidate)) kept.add(candidate.id);
     }
     const added: Array<{ requestId: string; removedAt: string }> = [];
@@ -176,7 +166,7 @@ export class PromptQueueStore {
     return added.length === 0 ? existing : [...existing, ...added].slice(-64);
   }
 
-  /** One queue, with the same claim recovery and validation as {@link loadPromptQueues}. */
+  /** One queue, with the same legacy-claim restore and validation as {@link loadPromptQueues}. */
   loadPromptQueue(queueKey: string): PersistedPromptQueue | null {
     const stored = this.context.loadStoreRow(this.files.promptQueuesFile(), queueKey);
     if (stored === undefined) return null;
@@ -191,8 +181,8 @@ export class PromptQueueStore {
     const stored = await this.readStoredPromptQueues();
     // A first-generation dispatch error was upgraded once at import
     // (storage-record-upgrades.ts); every stored error identifies its item.
-    // Expired legacy claims return to the head on every load. Live claims
-    // retain their exclusion and must survive every queue mutation.
+    // A legacy claim still on disk returns to the head on every load; no
+    // current writer produces one, and nothing reads a claim as a lease.
     return Object.fromEntries(
       Object.entries(restoreLegacyPromptQueueClaims(stored) as Record<string, unknown>).filter(
         (entry): entry is [string, PersistedPromptQueue] =>

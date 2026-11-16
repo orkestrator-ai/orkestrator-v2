@@ -21,9 +21,9 @@ import {
  * Readers that default or normalize values current writers may still omit
  * (environment setup phase, agent settings, mail defaults) stay where they are.
  *
- * The exception is a shape an older backend sharing the same schema version
- * can still write: its upgrade lives here too but runs on every load
- * ({@link restoreLegacyPromptQueueClaims}).
+ * The exception is the legacy prompt-queue claim: no current writer produces
+ * one, but its restore runs on every queue load rather than once
+ * ({@link restoreLegacyPromptQueueClaims}), so it needs no schema bump.
  */
 
 /** Same fingerprint the prompt queue records for a failed dispatch. */
@@ -131,32 +131,24 @@ export function upgradePromptQueueRecords(stored: unknown): unknown {
 }
 
 /**
- * Older backends sharing this schema can still write exclusive claims. Preserve
- * a live lease verbatim so its holder can settle it, including after unrelated
- * queue writes. On expiry (or malformed lease metadata), restore the message
- * to the head, replacing a queued copy of its id. Reads never persist changes.
- * A corrupt message id gets a deterministic recovery id so it remains both
- * deliverable and stable across reads before the next write.
+ * Backends before v2.30.0-beta could move a queue's head into an exclusive
+ * `outstandingClaim` lease. No current writer produces one and nothing reads a
+ * claim as a lease any more (to-do 0078 (retired), 2026-11-16), but a claim may
+ * still be on disk, and record upgrades are permanent. Every stored claim's
+ * message returns to the head, replacing a queued copy of its id, and the
+ * claim field is dropped, whatever its lease metadata says. Reads never
+ * persist changes; the next queue mutation writes the normalized shape. A
+ * corrupt message id gets a deterministic recovery id so it stays deliverable
+ * and stable across reads before that write. A claim without a message record
+ * is dropped without losing the queue tail.
  */
 export function restoreLegacyPromptQueueClaims(stored: unknown): unknown {
   if (!isRecord(stored)) return stored;
-  const now = Date.now();
   let upgraded: Record<string, unknown> | null = null;
   for (const [key, queue] of Object.entries(stored)) {
     if (!isRecord(queue) || !Object.hasOwn(queue, "outstandingClaim")) continue;
     const { outstandingClaim: claim, ...rest } = queue;
     const message = isRecord(claim) ? claim.message : undefined;
-    if (
-      isRecord(claim) &&
-      isRecord(message) &&
-      isNonBlankString(claim.token) &&
-      typeof claim.claimedAt === "string" &&
-      Number.isFinite(Date.parse(claim.claimedAt)) &&
-      typeof claim.expiresAt === "string" &&
-      Date.parse(claim.expiresAt) > now
-    ) {
-      continue;
-    }
     const messages = rest.messages;
     upgraded ??= { ...stored };
     const restored = isRecord(message)

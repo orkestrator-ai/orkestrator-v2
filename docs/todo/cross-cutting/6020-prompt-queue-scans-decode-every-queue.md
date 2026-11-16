@@ -14,21 +14,21 @@ Analysed 2026-11-05 against `main` at `6e796ca32`. Found while building 5100.
 
 **Context.** The callers are the native queue discovery (`discoverNativeQueues`, through `listQueues` in `native-agent-prompt-queue-dispatcher.ts`, by default every 30 s while idle), that dispatcher's `drainPromptQueues`, the tmux `PromptQueueDrainer.runSweep` (`prompt-queue-drainer.ts`), the job tab reuse's receipt search (`native-agent-job-tab-reuse.ts`) and the `list_prompt_queues` command (`commands-registry-prompts.ts`), which does need whole queues for the renderer. Environment deletion also uses `readStoredPromptQueues` to find owned rows, including damaged records; it remains a full-store scan.
 
-**Investigation.** The record layout has no `owner` extractor (`storage-stores.ts`), so an environment's queues cannot be read through `loadStoreRowsByOwner` today, and existing rows carry a null owner. The scans filter on the key's agent, `messages.length`, `inFlight`, `dispatchError`, `outstandingClaim` and, in places, a receipt. Claim recovery changes those fields, so a summary must apply it too. In 5100's fixtures one full load was about 3.7 MiB for 2000 small queues and 30 MiB with one large queue. How often real stores hold a large queue is not known; the live store sizes of to-do 5101 (retired 2026-11-10) are in the manual-test checklist (7568: 5101 task 1).
+**Investigation.** The record layout has no `owner` extractor (`storage-stores.ts`), so an environment's queues cannot be read through `loadStoreRowsByOwner` today, and existing rows carry a null owner. The scans filter on the key's agent, `messages.length`, `inFlight`, `dispatchError` and, in places, a receipt. The legacy-claim restore can change `messages` (it returns any stored claim to the head; since 2026-11-16 no claim is read as a lease), so a summary must apply it too. In 5100's fixtures one full load was about 3.7 MiB for 2000 small queues and 30 MiB with one large queue. How often real stores hold a large queue is not known; the live store sizes of to-do 5101 (retired 2026-11-10) are in the manual-test checklist (7568: 5101 task 1).
 
 **Decisions.**
 
 - **What to do about the scans?**
   - **Measure a real store first, then keep a decoded per-row read model for the scans if the cost shows up (recommended).** `storage-frozen-snapshot.ts` re-parses only the rows whose serialized value changed.
     - Pros: no work unless the cost is real; an unchanged store costs one revision query; an existing pattern; recovery stays one code path.
-    - Cons: retains decoded queues in memory, which needs the existing retained-size bound, and expiry-based claim recovery must still run on each read.
+    - Cons: retains decoded queues in memory, which needs the existing retained-size bound, and the legacy-claim restore must still run on each read.
   - **Keep a summary column or row beside each queue.**
     - Pros: a scan never parses the message bodies.
     - Cons: a second source of truth an older backend's whole-value save would not maintain, so it fails the [version compatibility](../../architecture/version-compatibility.md) rule without a fallback.
 
 ## Constraints and rationale
 
-A scan must apply the same claim recovery and validation as `loadPromptQueues`, and one unreadable row must keep costing only that row.
+A scan must apply the same legacy-claim restore and validation as `loadPromptQueues`, and one unreadable row must keep costing only that row.
 
 ## Related
 

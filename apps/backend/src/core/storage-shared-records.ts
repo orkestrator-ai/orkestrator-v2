@@ -62,14 +62,6 @@ export function isPersistedPromptQueue(
             (receipt.status === "accepted" || receipt.status === "unknown") &&
             (receipt.queued === undefined || receipt.queued === true),
         ))) &&
-    (value.outstandingClaim === undefined ||
-      (isRecord(value.outstandingClaim) &&
-        isRecord(value.outstandingClaim.message) &&
-        isNonBlankString(value.outstandingClaim.token) &&
-        typeof value.outstandingClaim.claimedAt === "string" &&
-        Number.isFinite(Date.parse(value.outstandingClaim.claimedAt)) &&
-        typeof value.outstandingClaim.expiresAt === "string" &&
-        Number.isFinite(Date.parse(value.outstandingClaim.expiresAt)))) &&
     (value.inFlight === undefined ||
       (isRecord(value.inFlight) &&
         Object.hasOwn(value.inFlight, "message") &&

@@ -359,7 +359,23 @@ replay shows it as the card, never as a message the user typed. See
   when `/etc/codex/requirements.toml` enables its proxy, so
   `mise run verify:codex:network-approval` proves it in a disposable container,
   and `mise run verify:codex:network-card` proves the card the app shows for it
-  (only under Codex's own sandbox; the host default skips the proxy, 8085).
+  (only under Codex's own sandbox; the host default skips the proxy, and its
+  reported policy says so).
+- Never send a sandbox mode the administrator's Codex requirements forbid.
+  `codex-managed-requirements.ts` reads `configRequirements/read` once per
+  generation (only for a request that could be refused) and the engine
+  narrows thread and turn requests to the widest allowed mode below the one
+  asked for (the host default's `danger-full-access` becomes
+  `workspace-write`). `/status` and `/config` report the policy applied, not
+  the one held: `provider` plus a note, or a note that the administrator's
+  network proxy does not apply to an unsandboxed host session. Widening
+  checks keep comparing the held policy, so the backend re-sending it is not
+  a widening. Never narrow a container session, a permission profile or a
+  read-only turn without the command sandbox: a narrowed sandbox cannot run
+  there, so Codex's own refusal stands. Codex 0.167.0 reports `network` there
+  without the experimental API although the generated bindings omit it;
+  re-check on a bump with `mise run verify:codex:network-card` (to-do 8085 (retired)
+  (retired)).
 - Every turn runs in Codex's Default collaboration mode, which refuses
   `request_user_input`. Threads of a watched session (any policy but
   `pipeline`) carry `features.default_mode_request_user_input = true`

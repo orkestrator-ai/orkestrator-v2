@@ -72,3 +72,89 @@ again, and this time the runner's rerun inside the busy aggregate also timed
 out (11.0 s file). The owner then passed alone:
 `mise run test:logged -- --name bench-alone -- bun --cwd=apps/backend test ./tests/agent-mail-store-size-bench.test.ts --parallel=1`,
 exit 0, 10.0 s.
+
+
+## Main-merge validation — 2026-11-15 (macOS)
+
+On `apply-root-changes-157033210ba5-r1`, base
+`33ade4a3c9741237ba0619bb2b6220e76df14184`, the command
+`mise run test:logged -- --name merge-tests -- mise run test` completed every
+default test group in 1,253.7 s and failed. The logged wrapper exited 1 after
+1,343.2 s. Backend used three isolated workers, web two, root one, and bridges
+two host slots. Guards and the Codex protocol check passed. Results:
+
+| Group/package | Passed | Skipped | Failed | Errors |
+| --- | --- | --- | --- | --- |
+| Backend | 18,416 | 203 | 44 | 32 |
+| Web | 14,916 | 10 | 3 | 0 |
+| Root and agent support | 4,891 | 29 | 13 | 2 |
+| Cursor bridge | 930 | 1 | 1 | 1 |
+
+Other workspace packages and bridges passed. The suite started with merge
+commit `99d78626f`; another worker committed `e57bfc447` in the shared tree
+during this work, so these results do not qualify that newer commit or the
+subsequent main merge.
+
+The benchmark's two cases named in the previous recurrence timed out at
+5,003.36 ms and 5,002.50 ms. Its complete unchanged owner was rerun with:
+
+`mise run test:logged -- --name merge-store-bench-owner -- bun test --cwd apps/backend ./tests/agent-mail-store-size-bench.test.ts --parallel=1 --only-failures`
+
+It also failed (18.3 s; one pass, two failures, two errors), both on their
+5 s limits with empty child stderr. This observation does not independently
+establish intermittence. `mise run flaky:recurrence -- 9999 --base
+33ade4a3c9741237ba0619bb2b6220e76df14184 --registry-ref origin/main` returned
+`open`.
+
+An additional mixed-owner failure in this run was
+`AgentNativeTab > capability-driven parity > passes the complete composer control set when resuming`
+in `apps/web/src/components/native-agent/AgentNativeTab.parity.test.tsx`:
+`Earlier work` was absent at the assertion after 116.32 ms. The complete
+unchanged owner passed separately (exit 0, 40.2 s):
+
+`mise run test:logged -- --name merge-parity-owner -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.parity.test.tsx --parallel=1 --only-failures`
+
+Passing output was deleted by the logged runner; owner totals are not inferred.
+This establishes intermittence, not a cause or a fix. Separate complete owners
+for `diff-baseline.test.ts` (six pass, one fail, one error, 16.9 s) and
+`TerminalContainer.notes.test.tsx` (zero pass, one fail, 5.9 s) remained
+non-green; other failures remain unclassified. No assertion, timeout or skip
+was changed.
+
+The aggregate's automatic reruns queued behind another worktree's new suite.
+After every original group had finished, only this run's queued retry phase
+was cancelled with SIGINT; it reported no verdict for those automatic reruns.
+The original failures remain failures. No development profile was started.
+
+Evidence (private host temporary storage):
+
+- Aggregate group logs: `orkestrator-test-run.96Ybtn/`.
+- Outer failure log: `orkestrator-test-run.8d4AhR/merge-tests.log.gz`.
+- Benchmark owner: `orkestrator-test-run.sZSgRJ/`.
+- Git baseline owner: `orkestrator-test-run.uk6Q4D/`.
+- Notes owner: `orkestrator-test-run.YBBVa1/`.
+
+All directories above are under
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/`.
+
+## Recurrence — 2026-11-15 (Environment Files review fix)
+
+`mise run test:full` on `environment-files-1d94a340e118-r1` at `df9bdce8b`,
+base `f53768371` (Linux x86_64, other worktrees' suites holding host slots;
+1,193.6 s of test groups) failed two owners that passed when the runner
+reran each file alone:
+
+| Test | Failure | Isolated rerun |
+| --- | --- | --- |
+| `agent mail store size benchmark > rejects malformed, empty, missing and nonpositive sizes` in `apps/backend/tests/agent-mail-store-size-bench.test.ts` | `this test timed out after 5000ms` (5,009 ms), after "killed 1 dangling process" | Runner's alone rerun passed in 8.3 s. |
+| `documented Vite 7/plugin-react 5 config gates emitted paths` in `apps/desktop/tests/source-hint-emitter-vite.integration.test.ts` | The `serve/development` child exited 143 (SIGTERM) instead of 0 at `:97`, empty stdout and stderr, after 25,031 ms | Runner's alone rerun passed in 5.4 s. |
+
+The Vite case is recorded here rather than in a case of its own because the
+four-digit flake numbers are exhausted (9999 is the last claim); it has no
+earlier case. Exit 143 after 25 s, with no output, is consistent with the
+child dev server being stopped at the test's deadline before it emitted on a
+loaded host; that is a hypothesis, not a confirmed cause. The branch changes
+backend seed-file code, `docker/workspace-setup.sh`, tests and docs; neither
+owner imports a changed file. `mise run flaky:recurrence -- 9999 --base
+f53768371` answered open. No assertion, timeout or skip changed. Evidence:
+`orkestrator-test-run.vonYRa` under the host temporary directory.

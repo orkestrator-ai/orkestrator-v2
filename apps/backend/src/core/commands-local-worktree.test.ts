@@ -2,11 +2,22 @@ import { afterEach, describe, expect, test, mock, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { BackendRuntime } from "./backend-runtime.js";
+import type { CommandContext } from "./commands-context.js";
 import {
   createLocalWorktree,
   removeLocalWorktree,
   cleanupFailedLocalWorktree,
+  showWorktreeSeedRefusalsWithoutSetup,
 } from "./commands-environment.js";
+import { setupTerminalSessionId } from "./commands-terminal.js";
+import {
+  rememberWorktreeSeedRefusals,
+  takeWorktreeSeedRefusals,
+} from "./container-project-seed-files.js";
+import type { Environment } from "./models.js";
+import { createEnvironment } from "./storage-shared-core.js";
+import type { StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
 
@@ -130,4 +141,198 @@ test("cleans a worktree and branch when add succeeds but output capture rejects"
   } finally {
     run.mockRestore();
   }
+});
+
+test("a new worktree gets the files the Environment Files setting matches, never a link", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worktree-env-files-"));
+  tempDirectories.push(root);
+  const project = path.join(root, "repo");
+  const outside = path.join(root, "outside");
+  await runCommand("git", ["init", "-b", "main", project]);
+  await runCommand("git", [
+    "-C",
+    project,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "initial",
+  ]);
+  // Untracked files in the project checkout, as a user's own `.env` would be.
+  await fs.mkdir(path.join(project, "config"));
+  await fs.mkdir(outside);
+  await fs.writeFile(path.join(outside, "host-secret"), "HOST_ONLY=1\n");
+  await fs.writeFile(path.join(project, ".env"), "A=1\n");
+  await fs.writeFile(path.join(project, ".env.local"), "not matched by these patterns\n");
+  await fs.writeFile(path.join(project, "config", "app.env"), "C=1\n");
+  await fs.symlink(path.join(outside, "host-secret"), path.join(project, "leak.env"));
+
+  const worktree = await createLocalWorktree(
+    project,
+    "app",
+    "feature",
+    "main",
+    [],
+    path.join(root, "trees"),
+    undefined,
+    true,
+    [".env", "*.env", "config/*.env", "../outside/host-secret"],
+  );
+
+  expect(worktree.envFileRefusals).toEqual([
+    { name: "../outside/host-secret", reason: "invalid-pattern" },
+    { name: "leak.env", reason: "symlink" },
+  ]);
+  expect(await fs.readFile(path.join(worktree.path, ".env"), "utf8")).toBe("A=1\n");
+  expect(await fs.readFile(path.join(worktree.path, "config", "app.env"), "utf8")).toBe("C=1\n");
+  expect(await fs.lstat(path.join(worktree.path, ".env.local")).catch(() => null)).toBeNull();
+  expect(await fs.lstat(path.join(worktree.path, "leak.env")).catch(() => null)).toBeNull();
+});
+
+async function initProject(root: string): Promise<string> {
+  const project = path.join(root, "repo");
+  await runCommand("git", ["init", "-b", "main", project]);
+  await runCommand("git", [
+    "-C",
+    project,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "initial",
+  ]);
+  return project;
+}
+
+test("an opencode.json named by files-to-copy reaches the worktree, untracked or only staged", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worktree-opencode-"));
+  tempDirectories.push(root);
+  const project = await initProject(root);
+  // Untracked in the project checkout: the worktree's own checkout lacks it.
+  await fs.writeFile(path.join(project, "opencode.json"), '{"model":"own"}');
+
+  const own = await createLocalWorktree(
+    project,
+    "app",
+    "own",
+    "main",
+    ["opencode.json"],
+    path.join(root, "trees"),
+    undefined,
+    true,
+  );
+  expect(await fs.readFile(path.join(own.path, "opencode.json"), "utf8")).toBe('{"model":"own"}');
+  expect(own.envFileRefusals).toEqual([]);
+
+  // Only a command node's staged copy has it.
+  await fs.rm(path.join(project, "opencode.json"));
+  const seed = path.join(root, "seed");
+  await fs.mkdir(seed);
+  await fs.writeFile(path.join(seed, "opencode.json"), '{"model":"staged"}');
+  await fs.writeFile(
+    path.join(seed, ".orkestrator-seed-manifest.json"),
+    JSON.stringify(["opencode.json"]),
+  );
+  const staged = await createLocalWorktree(
+    project,
+    "app",
+    "staged",
+    "main",
+    [],
+    path.join(root, "trees"),
+    seed,
+    true,
+  );
+  expect(await fs.readFile(path.join(staged.path, "opencode.json"), "utf8")).toBe(
+    '{"model":"staged"}',
+  );
+});
+
+describe("worktree refusals with no setup commands", () => {
+  const runtimes: BackendRuntime[] = [];
+  afterEach(() => {
+    for (const runtime of runtimes.splice(0)) runtime.shutdown();
+  });
+
+  async function setupContext() {
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worktree-notices-"));
+    tempDirectories.push(dataDir);
+    const runtime = new BackendRuntime({ emit: () => undefined });
+    runtimes.push(runtime);
+    const tabs: string[] = [];
+    const events: string[] = [];
+    const context = {
+      runtime,
+      storage: {
+        getDataDir: () => dataDir,
+        ensureSetupTab: async (environmentId: string) => {
+          tabs.push(environmentId);
+        },
+      } as unknown as StorageService,
+      emit: (event: string) => {
+        events.push(event);
+      },
+    } as unknown as CommandContext;
+    return { context, runtime, tabs, events };
+  }
+
+  function localEnvironment(id: string): Environment {
+    return {
+      ...createEnvironment("project-1"),
+      id,
+      environmentType: "local",
+      worktreePath: "/worktrees/app-feature",
+    };
+  }
+
+  test("opens a setup session to show them, and forgets them once shown", async () => {
+    const { context, runtime, tabs } = await setupContext();
+    const environment = localEnvironment("env-notices");
+    rememberWorktreeSeedRefusals(environment.id, [{ name: "leak.env", reason: "symlink" }]);
+
+    await showWorktreeSeedRefusalsWithoutSetup(environment, context, undefined);
+
+    const sessionId = setupTerminalSessionId(environment.id);
+    const output = runtime.terminals.readOutput(sessionId);
+    expect(output).toContain("No setup commands to run");
+    expect(output).toContain("Skipped leak.env from the project folder: it is a symbolic link");
+    expect(runtime.environments.setupSession(environment.id)?.sessionId).toBe(sessionId);
+    expect(tabs).toEqual([environment.id]);
+    expect(takeWorktreeSeedRefusals(environment.id)).toEqual([]);
+  });
+
+  test("writes them to an open preparation session instead", async () => {
+    const { context, runtime, tabs } = await setupContext();
+    const environment = localEnvironment("env-preparing");
+    const sessionId = setupTerminalSessionId(environment.id);
+    runtime.terminals.emitOutput(sessionId, "preparing\r\n", context.emit);
+    rememberWorktreeSeedRefusals(environment.id, [
+      { name: "Environment Files", reason: "too-many-matches" },
+    ]);
+
+    await showWorktreeSeedRefusalsWithoutSetup(environment, context, sessionId);
+
+    const output = runtime.terminals.readOutput(sessionId);
+    expect(output).toContain("preparing");
+    expect(output).toContain("Copied no Environment Files matches into the worktree");
+    expect(tabs).toEqual([]);
+  });
+
+  test("opens nothing when there is nothing to show", async () => {
+    const { context, runtime, tabs, events } = await setupContext();
+    const environment = localEnvironment("env-quiet");
+
+    await showWorktreeSeedRefusalsWithoutSetup(environment, context, undefined);
+
+    expect(runtime.environments.setupSession(environment.id)).toBeUndefined();
+    expect(runtime.terminals.readOutput(setupTerminalSessionId(environment.id))).toBe("");
+    expect(tabs).toEqual([]);
+    expect(events).toEqual([]);
+  });
 });

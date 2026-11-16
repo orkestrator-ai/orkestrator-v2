@@ -31,7 +31,7 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "git-mirror.clone-fallback":
         "A new environment could not clone from its project's Git mirror and cloned from the remote.",
       "project-seed.refused":
-        "A project .env, .env.local or opencode.json was not copied into a new container: a link, not a regular file, outside the project, too large or unreadable.",
+        "A project file the Environment Files setting matched (by default .env and .env.local), or opencode.json, was not copied into a new container: a link, not a regular file, outside the project, too large, unreadable, an unusable pattern or over the match bounds. Path and reason only, never contents.",
       "opencode.warm-incomplete": "OpenCode did not finish loading /workspace in a container.",
       "opencode.listener-replaced":
         "The process on a container's OpenCode port (`provider`: `opencode` or `opencode2`) is not the server the backend launched and recorded, so its password was withheld and the next start replaces it. `stage` is `request` when the re-check after a refused connection or an unexpected answer found it; that connection then sends nothing more.",
@@ -67,7 +67,11 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "recovery.clear-terminals-failed":
         "Terminal sessions could not be cleared after a recovery restore.",
       "github-ranges.seed-not-copied":
-        "The GitHub ranges seed could not be copied into a container, so its firewall fetches them.",
+        "The GitHub ranges seed could not be copied into a container created before the seed directory was bound, so its firewall fetches them.",
+      "github-ranges.seed-copied-before-boot":
+        "A container created before the GitHub ranges seed directory was bound was given a fresh copy of the seed before it booted.",
+      "github-ranges.seed-directory-unavailable":
+        "The GitHub ranges seed directory could not be created, so a new restricted container is created without it and its firewall fetches the ranges itself.",
       "availability.probe-failed":
         "Docker is not available; written when the diagnostic changes. Fixed-shape metadata only: messages can hold daemon endpoints.",
       "start.port-collision-retrying":

@@ -1,6 +1,6 @@
 # Real-watch tests that start their own `fs.watch` time out on a saturated `fseventsd`
 
-- **ID:** 9820
+- **ID:** 9821
 - **Status:** open
 - **Date observed:** 2026-11-15 to 2026-11-16
 - **Test:** `worktree watcher on this platform's real watch > the per-directory plan leaves a large ignored tree unwatched and withdraws coverage`; `… > replacing an ignored directory with a symlink refreshes proof and reports it`; less often `… > an install into a new node_modules goes unreported`, `… > removing the ignore rule makes node_modules visible again`, `… > a file in a directory created after the watch began is noticed` and `… > a directory removed and created again is still noticed`

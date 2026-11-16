@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:e6f2f9f4754e594411aeb892794e00dc26fcfc85f95e3abcfdec49cac41488f2",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {
+          "type": "string"
+        },
+        "nodeId": {},
+        "nodeName": {},
+        "nodeProjectId": {},
+        "paths": {},
+        "projectId": {
+          "type": "string"
+        },
+        "requestKey": {}
+      },
+      "required": ["environmentId", "projectId"],
+      "type": "object"
+    }
+  }
+}

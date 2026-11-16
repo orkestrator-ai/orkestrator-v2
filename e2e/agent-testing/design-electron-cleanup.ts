@@ -105,14 +105,23 @@ export async function closeElectron(
     await waitForStopped(owned, timeoutMs);
   }, [
     async () => {
-      const remaining = owned.filter(processAlive);
-      for (const pid of remaining) signalProcess(pid, "SIGTERM");
-      try {
-        await waitForStopped(remaining, Math.min(5_000, timeoutMs));
-      } catch {
-        for (const pid of remaining.filter(processAlive)) signalProcess(pid, "SIGKILL");
-        await waitForStopped(remaining, Math.min(5_000, timeoutMs));
+      const grace = Math.min(5_000, timeoutMs);
+      // `owned[0]` is Electron's top process. While it runs, SIGTERM goes to it
+      // alone: killing its GPU process and zygote under a live browser makes
+      // it die on `LOG(FATAL) "GPU process isn't usable"` with a core dump (see
+      // `stopProcessGroup`). Its helpers get SIGTERM only once it has gone.
+      const [root] = owned;
+      if (root !== undefined && processAlive(root)) {
+        signalProcess(root, "SIGTERM");
+        await waitForStopped([root], grace).catch(() => undefined);
       }
+      const remaining = owned.filter(processAlive);
+      if (root === undefined || !processAlive(root)) {
+        for (const pid of remaining) signalProcess(pid, "SIGTERM");
+        await waitForStopped(remaining, grace).catch(() => undefined);
+      }
+      for (const pid of remaining.filter(processAlive)) signalProcess(pid, "SIGKILL");
+      await waitForStopped(remaining, grace);
     },
     // Playwright may have already lost the connection after app.quit().
     () =>

@@ -22,6 +22,7 @@ import {
   expectNothingSecretLogged,
 } from "../../../tests/helpers/auth-secret-canaries.js";
 import { testApprovalDeadline } from "./testing/approval-fixtures.js";
+import * as sessionHeaders from "./session-headers.js";
 
 // `config.ts` reads its environment once, at import. Everything below is
 // therefore loaded dynamically, after the environment this suite needs is in
@@ -200,7 +201,7 @@ describe("authentication", () => {
   });
 
   test("a session list that timed out answers 504 with its reason", async () => {
-    const list = spyOn(SessionManager, "list").mockImplementation(
+    const list = spyOn(sessionHeaders, "listSessionsFromHeaders").mockImplementation(
       () => new Promise(() => undefined),
     );
     setSessionListTimeoutForTests(5);

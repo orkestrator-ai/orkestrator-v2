@@ -145,7 +145,7 @@ export function registerControllerWorkflowCommands(
     );
 
   /*
-   * A coordinator's worker surfaces (todo 0395). The command node holds the
+   * A coordinator's worker surfaces (to-do 0395, retired). The command node holds the
    * receipt and passes the key it derived from it, so a retry after a lost
    * answer reattaches to the same job or tab here.
    */

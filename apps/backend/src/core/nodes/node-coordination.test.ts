@@ -946,7 +946,15 @@ test("multi-target unknown deletion reports earlier completed targets", async ()
   instance.collector.dispose();
 });
 
-for (const scenario of ["selected", "fallback", "remote", "multiple", "failed"]) {
+for (const scenario of [
+  "selected",
+  "fallback",
+  "remote",
+  "remote-lost",
+  "remote-no-copy",
+  "multiple",
+  "failed",
+]) {
   test(`approved root-change ${scenario} execution and coordinator outcome mail`, async () => {
     const world = await MailWorld.create();
     worlds.push(world);
@@ -962,15 +970,18 @@ for (const scenario of ["selected", "fallback", "remote", "multiple", "failed"])
     options.invoke = async (command, args) => {
       calls.push({ command, args });
       if (scenario === "failed") throw new Error("Changes do not apply");
+      if (scenario === "remote-lost") return { files: args.paths, outcomeUnknown: true };
       return { files: args.paths };
     };
     const notice = spyOn(world.storage, "sendAgentMail");
+    const remote = scenario.startsWith("remote");
     const target = {
-      nodeId: scenario === "remote" ? "bk_remote" : "bk_leaf",
-      nodeName: "Leaf",
+      nodeId: remote ? "bk_remote" : "bk_leaf",
+      nodeName: remote ? "Build box" : "Leaf",
       environmentId: "worker",
       environmentName: "Worker",
       projectId: world.projectId,
+      ...(remote && scenario !== "remote-no-copy" ? { nodeProjectId: "leaf-project" } : {}),
       files: ["suggested.ts"],
     };
     const input = {
@@ -993,9 +1004,13 @@ for (const scenario of ["selected", "fallback", "remote", "multiple", "failed"])
       scenario === "fallback" ? {} : { paths: ["selected.ts"] },
     );
     expect(resolved.state).toBe(
-      ["remote", "multiple", "failed"].includes(scenario) ? "failed" : "executed",
+      ["remote-no-copy", "multiple", "failed"].includes(scenario)
+        ? "failed"
+        : scenario === "remote-lost"
+          ? "outcome-unknown"
+          : "executed",
     );
-    if (["remote", "multiple"].includes(scenario)) expect(calls).toHaveLength(0);
+    if (["remote-no-copy", "multiple"].includes(scenario)) expect(calls).toHaveLength(0);
     else
       expect(calls).toEqual([
         {
@@ -1004,9 +1019,30 @@ for (const scenario of ["selected", "fallback", "remote", "multiple", "failed"])
             environmentId: "worker",
             projectId: world.projectId,
             paths: [scenario === "fallback" ? "suggested.ts" : "selected.ts"],
+            // Another node's worker: the patch is built here and sent there.
+            ...(remote
+              ? {
+                  nodeId: "bk_remote",
+                  nodeName: "Build box",
+                  nodeProjectId: "leaf-project",
+                  requestKey: `root-changes:${request.requestId}`,
+                }
+              : {}),
           },
         },
       ]);
+    if (scenario === "remote")
+      expect(resolved.result?.message).toBe(
+        "Applied 1 file to “Worker” on Build box: selected.ts.",
+      );
+    if (scenario === "remote-lost") {
+      expect(resolved.result?.message).toContain("lost while it applied the changes");
+      expect(resolved.result?.message).toContain("were not resent");
+    }
+    if (scenario === "remote-no-copy")
+      expect(resolved.result?.message).toBe(
+        "The request names no copy of the project on that node.",
+      );
     expect(notice).toHaveBeenCalledTimes(1);
     expect(notice.mock.calls[0]![1]).toMatchObject({
       toEnvironmentId: main.environmentId,

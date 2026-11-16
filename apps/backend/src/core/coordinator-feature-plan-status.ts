@@ -1,6 +1,6 @@
 /**
  * A feature plan's planning exchange reduced to a coordinator status (todo
- * 0395 task 3): what a coordinator that sent a message with
+ * 0395 (retired) task 3): what a coordinator that sent a message with
  * `launch_feature_plan` hears through its status wake
  * (`coordinator-status-wakes.ts`, `feature-plan` associations).
  *

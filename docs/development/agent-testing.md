@@ -1241,7 +1241,9 @@ spec, `e2e/agent-testing/steer-missed-live.spec.ts` (todo 0005 task 10), on
 the real Claude, Codex, Cursor and Pi bridges with scripted models and nothing
 billed. Each platform's case finishes a turn and steers after it (one new turn
 must start, on the session's controls), then steers while a second turn runs
-(it joins that turn; to-do 8107 is to queue it instead). Both steers must
+(it names no run, so it joins that turn; a composer or Agent Info steer
+names the run its view showed and is queued as the next turn instead, to-do
+8107 (retired), covered by `native-agent-service-missed-steer.test.ts`). Both steers must
 also reach the model exactly once: the Claude, Codex and Pi scripted models
 count a spec's marker in the user-role items of every request they are sent
 (`MARKER_WATCH_PATH` in `idle-observation-fake-claude.ts`, counts only), and
@@ -1767,6 +1769,33 @@ renderer needs none. Startup recovery does not cover a later lazy load. The
 failure check looks for the startup heading's presence, not its visibility:
 headless Ozone ignores a window's constructor size, so until a spec sizes it
 the window is 1x1 and the heading has no box.
+
+Two tests cover the recovery outside the unit tests
+(`electron-startup-recovery.test.ts`):
+
+- `startup-recovery-electron.spec.ts`, part of `test:agent:electron`, runs on
+  any display, macOS included. Main's protocol handler fails a real Electron
+  window's first module fan-out with Chromium's own `net::ERR_NETWORK_CHANGED`
+  (net error -21), and the spec watches the window the way the other specs do.
+  The window must recover with exactly one reload and a `startup-recovery`
+  annotation. A different network error must get no reload, and an abort on
+  every load must fail after three reloads. The abort is injected, not caused
+  by an interface change: on a Mac changing an interface needs root and would
+  abort every other Chromium on the host. Docker Desktop keeps its networks
+  inside its VM, so the specs are not expected to meet the abort on macOS at
+  all.
+- `electron-startup-recovery.integration.test.ts` (Linux only) does cause the
+  abort by changing interfaces, inside a private user and network namespace
+  that no other build can see. It covers both real Chromium and a real
+  headless Electron window, and its fixtures hold the module responses and
+  let the network settle, so that exactly one reload is measured:
+
+```bash
+mise run test:logged -- --name startup-live -- bun test ./e2e/agent-testing/electron-startup-recovery.integration.test.ts --parallel=1
+```
+
+On a macOS display (mbp3, 2026-11-15) the whole suite printed no
+`[startup-recovery]` line apart from the covering spec's own, as expected.
 
 `design-canvas-electron.spec.ts`, `electron-cleanup.spec.ts`,
 `web-annotations-electron.spec.ts`, `service-preview-seeded-electron.spec.ts`,
@@ -4184,7 +4213,7 @@ verdict are in `coordinator-live-research.ts`;
 `coordinator-live-research.test.ts` runs the orchestration over a scripted
 command transport.
 
-The `surfaces` case (to-do 0395 task 4) proves the worker-surface tools on a
+The `surfaces` case (to-do 0395 (retired) task 4) proves the worker-surface tools on a
 real stack. It runs only on Claude, so other platforms record a skip: the tools
 are Control MCP calls, so one provider covers them. It waits at most four step
 budgets:

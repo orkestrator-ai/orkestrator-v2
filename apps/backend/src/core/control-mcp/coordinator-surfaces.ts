@@ -27,8 +27,8 @@ import {
  * worker, and the proposal to save decisions to AGENTS.md. None of them
  * reaches the project checkout; the last two only ask the user. Each calls one `*_coordinator_*` backend command with the
  * authenticated scope, which revalidates it and refuses the project home.
- * The terminal, browser, tab-edit, PR and Resolve tools take `nodeId` for a worker on
- * a connected node (todo 0395).
+ * The terminal, browser, tab-edit, PR, Resolve and root-changes tools take
+ * `nodeId` for a worker on a connected node (to-do 0395, retired).
  */
 
 const requestId = describe(
@@ -165,7 +165,7 @@ export function registerCoordinatorSurfaceTools(
     {
       title: "Ask the user to copy uncommitted checkout changes into a worker",
       description:
-        "Ask the user to apply some of the project checkout's uncommitted changes (edits, new and deleted files) to a worker environment on this node, for when the user wants a worker to start from work they have not committed. The user picks the files in Orkestrator; files you name are only pre-selected. Nothing is read or copied until they approve. The patch applies whole or not at all, and you are woken by mail with the outcome.",
+        "Ask the user to copy the checkout's uncommitted edits, new and deleted files into a worker. They pick files; yours are pre-selected. Nothing is read before approval; it applies all or nothing; the outcome comes by mail. With nodeId, over 16 MiB is refused; if the answer is lost, check the worker before retrying.",
       inputSchema: toolInput(
         strictObject({
           requestId,
@@ -177,6 +177,7 @@ export function registerCoordinatorSurfaceTools(
             ),
           ),
           reason: describe(str({ trim: true, min: 1, max: 500 }), "Why, in the user's words."),
+          nodeId: workerNodeId,
         }),
       ),
       annotations: WRITE,

@@ -149,7 +149,9 @@ feature validation still follow the normal requirements.
 ### Public-site smoke tests
 
 `mise run test:browser` also runs `e2e/public-site/` against a fresh production
-build of the public client. On Linux both suites run in a private loopback-only
+build of the public client, served by `e2e/public-site/vercel-static-server.ts`
+with `apps/web-public/vercel.json`'s header rules and rewrites applied, so the
+browser enforces the Content-Security-Policy a deployment sends. On Linux both suites run in a private loopback-only
 network namespace (`scripts/loopback-network.ts`), so other builds' Docker
 networks cannot abort their page loads (flake
 [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md));
@@ -161,8 +163,9 @@ mise run test:logged -- --name public-browser -- \
 ```
 
 It checks landing-page login, deferred connection-screen loading, direct loads
-and reloads of `/connect`, the home link, and install-command clipboard feedback
-at desktop and narrow widths. This pre-connection flow needs no backend,
+and reloads of `/connect`, the home link, install-command clipboard feedback,
+and that the static HTML frame document starts and renders a report under its
+own policy (`static-html-frame.spec.ts`) at desktop and narrow widths. This pre-connection flow needs no backend,
 credentials, or isolated application profile. The server is owned and stopped
 by Playwright; `ORKESTRATOR_PUBLIC_E2E_PORT` overrides its default port 4423.
 Authenticated renderer flows still use isolated profiles as described below.

@@ -30,11 +30,18 @@ const STATUS_LABEL: Record<RootChangeFile["status"], string> = {
 /** At most this many files go in one request; the backend refuses more. */
 const MAX_SELECTION = 500;
 
+/** The largest patch the backend sends to another node (`MAX_NODE_ROOT_CHANGE_PATCH_BYTES`). */
+const MAX_NODE_PATCH_MIB = 16;
+
 /**
  * A coordinator asked to apply some of the project checkout's uncommitted
  * changes to a worker. The user picks the files here; the ones the
  * coordinator named start ticked. Nothing is read into the worker until the
  * user approves, and the patch then applies whole or not at all.
+ *
+ * A worker on another node (the target names that node's copy of the
+ * project) is named with its node: the files are still this checkout's, and
+ * the patch is built here and sent there after approval.
  */
 export function RootChangesApprovalDialog({
   request,
@@ -105,6 +112,8 @@ export function RootChangesApprovalDialog({
   };
 
   const worker = target?.environmentName ?? target?.environmentId ?? "a worker";
+  // Only a request for another node's worker carries that node's project copy.
+  const remoteNode = target?.nodeProjectId ? target.nodeName : null;
   const files = listing?.files ?? [];
   const tooMany = selected.size > MAX_SELECTION;
 
@@ -113,10 +122,15 @@ export function RootChangesApprovalDialog({
     <Dialog open>
       <DialogContent size="xl" data-testid="root-changes-request" showCloseButton={false}>
         <DialogHeader>
-          <DialogTitle>Apply uncommitted changes to “{worker}”?</DialogTitle>
+          <DialogTitle>
+            Apply uncommitted changes to “{worker}”{remoteNode ? ` on ${remoteNode}` : ""}?
+          </DialogTitle>
           <DialogDescription>
             The project coordinator asked to copy some of this checkout&apos;s uncommitted changes
             into that worker. Pick the files; nothing happens unless you approve.
+            {remoteNode
+              ? ` The worker is on ${remoteNode}: the changes are sent there over the node connection, up to ${MAX_NODE_PATCH_MIB} MiB.`
+              : ""}
             {request.reason ? ` Its reason: “${request.reason}”` : ""}
           </DialogDescription>
         </DialogHeader>

@@ -8,6 +8,7 @@ import {
   formatProjectSeedRefusals,
   parseProjectSeedRefusalLabel,
   PROJECT_SEED_FILE_MAX_BYTES,
+  PROJECT_SEED_REFUSAL_LABEL_MAX_ENTRIES,
   projectSeedRefusalLabel,
   readProjectSeedFiles,
 } from "./container-project-seed-files.js";
@@ -51,10 +52,15 @@ test("regular files are read with their contents and mapped to their container p
 
 test("missing files are neither accepted nor refused", async () => {
   const project = await tempDir();
-  expect(await readProjectSeedFiles(project)).toEqual({ accepted: [], refused: [] });
+  expect(await readProjectSeedFiles(project)).toEqual({
+    accepted: [],
+    refused: [],
+    handled: [".env", ".env.local", "opencode.json"],
+  });
   expect(await readProjectSeedFiles(path.join(project, "missing"))).toEqual({
     accepted: [],
     refused: [],
+    handled: [],
   });
 });
 
@@ -157,9 +163,34 @@ test("the refusal label round-trips and ignores entries outside its vocabulary",
   expect(label).toBe(".env=symlink,opencode.json=outside-project");
   expect(parseProjectSeedRefusalLabel(label)).toEqual([...refused]);
   expect(
-    parseProjectSeedRefusalLabel("id_rsa=symlink,.env=whatever,.env.local=not-a-file,,="),
+    parseProjectSeedRefusalLabel(".env=whatever,.env.local=not-a-file,,=,a=symlink=x,%E0=symlink"),
   ).toEqual([{ name: ".env.local", reason: "not-a-file" }]);
   expect(parseProjectSeedRefusalLabel(null)).toEqual([]);
+});
+
+test("matched paths holding label separators round-trip encoded", () => {
+  const refused = [
+    { name: "config/a,b=c.env", reason: "symlink" },
+    { name: "Environment Files", reason: "too-many-matches" },
+  ] as const;
+  const label = projectSeedRefusalLabel(refused);
+  expect(label).toBe("config%2Fa%2Cb%3Dc.env=symlink,Environment%20Files=too-many-matches");
+  expect(parseProjectSeedRefusalLabel(label)).toEqual([...refused]);
+});
+
+test("a label carrying a terminal control sequence in a name is dropped", () => {
+  const label = `${encodeURIComponent("\u001b]0;owned\u0007.env")}=symlink,.env.local=symlink`;
+  expect(parseProjectSeedRefusalLabel(label)).toEqual([{ name: ".env.local", reason: "symlink" }]);
+});
+
+test("the label records a bounded number of refusals", () => {
+  const refused = Array.from({ length: PROJECT_SEED_REFUSAL_LABEL_MAX_ENTRIES + 5 }, (_, i) => ({
+    name: `f${i}.env`,
+    reason: "symlink" as const,
+  }));
+  expect(parseProjectSeedRefusalLabel(projectSeedRefusalLabel(refused))).toHaveLength(
+    PROJECT_SEED_REFUSAL_LABEL_MAX_ENTRIES,
+  );
 });
 
 test("each refusal is explained in one setup terminal line", () => {
@@ -174,13 +205,33 @@ test("each refusal is explained in one setup terminal line", () => {
   ]);
 });
 
+test("pattern and bound refusals explain themselves and name the destination", () => {
+  expect(
+    formatProjectSeedRefusals(
+      [
+        { name: "../secrets", reason: "invalid-pattern" },
+        { name: "Environment Files", reason: "too-many-matches" },
+        { name: "config/.env", reason: "linked-destination" },
+      ],
+      "worktree",
+    ),
+  ).toEqual([
+    '[orkestrator] Ignored the Environment Files pattern "../secrets": it is not a usable pattern (patterns are relative paths using * and ?, without **, .. or .git). Edit it in Settings.',
+    "[orkestrator] Copied no Environment Files matches into the worktree: the patterns match more than 32 files, so none was copied. Narrow the patterns in Settings.",
+    "[orkestrator] Skipped config/.env from the project folder: the new worktree has a link on its path. Only a regular file inside the project is copied into the worktree.",
+  ]);
+});
+
 test("fallback seed links and directories are refused by the same reader", async () => {
   const project = await tempDir();
   const fallback = await tempDir();
   await writeFile(path.join(fallback, "shared.env"), "FALLBACK=1");
   await symlink("shared.env", path.join(fallback, ".env"));
   await mkdir(path.join(fallback, "opencode.json"));
-  const result = await readProjectSeedFiles(project, fallback, [".env", "opencode.json"]);
+  const result = await readProjectSeedFiles(project, {
+    fallbackPath: fallback,
+    fallbackNames: [".env", "opencode.json"],
+  });
   expect(result.accepted).toEqual([]);
   expect(result.refused).toEqual([
     { name: ".env", reason: "symlink" },

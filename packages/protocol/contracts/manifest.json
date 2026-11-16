@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1004,
-    "defined": 1004,
+    "commands": 1005,
+    "defined": 1005,
     "untyped": 0,
     "events": 45
   },
@@ -287,7 +287,7 @@
       "read": false,
       "critical": ["executionProfileId", "expectedProviderSessionId", "interactionPolicy"],
       "argsDigest": "sha256:d0b2eb336ad3835362b1321dec8dc8153c4457778c79b7c868222b0817d1cbdb",
-      "resultDigest": "sha256:a2851e7ebc59524cfd0e9a314e28ab36657b9d46a0c845e087fb0bba5de0b20f"
+      "resultDigest": "sha256:9798d1f17189206fae5b6bd5171b1bf745dc90d5234ab95133c3757bb043bd68"
     },
     "allow_controller": {
       "domain": "nodes",
@@ -352,6 +352,15 @@
       "argsDigest": "sha256:899d146880f566105249ca59935fe14fcfde85cff3e65d884f3a1ea11d9d868e",
       "resultDigest": "sha256:db8a58a4030483aa11cfdcc207769190e65cf9c022828bdf7c032de6caea5748"
     },
+    "apply_controller_root_patch": {
+      "domain": "coordinator",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["sha256"],
+      "argsDigest": "sha256:8f40388d1ad831905dd42eda820cc548fe06706363cb57731a6343c6952c3f59",
+      "resultDigest": "sha256:2380b36c32f55a9306d78f221b021ef9c21e6e5d81b90e890ab3aebfb6866a5a"
+    },
     "apply_env_keys": {
       "domain": "nodes",
       "since": 1,
@@ -403,8 +412,8 @@
       "access": "internal",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:54ef9090c54d34ba5f053a0e4aed9a01aa9f26dfdba75cdf3d2950f7bf31e493",
-      "resultDigest": "sha256:2e461ba400982ae370940789c877ad9a69ddaa59082aa5e51054843b61c0abe8"
+      "argsDigest": "sha256:e6f2f9f4754e594411aeb892794e00dc26fcfc85f95e3abcfdec49cac41488f2",
+      "resultDigest": "sha256:2380b36c32f55a9306d78f221b021ef9c21e6e5d81b90e890ab3aebfb6866a5a"
     },
     "apply_shared_usage_readings": {
       "domain": "accounts",
@@ -2407,7 +2416,7 @@
         "schema"
       ],
       "argsDigest": "sha256:079b8898d504246ade15f9dbe94f2c425b698ecdba2ac140cf800e3783e50013",
-      "resultDigest": "sha256:a2851e7ebc59524cfd0e9a314e28ab36657b9d46a0c845e087fb0bba5de0b20f"
+      "resultDigest": "sha256:9798d1f17189206fae5b6bd5171b1bf745dc90d5234ab95133c3757bb043bd68"
     },
     "docker_cleanup_execute": {
       "domain": "docker",
@@ -2524,7 +2533,7 @@
       "read": false,
       "critical": ["executionProfileId", "interactionPolicy"],
       "argsDigest": "sha256:3576b4142c833df64f049cd2edf63e9686e4373962904a67a6c61655f4f3b35a",
-      "resultDigest": "sha256:a900f8fa3f8263c7623c857493f719d3ea170d818b31dcdd541031f24253aa01"
+      "resultDigest": "sha256:1d7d78aa3a174eff6f575db44793bf0f295488eeffd2fa43cfff8de35c11fe8d"
     },
     "ensure_project_coordinator": {
       "domain": "coordinator",
@@ -3910,7 +3919,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:c0468c73ee34dd5490bea392f081c45747c92b68b54a7ac3c77013107fe5415b",
-      "resultDigest": "sha256:404b94e631f2782a5e5b5701393187ab26c7b6d004ff70d901b032a675959c0d"
+      "resultDigest": "sha256:5ff6201616575a15f7c15b69262a906fb90f776ea876bf2f18e76f7ea024cb31"
     },
     "get_native_agent_session_account": {
       "domain": "accounts",

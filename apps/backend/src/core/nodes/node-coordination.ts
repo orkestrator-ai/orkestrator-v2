@@ -1175,6 +1175,7 @@ export class NodeCoordination {
         "environmentId",
         "environmentName",
         "projectId",
+        "nodeProjectId",
         "projectName",
         "location",
         "gitRemote",
@@ -1373,7 +1374,10 @@ export class NodeCoordination {
 
   /**
    * Approved: apply the files the user picked (else the coordinator's
-   * suggestion) from this node's checkout to a worker on this node.
+   * suggestion) from this node's checkout to the worker. A worker on another
+   * node (the target names that node's copy of the project) gets a patch
+   * built here and sent over the node link; a lost answer is never resent,
+   * and the request settles outcome-unknown.
    */
   private async executeRootChanges(request: NodeActionRequest, approval: NodeActionApproval) {
     const self = await this.options.nodes.selfIdentity();
@@ -1381,17 +1385,37 @@ export class NodeCoordination {
     if (!target?.environmentId || !target.projectId || request.targets.length !== 1) {
       throw new Error("The request names one worker environment.");
     }
-    if (target.nodeId !== self) throw new Error("Only a worker on this node can receive changes.");
+    const local = target.nodeId === self;
+    if (!local && !target.nodeProjectId)
+      throw new Error("The request names no copy of the project on that node.");
     const paths = approval.paths ?? target.files ?? [];
-    const applied = await this.options.invoke<{ files: string[] }>("apply_project_root_changes", {
-      projectId: target.projectId,
-      environmentId: target.environmentId,
-      paths,
-    });
+    const worker = `“${target.environmentName ?? target.environmentId}”${local ? "" : ` on ${target.nodeName}`}`;
+    const applied = await this.options.invoke<{ files: string[]; outcomeUnknown?: boolean }>(
+      "apply_project_root_changes",
+      {
+        projectId: target.projectId,
+        environmentId: target.environmentId,
+        paths,
+        ...(local
+          ? {}
+          : {
+              nodeId: target.nodeId,
+              nodeName: target.nodeName,
+              nodeProjectId: target.nodeProjectId,
+              requestKey: `root-changes:${request.requestId}`,
+            }),
+      },
+    );
+    if (applied.outcomeUnknown)
+      return {
+        code: "outcome-unknown",
+        message: `The connection to ${target.nodeName} was lost while it applied the changes to ${worker}. They were not resent; check the worker's files before asking again.`,
+        outcomeUnknown: true,
+      };
     const count = applied.files.length;
     return {
       code: "applied",
-      message: `Applied ${count} file${count === 1 ? "" : "s"} to “${target.environmentName ?? target.environmentId}”: ${applied.files.slice(0, 20).join(", ")}${count > 20 ? ", …" : ""}.`,
+      message: `Applied ${count} file${count === 1 ? "" : "s"} to ${worker}: ${applied.files.slice(0, 20).join(", ")}${count > 20 ? ", …" : ""}.`,
     };
   }
 

@@ -5,7 +5,7 @@ import type { ConnectionList } from "@orkestrator/protocol/connections";
 import { hostMaintenanceSnapshotFixture } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
 import { invoke } from "@/lib/native/backend";
 import { expectDomAbsent } from "../../../../../../tests/bounded-test-diagnostics";
-import { resetSonnerMocks } from "../../../../../../tests/mocks/sonner";
+import { mockToastSuccess, resetSonnerMocks } from "../../../../../../tests/mocks/sonner";
 import { MachinesSettings } from "./MachinesSettings";
 
 /**
@@ -255,6 +255,47 @@ describe("Add machine on iOS", () => {
 });
 
 describe("Machine settings on iOS", () => {
+  test.each(["Replace token", "Save on this device", "Add an HTTPS address"] as const)(
+    "%s shows a refused native save in the form without a success toast",
+    async (action) => {
+      const backend = installBackend();
+      const verified: ConnectionList = {
+        ...deskAndBuild,
+        connections: deskAndBuild.connections.map((connection) =>
+          connection.id === "build" ? { ...connection, identity: "verified" as const } : connection,
+        ),
+      };
+      const connections = installIos(action === "Save on this device" ? deskOnly : verified);
+      const reason = "Nothing was saved: the server editor was closed in the app.";
+      connections.connectInNativeEditor.mockRejectedValueOnce(new Error(reason));
+      await renderPage();
+      await openSettings("Build box");
+      let form = within(
+        await screen.findByTestId(
+          action === "Save on this device" ? "machine-save-on-device" : "machine-device-connection",
+        ),
+      );
+      let submitName: string = action;
+      let address = "https://build.tailnet.ts.net";
+      if (action === "Add an HTTPS address") {
+        fireEvent.click(form.getByTitle(action));
+        form = within(await screen.findByRole("dialog", { name: /Add an HTTPS address to/ }));
+        address = "https://build-2.tailnet.ts.net";
+        fireEvent.change(form.getByLabelText("HTTPS address"), { target: { value: address } });
+        submitName = "Add address";
+      }
+      fireEvent.click(form.getByRole("button", { name: submitName }));
+
+      expect(await form.findByText(reason)).toBeTruthy();
+      expect(form.getByRole("button", { name: submitName }).hasAttribute("disabled")).toBe(false);
+      expect(connections.connectInNativeEditor).toHaveBeenCalledTimes(1);
+      expect(connections.connectInNativeEditor).toHaveBeenCalledWith({ address });
+      expect(connections.connect).not.toHaveBeenCalled();
+      expect(backend.called("add_node")).toHaveLength(0);
+      expect(mockToastSuccess).not.toHaveBeenCalled();
+    },
+  );
+
   test("Save on this device opens the app's editor for the machine's address", async () => {
     installBackend();
     const connections = installIos(deskOnly);

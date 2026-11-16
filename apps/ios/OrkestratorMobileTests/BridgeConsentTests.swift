@@ -604,6 +604,50 @@ final class BridgeConsentTests: XCTestCase {
         XCTAssertEqual(harness.model.vault.connections, [first, second])
     }
 
+    func testAWithdrawnRequestWhoseCheckSucceedsSavesWithoutSwitchingOrAnsweringAgain() async throws {
+        let harness = makeHarness(.decline)
+        let request = await openEditorRequest(harness)
+        harness.model.draftToken = "gateway-token-lab-3"
+        var completeCheck: CheckedContinuation<Void, Never>?
+        let checkStarted = expectation(description: "validation is suspended")
+        harness.validator.checkHandler = { _, _ in
+            await withCheckedContinuation { continuation in
+                completeCheck = continuation
+                checkStarted.fulfill()
+            }
+        }
+        let save = Task { await harness.model.connectDraft() }
+        await fulfillment(of: [checkStarted], timeout: 2)
+        defer { completeCheck?.resume() }
+
+        XCTAssertTrue(harness.model.isConnecting)
+        XCTAssertTrue(harness.store.savedVaults.isEmpty)
+        harness.coordinator.navigationDidCommit()
+        await request.value
+        XCTAssertEqual(harness.scripts(), [editorReply("save-id", .withdrawn)])
+        XCTAssertNil(harness.model.editorRequest)
+        XCTAssertTrue(harness.model.isShowingConnectionEditor)
+
+        let continuation = try XCTUnwrap(completeCheck)
+        completeCheck = nil
+        continuation.resume()
+        await save.value
+
+        let persisted = try XCTUnwrap(harness.store.savedVaults.last)
+        let saved = try XCTUnwrap(persisted.connections.first { $0.address.host == "lab.example" })
+        XCTAssertEqual(harness.store.savedVaults.count, 1)
+        XCTAssertEqual(saved.token, "gateway-token-lab-3")
+        XCTAssertEqual(saved.nickname, "Lab")
+        XCTAssertEqual(persisted.activeConnectionID, first.id)
+        XCTAssertEqual(harness.model.activeConnection?.id, first.id)
+        XCTAssertEqual(harness.model.vault.connections, persisted.connections)
+        XCTAssertFalse(harness.model.isShowingConnectionEditor)
+        XCTAssertFalse(harness.model.isConnecting)
+        XCTAssertNil(harness.model.editorRequest)
+        XCTAssertEqual(harness.model.draftToken, "")
+        XCTAssertEqual(harness.scripts(), [editorReply("save-id", .withdrawn)])
+    }
+
     func testTheEditorAnswersOnlyOneRequestAtATime() async {
         let harness = makeHarness(.decline)
         let request = await openEditorRequest(harness)

@@ -72,11 +72,12 @@ describe("enqueuePromptQueueMessageIfAbsent", () => {
     });
   });
 
-  test("live legacy claims deduplicate retries and block steering across queue edits", async () => {
+  test("a restored legacy claim deduplicates retries and dispatches like any head", async () => {
     await withStorage(async (storage) => {
       await createSession(storage);
       await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"));
-      const token = seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "r1");
+      // A live lease is not honoured: loading restores r1 to the head.
+      seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "r1");
       expect(
         (await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"))).status,
       ).toBe("present");
@@ -84,16 +85,13 @@ describe("enqueuePromptQueueMessageIfAbsent", () => {
         storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1", "changed")),
       ).rejects.toThrow(PROMPT_QUEUE_MESSAGE_CONFLICT);
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "user-1", text: "mine" });
-      await storage.savePromptQueue(KEY, "e1", [message("r1"), { id: "user-1", text: "mine" }]);
-      expect((await storage.getPromptQueue(KEY))?.messages).toEqual([
-        { id: "user-1", text: "mine" },
-      ]);
-      expect(await storage.getPromptQueue(KEY)).toMatchObject({ outstandingClaim: { token } });
-      expect((await storage.getPromptQueue(KEY))?.removedOrigins ?? []).toEqual([]);
-      await expect(storage.reservePromptQueueSteer(SESSION_KEY, "user-1", "run-1")).rejects.toThrow(
-        "already being delivered",
-      );
-      expect(await storage.reservePromptQueueHeadForDispatch(KEY)).toBeNull();
+      const queue = await storage.getPromptQueue(KEY);
+      expect(queue?.messages).toEqual([message("r1"), { id: "user-1", text: "mine" }]);
+      expect(queue).not.toHaveProperty("outstandingClaim");
+      expect(queue?.removedOrigins ?? []).toEqual([]);
+      await expect(storage.reservePromptQueueHeadForDispatch(KEY)).resolves.toMatchObject({
+        requestId: "r1",
+      });
     });
   });
 
@@ -275,9 +273,9 @@ describe("backend-authored queue items", () => {
       await createSession(storage);
       await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"));
       await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r2"));
-      // An older backend sharing the database claimed r1. Loading restores it
-      // to the head, so a queue edit here never sees r1 leave `messages`.
-      seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "r1", { expiresAt: 1 });
+      // An older backend left a claim on r1. Loading restores it to the head,
+      // so a queue edit here never sees r1 leave `messages`.
+      seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "r1");
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "user-1", text: "mine" });
       expect(
         (await storage.getPromptQueue(KEY))?.messages.map((item) => (item as { id: string }).id),

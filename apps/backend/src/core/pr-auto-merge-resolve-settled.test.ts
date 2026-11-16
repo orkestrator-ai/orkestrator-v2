@@ -78,21 +78,13 @@ describe("resolveConversationBusy", () => {
     ).toBe(true);
   });
 
-  test("waiting, claimed, in-flight and unconfirmed prompts are busy", () => {
+  test("waiting, in-flight and unconfirmed prompts are busy", () => {
     const idle = session({ activityTurn: settledTurn });
     expect(resolveConversationBusy(idle, queue({ messages: [{ id: "next" }] }))).toBe(true);
     expect(
       resolveConversationBusy(
         idle,
         queue({ inFlight: { message: {}, requestId: "next", reservedAt: "now" } }),
-      ),
-    ).toBe(true);
-    expect(
-      resolveConversationBusy(
-        idle,
-        queue({
-          outstandingClaim: { token: "t", message: {}, claimedAt: "now", expiresAt: "later" },
-        }),
       ),
     ).toBe(true);
     expect(

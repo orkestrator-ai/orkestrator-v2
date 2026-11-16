@@ -126,19 +126,22 @@ describe("record shape upgrades", () => {
     expect(restoreLegacyPromptQueueClaims("garbage")).toBe("garbage");
   });
 
-  test("leaves a live legacy claim untouched", () => {
+  test("restores a claim with an unexpired lease too: nothing honours the lease", () => {
     const now = Date.now();
-    const queue = {
-      messages: [{ id: "tail" }],
-      outstandingClaim: {
-        token: "holder",
-        message: { id: "head" },
-        claimedAt: new Date(now - 1000).toISOString(),
-        expiresAt: new Date(now + 300_000).toISOString(),
+    const stored = {
+      queue: {
+        messages: [{ id: "tail" }, { id: "head", text: "stale copy" }],
+        outstandingClaim: {
+          token: "holder",
+          message: { id: "head", text: "claimed" },
+          claimedAt: new Date(now - 1000).toISOString(),
+          expiresAt: new Date(now + 300_000).toISOString(),
+        },
       },
     };
-    const stored = { queue };
-    expect(restoreLegacyPromptQueueClaims(stored)).toBe(stored);
+    expect(restoreLegacyPromptQueueClaims(stored)).toEqual({
+      queue: { messages: [{ id: "head", text: "claimed" }, { id: "tail" }] },
+    });
   });
 
   test.each([undefined, "", "  ", 42])(

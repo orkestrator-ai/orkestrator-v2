@@ -198,15 +198,6 @@ export type NativeAgentJobReceipt = Mutable<typeof NativeAgentJobReceiptSchema.T
 export const PromptQueueSchema = openRecord({
   /** Bounded job request bindings, published before dispatch and kept after queue settlement. */
   jobReceipts: Schema.optional(mutableArray(NativeAgentJobReceiptSchema)),
-  /** Only older backends write this lease; retain exclusion until settlement or expiry. */
-  outstandingClaim: Schema.optional(
-    openRecord({
-      token: Schema.String,
-      message: Schema.Record(Schema.String, Schema.Unknown),
-      claimedAt: Schema.String,
-      expiresAt: Schema.String,
-    }),
-  ),
   queueKey: Schema.String,
   environmentId: Schema.String,
   messages: mutableArray(Schema.Unknown),

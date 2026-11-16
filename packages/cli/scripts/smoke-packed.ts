@@ -2,7 +2,7 @@ import { chmod, cp, mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:f
 import os from "node:os";
 import path from "node:path";
 import { RELEASE_RUNTIME_PATH } from "@orkestrator/protocol/node/standalone-service";
-import { ON_DEMAND_BRIDGES, RUNTIME_SUBDIRECTORY } from "./bridges.js";
+import { CLAUDE_AGENT_SDK, ON_DEMAND_BRIDGES, RUNTIME_SUBDIRECTORY } from "./bridges.js";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const manifest = (await Bun.file(path.join(packageRoot, "package.json")).json()) as {
@@ -135,6 +135,54 @@ async function probePackedBridge(directory: string, name: string): Promise<void>
   }
 }
 
+/** Every installed package directory under `root` whose name is `name` or starts with `name-`. */
+async function installedPackagesNamed(root: string, name: string): Promise<string[]> {
+  const [scope, base] = name.split("/") as [string, string];
+  const found: string[] = [];
+  for await (const match of new Bun.Glob(`**/node_modules/${scope}/${base}*`).scan({
+    cwd: root,
+    onlyFiles: false,
+    dot: true,
+    followSymlinks: false,
+  })) {
+    const leaf = path.basename(match);
+    if (leaf === base || leaf.startsWith(`${base}-`)) found.push(match);
+  }
+  return found.sort();
+}
+
+async function assertNoClaudeAgentSdk(root: string, label: string): Promise<void> {
+  const found = await installedPackagesNamed(root, CLAUDE_AGENT_SDK);
+  if (found.length > 0) {
+    throw new Error(`${label} pulled ${CLAUDE_AGENT_SDK}: ${found.join(", ")}`);
+  }
+  console.log(`${label} holds no ${CLAUDE_AGENT_SDK} package`);
+}
+
+/** Load the installed Claude bridge, whose bundle carries the Agent SDK, and ask for its health. */
+async function probePackedClaudeBridge(installedRoot: string): Promise<void> {
+  const probe = path.join(installedRoot, "claude-bridge-probe.mjs");
+  await writeFile(
+    probe,
+    `
+    const bridge = await import("./resources/claude-bridge/dist/index.js");
+    const response = await bridge.app.fetch(new Request("http://127.0.0.1/global/health", {
+      headers: { authorization: "Bearer packed-smoke-token" },
+    }));
+    if (!response.ok) throw new Error("Packed Claude bridge health failed: " + response.status);
+    console.log("claude-bridge: packed bundle with the inlined SDK loaded");
+    process.exit(0);
+  `,
+  );
+  // `--no-install` so Bun cannot auto-install an SDK the bundle failed to inline.
+  await run([process.execPath, "--no-install", probe], installedRoot, {
+    ...process.env,
+    HOME: path.join(installedRoot, "claude-probe-home"),
+    CLAUDE_BRIDGE_NO_SERVER: "1",
+    CLAUDE_BRIDGE_TOKEN: "packed-smoke-token",
+  });
+}
+
 /** Render through the installed worker so its bundle paths and dependencies are exercised together. */
 async function probePackedPreview(installedRoot: string): Promise<void> {
   const probe = path.join(installedRoot, "preview-probe.mjs");
@@ -218,7 +266,6 @@ try {
   const installedRoot = path.join(temporaryRoot, "node_modules", "orkestrator");
   for (const [artifact, specifier] of [
     ["dist/main.js", "sharp"],
-    ["resources/claude-bridge/dist/index.js", "@anthropic-ai/claude-agent-sdk"],
     // The preview worker renders every Mermaid fence and HTML artifact.
     ["dist/artifact-runtime/preview-worker.js", "playwright-core"],
   ] as const) {
@@ -240,6 +287,11 @@ try {
       );
     }
   }
+
+  // The Claude bridge inlines the Agent SDK, so the install must hold no copy
+  // of it, above all none of its platform packages (a Claude Code binary each).
+  await assertNoClaudeAgentSdk(temporaryRoot, "The packed install");
+  await probePackedClaudeBridge(installedRoot);
 
   await probePackedPreview(installedRoot);
 
@@ -298,12 +350,13 @@ try {
     { ...process.env, BUN_INSTALL_CACHE_DIR: path.join(lockedRelease, ".cache") },
   );
   await rm(path.join(lockedRelease, ".cache"), { recursive: true, force: true });
+  await assertNoClaudeAgentSdk(lockedRelease, "The frozen release install");
   const lockedPackage = path.join(lockedRelease, "node_modules", "orkestrator");
   await cp(await realpath(installedRoot), lockedPackage, {
     recursive: true,
     filter: (source) => path.basename(source) !== "node_modules",
   });
-  for (const specifier of ["sharp", "playwright-core", "@anthropic-ai/claude-agent-sdk"]) {
+  for (const specifier of ["sharp", "playwright-core"]) {
     const resolved = await realpath(Bun.resolveSync(specifier, lockedPackage));
     const relative = path.relative(await realpath(lockedRelease), resolved);
     if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -317,7 +370,6 @@ try {
     const { default: sharp } = await import("sharp");
     await sharp({ create: { width: 1, height: 1, channels: 3, background: "red" } }).png().toBuffer();
     await import("playwright-core");
-    await import("@anthropic-ai/claude-agent-sdk");
   `,
   );
   await run([process.execPath, lockedProbe], lockedRelease);

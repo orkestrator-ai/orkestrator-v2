@@ -1006,6 +1006,15 @@ test("history, app zoom, DevTools, screenshots and capture work after reattach",
     )
     .toMatch(/^(captured|error)$/);
   if (status.status !== "captured") throw new Error(`Capture failed: ${JSON.stringify(status)}`);
+  // A fresh capture opens the Notes panel, and in a narrow pane the Notes
+  // surface, which hides the native view. Whether the renderer sees the
+  // capture before the discard below is a race, so wait for the panel, and
+  // close it afterwards: discarding does not, and a panel left open hid this
+  // tab's view from the next test (flake 9811).
+  const closeAnnotations = s()
+    .window.getByRole("button", { name: "Close annotations", exact: true })
+    .first();
+  await expect(closeAnnotations).toBeVisible({ timeout: 20_000 });
   const pending = await preview<BrowserPreviewPendingCapture | null>(
     "readPendingCapture",
     status.pending.captureId,
@@ -1020,6 +1029,9 @@ test("history, app zoom, DevTools, screenshots and capture work after reattach",
   } finally {
     await preview("discardPendingCapture", status.pending.captureId);
   }
+  await closeAnnotations.click();
+  await expect(closeAnnotations).toBeHidden();
+  await expectVisibility("a", [true]);
 });
 
 test("a crashed service renderer reports the failure and recovers on reload", async () => {

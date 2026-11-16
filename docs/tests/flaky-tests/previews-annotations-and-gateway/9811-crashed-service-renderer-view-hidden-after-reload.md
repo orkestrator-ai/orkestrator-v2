@@ -2,10 +2,12 @@
 
 - **ID:** 9811
 - **Status:** resolved
-- **Date observed:** 2026-11-10 to 2026-11-15
+- **Date observed:** 2026-11-10 to 2026-11-16
 - **Base:** `a8b89f1541e7abb6af36d45121593ae14640a3ca`.
 - **Observed head:** branch `legacy-retirement-8d61cbbc6765-r1` at
-  `67201e449` (the review run) and `136ccab06` (the reruns below). The branch
+  `67201e449` (the review run), `136ccab06` (the reruns below) and
+  `a8b29f805` (the round 3 review run, which already held the first fix; see
+  [Second cause](#second-cause-a-notes-panel-left-open-by-the-previous-test)). The branch
   removes legacy tests elsewhere in the spec but does not change this test's
   body, `ServiceBrowserTab`'s desktop-tunnel attach and reload path, or
   `BrowserPreviewManager.reload` for service previews.
@@ -74,6 +76,48 @@ and a miss records the renderer's role tree.
 Verification after the fix, with no forced dialog: three headless runs of the
 whole owning file, and the test passed in each (21 passed per run; each run's
 one failure is the headless-only case in the note below).
+
+## Second cause: a Notes panel left open by the previous test
+
+The round 3 review run (`mise run test:agent:electron` at `a8b29f805`, on the
+signed-in user's Hyprland display, 2026-11-16) failed the same assertion
+again, now through `expectVisibility`: the view stayed hidden for the whole
+30 s poll, with no dialog in the recorded role tree. The tree showed the
+browser tab's **Preview or notes** tablist with **Notes** selected and the
+annotations panel open (`Annotations, 0 open on this page` expanded).
+`mise run flaky:recurrence -- 9811 --base a8b89f15…` answers "base predates
+fix", because it checks only the merge-base; the run's own head held the
+first fix, so this is a second cause rather than a stale base.
+
+The previous test, `history, app zoom, DevTools, screenshots and capture
+work after reattach`, takes an annotation capture through the preview IPC and
+then discards it. A fresh capture opens the Notes panel and selects the Notes
+surface (`useBrowserAnnotations`: "A fresh capture always has a visible
+editor"); discarding it leaves the panel open, by design. Below the 720 px
+annotation breakpoint (`NARROW_ANNOTATION_LAYOUT_PX`) the Notes surface
+replaces the preview and correctly hides the native view. Two conditions make
+it intermittent:
+
+- The renderer opens the panel only if it reads the `captured` status before
+  the discard, which is a race.
+- Only a narrow pane hides the view. A tiling display gives the window less
+  than 720 px; a headless window is 1440 px wide, where the Notes column only
+  shrinks the view, which is why the headless reruns passed.
+
+Reproduced 2026-11-16, headless, the first six tests of the owning file
+(`-g`), with the window set to 700 × 900 px at the start of the capture test
+and the test waiting for the panel to open:
+
+- Without closing the panel: 5 passed, then this test failed with the
+  recorded assertion (`Received: false`) and the same role tree (Notes
+  selected).
+- With the fix, under the same 700 px window: 6 passed.
+
+The fix is in the capture test, which owns the state: it waits for the
+panel to open (so the race no longer decides what the next test inherits),
+closes it after the discard, and checks that the view is visible again. The
+whole owning file then ran headless with 21 passed; its one failure was the
+headless-only case below.
 
 ## Note on headless runs
 

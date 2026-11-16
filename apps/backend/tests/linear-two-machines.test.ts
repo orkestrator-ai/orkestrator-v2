@@ -101,6 +101,25 @@ async function realStorage(): Promise<StorageService> {
 }
 
 type Project = { id: string; name: string; gitUrl: string };
+type LinkCall = { name: string; args: Record<string, unknown>; result: unknown };
+
+/** Only the explicit key-copy response may carry a credential across the link. */
+function expectKeyOnlyInExport(linkCalls: LinkCall[]) {
+  expect(linkCalls.some((call) => call.name === "get_linear_sync_state")).toBe(true);
+  expect(linkCalls.some((call) => call.name === "apply_linear_sync_state")).toBe(true);
+  expect(
+    linkCalls.filter(
+      (call) =>
+        call.name === "export_linear_connection" && JSON.stringify(call.result).includes(KEY),
+    ),
+  ).toHaveLength(1);
+  for (const call of linkCalls) {
+    expect(JSON.stringify(call.args)).not.toContain(KEY);
+    if (call.name !== "export_linear_connection") {
+      expect(JSON.stringify(call.result)).not.toContain(KEY);
+    }
+  }
+}
 
 /** One machine: real Linear and Kanban stores, its own projects, the real handlers. */
 async function machine(projects: Project[]) {
@@ -138,15 +157,17 @@ async function linkedMachines() {
   const command = await machine([
     { id: "server-web", name: "Web (server)", gitUrl: "git@github.com:acme/web.git" },
   ]);
-  const linkCalls: string[] = [];
+  const linkCalls: LinkCall[] = [];
   Object.assign(leaf.context, {
     nodes: { mode: () => "leaf", listControllers: () => [{ controllerId: COMMAND_ID }] },
   });
   const link: LinearSyncLink = {
     connected: true,
     invokeCommand: (async (def: { name: string }, args: Record<string, unknown>) => {
-      linkCalls.push(def.name);
-      return leaf.run(def.name, args);
+      const capturedArgs = structuredClone(args);
+      const result = await leaf.run(def.name, args);
+      linkCalls.push({ name: def.name, args: capturedArgs, result: structuredClone(result) });
+      return result;
     }) as LinearSyncLink["invokeCommand"],
   };
   const sync = new NodeLinearSync({
@@ -199,7 +220,10 @@ describe("Linear on two linked machines (to-do 7767 task 10)", () => {
 
     // 2. A sync pass: the same repository's project on the command node gets the board.
     await sync.sync(LEAF_ID);
-    expect(linkCalls).toEqual(["get_linear_sync_state", "apply_linear_sync_state"]);
+    expect(linkCalls.map((call) => call.name)).toEqual([
+      "get_linear_sync_state",
+      "apply_linear_sync_state",
+    ]);
     await expect(
       command.run("get_linear_board_link", { projectId: "server-web" }),
     ).resolves.toMatchObject({
@@ -229,7 +253,7 @@ describe("Linear on two linked machines (to-do 7767 task 10)", () => {
 
     // 4. Use it here: one export over the link, verified, stored; the key is never returned.
     const copied = await command.run("copy_linear_connection_from_node", { nodeId: LEAF_ID });
-    expect(linkCalls.at(-1)).toBe("export_linear_connection");
+    expect(linkCalls.at(-1)?.name).toBe("export_linear_connection");
     expect(copied).toMatchObject({
       connected: true,
       viewer: { name: "Ada" },
@@ -281,13 +305,12 @@ describe("Linear on two linked machines (to-do 7767 task 10)", () => {
       expect.objectContaining({ nodeId: LEAF_ID, connected: true }),
     ]);
 
-    // The key was only ever sent to Linear.
-    for (const request of requests) expect(JSON.stringify(request.variables)).not.toContain(KEY);
+    expectKeyOnlyInExport(linkCalls);
   });
 
   test("a disconnect on the leaf clears the command node's copy, and a board cleared there clears the leaf's", async () => {
     fakeLinear();
-    const { leaf, command, sync } = await linkedMachines();
+    const { leaf, command, sync, linkCalls } = await linkedMachines();
     await leaf.run("connect_linear", { apiKey: KEY });
     await leaf.run("set_linear_board_link", { projectId: "laptop-web", teamId: "team-1" });
     await sync.sync(LEAF_ID);
@@ -310,5 +333,6 @@ describe("Linear on two linked machines (to-do 7767 task 10)", () => {
     await expect(leaf.run("get_linear_board_link", { projectId: "laptop-web" })).resolves.toEqual(
       {},
     );
+    expectKeyOnlyInExport(linkCalls);
   });
 });

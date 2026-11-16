@@ -86,9 +86,15 @@ pulls the SDK's Claude binary; a registry install and a standalone update of
 the first release built with it came in as 8250 (retired) task 1. It is in
 Git history at `a0920f1a7`.
 
+Updated 2026-11-16: 8150 was retired once an MCP task's report was folded
+onto the tool card that showed the CLI's placeholder (the report names only
+its task id), pinned by synthetic frames; its live check on a real Claude
+login came in as 8150 (retired) task 1. It is in Git history before the
+commit that retired it (`git log -1 --diff-filter=D -- docs/todo/agent-engines/8150-claude-mcp-task-tool-card-text.md`).
+
 ### Tasks
 
-1. **Manual tests and live checks** (360 items): run each check under
+1. **Manual tests and live checks** (361 items): run each check under
 
 
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
@@ -180,7 +186,7 @@ here link the spec's section in agent-testing.md.
 0223 and 0041 were retired on 2026-11-14, once nothing but these items was
 left in them; both are in Git history at `dc90609bf`.
 1031 was retired on 2026-11-14, once its macOS sandbox live test passed at
-the 2026-11-06 pins and its last open question moved to 8150; it is in Git
+the 2026-11-06 pins and its last open question moved to 8150 (retired); it is in Git
 history at `dc90609bf`, and its runs are recorded in
 [upgrade-agents.md](../../development/upgrade-agents.md#how-to-upgrade-claude).
 0190 (retired) and 7872 (retired) left the board on 2026-11-14, once their container Multi Review
@@ -259,7 +265,7 @@ agent can apply it.
 
 | Area | Manual tests and live checks | Decisions, approvals and outward actions |
 | --- | --- | --- |
-| Agent engines and provider SDKs | 70 | 3 |
+| Agent engines and provider SDKs | 71 | 3 |
 | CLI and slash commands | 6 | 0 |
 | Containers and environments | 33 | 6 |
 | Coordinator and Multi Review | 87 | 3 |
@@ -268,7 +274,7 @@ agent can apply it.
 | MCP | 10 | 1 |
 | Service previews and web annotations | 18 | 1 |
 | Transcripts, observation and bandwidth | 30 | 2 |
-| **Total** | 360 | 25 |
+| **Total** | 361 | 25 |
 
 
 
@@ -470,6 +476,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **0723 (retired) task 4: OpenCode live card run (billed).** Follow the permission-rule card-run steps above with `--profile perm-rules-opencode --credential-source opencode --agent-platforms opencode`. Run the cycle for `bash` `git status --short`, a single-file `edit` and `webfetch` `https://example.com/`. Also prompt `cd src && ls` once and confirm it keeps asking with no offer. Record each outcome and the date in permission-rules.md's Live card runs.
 - [ ] **0723 (retired) task 5: Codex card and inactive environment (billed).** Follow the Codex steps in the permission-rule card-run steps above (`--profile perm-rules-codex --credential-source codex --agent-platforms codex`). In environment A, queue a second `touch policy-probe.txt` turn, save the rule from the card, and switch to environment B. Look at the "Approve and remember…" panel: the exact pattern is first and Codex's proposal is preselected. While on B, there should be no attention badge for A. Back on A, the second turn shows the "Approved once by your rule" note, and removing the rule asks again. Record the outcome and date in permission-rules.md's Live card runs.
 - [ ] **8085 (retired) task 1: a Codex tab on a real administrator-managed host.** (Background: [Codex on a managed network host](../../architecture/permission-rules.md#codex-on-a-managed-network-host).) Agents may not write `/etc/codex/requirements.toml` on a real machine, so the container run (`mise run verify:codex:network-card`) proves the bridge and this check proves the app. On a machine whose Codex an administrator already manages (a `/etc/codex/requirements.toml` or a macOS MDM profile whose `allowed_sandbox_modes` leaves out `danger-full-access`), open a Codex tab in a local environment with no execution-policy override and send a prompt. Pass: the turn runs (no 503 naming `DangerFullAccess`), and Agent Info shows the provider sandbox with the note that the administrator's requirements need Codex's sandbox and that `.git` is read-only there. If the requirements only turn the network proxy on, Agent Info instead shows the note that the proxy does not apply to a session without a sandbox. Record the date, Codex version, how the host is managed and what Agent Info showed in permission-rules.md's "Codex on a managed network host", with a screenshot if you can.
+- [ ] **8150 (retired) task 1: a live Claude MCP task on its tool card.** (Background: [Claude MCP tasks](../../architecture/agent-engines.md#claude-mcp-tasks).) The card before and after the report is pinned only by synthetic frames written from the 2.1.319 CLI; nobody has seen the CLI run a call as an MCP task in a bridge session. In a disposable `dev:test` profile signed in to Claude (`--credential-source claude --agent-platforms claude`), add an MCP server whose tool declares `taskSupport` (`optional` or `required`) in `tools/list` and takes a while to answer, and ask Claude to call it. Check that the card first shows the "started server-side task …, running in the background as task k…" text and a live task row, that the card switches to the tool's real result when the task ends (no separate status row holding the result), and that a reload of the tab shows the same. If the card shows the tool's answer straight away with no placeholder, the CLI did not run it as a task: note that, since the `tengu_glowing_lark` default for an SDK session is unknown. Record: the date, the Claude CLI version, the server used, whether the call ran as a task, and each outcome, in agent-engines.md's "Claude MCP tasks" section or as a reply to the coordinator.
 
 #### CLI and slash commands
 

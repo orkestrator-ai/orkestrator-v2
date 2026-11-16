@@ -48,8 +48,12 @@ import { terminalVisibleText } from "./terminal-visible-text";
  * a third turn in the background that the fake refuses with a 401, as a wrong
  * key would be (to-do 5160 (retired) task 4): the sidebar must leave working, the
  * environment must ring `agent_failed` and opening it must show "Agent
- * stopped with an error". The next prompt in that session is recorded: the
- * CLI then answers "Not logged in" locally, with no hook (to-do 8092).
+ * stopped with an error". The fixture then removes its settings API token
+ * and opens a fresh signed-out CLI in the same container, deliberately omitting
+ * StopFailure to qualify fallback recovery. Its prompt must
+ * leave working: the CLI refuses it locally with no end hook, and the backend
+ * settles it from that new notice and rings `agent_failed` again
+ * (to-do 8092, retired; `claude-terminal-settle.ts`).
  * Screenshots go to `output/visual-previews/5160-container-claude-*.png`.
  *
  * Nothing at module scope spawns `mise` or `docker`, so the file stays inert
@@ -291,6 +295,7 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
     environmentId: container!.id,
   });
   let sessionId: string | undefined;
+  const ownedTerminals = new Set<string>();
   let undoFakeApi: (() => void) | undefined;
   // The terminal sessions (session IDs) running `claude` before this test's
   // tab, so cleanup can tell its own shell from an earlier one.
@@ -327,21 +332,27 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
     const signalBefore = await signal();
     if (FAKE_API) undoFakeApi = await installFakeClaudeApi(containerId);
 
-    const attached = page.waitForResponse(
-      (response) => {
-        if (!response.url().endsWith("/__orkestrator/invoke")) return false;
-        try {
-          const body = response.request().postDataJSON() as {
-            command?: string;
-            args?: { user?: string };
-          };
-          return body.command === "create_terminal_session" && body.args?.user !== "orkroot";
-        } catch {
-          return false;
-        }
-      },
-      { timeout: 60_000 },
-    );
+    const waitForClaudeTerminal = () =>
+      page.waitForResponse(
+        (response) => {
+          if (!response.url().endsWith("/__orkestrator/invoke")) return false;
+          try {
+            const body = response.request().postDataJSON() as {
+              command?: string;
+              args?: { user?: string; trackEnvironmentActivity?: boolean };
+            };
+            return (
+              body.command === "create_terminal_session" &&
+              body.args?.user !== "orkroot" &&
+              body.args?.trackEnvironmentActivity === true
+            );
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 60_000 },
+      );
+    const attached = waitForClaudeTerminal();
     // The product's terminal Claude: **Claude CLI** from the terminal button's
     // context menu starts `claude --dangerously-skip-permissions` in the tab.
     const newTerminal = page.getByRole("button", { name: "New terminal tab", exact: true });
@@ -350,6 +361,7 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
     await page.getByRole("menuitem", { name: "Claude CLI" }).click();
     sessionId = ((await (await attached).json()) as { result: { sessionId: string } }).result
       .sessionId;
+    ownedTerminals.add(sessionId);
     const output = async () =>
       terminalVisibleText(
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
@@ -371,7 +383,8 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
       }
     });
     const focusTerminal = async () => {
-      const terminals = page.locator(".xterm:visible");
+      // Inactive portal terminals retain layout bounds but cannot receive clicks.
+      const terminals = page.locator(".absolute.inset-0.pointer-events-auto .xterm:visible");
       await expect(terminals.first()).toBeVisible({ timeout: 30_000 });
       for (let index = (await terminals.count()) - 1; index >= 0; index -= 1) {
         await terminals.nth(index).click();
@@ -546,11 +559,51 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
       await page.waitForTimeout(800);
       await shot("container-claude-failed-turn");
       step("toast shown");
-      // The next prompt in the same session. After a refused login the CLI
-      // says "Not logged in" and answers nothing locally. An answer must ring
-      // waiting; a local refusal is recorded, not asserted: the CLI fires no
-      // Stop or StopFailure hook for it, so the tab reads working until the
-      // next hook (to-do 8092).
+      // A settings-provided API token remains usable to the CLI after a 401:
+      // another prompt retries the API, rather than being refused locally.
+      // Explicitly sign this credential-free fixture out, then open a fresh CLI
+      // in the same container so it no longer inherits the settings token.
+      // Fault-inject the missing StopFailure hook to require backend recovery;
+      // this pinned CLI emits it for a fresh signed-out session. The installer
+      // restores the complete original settings in finally.
+      docker([
+        "exec",
+        containerId,
+        "sh",
+        "-c",
+        `s="$HOME/.claude/settings.json"; jq 'del(.env.ANTHROPIC_AUTH_TOKEN, .hooks.StopFailure)'  "$s" > "$s.qa"; cat "$s.qa" > "$s"; rm "$s.qa"`,
+      ]);
+      const signedOutAttached = waitForClaudeTerminal();
+      await newTerminal.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Claude CLI" }).click();
+      sessionId = ((await (await signedOutAttached).json()) as { result: { sessionId: string } })
+        .result.sessionId;
+      ownedTerminals.add(sessionId);
+      await focusTerminal();
+      await expect
+        .poll(async () => (await screen(20_000)).includes("bypasspermissionson"), {
+          timeout: 90_000,
+        })
+        .toBe(true);
+      for (const sid of containerSessionsRunning(containerId, "claude")) {
+        if (!claudeSessionsBefore.has(sid)) claudeSessions.add(sid);
+      }
+      const freshOutput = async (cursor: { revision: number; generation: number }) => {
+        const delta = await invoke<{ output: string; mode?: string }>(
+          "get_terminal_output_snapshot",
+          {
+            sessionId,
+            sinceRevision: cursor.revision,
+            sinceGeneration: cursor.generation,
+          },
+        );
+        expect(delta.mode, "terminal output cursor expired").toBe("delta");
+        return terminalVisibleText(delta.output).replace(/\s+/g, "").toLowerCase();
+      };
+      const promptCursor = await invoke<{ revision: number; generation: number }>(
+        "get_terminal_output_snapshot",
+        { sessionId },
+      );
       await focusTerminal();
       await page.keyboard.type(
         "Reply with only the word PONG and then 60 plus 6 as digits. No tools.",
@@ -560,31 +613,28 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
       await localItem.click();
       await firstTimeTrue(
         async () =>
-          /PONG\s*66/.test(await output()) || (await screen(4_000)).includes("notloggedin"),
+          /pong66/.test(await freshOutput(promptCursor)) ||
+          (await freshOutput(promptCursor)).includes("notloggedin"),
         "the next prompt's answer or the CLI's sign-in notice",
         360_000,
       );
-      const answered = /PONG\s*66/.test(await output());
+      const answered = /pong66/.test(await freshOutput(promptCursor));
       step(answered ? "next prompt answered" : "next prompt refused locally");
-      // Long enough for a working ring, and a Stop or StopFailure ring, to land.
+      // Long enough for a working ring, and a Stop, StopFailure or settle, to land.
       await page.waitForTimeout(15_000);
       failedTurn.followingTurn = answered ? "answered" : "not-logged-in";
       failedTurn.followingTurnBackendState = (await backendState()) ?? null;
       failedTurn.followingTurnSidebar = await sidebarActivity(page, containerName);
       failedTurn.followingTurnUnreadReason = await unreadReason();
       process.stderr.write(`[claude-terminal-failed-turn] ${JSON.stringify(failedTurn)}\n`);
-      if (answered) {
-        expect(failedTurn.followingTurnBackendState).not.toBe("working");
-        expect(failedTurn.followingTurnUnreadReason).toBe("agent_waiting");
-      } else {
-        testInfo.annotations.push({
-          type: "known gap",
-          description: `after a refused login the next prompt reads ${String(failedTurn.followingTurnBackendState)} (to-do 8092)`,
-        });
-      }
       await containerItem.click();
       await page.waitForTimeout(1_000);
       await shot("container-claude-following-turn");
+      expect(failedTurn.followingTurnBackendState).not.toBe("working");
+      expect(failedTurn.followingTurnSidebar).not.toBe("working");
+      expect(failedTurn.followingTurnUnreadReason).toBe(
+        answered ? "agent_waiting" : "agent_failed",
+      );
     }
 
     const signalAfter = await signal();
@@ -631,23 +681,24 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
       try {
         // Layout removal only orphans a terminal. Explicitly stop both Claude
         // and its shell, including when a turn or an assertion failed.
-        if (sessionId) {
-          await invoke("detach_terminal", { sessionId });
+        for (const ownedId of ownedTerminals) {
+          await invoke("detach_terminal", { sessionId: ownedId });
           expect(
-            (await invoke<{ running: boolean }>("get_terminal_session", { sessionId })).running,
+            (await invoke<{ running: boolean }>("get_terminal_session", { sessionId: ownedId }))
+              .running,
             "the test's terminal is still running after cleanup",
           ).toBe(false);
-          expect(await invoke<string[]>("list_terminal_sessions")).not.toContain(sessionId);
-          // The backend's view is not enough: Docker keeps an exec running
-          // after its client is gone, so check the container itself.
-          if (claudeSessions.size > 0) {
-            await expect
-              .poll(() => containerProcessesInSessions(containerId, claudeSessions).length, {
-                timeout: 15_000,
-                message: "the tab's shell or claude is still running in the container",
-              })
-              .toBe(0);
-          }
+          expect(await invoke<string[]>("list_terminal_sessions")).not.toContain(ownedId);
+        }
+        // The backend's view is not enough: Docker keeps an exec running
+        // after its client is gone, so check the container itself.
+        if (claudeSessions.size > 0) {
+          await expect
+            .poll(() => containerProcessesInSessions(containerId, claudeSessions).length, {
+              timeout: 15_000,
+              message: "the tab's shell or claude is still running in the container",
+            })
+            .toBe(0);
         }
       } finally {
         // Undo the fake API last: Claude must stop before its settings change.

@@ -39,6 +39,10 @@ export const TMUX_LOG_AREAS = defineLogAreas({
       "signal.arm-failed": "The Claude state signal could not be armed.",
       "signal.degraded":
         "The Claude state signal missed a change or rang too often, so polling stays at one second until it is re-armed.",
+      "terminal-claude.settled":
+        "A container terminal Claude turn no hook will end was settled: the CLI refused the prompt with its sign-in notice, or the last terminal closed mid-turn.",
+      "terminal-claude.settle-failed":
+        "Settling a container terminal Claude turn failed; the next read of the same state retries.",
       "hook-signal.arm-failed": "The tmux hook doorbell could not be armed.",
       "hook-signal.degraded":
         "The tmux hook doorbell missed a hook, so idle tabs poll every second until it is re-armed.",

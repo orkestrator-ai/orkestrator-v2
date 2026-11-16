@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 
-export const DEFAULT_BACKEND_READY_TIMEOUT_MS = 20_000;
+/** A hang watchdog on the ready line, not a startup-speed assertion. */
+export const DEFAULT_BACKEND_READY_TIMEOUT_MS = 60_000;
 /** A backend wedged in startup need not act on SIGTERM. Escalate rather than wait forever. */
 export const DEFAULT_BACKEND_KILL_GRACE_MS = 2_000;
 /**

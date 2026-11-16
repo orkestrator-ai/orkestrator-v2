@@ -1,7 +1,7 @@
 # Pipeline flow rehydration browser case times out in parallel aggregate
 
 - **ID:** 1121
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-27
 - **Test:** `a review pass rehydrates progress missed while inactive and after reload`
 - **Owning file:** `e2e/PipelineFlow.spec.ts:292`
@@ -50,3 +50,18 @@ the Notes node outside the viewport after exiting fullscreen (line 1134).
 Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.yAfPM6/review-pipeline-browser-owner.log.gz`.
 This is not a complete isolated-owner pass or an environmental excuse. No
 assertions, timeouts, skips or implementation were changed.
+
+## Triage note (2026-11-15)
+
+Class A candidate. A navigation (`page.goto`/`page.reload`) or step used up Playwright's 30 s test deadline, or an assertion hit the 5 s `expect` default, while the host was loaded. The spec has no fixed sleep or ad-hoc wall-clock check of its own on the failing path. Nothing was changed. The fix would be hang-watchdog defaults in `e2e/playwright.config.ts` (`timeout` and `expect.timeout`), but every group's component specs share that config, so it is left for a separate decision rather than changed in a per-group sweep. Not reproduced, because the browser suite was not run. Stays `open`.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** Playwright's default deadlines ran out on a loaded host while the test was waiting on a real signal. Every recorded failure is the 30 s default test timeout (`Test timeout of 30000ms exceeded`, in `page.goto`, `page.reload`, a click or a web-first assertion still in progress) or the 5 s default `expect` budget; none is a value mismatch, crash or lost interaction, and the failing calls pass no smaller timeout of their own. The specs measure no latency, so those defaults were acting as speed checks rather than hang watchdogs.
+- **Fix:** the component browser config, `e2e/playwright.config.ts` (`mise run test:browser`), now sets `timeout: 120_000` (was Playwright's 30 s default) and `expect: { timeout: 30_000 }` (was 5 s). Navigations carry no timeout of their own, so they are bounded by the 120 s test timeout. No assertion changed.
+- **Reproduced:** no — the recorded failure was not reproduced before the change. The evidence is weaker: a rerun of the component browser specs that had failed in a loaded run, with the new config, gave 112 passed; the one remaining failure there (`ToolGroupFold.spec.ts:127`, [1012](../web-ui/1012-live-tool-fold-threshold-gap.md)) also fails with main's config and is unrelated.
+- **Stress:** none beyond that rerun.
+
+The 2026-11-06 owner rerun's separate failure, desktop `completion in fullscreen lands in the overlay and then the panel` (Notes node outside the viewport at line 1134), is a different test and a position mismatch, not a deadline; this resolution does not cover it, and a recurrence of it needs its own case.
+
+A recurrence that hangs until near the new budget (a navigation or assertion timing out at 120 s or 30 s) is a real hang, not this deadline: reopen this case and record it.

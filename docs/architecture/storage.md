@@ -39,7 +39,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 
 The area fields are `kanban` (`KanbanStorage`), `linear` (`LinearStorage`), `coordinators`
 (`CoordinatorsStorage`), `publicOperations` (`PublicOperationsStorage`),
-`nodes` (`NodesStorage`), `previewServices` (`PreviewServicesStorage`),
+`nodes` (`NodesStorage`), `machineLoadHistory` (`MachineLoadHistoryStorage`), `previewServices` (`PreviewServicesStorage`),
 `agentAccounts` (`AgentAccountsStorage`), `graphTemplates`
 (`GraphTemplatesStorage`), `graphRuns` (`GraphRunsStorage`), `graphEffects`
 (`GraphEffectsStorage`), `clientState` (`ClientStateStorage`), `setupApprovals`
@@ -88,6 +88,7 @@ the change journal.
 | `GraphDescribeRepository` | `storage-graph-describe.ts` | `graph-describe` (item 215): one row per environment holding its latest "Describe a graph" job (the runner's branch record, the description, the compile context and, once completed, the draft), owned by the environment and deleted with it; revision compare-and-swap inside the row's transaction; writes announce the `graph-describe` resource |
 | `ClientStateRepository` | `storage-client-state.ts` | Presentation state every client shares that used to live in one browser's localStorage. `coordinator-pane-layouts` (one row per project, the coordinator page's tab groups, revision compare-and-swap, announces `coordinator-pane-layout`) and `coordinator-upstream-declines` and `coordinator-upstream-auto-merge` (one row per project each, written only by older clients through the retired decline and auto-merge commands; `check_coordinator_upstream_merge` no longer reads them, not announced) are deleted with the project; `notice-dismissals` (one row: dismissed notice occurrences per session identity, bounded in both dimensions, oldest-touched sessions leave first, announces `notice-dismissal`); `coordinator-action-marks` (one row per coordinator conversation, owned by its project and deleted with it: the action cards the user marked done by hand, at most 500, a further mark refused; announces `coordinator-action-marks`; commands in the `coordinator` domain, [coordinator.md](coordinator.md#marking-actions-done-by-hand)). Commands: `commands-registry-client-state.ts`; clients learn which of these a backend owns from `get_client_state_capabilities`, import their browser copy once and then stop reading it |
 | `WatchedPullRequestsRepository` | `storage-watched-pull-requests.ts` | `coordinator-watched-pull-requests`: one row per project holding the pull requests its coordinator watches ([coordinator.md](coordinator.md#watched-pull-requests)), at most 100 (least recently seen first out), plus the keys settled in the last week; deleted with the project |
+| `MachineLoadHistoryRepository` | `storage-machine-load-history.ts` | `machine-load-history`: one row (`local`) holding this machine's load history for coordinators choosing a machine ([coordinator.md](coordinator.md#choosing-a-machine)), numbers only and under 16 KB; written by the sampler with `updateStoreRow` about once every 15 minutes and at shutdown, an unreadable row replaced; validated by the sampler on load, never deleted |
 | `SetupApprovalsRepository` | `storage-setup-approvals.ts` | `setup-approvals`: one row per project holding the hashes of the `setupLocal` command lists the user approved on this machine ([setup-approval.md](setup-approval.md)), bounded per project, oldest first out; deleted with the project |
 | `ScheduledJobsRepository` | `storage-scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
 | `PermissionRulesRepository` | `storage-permission-rules.ts` | Adapts the permission-rule store ([permission-rules.md](permission-rules.md)) to the shared context; the store owns its row transactions |
@@ -120,7 +121,15 @@ Every repository takes the one `StorageContext` (`this.context`), the
 `StorageRepositories` registry (`this.repos.projects`), and keeps only what it
 uses. Repositories call each other through the registry, which is how the
 paths that cross stores work: project removal deletes compose drafts
-(`this.repos.drafts`), session removal deletes the session buffer, public
+(`this.repos.drafts`) and the project's tickets, ticket images, labels, notes
+and feature plans (`this.repos.kanban.deleteProjectContent`, behind a
+content fence in `storage-deletion-fences` and with a `kanban-image-deletions`
+journal, both in `storage-kanban-project-removal.ts`; what that means for sync
+is in [tickets.md](tickets.md#sync-across-machines)), deleting a pipeline
+deletes its Linear and GitHub completion comment records before its row
+(`deleteCompletionCommentsForPipelines`, which project removal also calls for
+any pipeline still listed for the project), session removal deletes the
+session buffer, public
 operations write projects and environments under those stores' leases
 (`this.repos.projects.enqueueEnvironmentMutation`). A lease
 wrapper (`enqueueEnvironmentMutation`, `enqueueConfigMutation`, …) lives in
@@ -801,8 +810,10 @@ filesystem. Its full record of tasks 1 to 4 (runs, samplers, the A/B arms):
   same volume, `proc_pid_rusage` disk bytes and a `sample` of the backend
   can. The busy driver's rounds took 1.6 to 2.5 minutes on mini against
   about 22 s on beelink2, mostly burst rescans running out at 60 s
-  ([8171](../todo/cross-cutting/8171-macos-burst-rescans-time-out.md)), so
-  its change-tracking ledger did less work there than on btrfs.
+  because mini's saturated `fseventsd` delivered events late and sparsely,
+  20 to 59 s late when at all (to-do 8171, retired
+  2026-11-15; see [Lost events on macOS](git-scan-caches.md#lost-events-on-macos)),
+  so its change-tracking ledger did less work there than on btrfs.
 
 ## Provider secrets at rest
 

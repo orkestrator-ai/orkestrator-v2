@@ -1,7 +1,7 @@
 # Docker registry credential error fixture exceeds the aggregate deadline
 
 - **ID:** 0766
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** `Electron backend command registry > does not expose configured credentials in Docker argv or container creation errors` in `apps/backend/tests/commands-registry-docker.test.ts:140`.
 - **Original command:** `mise run test:logged -- --name merge-backend-complete -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src ./tests --parallel=2 --only-failures`, on the merged `74387453` / `0014505ca` tree, Bun 1.4.3 on the shared macOS host.
@@ -25,3 +25,11 @@
 - **Owning-file rerun:** `mise run test:logged -- --name docker-registry-owner -- bun test --cwd apps/backend ./tests/commands-registry-docker.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 12.7 s).
 - **Evidence:** `orkestrator-test-run.wESThp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion. Aggregate results are recorded in [1140](../aggregate-validation-runs/1140-direct-history-cursors-0232-validation.md).
 - **Assessment:** credible recurrence with two additional Docker command cases in the same owner. Shared-host subprocess contention is plausible but unproven; no implementation, assertion, deadline or skip changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** The credential error case and two Docker list cases run fake Docker; they exceeded Bun's 5 s default and the test then saw the uncertain-creation path of its cut-off work.
+- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup-node.ts`, `tests/setup.ts`), makes 60 s the default per-test and hook budget, a hang watchdog only. The owning file sets no smaller file, test or hook budget, and the failing test has no inner wall-clock deadline of its own.
+- **Reproduced:** no — the recorded deadline was Bun's default budget on a loaded host; the failing body is fast alone, and a 5 s exhaustion was not re-created per case here.
+- **Stress:** `mise run test:logged -- --name ec-stress-a -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --core 15 --burners 6 -- bun test --preload ../../tests/setup-node.ts <the twelve commands-* owners, this one included> --rerun-each=2 --parallel=1'` at host load about 80: 736 passed, 2 failed, both `serves the Files panel from the scan the badge already ran`, which stays open in [9854](9854-electron-diff-statistics-aggregate-timeout.md); no other case failed.
+- **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).

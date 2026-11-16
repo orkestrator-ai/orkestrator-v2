@@ -14,7 +14,7 @@ import type { OpenCode2Message } from "./types.js";
 
 /**
  * A steer sent while the running turn is parked on a permission or question
- * card (to-do 7905 task 3), against a real pinned 2.x server and a scripted
+ * card (to-do 7905 (retired) task 3), against a real pinned 2.x server and a scripted
  * local model (no credentials, no remote calls). What 2.2.6 does, pinned so a
  * bump that changes it fails here:
  *
@@ -24,7 +24,9 @@ import type { OpenCode2Message } from "./types.js";
  * - once the card is resolved (allowed, denied or answered) the tool settles
  *   and the steer is delivered at that step boundary, in the same run, once;
  * - a stop leaves the steer in the inbox, and the next prompt's run delivers
- *   it first (follow-up to-do 8100).
+ *   it first. The provider therefore withdraws the user's own steers on stop
+ *   (`DELETE /api/session/:id/inbox/:inputId`, to-do 8100 (retired)), so the
+ *   next prompt runs alone; a mail steer is kept and still delivered first.
  *
  * Run with RUN_LIVE_OPENCODE2=1 and OPENCODE2_CLI_PATH set to the 2.x binary,
  * or through `mise run verify:opencode2:live`.
@@ -124,7 +126,13 @@ const steerCalls = (text: string) =>
   fixture!.model.calls.filter((call) => call.userTexts.at(-1) === text).length;
 
 /** Park a card, steer the parked run, and check the steer waits behind the card. */
-async function steerWhileParked(prompt: string, kind: string, steer: string, requestId: string) {
+async function steerWhileParked(
+  prompt: string,
+  kind: string,
+  steer: string,
+  requestId: string,
+  origin?: "user",
+) {
   const p = provider!;
   const id = await p.createSession("build", "steer-card", { model: "fixture/fixture" });
   await p.send(id, prompt, { requestId: `${requestId}-turn` });
@@ -138,6 +146,7 @@ async function steerWhileParked(prompt: string, kind: string, steer: string, req
       text: steer,
       requestId,
       expectedRunId: (run as { runId: string }).runId,
+      ...(origin ? { origin } : {}),
     }),
   ).toEqual({ outcome: "applied", requestId });
   expect(await p.steerStatus(id, requestId)).toBe("dispatched");
@@ -233,7 +242,7 @@ liveTest(
 );
 
 liveTest(
-  "a stop leaves a parked run's steer in the inbox, and the next run delivers it first (to-do 8100)",
+  "a stop withdraws the user's steer held behind a card, so the next prompt runs alone (to-do 8100 (retired))",
   async () => {
     const p = provider!;
     const steer = "STEER_BEHIND_STOPPED_PERMISSION";
@@ -242,6 +251,43 @@ liveTest(
       "permission",
       steer,
       "steer-stop",
+      "user",
+    );
+    await p.abort(id);
+    await idle(id);
+    expect((await p.interactions.listPendingInteractions(id)).requests).toEqual([]);
+    expect(await client().listInbox(id)).toEqual([]);
+    expect(await p.steerStatus(id, "steer-stop")).toBe("absent");
+    expect(steerCalls(steer)).toBe(0);
+    // The run id (to-do 8107 (retired)) is read from the newest `idle` row by type.
+    const boundary = await client().listMessages(id, { limit: 1, order: "desc", type: "idle" });
+    expect(boundary.messages.map((row) => row.type)).toEqual(["idle"]);
+
+    await p.send(id, "the next prompt", { requestId: "after-stop" });
+    await idle(id);
+    expect(await timeline(id)).toEqual([
+      "user:RUN_BASH:echo parked-stop",
+      "tool:shell:error",
+      "idle:interrupted",
+      "user:the next prompt",
+      "text:ack:the next prompt",
+      "idle:succeeded",
+    ]);
+    expect(steerCalls(steer)).toBe(0);
+  },
+  90_000,
+);
+
+liveTest(
+  "a stop keeps a mail steer held behind a card, and the next run delivers it first",
+  async () => {
+    const p = provider!;
+    const steer = "MAIL_BEHIND_STOPPED_PERMISSION";
+    const { id } = await steerWhileParked(
+      "RUN_BASH:echo parked-stop-mail",
+      "permission",
+      steer,
+      "steer-stop-mail",
     );
     await p.abort(id);
     await idle(id);
@@ -249,10 +295,10 @@ liveTest(
     expect((await client().listInbox(id)).map((item) => item.payload?.text)).toEqual([steer]);
     expect(steerCalls(steer)).toBe(0);
 
-    await p.send(id, "the next prompt", { requestId: "after-stop" });
+    await p.send(id, "the next prompt", { requestId: "after-stop-mail" });
     await idle(id);
     expect(await timeline(id)).toEqual([
-      "user:RUN_BASH:echo parked-stop",
+      "user:RUN_BASH:echo parked-stop-mail",
       "tool:shell:error",
       "idle:interrupted",
       `user:${steer}`,

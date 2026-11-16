@@ -29,3 +29,9 @@
 - **Owning-file rerun:** `mise run test:logged -- --name servers-owner -- bun test --cwd apps/backend ./tests/commands-registry-servers.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 32.6 s).
 - **Evidence:** `orkestrator-test-run.wESThp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion. Aggregate results are recorded in [1140](../aggregate-validation-runs/1140-direct-history-cursors-0232-validation.md).
 - **Assessment:** credible recurrence. The rejection is now recorded, but the startup timing and fake-Docker interaction remain unproven causes. No implementation, assertion, deadline or skip changed.
+
+## Triage 2026-11-15
+
+- **Disposition:** open.
+- **Evidence:** `start_claude_server` raises "Container is not running" when `isContainerRunning` returns false, and that function maps *any* `docker inspect` failure to false (`commands-container-exec.ts`). The 2026-10-27 recurrence was two five-second budget timeouts whose late rejection arrived after `withFakeDocker` had restored `PATH`, so the late inspect no longer reached the fake: that part is the default budget, now a 60 s hang watchdog (`tests/default-test-timeout.ts`). The first observation (3,415.90 ms, inside the budget) is not explained: some `docker` call in the test reached the no-docker socket rather than the fake. Not reproduced.
+- **Next step:** on recurrence inside the budget, record which `docker` binary and `PATH` the failing inspect used.

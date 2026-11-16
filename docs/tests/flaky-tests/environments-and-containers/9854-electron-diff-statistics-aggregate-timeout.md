@@ -431,3 +431,12 @@ The unchanged owning file passed: `mise run test:logged -- --name merge-unit-own
   shared-ledger contention, but the case still spends nine Git processes and
   overruns the generic five-second budget under heavy host load. No
   implementation, assertion, deadline or skip changed.
+
+## Partial fix, still open (2026-11-15)
+
+- **Changed:** the file's `setDefaultTimeout(30_000)` now sets `DEFAULT_TEST_TIMEOUT_MS` (60 s, `tests/default-test-timeout.ts`) explicitly, and the two smaller per-test budgets in this group (15 s and 30 s) are removed. `enables git's scan caches on a newly created worktree` now waits for its first `environment-diff-stats-changed` event through a deferred resolved by the event sink instead of a 10 s `waitForCondition` poll.
+- **Remaining failure, reproduced:** `serves the Files panel from the scan the badge already ran` fails under contention with a different symptom: the panel's read runs its own `git status` (the log is not empty). The unchanged test failed 1 of 5 under `mise run test:logged -- --name ec-9854-before -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --core 15 --burners 6 -- bun test --preload ../../tests/setup-node.ts <HEAD copy of the owner> -t "serves the Files panel from the scan" --rerun-each=5 --parallel=1'`, and 2 of 2 in a wider contention run.
+- **Tried and reverted:** holding `Date.now` at the announcement while the panel reads (the cache is valid for `DIFF_CACHE_MAX_AGE_MS`, 3 s, unless the watcher is qualified). It did not help: 0 of 4 under the same runner (`ec-9854-diag`). So the cache's age is not the cause; the likelier one is a watcher hint (for example a late event from the fixture's own write of `tracked.txt`) that raises the required epoch or starts a rescan the read then joins. Not established. A deterministic version needs a signal that tracking is quiescent (qualified watcher, no scan queued or in flight) before the read. The test is unchanged from `HEAD`.
+- **Base:** `a8b89f154` (working tree).
+
+- **Follow-up (2026-11-15):** the product signal this test needs is to-do [8302](../../../todo/cross-cutting/8302-signals-for-deterministic-flake-fixes.md).

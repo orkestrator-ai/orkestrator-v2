@@ -54,7 +54,7 @@ import type { Environment } from "./command-fixtures";
 // This slow-tier file creates real repositories/worktrees and waits for
 // subprocess cleanup. Give that fixture work its own bounded host budget;
 // explicit operation deadlines and shorter test budgets remain unchanged.
-setDefaultTimeout(30_000);
+setDefaultTimeout(60_000);
 
 describe("Electron backend environment lifecycle commands", () => {
   /**
@@ -3569,28 +3569,43 @@ exit 0
       });
       const { context } = createContext(environment);
       const commands = createCommandRegistry();
-
-      await expect(
-        commands.get("get_environments")?.(
-          {
-            projectId: environment.projectId,
-          },
-          context,
-        ),
-      ).resolves.toContainEqual(
-        expect.objectContaining({
-          id: environment.id,
-          cleanupAfterMergeRequestedAt: "2026-07-28T12:00:00.000Z",
-        }),
+      // The recovery is the only completion signal this test needs: it settles
+      // once the persisted cleanup it resumed has finished, however long the
+      // host takes. Capture the task the rehydration schedules instead of
+      // polling storage for its first write, then closing the lifecycle
+      // tracker (whose bounded shutdown drain can return before slow cleanup).
+      const operations = context.runtime.environments;
+      const scheduleRecovery = operations.scheduleMergeCleanupRecovery.bind(operations);
+      const recoverySettled = Promise.withResolvers<void>();
+      const scheduleSpy = spyOn(operations, "scheduleMergeCleanupRecovery").mockImplementation(
+        (environmentId, recover) =>
+          scheduleRecovery(environmentId, () => {
+            const task = recover();
+            task.then(recoverySettled.resolve, recoverySettled.reject);
+            return task;
+          }),
       );
 
-      await waitForCondition(
-        () =>
-          !environment.cleanupAfterMergeRequestedAt ||
-          environment.deletionRequestedAt !== undefined,
-        "persisted cleanup recovery to begin",
-      );
-      await context.environmentLifecycleTasks.beginShutdown();
+      try {
+        await expect(
+          commands.get("get_environments")?.(
+            {
+              projectId: environment.projectId,
+            },
+            context,
+          ),
+        ).resolves.toContainEqual(
+          expect.objectContaining({
+            id: environment.id,
+            cleanupAfterMergeRequestedAt: "2026-07-28T12:00:00.000Z",
+          }),
+        );
+
+        await recoverySettled.promise;
+        await context.environmentLifecycleTasks.whenDrained();
+      } finally {
+        scheduleSpy.mockRestore();
+      }
       const recoveredEnvironment = await context.storage.getEnvironment(environment.id);
       expect(recoveredEnvironment).toBeNull();
     },

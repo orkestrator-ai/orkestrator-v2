@@ -20,3 +20,7 @@
   spec: the page crashed during navigation, and the branch touches neither
   `NativeChatShell`, the global styles nor this spec (it only adds a
   `ReadCoordinatorFixture` route to the component fixture).
+
+## Triage note (2026-11-15)
+
+Not changed. `page.goto: Page crashed` is the browser process dying on a saturated host, not a test deadline; no test-side signal can prevent it. Stays `open` until it recurs on an idle host (then it is a product or browser bug) or is reclassified `environmental` by the owner of the host evidence.

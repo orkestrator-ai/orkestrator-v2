@@ -4,6 +4,7 @@ import { writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createHostTestScheduler } from "@orkestrator/protocol/node/host-test-scheduler";
+import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import {
   fixture,
   control,
@@ -20,7 +21,7 @@ import {
 // 5 s Bun default is shorter than those bounds, so a loaded host timed tests
 // out mid-run; afterEach then cancelled the live run and the still-running
 // body reported "cancelled" (case 0745) or the test simply timed out (0302).
-setDefaultTimeout(30_000);
+setDefaultTimeout(60_000);
 afterEach(cleanupReviewValidationFixtures);
 
 test("cooperative admission continues when the worktree is already dirty", async () => {
@@ -186,19 +187,20 @@ admission.close(); process.exitCode = result.status ?? 1;
       ORKESTRATOR_TEST_HOST_WORKERS: "2",
       ORKESTRATOR_TEST_HOST_MEMORY_MIB: "4096",
     });
-    const queuedDeadline = Date.now() + 8000;
-    while (Date.now() < queuedDeadline) {
-      if ((await control(root, run, "status")).results[0]!.status === "queued") break;
-      await Bun.sleep(50);
-    }
-    const ranDeadline = Date.now() + 5000;
-    while (
-      !(await Bun.file(path.join(root, ".orkestrator/independent-ran")).exists()) &&
-      Date.now() < ranDeadline
-    )
-      await Bun.sleep(50);
+    // Wait for the signals themselves, not a wall-clock budget. The worker reports
+    // `queued` twice for the cooperative command: once locally before its child
+    // exists (no reason yet) and again when the child's admission publishes the
+    // host wait, which is the only report that carries a queue reason. Only the
+    // second proves the command is held on the host. The bounds are hang watchdogs.
+    const hostQueued = (next: ReviewValidationRun) =>
+      next.results[0]?.status === "queued" && Boolean(next.results[0].queueReason);
+    await observeUntil(root, run, hostQueued, 60_000);
+    // The independent command finishing is what shows it was not stuck behind the
+    // queued cooperative one.
+    await observeUntil(root, run, (next) => next.results[1]?.status === "passed", 60_000);
     expect(await Bun.file(path.join(root, ".orkestrator/independent-ran")).exists()).toBe(true);
-    expect((await control(root, run, "status")).results[0]!.status).toBe("queued");
+    // The held ticket keeps the host wait in place, so this cannot have moved on.
+    expect(hostQueued(await control(root, run, "status"))).toBe(true);
     scheduler.release(ticket);
     const done = await completed(root, run);
     expect(done.results.map((result) => result.status)).toEqual(["passed", "passed"]);
@@ -206,7 +208,7 @@ admission.close(); process.exitCode = result.status ?? 1;
     scheduler.release(ticket);
     scheduler.close();
   }
-}, 30000);
+});
 
 test("a cooperative channel that goes stale is marked incomplete", async () => {
   const { root, run } = await cooperativeFixture(

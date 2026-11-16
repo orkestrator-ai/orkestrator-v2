@@ -24,3 +24,16 @@ explain this observation, though: it was made on 2026-09-07, before the cleanup
 ledger existed (2026-09-26), it recorded no failure text, and it has not
 recurred. The cause remains unattributed, so the case stays open until a
 recurrence records the failing assertion.
+
+## Test hardened, still open — 2026-11-15
+
+The test no longer polls storage for the recovery to begin (a 10 s
+`waitForCondition`) and then relies on the lifecycle tracker's bounded
+shutdown drain. It wraps `scheduleMergeCleanupRecovery` to capture the task the
+rehydration schedules, awaits that task and `environmentLifecycleTasks.whenDrained()`,
+then reads storage. The shared preload (`tests/default-test-timeout.ts`) makes
+60 s the hang watchdog; the file sets the same. The owning file passed alone
+and under `scripts/test-under-contention.ts --burners 6` (see the 2026-11-15
+resolutions of 0013 and 9886). The 2026-09-07 failure recorded no assertion,
+so no root cause is established and the case stays open until a recurrence
+names the failing line.

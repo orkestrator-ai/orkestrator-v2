@@ -11,6 +11,7 @@ import { ProjectCopyDialog } from "./ProjectCopyDialog";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 
+import { useAsyncUtilHangWatchdog } from "@/test/async-util-hang-watchdog";
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
 afterEach(() => {
@@ -106,6 +107,8 @@ function record(stage: ProjectCopyRecord["stage"]): ProjectCopyRecord {
   };
 }
 
+useAsyncUtilHangWatchdog();
+
 describe("copying a project to another machine", () => {
   test("suggested files are ticked, dependencies hidden, and the copy names target, location and files", async () => {
     const { clock, document: visibility, coordinator } = installFakeReadCoordinator();
@@ -192,9 +195,8 @@ describe("copying a project to another machine", () => {
     await act(async () => {
       await clock.advance(500);
     });
-    await waitFor(
-      () => expect(screen.getByRole("button", { name: "Open on Build box" })).toBeTruthy(),
-      { timeout: 5_000 },
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Open on Build box" })).toBeTruthy(),
     );
     expect(dialog.textContent).toContain("with 0 files (0 B)");
     cleanup();
@@ -300,9 +302,7 @@ describe("copying a project to another machine", () => {
     });
     await waitFor(() => expect(dialog.textContent).toContain("Copying files"));
     stage = "failed";
-    await waitFor(() => expect(dialog.textContent).toContain("Disk full on Build box"), {
-      timeout: 5000,
-    });
+    await waitFor(() => expect(dialog.textContent).toContain("Disk full on Build box"));
     expect(screen.getAllByRole("button", { name: "Close" }).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(retries).toHaveLength(1));

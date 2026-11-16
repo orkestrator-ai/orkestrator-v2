@@ -3,7 +3,7 @@
  * H08, V03, V06, V09, V10 and V14.
  */
 
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -17,7 +17,7 @@ import { WorkAdmissionPool, type AdmissionRequest } from "../work-admission.js";
 import { encodePath } from "./capture.js";
 import { operationIdFor } from "./identities.js";
 import { createHarness, git, spoolSource, type Harness } from "./service-test-support.js";
-import { PhysicalKeyResolver } from "./shared-physical-work.js";
+import { PhysicalKeyResolver, SharedScanQueue } from "./shared-physical-work.js";
 import { turnIdFor } from "./turn-boundaries.js";
 import {
   RemoteSlots,
@@ -26,12 +26,9 @@ import {
   type WorktreeTarget,
 } from "./worktree-owner.js";
 
-// This slow-tier file runs real Git and native watchers. V09 waits up to 15 s
-// for scans, and closing a recursive watcher blocks synchronously (about
-// 0.5 s each on an idle macOS host), so a busy run pushed the synchronous
-// teardown past Bun's 5 s default. Set before the hook registers: Bun captures
-// a hook's budget at registration.
-setDefaultTimeout(30_000);
+// This slow-tier file runs real Git and native watchers. It sets no budget of
+// its own: the shared preload's default (tests/default-test-timeout.ts) is the
+// hang watchdog, and every wait below is on an explicit signal.
 
 const harnesses: Harness[] = [];
 const directories: string[] = [];
@@ -87,12 +84,13 @@ const identityCount = (h: Harness): number =>
   (h.database().db.query("SELECT COUNT(*) AS n FROM change_diff_identities").get() as { n: number })
     .n;
 
-async function until(condition: () => boolean, timeoutMs = 3_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error("condition not reached");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+/**
+ * Waits for a state the code under test reaches by itself. It has no deadline
+ * of its own: a slow host only delays the state, and a state that never comes
+ * is a hang that the test's budget reports.
+ */
+async function until(condition: () => boolean): Promise<void> {
+  while (!condition()) await new Promise((resolve) => setTimeout(resolve, 10));
 }
 
 /**
@@ -484,8 +482,44 @@ describe("V09: aliases of one checkout share physical work", () => {
         comparisonRef: "main",
       },
     ];
+    // Env-a and env-c share an admission target, so env-c's request reaches the
+    // queue only after env-a's pass has finished. Hold each of the first two
+    // passes until the requests that must meet it have arrived, so the join
+    // count never depends on how fast the aliases reach the queue: env-b meets
+    // pass one (and queues), env-c meets pass two (and joins it).
+    const requested = { count: 0 };
+    const queueRun = spyOn(tracking.sharedScans, "run");
+    queueRun.mockImplementation((...args: Parameters<typeof tracking.sharedScans.run>) => {
+      requested.count += 1;
+      return SharedScanQueue.prototype.run.apply(tracking.sharedScans, args);
+    });
+    type PhysicalScan = (...args: unknown[]) => Promise<unknown>;
+    const scanOwner = tracking as unknown as { scanPhysical: PhysicalScan };
+    const scanPhysical = scanOwner.scanPhysical;
+    const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    let passes = 0;
+    const scanSpy = spyOn(scanOwner, "scanPhysical").mockImplementation(
+      async (...args: unknown[]) => {
+        const gate = gates[passes++];
+        if (gate) await gate.promise;
+        return scanPhysical.apply(tracking, args);
+      },
+    );
+    cleanups.push(() => {
+      for (const gate of gates) gate.resolve();
+      queueRun.mockRestore();
+      scanSpy.mockRestore();
+    });
     for (const target of targets) tracking.service.track(target);
-    await until(() => scannedIds.size === 3, 15_000);
+    await until(() => requested.count === 2);
+    const trackedAt = Date.now();
+    // A pass joins a request only when it started strictly after the request
+    // was made; both clocks are whole milliseconds, so let one tick pass.
+    await until(() => Date.now() > trackedAt);
+    gates[0]!.resolve();
+    await until(() => requested.count === 3);
+    gates[1]!.resolve();
+    await until(() => scannedIds.size === 3);
     // Three logical views, one physical watcher; their scans joined.
     expect(tracking.sharedWatchers.activeWatchers()).toBe(1);
     const shared = tracking.sharedScans.stats();
@@ -498,7 +532,7 @@ describe("V09: aliases of one checkout share physical work", () => {
       worktreePath: linked,
       comparisonRef: "main",
     });
-    await until(() => scannedIds.has("env-d"), 15_000);
+    await until(() => scannedIds.has("env-d"));
     expect(tracking.sharedWatchers.activeWatchers()).toBe(2);
     expect(tracking.sharedScans.stats().executed).toBe(shared.executed + 1);
   });

@@ -73,3 +73,7 @@ with `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` and the scoped Docker shim on
 `PATH`: passed in 48 s. One pass does not resolve this case: run 3 above
 failed with the probe off, so the modal is not shown to be the cause, and the
 status stays open until repeated runs with the probe off pass.
+
+## Triage note (2026-11-15)
+
+Not changed. The probe-off default for Electron specs (`electronSpecEnvironment`, 60c065c36), enforced by `tests/unit/electron-spec-environment.test.ts`, already removes the asynchronous reachability modal. As recorded above, the case stays `open` until repeated probe-off runs pass. No Electron run was made in this sweep.

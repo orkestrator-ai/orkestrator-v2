@@ -35,6 +35,10 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
       "listener.change-failed": "A resource change listener threw; the committed mutation stands.",
       "kanban.image-cleanup-failed":
         "An orphaned Kanban image could not be removed after its retries; it is safe to remove later.",
+      "kanban.removal-image-cleanup-pending":
+        "A removed project's ticket image files could not all be unlinked; they stay journaled and the removal fails so a retry finishes them.",
+      "kanban.delivery-sidecar-cleanup-failed":
+        "A removed project's deleted-ticket delivery sidecars could not all be removed; the removal fails so a retry finishes them.",
       "nodes.entries-dropped": "Unreadable node registry entries were ignored.",
       "preview-identity.reminted":
         "The data directory moved or was copied, so previews get a new backend identity.",

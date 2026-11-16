@@ -1,4 +1,5 @@
 import { describe, expect, mock, setDefaultTimeout, spyOn, test } from "bun:test";
+import { DEFAULT_TEST_TIMEOUT_MS } from "../../../tests/default-test-timeout.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
@@ -19,8 +20,11 @@ const {
   withFakeGh,
 } = await createCommandFixtures();
 
-// The skills scanner test runs the real scanner script in a subprocess.
-setDefaultTimeout(30_000);
+// The skills scanner test runs the real scanner script in a subprocess. The
+// budget equals the shared preload's (tests/default-test-timeout.ts): in a run
+// without `--parallel`/`--isolate` Bun applies a preload's setDefaultTimeout to
+// the first test file only.
+setDefaultTimeout(DEFAULT_TEST_TIMEOUT_MS);
 
 describe("agent skill commands", () => {
   test("registered plugin discovery runs the normal host runner", async () => {

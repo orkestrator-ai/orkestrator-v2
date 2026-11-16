@@ -1,6 +1,6 @@
 /**
  * The coordinator's feature-plan workflow surface over the real Control MCP
- * endpoint (todo 0395 task 3): `launch_feature_plan` says the conversation is
+ * endpoint (to-do 0395 (retired) task 3): `launch_feature_plan` says the conversation is
  * woken, `list_workflows` lists a `feature-plan` association with its plan and
  * follow, and an association kind this backend does not know is listed with no
  * resource rather than failing the list. Backend commands are scripted.

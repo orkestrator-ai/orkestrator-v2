@@ -1,7 +1,7 @@
 # Graph project templates: a retired watch's readiness reported a change under load
 
 - **ID:** 9989
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-11
 - **Test:** `watching > readiness from a retired watch cannot rescan or rearm it`
 - **File:** `apps/backend/src/core/graph-project-templates.test.ts:162`
@@ -34,3 +34,10 @@
   "open, record as a recurrence". Evidence:
   `orkestrator-test-run.2L8bxS/rerun-apps-backend-src-core-graph-project-templates-test-ts.log.gz`
   under the host temporary directory.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** product race plus cross-test leakage. `GraphProjectTemplates.rescan` announced `onChange` after its awaited `scan` even when the reader had been closed meanwhile. The test file's `onChange` closures push into the module-level `changes`, which `beforeEach` reassigns, so a rescan of the previous test's reader that finished after `afterEach` closed it landed `"p1"` in the next test's array: the recorded `["p1"]` straight after a 20 ms wait.
+- **Fix:** `apps/backend/src/core/graph-project-templates.ts` returns from `rescan` when the reader is closed. New test `a rescan still in flight when the reader closes announces nothing` gates the checkout read with a deferred promise, closes the reader, releases it and awaits the rescan's own promise. The retired-watch test now awaits `established` and one zero-delay timer instead of sleeping 20 ms, and `waitForGraphCondition` (`graph-template-test-support.ts`) no longer has a 2 s deadline.
+- **Reproduced:** yes for the mechanism: the new test fails against the unchanged `rescan` (`["p1"]` received) and passes with the guard. The aggregate interleaving itself was not reproduced.
+- **Stress:** `--rerun-each=20` of the owner passed; `f4-backend-cont2` (as in 1317) passed. Base `a8b89f154`.

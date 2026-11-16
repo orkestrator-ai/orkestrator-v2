@@ -214,3 +214,11 @@ wrapper. Aggregate evidence:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.9X99pc/browser-wrapper-macos-3.log.gz`.
 No pane source, assertion, timeout or skip changed; the cause is still not
 established.
+
+## Triage note (2026-11-15)
+
+Class A candidate (Playwright's default 5 s assertion / 30 s test deadline expiring on a loaded host). Not changed. The fix would be hang-watchdog defaults in `e2e/playwright.config.ts` (`expect.timeout` and `timeout`), but that config is shared with every group's component browser specs, so it is left for a separate decision rather than changed in a per-group sweep. Not reproduced; the browser suite was not run. Stays `open`.
+
+## Triage note (2026-11-15, after the config change)
+
+Follow-up: the hang-watchdog defaults this note deferred have now landed (`e2e/playwright.config.ts`: `timeout: 120_000`, `expect: { timeout: 30_000 }`), but this case stays `open`: later observations are anchor value mismatches (`Transcript message 36.` expected, 35 received), not expired waits.

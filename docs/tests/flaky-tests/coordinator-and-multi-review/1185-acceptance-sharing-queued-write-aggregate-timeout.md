@@ -1,7 +1,7 @@
 # Acceptance sharing queued-write candidate exceeds the aggregate deadline
 
 - **ID:** 1185
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-27
 - **Test:** `a queued-write candidate cannot consume the worker commits after its PR merges`
 - **Owning file:** `apps/backend/src/core/change-tracking/acceptance-sharing.test.ts`.
@@ -127,3 +127,13 @@ same contention family as the deadline failures above.
 
 Status stays open. Making V09 deterministic would hold the first scan until
 every alias has requested one; no assertion, timeout or skip changed here.
+
+## Resolution (2026-11-15)
+
+- **Class:** the test, in two parts.
+- **Root cause:**
+  1. *Deadlines.* `apps/backend/src/core/change-tracking/acceptance-sharing.test.ts` set `setDefaultTimeout(30_000)` and its `until` helper threw `condition not reached` after 3 s (15 s in V09), so a slow real-Git fixture failed the file for time alone.
+  2. *Join count (V09, 2026-11-11, `toBeLessThanOrEqual(2)` received 3).* The three aliases do not all reach the shared scan queue together: `env-a` and `env-c` resolve to the same admission target (`local:<repo>`, one at a time), so `env-c` asks for its pass only after `env-a`'s pass has finished. Whether it joined the second pass then depended on that pass still running, and on `requestedAt` being strictly earlier than that pass's start in whole milliseconds, which a loaded runner does not bound.
+- **Fix:** V09 now holds each of the first two physical passes behind a deferred until the requests that must meet it have reached the queue (env-b meets pass one, env-c meets pass two), and lets one clock millisecond pass before releasing, so the join outcome (`executed` 2, `joined` 1) no longer depends on timing. `until` keeps no deadline of its own, and `setDefaultTimeout(30_000)` is removed so the file inherits `tests/default-test-timeout.ts` (imported by `tests/setup.ts` and `tests/setup-node.ts`), which sets Bun's default per-test and hook budget to 60 s. Assertions unchanged.
+- **Reproduced:** no. The unchanged V09 test passed 30 of 30 reruns (`--rerun-each=30`, six burners on core 14), so neither the 3-executed outcome nor the deadline was observed here; the cause for the count is derived from `SharedScanQueue.run` and the admission pool's one-per-target rule, and the first attempt at gating (all three requests) deadlocked until the budget for exactly that reason.
+- **Verified after the fix:** the complete owner passed alone (1.3 s) and `--core 14 --burners 6 --rerun-each=5` (44.3 s).

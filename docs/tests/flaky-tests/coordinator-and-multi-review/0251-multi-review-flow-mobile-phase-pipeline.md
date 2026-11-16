@@ -33,3 +33,9 @@
   e2e/playwright.config.ts e2e/MultiReviewFlow.spec.ts` passed in 15.2 s.
 - **Hypothesis:** the repeat supports a load-sensitive navigation deadline;
   the root cause remains unconfirmed. Status stays open.
+
+## Triage note (2026-11-15)
+
+Class A candidate. A navigation (`page.goto`/`page.reload`) or step used up Playwright's 30 s test deadline, or an assertion hit the 5 s `expect` default, while the host was loaded. The spec has no fixed sleep or ad-hoc wall-clock check of its own on the failing path. Nothing was changed. The fix would be hang-watchdog defaults in `e2e/playwright.config.ts` (`timeout` and `expect.timeout`), but every group's component specs share that config, so it is left for a separate decision rather than changed in a per-group sweep. Not reproduced, because the browser suite was not run. Stays `open`.
+
+Later the same day `e2e/playwright.config.ts` raised its defaults to `timeout: 120_000` and `expect: { timeout: 30_000 }`, which resolved the same test's recorded deadlines in [0254](0254-multi-review-flow-goto-timeout-under-load.md). This case is not resolved with it: its first observation kept no failure text, so not every recorded failure is shown to be a default deadline. Close it as a duplicate of 0254 if the next failure of this test is a deadline, or record the new text here.

@@ -25,3 +25,11 @@
   load. The isolated pass establishes intermittency, but does not establish
   the cause. The implementation changes the design-host client and unit-test
   coverage, not the mobile tooltip or its browser fixture.
+
+## Triage note (2026-11-15)
+
+Class A candidate (Playwright's default 5 s assertion / 30 s test deadline expiring on a loaded host). Not changed. The fix would be hang-watchdog defaults in `e2e/playwright.config.ts` (`expect.timeout` and `timeout`), but that config is shared with every group's component browser specs, so it is left for a separate decision rather than changed in a per-group sweep. Not reproduced; the browser suite was not run. Stays `open`.
+
+## Triage note (2026-11-15, after the config change)
+
+Follow-up: the hang-watchdog defaults this note deferred have now landed (`e2e/playwright.config.ts`: `timeout: 120_000`, `expect: { timeout: 30_000 }`), but this case stays `open`: the tooltip stayed open after `Space` for the whole wait, which points at a lost or mishandled keypress rather than a late signal; cause unclear.

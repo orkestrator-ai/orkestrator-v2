@@ -18,6 +18,8 @@ import { rpc, useControlMcpServerHarness } from "./server-test-support.js";
 // 2026-11-11: 93 tools and 124,994 bytes with the six Linear board tools
 // (docs/architecture/tickets.md, "Linear"); their descriptions were trimmed to
 // stay under the byte bound.
+// 2026-11-15: 124,991 bytes once request_root_changes took nodeId (to-do
+// 0395 (retired) task 2); its description was trimmed to pay for the field.
 const MAX_TOOLS = 93;
 const MAX_SCHEMA_BYTES = 125_000;
 

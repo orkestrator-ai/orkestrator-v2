@@ -57,3 +57,16 @@ None of these owners imports the changed store, and none was changed. No
 assertion, deadline, retry or skip changed. This establishes intermittency
 under host load, not its cause; known cases record their own recurrences
 (0342, 1310, 0483).
+
+## Recurrence 2026-11-15 (8103 reviewer-rerun review repair)
+
+`rerun-reviewer-7b5831fd4bed-r1` at `06d5743d7`, merge base
+`a8b89f1541e7abb6af36d45121593ae14640a3ca`, which changes only the build
+pipeline's reviewer rerun and its graph model. `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=6600000 mise run test:logged -- --name test-browser-2 -- mise run test:browser`
+(five workers): 1750 passed, 154 skipped, 2 failed. The SidebarMotion failure
+was desktop `e2e/SidebarMotion.spec.ts:167` "root CSS zoom 1.25 keeps pins in
+layout pixels" (the other failure is 0252). The complete owner run alone with
+default workers passed that case but failed `SidebarMotion.spec.ts:26` (three
+sizes, bound two), as in the table above; the complete owner then passed with
+`--workers=1` (35.0 s). `mise run flaky:recurrence 9953 --base a8b89f154`
+reported `open`. No assertion, deadline, retry or skip changed.

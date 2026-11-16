@@ -40,6 +40,7 @@ import type { Environment } from "@/types";
 import { tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
 import type { AgentNativeTabProps } from "./adapter";
 import { appCommandStore } from "@/test/app-command-store";
+import { useAsyncUtilHangWatchdog } from "@/test/async-util-hang-watchdog";
 
 const realBackendSnapshot = { ...realBackend };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
@@ -289,6 +290,11 @@ const unassignedTab: NativeAgentTabData = { environmentId: "env-1" };
 let commits = 0;
 /** The chat shells' slide-on timer, so a test does not wait out its 400 ms. */
 let shellClock: ControlledTimeout;
+
+// Every `waitFor`/`findBy` here waits for a state the tab will reach; under an
+// aggregate the default one-second wait can expire while the tab is merely
+// queued behind other workers (flake 6623). The longer wait is a hang watchdog.
+useAsyncUtilHangWatchdog();
 
 beforeEach(() => {
   commits = 0;

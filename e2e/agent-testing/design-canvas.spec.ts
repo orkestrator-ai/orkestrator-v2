@@ -246,9 +246,14 @@ test("real gateway saves a design and rehydrates another client's edits", async 
       for (const folder of segments)
         await page.getByRole("button", { name: folder, exact: true }).click();
       await page.getByRole("button", { name, exact: true }).click();
+      // The renderer writes the layout as soon as the tab opens, but the write
+      // is a backend round trip a loaded host can hold past the 5 s default
+      // (case 0380). Waiting for the saved layout is the signal; the bound is a
+      // hang watchdog.
       await expect
-        .poll(async () =>
-          JSON.stringify(await invoke("get_pane_layout", { environmentId: env.id })),
+        .poll(
+          async () => JSON.stringify(await invoke("get_pane_layout", { environmentId: env.id })),
+          { timeout: 30_000 },
         )
         .toContain(`"filePath":"${filePath}"`);
       await page.getByRole("button", { name: `Close ${name}`, exact: true }).click();

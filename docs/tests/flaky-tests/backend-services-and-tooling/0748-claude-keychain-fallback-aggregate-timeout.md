@@ -1,7 +1,7 @@
 # Claude Keychain fallback exceeds the aggregate test deadline
 
 - **ID:** 0748
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** `host Claude credential resolution on macOS > falls back to disk when the Keychain lookup fails`.
 - **Owning file:** `apps/backend/tests/claude-credential-injection.test.ts`.
@@ -18,3 +18,10 @@
 - **Disposition:** open.
 - **Evidence:** single observation. The case spawns a stub `security` and reads the disk fixture under Bun's default five-second budget. The owner passed alone today (32/32, 1.4 s; Bun 1.4.4).
 - **Next step:** give the case an explicit budget if it recurs; if it does not recur by the next sweep, reclassify it as environmental.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** Bun's five-second default test budget, exhausted under aggregate load. The case spawns a stub `security` that exits 1 and reads the disk fixture; nothing in it waits on wall time, and the owning file sets no budget of its own (no `setDefaultTimeout`, third-argument or hook timeout).
+- **Fix:** `tests/default-test-timeout.ts`, preloaded by `tests/setup-node.ts`, makes the default per-test and hook budget a 60 s hang watchdog. The test is unchanged.
+- **Reproduced:** no — not reproduced on this host; a five-second timeout at 5002.92 ms on a test that finishes in milliseconds alone is the budget shape, and the file was checked for smaller explicit budgets.
+- **Stress:** not run separately for this case; the owner is fast and has no timed assertion.

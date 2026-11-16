@@ -36,3 +36,7 @@
 No assertion, timeout or skip was changed. Shared-host contention is a
 possible contributor, not an established cause. The aggregate exit stays
 failed.
+
+## Triage (2026-11-15)
+
+Left open. Two of the four failures are five-second timeouts the shared default in `tests/default-test-timeout.ts` now covers, but the `PreviewTransportManager` case is owned by [9887](../previews-annotations-and-gateway/9887-preview-transport-attachment-release-timing.md) and the OpenCode host-start case has no recorded duration, and `coordinator-live.test.ts` carries its own explicit budget for another test; this case is not resolved on the default alone.

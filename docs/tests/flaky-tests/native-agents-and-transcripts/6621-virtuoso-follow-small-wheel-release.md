@@ -12,3 +12,7 @@
 - **Owning-file rerun:** this is not the usual pattern, because the test also fails alone. `bunx playwright test -c e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts:57 --project=desktop-chromium --repeat-each=8 --workers=1` failed 5 of 8 on `41f9eb638` with no other change, and 4 of 8 with the 6280 change applied.
 - **Evidence:** the `/virtuoso-follow` fixture renders `<Virtuoso>` directly (`VirtuosoFollowFixture` in `e2e/fixture/main.tsx`), not through `VirtualizedMessageList`, so 6280's list change does not reach it.
 - **Hypothesis:** the follow decision read after `scrollTo` depends on when Virtuoso reports the end of the list relative to the append. Not confirmed.
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. The test fails alone (5 of 8 and 4 of 8 under `--repeat-each=8`) with `false` instead of `auto` for the whole deadline, a wrong state; a longer assertion budget does not address it.

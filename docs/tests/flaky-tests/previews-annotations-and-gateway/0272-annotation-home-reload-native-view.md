@@ -73,3 +73,8 @@
 - **Evidence:** `orkestrator-test-run.2kT16D/agent-electron.log.gz` below the host temporary directory; results and traces under `output/agent-testing/electron-4340/electron/`; rerun under `output/agent-testing/electron-4340-solo-web-annotations-electron/electron/`.
 - **Hypothesis:** the Home tab's browser surface renders later than 5 s after the click on a saturated host; not established. No assertion, timeout or skip changed.
 
+## Triage note (2026-11-15)
+
+Not changed. Recorded failure: a native-view visibility poll in Electron after a renderer reload. Electron specs and their configs were not run or edited in this pass (shared with other groups, and unverifiable here); no spec-local explicit signal could be justified without a live reproduction. Stays `open`.
+
+Addendum (2026-11-15): `e2e/agent-testing/playwright.electron.config.ts` now sets `expect: { timeout: 30_000 }`, which would cover the 2026-11-13 5 s `Browser address` miss, but that recurrence was macOS-only and the earlier failures were a 30 s poll with a confirmed product cause, so the case stays `open`.

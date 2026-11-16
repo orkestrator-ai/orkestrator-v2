@@ -163,6 +163,10 @@ export class SharedWatcherRegistry {
           if (entry.generation !== generation) return;
           for (const listener of Array.from(listeners)) listener.onCoverageChange?.();
         },
+        onMissedChange: () => {
+          if (entry.generation !== generation) return;
+          for (const listener of Array.from(listeners)) listener.onMissedChange?.();
+        },
       });
       entry.watcher = watcher;
       shared = entry;
@@ -177,6 +181,11 @@ export class SharedWatcherRegistry {
       },
       get qualified() {
         return !closed && (entry.watcher.qualified ?? true);
+      },
+      // One physical tree, one watcher: a miss any subscriber's scan found is
+      // the shared watcher's (to-do 8171).
+      unannouncedChange: () => {
+        if (!closed) entry.watcher.unannouncedChange?.();
       },
       close: () => {
         if (closed) return;

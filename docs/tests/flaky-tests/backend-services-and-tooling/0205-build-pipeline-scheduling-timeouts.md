@@ -142,3 +142,7 @@ GitHub Actions `lint.yml` "Unit and integration tests" job,
 - **Observation:** `retained history is enumerated only by the safety scan` exceeded its deadline (109988.53 ms).
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-build-scheduling-owner -- bun test --cwd apps/backend ./src/core/build-pipeline-scheduling.test.ts --parallel=1 --only-failures` passed (exit 0, 0.9 s).
 - **Assessment:** Reopened after this aggregate-only recurrence; the current cause is unconfirmed. Earlier fix history remains valid for its documented failure. No implementation, assertion, deadline or skip changed.
+
+## Investigation (2026-11-15, status stays open)
+
+No change. The 2026-10-26 recurrence reported 109,988 ms against a 5 s budget, so the event loop was blocked for well over the new 60 s default (`tests/default-test-timeout.ts`); the default does not cover it and the owner has no explicit timeout or inner deadline to remove. Cause still unconfirmed (a stalled synchronous SQLite commit is a candidate given the earlier fsync analysis).

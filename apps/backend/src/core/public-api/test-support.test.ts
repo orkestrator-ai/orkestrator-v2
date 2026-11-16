@@ -13,8 +13,15 @@ afterEach(async () => {
 
 async function trackedHarness() {
   const events: unknown[] = [];
+  // Woken by every emitted event; `awaitQualifiedCoverage` re-reads the gauge on each.
+  const emitted = new Set<() => void>();
   const harness = await createPublicApiHarness({
-    context: { emit: (event, payload) => events.push({ event, payload }) },
+    context: {
+      emit: (event, payload) => {
+        events.push({ event, payload });
+        for (const wake of Array.from(emitted)) wake();
+      },
+    },
   });
   harnesses.push(harness);
   const { projectPath } = await harness.createRepository("tracking");
@@ -29,7 +36,31 @@ async function trackedHarness() {
   await harness.commands.get("get_environments")!({ projectId: "project" }, harness.context);
   await harness.context.runtime.diffStats.sync(harness.context);
   await readTracking(harness);
-  return { harness, events, projectPath };
+  return {
+    harness,
+    events,
+    projectPath,
+    /**
+     * `isWatching` is true as soon as the watcher is established, but the
+     * `watched` gauge counts qualified coverage: the Git metadata locations
+     * resolve asynchronously (a subprocess) after that. The service announces
+     * the moment coverage is qualified with a snapshot event carrying
+     * `watched`, so wait for that event instead of reading the gauge straight
+     * after tracking starts, which a loaded host can win.
+     */
+    awaitQualifiedCoverage(): Promise<void> {
+      const tracking = harness.context.runtime.diffStats;
+      return new Promise<void>((resolve) => {
+        const check = () => {
+          if (tracking.service.status().watched < 1) return false;
+          emitted.delete(check);
+          resolve();
+          return true;
+        };
+        if (!check()) emitted.add(check);
+      });
+    },
+  };
 }
 
 async function readTracking(harness: PublicApiHarness) {
@@ -84,8 +115,9 @@ test("worktree cache gauges follow the tracked environment and leave diagnostics
     snapshots: cache("worktree-snapshots")?.sources ?? 0,
     scans: cache("local-git-scan")?.sources ?? 0,
   };
-  const { harness } = await trackedHarness();
+  const { harness, awaitQualifiedCoverage } = await trackedHarness();
   const tracking = harness.context.runtime.diffStats;
+  await awaitQualifiedCoverage();
   expect(tracking.cacheGauges()).toMatchObject({
     entries: 1,
     watched: 1,

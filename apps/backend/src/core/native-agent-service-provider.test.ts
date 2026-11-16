@@ -8,12 +8,7 @@ import path from "node:path";
 
 import { type BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 
-import {
-  AGENT_INTERACTION_CONTRACT_VERSION,
-  INTERACTIVE_AGENT_INTERACTION_POLICY,
-  UNATTENDED_AGENT_INTERACTION_POLICY,
-  type AgentInteractionSnapshot,
-} from "@orkestrator/protocol/agent-interactions";
+import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 
 import {
   createNativeAgentProvider,
@@ -53,7 +48,7 @@ import {
   COORDINATOR_WORKSPACE_VERSION,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
-import { collaborators, interactionInternals } from "./native-agent-service-test-collaborators.js";
+import { collaborators } from "./native-agent-service-test-collaborators.js";
 
 /** The model earlier releases shipped as the OpenCode default. */
 const LEGACY_OPENCODE_DEFAULT_MODEL_ID = "opencode/claude-sonnet-5";
@@ -231,15 +226,7 @@ async function withService(
     invoke?: Invoke;
     now?: NativeAgentServiceOptions["now"];
     delay?: NativeAgentServiceOptions["delay"];
-    interactionMonitorMode?: NativeAgentServiceOptions["interactionMonitorMode"];
-    interactionMonitorAdoptionEnabled?: boolean;
-    interactionMonitorIntervalMs?: number;
-    interactionMonitorMaxConcurrency?: number;
-    interactionMonitorMaxSessionsPerEnvironment?: number;
-    interactionMonitorRetryBaseMs?: number;
-    interactionMonitorMaxRetries?: number;
     onActivityTransition?: NativeAgentServiceOptions["onActivityTransition"];
-    onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
     resolveAgentToolConnection?: NativeAgentServiceOptions["resolveAgentToolConnection"];
@@ -254,34 +241,7 @@ async function withService(
     ...(setup.provider ? { provider: setup.provider } : {}),
     ...(setup.now ? { now: setup.now } : {}),
     ...(setup.delay ? { delay: setup.delay } : {}),
-    ...(setup.interactionMonitorMode
-      ? { interactionMonitorMode: setup.interactionMonitorMode }
-      : {}),
-    ...(setup.interactionMonitorAdoptionEnabled === undefined
-      ? {}
-      : { interactionMonitorAdoptionEnabled: setup.interactionMonitorAdoptionEnabled }),
-    ...(setup.interactionMonitorIntervalMs === undefined
-      ? {}
-      : { interactionMonitorIntervalMs: setup.interactionMonitorIntervalMs }),
-    ...(setup.interactionMonitorMaxConcurrency === undefined
-      ? {}
-      : { interactionMonitorMaxConcurrency: setup.interactionMonitorMaxConcurrency }),
-    ...(setup.interactionMonitorMaxSessionsPerEnvironment === undefined
-      ? {}
-      : {
-          interactionMonitorMaxSessionsPerEnvironment:
-            setup.interactionMonitorMaxSessionsPerEnvironment,
-        }),
-    ...(setup.interactionMonitorRetryBaseMs === undefined
-      ? {}
-      : { interactionMonitorRetryBaseMs: setup.interactionMonitorRetryBaseMs }),
-    ...(setup.interactionMonitorMaxRetries === undefined
-      ? {}
-      : { interactionMonitorMaxRetries: setup.interactionMonitorMaxRetries }),
     ...(setup.onActivityTransition ? { onActivityTransition: setup.onActivityTransition } : {}),
-    ...(setup.onInteractionObservation
-      ? { onInteractionObservation: setup.onInteractionObservation }
-      : {}),
     ...(setup.toolDetailCacheMaxEntries === undefined
       ? {}
       : { toolDetailCacheMaxEntries: setup.toolDetailCacheMaxEntries }),
@@ -329,52 +289,6 @@ async function addEnvironment(
     setupScriptsComplete: true,
     ...updates,
   });
-}
-
-function pendingInteractionSnapshot(
-  now: number,
-  requests: Array<"question" | "permission"> = ["question", "permission"],
-): AgentInteractionSnapshot {
-  return {
-    version: AGENT_INTERACTION_CONTRACT_VERSION,
-    revision: 1,
-    requests: requests.map((kind, index) => ({
-      version: AGENT_INTERACTION_CONTRACT_VERSION,
-      id: `interaction-${index}`,
-      provider: "codex",
-      kind,
-      origin: "automated-review",
-      sessionId: "provider-session",
-      state: "pending",
-      revision: 1,
-      presentation:
-        kind === "question"
-          ? {
-              title: "private request content",
-              questions: [
-                {
-                  id: "question-1",
-                  prompt: "private prompt content",
-                  required: true,
-                  multiple: false,
-                  secret: false,
-                  allowFreeText: true,
-                  options: [
-                    {
-                      id: "option-1",
-                      label: "private option content",
-                      providerValue: "private provider value",
-                    },
-                  ],
-                },
-              ],
-            }
-          : { title: "private permission content", questions: [] },
-      createdAt: now,
-      updatedAt: now,
-      expiresAt: now + 1_000,
-    })),
-  };
 }
 
 describe("NativeAgentService", () => {
@@ -964,47 +878,6 @@ describe("NativeAgentService", () => {
 
         expect(stub.createSession).toHaveBeenCalledTimes(1);
         expect(delays).toEqual([]);
-      },
-    );
-  });
-
-  test("settles stale evidence when a replacement provider loses interaction capability", async () => {
-    const capable = createProviderStub("codex", {
-      interactions: {
-        listPendingInteractions: async () => pendingInteractionSnapshot(10_000, ["question"]),
-        resolveInteraction: async () => {
-          throw new Error("observe-only must never resolve");
-        },
-      },
-    });
-    const unsupported = createProviderStub("codex");
-    let current = capable.provider;
-    await withService(
-      {
-        prefix: "orkestrator-native-interaction-capability-loss-",
-        provider: async () => current,
-        interactionMonitorMode: "observe-only",
-      },
-      async ({ storage, service }) => {
-        const logicalSessionKey = "automated-review:workflow:capability:Review";
-        await storage.adoptNativeAgentSession({
-          key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
-          environmentId: "env-1",
-          agent: "codex",
-          logicalSessionKey,
-          providerSessionId: "provider-session",
-          origin: "automated-review",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        });
-        await service.reconcileAgentInteractions();
-        current = unsupported.provider;
-        collaborators(service).providerRegistry.stateForTesting().providers.clear();
-        await service.reconcileAgentInteractions();
-        expect(service.getInteractionObservations()[0]).toMatchObject({
-          providerState: "error",
-          eventualOutcome: "expired",
-        });
-        expect(interactionInternals(service).trackedInteractions.size).toBe(0);
       },
     );
   });

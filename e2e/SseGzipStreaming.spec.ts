@@ -18,7 +18,6 @@ async function streamingStarted(page: Page, url: string): Promise<number> {
  * visible to an `EventSource` on a compressed stream.
  */
 test("a real browser decodes gzip SSE frame by frame", async ({ page }) => {
-  test.setTimeout(60_000);
   const child = spawn(
     "bun",
     [path.join(import.meta.dirname, "fixture/sse-gzip-gateway-server.ts")],

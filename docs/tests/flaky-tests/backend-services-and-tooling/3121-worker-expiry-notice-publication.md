@@ -1,7 +1,7 @@
 # Pipeline worker expiry notice asserted before publication finished
 
 - **ID:** 3121
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-03
 - **Test:** `a claim settling returned after terminal synchronization keeps its outcome`
 - **Owning file:** `apps/backend/src/core/pipeline-worker-mail.test.ts`
@@ -56,3 +56,10 @@ The runner's own rerun of the unchanged file alone passed (526.5 s, most of it
 spent waiting for host capacity). A second rerun alone also passed:
 `mise run test:logged -- --name rerun-pipeline-worker-mail.test -- bun --cwd=apps/backend test src/core/pipeline-worker-mail.test.ts --parallel=1 --only-failures`
 (exit 0, 4.3 s). Cause still unconfirmed; the case stays open.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** the earlier fixture barrier covered only the explicit-sync claim-settling test. The sibling `mail queued for a worker that ends expires, and the sender is told` (and the command-node outbox test) saved the terminal pipeline and read the expiry notice / outbox immediately, while the mail service's own scheduled directory sync, still subscribed, could expire the message first. The test's explicit `synchronizeAgentMailboxes()` then found nothing left to expire and returned before the competing sync had sent the notice (notices go out after the store lock is released), so the read landed between expiry and notice. This is the same mechanism the first fix recorded, inferred from the code and the identical symptom, not observed again.
+- **Fix:** `apps/backend/src/core/pipeline-worker-mail.test.ts` calls `await h.world.mail.shutdown()` (stops the service's timers, unsubscribes, drains the in-flight sync) before saving the terminal pipeline in those two tests, so the explicit synchronization alone owns expiry and the notice is published before it returns. All assertions are retained.
+- **Reproduced:** no. Neither recorded failure recurred in repeated alone runs, and no delay was injected to force the competing sync.
+- **Stress:** `bun test --rerun-each=10 -t "sender is told|command-node mail|keeps its outcome"` passed, and the whole file passed three times (93 of 93).

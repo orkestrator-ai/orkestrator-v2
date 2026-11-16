@@ -720,6 +720,26 @@ export function bridgeTranscriptPageCursorAt(cursor: string, position: number): 
   return encodePageCursor({ ...body, b: position });
 }
 
+/**
+ * The page cursor for the history before absolute `position` in one bridge
+ * generation and content epoch, exactly as the bridge mints its own.
+ *
+ * A snapshot that starts at the first message carries no cursor (nothing is
+ * before it), yet a reader whose byte bound dropped its leading rows still
+ * needs one naming the first row it kept. Every bridge's page route is this
+ * module's, so a cursor minted here from the snapshot's own generation and
+ * content epoch means the same as one the bridge sent; the bridge still checks
+ * all three against the history it holds. Position 0 has nothing before it.
+ */
+export function bridgeTranscriptPageCursorFor(
+  generation: string | number,
+  contentEpoch: string | number,
+  position: number,
+): string | undefined {
+  if (!Number.isSafeInteger(position) || position <= 0) return undefined;
+  return encodePageCursor({ g: String(generation), e: String(contentEpoch), b: position });
+}
+
 export interface BridgeTranscriptPageOptions {
   generation: string | number;
   contentEpoch: string | number;

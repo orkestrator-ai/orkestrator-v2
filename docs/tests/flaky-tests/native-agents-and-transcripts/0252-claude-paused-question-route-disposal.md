@@ -218,3 +218,24 @@ Observed on `mise run test:logged -- --name browser-rerun -- mise run test:brows
   [9959](../aggregate-validation-runs/9959-qualification-tooling-review-runs-under-host-load.md).
 
 No assertion, deadline, retry or skip was changed.
+
+## Recurrence 2026-11-15 (8103 reviewer-rerun review repair)
+
+- **Branch and base:** `rerun-reviewer-7b5831fd4bed-r1` at `06d5743d7`, merge
+  base `a8b89f1541e7abb6af36d45121593ae14640a3ca`. The branch changes the build
+  pipeline's reviewer rerun and its graph model; it does not touch the spec or
+  the Claude interaction surfaces.
+- **Command:** `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=6600000 mise run test:logged -- --name test-browser-2 -- mise run test:browser`
+  (five workers): 1750 passed, 154 skipped, 2 failed.
+- **Failure:** desktop-chromium, `apiRequestContext.fetch: Target page, context
+  or browser has been closed` in the route callback at
+  `e2e/ClaudeInteractions.spec.ts:107`.
+- **Owner rerun alone:** `bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts --project=desktop-chromium`
+  through `test:logged`: 9 passed (18.5 s).
+- **Recurrence check:** `mise run flaky:recurrence 0252 --base a8b89f154` reported `open`.
+
+No assertion, deadline, retry or skip was changed.
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. Every recorded failure is a route callback using a disposed request context or closed page during teardown, not a deadline, so the 2026-11-15 timeout change in `e2e/playwright.config.ts` does not address it.

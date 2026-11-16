@@ -26,12 +26,29 @@ async function upstream(handler: (response: ServerResponse) => void | Promise<vo
 function countIdleTimers() {
   const real = globalThis.setTimeout;
   let created = 0;
+  let refreshed = 0;
   globalThis.setTimeout = ((handler: () => void, delay?: number, ...args: unknown[]) => {
-    if (delay === IDLE_MS) created += 1;
-    return (real as (...parameters: unknown[]) => unknown)(handler, delay, ...args);
+    const timer = (real as unknown as (...parameters: unknown[]) => ReturnType<typeof setTimeout>)(
+      handler,
+      delay,
+      ...args,
+    );
+    if (delay === IDLE_MS) {
+      created += 1;
+      // Count the moves of the deadline rather than timing them: the runtime
+      // starts a refreshed timer from its cached loop time, which a starved
+      // process can leave far behind the wall clock.
+      const refresh = timer.refresh.bind(timer);
+      timer.refresh = () => {
+        refreshed += 1;
+        return refresh();
+      };
+    }
+    return timer;
   }) as typeof setTimeout;
   return {
     created: () => created,
+    refreshed: () => refreshed,
     restore: () => {
       globalThis.setTimeout = real;
     },
@@ -89,7 +106,7 @@ describe.each([
   });
 
   test("silence after a chunk still ends the body at the deadline", async () => {
-    let lastChunkAt = 0;
+    let secondChunkWritten = false;
     const port = await upstream(async (response) => {
       response.writeHead(200, {
         "content-type": contentType,
@@ -97,15 +114,24 @@ describe.each([
       });
       response.write(CHUNK);
       await sleep(60);
-      lastChunkAt = Date.now();
       response.write(CHUNK);
+      secondChunkWritten = true;
     });
-    const result = await fetchBody(port);
-    expect(result.status).toBe(502);
-    expect(result.body).toContain(stalledMessage);
-    // Measured from the second chunk, not the first: the deadline moved.
-    expect(lastChunkAt).toBeGreaterThan(0);
-    expect(Date.now() - lastChunkAt).toBeGreaterThanOrEqual(IDLE_MS);
+    const timers = countIdleTimers();
+    try {
+      const result = await fetchBody(port);
+      expect(result.status).toBe(502);
+      expect(result.body).toContain(stalledMessage);
+      // The stall is reported only after the body went silent, and the deadline
+      // was one timer that the arriving chunks moved. The "steady body" case
+      // proves a moved deadline outlasts its own length; no elapsed time is
+      // compared here because it depends on when a loaded host schedules the read.
+      expect(secondChunkWritten).toBe(true);
+      expect(timers.created()).toBe(1);
+      expect(timers.refreshed()).toBeGreaterThanOrEqual(1);
+    } finally {
+      timers.restore();
+    }
   });
 });
 

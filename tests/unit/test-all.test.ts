@@ -181,6 +181,13 @@ await Bun.write("dist/commit.json", JSON.stringify(process.env.ORKESTRATOR_BUILD
   }
 }, 60_000);
 
+// Wait for a real signal with no wall-clock deadline of its own. The test's
+// budget (tests/default-test-timeout.ts) is the hang watchdog; a deadline here
+// would turn a slow host into a failed assertion.
+async function waitUntil(condition: () => boolean): Promise<void> {
+  while (!condition()) await Bun.sleep(5);
+}
+
 interface Invocation {
   name: string;
   command: string;
@@ -315,11 +322,11 @@ describe("scripts/test-all.ts", () => {
     const { dependencies, started } = createDependencies({ gate });
 
     const run = runAllTests(dependencies);
-    // Pruning old runner artifacts precedes group creation. Keep this wait
-    // bounded and capture the pre-release starts so a sequential regression
-    // names the missing groups instead of deadlocking on the WORKSPACE gate.
-    const deadline = Date.now() + 15_000;
-    while (started.length < 4 && Date.now() < deadline) await Bun.sleep(5);
+    // Pruning old runner artifacts precedes group creation. Wait for all four
+    // groups to start (the signal), then capture the pre-release starts. A
+    // sequential regression never starts them and fails at the test's hang
+    // watchdog instead of on a wall-clock guess.
+    await waitUntil(() => started.length >= 4);
     const startedBeforeRelease = Array.from(started);
 
     release();
@@ -329,7 +336,7 @@ describe("scripts/test-all.ts", () => {
     expect(startedBeforeRelease).toContain(ROOT);
     expect(startedBeforeRelease).toContain(BRIDGES);
     expect(startedBeforeRelease).toContain(PROTOCOL);
-  }, 30_000);
+  });
 
   test("reports a still-running group so a wrapping watchdog sees progress", async () => {
     let release = () => {};
@@ -347,10 +354,7 @@ describe("scripts/test-all.ts", () => {
     });
 
     const run = runAllTests(dependencies);
-    const deadline = Date.now() + 15_000;
-    while (!logs.some((line) => line.startsWith("STILL RUNNING")) && Date.now() < deadline) {
-      await Bun.sleep(5);
-    }
+    await waitUntil(() => logs.some((line) => line.startsWith("STILL RUNNING")));
     const heartbeats = logs.filter((line) => line.startsWith("STILL RUNNING"));
     release();
     expect(await run).toBe(0);
@@ -363,7 +367,7 @@ describe("scripts/test-all.ts", () => {
     const settledLogCount = logs.length;
     await Bun.sleep(60);
     expect(logs).toHaveLength(settledLogCount);
-  }, 30_000);
+  });
 
   test("passes a bounded worker count so concurrent groups cannot oversubscribe", () => {
     const groups = buildConcurrentGroups(10);
@@ -377,6 +381,8 @@ describe("scripts/test-all.ts", () => {
       [BACKEND_WORKERS_ENV]: "3",
     });
     expect(rootGroup.args).toContain("--parallel=1");
+    // Passing tests stay hidden, but each one still reports progress (flake 0262).
+    expect(rootGroup.args).toEqual(expect.arrayContaining(["--only-failures", "--dots"]));
     expect(rootGroup.args.slice(0, 2)).toEqual(["test", "./tests"]);
     expect(rootGroup.args).toContain("./e2e/agent-testing/artifact-sanitizer.test.ts");
     expect(rootGroup.args).toContain("./e2e/agent-testing/mcp-apply-live-support.test.ts");
@@ -1008,10 +1014,7 @@ describe("scripts/test-all.ts", () => {
     };
     const { dependencies, logs } = createDependencies({ gate });
     const run = runAllTests(dependencies);
-    const deadline = Date.now() + 5_000;
-    while (!logs.some((line) => line.includes("finished (")) && Date.now() < deadline) {
-      await Bun.sleep(5);
-    }
+    await waitUntil(() => logs.some((line) => line.includes("finished (")));
 
     expect(logs.some((line) => line.includes("finished ("))).toBe(true);
     expect(logs.join("\n")).not.toContain(`PASS  ${ROOT}`);
@@ -1352,9 +1355,8 @@ describe("scripts/test-all.ts", () => {
         isolatedRunnerEnvironment(),
       );
 
-      const deadline = Date.now() + 5_000;
       let grandchildPid = 0;
-      while (!grandchildPid && Date.now() < deadline) {
+      while (!grandchildPid) {
         grandchildPid = Number(await readFile(pidFile, "utf8").catch(() => 0));
         if (!grandchildPid) await Bun.sleep(10);
       }
@@ -1365,8 +1367,7 @@ describe("scripts/test-all.ts", () => {
       expect(result.status).not.toBe(0);
 
       let alive = true;
-      const grandchildDeadline = Date.now() + 5_000;
-      while (alive && Date.now() < grandchildDeadline) {
+      while (alive) {
         try {
           process.kill(grandchildPid, 0);
           await Bun.sleep(10);

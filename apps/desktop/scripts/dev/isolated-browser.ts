@@ -482,15 +482,15 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
       signal?.throwIfAborted();
       if (started.finished) throw new Error("Isolated profile exited before browser readiness");
       if (performance.now() >= deadline) throw new Error("Isolated profile startup timed out");
-      const status = await launchTask(
-        "dev:status",
-        ["--json"],
-        Math.min(10_000, Math.max(1, deadline - performance.now())),
-        true,
-        signal,
-        name,
-      ).done;
+      // A probe is cut short by the startup deadline when less than its own
+      // bound is left. Then the deadline is what ended it, so report that and
+      // not "Command timed out", whichever of the two a slow host reaches first.
+      const probeBudget = Math.min(10_000, Math.max(1, deadline - performance.now()));
+      const status = await launchTask("dev:status", ["--json"], probeBudget, true, signal, name)
+        .done;
       signal?.throwIfAborted();
+      if (status.failure === "Command timed out" && probeBudget < 10_000)
+        throw new Error("Isolated profile startup timed out");
       if (status.failure) throw new Error(status.failure);
       let snapshot: { status?: string; profile?: string; live?: Record<string, boolean> };
       try {

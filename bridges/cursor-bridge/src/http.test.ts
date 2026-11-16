@@ -73,6 +73,25 @@ afterEach(async () => {
   restoreModels();
 });
 
+// A response that must not wait on a cleanup the test holds open. Nothing here
+// decides the outcome by elapsed time: when the route is correct the response
+// settles by itself, and the watchdog only turns a real hang (the route
+// awaiting the held promise forever) into a failure instead of a stuck run.
+const HELD_WATCHDOG_MS = 30_000;
+async function notHeldBy<T>(response: Promise<T>, message: string): Promise<T> {
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      response,
+      new Promise<never>((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error(message)), HELD_WATCHDOG_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(watchdog);
+  }
+}
+
 /**
  * The repository-wide test preload installs a browser-like `fetch` for UI
  * tests, which applies CORS to these loopback requests and rejects them. Bun's
@@ -938,15 +957,13 @@ describe("prompt dispatch", () => {
     state.workspaceWarmRelease = () => cleanup;
     state.hostedMcpClose = () => cleanup;
 
-    const failed = await Promise.race([
+    const failed = await notHeldBy(
       call(`/session/${state.id}/prompt`, {
         method: "POST",
         body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
       }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("prompt 502 was held by detach cleanup")), 200),
-      ),
-    ]);
+      "prompt 502 was held by detach cleanup",
+    );
     expect(failed.status).toBe(502);
     expect(state.agent).toBeNull();
     expect(state.promptJournal.get("r1")?.state).toBe("ambiguous");
@@ -955,15 +972,13 @@ describe("prompt dispatch", () => {
     const replacement = fakeAgent();
     const { restore } = stubEnsureAgentResume(replacement);
     try {
-      const retry = await Promise.race([
+      const retry = await notHeldBy(
         call(`/session/${state.id}/prompt`, {
           method: "POST",
           body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
         }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("retry was held by the in-flight dispose")), 200),
-        ),
-      ]);
+        "retry was held by the in-flight dispose",
+      );
       expect(retry.status).toBe(202);
       expect(state.agent).toBe(replacement);
       expect(state.agent).not.toBe(refused);
@@ -992,15 +1007,13 @@ describe("prompt dispatch", () => {
       throw new Error("mcp close failed");
     };
 
-    const failed = await Promise.race([
+    const failed = await notHeldBy(
       call(`/session/${state.id}/prompt`, {
         method: "POST",
         body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
       }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("prompt 502 was held by a rejected detach")), 200),
-      ),
-    ]);
+      "prompt 502 was held by a rejected detach",
+    );
     expect(failed.status).toBe(502);
     expect(state.agent).toBeNull();
     expect(state.promptJournal.get("r1")?.state).toBe("ambiguous");

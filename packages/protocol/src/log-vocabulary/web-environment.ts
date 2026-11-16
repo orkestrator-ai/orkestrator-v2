@@ -41,7 +41,6 @@ export const WEB_ENVIRONMENT_LOG_AREAS = defineLogAreas({
       "settings.container-reset-failed": "The settings dialog could not reset the container.",
       "settings.save-failed": "The settings dialog could not save.",
       "domains.test-failed": "Testing whether network whitelist domains resolve failed.",
-      "network-whitelist.save-failed": "The network whitelist dialog could not save.",
     },
   },
   "web.sidebar": {

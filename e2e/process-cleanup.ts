@@ -66,19 +66,59 @@ export function signalProcess(pid: number, signal: NodeJS.Signals): void {
 const ownedGroups = new Set<ChildProcess>();
 let exitHookInstalled = false;
 
+function leaderExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+/** Resolves once `child` has exited, or after `timeoutMs`. */
+function leaderExitWithin(child: ChildProcess, timeoutMs: number): Promise<void> {
+  if (leaderExited(child)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, timeoutMs);
+    function done() {
+      clearTimeout(timer);
+      child.off("exit", done);
+      resolve();
+    }
+    child.once("exit", done);
+  });
+}
+
 /**
  * Only for children spawned with detached:true. Also handles an already-exited
  * leader. Ownership recorded by {@link ownProcessGroup} ends once the group is
  * confirmed stopped; a group that could not be stopped stays owned.
+ *
+ * SIGTERM goes to the leader alone first, and reaches the rest of the group
+ * only once the leader has exited. When the leader is Electron or Chrome, its
+ * group holds Chromium's zygotes and GPU process: a SIGTERM to the whole group
+ * kills them under a browser that is still running, every GPU relaunch then
+ * fails, and with `--disable-gpu` the browser dies on `LOG(FATAL) "GPU process
+ * isn't usable. Goodbye."` with SIGTRAP and a core dump. The dev launcher stops
+ * Electron the same way (`signalsProcessGroup` in
+ * `apps/desktop/scripts/dev/lifecycle.ts`). A leader that does not exit within
+ * `timeoutMs` gets SIGKILL with its group, which never dumps core.
  */
 export async function stopProcessGroup(child: ChildProcess, timeoutMs = 5_000): Promise<void> {
   if (!child.pid) return;
   const group = -child.pid;
   if (processAlive(group)) {
-    signalProcess(group, "SIGTERM");
-    try {
-      await waitForStopped([group], timeoutMs);
-    } catch {
+    if (!leaderExited(child)) {
+      signalProcess(child.pid, "SIGTERM");
+      await leaderExitWithin(child, timeoutMs);
+    }
+    // The leader is gone, so nothing is left that a helper's death can crash:
+    // let whatever it left behind exit on SIGTERM. A leader still running
+    // ignored SIGTERM; a group SIGTERM now would recreate the race above.
+    if (leaderExited(child) && processAlive(group)) {
+      signalProcess(group, "SIGTERM");
+      try {
+        await waitForStopped([group], timeoutMs);
+      } catch {
+        // Escalated below.
+      }
+    }
+    if (processAlive(group)) {
       signalProcess(group, "SIGKILL");
       await waitForStopped([group], timeoutMs);
     }

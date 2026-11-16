@@ -1114,6 +1114,9 @@ export function buildConcurrentGroups(
             ? GUARD_STAGE_TEST_FILES.map((file) => `--path-ignore-patterns=${file}`)
             : []),
           "--only-failures",
+          // One dot per finished test keeps the no-progress watchdog following
+          // real progress while passing output stays hidden (test-progress-dots.ts).
+          "--dots",
           ...changedArguments,
           ...(timingsDirectory
             ? ["--timings", path.join(timingsDirectory, "root.json"), "--update-timings"]

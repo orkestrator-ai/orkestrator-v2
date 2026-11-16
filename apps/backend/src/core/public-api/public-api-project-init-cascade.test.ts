@@ -174,7 +174,7 @@ describe("project.remove with cascade", () => {
       expect.objectContaining({ environmentId: first, state: "deleted" }),
       expect.objectContaining({ environmentId: second, state: "deleted" }),
     ]);
-    expect(result.effects).toBe("registration-only");
+    expect(result.effects).toBe("registration-and-local-content");
     // The checkout and its origin are never deleted.
     expect((await fs.stat(project.localPath!)).isDirectory()).toBe(true);
     expect(await git(project.localPath!, ["remote"])).toBe("origin");

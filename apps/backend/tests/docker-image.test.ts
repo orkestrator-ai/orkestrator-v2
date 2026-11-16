@@ -21,6 +21,7 @@ import {
 } from "../src/core/docker-image";
 import { egressGatewayOf, resetNetworkOwnerCache } from "../src/core/container-network-owner";
 import { prepareEgressGatewayForStart } from "../src/core/egress-gateway";
+import { githubRangesSeedDirectory } from "../src/core/github-ranges-cache";
 import { extractSingleTarFile } from "../src/core/docker-copy-out";
 import { resolveOperationImage } from "../src/core/commands-environment";
 import { shouldAddDockerHostGatewayAlias } from "../src/core/commands-container-exec";
@@ -746,13 +747,10 @@ esac
         );
         const lines = (await log.read()).split("\n");
         const creates = lines.filter((line) => line.startsWith("create --name ork-"));
-        // The seed is copied into the gateway before it starts, never bound:
-        // a rootless daemon cannot bind it read-only from a nosuid/nodev source.
-        expect(
-          lines.some(
-            (line) => line.startsWith("cp ") && line.endsWith(`${gatewayId}:/etc/orkestrator-seed`),
-          ),
-        ).toBe(true);
+        // The seed directory is bound into the gateway, never copied in: a
+        // copy into a container that is not running is what a rootless
+        // daemon refused (to-do 7549 task 2).
+        expect(lines.some((line) => line.endsWith(":/etc/orkestrator-seed"))).toBe(false);
         expect(creates).toHaveLength(2);
         const [gateway, workload] = creates as [string, string];
         // The gateway owns the namespace: capability, network, IPv6 setting,
@@ -770,7 +768,9 @@ esac
         expect(gateway).toContain("--tmpfs /run:rw,nosuid,nodev,mode=0755");
         expect(gateway).toContain("--network ork-");
         expect(gateway).toContain("--sysctl net.ipv6.conf.all.disable_ipv6=1");
-        expect(gateway).not.toContain("github-ranges");
+        expect(gateway).toContain(
+          `--mount type=bind,src=${githubRangesSeedDirectory(dir)},dst=/etc/orkestrator-seed,readonly`,
+        );
         if (process.platform === "linux") {
           expect(gateway).toContain("--add-host host.docker.internal:host-gateway");
         } else {
@@ -864,13 +864,11 @@ esac
           const lines = (await log.read()).split("\n");
           const creates = lines.filter((line) => line.startsWith("create --name ork-"));
           expect(creates).toHaveLength(1);
-          expect(creates[0]).not.toContain("github-ranges");
-          expect(
-            lines.some(
-              (line) =>
-                line.startsWith("cp ") && line.endsWith("created-workload:/etc/orkestrator-seed"),
-            ),
-          ).toBe(true);
+          // The workload runs the firewall, so it binds the seed directory.
+          expect(creates[0]).toContain(
+            `--mount type=bind,src=${githubRangesSeedDirectory(dir)},dst=/etc/orkestrator-seed,readonly`,
+          );
+          expect(lines.some((line) => line.endsWith(":/etc/orkestrator-seed"))).toBe(false);
           expect(creates[0]).toContain("--cap-add NET_ADMIN");
           expect(creates[0]).toContain("--network ork-");
           expect(creates[0]).toContain("-p 127.0.0.1::4097/tcp");

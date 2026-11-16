@@ -21,3 +21,9 @@
   title is set by the renderer, so a stall before that point looks like this.
   Nothing recorded in the run shows where it stopped.
 - **How to reproduce:** not reproduced; it has been seen once.
+
+## Triage note (2026-11-15)
+
+Not changed. Recorded failure: the window title not updating for 60 s after backend start, in Electron. Electron specs and their configs were not run or edited in this pass (shared with other groups, and unverifiable here); no spec-local explicit signal could be justified without a live reproduction. Stays `open`.
+
+Addendum (2026-11-15): the Electron config's new `expect: { timeout: 30_000 }` does not touch this failure, which was the spec's own 60 s title wait. Stays `open`.

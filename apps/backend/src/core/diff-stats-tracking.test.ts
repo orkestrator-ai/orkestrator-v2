@@ -1,5 +1,5 @@
 import { eventSink } from "./backend-emit.js";
-import { afterEach, expect, spyOn, test, setDefaultTimeout } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Environment } from "./models.js";
@@ -11,10 +11,9 @@ import * as remoteGit from "./git-noninteractive-env.js";
 import * as containerExec from "./commands-container-exec.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./public-api/test-support.js";
 
-// This slow-tier file creates real repositories/worktrees and waits for
-// subprocess cleanup. Give that fixture work its own bounded host budget;
-// explicit operation deadlines and shorter test budgets remain unchanged.
-setDefaultTimeout(30_000);
+// This slow-tier file creates real repositories and worktrees. It sets no
+// budget of its own: the shared preload's default (tests/default-test-timeout.ts)
+// is its hang watchdog, and what a test asserts is decided by explicit signals.
 
 const harnesses: PublicApiHarness[] = [];
 afterEach(async () => {
@@ -342,8 +341,11 @@ function baselineOwner(tracking: Awaited<ReturnType<typeof harness>>["tracking"]
 
 async function idleBaseline(tracking: Awaited<ReturnType<typeof harness>>["tracking"]) {
   const owner = baselineOwner(tracking);
-  const deadline = Date.now() + 5000;
-  while (owner.baselineChecks.size && Date.now() < deadline) {
+  // Wait for the owner's own signal (its map empties as each check finishes),
+  // with no wall-clock deadline of our own: a loaded host only makes the real
+  // Git fixture slower, and a check that never finishes is a hang that the
+  // test's default budget reports.
+  while (owner.baselineChecks.size) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   expect(owner.baselineChecks.size).toBe(0);

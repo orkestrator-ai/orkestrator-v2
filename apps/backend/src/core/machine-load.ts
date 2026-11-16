@@ -19,6 +19,13 @@ import {
   type CachedRamReader,
 } from "./system-usage.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  decodeMachineLoadHistory,
+  encodeMachineLoadHistory,
+  type MachineLoadHistoryDocument,
+  type MachineLoadHistoryLimits,
+  type MachineLoadHistoryParts,
+} from "./machine-load-history-document.js";
 
 const log = createLogger("host");
 
@@ -32,9 +39,14 @@ const log = createLogger("host");
  * usage snapshot itself is not used here: its stale-baseline rule would reduce
  * CPU to a 200 ms point sample, and it runs GPU and disk probes this discards.
  *
- * History is in memory and starts empty on each start. Every average says how
- * much of its window it covers, so a 24-hour figure built from ten minutes
- * reads as ten minutes.
+ * History lives in memory. With a history store (the backend passes its
+ * database document, `storage-machine-load-history.ts`) it is restored at
+ * start, written whenever a 15-minute period has passed since the last write,
+ * and written once more at stop, so a restart or update costs at most the
+ * newest 15 minutes after a crash and nothing after a clean stop. The time the
+ * backend was down holds no buckets, so it reads as no history. Every average
+ * says how much of its window it covers, so a 24-hour figure built from ten
+ * minutes reads as ten minutes.
  */
 
 export const MACHINE_LOAD_SAMPLE_MS = 60_000;
@@ -51,6 +63,15 @@ const LONGEST_WINDOW_MS = Math.max(...WINDOW_LENGTHS_MS);
 const FINE_RETENTION_MS = Math.max(
   ...WINDOW_LENGTHS_MS.filter((length) => length < LONGEST_WINDOW_MS),
 );
+
+/** What a stored document may hold: the steady-state bucket counts with a little room. */
+export const MACHINE_LOAD_HISTORY_LIMITS: MachineLoadHistoryLimits = {
+  fineBucketMs: MACHINE_LOAD_FINE_BUCKET_MS,
+  coarseBucketMs: MACHINE_LOAD_COARSE_BUCKET_MS,
+  maxSampleGapMs: MACHINE_LOAD_MAX_SAMPLE_GAP_MS,
+  maxFineBuckets: Math.ceil(FINE_RETENTION_MS / MACHINE_LOAD_FINE_BUCKET_MS) + 4,
+  maxCoarseBuckets: Math.ceil(LONGEST_WINDOW_MS / MACHINE_LOAD_COARSE_BUCKET_MS) + 4,
+};
 
 export interface MachineLoadSample {
   startMs: number;
@@ -82,6 +103,10 @@ function addToBuckets(buckets: LoadBucket[], key: number, part: Omit<LoadBucket,
   }
 }
 
+function periodOf(timeMs: number): number {
+  return Math.floor(timeMs / MACHINE_LOAD_COARSE_BUCKET_MS);
+}
+
 function roundPercent(value: number): number {
   return Math.round(Math.min(100, Math.max(0, value)) * 10) / 10;
 }
@@ -104,19 +129,55 @@ export class MachineLoadHistory {
       cpuWeighted: sample.cpuPercent * coveredMs,
       ramWeighted: sample.ramPercent * coveredMs,
     });
-    while (this.fine[0] && this.fine[0].endMs <= sample.endMs - FINE_RETENTION_MS) {
+    this.ageOut(sample.endMs);
+  }
+
+  /** Moves minutes past the shorter windows into coarse buckets and drops what left the longest. */
+  private ageOut(nowMs: number): void {
+    while (this.fine[0] && this.fine[0].endMs <= nowMs - FINE_RETENTION_MS) {
       const { key: _fineKey, ...minute } = this.fine.shift()!;
       addToBuckets(this.coarse, Math.floor(minute.endMs / MACHINE_LOAD_COARSE_BUCKET_MS), minute);
     }
-    while (this.coarse[0] && this.coarse[0].endMs <= sample.endMs - LONGEST_WINDOW_MS) {
+    while (this.coarse[0] && this.coarse[0].endMs <= nowMs - LONGEST_WINDOW_MS) {
       this.coarse.shift();
     }
   }
 
-  /** The wall clock moved back: readings now dated in the future can never age out correctly. */
-  dropAfter(timeMs: number): void {
+  /**
+   * The wall clock moved back: readings now dated in the future can never age
+   * out correctly. Returns whether anything was dropped.
+   */
+  dropAfter(timeMs: number): boolean {
+    const before = this.bucketCount();
     this.fine = this.fine.filter((bucket) => bucket.endMs <= timeMs);
     this.coarse = this.coarse.filter((bucket) => bucket.endMs <= timeMs);
+    return this.bucketCount() !== before;
+  }
+
+  /** A copy of the buckets without their keys, for the history store. */
+  parts(): MachineLoadHistoryParts {
+    const strip = ({ key: _key, ...bucket }: LoadBucket) => bucket;
+    return { fine: this.fine.map(strip), coarse: this.coarse.map(strip) };
+  }
+
+  /**
+   * History from validated stored buckets, as of `nowMs`: buckets dated after
+   * it are dropped (the clock moved back while the backend was down) and the
+   * rest age as if the readings had just been recorded.
+   */
+  static restore(parts: MachineLoadHistoryParts, nowMs: number): MachineLoadHistory {
+    const history = new MachineLoadHistory();
+    history.fine = parts.fine.map((bucket) => ({
+      key: Math.floor(bucket.endMs / MACHINE_LOAD_FINE_BUCKET_MS),
+      ...bucket,
+    }));
+    history.coarse = parts.coarse.map((bucket) => ({
+      key: Math.floor(bucket.endMs / MACHINE_LOAD_COARSE_BUCKET_MS),
+      ...bucket,
+    }));
+    history.dropAfter(nowMs);
+    history.ageOut(nowMs);
+    return history;
   }
 
   bucketCount(): number {
@@ -222,7 +283,19 @@ export async function describeOs(
   }
 }
 
+/**
+ * Where history survives a restart. Both calls are synchronous (one database
+ * row), and either may throw; the sampler logs and carries on in memory.
+ */
+export interface MachineLoadHistoryStore {
+  /** The stored document, or `undefined` when none was ever written. */
+  load(): unknown;
+  save(document: MachineLoadHistoryDocument): void;
+}
+
 export interface MachineLoadSamplerOptions extends Partial<OsDescriptionDependencies> {
+  /** Persists history across restarts; without one it starts empty each time. */
+  historyStore?: MachineLoadHistoryStore;
   /** Wall clock: windows are real elapsed time, so a sleeping host shows up as a gap. */
   now?: () => number;
   cpus?: () => CpuInfo[];
@@ -238,7 +311,7 @@ export interface MachineLoadSamplerOptions extends Partial<OsDescriptionDependen
 }
 
 export class MachineLoadSampler {
-  private readonly history = new MachineLoadHistory();
+  private history = new MachineLoadHistory();
   private readonly now: () => number;
   private readonly cpus: () => CpuInfo[];
   private readonly arch: () => string;
@@ -250,6 +323,12 @@ export class MachineLoadSampler {
   private baseline: { at: number; times: ReturnType<typeof cpuTimes>; cores: number } | null = null;
   private latestSampleAt: number | null = null;
   private osName: string | null = null;
+  /** Whether the history store has been read; it is read once, at the first start. */
+  private restored = false;
+  /** History changed since it was last written. */
+  private unsaved = false;
+  /** The 15-minute period of the last write (or of the restore), so writes stay one a period. */
+  private savedPeriod: number | null = null;
 
   constructor(private readonly options: MachineLoadSamplerOptions = {}) {
     this.now = options.now ?? Date.now;
@@ -263,6 +342,7 @@ export class MachineLoadSampler {
 
   start(): void {
     if (this.jobs) return;
+    this.restoreHistory();
     const cpus = this.cpus();
     this.baseline = { at: this.now(), times: cpuTimes(cpus), cores: cpus.length };
     void this.resolveOsName();
@@ -296,10 +376,12 @@ export class MachineLoadSampler {
     this.jobs.start();
   }
 
+  /** Stops sampling and writes any history not yet written (the shutdown write). */
   stop(): void {
     this.jobs?.stop();
     this.jobs = null;
     this.baseline = null;
+    if (this.unsaved) this.saveHistory();
   }
 
   /** One reading. Public so a test can drive it with a fake clock. */
@@ -314,7 +396,7 @@ export class MachineLoadSampler {
     if (!previous) return;
     const elapsedMs = at - previous.at;
     if (elapsedMs <= 0) {
-      this.history.dropAfter(at);
+      if (this.history.dropAfter(at)) this.unsaved = true;
       this.latestSampleAt = null;
       return;
     }
@@ -331,6 +413,8 @@ export class MachineLoadSampler {
       ramPercent,
     });
     this.latestSampleAt = at;
+    this.unsaved = true;
+    if (this.savedPeriod !== null && periodOf(at) !== this.savedPeriod) this.saveHistory();
   }
 
   /** No I/O, so a coordinator's `list_nodes` never waits on a probe. */
@@ -340,7 +424,7 @@ export class MachineLoadSampler {
       (this.baseline && this.baseline.at > now) ||
       (this.latestSampleAt !== null && this.latestSampleAt > now)
     ) {
-      this.history.dropAfter(now);
+      if (this.history.dropAfter(now)) this.unsaved = true;
       this.baseline = null;
       this.latestSampleAt = null;
     }
@@ -361,6 +445,56 @@ export class MachineLoadSampler {
           : Math.max(0, Math.round((now - this.latestSampleAt) / 1_000)),
       load: this.history.windows(onSchedule ? this.latestSampleAt! : now),
     };
+  }
+
+  /** Reads the stored history once. A missing or unusable document starts empty, with a log line. */
+  private restoreHistory(): void {
+    const store = this.options.historyStore;
+    if (!store || this.restored) return;
+    this.restored = true;
+    const now = this.now();
+    this.savedPeriod = periodOf(now);
+    let stored: unknown;
+    try {
+      stored = store.load();
+    } catch (error) {
+      log.warn("load.history-fresh", { reason: "unreadable", error: formatLogError(error) });
+      this.unsaved = true;
+      return;
+    }
+    if (stored === undefined || stored === null) {
+      log.info("load.history-fresh", { reason: "missing" });
+      return;
+    }
+    const decoded = decodeMachineLoadHistory(stored, MACHINE_LOAD_HISTORY_LIMITS);
+    if (!decoded.ok) {
+      log.warn("load.history-fresh", { reason: decoded.reason });
+      // Replace it at the next write, even if nothing is sampled before stop.
+      this.unsaved = true;
+      return;
+    }
+    this.history = MachineLoadHistory.restore(decoded, now);
+    if (this.history.bucketCount() !== decoded.fine.length + decoded.coarse.length) {
+      this.unsaved = true;
+    }
+    const longest = this.history.windows(now).at(-1);
+    log.info("load.history-restored", {
+      buckets: this.history.bucketCount(),
+      coveredSeconds: longest?.coveredSeconds ?? 0,
+    });
+  }
+
+  /** One row write. A failure is logged and retried at the next period or at stop. */
+  private saveHistory(): void {
+    const store = this.options.historyStore;
+    if (!store || !this.restored) return;
+    this.savedPeriod = periodOf(this.now());
+    try {
+      store.save(encodeMachineLoadHistory(this.history.parts()));
+      this.unsaved = false;
+    } catch (error) {
+      log.warn("load.history-save-failed", { error: formatLogError(error) });
+    }
   }
 
   /** Read until it succeeds once: the OS does not change while a backend runs. */

@@ -406,6 +406,8 @@ export interface NodeActionRequestView {
     environmentId?: string;
     environmentName?: string;
     projectId?: string;
+    /** `apply-root-changes` for a worker on another node: that node's copy of the project. */
+    nodeProjectId?: string;
     projectName?: string;
     location?: string;
     gitRemote?: string;

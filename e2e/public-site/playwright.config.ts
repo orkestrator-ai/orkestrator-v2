@@ -2,6 +2,7 @@ import { defineConfig } from "@playwright/test";
 import path from "node:path";
 import { installPlaywrightRunnerSigterm } from "../../tests/playwright-runner-sigterm";
 import { enterPrivateTestTmpdir } from "../../tests/private-tmpdir";
+import { publicSiteDistDirectory } from "./public-site-dist";
 
 // Workers inherit a private TMPDIR, so the browser profiles of a worker that is
 // killed land where a later run can remove them (0248). Workers load this file
@@ -15,12 +16,16 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const port = Number.parseInt(process.env.ORKESTRATOR_PUBLIC_E2E_PORT ?? "4423", 10);
 const baseURL = `http://127.0.0.1:${port}`;
 
-// Build outside apps/web-public/dist: the aggregate suite's Turbo build writes
-// that directory, and review validation runs the two concurrently.
-const distDirectory = path.join(repositoryRoot, "output/playwright/public-site-dist");
+// Built outside apps/web-public/dist (public-site-dist.ts says why).
+const distDirectory = publicSiteDistDirectory;
 
 // Serve the built public entrypoint, including its real lazy-loaded chunks and
-// SPA fallback. The pre-connection flow does not require a backend or credentials.
+// SPA fallback, with vercel.json's header rules and rewrites applied
+// (vercel-static-server.ts) so the browser enforces the policies a deployment
+// sends; `vite preview` sends none. The pre-connection flow does not require a
+// backend or credentials.
+const server = path.join(import.meta.dirname, "vercel-static-server.ts");
+const vercelConfig = path.join(repositoryRoot, "apps/web-public/vercel.json");
 export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: "*.spec.ts",
@@ -30,7 +35,7 @@ export default defineConfig({
   reporter: "line",
   outputDir: path.join(repositoryRoot, "output/playwright/public-site"),
   webServer: {
-    command: `bun check && bunx vite build --outDir "${distDirectory}" --emptyOutDir && bunx vite preview --outDir "${distDirectory}" --host 127.0.0.1 --port ${port} --strictPort`,
+    command: `bun check && bunx vite build --outDir "${distDirectory}" --emptyOutDir && bun "${server}" --dist "${distDirectory}" --config "${vercelConfig}" --port ${port}`,
     cwd: path.join(repositoryRoot, "apps/web-public"),
     url: baseURL,
     reuseExistingServer: false,

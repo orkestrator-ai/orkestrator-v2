@@ -261,3 +261,7 @@ bound on that helper. A helper that never exits would stall every app-server
 start that waits on the refresh. That is a product robustness gap worth a
 bounded `execFile` timeout, but adding one would only turn this test's hang
 into an assertion failure, so it was not made as a flake fix.
+
+## Deadline change, still open (2026-11-15)
+
+`bridges/codex-bridge/src/runtime-env.test.ts` no longer gives this case its own 15 s budget (`}, 15_000)` removed), so it gets the shared 60 s default from `tests/default-test-timeout.ts`. This does not address the 2026-11-06 hypothesis that the first child spawn of the test process never reports its exit: if that is the cause, 60 s only delays the same failure. Not reproduced here; the file passed (`bun test --cwd bridges/codex-bridge ... ./src/runtime-env.test.ts`, with `fake-codex-app-server.test.ts` and `app-server-http.test.ts`, `--parallel=2`, 2.4 s). Next recurrence: record whether the `/bin/sh` child was alive and whether `exit` fired without `close`. The unbounded `execFile` in `refreshRuntimeEnvironment` remains a separate product gap.

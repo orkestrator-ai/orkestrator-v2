@@ -386,13 +386,27 @@ describe("database snapshots", () => {
     // A pipe capture waits for this child to close its copy of the pipe.
     test("settles at exit while a background child holds the output", async () => {
       const directory = await dataDir();
-      const started = Date.now();
-      expect(
-        await copyDatabaseInChildProcess(path.join(directory, "a"), path.join(directory, "b"), {
-          spawn: supervisorRunning("printf unsound; sleep 5 & exit 0"),
-        }),
-      ).toBe(false);
-      expect(Date.now() - started).toBeLessThan(4_000);
+      // The background child outlives the test unless it is stopped, and it
+      // holds the output for far longer than any host could take to settle. A
+      // regression that waits on the pipe would hang until the test's watchdog
+      // rather than race a wall-clock bound.
+      const holderPid = path.join(directory, "holder.pid");
+      try {
+        expect(
+          await copyDatabaseInChildProcess(path.join(directory, "a"), path.join(directory, "b"), {
+            spawn: supervisorRunning(
+              `printf unsound; sleep 600 & echo $! > ${JSON.stringify(holderPid)}; exit 0`,
+            ),
+          }),
+        ).toBe(false);
+      } finally {
+        const pid = Number(await fs.readFile(holderPid, "utf8").catch(() => 0));
+        if (pid > 0) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {}
+        }
+      }
     });
 
     test("a clean exit without a verdict is a failure, never a success", async () => {
@@ -422,7 +436,8 @@ describe("database snapshots", () => {
           event === "exit" || event === "close" ? child : once(event, listener)) as never;
         return child;
       };
-      const started = Date.now();
+      // Settling at all is the evidence the deadline fired; the test's budget is
+      // the hang watchdog, not an elapsed-time assertion.
       await expect(
         copyDatabaseInChildProcess(path.join(directory, "a"), path.join(directory, "b"), {
           spawn: lostExit,
@@ -430,7 +445,6 @@ describe("database snapshots", () => {
           settleGraceMs: 100,
         }),
       ).rejects.toThrow("never reported an exit");
-      expect(Date.now() - started).toBeLessThan(5_000);
     });
 
     test("a supervisor that cannot start rejects", async () => {
@@ -469,16 +483,34 @@ describe("database snapshots", () => {
         .map((line) => line.trim().split(/\s+/))
         .filter((parts) => Number(parts[1]) === pid && !parts[2]?.startsWith("Z"))
         .map((parts) => Number(parts[0]));
+    // A zombie still answers signal 0 until whoever adopted it reaps it, which
+    // is not this test's process; it has exited all the same.
     const alive = (pid: number) => {
       try {
         process.kill(pid, 0);
-        return true;
+      } catch {
+        return false;
+      }
+      try {
+        return !execFileSync("ps", ["-o", "stat=", "-p", String(pid)])
+          .toString()
+          .trim()
+          .startsWith("Z");
       } catch {
         return false;
       }
     };
     try {
-      for (let attempt = 0; attempt < 100; attempt++) {
+      // Wait for the supervisor and its blocked copy to exist (the readiness
+      // signal), then for them to be gone after the backend dies. Neither wait
+      // has a wall-clock deadline of its own: how long a loaded host takes to
+      // start or reap them is not what this test asserts. A parent that exits
+      // before both appear ends the first wait; the budget is the hang watchdog.
+      let parentExited = false;
+      parent.once("exit", () => {
+        parentExited = true;
+      });
+      while (!parentExited) {
         const supervisors = children(parent.pid!);
         descendants = [...supervisors, ...supervisors.flatMap(children)];
         if (descendants.length === 2) break;
@@ -486,8 +518,7 @@ describe("database snapshots", () => {
       }
       expect(descendants).toHaveLength(2);
       parent.kill("SIGKILL");
-      for (let attempt = 0; attempt < 100 && descendants.some(alive); attempt++)
-        await Bun.sleep(20);
+      while (descendants.some(alive)) await Bun.sleep(20);
       expect(descendants.some(alive)).toBe(false);
       removeStaleBackupTemporaries(directory);
       expect(await fs.readdir(path.dirname(target))).toEqual([]);

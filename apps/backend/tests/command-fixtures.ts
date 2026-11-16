@@ -1487,15 +1487,15 @@ exec '${realGit}' "$@"
   const ASYNC_TEST_WAIT_TIMEOUT_MS = 10_000;
 
   /**
-   * Per-test budget for the tests that use the wait helpers below.
+   * Per-test hang watchdog for the tests that use the wait helpers below.
    *
-   * Bun's default is 5s, which two of these tests can exhaust on their own: they
-   * await a helper twice, so the worst case is 2 x ASYNC_TEST_WAIT_TIMEOUT_MS
-   * before any fixture setup is counted. Without an explicit budget a slow run
-   * dies on Bun's generic "timed out after 5000ms" instead of the helper's message
-   * naming the condition that never became true.
+   * It matches the shared preload's default (`tests/default-test-timeout.ts`,
+   * 60s) rather than undercutting it: a test here runs real subprocesses
+   * (`spawnSync` bash, git, fake docker), and a host saturated by the aggregate
+   * can spend a 30s budget on process startup alone. It still fails a test that
+   * is stuck, and does not decide what a test asserts.
    */
-  const ASYNC_TEST_BUDGET_MS = 30_000;
+  const ASYNC_TEST_BUDGET_MS = 60_000;
 
   async function waitForPtyProcessCount(
     count: number,

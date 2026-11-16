@@ -11,7 +11,10 @@ tasks 1 and 2 re-checked and task 4 found on 2026-11-11 against `main` at
 task 4 acted on the same day
 ([evidence](../../development/container-qualification.md#backend-chosen-host-ports-on-rootless-docker-2026-11-11));
 task 2 acted on 2026-11-13 against `main` at `17d28238c`, on beelink2
-([evidence](../../development/container-qualification.md#docker-cp-busy-probe-copy-stream-stall-and-port-collision-runs-on-beelink2-2026-11-13)).
+([evidence](../../development/container-qualification.md#docker-cp-busy-probe-copy-stream-stall-and-port-collision-runs-on-beelink2-2026-11-13));
+task 2's GitHub ranges seed delivery built and task 5 split from it on
+2026-11-15 against `main` at `a8b89f154`
+([evidence](../../development/container-qualification.md#github-ranges-seed-directory-bind-on-beelink-2026-11-15)).
 Found by the retired to-do 0109's task 5, the rootless re-run on a
 freshly built image
 ([evidence](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)).
@@ -19,9 +22,10 @@ freshly built image
 ### Tasks
 
 1. **`docker cp` refused when a read-only bind's source is `nosuid`/`nodev`**: classify the refusal and decide whether to avoid it. Status: done (2026-11-10, the classification; still passing on 2026-11-11); the upstream report to Moby is drafted in [`docs/upstream-issues/moby-rootless-docker-cp-readonly-bind.md`](../../upstream-issues/moby-rootless-docker-cp-readonly-bind.md). On 2026-11-15 its duplicate search found the bug fixed upstream by [moby/moby#53981](https://github.com/moby/moby/pull/53981) (Docker Engine 29.10.0, in 29.10.0-rc.1 and rc.2, not in 29.9.3), so the report is marked do not file; when 29.10.0 is out, re-run its reproduction on beelink's rootless daemon and delete the report if `docker cp` works.
-2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop project seed files, configured project files and the GitHub ranges seed depending on it there. Status: open (2026-11-14: the user decided to keep the firewall's GitHub fetch anonymous and fix seed delivery so the fetch stays the exception, which makes the bind delivery agent work now rather than waiting on a recurrence). Done 2026-11-13: the probe on beelink2 (kernel 7.2.15) did not reproduce on either image store, and the three copies now retry a busy refusal twice and then fail with a typed error naming it. The bind delivery below is the open work. The firewall's GitHub fetch gets no token (the user, 2026-11-14).
+2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop the GitHub ranges seed depending on it there. Status: done 2026-11-15 (the GitHub ranges seed directory is bound read-only into every new firewall container and refreshed before each boot, so restricted boots read a seed under an hour old whenever the backend reached GitHub, with no copy; the firewall's fetch stays anonymous, the user's decision of 2026-11-14). Done 2026-11-13: the probe on beelink2 (kernel 7.2.15) did not reproduce on either image store, and the three copies now retry a busy refusal twice and then fail with a typed error naming it. Project seed files and configured project files moved to task 5.
 3. **An automatic port can collide twice in a row**: decide whether the start path's single retry should become a bounded few. Status: done 2026-11-10 (three retries; raised to ten on 2026-11-13 by 7750 (retired)).
 4. **Automatic ports still collide past three retries right after a rootless daemon restart**: decide how the start path should stop drawing ports that loopback churn holds. Status: done 2026-11-11 (on a rootless daemon the backend chooses automatic host ports itself; qualified on a disposable rootless daemon).
+5. **Project seed files and configured project files still reach a created container by `docker cp`**: deliver them through a bind as task 2 now does for the GitHub seed, once a host refuses those copies as busy again. Status: open (depends on a recurrence of task 2's busy refusal).
 
 ### 1. `docker cp` refused when a read-only bind's source is `nosuid`/`nodev`
 
@@ -205,9 +209,39 @@ Steps:
    daemon (`container-project-seed-docker.test.ts`). The recommended bind
    delivery is still not built: with no failing host it could not be shown
    to fix anything, and it is an image contract change in the input-staging
-   code. Act on it when the refusal recurs.
+   code. Act on it when the refusal recurs. Done 2026-11-15 for the GitHub
+   ranges seed, which needed no image change (below); project seed files
+   and configured project files are task 5.
+3. Done 2026-11-15 (the user's decision of 2026-11-14 made it agent work):
+   bind the GitHub ranges seed. What was built: the seed now lives alone in
+   `<data directory>/github-ranges-seed/github-ranges`
+   (`github-ranges-cache.ts`; a seed an older backend kept at
+   `github-ranges.txt` is moved in on first use), and the container that
+   runs the firewall, the egress gateway or a restricted runtime without
+   one, binds that directory read-only at `/etc/orkestrator-seed`, the path
+   the firewall already read, so no image change or capability bump was
+   needed. The backend refreshes the file at most hourly, writing it beside
+   the directory and renaming it in, with one fetch at a time and none for
+   five minutes after a failed one. It does so at creation and again just
+   before the start path boots a firewall container
+   (`github-ranges-seed-delivery.ts`, from `startContainerWithAgentAccounts`
+   and `prepareEgressGatewayForStart`'s `beforeGatewayBoot`); Docker never
+   boots these containers by itself, so this covers every boot. A container
+   created before the bind is given a fresh copy before each boot instead,
+   best effort, until it is rebuilt. Tests: `github-ranges-cache.test.ts`,
+   `github-ranges-seed-delivery.test.ts`, `github-ranges-seed-start.test.ts`,
+   `egress-gateway.test.ts` and `docker-image.test.ts`; live,
+   `container-live-github-seed.test.ts` (in the container live qualification
+   workflow), which passed on beelink's rootful Engine and on a disposable
+   rootless daemon with the data directory on the `nosuid,nodev` tmpfs
+   `/tmp` ([evidence](../../development/container-qualification.md#github-ranges-seed-directory-bind-on-beelink-2026-11-15)).
 
 **Decisions.**
+
+Done 2026-11-15 for the GitHub seed: its own directory bind rather than a
+place in the input revision, since the seed is shared by every container and
+replaced by rename, while revisions are per environment and fixed once
+staged. The project files are task 5.
 
 - **How should creation deliver files to a container that is not running?**
   - **Deliver them through a bind the backend already makes: project seed files and configured project files in the per-environment input revision, the GitHub seed beside it, read by the entrypoint as the staged inputs are (recommended, pending step 1).**
@@ -375,6 +409,49 @@ pause instead of recreating the container.
     - Cons: a start fails with a `port-conflict` that names no port the
       user can free, most often right after a daemon restart.
 
+### 5. Project seed files and configured project files still reach a created container by `docker cp`
+
+**Problem.** Task 2's busy refusal (`failed to mount … device or resource
+busy` on a copy into a created container) fails creation for a project with
+`.env` seed files or configured project files: both are copied into the
+created, not yet started, container (`copyProjectSeedFilesIntoContainer`,
+`stageConfiguredProjectFilesForContainer`), and a failed copy removes the
+container.
+
+**Context.** Split from task 2 on 2026-11-15, when the GitHub ranges seed,
+task 2's other copy, moved to a directory bind. Unlike that seed, these
+files are read by the entrypoint and workspace setup, not the firewall, and
+land in the workspace with the project's names, so a bind needs new
+entrypoint reads and a staged-inputs capability bump: an image contract
+change. The copies already retry a busy refusal after 1 and 3 s and then
+fail with a typed `unsupported-topology` error naming it.
+
+**Investigation.** The refusal was seen only on beelink2's rootless daemon on
+2026-11-09 and has not reproduced since, on beelink or beelink2, on either
+image store (task 2's step 1), so a bind delivery could not be shown to cure
+anything. When it recurs (`copy-in.snapshot-busy` in the backend log, or the
+typed error), record the daemon's mount options and whether `index=off` is
+among them, then build the delivery below with a live case on that host.
+
+**Decisions.**
+
+- **How should creation deliver these files?**
+  - **Stage them in the per-environment input revision, bound read-only, and have the entrypoint copy them into the workspace as it relays staged inputs (recommended).**
+    - Pros: no daemon archive path at creation; revocation and pruning
+      already work for revisions; start accepts read-only directory binds on
+      rootless.
+    - Cons: an image contract change (entrypoint reads, a staged-inputs
+      capability bump), with the old copy kept for older images; task 1's
+      refusal still applies to other copies when the data directory is
+      `nosuid`/`nodev`.
+  - **Keep the copy with its retries and typed error.**
+    - Pros: no change; the failure now says why.
+    - Cons: a host that refuses every copy cannot create containers for such
+      projects.
+  - **Start the container first and copy into the running container before setup reads the files.**
+    - Pros: copies into a running container work on the affected daemon.
+    - Cons: needs a wait-for-inputs handshake in the image, with a deadline.
+
 ## Current state
 
 - Start, `exec`, copies into a running container and copies out of any
@@ -392,7 +469,14 @@ pause instead of recreating the container.
   2026-11-09 (task 2). A copy into a created container the daemon refuses as
   busy is retried after 1 and 3 s; one still refused fails with
   `unsupported-topology` naming the busy filesystem (seed files and project
-  files), or is logged as `refusal=snapshot-busy` (the GitHub seed).
+  files, task 5), or is logged as `refusal=snapshot-busy` (the GitHub seed
+  copy a container created before its bind still gets).
+- Since 2026-11-15, new restricted runtimes and egress gateways bind the
+  GitHub ranges seed directory read-only, and the backend refreshes the seed
+  before each boot, so a restricted boot fetches `api.github.com/meta`
+  itself only when the backend could not reach GitHub in the last hour and
+  its seed is over a day old (task 2). The fetch stays anonymous. Containers
+  created earlier get a fresh copy before each boot until they are rebuilt.
 - On a rootless daemon, runtimes and gateways created from now on publish
   host ports the backend chose; they keep them across starts and daemon
   restarts, and a start that finds one held waits for it a few seconds
@@ -407,13 +491,13 @@ pause instead of recreating the container.
 
 ## Outstanding work
 
-- Task 2 (open): build the recommended bind delivery for the GitHub ranges
-  seed, project seed files and configured project files, with its live case
-  on a rootless daemon, so a restricted boot fetches `api.github.com/meta`
-  only when the backend's seed is missing or over a day old. When a host
-  refuses copies as busy again (`copy-in.snapshot-busy` in the backend log, or
-  the typed error), also record the daemon's full mount options and whether
-  `index=off` is among them.
+- Task 5 (open, waits on a recurrence): when a host refuses copies into a
+  created container as busy again (`copy-in.snapshot-busy` in the backend
+  log, or the typed error), record the daemon's full mount options and
+  whether `index=off` is among them, then build the bind delivery for
+  project seed files and configured project files with a live case there.
+- The seed bind's run on Docker Desktop is a manual check in
+  [7568](../manual-test/7568-manual-test-checklist.md).
 
 ## Assumptions and decisions
 
@@ -454,6 +538,51 @@ turn a slower boot into no boot.
   late seed copy is what sends a boot to the anonymous fetch. Its proof is a
   live case on a rootless daemon in which a restricted boot reads the bound
   seed and does not fetch.
+
+### Task 2: the GitHub seed gets its own directory bind (2026-11-15)
+
+Chose: a dedicated `github-ranges-seed/` directory under the data directory,
+bound read-only at `/etc/orkestrator-seed` into the container that runs the
+firewall. Why: a directory bind follows the backend's rename, so one bind
+serves every later boot, which a file bind or a copy cannot; the firewall
+already read that path, so older and current images need no change; and it
+is an ordinary read-only directory bind from the data directory, which every
+runtime already has for its input revision. Alternative: put the seed in the
+per-environment input revision, which is fixed once staged and so would need
+re-staging on every refresh.
+
+### Task 2: refresh before each boot, not on a timer (2026-11-15)
+
+Chose: refresh at creation and in the start path just before a firewall
+container boots, sharing one in-flight fetch and skipping fetches for five
+minutes after a failure. Why: Docker never boots these containers on its own
+(no restart policy, and the backend's start path brings up a gateway before
+its runtime), so the start path sees every boot; a timer would fetch for
+hosts with no restricted containers and needs its own stop. The cost is one
+`docker inspect` per booted firewall container and, when the seed is over an
+hour old, one fetch of at most 15 s before the start. A runtime behind a
+gateway, or one whose environment is in full mode, is not inspected for the
+seed (`deliverRuntimeSeedBeforeBoot`); only a runtime with no environment
+record, whose mode is unknown, is inspected without running a firewall. The
+container benchmark's `bootRuntime` calls the same helpers, so its Docker
+call counts include these inspects.
+
+### Task 2: keep the copy only for containers created before the bind (2026-11-15)
+
+Chose: a container without the seed mount is given a fresh `docker cp` of
+the seed before each boot, best effort. Why: those containers would
+otherwise boot on the copy made at creation and fetch once it is a day old;
+on the hosts where the copy works (all seen since 2026-11-09) this keeps
+them off the anonymous fetch until they are rebuilt, and a refused copy
+leaves them as they were.
+
+### Task 5: split from task 2 (2026-11-15)
+
+Chose: move project seed files and configured project files to a task of
+their own, waiting on a recurrence. Why: the user's 2026-11-14 decision was
+about keeping the firewall's fetch anonymous, which needed only the GitHub
+seed moved; the project files need an image contract change that, with no
+failing host since 2026-11-09, could not be shown to fix anything.
 
 ### Task 1: the Moby report lives in `docs/upstream-issues/` (2026-11-14)
 

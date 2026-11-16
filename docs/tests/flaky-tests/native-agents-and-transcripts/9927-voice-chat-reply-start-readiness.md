@@ -1,7 +1,7 @@
 # Voice chat slow-reply fixture is not started when released
 
 - **ID:** 9927
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-10
 - **Test:** `agent voice chat tools > a slow reply is heard later with listen`.
 - **File:** `apps/backend/src/core/control-mcp/agent-voice-chat.test.ts:324`.
@@ -27,3 +27,11 @@
   It does edit the imported storage facade and pane-layout code, so the failure
   is left for verification rather than excused as unrelated solely from the pass.
   No assertion, budget, or product behavior was changed to hide it.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** The test assigned the reply resolver only when the reply handler started, so a slow start left `finish` undefined. Commit `784094ec4` (2026-11-10) creates the resolver before the harness (`Promise.withResolvers`); the observed base `60afa4b71` predates it.
+- **Fix:** Already fixed by `784094ec4`. Also, both `listen` calls that waited 1 s for a reply to settle now use the tool's maximum wait (`AGENT_VOICE_CHAT_LIMITS.waitMaxMs`); `listen` returns as soon as the reply settles, so this is a bound, not a sleep. `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup-node.ts`, `tests/setup.ts`), makes 60 s the default per-test and hook budget, a hang watchdog only.
+- **Reproduced:** no — the resolver gap is already gone in the current test. Under the contention runner the unchanged file, run as the second file of a non-isolated run (so on Bun's 5 s budget), timed out `a slow reply is heard later with listen` 3 of 5 times; the changed file passed 5 of 5 isolated under the same runner.
+- **Stress:** `mise run test:logged -- --name repro-be-after -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --burners 6 -- bun test --preload ../../tests/setup-node.ts ./tests/commands-environment.test.ts ./src/core/control-mcp/agent-voice-chat.test.ts ./src/core/container-host-reachability.test.ts -t "pending rename|slow reply|cannot be written|remediation" --rerun-each=5 --parallel=1'` passed (every selected case 5 of 5) at host load about 80; the owners also passed in the wider contention runs of 2026-11-15.
+- **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).

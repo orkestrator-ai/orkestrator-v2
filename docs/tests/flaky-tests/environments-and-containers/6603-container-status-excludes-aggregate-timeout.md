@@ -1,7 +1,7 @@
 # Container status: exclude repair timed out in the aggregate suite
 
 - **ID:** 6603
-- **Status:** open
+- **Status:** resolved
 - **Previously:** 9834, renumbered on 2026-11-06 because three cases shared it (to-do 7142, retired 2026-11-10; see [number claims](../../../number-claims/README.md))
 - **Date observed:** 2026-11-05
 - **Test:** `container status > repairs excludes after same-container replacement, deletion, rewrite and failed housekeeping`
@@ -124,3 +124,11 @@ mise run test:logged -- --name watcher-triage-local-scan -- bun test --cwd apps/
 `mise run flaky:recurrence -- 6603 --base 08d3da4a23cfe2ecc34fba663ca27e765f7924a9 --registry-ref origin/main` found the resolution commit `ee2cc84234` in the base. Reopen the case: the current deadline is already 30 s, and this recurrence does not justify another budget increase.
 
 Evidence: `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.dH765N/` (compressed group logs); JUnit under `/private/tmp/ork-watcher-failure-triage.0oarZv/`. [The complete report](../../../development/worktree-watcher-validation.md) contains the exact group outcomes, commands and non-green isolated owners. Passing alone establishes intermittence, not a cause or a fix. No related assertion, timeout, skip or implementation changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** The exclude-repair case (two repository inits, seven real scans, 1.3 s idle) exceeded the file's own 30 s budget under load.
+- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup-node.ts`, `tests/setup.ts`), makes 60 s the default per-test and hook budget, a hang watchdog only. The file's own `setDefaultTimeout(30_000)`, which undercut the preload, now sets `DEFAULT_TEST_TIMEOUT_MS` (60 s) explicitly, because in a run without `--parallel`/`--isolate` Bun applies a preload's `setDefaultTimeout` to the first test file only.
+- **Reproduced:** no — the 30 s overrun was not re-created; this is a raised hang watchdog on real subprocess completion, which is weaker evidence.
+- **Stress:** `mise run test:logged -- --name ec-stress-b -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --core 13 --burners 6 -- bun test --preload ../../tests/setup-node.ts <seventeen container, pipeline, move, worktree and native-agent owners, this one included> --rerun-each=2 --parallel=1'` at host load about 80: 1,139 passed, 1 failed — `git fsmonitor > fixture repositories inherit fsmonitor off from the test preload` on its second rerun, which fails the same way without contention and with the unchanged file (`git-fsmonitor.test.ts` is not rerun-safe).
+- **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).

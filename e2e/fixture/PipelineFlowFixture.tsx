@@ -44,6 +44,9 @@ import { appCommandStore } from "../../apps/web/src/test/app-command-store";
  * - `code-rewind`: a finished single-review pipeline whose Build wrote the
  *   package plan and recorded the commit it started from, for "Rewind code to
  *   here" and "Prepare package again".
+ * - `reviewer-rerun`: a two-reviewer panel that consolidated, paused in Address
+ *   Findings, so one reviewer can be rerun on its own; the fake backend answers
+ *   "Restart reviewer" with the rewind the real one records.
  *
  * `&longTranscript` gives the current session a transcript that overflows its
  * inspector; `&longTranscript=report` also files a review report in its footer;
@@ -377,8 +380,108 @@ function validationHistory(): BuildPipeline {
   });
 }
 
+const RERUN_PASS = "rerun-pass";
+
+/** A consolidated two-reviewer pass, the pipeline paused in Address Findings. */
+function reviewerRerun(): BuildPipeline {
+  const pass = { reviewPassId: RERUN_PASS };
+  return base({
+    phase: "paused",
+    pausedFromPhase: "addressing",
+    reviewers: PANEL.slice(0, 2),
+    // The smallest package the snapshot validator accepts (a legacy inline one).
+    reviewPackage: {
+      id: "rerun-package",
+      round: 1,
+      preparedAt: at(760),
+      targetBranch: "main",
+      baseRef: "a".repeat(40),
+      headRef: "b".repeat(40),
+      commit: null,
+      completeDiff: "",
+      changedFiles: [],
+      validation: [],
+      skippedFiles: [],
+      uncommittedFiles: [],
+      limitations: [],
+    } as BuildPipeline["reviewPackage"],
+    currentSessionIndex: 4,
+    sessions: [
+      stage("build", "build", 30, 600),
+      stage("fix", "prep", 640, 120, { label: "Package Preparation Session" }),
+      stage("review", "rerun-rev-1", 800, 200, {
+        ...pass,
+        label: "Review 1",
+        reviewerOutcome: "completed",
+      }),
+      stage("review", "rerun-rev-2", 800, 220, {
+        ...pass,
+        label: "Review 2",
+        agent: "codex",
+        model: "gpt-6.1-sol",
+        reviewerOutcome: "completed",
+      }),
+      stage("review", "rerun-consolidation", 1030, 90, { ...pass, label: "Consolidation" }),
+      stage("address", "rerun-address", 1130, 60),
+    ],
+  });
+}
+
+/**
+ * What `restart_build_pipeline_reviewer` leaves for a slot of a consolidated
+ * pass: Consolidation and every later step superseded by one rewind, the panel
+ * live again with that slot queued and the other slot's report kept.
+ */
+function rerunReviewerSlot(current: BuildPipeline, reviewerId: string): Partial<BuildPipeline> {
+  const rewindId = "reviewer-rerun";
+  const supersededAt = at(1300);
+  const sessions = current.sessions.map((session) =>
+    session.sessionKey === "rerun-consolidation" || session.phase === "address"
+      ? { ...session, supersededBy: rewindId, supersededAt }
+      : session,
+  );
+  return {
+    phase: "reviewing",
+    pausedFromPhase: undefined,
+    sessions,
+    rewinds: [
+      {
+        id: rewindId,
+        at: supersededAt,
+        fromPhase: current.phase,
+        fromIteration: current.iteration,
+        iteration: current.iteration,
+        step: { kind: "session", phase: "review" },
+        sessionKey: reviewerId,
+        supersededSessions: 2,
+      },
+    ],
+    reviewFanout: {
+      reviewers: [
+        { id: RERUN_PASS, agent: "claude" as const, model: "opus", sessionKey: "rerun-rev-1" },
+        {
+          id: `${RERUN_PASS}:1`,
+          agent: "codex" as const,
+          model: "gpt-6.1-sol",
+          sessionKey: "rerun-rev-2",
+        },
+      ].map(({ sessionKey, ...reviewer }) =>
+        sessionKey === reviewerId
+          ? { ...reviewer, status: "pending" as const }
+          : {
+              ...reviewer,
+              status: "completed" as const,
+              sessionKey,
+              report: TEST_STRUCTURED_REVIEW_REPORT,
+            },
+      ),
+    },
+  };
+}
+
 function scenario(): BuildPipeline {
   const name = new URLSearchParams(window.location.search).get("scenario");
+  if (name === "reviewer-rerun") return reviewerRerun();
   if (name === "validation-history") return validationHistory();
   if (name === "nested-rewinds") return nestedRewinds();
   if (name === "validation-rewind") return validationRewind(false);
@@ -755,6 +858,9 @@ function installBackend(pipeline: BuildPipeline) {
             },
           });
         case "restart_build_pipeline_reviewer":
+          if (!current.reviewFanout) {
+            return next(rerunReviewerSlot(current, String(args?.reviewerId)));
+          }
           return next({
             reviewFanout: {
               reviewers: current.reviewFanout!.reviewers.map((reviewer) =>

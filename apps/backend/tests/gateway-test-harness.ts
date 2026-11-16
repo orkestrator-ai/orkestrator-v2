@@ -318,10 +318,20 @@ export async function startGateway(
   return { gateway, info, dataDir, rendererRoot };
 }
 
+/**
+ * A hang watchdog, not an assertion: every caller waits for a condition the
+ * code under test will make true, and none asserts that it stays false. The
+ * deadline therefore must not be what a slow host can reach (a gateway booted
+ * beside a hundred other workers took more than the old 2 s to proxy its first
+ * request); it only turns a condition that never arrives into a named failure
+ * before the test's own budget (`tests/default-test-timeout.ts`) expires.
+ */
+const WAIT_UNTIL_HANG_WATCHDOG_MS = 30_000;
+
 export async function waitUntil(
   predicate: () => boolean,
   message: string,
-  timeoutMs = 2000,
+  timeoutMs = WAIT_UNTIL_HANG_WATCHDOG_MS,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {

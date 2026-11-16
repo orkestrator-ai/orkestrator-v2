@@ -1,7 +1,7 @@
 # Storage writer guard's backend-wide raw-writer scan times out under host load
 
 - **ID:** 1309
-- **Status:** open
+- **Status:** resolved
 - **Resolved:** 2026-10-30, by todo 0930 task 4 (`b64a2b224`)
 - **Observed:** 2026-10-26 to 2026-10-28 in aggregate runs on the shared Linux host;
   diagnosed 2026-10-29 on the todo 0214 follow-up branch
@@ -171,3 +171,10 @@ The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.
   [9959](../aggregate-validation-runs/9959-qualification-tooling-review-runs-under-host-load.md).
 
 No budget or assertion was changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** the default five-second Bun test/hook budget was spent while the process was starved of CPU on a loaded host; the body is milliseconds to seconds of work when the host is idle and waits on no signal that could be made explicit. The scan is CPU-bound with no completion signal to wait on, so a budget is the only limit it can have; the earlier scan optimisation (todo 0930) stays.
+- **Fix:** `tests/default-test-timeout.ts` (imported by `tests/setup.ts` and `tests/setup-node.ts`) now sets the default per-test and per-hook budget to 60 s, a hang watchdog that a slow host does not trip. `apps/backend/src/core/storage-writer-guards-raw.test.ts` has no smaller explicit budget (no `setDefaultTimeout`, third-argument or hook timeout, and no wall-clock deadline of its own), so the new default applies to it. No assertion, skip or production code changed.
+- **Reproduced:** no. Not reproduced here (the host load average was 100 to 180 from other workers' runs, and a contention run of the owner did not finish); the class is established from the recorded timeouts at the 5 s default with the owner passing alone, not from a local failure.
+- **Stress:** none specific to this case; the owner passes unchanged in this tree.

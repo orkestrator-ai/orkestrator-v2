@@ -417,6 +417,13 @@ export const PendingSteerSchema = openRecord({
   expectedRunId: Schema.String,
   onMissedTurn: Schema.optional(Schema.Literals(["refuse", "new-turn"])),
   turnRequestId: optionalString,
+  /**
+   * `user`: a redirect the user typed for the running turn (composer, Agent
+   * Info, public CLI). A provider that holds steers until a step boundary
+   * withdraws it when that turn is stopped first (to-do 8100 (retired)). Absent for
+   * mail, queue and pipeline steers, which must still reach the agent.
+   */
+  origin: Schema.optional(Schema.Literal("user")),
   state: Schema.Literals(["prepared", "unknown"]),
   /** Source reservation survives until delivery or definitive non-delivery. */
   sourceQueue: Schema.optional(Schema.Literal(true)),
@@ -712,20 +719,6 @@ export const SuborkTranscriptSchema = openRecord({
   messageCount: optionalNumber,
   truncated: optionalBoolean,
   transcript: Schema.optional(Schema.Unknown),
-});
-
-/** `AgentInteractionObservation` (backend `native-agent-service-shared.ts`). */
-export const InteractionObservationSchema = openRecord({
-  provider: Schema.optional(Schema.String),
-  kind: Schema.optional(Schema.String),
-  workflowSurface: Schema.optional(Schema.Unknown),
-  phase: Schema.optional(Schema.String),
-  firstDetectedAt: Schema.optional(Schema.Finite),
-  lastDetectedAt: Schema.optional(Schema.Finite),
-  count: Schema.optional(Schema.Finite),
-  providerState: Schema.optional(Schema.String),
-  eventualOutcome: optionalString,
-  eventualAt: optionalNumber,
 });
 
 /** `ViewRevisionStamp` (view-sync.ts). */

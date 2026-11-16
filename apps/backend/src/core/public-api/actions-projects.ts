@@ -24,7 +24,7 @@ import {
   optionalString,
   requiredId,
 } from "./input.js";
-import { publicProjectSummary } from "./summaries.js";
+import { PROJECT_REMOVE_EFFECTS, publicProjectSummary } from "./summaries.js";
 import type {
   ExecuteOutcome,
   MutationActionHandler,
@@ -373,13 +373,20 @@ async function removeEmptyProject(
     // project remains usable, and report the cleanup failure.
     const removed = !(await storage.getProject(projectId));
     if (!removed) await storage.releaseProjectRemovalFence(projectId).catch(() => undefined);
-    if (removed) return { state: "succeeded", result: { removed: projectId, ...extra } };
+    if (removed) {
+      return {
+        state: "succeeded",
+        result: { removed: projectId, effects: PROJECT_REMOVE_EFFECTS, ...extra },
+      };
+    }
     throw error;
   }
   return {
     state: "succeeded",
-    // Registration only: checkouts on disk and remote repositories are untouched.
-    result: { removed: projectId, effects: "registration-only", ...extra },
+    // The registration and this machine's tickets, ticket images, labels,
+    // notes and feature plans for it (to-do 5820); checkouts on disk, remote
+    // repositories and other machines' copies are untouched.
+    result: { removed: projectId, effects: PROJECT_REMOVE_EFFECTS, ...extra },
   };
 }
 

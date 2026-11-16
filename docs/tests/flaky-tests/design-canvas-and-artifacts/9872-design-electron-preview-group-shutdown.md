@@ -13,3 +13,7 @@
 - **Hypothesis:** probing a process group with signal zero may observe a group with no live members during shutdown. The original process table was not captured, so the cause remains unconfirmed. A standalone `bun run dev` shutdown diagnostic did not reproduce the failure.
 - **Mitigation:** cleanup now enumerates the exact owned group's live members, excludes zombies, checks membership before signaling, and waits for the runtime to reap the leader. `EPERM` is accepted only after enumeration proves that no live group member remains. Errors with live members still fail qualification and prevent profile removal.
 - **Verification:** the owning Electron scenario passed three repetitions (50.7 seconds) after the membership check. `tests/unit/design-qualification-processes.test.ts` also covers an exited group whose mocked kernel signal probe would report it present, as well as live descendants, early exit, forced termination and repeated cleanup. Retain this case open until the original `EPERM` condition is directly characterized.
+
+## Triage note (2026-11-15)
+
+Not changed. The cleanup mitigation recorded above (enumerating the owned group's live members before `SIGKILL`, and accepting `EPERM` only when none remain) is already in place. The case waits on the original `EPERM` condition being characterized, which needs an Electron run this sweep does not make. Stays `open`.

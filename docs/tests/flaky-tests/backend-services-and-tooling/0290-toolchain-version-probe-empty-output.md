@@ -1,7 +1,7 @@
 # Toolchain version probe sometimes observes empty output
 
 - **ID:** 0290
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-17
 
 ## Codex catalogue review validation — 2026-10-17
@@ -62,3 +62,10 @@ Evidence: host temporary `orkestrator-test-run.Db1a7X/workspace-web-backend-desk
 (compressed on aggregate finalization). Unchanged owner passed alone in 8.3 s:
 `mise run test:logged -- --name repair-toolchain-owner -- bun test --cwd packages/toolchain ./src/manager.test.ts --parallel=1 --only-failures`.
 Cause and target-branch independence remain unproven.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** a product race in `probeExecutable` (`packages/toolchain/src/executable-checks.ts`). It judged the version output on the child's `exit` event, which Node/Bun may emit before the last stdout chunk has been read. On a loaded host the version line arrived after `exit`, so the probe saw an empty buffer and rejected with `reported an unexpected version: no output`.
+- **Fix:** the probe settles on `close`, which follows the end of both stdio streams. The existing timeout still bounds a child that never ends. New `packages/toolchain/src/executable-checks.test.ts` emits `exit`, then the output, then `close`, and checks that the probe accepts a correct version and still names a wrong one. The fake spawn in `manager.test.ts` now emits `close` after `exit`, as a real child does.
+- **Reproduced:** yes, by injecting the event order rather than load. Against the unchanged `executable-checks.ts` both new tests failed (`codex reported an unexpected version: no output`); with the fix both pass. Base `a8b89f1541e7abb6af36d45121593ae14640a3ca`.
+- **Stress:** `mise run test:logged -- --name f3-toolchain -- bun --cwd=packages/toolchain test --preload ../../tests/setup-node.ts ./src` passed (whole package). Not stressed under contention.

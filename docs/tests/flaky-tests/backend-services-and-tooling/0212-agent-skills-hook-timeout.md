@@ -1,7 +1,7 @@
 # Skill scanning fixture hook exceeds the aggregate deadline
 
 - **ID:** 0212
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `scanAgentSkills > bounds entries per root and total skills across plugin roots`
 - **Owning file:** `apps/backend/src/core/agent-skills.test.ts`.
@@ -35,3 +35,10 @@ The unchanged owning file passed alone with
 `mise run test:logged -- --name agent-skills-isolated -- bun test --cwd apps/backend ./src/core/agent-skills.test.ts --parallel=1 --only-failures`
 (exit 0, 3.6 seconds). This matches the existing concurrent fixture-I/O
 hypothesis; no deadline, assertion or skip was changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** the `beforeEach`/`afterEach` fixture hooks (and, in the recorded runs, the 2,500-file scan case) ran against the default five-second hook budget while the host was saturated with other worktrees' suites.
+- **Fix:** `tests/default-test-timeout.ts` (imported by `tests/setup.ts` and `tests/setup-node.ts`) sets the default per-test and per-hook budget to 60 s. The one smaller explicit budget in `apps/backend/src/core/agent-skills.test.ts`, a `20_000` third argument on `bounds entries per root and total skills across plugin roots`, was removed so that case gets the same 60 s watchdog (it creates 2,500 files and has no signal to wait on). No assertion or skip changed.
+- **Reproduced:** no. The host load average was 100 to 180 from other workers' runs, so no clean contention run was possible; the class is established from the recorded hook timeouts with the owner passing alone.
+- **Stress:** the owner passes unchanged in this tree (with the other changed owners, one `bun test --parallel=3` run).

@@ -426,7 +426,11 @@ describe("ACP bridge", () => {
       env: {
         FAKE_ACP_HANG_INITIALIZE: "1",
         FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
-        ACP_RPC_TIMEOUT_MS: "100",
+        // Far past the test's watchdog. A short RPC timeout raced the fake
+        // agent's own startup: on a loaded host it expired and killed the
+        // agent before it wrote `start:`, so the wait below never saw it.
+        // Only the client disconnect can reap the hung session in this test.
+        ACP_RPC_TIMEOUT_MS: "3600000",
       },
     });
     const controller = new NativeAbortController();

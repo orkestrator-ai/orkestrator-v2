@@ -1,7 +1,7 @@
 # Monaco runtime fixture startup deadline
 
 - **ID:** 9865
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `real Monaco defaults and every Vite worker route initialize in Chromium`
 - **File:** `e2e/MonacoRuntime.spec.ts:3`
@@ -58,3 +58,26 @@ The desktop Monaco fixture missed its startup deadline.
 ## Environment-list UI main merge — 2026-10-24
 
 The aggregate recurrence passed in the complete unchanged owning-file rerun. Exact commands, durations, merge parents, aggregate results and evidence are retained in [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
+
+## Triage note (2026-11-15)
+
+Class A candidate (Playwright's default 5 s assertion / 30 s test deadline expiring on a loaded host). Not changed. The fix would be hang-watchdog defaults in `e2e/playwright.config.ts` (`expect.timeout` and `timeout`), but that config is shared with every group's component browser specs, so it is left for a separate decision rather than changed in a per-group sweep. Not reproduced; the browser suite was not run. Stays `open`.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** every recorded failure is a Playwright default deadline
+  expiring on a loaded host while the spec waited on a real signal: `.monaco-editor` not visible within the 5 s `expect` default (line 25) while Monaco started.
+  No wrong value, crash or lost input is recorded. `e2e/MonacoRuntime.spec.ts` passes no smaller
+  timeout of its own at the failing calls.
+- **Fix:** `e2e/playwright.config.ts`, which runs this component spec, now sets
+  `timeout: 120_000` (was Playwright's 30 s default) and
+  `expect: { timeout: 30_000 }` (was 5 s). Navigations have no timeout of
+  their own, so they are bounded by the 120 s test budget. Both budgets are
+  hang watchdogs on real signals, not speed checks.
+- **Reproduced:** no — the recorded failure was not reproduced. The evidence
+  is a rerun, under the new config, of the component specs that had failed in
+  a loaded run (112 passed); that is not a targeted reproduction of this case,
+  and a raised budget is weaker evidence than a reproduced fix.
+- **Reopen:** a recurrence that hangs near the new budgets (120 s test, 30 s
+  assertion) means the signal never arrived rather than arrived late; reopen
+  this case.

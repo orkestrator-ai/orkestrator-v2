@@ -1,7 +1,7 @@
 # Public-API harness tracking tests hit the 5 s default timeout under host load
 
 - **ID:** 1240
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-10-28, todo 0731 branch validation
 - **Tests:** `cleanup drains lifecycle work before releasing tracking and diagnostics`
   (`:43`), `restart releases the old runtime while the replacement tracks and
@@ -46,3 +46,10 @@ about 35 and the backend group twice as slow as an hour earlier (665.7 s). The
 runner's rerun of the unchanged owner alone passed (6.6 s). The run's other
 deadline failures are in aggregate case
 [9970](../aggregate-validation-runs/9970-hidden-window-specs-review-rerun-under-host-load.md).
+
+## Resolution (2026-11-15)
+
+- **Root cause:** the default five-second Bun test/hook budget was spent while the process was starved of CPU on a loaded host; the body is milliseconds to seconds of work when the host is idle and waits on no signal that could be made explicit. The `afterEach` hook that timed out (13.6 s) is covered the same way.
+- **Fix:** `tests/default-test-timeout.ts` (imported by `tests/setup.ts` and `tests/setup-node.ts`) now sets the default per-test and per-hook budget to 60 s, a hang watchdog that a slow host does not trip. `apps/backend/src/core/public-api/test-support.test.ts` has no smaller explicit budget (no `setDefaultTimeout`, third-argument or hook timeout, and no wall-clock deadline of its own), so the new default applies to it. No assertion, skip or production code changed.
+- **Reproduced:** no. Not reproduced here (the host load average was 100 to 180 from other workers' runs, and a contention run of the owner did not finish); the class is established from the recorded timeouts at the 5 s default with the owner passing alone, not from a local failure.
+- **Stress:** none specific to this case; the owner passes unchanged in this tree.

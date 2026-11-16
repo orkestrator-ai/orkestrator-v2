@@ -116,7 +116,7 @@ describe("where a runtime's firewall runs", () => {
       network: "ork-net",
       publishArguments: ["-p", "127.0.0.1::4097/tcp"],
       addHostGateway: true,
-      githubSeed: null,
+      githubSeedDirectory: null,
       policyEnvironment: { NETWORK_MODE: "restricted" },
       limits: { memory: true, pids: false },
       logArguments: ["--log-driver", "local"],
@@ -135,10 +135,11 @@ describe("where a runtime's firewall runs", () => {
     expect(
       egressGatewayCreateArguments({ ...spec, hostAliasTarget: "10.0.2.2" }).join(" "),
     ).toContain("--add-host host.docker.internal:10.0.2.2");
-    // The seed is copied in after creation, even when there is one.
+    // The seed directory is bound read-only where the firewall reads it, so
+    // every boot sees the seed as last refreshed and nothing is copied in.
     expect(
-      egressGatewayCreateArguments({ ...spec, githubSeed: "/data/github-ranges.txt" }).join(" "),
-    ).not.toContain("github-ranges");
+      egressGatewayCreateArguments({ ...spec, githubSeedDirectory: "/data/github-ranges-seed" }),
+    ).toContain("type=bind,src=/data/github-ranges-seed,dst=/etc/orkestrator-seed,readonly");
   });
 
   test("the name checks' rollback switch reaches only a new gateway's policy", () => {
@@ -283,6 +284,44 @@ exec sh -c "$(printf '%s' "$5" | sed 's#/run/orkestrator-firewall#${dir}#g')"
     );
   });
 
+  test("the GitHub seed hook runs just before a gateway boots, and never for one already applied", async () => {
+    await withDockerScript(await fakeDaemon({ gatewayRunning: false }), async (log) => {
+      const hooked: string[] = [];
+      expect(
+        await prepareEgressGatewayForStart("wl", {
+          pollMs: 1,
+          beforeGatewayBoot: async (id) => {
+            hooked.push(id);
+            hooked.push(`calls-before:${(await log.read()).includes(`start ${GATEWAY}`)}`);
+          },
+        }),
+      ).toBe("ready");
+      expect(hooked).toEqual([GATEWAY, "calls-before:false"]);
+    });
+    // A failing hook never stops the start: the firewall then fetches itself.
+    await withDockerScript(await fakeDaemon({ gatewayRunning: false }), async (log) => {
+      expect(
+        await prepareEgressGatewayForStart("wl", {
+          pollMs: 1,
+          beforeGatewayBoot: async () => {
+            throw new Error("seed unavailable");
+          },
+        }),
+      ).toBe("ready");
+      expect((await log.read()).split("\n")).toContain(`start ${GATEWAY}`);
+    });
+    await withDockerScript(await fakeDaemon({ gatewayRunning: true }), async () => {
+      let hooked = 0;
+      await prepareEgressGatewayForStart("wl", {
+        pollMs: 1,
+        beforeGatewayBoot: async () => {
+          hooked += 1;
+        },
+      });
+      expect(hooked).toBe(0);
+    });
+  });
+
   test("a running gateway's applied firewall is read once, and a just-created runtime is not inspected", async () => {
     rememberNetworkOwner("wl", GATEWAY);
     await withDockerScript(await fakeDaemon({ gatewayRunning: true }), async (log) => {
@@ -319,10 +358,20 @@ exec sh -c "$(printf '%s' "$5" | sed 's#/run/orkestrator-firewall#${dir}#g')"
         firewallAfterRestart: '{"state":"applied"}',
       }),
       async (log) => {
-        expect(await prepareEgressGatewayForStart("wl", { pollMs: 1 })).toBe("ready");
+        let hooked = 0;
+        expect(
+          await prepareEgressGatewayForStart("wl", {
+            pollMs: 1,
+            beforeGatewayBoot: async () => {
+              hooked += 1;
+            },
+          }),
+        ).toBe("ready");
         expect(
           (await log.read()).split("\n").filter((line) => line === `restart ${GATEWAY}`),
         ).toHaveLength(1);
+        // The restart is a boot too, so it reads a freshly refreshed seed.
+        expect(hooked).toBe(1);
       },
     );
   });
@@ -508,7 +557,7 @@ esac
             network: "network",
             publishArguments: [],
             addHostGateway: false,
-            githubSeed: null,
+            githubSeedDirectory: null,
             policyEnvironment: {},
             limits: { memory: false, pids: false },
             logArguments: [],

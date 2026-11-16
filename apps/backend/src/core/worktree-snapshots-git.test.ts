@@ -1,5 +1,6 @@
 import { eventSink } from "./backend-emit.js";
 import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { DEFAULT_TEST_TIMEOUT_MS } from "../../../../tests/default-test-timeout.js";
 import { promises as fs, watch } from "node:fs";
 import path from "node:path";
 import { WORKTREE_SNAPSHOT_CHANGED_EVENT } from "@orkestrator/protocol/worktree-snapshots";
@@ -18,7 +19,13 @@ import { startWorktreeWatcher } from "./worktree-watcher.js";
  * a read of the cache is not asserted, because a late event can invalidate it.
  */
 const EVENTS_CAN_BE_LOST = process.platform === "darwin";
-const DETECTION_DEADLINE_MS = EVENTS_CAN_BE_LOST ? 180_000 : 15_000;
+/**
+ * On Linux every detection and settle below waits for a real signal (a published
+ * scan revision, scans settling) and never repeats the change, so its deadline
+ * is only a hang watchdog: well past anything a loaded host needs, and below the
+ * shared preload's 60 s test budget so a stuck wait still names its condition.
+ */
+const DETECTION_DEADLINE_MS = EVENTS_CAN_BE_LOST ? 180_000 : 45_000;
 const REPEAT_CHANGE_EVERY_MS = 1_000;
 /**
  * The shared owner's minimum gap between local scans. The production 2 s default
@@ -29,9 +36,12 @@ const REPEAT_CHANGE_EVERY_MS = 1_000;
 const SCAN_GAP_MS = 250;
 
 // This slow-tier file creates real repositories/worktrees and waits for
-// subprocess cleanup. Give that fixture work its own bounded host budget;
-// explicit operation deadlines and shorter test budgets remain unchanged.
-setDefaultTimeout(EVENTS_CAN_BE_LOST ? 2 * DETECTION_DEADLINE_MS : 30_000);
+// subprocess cleanup. Elsewhere the shared preload's hang watchdog
+// (tests/default-test-timeout.ts, 60 s) bounds each case; macOS needs room for
+// its repeated changes.
+// The Linux budget equals the preload's: in a run without `--parallel` Bun
+// applies a preload's setDefaultTimeout to the first test file only.
+setDefaultTimeout(EVENTS_CAN_BE_LOST ? 2 * DETECTION_DEADLINE_MS : DEFAULT_TEST_TIMEOUT_MS);
 
 /**
  * The shared owner against real Git, a real linked worktree and the real
@@ -67,7 +77,7 @@ function run(cwd: string, ...args: string[]): void {
   if (result.exitCode !== 0) throw new Error(result.stderr.toString());
 }
 
-async function until(predicate: () => boolean, timeoutMs = 15_000): Promise<void> {
+async function until(predicate: () => boolean, timeoutMs = DETECTION_DEADLINE_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error("condition not reached before the deadline");

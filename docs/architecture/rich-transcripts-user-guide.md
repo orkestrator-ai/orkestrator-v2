@@ -148,8 +148,8 @@ unavailable.
 - Browser access runs them in a sandboxed frame on a separate content origin.
   Browsers isolate origins but cannot guarantee CPU isolation: a runaway
   artifact can slow the tab until you press Stop.
-- The hosted web client shows static reports as their saved preview, with Source
-  and export, because its security policy cannot run the document frame.
+- The hosted web client shows static reports as selectable documents, like the
+  desktop and browser clients.
 - Previews, Mermaid diagrams and HTML verification need the backend's
   headless Chromium. Without it, new diagrams and HTML cannot be verified, and
   agents are told so; charts, tables, code and workflow snapshots still render,

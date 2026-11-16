@@ -176,3 +176,12 @@ export function publicSessionSummary(
 export function logicalKey(environmentId: string, tabId: string): string {
   return nativeTabLogicalSessionKey(environmentId, tabId);
 }
+
+/**
+ * What a completed `project.remove` deleted: the registration and this
+ * machine's tickets, ticket images, labels, notes and feature plans for the
+ * project (to-do 5820). Checkouts, remote repositories and other machines'
+ * copies are never touched. Shared with the reconciler, which reports it for
+ * a removal that finished before a restart.
+ */
+export const PROJECT_REMOVE_EFFECTS = "registration-and-local-content";

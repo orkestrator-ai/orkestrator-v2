@@ -409,7 +409,9 @@ print -- '${QUERY_END}'`,
     // universal variables or vendor startup snippets.
     const run = spawnSync("fish", ["--no-config", "-c", `${script}\ncomplete -C '${line}'`], {
       encoding: "utf8",
-      timeout: 4000,
+      // A hang watchdog on fish exiting, not a speed bound: a starved host only
+      // delays the exit, and a fish that never exits still fails here.
+      timeout: 30_000,
     });
     expect(run.status, run.stderr || run.error?.message).toBe(0);
     expect(run.stderr).toBe("");

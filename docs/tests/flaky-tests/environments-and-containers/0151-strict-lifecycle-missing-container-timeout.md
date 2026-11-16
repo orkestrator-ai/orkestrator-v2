@@ -1,7 +1,7 @@
 # Strict lifecycle missing-container timeout
 
 - **ID:** 0151
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-20
 - **Test:** `environment status and settings commands > strict lifecycle commands still repair an environment whose container is already gone`
 - **File:** `apps/backend/tests/commands-registry-environments-status.test.ts`
@@ -111,3 +111,11 @@ Original command: `mise run test:logged -- --name merge2-tests -- mise run test`
 Aggregate result: `merge2-tests` exited 1 after 1132.1 seconds logged. Backend reported 9081 passed, 41 skipped and 11 failed across 9133 tests in 485 files (1118.57 seconds). Every other workspace package passed; root/support passed 3084 tests with one skip, and protocol regeneration passed. Evidence: `orkestrator-test-run.0J1rem/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 
 The unchanged owner pass confirms intermittence. No implementation, assertion, timeout or skip changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** Fake-Docker lifecycle work (real shell subprocesses) exceeded Bun's 5 s default under load; nothing in the test measures time.
+- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup-node.ts`, `tests/setup.ts`), makes 60 s the default per-test and hook budget, a hang watchdog only. The owning file sets no smaller file, test or hook budget, and the failing test has no inner wall-clock deadline of its own.
+- **Reproduced:** no — the recorded deadline was Bun's default budget on a loaded host; the failing body is fast alone, and a 5 s exhaustion was not re-created per case here.
+- **Stress:** `mise run test:logged -- --name ec-stress-a -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --core 15 --burners 6 -- bun test --preload ../../tests/setup-node.ts <the twelve commands-* owners, this one included> --rerun-each=2 --parallel=1'` at host load about 80: 736 passed, 2 failed, both `serves the Files panel from the scan the badge already ran`, which stays open in [9854](9854-electron-diff-statistics-aggregate-timeout.md); no other case failed.
+- **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).

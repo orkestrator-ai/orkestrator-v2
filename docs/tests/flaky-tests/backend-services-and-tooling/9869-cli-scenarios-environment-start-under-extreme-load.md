@@ -39,3 +39,10 @@
 - **Owner rerun:** `mise run test:logged -- --name cli-client-exit -- mise run test:cli:scenarios --scenario client-exit` passed (12.8 s including preparation).
 - **Evidence:** `output/cli-scenarios/2026-10-25T18-25-16-554Z-488fa2fd/manifest.json`; private failure log `orkestrator-test-run.C5xhRf/cli-scenarios.log.gz` in the host temporary directory.
 - **Assessment:** confirmed recurrence of the intermittent interruption-receipt failure; no timeout, assertion, skip or implementation was changed to hide it.
+
+## Triage (2026-11-15)
+
+- **Cause (from the code):** `client-exit` sends SIGINT 2.5 s after spawning `environment start --wait ready` (`signalAfterMs` in `packages/cli/scenarios/harness.ts`). If the client has not yet received the submission response, it cannot print a receipt, so the scenario races host speed.
+- **Not changed:** a deterministic fix needs a signal that the client is observing, such as a stderr progress line or a readiness hook in the CLI. Waiting for admission through `run get --request-id` still leaves the response in flight. That is a CLI output change, and the scenario suite was not run here (heavy live suite, loaded host). Still open.
+
+- **Follow-up (2026-11-15):** the product signal this test needs is to-do [8302](../../../todo/cross-cutting/8302-signals-for-deterministic-flake-fixes.md).

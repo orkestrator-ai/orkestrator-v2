@@ -149,7 +149,9 @@ feature validation still follow the normal requirements.
 ### Public-site smoke tests
 
 `mise run test:browser` also runs `e2e/public-site/` against a fresh production
-build of the public client. On Linux both suites run in a private loopback-only
+build of the public client, served by `e2e/public-site/vercel-static-server.ts`
+with `apps/web-public/vercel.json`'s header rules and rewrites applied, so the
+browser enforces the Content-Security-Policy a deployment sends. On Linux both suites run in a private loopback-only
 network namespace (`scripts/loopback-network.ts`), so other builds' Docker
 networks cannot abort their page loads (flake
 [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md));
@@ -161,8 +163,9 @@ mise run test:logged -- --name public-browser -- \
 ```
 
 It checks landing-page login, deferred connection-screen loading, direct loads
-and reloads of `/connect`, the home link, and install-command clipboard feedback
-at desktop and narrow widths. This pre-connection flow needs no backend,
+and reloads of `/connect`, the home link, install-command clipboard feedback,
+and that the static HTML frame document starts and renders a report under its
+own policy (`static-html-frame.spec.ts`) at desktop and narrow widths. This pre-connection flow needs no backend,
 credentials, or isolated application profile. The server is owned and stopped
 by Playwright; `ORKESTRATOR_PUBLIC_E2E_PORT` overrides its default port 4423.
 Authenticated renderer flows still use isolated profiles as described below.
@@ -375,6 +378,9 @@ queued for over an hour (2026-11-10: 218 queued, 14 running). So:
   four platforms including two macOS runners) runs on pull requests and merges
   only when Bun, dependencies, Docker or packaging inputs change, and nightly
   on `main` for everything else.
+- `electron-qualification.yml` runs the whole `mise run test:agent:electron`
+  suite under `xvfb-run` on one Linux runner weekly and on demand, not on
+  every change ([agent-testing.md](agent-testing.md#electron-specs-and-their-display)).
 
 The runner reports each group as soon as it finishes, but prints detailed
 failure sections in a stable order. It waits for every group, so one failure
@@ -453,8 +459,19 @@ fails it.
 
 ### Controlled time
 
-Wait for an explicit signal, not wall time. To skip an application delay,
-capture it with `installControlledTimeout` (`tests/helpers/controlled-timeout.ts`,
+Wait for an explicit signal, not wall time. A slow host must never be able to
+fail a test that is still making progress, so the shared preloads
+(`tests/setup.ts`, `tests/setup-node.ts`) raise Bun's default per-test and
+hook budget from five seconds to 60 through `tests/default-test-timeout.ts`.
+That budget is a hang watchdog, not an assertion: do not add a shorter test,
+hook, poll or `waitFor` deadline to a wait that ends on a real signal. Bun
+applies a preload's default only to the first file of a non-isolated process,
+so pass `--isolate` to an ad hoc multi-file or `--rerun-each` run (every suite
+script already runs `--parallel`, which isolates). A file that needs a
+different budget sets it with `setDefaultTimeout`; `--timeout` on the command
+line is overridden by the preload.
+
+To skip an application delay, capture it with `installControlledTimeout` (`tests/helpers/controlled-timeout.ts`,
 tested by `tests/unit/controlled-timeout.test.ts`). It intercepts only timers
 scheduled at one exact delay, leaving Testing Library, promises and unrelated
 timers real, and it throws when more timers are pending at that delay than
@@ -479,8 +496,10 @@ says whether one is armed, and `restore()` reports any it drops. The
 
 The `sleep-before-negative-assertion` source guard
 (`tests/unit/source-guards.test.ts`) refuses a new fixed sleep followed by a
-negative or exact-count assertion, and its siblings refuse released ports,
-real subprocesses without a time budget and small fake pids. Existing offenders
+negative or exact-count assertion, and its siblings refuse released ports
+and small fake pids. (A `subprocess-without-budget` guard used to require a
+per-file budget on tests that start processes; the shared 60 s default
+replaced it.) Existing offenders
 sit in a baseline that only shrinks; see
 [linting.md](linting.md#source-guards).
 
@@ -1136,7 +1155,11 @@ credential, login or provider: every turn goes to the fake model.
   Playwright clients from `scripts/recurring-live-ab-busy-clients.ts`, each
   signed in with its own `dev:login` link and showing `busy-ask`'s Pi tab),
   N rounds of: `--busy-burst-files` (default 200) files written into every
-  environment at once and removed; a turn in `busy-1` held at the model
+  environment at once and removed, the round waiting until the backend's diff
+  stats of every environment are back to what they read before the burst
+  (the `burst-clear-backend` row: without clients nothing else waited, and a
+  removal rescanned only together with the next burst read as unchanged;
+  to-do 8171, retired 2026-11-15); a turn in `busy-1` held at the model
   (`[hold:<id>]`) with a prompt queued behind it (`session prompt
   --enqueue`), with `--busy-turn-files` (default 0) files written into
   `busy-1` while that turn is held and removed when the round ends, so the
@@ -2273,7 +2296,7 @@ unchanged code would have passed it too. Work in this order:
      ```bash
      mise run test:logged -- --name repro -- \
        bun scripts/test-under-contention.ts --burners 6 -- \
-       bun test path/to/owner.test.ts --rerun-each=5
+       bun test path/to/owner.test.ts --isolate --rerun-each=5
      ```
 
      `mise run test:contention -- [--core N] [--burners K] [--duration S] -- <command>`
@@ -2287,7 +2310,10 @@ unchanged code would have passed it too. Work in this order:
    contention when load was the trigger. `--rerun-each` reruns the file's tests
    in one process, so a file that is not rerun-safe (module-level state, a
    fixture created once, a server bound at import) can fail for that reason
-   alone. For such a file, loop fresh processes instead:
+   alone. Keep `--isolate` on such runs: without it Bun resets the per-test
+   budget after the first pass, so later passes fall back to five seconds
+   (see [Controlled time](#controlled-time)). For a file that is not
+   rerun-safe, loop fresh processes instead:
 
    ```bash
    mise run test:logged -- --name stress -- bash -c \

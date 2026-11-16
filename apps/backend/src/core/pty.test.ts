@@ -95,19 +95,28 @@ describe("Bun PTY adapter", () => {
     terminal.onExit(({ exitCode }) => resolveExit(exitCode));
 
     terminal.resize(93, 31);
-    terminal.write("stty size; printf '__PTY_READY__\\n'; exit\n");
+    // The resize reaches the pty asynchronously, so a shell that runs `stty`
+    // straight after spawn can still see 24 80. Let the shell wait until its own
+    // terminal reports the new size; the assertion below still proves the resize
+    // arrived, and no wall-clock bound decides when.
+    terminal.write(
+      "until [ \"$(stty size)\" = '31 93' ]; do sleep 0.02; done; stty size; printf '__PTY_READY__\\n'; exit\n",
+    );
 
+    // Hang watchdog only: a resize that never applies leaves the shell waiting.
     const exitCode = await Promise.race([
       exited,
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("PTY did not exit")), 3_000),
+        setTimeout(() => reject(new Error("PTY did not exit")), 50_000),
       ),
     ]);
 
     expect(exitCode).toBe(0);
-    expect(output).toContain("31 93");
+    // The terminal echoes the command, which names the size too; only
+    // `stty size`'s own line is the size alone.
+    expect(output).toMatch(/^31 93\r?$/m);
     expect(output).toContain("__PTY_READY__");
-  }, 5_000);
+  });
 
   test("delivers the leading chunk immediately and coalesces the rest of a burst", async () => {
     const { process: terminal, harness } = spawnFakePty({

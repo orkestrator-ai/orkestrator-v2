@@ -16,9 +16,10 @@ import {
 } from "./standalone-test-support";
 
 // A case can include backend startup, a real child-process tree, and graceful
-// shutdown. The helper deadlines remain narrower so failures retain a specific
-// diagnostic instead of Bun killing the fixture at its default five seconds.
-jest.setTimeout(30_000);
+// shutdown. The helper deadlines (60 s each) stay narrower than this per-test
+// hang watchdog, so a stuck fixture fails with a named diagnostic; none of
+// them decides an assertion, so a slow host only makes the test slower.
+jest.setTimeout(150_000);
 registerStandaloneCleanup();
 
 describe("standalone backend service", () => {

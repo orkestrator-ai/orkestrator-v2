@@ -82,3 +82,7 @@ mock keychain was in use, so the 2026-10-17 Keychain cause does not apply.
 The next owner rerun (`svc0042-owner2-electron-main`) passed the unchanged
 file (3 passed, 1 skipped, 40.4 s), as did the second full suite
 (`svc0042-suite-2`, 38 passed). No assertion, timeout or skip changed.
+
+## Partial change, 2026-11-15 (unverified, case stays open)
+
+`electron-main.spec.ts`, `terminal-input-resume-electron.spec.ts`, `artifact-host-electron.spec.ts` and `application-menu-electron.spec.ts` now pass `timeout: 60_000` to `electron.launch` and `firstWindow` (Playwright's defaults are 30 s). Both wait on a real signal (the process starting, the `window` event), so the figure only guards a hang. The independent-windows test already polled `app.windows()` for the renderer URL for up to 60 s. Nothing was run: no Electron suite was available here, and the 2026-09-22 and 2026-10-25 failures have no established cause, so this is not marked resolved.

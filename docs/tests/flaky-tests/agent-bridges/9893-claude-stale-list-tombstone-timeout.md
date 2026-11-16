@@ -1,7 +1,7 @@
 # Claude stale-list deletion tombstone timeout
 
 - **ID:** 9893
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-10-26, Codex resume-context review validation
 - **Test:** `reconcilePersistedSessions > bounds stale-list deletion tombstones to the newest 128 sessions`
 - **File:** `bridges/claude-bridge/src/services/session-manager-persistence.test.ts`
@@ -24,3 +24,18 @@ Evidence: host temporary directory `orkestrator-test-run.unZQTH/bridges.log`
 `orkestrator-test-run.2JILAH/repository-tests.log`. No Claude implementation,
 test, assertion or deadline changed. Host contention is a hypothesis, not an
 established cause. The original aggregate remains failed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** none to fix. The owning test no longer exists. It exercised the
+  Claude bridge's stale-list deletion tombstones, which commit `c51d553e4`
+  ("remove dead bridge SSE mode, tombstones and unused APIs", #2230, an ancestor of
+  `HEAD`) removed together with the writer and reader they covered; that commit also
+  deletes `bounds stale-list deletion tombstones to the newest 128 sessions` from
+  `session-manager-persistence.test.ts`. Today `rg "deleteSessionDurably|stale-list"
+  bridges/claude-bridge/src` finds nothing.
+- **Fix:** none beyond that removal. The remaining file's tests also gain the 60 s
+  default budget from `tests/default-test-timeout.ts`, which covers the original
+  5 s deadline (the file has no smaller explicit timeout).
+- **Reproduced:** no. The test cannot run, so there is nothing to reproduce.
+- **Stress:** not applicable.

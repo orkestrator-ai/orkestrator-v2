@@ -24,3 +24,7 @@
   cause; this is unconfirmed. No source edits occurred during the passing owner
   rerun. No assertion, timeout or skip was weakened. Both profiles were stopped
   and reset.
+
+## Triage note (2026-11-15)
+
+Not changed. The `Open beside` action was missing for 15 s after a rename while renderer sources were being edited (Vite refresh), and the owner passed alone with frozen sources. No timed check in the spec is implicated. The Vite-reload explanation is unconfirmed, and the live suite was not run. Stays `open`.

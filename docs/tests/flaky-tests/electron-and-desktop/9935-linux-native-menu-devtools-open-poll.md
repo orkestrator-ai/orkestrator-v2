@@ -1,7 +1,7 @@
 # Linux native menu: DevTools not reported open within the poll
 
 - **ID:** 9935
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-10
 
 Test: `Help offers Open Developer Tools only while a renderer has debug logging on`
@@ -66,3 +66,10 @@ a plausible cause but unconfirmed. No assertion, timeout or retry was changed.
   `--repeat-each=20` and record first-repetition timings for the DevTools
   load before deciding whether the test should await the `devtools-opened`
   event instead of polling.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** not confirmed. `devToolsOpen` was polled under expect's 5 s default, and a cold first repetition on a loaded runner can take longer than that to report the detached DevTools front end as open. The event Electron emits for this was not used.
+- **Fix:** `e2e/agent-testing/application-menu-electron.spec.ts` registers `webContents.once("devtools-opened")` before clicking Open Developer Tools and awaits it in main (and `devtools-closed` before `closeDevTools()`), then asserts `isDevToolsOpened()` as before. The wait is on the real signal; only the test's own deadline guards a hang. The same file's launch, `firstWindow` and first title check also now carry a 60 s hang watchdog instead of Playwright's 30 s and 5 s defaults.
+- **Reproduced:** no. The headless rerun above passed 10 of 10 before the change and cannot show the Xvfb behaviour; no Xvfb run was possible here, and the change itself was not run (typecheck, oxlint and `bun fmt` only).
+- **Stress:** none. Reopen if `ubuntu-latest` still fails after the `devtools-opened` event.

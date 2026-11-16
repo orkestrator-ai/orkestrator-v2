@@ -27,8 +27,14 @@ function deferred() {
   return { promise, resolve };
 }
 
+// A hang watchdog on waits for a real state (servers connected, a result
+// frame), not a speed assertion: a starved host can need far longer than an
+// idle one to start the CLI and its servers. It matches the probe's own
+// `READY_TIMEOUT_MS` and sits below the live test's watchdog.
+const READY_WATCHDOG_MS = 120_000;
+
 async function until(check: () => boolean | Promise<boolean>, label: string) {
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + READY_WATCHDOG_MS;
   while (!(await check())) {
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${label}`);
     await Bun.sleep(20);
@@ -299,7 +305,7 @@ export async function runMcpCallProbe(open: Set<Query>) {
     }
   })();
   try {
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + READY_WATCHDOG_MS;
     let statuses = await control.mcpServerStatus();
     while (statuses.some((status) => status.status === "pending") && Date.now() < deadline) {
       await Bun.sleep(50);

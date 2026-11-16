@@ -1622,8 +1622,8 @@ describe("per-step model placeholders", () => {
 
   test("normalizes a placeholder that reached the snapshot unnormalized", async () => {
     await withService(async ({ service, storage, created }) => {
-      // `start()` is not the only way a snapshot arrives — `importLegacy` takes
-      // one straight from disk — so the read side has to normalize too.
+      // `start()` is not the only way a snapshot arrives — a stored record is
+      // read straight from disk — so the read side has to normalize too.
       const started = await service.start({
         ...startInput(),
         agentType: "codex",

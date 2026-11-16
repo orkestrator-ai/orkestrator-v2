@@ -7,6 +7,7 @@ import { createLogger } from "@orkestrator/protocol/logger";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
+import { KanbanProjectRemovalStore } from "./storage-kanban-project-removal.js";
 import {
   emptyKanbanSyncStore,
   imageRef,
@@ -45,10 +46,15 @@ export function normalizeKanbanTask(task: KanbanTask): KanbanTask {
  * change is stamped for sync the same way.
  */
 export class KanbanBoardStore {
+  /** Project removal's content fence, image journal and sidecar cleanup. */
+  readonly removal: KanbanProjectRemovalStore;
+
   constructor(
     private readonly context: StorageContext,
     private readonly files: StorageFiles,
-  ) {}
+  ) {
+    this.removal = new KanbanProjectRemovalStore(context, files);
+  }
 
   /**
    * Serializes the complete Kanban read-modify-write transaction both within

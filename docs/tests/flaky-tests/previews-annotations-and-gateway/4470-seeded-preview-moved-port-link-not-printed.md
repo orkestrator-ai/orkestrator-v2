@@ -12,3 +12,7 @@
 - **Evidence:** `output/agent-testing/seeded-3230-final/electron/` in the worktree (git-ignored; `results.json`, `error-context.md`, `electron-diagnostics.txt`, trace). The diagnostics hold only environment B's expected `target-unverified` refusals, and no terminal contents, so they do not show what the server printed.
 - **Hypothesis (unconfirmed):** `freePortPair` checks that port N+1 is free, then the check presses **Run** much later. N+1 is in macOS's ephemeral range (49152–65535), so something else on the host could take it; the fixture server would then move on to N+2, and the spec, which looks only for N+1, would wait out its 60 s. Alternatively the address was printed but was not in the terminal viewport, the only rows `terminalLinkPoint` reads. Neither was observed.
 - **Related change:** found while qualifying 3230. The failing step is before any restart, and starting a server and reading its terminal do not go through `acquireTarget`, which is the only path that change alters.
+
+## Triage note (2026-11-15)
+
+Not changed. Recorded failure: a dev server's port line not printed within 60 s once in ten runs. Electron specs and their configs were not run or edited in this pass (shared with other groups, and unverifiable here); no spec-local explicit signal could be justified without a live reproduction. Stays `open`.

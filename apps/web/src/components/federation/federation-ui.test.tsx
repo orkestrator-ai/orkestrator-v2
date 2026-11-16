@@ -56,6 +56,7 @@ import { SshPromptDialog } from "./SshPromptDialog";
 import { useMachineViews } from "./useMachineViews";
 import { appCommandStore } from "@/test/app-command-store";
 
+import { useAsyncUtilHangWatchdog } from "@/test/async-util-hang-watchdog";
 /** A project's header button, found through its "+" button, which names project and machine. */
 function projectHeading(project: string, machine: string): HTMLElement {
   const add = screen.getByRole("button", { name: `New environment in ${project} on ${machine}` });
@@ -295,6 +296,8 @@ test("merged lists draw this window's own projects and rows with its full contro
     list.unmount();
   }
 });
+
+useAsyncUtilHangWatchdog();
 
 describe("CL-05: machine identity visual rules", () => {
   test("CL-05: a decorative MachineDot is hidden from assistive technology", () => {
@@ -627,9 +630,7 @@ describe("CL-05: machine identity visual rules", () => {
       await act(async () => {
         fireEvent.focus(screen.getByRole("button", { name: /^feature, on Machine A/ }));
       });
-      const machineLine = await screen.findByTestId("environment-tooltip-machine", undefined, {
-        timeout: 2000,
-      });
+      const machineLine = await screen.findByTestId("environment-tooltip-machine");
       expect(machineLine.textContent).toBe("On Machine A");
       expect(await screen.findByText("Full network access")).toBeTruthy();
       expect(screen.getByText("PR: https://github.com/acme/app/pull/7")).toBeTruthy();

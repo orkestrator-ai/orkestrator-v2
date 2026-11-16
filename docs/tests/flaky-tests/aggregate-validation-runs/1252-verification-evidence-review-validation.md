@@ -54,3 +54,7 @@ registry read durations suggest filesystem or scheduling delays, but their
 cause was not established. No assertion, timeout or skip was changed in these
 owners. The prompt, supervisor and verification-evidence tests, changed-file
 formatting/lint and backend typechecks passed separately.
+
+## Triage (2026-11-15)
+
+Left open. Six of the seven registry-owner and bridge failures were five-second deadlines the shared default in `tests/default-test-timeout.ts` now covers, but the Pi bridge task also ended on the runner's 300 s no-output watchdog and the bridge group stayed incomplete: that is a watchdog stall, not a test budget, and no passing rerun of Pi exists in this case.

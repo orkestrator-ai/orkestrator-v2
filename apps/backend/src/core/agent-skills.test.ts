@@ -587,7 +587,7 @@ describe("scanAgentSkills", () => {
     // Every root held 501 entries and the last was cut off by the cap, so none
     // of them is reported as complete.
     expect(scan.roots.every((root) => root.truncated)).toBe(true);
-  }, 20_000);
+  });
 
   test("a complete root is not reported as truncated", async () => {
     await writeSkill(join(home, ".claude", "skills"), "only-one");

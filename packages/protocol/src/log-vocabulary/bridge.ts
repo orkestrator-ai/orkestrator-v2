@@ -318,6 +318,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "A request tried to widen a live session's execution policy and was refused; widened names the axes.",
       "session-list.failed":
         "Reading the resumable sessions failed, so none were offered; its error message is not logged because it can hold content.",
+      "session-list.read-by-pi":
+        "A session file was in a format the header reader does not recognise, so the resumable sessions were read through Pi's own full listing; reason names the part not recognised.",
       "state.over-budget":
         "The state file stayed over budget after shedding transcripts, so the write was skipped.",
       "state.transcripts-shed":

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { DEFAULT_TEST_TIMEOUT_MS } from "../../../tests/default-test-timeout.js";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -23,9 +24,12 @@ import {
 } from "../src/core/commands-environment-fork";
 
 // This slow-tier file creates real repositories/worktrees and waits for
-// subprocess cleanup. Give that fixture work its own bounded host budget;
-// explicit operation deadlines and shorter test budgets remain unchanged.
-setDefaultTimeout(30_000);
+// subprocess cleanup. The shared preload's hang watchdog
+// (tests/default-test-timeout.ts, 60 s) bounds that work; a smaller per-file
+// budget would let a loaded host fail a case that is still making progress.
+// The file sets the same budget itself: in a run without `--parallel`/`--isolate`
+// Bun applies a preload's setDefaultTimeout to the first test file only.
+setDefaultTimeout(DEFAULT_TEST_TIMEOUT_MS);
 
 const originalIsContainerRunning = environmentForkHooks.isContainerRunning;
 const originalReadContainerHeadCommit = environmentForkHooks.readContainerHeadCommit;

@@ -1,7 +1,7 @@
 # Measurement retention backlog times out in the aggregate
 
 - **ID:** 1222
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-28
 - **Tests:** `superseded measurements > retention prunes a backlog in batches, sparing selected and restorable ones`; followed by `superseded measurements > a single large measurement is pruned in strict row batches and reader pins are counted`.
 - **File:** `apps/backend/src/core/change-tracking/measurement-retention.test.ts`
@@ -58,3 +58,11 @@ This observation does **not** establish a flake: the complete owner failed in
 isolation as well. The deadline failure and cleanup cascade remain unresolved;
 no timeout, assertion or skip was changed. The new provider-evidence boundary
 and benchmark-report regressions passed separately.
+
+## Resolution (2026-11-15)
+
+- **Class:** default test budget (A). The file sets no budget of its own, no deadline, and no `setDefaultTimeout`.
+- **Root cause:** the 150-by-200 backlog fixture is real SQLite work that took 5.3 to 13.6 s when the host was loaded, against Bun's former 5 s default. After the timeout, `afterEach` closed the harness database while the timed-out test's `retention.run()` was still going, which is the following `Cannot use a closed database`. That cascade is a consequence of the timeout, not a product race: nothing in the product runs after the harness is deliberately torn down mid-test, and with a passing test `retention.run()` has finished before cleanup.
+- **Fix:** none in this file. It now runs under `tests/default-test-timeout.ts` (imported by `tests/setup.ts` and `tests/setup-node.ts`), which sets Bun's default per-test and hook budget to 60 s. The earlier fixture repair (seeding in one `ledger.transaction`, 2026-10-28) stays.
+- **Reproduced:** no. The complete owner passed under contention with the old budget forced on the command line (`--core 14 --burners 6 -- bun test ... measurement-retention.test.ts --timeout=5000`, 13.8 s) and at the new default (`--rerun-each=3`, 33.9 s, about 11 s per pass of the file), so the 5.3 s observation was not reproduced on this host.
+- **Not verified:** the 2026-11-06 observation that the owner also failed in isolation (backlog at 5.6 s) was not reproduced either; the stall there was not decomposed into fixture and retention time.

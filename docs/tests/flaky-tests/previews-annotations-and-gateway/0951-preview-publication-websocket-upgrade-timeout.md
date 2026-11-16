@@ -1,7 +1,7 @@
 # Preview publication WebSocket upgrade test timed out under aggregate load
 
 - **ID:** 0951
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-26
 - **Test:** `PreviewPublicationManager (private HTTPS origins) > application WebSockets upgrade through the published origin with the session`
 - **File:** `apps/backend/src/preview-publication.test.ts:300`
@@ -24,3 +24,11 @@ The test's upgrade promise resolves only when the response contains the
 fixture marker and has no `end`/`close` handler, so a refused or closed
 upgrade waits for the 5 s deadline rather than failing with the response
 text; adding that handler would show the cause on the next recurrence.
+
+## Resolution (2026-11-15)
+
+- **Class:** default budget (A).
+- **Root cause:** the case timed out at Bun's 5 s default under load average about 21; it takes about 0.27 s alone.
+- **Fix:** `tests/default-test-timeout.ts` (a 60 s per-test and hook hang watchdog in both shared preloads, replacing Bun's 5 s default). The upgrade promise in `apps/backend/src/preview-publication.test.ts` now also rejects on socket `close` with the response text, so a refused upgrade fails at once with evidence instead of waiting out the budget. The file's `until` poll (200 × 5 ms) and the certificate-reload poll (400 × 10 ms) are now 30 s hang watchdogs.
+- **Reproduced:** no — the unchanged code passed under the same contention; the evidence is the removed deadline, not a reproduced failure, which is weaker.
+- **Stress:** `mise run test:logged -- --name b-cont -- bun scripts/test-under-contention.ts --core 2 --burners 6 -- bash -c 'cd apps/backend && bun test src/preview-tunnel-server.test.ts src/preview-publication.test.ts src/core/preview-local-discovery.test.ts src/core/preview-terminal-roots.test.ts --preload ../../tests/setup-node.ts --parallel=1 --rerun-each=3'` passed (59.7 s).

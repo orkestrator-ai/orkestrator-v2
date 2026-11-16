@@ -3,8 +3,12 @@ import type {
   ScheduleAction,
   ScheduledJob,
   ScheduledJobSummary,
+  SchedulerStatus,
 } from "@orkestrator/protocol/scheduled-jobs";
-import { describeScheduleTrigger } from "@orkestrator/protocol/scheduled-jobs";
+import {
+  describeScheduleTrigger,
+  schedulerPausedMessage,
+} from "@orkestrator/protocol/scheduled-jobs";
 import { CliError } from "../errors.js";
 import { keyValues, table } from "../format.js";
 import { readTextSource } from "../inputs.js";
@@ -369,11 +373,25 @@ function simpleMutation(verb: "pause" | "resume" | "run" | "delete", summary: st
   };
 }
 
+/**
+ * The notice for a backend that lists schedules but does not fire them, in
+ * Settings → Schedules' words. It rides as a warning: stderr in the human and
+ * ID modes, the envelope's `warnings` in JSON, beside the result's own
+ * `scheduler`. No status (a backend that released its lease cleanly) is not
+ * evidence of a pause, so it prints nothing.
+ */
+export function schedulerNotice(scheduler: SchedulerStatus | undefined): string | undefined {
+  if (!scheduler || scheduler.firing) return undefined;
+  // A reason this client does not know yet is still a pause.
+  return schedulerPausedMessage(scheduler.reason) ?? "Schedules do not fire on this backend.";
+}
+
 export const scheduleCommands: CommandSpec[] = [
   {
     path: ["schedule", "list"],
     action: "schedule.list",
-    summary: "List scheduled jobs with their next fire, owner and last outcome.",
+    summary:
+      "List scheduled jobs with their next fire, owner and last outcome; warns when this backend does not fire them.",
     positionals: [],
     options: [
       {
@@ -397,22 +415,27 @@ export const scheduleCommands: CommandSpec[] = [
       { name: "offset", kind: "integer", valueName: "N", description: "Rows to skip." },
       { name: "limit", kind: "integer", valueName: "N", description: "Rows (max 200)." },
     ],
+    idOutput: "schedule IDs, one per line",
     async run(context, parsed) {
       const session = await context.session();
       const options = parsed.options;
-      const page = await session.read<{ schedules: ScheduledJobSummary[]; total: number }>(
-        "schedule.list",
-        {
-          ...(options.project !== undefined ? { projectId: options.project } : {}),
-          ...(options.state !== undefined ? { state: options.state } : {}),
-          ...(options["owner-kind"] !== undefined ? { ownerKind: options["owner-kind"] } : {}),
-          ...(options.offset !== undefined ? { offset: options.offset } : {}),
-          ...(options.limit !== undefined ? { limit: options.limit } : {}),
-        },
-      );
+      const page = await session.read<{
+        schedules: ScheduledJobSummary[];
+        total: number;
+        scheduler?: SchedulerStatus;
+      }>("schedule.list", {
+        ...(options.project !== undefined ? { projectId: options.project } : {}),
+        ...(options.state !== undefined ? { state: options.state } : {}),
+        ...(options["owner-kind"] !== undefined ? { ownerKind: options["owner-kind"] } : {}),
+        ...(options.offset !== undefined ? { offset: options.offset } : {}),
+        ...(options.limit !== undefined ? { limit: options.limit } : {}),
+      });
+      const notice = schedulerNotice(page.scheduler);
       return {
         action: "schedule.list",
         result: page,
+        ...(notice ? { warnings: [notice] } : {}),
+        ids: page.schedules.map((job) => job.id),
         connection: session.identity,
         human: table(
           ["ID", "NAME", "STATE", "NEXT FIRE", "OWNER", "LAST"],

@@ -755,3 +755,6 @@ Branch `container-live-evidence-4156bad5e3b0-r1` at `eedd4f1ba`, base `17d28238c
 
 No implementation, assertion, timeout or skip changed between these runs. The failure count followed the host's load; the cause is unconfirmed.
 
+## Triage note (2026-11-15)
+
+Not changed; stays `open`. Umbrella case for component browser failures across 21 owners under parallel load; it is closed only as its owners are. The likely common lever is hang-watchdog defaults (`expect.timeout`, `timeout`) in the shared `e2e/playwright.config.ts`, left for a separate decision because the config serves every group's specs. Browser suites were not run.

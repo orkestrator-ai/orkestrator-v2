@@ -80,6 +80,5 @@ describe("preview terminal process roots", () => {
         await harness.cleanup();
       }
     },
-    20_000,
   );
 });

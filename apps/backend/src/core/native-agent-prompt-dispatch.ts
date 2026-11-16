@@ -874,7 +874,7 @@ export class NativeAgentPromptDispatch {
         return { outcome: "applied", deliveredAs: "queued", requestId: turnRequestId };
       }
     }
-    const outcome = await this.steerProjectionOnce(input, resolved, action, steerRequestId);
+    const outcome = await this.steerProjectionOnce(input, resolved, action, steerRequestId, "user");
     if (
       (outcome.outcome !== "idle" && outcome.outcome !== "mismatch") ||
       action.onMissedTurn === "refuse"
@@ -915,6 +915,7 @@ export class NativeAgentPromptDispatch {
     },
     action: Extract<NativeAgentSessionAction, { kind: "steer" }>,
     requestId: string = randomUUID(),
+    origin?: "user",
   ): Promise<NativeAgentSessionActionOutcome> {
     const text = action.text.trim();
     if (!text) throw new Error("Steering text must not be blank");
@@ -954,6 +955,11 @@ export class NativeAgentPromptDispatch {
     if (active.state === "unknown") {
       throw new Error(`${input.agent} active turn is not ready to steer`);
     }
+    // Bound to the run the caller saw: a different run is a missed turn, so a
+    // steer written for a turn that has ended never joins the next (to-do 8107 (retired)).
+    if (action.expectedRunId !== undefined && action.expectedRunId !== active.runId) {
+      return { outcome: "mismatch" };
+    }
 
     const pending: PersistedNativeAgentPendingSteer = {
       requestId,
@@ -962,6 +968,7 @@ export class NativeAgentPromptDispatch {
       expectedRunId: active.runId,
       ...(action.onMissedTurn ? { onMissedTurn: action.onMissedTurn } : {}),
       ...(action.turnRequestId ? { turnRequestId: action.turnRequestId } : {}),
+      ...(origin ? { origin } : {}),
       state: "prepared",
       createdAt: new Date().toISOString(),
     };
@@ -1020,6 +1027,7 @@ export class NativeAgentPromptDispatch {
               text: pending.text,
               requestId: pending.requestId,
               expectedRunId: pending.expectedRunId,
+              ...(pending.origin ? { origin: pending.origin } : {}),
             }),
           ),
       );

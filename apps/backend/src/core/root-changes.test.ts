@@ -233,6 +233,8 @@ test("quoted UTF-8 and special Git paths survive patch application and reporting
 });
 
 test("oversized diff capture errors never expose patch bytes", async () => {
+  // About 63 MiB: past the 32 MiB limit and the capture's own 50 MiB default,
+  // so this also shows the capture stops at the limit and says so.
   await writeFile(
     path.join(checkout, "large.txt"),
     "PRIVATE_PATCH_CONTENT".repeat(3 * 1024 * 1024),
@@ -242,7 +244,7 @@ test("oversized diff capture errors never expose patch bytes", async () => {
     throw new Error("expected oversized capture to fail");
   } catch (error) {
     expect((error as Error).message).toBe(
-      "Could not capture the selected changes; pick fewer files and retry.",
+      "The selected changes are larger than 32 MiB; pick fewer files.",
     );
     expect(JSON.stringify(error)).not.toContain("PRIVATE_PATCH_CONTENT");
   }

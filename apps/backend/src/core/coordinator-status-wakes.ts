@@ -1574,7 +1574,7 @@ export class CoordinatorStatusWakes {
   }
 
   /**
-   * A planning exchange the coordinator started (todo 0395 task 3): its reply
+   * A planning exchange the coordinator started (to-do 0395 (retired) task 3): its reply
    * is ready (once, terminal) or it failed (once per failure). Feature plans
    * live on this node only; a cancelled exchange or a deleted plan ends the
    * association without a wake.

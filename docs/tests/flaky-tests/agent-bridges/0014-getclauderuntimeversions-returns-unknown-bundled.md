@@ -25,3 +25,29 @@
   one registry and do not have that guarantee. Not reproduced under any
   documented invocation, so this is recorded rather than acted on — see the
   `mock.module()` rules in `AGENTS.md`.
+
+## Investigation (2026-11-15) — left open
+
+Not fixed; the cause is narrowed but not proven as the recorded failure.
+
+- The package script runs `bun test ... --parallel=1`, which isolates each file. The
+  test passes there and in the isolated rerun. A two-file non-isolated run
+  (`bun test ./src/services/session-manager-runtime-regressions.test.ts
+  ./src/services/session-manager-core.test.ts -t "unknown bundled|reports the bundled"
+  --preload ../../tests/setup-node.ts`) also passed, so the recorded sequential
+  failure was **not reproduced**.
+- Supporting the module-registry hypothesis: re-running this file inside one
+  process (`bun test ./src/services/session-manager-core.test.ts -t
+  "getClaudeRuntimeVersions" --preload ../../tests/setup-node.ts --rerun-each=5`)
+  fails the three mock-dependent cases on every repeat after the first, in 0.2 to
+  12 ms (this case, the malformed-manifest case and `parses the managed CLI
+  --version output when configured`): the repeated file
+  re-installs `mock.module` doubles with new mock functions, while
+  `session-manager-interactions.ts` keeps the first run's `readFile` and
+  `execFile` bindings. That is the same sub-millisecond, detail-free signature as the
+  recorded failure, but it is a different invocation and the cause for the original
+  one remains unobserved.
+- No code was changed. A fix would be to make the `session-manager-test-mocks.ts`
+  doubles survive re-evaluation, a shared-harness change affecting every
+  session-manager suite, which was out of scope here. Run this file with
+  `--parallel` (the package script) or alone.

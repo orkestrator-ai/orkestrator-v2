@@ -1,3 +1,5 @@
+import path from "node:path";
+
 /**
  * Every bridge the standalone package carries, and how.
  *
@@ -9,7 +11,11 @@
  * Two shapes:
  *
  * - **Bundled** bridges ship complete. Anything left `external` must be a
- *   dependency of this package (`tests/cli.test.ts` enforces that).
+ *   dependency of this package (`tests/cli.test.ts` enforces that). The Claude
+ *   bridge's own build keeps the Agent SDK external; this one inlines it, so
+ *   installing the package never pulls the SDK's optional platform packages
+ *   (each a whole Claude Code binary of about 320 MB that the bridge never
+ *   runs: it always passes `CLAUDE_CLI_PATH` as `pathToClaudeCodeExecutable`).
  * - **On-demand** bridges ship their own bundled code, but not the SDK they
  *   keep external. Those SDKs cannot be inlined (Cursor's loads code-split
  *   chunks at runtime and carries a per-platform native package; Pi's closure
@@ -30,7 +36,7 @@ export interface OnDemandBridge {
 }
 
 export const BUNDLED_BRIDGES: readonly BundledBridge[] = [
-  { name: "claude-bridge", external: ["@anthropic-ai/claude-agent-sdk"] },
+  { name: "claude-bridge", external: [] },
   { name: "codex-bridge", external: [] },
   { name: "acp-bridge", external: [] },
 ];
@@ -63,3 +69,40 @@ export const RUNTIME_SUBDIRECTORY = "runtime";
 
 /** Names the build's digest of an on-demand bridge; read by the backend. */
 export const RUNTIME_DESCRIPTOR = "install.json";
+
+/** The Agent SDK the Claude bridge builds against; its build inlines it. */
+export const CLAUDE_AGENT_SDK = "@anthropic-ai/claude-agent-sdk";
+
+/** The SDK manifest fields the Claude bridge reports as its SDK and bundled CLI versions. */
+export interface ClaudeAgentSdkManifest {
+  version: string;
+  claudeCodeVersion: string;
+}
+
+/**
+ * The installed Agent SDK's manifest, resolved the way the bridge's own build
+ * resolves the SDK. A bundle that inlines the SDK has no `package.json` to read
+ * at runtime, so the build defines these as `__CLAUDE_AGENT_SDK_MANIFEST__`
+ * (`readClaudeSdkManifest` in the bridge's `session-manager-interactions.ts`).
+ */
+export async function claudeAgentSdkManifest(
+  repositoryRoot: string,
+): Promise<ClaudeAgentSdkManifest> {
+  const entry = Bun.resolveSync(
+    CLAUDE_AGENT_SDK,
+    path.join(repositoryRoot, "bridges/claude-bridge"),
+  );
+  const manifest = (await Bun.file(path.join(path.dirname(entry), "package.json")).json()) as {
+    name?: string;
+    version?: string;
+    claudeCodeVersion?: string;
+  };
+  if (
+    manifest.name !== CLAUDE_AGENT_SDK ||
+    typeof manifest.version !== "string" ||
+    typeof manifest.claudeCodeVersion !== "string"
+  ) {
+    throw new Error(`Cannot read ${CLAUDE_AGENT_SDK}'s version beside ${entry}`);
+  }
+  return { version: manifest.version, claudeCodeVersion: manifest.claudeCodeVersion };
+}

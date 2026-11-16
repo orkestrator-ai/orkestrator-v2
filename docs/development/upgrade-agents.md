@@ -612,20 +612,20 @@ None of them breaks a build when it changes, so check them on a bump:
 - `@anthropic-ai/sdk` is imported only for `ImageBlockParam`, `TextBlockParam`,
   and `ContentBlockParam` message types.
 
-`packages/cli/package.json` pins `@anthropic-ai/claude-agent-sdk` a **second
-time**, and it is easy to miss. That package is the standalone `orkestrator`
-backend published to npm, and its `dependencies` list is deliberately only the
-modules `packages/cli/scripts/build.ts` leaves unbundled — so the Agent SDK
-there is a real
-runtime pin for CLI users, not a stale duplicate. Bump it with the bridge's, then
-regenerate the lockfile standalone services install from, and commit
-`packages/cli/release-runtime/` (`packages/cli/tests/cli.test.ts` fails until it
-matches). The script also re-resolves the on-demand bridge lockfiles; keep only
-the changes this bump needs:
-
-```bash
-bun packages/cli/scripts/lock-bridge-runtimes.ts
-```
+The published `orkestrator` CLI (`packages/cli`) has no Agent SDK pin of its
+own. Its build (`packages/cli/scripts/build.ts`) inlines the SDK the bridge
+workspace has installed into `resources/claude-bridge/dist/index.js`, so a bump
+of the bridge's pin is the whole bump for the CLI too, and installing the
+package never pulls the SDK's platform packages (see
+[the next section](#the-sdks-own-claude-binary-is-not-vendored)). The bundle
+cannot read the SDK's `package.json` at runtime, so the build defines its
+`version` and `claudeCodeVersion` as `__CLAUDE_AGENT_SDK_MANIFEST__`, which
+`readClaudeSdkManifest` in `services/session-manager-interactions.ts` prefers
+over resolving the installed SDK. `packages/cli/tests/claude-bridge-bundle.test.ts`
+fails if the SDK comes back as a dependency or into
+`packages/cli/release-runtime/bun.lock`, and runs the built bundle, from a
+directory with no `node_modules`, against a fake `claude` to check that the
+inlined SDK reports its version and spawns only the executable it is given.
 
 `bridges/claude-bridge/src/services/session-manager.ts` is only a barrel. The
 compatibility surface is `services/session-manager-prompt-handlers/*` (one
@@ -675,9 +675,19 @@ The packaged SDK still spawned the executable it was given and, with none,
 failed with `Native CLI binary for darwin-arm64 not found`. A signed release
 and a native turn from it are in the
 [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
-(8050 (retired) task 2). The published CLI still pulls the platform package
-through its own SDK dependency; dropping that is
-[8250](../todo/cross-cutting/8250-cli-install-pulls-sdk-claude-binary.md).
+(8050 (retired) task 2).
+
+The published CLI drops it too (to-do 8250, retired 2026-11-16), by inlining
+the SDK instead of depending on it. Measured on 2026-11-16 at SDK 0.3.319 on
+macOS arm64: a CLI install or standalone update no longer downloads the SDK
+(5 MB unpacked), the host's platform package (321,995,200 bytes; on Linux
+possibly both the glibc and the musl package) or the 103 other lockfile entries the
+SDK's peer dependencies brought in; `packages/cli/release-runtime/bun.lock`
+went from 145 package entries to 33. The cost is a larger bundle:
+`resources/claude-bridge/dist/index.js` grew from 1,171,722 to 2,916,839 bytes
+(285,748 to 742,436 bytes gzip-compressed), and the packed tarball is
+10.71 MB. `mise run smoke:cli` checks that neither the packed install nor the
+frozen release install holds any `@anthropic-ai/claude-agent-sdk*` package.
 
 `bridges/claude-bridge/src/sdk-compatibility.test.ts` loads the real installed
 SDK in isolated processes and guards the feature-detected APIs that could

@@ -1,5 +1,5 @@
 /**
- * Pure helpers for `schedules-two-backends-live.spec.ts` (to-do 5160 task 3):
+ * Pure helpers for `schedules-two-backends-live.spec.ts` (to-do 5160 (retired) task 3):
  * the second backend's command line, copied from the profile's own backend
  * with only its gateway port changed, and the lease document that takes the
  * first backend's writer lease. Nothing here runs at import time.

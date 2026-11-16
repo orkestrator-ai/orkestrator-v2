@@ -154,3 +154,35 @@ The complete unchanged owner passed alone with
 apps/backend ./src/core/diff-baseline.test.ts --parallel=1 --only-failures`
 (exit 0, 2.4 s). Passing raw output was removed. This establishes intermittence,
 not the cause of the incomplete aggregate. No assertion, skip or timeout changed.
+
+## Fork-card review repair recurrence — 2026-11-16
+
+Observed on the branch based on `c1fcc573bc079b4d856d53e31c45d5ebf2485d11`,
+with repair commit `0967f5b2e`. `mise run flaky:recurrence -- 6063 --base
+c1fcc573bc079b4d856d53e31c45d5ebf2485d11` reported this case open and instructed
+recording a recurrence. The branch changes Claude fork rehydration and renderer
+card lifecycle; neither this test nor `scripts/activity-sweep-bridge.ts` changes.
+
+Command: `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name
+fix-default-runtime -- mise run test`. Guards were run separately by the exact
+recorded default command, which stopped on the unchanged watcher-test source
+guard. Runtime groups were then allowed to execute without that guard.
+The root/support group used one worker alongside workspace (six slots), bridges
+(two slots), and Codex protocol (one slot).
+
+`activity sweep bridge ownership > readiness timeout reaps the child and removes
+copied credentials (ignores TERM: %s)` failed after 183.18 ms: process-group
+cleanup at `tests/unit/activity-sweep-bridge.test.ts:111` raised `kill() failed:
+EPERM`. Root/support totals: 5,003 passed, 29 skipped, eight failed in 392.21 s;
+seven other failures were installer-plan tests returning status 6. Their fixed
+script PATH cannot find this Mac's `/opt/homebrew/bin/flock`, so those seven
+are not counted as flakes.
+
+The complete unchanged activity-sweep owner then passed alone:
+`mise run test:logged -- --name fix-activity-owner -- bun test
+./tests/unit/activity-sweep-bridge.test.ts --parallel=1 --only-failures`
+(exit 0, 0.6 s). Passing output was deleted; test counts are not inferred.
+Evidence directory:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.0s0ejx/`
+(root/support log). This establishes intermittence, not its cause or a repair.
+No assertion, skip or timeout changed.

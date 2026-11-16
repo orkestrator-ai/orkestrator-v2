@@ -104,7 +104,7 @@ export type ClaudeStatePoll = {
   ringWindowStartedAt?: number;
   ringsInWindow: number;
   /**
-   * Each container terminal's output revision at the last read of a state
+   * Each container terminal's output revision before the last read of a state
    * that was not `working`: where a sign-in notice for the next prompt can
    * start (`claude-terminal-settle.ts`, to-do 8092, retired).
    */
@@ -112,7 +112,7 @@ export type ClaudeStatePoll = {
   /** Watches the `working` snapshot being read for the CLI's local refusal. */
   noticeWatch?: SignInNoticeWatch;
   noticeTimer?: unknown;
-  settling: boolean;
+  settling?: Promise<void>;
   /** The revision this poll's own settle wrote, and the outcome it persists with. */
   settled?: { revision: number; outcome: "failed" | "none" };
   /** Settles written, which announce their own change as a ring does. */
@@ -332,7 +332,6 @@ export class ClaudeStatePollManager {
       rings: 0,
       ringsAtPreviousRead: 0,
       ringsInWindow: 0,
-      settling: false,
       settles: 0,
     };
     poll.timer = this.schedule(
@@ -629,11 +628,13 @@ export class ClaudeStatePollManager {
     state: string,
     revision?: number,
     completions?: number,
+    readMarks?: Map<string, number>,
   ): void {
-    this.observeTurn(containerId, poll, state, revision, completions);
+    this.observeTurn(containerId, poll, state, revision, completions, readMarks);
     poll.ringsAtPreviousRead = rings;
     poll.lastRevision = revision;
     poll.lastCompletions = completions;
+    if (!poll.demand && state === "working") this.settle(containerId, poll, "idle");
     // A legacy state has no way to expose a whole missed turn: keep fast polling,
     // unless nothing in the container can run terminal Claude at all.
     const slow = (poll.signalConfirmed && revision !== undefined) || !poll.demand;
@@ -656,20 +657,24 @@ export class ClaudeStatePollManager {
     state: string,
     revision?: number,
     completions?: number,
+    readMarks?: Map<string, number>,
   ): void {
     const screens = this.settler ? this.screens(poll.context) : undefined;
     if (!screens) return;
     if (state !== "working" || revision === undefined || completions === undefined) {
       this.stopNoticeWatch(poll);
-      poll.outputMarks = terminalOutputMarks(screens, containerId);
+      poll.outputMarks = readMarks;
       return;
     }
     if (poll.noticeWatch?.revision === revision) return;
+    // A replacement turn must not replay evidence the old watch consumed.
+    if (poll.noticeWatch) poll.outputMarks = poll.noticeWatch.outputMarks();
     this.stopNoticeWatch(poll);
     const watch = new SignInNoticeWatch(
       revision,
       completions,
-      poll.outputMarks ?? terminalOutputMarks(screens, containerId),
+      // First adoption may already have the refusal in the bounded retained tail.
+      poll.outputMarks ?? new Map(),
       this.nowMs(),
     );
     poll.noticeWatch = watch;
@@ -688,7 +693,6 @@ export class ClaudeStatePollManager {
     if (!this.isCurrent(containerId, poll) || poll.noticeWatch !== watch) return;
     const screens = this.screens(poll.context);
     if (!screens || !watch.refused(screens, containerId, this.nowMs())) return;
-    this.stopNoticeWatch(poll);
     this.settle(containerId, poll, "failed", {
       revision: watch.revision,
       completions: watch.completions,
@@ -705,7 +709,8 @@ export class ClaudeStatePollManager {
    * Ends a `working` turn no hook will end by rewriting the container's
    * snapshot, compare-and-set against `expected` (`claude-terminal-settle.ts`).
    * A settle that finds the snapshot moved on writes nothing. A failed exec is
-   * logged; the next read of the same snapshot starts a fresh watch.
+   * logged; notice checks retry on their bounded timer, and absent-demand
+   * recovery retries when the next safety read still finds working.
    */
   private settle(
     containerId: string,
@@ -716,8 +721,7 @@ export class ClaudeStatePollManager {
     const settler = this.settler;
     const { revision, completions } = expected;
     if (!settler || poll.settling || revision === undefined || completions === undefined) return;
-    poll.settling = true;
-    void Promise.resolve()
+    poll.settling = Promise.resolve()
       .then(() => settler(containerId, { revision, completions }, target))
       .then((wrote) => {
         if (!wrote || !this.isCurrent(containerId, poll)) return;
@@ -733,7 +737,10 @@ export class ClaudeStatePollManager {
         log.warn("terminal-claude.settle-failed", { containerId, error: formatLogError(error) });
       })
       .finally(() => {
-        poll.settling = false;
+        poll.settling = undefined;
+        // Reconcile a demand loss or moved-on CAS after the outstanding attempt.
+        if (target === "failed" && !poll.demand && this.isCurrent(containerId, poll))
+          this.requestPoll(containerId, poll);
       });
   }
 
@@ -762,9 +769,12 @@ export class ClaudeStatePollManager {
     // A settle this poll wrote announces its own change the same way.
     const ringsBeforePreviousRead = poll.ringsAtPreviousRead;
     const ringsAtReadStart = poll.rings + poll.settles;
+    const screens = this.settler ? this.screens(poll.context) : undefined;
+    const readMarks = screens ? terminalOutputMarks(screens, containerId) : undefined;
     const { state, revision, completions, absent, failed } = parseClaudeStateSnapshot(
       (await this.readState(containerId).catch(() => "")).trim(),
     );
+    await poll.settling;
     if (!this.isCurrent(containerId, poll)) return;
 
     const known = state === "working" || state === "waiting" || state === "idle";
@@ -791,7 +801,15 @@ export class ClaudeStatePollManager {
     // only has to be timely enough to stop polling a container that has gone.
     if (!changed && !this.isRetirementCheckDue(poll)) {
       if (observed) {
-        this.acceptObservation(containerId, poll, ringsAtReadStart, state, revision, completions);
+        this.acceptObservation(
+          containerId,
+          poll,
+          ringsAtReadStart,
+          state,
+          revision,
+          completions,
+          readMarks,
+        );
       }
       return;
     }
@@ -822,15 +840,33 @@ export class ClaudeStatePollManager {
       poll.lastState = previous;
       poll.stale = true;
       if (absent)
-        this.acceptObservation(containerId, poll, ringsAtReadStart, state, revision, completions);
+        this.acceptObservation(
+          containerId,
+          poll,
+          ringsAtReadStart,
+          state,
+          revision,
+          completions,
+          readMarks,
+        );
       return;
     }
     if (!changed) {
       if (observed) {
-        this.acceptObservation(containerId, poll, ringsAtReadStart, state, revision, completions);
+        this.acceptObservation(
+          containerId,
+          poll,
+          ringsAtReadStart,
+          state,
+          revision,
+          completions,
+          readMarks,
+        );
       }
       return;
     }
+    await poll.settling;
+    if (!this.isCurrent(containerId, poll)) return;
     const occurredAt = this.now();
     // A settle for a closed tab ends the turn with no bell (`"none"`).
     const settledOutcome =
@@ -887,7 +923,15 @@ export class ClaudeStatePollManager {
     ) {
       this.demoteSignal(containerId, poll, "missed-change");
     }
-    this.acceptObservation(containerId, poll, ringsAtReadStart, state, revision, completions);
+    this.acceptObservation(
+      containerId,
+      poll,
+      ringsAtReadStart,
+      state,
+      revision,
+      completions,
+      readMarks,
+    );
     // Production hooks write `working` at UserPromptSubmit, `waiting` at
     // Stop and `failed` (read as idle) at StopFailure. `idle` is also retained
     // for older hook writers and recovery from a backend restart. Storage's

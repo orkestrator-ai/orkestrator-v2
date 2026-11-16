@@ -2201,17 +2201,23 @@ any image with the counted snapshot (version 2 and later) can be settled.
 
 | End | Detected by | Written | Persisted as |
 | --- | --- | --- | --- |
-| Local refusal | While a counted snapshot reads `working`, a 1 s in-memory check of the container's terminal output (`TerminalRuntime`, no exec) finds one of the CLI's sign-in notices printed after the output each terminal had at the last non-`working` read, and that terminal has then printed nothing for 3 s | `failed` | `idle` with `completionOutcome: "failed"`, ringing `agent_failed` like `StopFailure` |
-| Last terminal closed | The container loses its last terminal and claude-tmux tab (the poll's `demand`) while the last read was `working` | `idle` | `idle` with `completionOutcome: "none"`: the turn ends with no bell |
+| Local refusal | While a counted snapshot reads `working`, a 1 s in-memory check of the container's terminal output (`TerminalRuntime`, no exec) finds one of the CLI's sign-in notices printed after the output marks captured before the last non-`working` read began, followed only by prompt-box redraw glyphs and 3 s of quiet | `failed` | `idle` with `completionOutcome: "failed"`, ringing `agent_failed` like `StopFailure` |
+| Last terminal closed | A counted snapshot reads `working` while no terminal or claude-tmux tab demands it; retried on later reads, including cold start | `idle` | `idle` with `completionOutcome: "none"`: the turn ends with no bell |
 
 The notices are the CLI's fixed text (`CLAUDE_SIGN_IN_NOTICES`), matched with
 escape sequences, control characters and whitespace removed, so the
-renderer's colours, cursor moves and line wrapping do not matter. A turn that
-is really running animates its spinner several times a second (about 80 bytes
-a second measured on 2026-11-16), while the CLI back at its prompt printed
-nothing in 15 s, so the quiet window keeps a notice the model merely quotes
-from settling a live turn. The check keeps only a short normalized tail per
-terminal and answers a boolean: terminal output never reaches a log or a
+renderer's colours, cursor moves and line wrapping do not matter. Quiet alone
+does not prove completion: a live turn can wait on a static permission dialog.
+Only prompt-box punctuation and the pinned CLI’s fixed bypass-permissions
+footer and completed-turn duration line may follow a notice; other visible output revokes
+the candidate. A quoted notice with nothing but prompt punctuation after it is
+still ambiguous. On first adoption of a working snapshot the watch scans a
+bounded retained tail (64 KiB of characters); replacing a working revision uses the
+previous watch's consumed positions, without its notice evidence. Reads wait
+for an outstanding settle before persisting its result, so its no-bell metadata
+cannot arrive after an idle transition. Failed notice attempts retry on watch
+ticks; absent-demand attempts retry on safety reads. The check keeps only a
+short normalized tail per terminal and answers a boolean: terminal output never reaches a log or a
 metric. A CLI that rewords the notices silently disables the check, so
 `claude-terminal-settle.test.ts` reads both out of the pinned CLI build the
 Claude bridge's Agent SDK bundles.

@@ -35,9 +35,9 @@ export const CLAUDE_SIGN_IN_NOTICES = [
 
 /**
  * How long a terminal must print nothing after the notice before its turn is
- * settled. A turn that is really running animates its spinner several times a
- * second, so a quiet terminal plus the notice means the CLI is back at its
- * prompt; it also keeps a notice the model merely quotes from settling a turn.
+ * settled. Only prompt-box punctuation and the fixed CLI footer may follow the notice: a static
+ * permission dialog or other visible content invalidates the candidate.
+ * Quoted notice text alone is still ambiguous; this remains a narrow heuristic.
  */
 export const CLAUDE_SIGN_IN_NOTICE_QUIET_MS = 3_000;
 /** Cadence of the in-memory output check while a turn reads `working`. */
@@ -95,6 +95,20 @@ export function terminalOutputMarks(
   return marks;
 }
 
+/** Prompt chrome and the CLI's completed-turn duration line, after normalization. */
+function stripPromptGlyphs(text: string): string {
+  return text.replace(/[❯>─━│┃┌┐└┘╭╮╰╯⏵▶▸»]/g, "");
+}
+
+function onlyPromptRedraw(text: string): boolean {
+  return (
+    stripPromptGlyphs(text)
+      .replaceAll("bypasspermissionson(shift+tabtocycle)", "")
+      .replaceAll("notloggedin·run/login", "")
+      .replace(/[✻*][a-z]+for(?:[0-9]+[hms])+·done[0-9]{1,2}:[0-9]{2}(?:am|pm)/g, "") === ""
+  );
+}
+
 type SessionCursor = { revision: number; tail: string; changedAt: number; notice: boolean };
 
 /**
@@ -117,6 +131,11 @@ export class SignInNoticeWatch {
     }
   }
 
+  /** Consumed positions, without carrying notice evidence to a new turn. */
+  outputMarks(): Map<string, number> {
+    return new Map(Array.from(this.cursors, ([id, cursor]) => [id, cursor.revision]));
+  }
+
   /**
    * Whether a terminal printed the notice since the marks and has been quiet
    * for {@link CLAUDE_SIGN_IN_NOTICE_QUIET_MS} since its last output.
@@ -134,15 +153,35 @@ export class SignInNoticeWatch {
       if (current !== cursor.revision) {
         let text = "";
         for (const delta of screens.retainedOutputDeltas(id)) {
-          if (delta.revision > cursor.revision) text += delta.text;
+          if (delta.revision > cursor.revision) text = (text + delta.text).slice(-64 * 1024);
         }
         const normalized = cursor.tail + normalizeTerminalText(text);
-        if (containsSignInNotice(normalized)) cursor.notice = true;
-        cursor.tail = normalized.slice(-NOTICE_TAIL_CHARS);
+        const noticeEnd = Math.max(
+          ...NORMALIZED_NOTICES.map((notice) => {
+            const at = normalized.lastIndexOf(notice);
+            return at < 0 ? -1 : at + notice.length;
+          }),
+        );
+        // Keep the whole bounded suffix, including partial redraws. Arbitrary
+        // later text remains disqualifying; it must not disappear as tails roll.
+        if (noticeEnd >= 0) {
+          cursor.notice = true;
+          cursor.tail = stripPromptGlyphs(normalized.slice(noticeEnd));
+        } else {
+          cursor.tail = cursor.notice ? stripPromptGlyphs(normalized) : normalized;
+        }
+        if (cursor.tail.length > NOTICE_TAIL_CHARS) {
+          cursor.notice = false;
+          cursor.tail = cursor.tail.slice(-NOTICE_TAIL_CHARS);
+        }
         cursor.revision = current;
         cursor.changedAt = nowMs;
       }
-      if (cursor.notice && nowMs - cursor.changedAt >= CLAUDE_SIGN_IN_NOTICE_QUIET_MS) {
+      if (
+        cursor.notice &&
+        onlyPromptRedraw(cursor.tail) &&
+        nowMs - cursor.changedAt >= CLAUDE_SIGN_IN_NOTICE_QUIET_MS
+      ) {
         refused = true;
       }
     }

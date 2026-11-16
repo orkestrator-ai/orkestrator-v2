@@ -76,6 +76,17 @@ function fakeScreens() {
 }
 
 describe("SignInNoticeWatch", () => {
+  test("a static permission dialog after a notice invalidates refusal evidence", () => {
+    const t = fakeScreens();
+    t.open("a");
+    const watch = new SignInNoticeWatch(3, 0, terminalOutputMarks(t.screens, "c"), 0);
+    t.print("a", "Not logged in · Please run /login");
+    expect(watch.refused(t.screens, "c", 1000)).toBe(false);
+    t.print("a", "Allow Bash to execute this command? Yes / No");
+    expect(watch.refused(t.screens, "c", 2000)).toBe(false);
+    expect(watch.refused(t.screens, "c", 6000)).toBe(false);
+  });
+
   test("settles only once the terminal has been quiet after the notice", () => {
     const t = fakeScreens();
     t.open("a");
@@ -85,7 +96,9 @@ describe("SignInNoticeWatch", () => {
     t.print("a", "ease run /login\r\n");
     expect(watch.refused(t.screens, "c", 1_000)).toBe(false);
     // The prompt box redraws after the notice; quiet counts from the last output.
-    t.print("a", "❯ ");
+    t.print("a", "✻ Brewed for 0s · done 3:05 AM\r\n❯ " + "─".repeat(200) + "⏵⏵ bypass permis");
+    expect(watch.refused(t.screens, "c", 1500)).toBe(false);
+    t.print("a", "sions on (shift+tab to cycle) Not logged in · Run /login");
     expect(watch.refused(t.screens, "c", 2_000)).toBe(false);
     expect(watch.refused(t.screens, "c", 2_000 + CLAUDE_SIGN_IN_NOTICE_QUIET_MS - 1)).toBe(false);
     expect(watch.refused(t.screens, "c", 2_000 + CLAUDE_SIGN_IN_NOTICE_QUIET_MS)).toBe(true);

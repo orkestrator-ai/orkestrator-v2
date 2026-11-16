@@ -88,7 +88,9 @@ function readState(): string {
   return CLAUDE_STATE_ABSENT_MARKER;
 }
 
-async function harness(options: { settle?: ClaudeStateSettler | null } = {}) {
+async function harness(
+  options: { settle?: ClaudeStateSettler | null; read?: () => Promise<string> } = {},
+) {
   const storage = new StorageService(join(dir, "data"));
   await storage.init();
   const environment = lifecycleEnvironment({ containerId: CONTAINER, status: "running" });
@@ -109,7 +111,7 @@ async function harness(options: { settle?: ClaudeStateSettler | null } = {}) {
   terminals.registerProcess("tab", { kill: () => undefined } as unknown as PtyProcess);
   const time = new ManualTime(Date.now());
   const manager = new ClaudeStatePollManager({
-    readState: async () => readState(),
+    readState: options.read ?? (async () => readState()),
     nowMs: time.now,
     now: () => new Date(time.now()).toISOString(),
     schedule: time.setInterval.bind(time),
@@ -251,9 +253,8 @@ describe.skipIf(!hasFlock)("a prompt the Claude CLI refuses locally", () => {
     }
     expect(raced).toBe(true);
     expect(snapshot()).toBe("working 4 0");
-    // The new prompt is a real turn: its spinner keeps the terminal busy.
+    // The new prompt stays quiet; the consumed notice must not be replayed.
     for (let elapsed = 0; elapsed < 15_000; elapsed += 1_000) {
-      h.print("\r✻ Working… (esc to interrupt)");
       await h.tick();
     }
     expect(snapshot()).toBe("working 4 0");
@@ -316,6 +317,173 @@ describe.skipIf(!hasFlock)("closing the last terminal mid-turn", () => {
     await h.tick(30_000);
     expect(snapshot()).toBe("working 1 0");
     expect((await h.read()).agentActivityState).toBe("working");
+    h.stop();
+  });
+});
+
+describe.skipIf(!hasFlock)("deferred recovery ordering", () => {
+  test("retained refusal before the first read settles exactly once", async () => {
+    let release!: (value: string) => void;
+    let first = true;
+    const h = await harness({
+      read: () => {
+        if (!first) return Promise.resolve(readState());
+        first = false;
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      },
+    });
+    hook("working");
+    h.print(NOTICE);
+    await h.start();
+    release(readState());
+    await flushMicrotasks();
+    await h.tick(10_000);
+    expect(snapshot()).toBe("failed 2 0");
+    expect(h.attention).toEqual(["agent_failed"]);
+    h.stop();
+  });
+
+  test("a notice during a non-working read is retained for the next working read", async () => {
+    let release!: (value: string) => void;
+    let defer = false;
+    const h = await harness({
+      read: () =>
+        defer
+          ? new Promise((resolve) => {
+              defer = false;
+              release = resolve;
+            })
+          : Promise.resolve(readState()),
+    });
+    hook("working");
+    hook("failed");
+    await h.start();
+    defer = true;
+    await h.tick();
+    hook("working");
+    h.print(NOTICE);
+    release("failed 2 0");
+    await flushMicrotasks();
+    await h.tick(10_000);
+    expect(snapshot()).toBe("failed 4 0");
+    expect(h.attention.filter((x) => x === "agent_failed")).toHaveLength(1);
+    h.stop();
+  });
+
+  for (const failure of ["false", "reject"] as const) {
+    test("absent demand retries a " + failure + " idle settle", async () => {
+      let calls = 0;
+      const h = await harness({
+        settle: async (...args) => {
+          if (++calls === 1) {
+            if (failure === "reject") throw new Error("test failure");
+            return false;
+          }
+          return localSettler(...args);
+        },
+      });
+      hook("working");
+      await h.start(false);
+      await h.tick(65_000);
+      expect(snapshot()).toBe("idle 2 0");
+      expect(h.attention).toEqual([]);
+      h.stop();
+    });
+  }
+
+  test("demand lost before the working read returns settles silently", async () => {
+    let release!: (value: string) => void;
+    let first = true;
+    const h = await harness({
+      read: () => {
+        if (!first) return Promise.resolve(readState());
+        first = false;
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      },
+    });
+    hook("working");
+    await h.start();
+    await h.start(false);
+    release(readState());
+    await flushMicrotasks();
+    await h.tick(35_000);
+    expect(snapshot()).toBe("idle 2 0");
+    expect(h.attention).toEqual([]);
+    h.stop();
+  });
+
+  test("idle snapshot readable before settle resolves cannot ring finished", async () => {
+    let release!: () => void;
+    const h = await harness({
+      settle: async (...args) => {
+        const wrote = await localSettler(...args);
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return wrote;
+      },
+    });
+    hook("working");
+    await h.start();
+    await h.start(false);
+    expect(snapshot()).toBe("idle 2 0");
+    await h.tick(30_000);
+    expect(h.attention).toEqual([]);
+    release();
+    await flushMicrotasks();
+    await h.tick(30_000);
+    expect((await h.read()).agentActivityState).toBe("idle");
+    expect(h.attention).toEqual([]);
+    h.stop();
+  });
+
+  test("demand loss during a refused settle reconciles the newer working revision", async () => {
+    let release!: () => void;
+    let first = true;
+    const h = await harness({
+      settle: async (...args) => {
+        if (first) {
+          first = false;
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+        return localSettler(...args);
+      },
+    });
+    hook("working");
+    await h.start();
+    h.print(NOTICE);
+    await h.tick(4_000);
+    hook("working");
+    await h.start(false);
+    release();
+    await flushMicrotasks();
+    await h.tick(65_000);
+    expect(snapshot()).toBe("idle 3 0");
+    expect(h.attention).toEqual([]);
+    h.stop();
+  });
+
+  test("failed notice settles retry on the next watch check", async () => {
+    let calls = 0;
+    const h = await harness({
+      settle: async (...args) => {
+        if (++calls === 1) throw new Error("test failure");
+        if (calls === 2) return false;
+        return localSettler(...args);
+      },
+    });
+    hook("working");
+    await h.start();
+    h.print(NOTICE);
+    await h.tick(10_000);
+    expect(snapshot()).toBe("failed 2 0");
+    expect(h.attention).toEqual(["agent_failed"]);
     h.stop();
   });
 });

@@ -9,7 +9,8 @@
  * which other builds' Docker networks do all the time (flake 2340). Under
  * Docker network churn the component browser suite lost 850 of the first
  * 1,024 cases that way; inside the namespace, under the same churn, it lost
- * none (to-do 7020).
+ * none (to-do 7020, retired; docs/development/agent-testing.md, "Loopback
+ * namespace qualification").
  *
  * Only for suites that need nothing beyond loopback. The namespace is an
  * unprivileged user namespace, so the command runs as uid 0 inside it and
@@ -42,7 +43,7 @@ const MAX_REASON_DETAIL = 160;
 /**
  * Names why the namespace probe failed, so the fallback notice in a review
  * validation log on another host says which prerequisite is missing (to-do
- * 7020 task 2): `unshare`, `ip`, or the kernel's permission.
+ * 7020 task 2, retired): `unshare`, `ip`, or the kernel's permission.
  */
 export function classifyIsolationProbe(result: {
   status: number | null;

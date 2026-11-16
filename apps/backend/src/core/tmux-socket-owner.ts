@@ -8,7 +8,8 @@ import type { ExecOutput } from "./tmux-shared.js";
  * owner. On a Linux host that runs other tmux servers (another worktree's
  * private socket, a container's tmux) that made every unreachable socket look
  * contested, and a local environment move failed with `claude-tmux cleanup
- * incomplete` whenever one happened to be running (to-do 7020 task 1).
+ * incomplete` whenever one happened to be running (to-do 7020 task 1, retired;
+ * docs/architecture/environment-deletion.md).
  *
  * On Linux the kernel still knows the answer. A listening Unix socket keeps
  * its bound path in `/proc/net/unix` after the file is unlinked, and that table

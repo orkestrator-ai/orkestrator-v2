@@ -6,7 +6,7 @@ process.once("exit", enterPrivateTestTmpdir());
 
 /**
  * The coordinator node-mail fake-model suite
- * (`mise run test:agent:coordinator:node-mail-fake`, to-do 2900).
+ * (`mise run test:agent:coordinator:node-mail-fake`, #2075).
  * Separate from the coordinator config so it runs only on the two profiles
  * set up for it (the command node is `ORKESTRATOR_AGENT_TEST_PROFILE`, the
  * leaf `ORKESTRATOR_AGENT_TEST_NODE_MAIL_LEAF_PROFILE`): Pi only, no

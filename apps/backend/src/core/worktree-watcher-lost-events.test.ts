@@ -194,7 +194,7 @@ test("lost events under Git metadata rescan the file list and keep the paths see
   expect(context.hints[1]).toEqual({ fileList: true, tree: false, overflow: false });
 });
 
-test("a burst that also touched Git metadata says so beside its paths (todo 7840)", async () => {
+test("a burst that also touched Git metadata says so beside its paths (#2185)", async () => {
   const context = linkedWorktree();
   await until(() => context.watches.length === 4);
   await Bun.sleep(40);

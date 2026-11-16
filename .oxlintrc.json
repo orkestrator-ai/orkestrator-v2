@@ -416,6 +416,10 @@
               {
                 "group": ["**/features/*", "!**/features/index.js"],
                 "message": "Import the features domain through features/index.js."
+              },
+              {
+                "group": ["**/previews/*", "!**/previews/index.js", "!**/previews/test-support.js"],
+                "message": "Import the previews domain through previews/index.js."
               }
             ]
           }
@@ -546,6 +550,13 @@
                   "!**/backend/src/core/features/index.js"
                 ],
                 "message": "Import the features domain through features/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/previews/*",
+                  "!**/backend/src/core/previews/index.js"
+                ],
+                "message": "Import the previews domain through previews/index.js."
               }
             ]
           }

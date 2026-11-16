@@ -649,7 +649,7 @@ export class KanbanRepository {
   }
 
   /**
-   * Deletes what one project holds here, for project removal (to-do 5820):
+   * Deletes what one project holds here, for project removal (#2295):
    * its tickets and their image files, the delivery sidecars of its deleted
    * tickets, its label catalogue, its notes, its feature plans, and the sync
    * bookkeeping that names it (`forgetSyncProject`). Other projects' rows are
@@ -749,7 +749,7 @@ export class KanbanRepository {
 
   /**
    * Deletes the Linear and GitHub completion comment records of these
-   * pipelines (to-do 5820 task 2). A record only spares a finished pipeline
+   * pipelines (#2295). A record only spares a finished pipeline
    * a second scan of the issue's comments, and posting always scans for the
    * run's marker first, so a record whose pipeline is gone has no use left.
    * Returns how many records were removed.

@@ -9,6 +9,7 @@ import {
   hostCodexHome,
 } from "./agent-accounts-homes.js";
 import { runtimeHostCodexHome } from "./agent-accounts-active.js";
+import { claudeProjectSlug } from "./claude-project-slug.js";
 import type { CommandContext } from "./commands-context.js";
 import { environmentStateDirectory } from "./environment-state-paths.js";
 import { pathExists } from "./shell.js";
@@ -100,23 +101,7 @@ export async function relocateAgentSessionState(
 // Claude
 // ---------------------------------------------------------------------------
 
-const CLAUDE_SLUG_MAX = 200;
-
-/** Claude Code's 32-bit string hash, used to shorten long transcript folder names. */
-function claudeStringHash(value: string): number {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
-  }
-  return hash;
-}
-
-/** Claude Code's transcript folder name for a working directory. */
-export function claudeProjectSlug(cwd: string): string {
-  const slug = cwd.replace(/[^a-zA-Z0-9]/g, "-");
-  if (slug.length <= CLAUDE_SLUG_MAX) return slug;
-  return `${slug.slice(0, CLAUDE_SLUG_MAX)}-${Math.abs(claudeStringHash(cwd)).toString(36)}`;
-}
+export { claudeProjectSlug };
 
 /**
  * Claude only finds a conversation under the folder it is resumed in, and

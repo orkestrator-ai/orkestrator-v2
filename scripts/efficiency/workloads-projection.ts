@@ -381,6 +381,8 @@ export async function historyPagingWorkload(context: WorkloadContext): Promise<W
   };
   const joined: CaseDefinition = {
     id: "joined-refresh",
+    // Measures a baseline revision: joined paging was removed by 0232 task 4,
+    // after which the sync snapshot names no cursor and nothing is paged.
     description: "v1 provider: transcript read, joined sync snapshot for a cursor, then pages",
     run: async () => {
       const source = history();
@@ -581,7 +583,9 @@ export async function historyCursorCoverageWorkload(
                 counters.withoutCursor += 1;
                 if (value.historyComplete === false) {
                   counters.withoutCursorIncomplete += 1;
-                  // The renderer's click mints a joined cursor (loadEarlierMessages).
+                  // Before 0232 task 4 the renderer's click minted a joined cursor
+                  // (loadEarlierMessages); a later revision never reaches here for
+                  // a provider that pages.
                   const before = returned.messages;
                   await service.getProjectionUpdate({
                     ...IDENTITY,

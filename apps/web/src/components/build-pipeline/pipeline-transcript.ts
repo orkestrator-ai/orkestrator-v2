@@ -78,7 +78,9 @@ function asToolState(value: unknown): NativeToolState | undefined {
 }
 
 function asAgentState(value: unknown): NativeAgentState | undefined {
-  return value === "active" || value === "finished" || value === "failed" ? value : undefined;
+  return value === "active" || value === "finished" || value === "failed" || value === "ended"
+    ? value
+    : undefined;
 }
 
 function asRole(value: unknown): NativeMessage["role"] | undefined {

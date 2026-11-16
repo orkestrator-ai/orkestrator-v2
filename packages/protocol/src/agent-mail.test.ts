@@ -704,14 +704,12 @@ describe("what a recipient is told about where mail came from", () => {
     expect("selfReminder" in payload(text).from).toBe(false);
   });
 
-  test("an older reader, which refuses any source but workflow, still reads a self-reminder", () => {
+  test("the carrier spells a self-reminder as it is, with no compatibility flag", () => {
     const { from, kind } = payload(carrier(system("self-reminder")));
-    // What a renderer before `self-reminder` checks before it parses the block.
-    expect(from.source).toBe("workflow");
+    expect(from.source).toBe("self-reminder");
     expect(from.kind).toBe("system");
     expect(kind).toBe("notice");
-    // What this one reads.
-    expect(from.selfReminder).toBe(true);
+    expect("selfReminder" in from).toBe(false);
   });
 });
 
@@ -811,16 +809,28 @@ describe("reading a carrier back", () => {
     ]);
   });
 
-  test("reads back a self-reminder as the carrier spells it for older renderers", () => {
+  test("reads back a self-reminder, and one an older backend spelled `workflow`", () => {
     const from = {
       kind: "system",
       projectId: "p",
       source: "self-reminder",
       resourceId: "r",
     } as const;
-    const { entries } = readAgentMailCarriers(renderAgentMailCarrier(mailMessage({ from })));
+    const current = renderAgentMailCarrier(mailMessage({ from }));
+    expect(readAgentMailCarriers(current).entries[0]?.from).toMatchObject({
+      kind: "system",
+      source: "self-reminder",
+    });
 
-    expect(entries[0]?.from).toMatchObject({ kind: "system", source: "self-reminder" });
+    // A provider transcript keeps carriers written before the spelling retired.
+    const stored = renderAgentMailCarrier(
+      mailMessage({ from: { ...from, source: "workflow" } }),
+    ).replace(/"source":\s*"workflow"/, '"source":"workflow","selfReminder":true');
+    expect(stored).toContain('"selfReminder":true');
+    expect(readAgentMailCarriers(stored).entries[0]?.from).toMatchObject({
+      kind: "system",
+      source: "self-reminder",
+    });
   });
 
   test("reads carriers back to back, and what follows them", () => {

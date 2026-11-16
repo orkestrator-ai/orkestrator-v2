@@ -233,7 +233,7 @@ results, not evidence of a common cause or a reproduction on main.
 | Name | Package and path | Result | Failure artifact directory under `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/` |
 | --- | --- | --- | --- |
 | merge-container-exec-alone | apps/backend; tests/commands-container-exec.test.ts | 14 pass, 1 fail, 1 error; 29.2 s. Credential-helper test still hits its 5 s limit. | orkestrator-test-run.T5ZEPJ |
-| merge-preview-ownership-alone | apps/backend; src/core/preview-listener-ownership.test.ts | 21 pass, 2 fail; 11.5 s. Both real-listener tests still receive `unchecked`. | orkestrator-test-run.QJ1iee |
+| merge-preview-ownership-alone | apps/backend; src/core/previews/listener-ownership.test.ts | 21 pass, 2 fail; 11.5 s. Both real-listener tests still receive `unchecked`. | orkestrator-test-run.QJ1iee |
 | merge-container-readiness-alone | apps/backend; tests/container-readiness.test.ts | 19 pass, 2 fail; 16.9 s. Probe-clipping elapsed time exceeds 1,500 ms; renewed readiness still times out. | orkestrator-test-run.iBRBji |
 | merge-shared-skills-alone | apps/backend; tests/portable-inputs-shared-skills.test.ts | 19 pass, 2 fail, 2 errors; 16.3 s. Relay import and linked-skill import hit their 5 s limits. | orkestrator-test-run.jk89ua |
 | merge-portable-stamps-alone | apps/backend; tests/portable-inputs-stamps.test.ts | Incomplete: five-minute no-output watchdog; no test totals. The aggregate's changed-tree and planted-link failures remain undetermined. | orkestrator-test-run.IVMpxK |

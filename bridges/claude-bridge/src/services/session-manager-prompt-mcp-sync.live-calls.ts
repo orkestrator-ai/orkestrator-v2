@@ -247,7 +247,7 @@ export async function runMcpCallProbe(open: Set<Query>) {
     },
   };
   // The CLI writes its MCP logs under `HOME` while it shuts down, so the root
-  // is removed only once the process has exited (0247).
+  // is removed only once the process has exited (#1339).
   let exited: Promise<void> = Promise.resolve();
   const control = query({
     prompt,

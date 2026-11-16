@@ -113,7 +113,7 @@ import { registryWriterStartup } from "./registry-writer-startup.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
 import { sweepOrphanEgressGateways } from "./egress-gateway.js";
 import { DesignService } from "./design/index.js";
-import { PreviewRuntime } from "./preview-runtime.js";
+import { PreviewRuntime } from "./previews/index.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { BackendDiagnostics } from "./backend-diagnostics.js";
@@ -128,6 +128,7 @@ import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
 import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { backendClaudeStateSignal, backendTmuxHookSignal } from "./claude-state-signal.js";
+import { backendClaudeStateSettler } from "./claude-terminal-settle.js";
 import { ContainerLifecycleReactor } from "./container-lifecycle-events.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
@@ -402,7 +403,7 @@ export class OrkestratorBackend {
   private readonly transcriptArtifactRuntimeEnabled: boolean;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
-  /** Agent-test profiles only (to-do 0050 task 3); see `agent-test-dispatch-hold.ts`. */
+  /** Agent-test profiles only (#2086); see `agent-test-dispatch-hold.ts`. */
   private uninstallDispatchHold?: () => void;
   /** Agent-test profiles only: a spec's shortened periods (`agent-test-timing.ts`). */
   private readonly agentTestTiming: AgentTestTiming | undefined;
@@ -573,7 +574,7 @@ export class OrkestratorBackend {
     const emit = createBackendEmit((event, payload) => options.emit(event, payload));
     this.activityJobClock = options.activityJobClock;
     const storage = new StorageService(options.dataDir);
-    // History survives a restart through one database row (to-do 8104).
+    // History survives a restart through one database row (#2287).
     this.machineLoad = new MachineLoadSampler({
       historyStore: {
         load: () => storage.machineLoadHistory.loadMachineLoadHistory(),
@@ -728,7 +729,10 @@ export class OrkestratorBackend {
           : { dockerAvailability: { probe: () => checkDockerAvailability() } }),
         tmux: {
           localClaudeConfigDirectory: tmuxLocalClaudeConfigDirectory,
-          claudeStatePolls: { signal: backendClaudeStateSignal() },
+          claudeStatePolls: {
+            signal: backendClaudeStateSignal(),
+            settle: backendClaudeStateSettler(),
+          },
           hookSignal: backendTmuxHookSignal(),
         },
         // Read at call time: the keeper and the Codex refresher exist only

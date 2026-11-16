@@ -11,7 +11,7 @@ import { StorageService } from "./storage.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
 
 /**
- * Todo 7220: a restarted backend asks for the agent tools port it saved last
+ * #1936: a restarted backend asks for the agent tools port it saved last
  * time. On macOS a wildcard bind of that port succeeds beside another
  * process's 127.0.0.1 listener, which then receives every host agent's
  * request and bearer token. Ports here are OS-chosen, and a stray is placed

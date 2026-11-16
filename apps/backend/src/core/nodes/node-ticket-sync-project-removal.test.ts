@@ -12,7 +12,7 @@ import {
 } from "./node-ticket-sync-test-support.js";
 
 /**
- * Removing a project deletes this machine's rows of its board (to-do 5820,
+ * Removing a project deletes this machine's rows of its board (#2295,
  * retired). Over sync that is not a deletion of the shared board: nothing is
  * queued for the command node, the command node's tickets stay, and a
  * re-added copy of the repository syncs them again.

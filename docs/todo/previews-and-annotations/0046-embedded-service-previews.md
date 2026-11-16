@@ -45,8 +45,8 @@ surface: `"browser-embedded"` in `PREVIEW_SURFACES`
 (`packages/protocol/src/preview-access.ts:21`) and
 `surfaces.browserEmbedded` with `platforms`
 (`packages/protocol/src/preview-services.ts:352`). The backend hard-codes it off
-with the documented reason (`apps/backend/src/core/preview-runtime.ts:326-331`)
-and refuses the surface (`apps/backend/src/core/preview-access.ts:179-184`).
+with the documented reason (`apps/backend/src/core/previews/runtime.ts:326-331`)
+and refuses the surface (`apps/backend/src/core/previews/access.ts:179-184`).
 Settings shows the reason (`apps/web/src/components/settings/PreviewSettings.tsx:237`).
 The file's description is still accurate.
 
@@ -216,8 +216,8 @@ embedded flag must flip only per qualified platform.
 
 **Investigation.** Capture is already hidden off desktop through `canCapture`
 (`apps/web/src/components/browser/annotations/AnnotationPanel.tsx:70`). The
-refusal to lift is `preview-access.ts:183`; the flag to set is
-`preview-runtime.ts:326`. A fixture copy lives in
+refusal to lift is `core/previews/access.ts:183`; the flag to set is
+`core/previews/runtime.ts:326`. A fixture copy lives in
 `packages/protocol/src/testing/preview-contract-fixtures.ts:110`.
 
 **Decisions.**
@@ -267,12 +267,12 @@ browser privacy tests.
 
 ## Current state
 
-- `PreviewRuntime.capabilities` (`apps/backend/src/core/preview-runtime.ts`)
+- `PreviewRuntime.capabilities` (`apps/backend/src/core/previews/runtime.ts`)
   hard-codes `browserEmbedded: { available: false, platforms: [] }`, with the
   reason "Embedded browser previews have not passed real-browser privacy
   tests". Settings → Previews shows that reason
   (`apps/web/src/components/settings/PreviewSettings.tsx`).
-- `PreviewAccessService` (`apps/backend/src/core/preview-access.ts`) refuses
+- `PreviewAccessService` (`apps/backend/src/core/previews/access.ts`) refuses
   `surface: "browser-embedded"` with `unsupported`.
 - The publication gateway refuses framed preview navigations from any other
   site or service (`crossServiceReadViolation` in
@@ -435,7 +435,7 @@ defers.
 ### File accuracy
 
 Updated the line citations that moved since 2026-10-27
-(`preview-access.ts:179-184`, `ServiceBrowserTab.tsx:907`,
+(`core/previews/access.ts:179-184`, `ServiceBrowserTab.tsx:907`,
 `BrowserTab.tsx:795`). Rechecked that no backend code sets `Partitioned`.
 Every other citation in the Task analysis and Current state still matches
 `cd7bbe3e`. No follow-up todo was created: the new finding belongs in task 2,

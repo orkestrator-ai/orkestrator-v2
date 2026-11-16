@@ -795,3 +795,38 @@ a machine from before board links answers `unknown-command`, and its older
 `get_linear_issue`, `get_linear_issues` and `post_linear_issue_comment` would
 ignore `projectId`. `add_linear_comment` is not idempotent: a retry posts
 again.
+
+**Decisions behind the design** (from to-do 7767, retired 2026-11-16):
+
+- *Kanban first is said in the tool descriptions, not the coordinator's
+  context prompt.* Each Linear tool says Kanban (`list_tickets`) stays the
+  default board and to use Linear when the user works from Linear or names an
+  issue, and an unlinked project answers "no Linear board linked". A context
+  line would cost every coordinator turn for projects that never use Linear;
+  if coordinators are seen reaching for Linear unasked, a prompt line is the
+  next step. A per-project "Linear is the source of truth" switch was not
+  asked for and nothing depends on it.
+- *Board-link sync is its own small service.* `NodeLinearSync` swaps the
+  whole (small) state each pass instead of adding a third record kind to
+  Kanban sync's cursors and outbox: a machine has one link per repository, so
+  a full read is simpler to reason about. The cost is that a leaf's change
+  waits for the command node's next pass (at most a minute).
+- *A synced link names no project*, because project ids differ between
+  machines; lookups go by the repository key.
+- *A status read keeps when the key was connected.* `get_linear_connection`
+  refreshes the viewer but not `connectedAt`, since a disconnect made
+  elsewhere is compared with it; rewriting it would let a status read undo a
+  disconnect.
+- *Only non-secret state syncs* (links, disconnects, the connection's
+  fingerprint and viewer name), and each machine keeps working with Linear
+  when it is cut off from the others.
+
+**Verification.** Every path has deterministic tests with real storage and a
+faked Linear API and node link (`linear-boards.test.ts`,
+`commands-registry-linear.test.ts`, `nodes/node-linear-sync.test.ts`,
+`control-mcp/linear-tools*.test.ts`), and `linear-two-machines.test.ts` runs
+the whole two-machine sequence through the real command handlers and the
+command node's real sync: connect and link on a leaf, a sync pass, Use it
+here, a board read, disconnect everywhere and reconnect. The same sequence on
+two live profiles with a throwaway Linear key is in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).

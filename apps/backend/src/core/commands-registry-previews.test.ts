@@ -4,7 +4,7 @@ import { previewErrorFromUnknown } from "@orkestrator/protocol/preview-services"
 
 import { createCommandRegistry } from "./commands.js";
 import type { CommandContext } from "./commands-context.js";
-import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
+import { createPreviewHarness, type PreviewHarness } from "./previews/test-support.js";
 
 describe("preview commands", () => {
   let harness: PreviewHarness;

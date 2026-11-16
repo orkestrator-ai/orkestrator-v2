@@ -21,7 +21,7 @@ import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./con
 import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-authority.js";
 
 /**
- * To-do 6080 task 5: `send_prompt_to_tab` and `launch_job` say when the
+ * To-do 6080 (retired) task 5: `send_prompt_to_tab` and `launch_job` say when the
  * coordinator's turn arose from agent mail, as its mail does, and a
  * scheduled fire is framed from the turn that set the schedule.
  *

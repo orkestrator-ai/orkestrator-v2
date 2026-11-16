@@ -1,6 +1,6 @@
 /**
  * A scripted loopback Anthropic Messages endpoint for
- * `idle-observation-live.spec.ts` (todo 0049 tasks 1, 2, 9 and 10), so the
+ * `idle-observation-live.spec.ts` (#1934), so the
  * real pinned Claude CLI and bridge take real turns with no login and nothing
  * billed.
  *

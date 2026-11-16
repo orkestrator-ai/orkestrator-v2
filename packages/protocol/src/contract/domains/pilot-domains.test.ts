@@ -297,7 +297,8 @@ describe("node-mail client", () => {
       coordinatorNotices: { declined: [] },
       attachmentMail: true,
     });
-    // turnOrigin, coordinatorNotices and attachmentMail are unknown to it: left out.
+    // coordinatorNotices and attachmentMail are unknown to it: left out.
+    // Adapter 0 omits turnOrigin for strict pre-contract receivers.
     expect(node.sent).toEqual([
       {
         command: "deliver_node_mail",
@@ -320,6 +321,57 @@ describe("node-mail client", () => {
       ["node-mail", 0],
       ["node-mail", 0],
     ]);
+  });
+
+  it("version 0 preserves origin for capable pre-contract beta leaves", async () => {
+    // v2.36.5-beta and v2.36.6-beta have this capability but no domain range.
+    const node = fakeNode(undefined, ["node-mail-turn-origin"]);
+    const client = createDomainClient(nodeMailClient, node.options);
+    expect(client.version()).toBe(0);
+    const plain = Object.freeze({
+      controllerId: "bk_cmd",
+      requestId: "r1",
+      toEnvironmentId: "env-1",
+      body: "Stop.",
+      turnOrigin: "mail",
+    });
+    await client.api().deliver(plain);
+    expect(node.sent).toEqual([{ command: "deliver_node_mail", args: plain, envelope: undefined }]);
+    expect(node.sent[0]!.args).toHaveProperty("turnOrigin", "mail");
+    expect(plain.turnOrigin).toBe("mail");
+    expect(node.usage).toEqual([["node-mail", 0]]);
+  });
+
+  it("version 0 delivers mail to a strict stable leaf without origin support", async () => {
+    const node = fakeNode(undefined, []);
+    const call = node.options.call;
+    node.options.call = async (def, args, envelope) => {
+      if (def.name === "deliver_node_mail") {
+        // Stable v2.36.1 rejects unknown keys before storing anything.
+        const allowed = new Set([
+          "controllerId",
+          "coordinatorEnvironmentId",
+          "coordinatorTabId",
+          "requestId",
+          "toEnvironmentId",
+          "toTabId",
+          "subject",
+          "body",
+          "steer",
+          "nodeParent",
+          "projectId",
+        ]);
+        for (const key of Object.keys(args as object)) {
+          if (!allowed.has(key)) throw new Error(`Unexpected key: ${key}`);
+        }
+      }
+      return call(def, args, envelope);
+    };
+    const mail = createDomainClient(nodeMailClient, node.options).api();
+    const { steer: _steer, ...plain } = delivery;
+    await expect(mail.deliver(plain)).resolves.toBeDefined();
+    expect(node.sent[0]!.args).not.toHaveProperty("turnOrigin");
+    expect(plain.turnOrigin).toBe("mail");
   });
 
   it("version 0 refuses what such a leaf would drop, with the typed errors, and sends nothing", async () => {

@@ -18,7 +18,7 @@ interface PendingImageDeletion {
 }
 
 /**
- * What project removal needs beyond deleting rows (to-do 5820): a fence that
+ * What project removal needs beyond deleting rows (#2295): a fence that
  * stops new content reaching a project being removed, a journal of the ticket
  * image files it still has to unlink, and the deleted-ticket delivery
  * sidecars it has to find. `KanbanBoardStore` holds the one instance, so the

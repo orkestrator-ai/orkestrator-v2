@@ -286,8 +286,14 @@ transcript reads at the bridge.
   (about 30 KB for Claude, 8 KB for Codex). Their number varied from 1 to 4
   per viewer in 40 s against a 30 s backstop. With 4 they carried as many
   bytes as all 84 live updates. To-do
-  [8151](8151-discovery-reads-during-a-quiet-turn.md) attributes both. The
-  layer carries a discovery part too (D4).
+  8151 (retired 2026-11-16; [native-transcripts.md](../../architecture/native-transcripts.md#one-request-per-round))
+  found three causes:
+  each backstop read found its sections expired and answered `stale` (a new
+  view plus a 2 s follow-up), the follow-up carried a moved `fetchedAt`, and
+  the two sections the job limit refused made a third. Since 8151 an
+  unchanged renewal answers `unchanged`, so a quiet tab's discovery is one
+  small answer per 30 s and a renewal reaches this layer (D4) only when a
+  view would show something new.
 - **Streaming must not get more expensive.** While streaming, nearly every
   round really has a change (transcript `delta` on 39–40 of 40), so push
   saves little there; the throttle in D6 keeps it at or below today's rate.
@@ -851,8 +857,9 @@ the review:
   cadences).
 - [agent-testing.md](../../development/agent-testing.md#live-requests-of-a-running-agent-tab)
   (the specs that took the baseline).
-- [8151](8151-discovery-reads-during-a-quiet-turn.md) (discovery reads during
-  a quiet turn, found by the baseline).
+- To-do 8151 (retired 2026-11-16; discovery reads during a quiet turn, found
+  by the baseline):
+  `git show eb32124cc:docs/todo/transcripts-and-observation/8151-discovery-reads-during-a-quiet-turn.md`.
 - To-do 1202 (retired 2026-11-10) task 4:
   `git show 76a0bb93a^:docs/todo/cross-cutting/1202-efficiency-review-follow-ups.md`.
 - To-do 6680 (retired) task 2:

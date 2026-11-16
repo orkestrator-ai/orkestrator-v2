@@ -3883,7 +3883,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:ab62cace84790b0e2c30bde4760c0c92d5a7810d5032efe286ad0b576dd212e6",
-      "resultDigest": "sha256:2fb1b9d5b8d29c12fc9bcaec7d6d916426be829ade1a6b799286ebbfff7f7a4b"
+      "resultDigest": "sha256:cfdf395eae0272e4323629848da0cf7c5e58363b2ffb0059343031bd0726d800"
     },
     "get_native_agent_model_catalog": {
       "domain": "agent-servers",
@@ -3910,7 +3910,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9ba07888f28d25078a14388e9bdd490565bc3ca1c605a16d9a316f0360b8f2f8",
-      "resultDigest": "sha256:5e4bf69a145c5efc51e80b1977723d1bdf42cf7aa265a9fa9e126e98cedcef9b"
+      "resultDigest": "sha256:1f4e821b968b88625643a02c7d7ac323e9a5a84ac0c3c89fd104404b5f5c310e"
     },
     "get_native_agent_session": {
       "domain": "native-sessions",

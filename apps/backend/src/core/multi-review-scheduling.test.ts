@@ -113,7 +113,7 @@ describe("graph-engine reviews (item 301)", () => {
   });
 });
 
-describe("validation run fast window (todo 7564 task 3)", () => {
+describe("validation run fast window (#2131)", () => {
   const NOW = Date.parse("2026-11-11T03:00:00.000Z");
   const WINDOW = 3_000;
   type Run = NonNullable<MultiReviewWorkflow["validationRun"]>;
@@ -203,7 +203,7 @@ describe("stable workflow jitter", () => {
   });
 });
 
-describe("result slots awaiting their turn's end (todo 7557)", () => {
+describe("result slots awaiting their turn's end (#2079)", () => {
   type Reviewer = MultiReviewWorkflow["reviewers"][number];
   const reviewer = (fields: Partial<Reviewer>): Reviewer =>
     ({ id: "r", agent: "codex", model: "default", status: "running", ...fields }) as Reviewer;

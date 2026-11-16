@@ -188,7 +188,7 @@ builds, bridges and agent CLIs would outlive whatever stopped them.
   - `process-identity.ts`;
   - `shell-process-state.ts:113`;
   - `environment-process-usage.ts:262`;
-  - `preview-listener-ownership.ts:253`.
+  - `previews/listener-ownership.ts:253`.
 
   The orphan reaper's safety checks (`ppid == 1`, `pgid == pid`) have no
   Windows equivalent.

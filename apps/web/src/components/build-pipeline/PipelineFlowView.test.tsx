@@ -312,7 +312,7 @@ describe("pipeline inspector controls", () => {
     expect(graphNode("Reviewer 2").textContent).toContain(reason);
   });
 
-  test("a reviewer that could not review is failed, with its reason (todo 7871)", () => {
+  test("a reviewer that could not review is failed, with its reason (#2221)", () => {
     const reason = "No shell command could run in the container.";
     const pipeline = build({
       phase: "reviewing",

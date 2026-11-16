@@ -1,5 +1,5 @@
 /**
- * A container Claude CLI turn that ends on an API error (to-do 1200).
+ * A container Claude CLI turn that ends on an API error (#1612).
  *
  * `StopFailure` runs instead of `Stop`, and its hook calls
  * `orkestrator-state-signal failed`. These tests run the real hook script on

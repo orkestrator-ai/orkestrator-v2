@@ -53,7 +53,7 @@ interface HeldCursor {
 
 /**
  * Provider cursors too long to wrap inside the page command's 1,024-character
- * cursor, held in memory and named by a short handle instead (8110).
+ * cursor, held in memory and named by a short handle instead (#2285).
  *
  * A handle is a digest of what it names, so the view re-registering the same
  * cursor on every read refreshes one entry rather than adding another. It is
@@ -189,7 +189,7 @@ export function encodeDirectHistoryCursor(
 }
 
 export type DecodedHistoryCursor =
-  { version: 1 } | { version: 2; epoch: string; providerCursor: string } | { version: "invalid" };
+  { version: 2; epoch: string; providerCursor: string } | { version: "invalid" };
 
 /**
  * Classify a page cursor and, for a direct one, check it belongs to this
@@ -210,7 +210,6 @@ export function decodeHistoryCursor(
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) return { version: "invalid" };
   const record = body as Record<string, unknown>;
-  if (record.v === 1) return { version: 1 };
   const key = shortDigest(owner.sessionKey);
   const session = shortDigest(owner.providerSessionId);
   if (

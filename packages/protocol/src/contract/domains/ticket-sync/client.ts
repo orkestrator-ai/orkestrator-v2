@@ -14,6 +14,7 @@
  *   (`assertOnlyKeys`), so `collect_ticket_sync_outbox` goes without
  *   `features`, which came with image sync. Such a leaf queues no image
  *   change, so it loses nothing by not hearing the command node's features.
+ *   `ack_ticket_sync_outbox` goes without `removedProjects` the same way.
  *
  * `status` is the command node's own board read (`get_ticket_sync_status`,
  * the Kanban sync strip, plan item 7001's audit on 2026-11-07). It is not

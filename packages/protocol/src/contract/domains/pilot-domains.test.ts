@@ -95,7 +95,8 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
   get_ticket_sync_cursor: ["controllerId", "projectId"],
   // `features` added with images on synced tickets (#2027).
   collect_ticket_sync_outbox: ["controllerId", "after", "features"],
-  ack_ticket_sync_outbox: ["controllerId", "epoch", "upTo"],
+  // `removedProjects` added for a command node's removed projects (to-do 8111).
+  ack_ticket_sync_outbox: ["controllerId", "epoch", "upTo", "removedProjects"],
   get_ticket_sync_status: ["projectId"],
   sync_node_tickets: ["nodeId"],
   // The lenient neighbours (plan item 7009): every key is `optionalKey(Unknown)`.
@@ -460,6 +461,16 @@ describe("ticket-sync client", () => {
     const current = fakeNode({ "ticket-sync": { min: 1, max: 1 } }, []);
     await createDomainClient(ticketSyncClient, current.options).api().collectOutbox(collect);
     expect(current.sent[0]!.args).toEqual(collect);
+  });
+
+  it("current acknowledgements preserve removedProjects", async () => {
+    const ack = { controllerId: "bk_cmd", epoch: "e1", upTo: 4, removedProjects: ["gone"] };
+    const current = fakeNode({ "ticket-sync": { min: 1, max: 1 } }, [], () => ({
+      remaining: 0,
+      dropped: 1,
+    }));
+    await createDomainClient(ticketSyncClient, current.options).api().ackOutbox(ack);
+    expect(current.sent[0]!.args).toEqual(ack);
   });
 });
 

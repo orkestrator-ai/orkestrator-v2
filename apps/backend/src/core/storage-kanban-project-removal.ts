@@ -125,17 +125,21 @@ export class KanbanProjectRemovalStore {
 
   /**
    * Deletes the delivery sidecars (`KanbanBoardStore.deletedDeliveryFile`) of
-   * this project's deleted tickets, with their backup ladders. A sidecar is
-   * named by a hash of its ticket id, so each is read to find its project; one
-   * that cannot be read is left alone. Returns how many could not be removed.
+   * deleted tickets whose project `matches` (one project for a removal, every
+   * project no longer stored for the removed-project sweep), with their
+   * backup ladders. A sidecar is named by a hash of its ticket id, so each is
+   * read to find its project; one that cannot be read is left alone. Returns
+   * how many matched, and how many of those could not be removed.
    */
-  async removeDeliverySidecars(projectId: string): Promise<number> {
+  async removeDeliverySidecars(
+    matches: (projectId: unknown) => boolean,
+  ): Promise<{ removed: number; failed: number }> {
     const directory = `${this.files.kanbanFile()}.delivery`;
     let entries: string[];
     try {
       entries = await fs.readdir(directory);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { removed: 0, failed: 0 };
       throw error;
     }
     const keys = new Set(
@@ -143,6 +147,7 @@ export class KanbanProjectRemovalStore {
         .map((entry) => /^([0-9a-f]{64})\.json/.exec(entry)?.[1])
         .filter((key): key is string => key !== undefined),
     );
+    let removed = 0;
     let failed = 0;
     for (const key of keys) {
       const sidecar = path.join(directory, `${key}.json`);
@@ -152,18 +157,19 @@ export class KanbanProjectRemovalStore {
         sidecar,
         () => null,
       );
-      if (saved?.projectId !== projectId) continue;
+      if (!saved || !matches(saved.projectId)) continue;
       try {
         await Promise.all(
           [sidecar, ...this.context.jsonBackupPaths(sidecar)].map((target) =>
             fs.rm(target, { force: true }),
           ),
         );
+        removed += 1;
       } catch {
         failed += 1;
       }
     }
     if (failed) log.warn("kanban.delivery-sidecar-cleanup-failed");
-    return failed;
+    return { removed, failed };
   }
 }

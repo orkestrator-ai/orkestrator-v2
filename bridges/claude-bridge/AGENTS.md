@@ -130,6 +130,15 @@ writers on one `.jsonl`. When touching the prompt path:
   unloaded: a PreToolUse hook refuses its tools and the revision names it in
   `staleServers`. Re-prove the CLI behaviour with
   `mise run verify:claude:mcp-live` on every Claude bump.
+- **A join refuses a required server that is not connected.** The injected
+  Orkestrator servers must be `connected` before a prompt is written into a
+  running CLI; a new CLI's first turn is not held for them. A server the CLI
+  reports `failed` or `needs-auth` is not reconnected, so that 409 names the
+  address it could not reach and the agent tools reachability notice, never a
+  bare "retry" (`requiredServerRefusal`); it never repeats the CLI's own error
+  text or anything in the URL beyond scheme, host and path. The backend
+  preflights container Multi Review turns so a review fails up front instead
+  ([container-lifecycle.md](../../docs/architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)).
 
 ## The policy caps the permission mode
 

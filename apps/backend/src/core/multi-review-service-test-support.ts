@@ -18,10 +18,13 @@ import type {
   StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
 import {
+  isMultiReviewTerminalPhase,
   MULTI_REVIEW_WORKFLOW_VERSION,
   type MultiReviewModelSelection,
+  type MultiReviewPhase,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
+import { multiReviewStartRefusal } from "./multi-review-refusals.js";
 import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent";
 import type {
   BuildPipelineProvider,
@@ -1105,8 +1108,15 @@ export async function startLegacyReview(
     1,
     workflow,
   );
-  if (!saved)
-    throw new Error("Finish, cancel, or delete the existing Multi Review before starting another");
+  if (!saved) {
+    const active = (await storage.listMultiReviewWorkflows(workflow.environmentId)).flatMap(
+      (record) => {
+        const phase = (record.snapshot as { phase?: MultiReviewPhase }).phase;
+        return phase && !isMultiReviewTerminalPhase(phase) ? [phase] : [];
+      },
+    );
+    throw new Error(multiReviewStartRefusal(active));
+  }
   workflow.backendRevision = saved.revision;
   void service.advanceNow(workflow.id);
   return workflow;

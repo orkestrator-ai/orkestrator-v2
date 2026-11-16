@@ -34,6 +34,12 @@ proved on the pinned Codex in a disposable container; its check on a real
 administrator-managed machine came in (in Git history before the commit
 that retired it).
 
+Updated 2026-11-16: 8172 was retired once both of its tasks were built (a
+container Multi Review turn is refused up front when its container cannot
+reach the agent tools server, the Claude bridge's refusal names the address,
+and a failed review's delete and start refusals no longer say "running"); its
+live check on a firewalled host came in under Containers and environments.
+
 Updated 2026-11-16: 0232 was retired once its task 4 (removing joined
 `sync-v1` history paging) was built; it is in Git history at `c1fcc573b`.
 Its real-session check came in as one item, and 8110 (retired) task 1's
@@ -51,7 +57,7 @@ task 2, and the CLI's copy went to to-do 8250.
 
 ### Tasks
 
-1. **Manual tests and live checks** (348 items): run each check under
+1. **Manual tests and live checks** (349 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (24 items): make each call
@@ -213,14 +219,14 @@ agent can apply it.
 | --- | --- | --- |
 | Agent engines and provider SDKs | 70 | 3 |
 | CLI and slash commands | 6 | 0 |
-| Containers and environments | 31 | 6 |
+| Containers and environments | 32 | 6 |
 | Coordinator and Multi Review | 86 | 3 |
 | Cross-cutting | 94 | 8 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 16 | 1 |
 | Transcripts, observation and bandwidth | 30 | 2 |
-| **Total** | 348 | 24 |
+| **Total** | 349 | 24 |
 
 ## Outstanding work
 
@@ -475,6 +481,12 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **8106 (retired) task 2: Environment Files patterns on a real daemon and in the real Settings page.** (Background: [Project seed files](../../architecture/container-lifecycle.md#project-seed-files) and its security review.) In a disposable `dev:test` profile with `--fixture` on a rootless Linux daemon (beelink, or `mise run docker:disposable -- start`), set **Settings → Environment Files** to `.env, .env.*, config/*.env` and check the help text reads correctly at desktop and narrow widths. In the fixture project folder add untracked `.env.test`, `config/app.env`, a link `config/leak.env` to a throwaway file outside the project, and a `config/big.env` over 1 MiB. Create a container environment and a local environment. Check: `/workspace/.env.test` and `/workspace/config/app.env` exist in the container (and in the worktree, mode `0600`), `leak.env` and `big.env` do not, and each setup terminal starts with `[orkestrator] Skipped config/leak.env … symbolic link` and `… config/big.env … larger than 1 MiB`. Then add 33 `config/fNN.env` files, rebuild the container and check that none of the matches arrive and the terminal says the patterns match more than 32 files. Record the date, the Docker version and the outcome in the Project seed files section of container-lifecycle.md, or reply to the coordinator.
 - [ ] **[7549](../containers-and-environments/7549-rootless-docker-cp-refusals.md) task 2: the GitHub ranges seed bind on Docker Desktop.** (Background: [GitHub ranges seed directory bind on beelink](../../development/container-qualification.md#github-ranges-seed-directory-bind-on-beelink-2026-11-15); it passed on rootful and rootless Linux Engine.) Needs a Mac with Docker Desktop, which agents may not use: the seed directory is bound from the data directory, whose macOS path (`~/Library/Application Support/...`) has a space and goes through Desktop's file sharing. From a checkout of this repository, with any current environment image, run `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-github-seed.test.ts --parallel=1` (it makes one anonymous request to `api.github.com/meta` unless `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED` names a seed file). Expect 1 pass. Record: the Desktop version, architecture and the pass/fail count, as a dated line in that section of [container qualification](../../development/container-qualification.md) or a reply to the coordinator.
 - [ ] **8093 (retired) task 1 and 8101 (retired) task 1: a crashed backend's servers are reaped under `systemd --user`.** (Background: the reaper's rule in the header of `apps/backend/src/core/local-server-reaper.ts`; a real-process test, `local-server-reaper-subreaper.integration.test.ts`, passes with a stand-in subreaper, backend and bridge, but no run has yet killed a real backend on a desktop session.) On a Linux desktop logged in through a systemd user session (beelink or beelink2), start a throwaway profile, `mise run dev:test --profile reaper-subreaper-qa --fixture --headless` (left running in its own terminal), and in its fixture project start a local OpenCode environment and a local Codex (or Claude) environment, each with one tab open; let the OpenCode one stay idle (no turn). Note the two server PIDs (`ps -o pid,ppid,args` filtered to the profile's toolchain and `bridges/*/dist/index.js`). SIGKILL only that profile's backend, by the PID its `dev:status --json` liveness block names, then `mise run dev:stop` and start the same profile again. Check with `ps -o pid,ppid,args -p <pid>` that both old PIDs are gone, and that the backend log under the profile's `logDir` has `reaper.server-reaping` with `adoptedBySubreaper` true for any server still alive at startup. Finish with `dev:stop` and `dev:reset`. Record: for each server, whether it was gone, its parent before the restart (`systemd --user` or PID 1), and the reaper log line, in a reply to the coordinator; a survivor whose parent was `systemd --user` or PID 1 opens a new to-do (one under any other live parent is left alone by design: the reaper treats only `systemd` as positive evidence of adoption).
+- [ ] **8172 (retired) task 1: a container Claude Multi Review when the agent tools port is unreachable.** (Background: [Agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts), the paragraph on structured-output turns.) On a Linux host whose firewall drops the profile's agent tools port from containers (beelink's ufw without the 7080 task 1 rule, or a profile started so containers cannot reach it), start an isolated profile with a container fixture and the fake Claude review API, no credentials and no host seed (`--fixture --fixture-environments local,container --no-host-seed --no-agent-credentials`). On both the bespoke and graph engines, start a Claude Multi Review in the container environment, once on the default tool transport and once on structured output (global config `workflowResultTools.enabled` set to `false`).
+  1. Each review fails at its first stage before any turn: the error names the agent tools URL and the fix, the transcript shows no prompt, and the tab offers "Retry failed stage" and "Abandon".
+  2. Press "Retry failed stage" while the port is still blocked: it fails the same way, at once. Record what the tab shows.
+  3. While it is failed, call `delete_multi_review_workflow` (the tab offers no Delete on a failed review): the refusal reads "This Multi Review failed. Retry the failed stage or abandon (cancel) the review before deleting it", and a new start reads "The existing Multi Review failed. Retry its failed stage or abandon (cancel) it before starting another" (8172 task 2).
+  4. Open a native Claude tab in the same container and send two prompts: the second is refused with `Claude required MCP server "orkestrator" could not connect to http://host.docker.internal:<port>/mcp …`, not "retry the prompt".
+  Record pass or fail per step, the host, the Docker version and the date as a dated section in [container-qualification.md](../../development/container-qualification.md), or reply to the coordinator.
 
 #### Coordinator and Multi Review
 

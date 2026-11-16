@@ -507,6 +507,9 @@ export interface GraphAgentWorldOptions {
   agent?: AgentPlatform;
   script?: FakeAgentScript;
   toolResults?: boolean;
+  runId?: string;
+  environmentType?: "local" | "containerized";
+  assertAgentToolsReachable?: GraphAgentWiringInput["assertAgentToolsReachable"];
   /** Replaces the fake repository's Git (item 403 adds worktrees on top of it). */
   git?: (repo: FakeGraphRepo) => EnvironmentGit;
   /** Isolated branch worktrees for the agent executor (item 403). */
@@ -523,7 +526,12 @@ export async function graphAgentWorld(
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-graph-agent-"));
   const storage = new StorageService(dataDir);
   await storage.init();
-  await storage.addEnvironment(graphEnvironmentFixture({ worktreePath: dataDir }));
+  await storage.addEnvironment(
+    graphEnvironmentFixture({
+      worktreePath: dataDir,
+      environmentType: options.environmentType ?? "local",
+    }),
+  );
   const artifacts = new GraphArtifactStore({
     storage,
     fence: { beginMutation: () => () => undefined },
@@ -591,6 +599,7 @@ export async function graphAgentWorld(
         workflowResults,
         agentTools,
         toolResultsEnabled: () => world.toolResults,
+        assertAgentToolsReachable: options.assertAgentToolsReachable,
         environmentGit: options.git ? options.git(repo) : repo.git,
         ...(options.branchWorktrees ? { branchWorktrees: options.branchWorktrees(world) } : {}),
         workspaceProbe: repo.probe,
@@ -621,6 +630,7 @@ export async function graphAgentWorld(
     async launch(template, inputs, roles) {
       const plan: CompiledGraphPlan = compiledPlan(template);
       return world.current().service.create({
+        ...(options.runId ? { id: options.runId } : {}),
         projectId: "p1",
         environmentId: "e1",
         template: { id: template.id, revision: template.revision, digest: plan.templateDigest },

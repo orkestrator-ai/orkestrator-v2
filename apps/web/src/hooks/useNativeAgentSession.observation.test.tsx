@@ -65,7 +65,6 @@ const getNativeAgentSessionStateUpdateMock = mock(
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getNativeAgentSyncCapabilities: async () => ({
-    projectionSyncVersions: [1],
     historyPagingVersions: [1],
     progressiveViewVersions: [1],
     ...(observationEventVersions ? { observationEventVersions } : {}),

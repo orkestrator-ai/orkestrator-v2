@@ -342,7 +342,6 @@ function installBackend(): void {
           break;
         case "get_native_agent_sync_capabilities":
           result = {
-            projectionSyncVersions: [1],
             historyPagingVersions: [1],
             progressiveViewVersions: [1],
           };
@@ -396,7 +395,6 @@ function installBackend(): void {
                 ? { historyComplete: true }
                 : {
                     historyCursor: "before-earlier",
-                    historyPaging: "direct",
                     historyComplete: false,
                     messageWindow: { limit: 100, truncated: true, canLoadEarlier: true },
                   }),

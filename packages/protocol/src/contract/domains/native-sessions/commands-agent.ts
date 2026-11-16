@@ -34,7 +34,6 @@ import {
   MessagePageSchema,
   NativeAgentSessionSchema,
   NullableProjectionSchema,
-  ProjectionUpdateSchema,
   ResumeEntrySchema,
   SessionActionOutcomeSchema,
   SuborkTranscriptSchema,
@@ -327,25 +326,6 @@ export const getNativeAgentDiscoveryUpdateCommand = defineCommand({
   args: Schema.Struct({ ...sessionKey, ...progressive, sections: optionalUnknown }),
   result: ViewUpdateSchema,
   critical: [],
-});
-
-/** The sync-v1 projection read. Pre-encoded rows: the gateway splices them. */
-export const getNativeAgentProjectionUpdateCommand = defineCommand({
-  domain: nativeSessionsDomain,
-  name: "get_native_agent_projection_update",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: Schema.Struct({
-    ...sessionKey,
-    syncVersion: optionalUnknown,
-    liveWindow: optionalUnknown,
-    knownToken: optionalUnknown,
-    forceSnapshot: optionalUnknown,
-  }),
-  result: ProjectionUpdateSchema,
-  critical: [],
-  encoded: true,
 });
 
 /** One page of older transcript rows. Pre-encoded rows: the gateway splices them. */
@@ -706,7 +686,6 @@ export const NATIVE_AGENT_COMMANDS = [
   getNativeAgentSessionStateUpdateCommand,
   getNativeAgentLiveUpdateCommand,
   getNativeAgentDiscoveryUpdateCommand,
-  getNativeAgentProjectionUpdateCommand,
   getNativeAgentMessagePageCommand,
   getNativeAgentToolDetailsCommand,
   refreshNativeAgentModelsCommand,

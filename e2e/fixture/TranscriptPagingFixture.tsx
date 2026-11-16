@@ -24,7 +24,7 @@ const mixed = query.has("mixed");
 const short = query.has("short");
 // `bounded` reports the tail the way a view whose own byte bound dropped rows
 // does: a direct cursor at the first kept row of a bytes-truncated window
-// (0232). Any joined sync-v1 call fails the fixture.
+// (0232).
 const bounded = query.has("bounded");
 // `churn` moves the reconciliation token on every read, as a held row too large
 // to travel as a revision does while its subagents run.
@@ -205,7 +205,6 @@ function installBackend() {
       switch (command) {
         case "get_native_agent_sync_capabilities":
           result = {
-            projectionSyncVersions: [1],
             historyPagingVersions: [1],
             progressiveViewVersions: [1],
           };
@@ -242,7 +241,6 @@ function installBackend() {
               ...(churn ? { historyReconciliationToken: `row-digest-${transcriptReads}` } : {}),
               historyEpoch: "epoch-1",
               historyCursor: `before-${tailStart}`,
-              historyPaging: "direct",
               historyComplete: false,
               messageWindow: bounded
                 ? {

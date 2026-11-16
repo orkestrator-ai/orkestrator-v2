@@ -60,7 +60,6 @@ function transcriptSnapshot(): Extract<
         parts: [],
       })),
       historyCursor: "older",
-      historyPaging: "direct",
       historyEpoch: "epoch",
       historyComplete: false,
     },
@@ -85,9 +84,8 @@ test("two node-scoped clients reload a bounded transcript and independently disc
     const node = client();
     const view = renderInNodeScope(<Probe />, { client: node });
     await waitFor(() => expect(view.container.textContent).toBe("Historical question"));
-    // The view's direct cursor pages the older rows; nothing reads sync-v1.
+    // The view's direct cursor pages the older rows.
     expect(node.calls("get_native_agent_transcript_update")).toHaveLength(1);
-    expect(node.calls("get_native_agent_projection_update")).toHaveLength(0);
     expect(node.calls("get_native_agent_message_page")).toHaveLength(1);
     expect(node.calls("get_native_agent_message_page")[0]!.args).toMatchObject({
       environmentId: "environment",
@@ -120,7 +118,6 @@ test("an incomplete cold preview retries until historical cards recover without 
             ...snapshot.value,
             freshness: "cached",
             historyCursor: undefined,
-            historyPaging: undefined,
             historyComplete: false,
           },
         }
@@ -140,7 +137,6 @@ test("an incomplete cold preview retries until historical cards recover without 
       timeout: 2_000,
     });
     expect(reads).toBe(3);
-    expect(node.calls("get_native_agent_projection_update")).toHaveLength(0);
     expect(node.calls("get_native_agent_message_page")).toHaveLength(1);
     timer.assertDrained();
   } finally {

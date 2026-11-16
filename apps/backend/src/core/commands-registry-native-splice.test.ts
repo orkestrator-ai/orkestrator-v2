@@ -24,7 +24,6 @@ const nativeAgents = {
   getProjection: async () => ({ messages: [{ id: "m1" }] }),
   getTranscriptUpdate: async () => ({ status: "snapshot", value: { messages: [] } }),
   getLiveUpdate: async () => ({ transcript: { status: "unchanged" } }),
-  getProjectionUpdate: async () => ({ status: "snapshot", value: { messages: [] } }),
   getMessagePage: async () => ({ messages: [] }),
 };
 
@@ -32,7 +31,6 @@ const calls: Array<[command: string, args: Record<string, unknown>, spliced: boo
   ["get_native_agent_projection", identity, true],
   ["get_native_agent_transcript_update", { ...identity, viewVersion: 1, liveWindow }, true],
   ["get_native_agent_live_update", { ...identity, viewVersion: 1, liveWindow }, true],
-  ["get_native_agent_projection_update", { ...identity, syncVersion: 1, liveWindow }, true],
   ["get_native_agent_message_page", { ...identity, syncVersion: 1, before: "cursor" }, true],
 ];
 

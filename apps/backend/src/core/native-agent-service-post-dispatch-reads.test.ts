@@ -133,18 +133,18 @@ describe("post-dispatch transcript reads (TX-2)", () => {
     );
   });
 
-  test("a sync read keeps the whole transcript its retained history is built from", async () => {
+  test("a detail-recovery read keeps the whole transcript its details are rebuilt from", async () => {
     const { stub, reads } = boundedProvider(600);
     await withService(
-      { prefix: "ork-post-dispatch-sync-", provider: async () => stub.provider },
+      { prefix: "ork-post-dispatch-recovery-", provider: async () => stub.provider },
       async ({ service }) => {
         await service.ensureSession(identity);
-        const update = await service.getProjectionUpdate({
+        const projection = await service.getProjection({
           ...identity,
-          syncVersion: 1,
-          liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+          messageLimit: 100,
+          representation: "detail-recovery",
         });
-        expect(update.status).toBe("snapshot");
+        expect(projection).not.toBeNull();
         expect(reads).toEqual([{ limit: undefined, rows: 600 }]);
       },
     );

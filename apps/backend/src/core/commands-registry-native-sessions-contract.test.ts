@@ -19,7 +19,7 @@ test("registers every native-sessions command with its definition", () => {
       defined: true,
     });
   }
-  expect(registry.helloDomains()["native-sessions"]).toEqual({ min: 1, max: 3 });
+  expect(registry.helloDomains()["native-sessions"]).toEqual({ min: 1, max: 4 });
 });
 
 test("a dispatch reaches the service with every key the parser reads", async () => {
@@ -109,7 +109,7 @@ test("a native-sessions version outside the range is refused", async () => {
     (async () =>
       command({ sessionId: "s1" }, {} as CommandContext, {
         domain: "native-sessions",
-        version: 4,
+        version: 5,
       }))(),
   ).rejects.toMatchObject({ code: "unsupported-version" });
 });

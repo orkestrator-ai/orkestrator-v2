@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1005,
-    "defined": 1005,
+    "commands": 1004,
+    "defined": 1004,
     "untyped": 0,
     "events": 45
   },
@@ -70,7 +70,7 @@
       "min": 1
     },
     "native-sessions": {
-      "version": 3,
+      "version": 4,
       "min": 1
     },
     "node-files": {
@@ -3903,15 +3903,6 @@
       "argsDigest": "sha256:3d1b8eaa7adcfea0e9d059cb65da92bf064a9b6046692e84da86a009b6618b16",
       "resultDigest": "sha256:70f2e9d952297c291ff59c6839cf625619758735649cf42b906c58f6dc1b76fd"
     },
-    "get_native_agent_projection_update": {
-      "domain": "native-sessions",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9ba07888f28d25078a14388e9bdd490565bc3ca1c605a16d9a316f0360b8f2f8",
-      "resultDigest": "sha256:1f4e821b968b88625643a02c7d7ac323e9a5a84ac0c3c89fd104404b5f5c310e"
-    },
     "get_native_agent_session": {
       "domain": "native-sessions",
       "since": 1,
@@ -3955,7 +3946,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:e1bcff9d059839ae9936e74211c75e5044a61f0d02e3f6fcaab05a577a5af5fb"
+      "resultDigest": "sha256:cb1960524c8f3c26984ba50958d9033b39ef3cbe70e5c16722ac14ccf857bf0d"
     },
     "get_native_agent_tool_details": {
       "domain": "native-sessions",

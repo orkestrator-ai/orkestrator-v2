@@ -1792,7 +1792,6 @@ describe("backend command wrapper coverage", () => {
       "getNativeAgentTranscriptUpdate",
       "getNativeAgentSessionStateUpdate",
       "getNativeAgentDiscoveryUpdate",
-      "getNativeAgentProjectionUpdate",
       "getNativeAgentMessagePage",
       "getMultiReviewReviewerHistoryPage",
       // Test seam for the cached change-tracking capabilities, not a command.
@@ -1871,27 +1870,19 @@ describe("backend command wrapper coverage", () => {
     expect(invokeMock).toHaveBeenLastCalledWith("get_scoped_resource_snapshots", { changes });
   });
 
-  test("validates native-agent projection synchronization responses", async () => {
-    invokeMock.mockResolvedValueOnce({ projectionSyncVersions: [1], historyPagingVersions: [1] });
+  test("validates native-agent sync capabilities and message pages", async () => {
+    invokeMock.mockResolvedValueOnce({ historyPagingVersions: [1] });
     await expect(backendWrappers.getNativeAgentSyncCapabilities()).resolves.toEqual({
-      projectionSyncVersions: [1],
       historyPagingVersions: [1],
     });
 
-    const updateInput = {
+    const pageInput = {
       environmentId: "env-1",
       agent: "codex" as const,
       logicalSessionKey: "tab-1",
       syncVersion: 1 as const,
-      liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+      before: "cursor-1",
     };
-    invokeMock.mockResolvedValueOnce({ syncVersion: 1, status: "missing" });
-    await expect(backendWrappers.getNativeAgentProjectionUpdate(updateInput)).resolves.toEqual({
-      syncVersion: 1,
-      status: "missing",
-    });
-
-    const pageInput = { ...updateInput, before: "cursor-1" };
     const page = {
       syncVersion: 1 as const,
       messages: [],

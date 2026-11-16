@@ -40,9 +40,7 @@ import type {
   NativeAgentServiceOptions,
   NativeAgentAuthStatus,
   NativeAgentMcpServerAction,
-  NativeAgentProjectionUpdateInput,
   NativeAgentMessagePageInput,
-  NativeAgentProjectionUpdate,
   NativeAgentTranscriptUpdateInput,
   NativeAgentProgressiveInput,
   NativeAgentDiscoveryUpdateInput,
@@ -273,12 +271,6 @@ export class NativeAgentService {
 
   getDiscoveryUpdate(input: NativeAgentDiscoveryUpdateInput): Promise<NativeAgentDiscoveryUpdate> {
     return this.projections.getDiscoveryUpdate(input);
-  }
-
-  getProjectionUpdate(
-    input: NativeAgentProjectionUpdateInput,
-  ): Promise<NativeAgentProjectionUpdate> {
-    return this.projections.getProjectionUpdate(input);
   }
 
   getMessagePage(input: NativeAgentMessagePageInput): Promise<NativeAgentMessagePage> {

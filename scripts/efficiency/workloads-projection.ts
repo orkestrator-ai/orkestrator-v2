@@ -43,13 +43,16 @@ const IDENTITY = {
 interface Service {
   ensureSession(input: Json): Promise<unknown>;
   getTranscriptUpdate(input: Json): Promise<Json>;
-  getProjectionUpdate(input: Json): Promise<Json>;
+  /** The sync-v1 projection read; gone since 8173 (retired) task 1 (2026-11-16). */
+  getProjectionUpdate?(input: Json): Promise<Json>;
   getMessagePage(input: Json): Promise<Json>;
   shutdown(): Promise<void>;
 }
 
 export interface Modules {
-  service: new (storage: unknown, invoke: unknown, options: Json) => Service;
+  service: (new (storage: unknown, invoke: unknown, options: Json) => Service) & {
+    prototype: Partial<Service>;
+  };
   storage: new (dataDir: string) => {
     init(): Promise<void>;
     addEnvironment(value: Json): Promise<unknown>;
@@ -61,6 +64,19 @@ export interface Modules {
     readBridgeTranscriptDetail: (messages: readonly unknown[], locator: string) => Json;
   };
   patchVersion?: 1;
+}
+
+/**
+ * Whether a revision's transcript-view cursor is direct. From 8173 (retired)
+ * task 2 (2026-11-16, the same change that removed the sync-v1 read) the view
+ * has no `historyPaging` flag and every cursor is direct; before it, only
+ * `historyPaging: "direct"` marked a direct cursor, and an older revision's
+ * unmarked cursor was a joined one.
+ */
+function directCursor(modules: Modules, value: Json): string | undefined {
+  if (typeof value.historyCursor !== "string") return undefined;
+  const flagged = typeof modules.service.prototype.getProjectionUpdate === "function";
+  return !flagged || value.historyPaging === "direct" ? value.historyCursor : undefined;
 }
 
 async function loadModules(context: WorkloadContext): Promise<Modules> {
@@ -382,42 +398,54 @@ export async function historyPagingWorkload(context: WorkloadContext): Promise<W
   const joined: CaseDefinition = {
     id: "joined-refresh",
     // Measures a baseline revision: joined paging was removed by 0232 task 4,
-    // after which the sync snapshot names no cursor and nothing is paged.
+    // after which the sync snapshot names no cursor and nothing is paged, and
+    // the sync snapshot itself by 8173 (retired) task 1.
     description: "v1 provider: transcript read, joined sync snapshot for a cursor, then pages",
-    run: async () => {
-      const source = history();
-      const { provider, calls, returned } = stubProvider({
-        transcriptSnapshot: v1Snapshot(modules, source),
-        interactiveSnapshot: async () => ({
-          status: "idle",
-          messages: source.messages,
-          messagesComplete: true,
-        }),
-        messages: async () => source.messages,
-      });
-      return withService(modules, provider, async (service) => {
-        const started = performance.now();
-        await service.getTranscriptUpdate({
-          ...IDENTITY,
-          viewVersion: 1,
-          liveWindow: LIVE_WINDOW,
-          forceSnapshot: true,
-        });
-        const joinedSnapshot = await service.getProjectionUpdate({
-          ...IDENTITY,
-          syncVersion: 1,
-          liveWindow: LIVE_WINDOW,
-          forceSnapshot: true,
-        });
-        const paged = await pageAll(service, joinedSnapshot.historyCursor as string | undefined);
-        const measuredMs = performance.now() - started;
-        await settle();
-        return {
-          counters: { ...paged, ...prefixed(calls), providerMessagesReturned: returned.messages },
-          measuredMs,
-        };
-      });
-    },
+    ...(typeof modules.service.prototype.getProjectionUpdate === "function"
+      ? {
+          run: async () => {
+            const source = history();
+            const { provider, calls, returned } = stubProvider({
+              transcriptSnapshot: v1Snapshot(modules, source),
+              interactiveSnapshot: async () => ({
+                status: "idle",
+                messages: source.messages,
+                messagesComplete: true,
+              }),
+              messages: async () => source.messages,
+            });
+            return withService(modules, provider, async (service) => {
+              const started = performance.now();
+              await service.getTranscriptUpdate({
+                ...IDENTITY,
+                viewVersion: 1,
+                liveWindow: LIVE_WINDOW,
+                forceSnapshot: true,
+              });
+              const joinedSnapshot = await service.getProjectionUpdate!({
+                ...IDENTITY,
+                syncVersion: 1,
+                liveWindow: LIVE_WINDOW,
+                forceSnapshot: true,
+              });
+              const paged = await pageAll(
+                service,
+                joinedSnapshot.historyCursor as string | undefined,
+              );
+              const measuredMs = performance.now() - started;
+              await settle();
+              return {
+                counters: {
+                  ...paged,
+                  ...prefixed(calls),
+                  providerMessagesReturned: returned.messages,
+                },
+                measuredMs,
+              };
+            });
+          },
+        }
+      : { unsupportedReason: "the sync-v1 projection read was removed (8173 (retired) task 1)" }),
   };
   const direct: CaseDefinition = {
     id: "direct-page",
@@ -449,7 +477,7 @@ export async function historyPagingWorkload(context: WorkloadContext): Promise<W
               await settle();
               return {
                 counters: {
-                  pagingPath: String(value.historyPaging ?? "none"),
+                  pagingPath: directCursor(modules, value) ? "direct" : "none",
                   ...paged,
                   ...prefixed(calls),
                   providerMessagesReturned: returned.messages,
@@ -568,13 +596,14 @@ export async function historyCursorCoverageWorkload(
                 const value = (update.value ?? {}) as Json;
                 const shown = (value.messages as unknown[] | undefined)?.length ?? 0;
                 if (shown < sent.messages.length) counters.boundDroppedRows += 1;
-                if (value.historyPaging === "direct" && typeof value.historyCursor === "string") {
+                const cursor = directCursor(modules, value);
+                if (cursor) {
                   counters.directCursor += 1;
                   // The renderer pages straight from the provider.
                   await service.getMessagePage({
                     ...IDENTITY,
                     syncVersion: 1,
-                    before: value.historyCursor,
+                    before: cursor,
                     limit: 60,
                   });
                   counters.directPages += 1;
@@ -585,7 +614,8 @@ export async function historyCursorCoverageWorkload(
                   counters.withoutCursorIncomplete += 1;
                   // Before 0232 task 4 the renderer's click minted a joined cursor
                   // (loadEarlierMessages); a later revision never reaches here for
-                  // a provider that pages.
+                  // a provider that pages, and has no sync-v1 read (8173 (retired) task 1).
+                  if (!service.getProjectionUpdate) return;
                   const before = returned.messages;
                   await service.getProjectionUpdate({
                     ...IDENTITY,
@@ -673,7 +703,7 @@ export async function historyCursorCoverageWorkload(
                   forceSnapshot: true,
                 });
                 const value = (update.value ?? {}) as Json;
-                if (value.historyPaging === "direct") counters.directCursor += 1;
+                if (directCursor(modules, value)) counters.directCursor += 1;
                 else if (value.historyComplete === false) counters.withoutCursorIncomplete += 1;
               });
             }

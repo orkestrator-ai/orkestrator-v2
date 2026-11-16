@@ -1264,8 +1264,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         lastTranscriptViewRef.current?.historyReconciliationToken !==
           value.historyReconciliationToken;
       const historyEpochChanged =
-        previousEpoch !== value.historyEpoch ||
-        (heldHistoryStale && !(value.historyPaging === "direct" && value.historyCursor));
+        previousEpoch !== value.historyEpoch || (heldHistoryStale && !value.historyCursor);
       const evictionGeneration = projectionStore.getState().historyEvictions.get(sessionKey) ?? 0;
       const evicted = evictionGeneration !== progressiveHistoryEvictionRef.current;
       const deleted = deletedMessageIds?.length ? new Set(deletedMessageIds) : undefined;
@@ -1395,8 +1394,7 @@ export function useNativeAgentSession<TMessage = unknown>({
        * collapse dropped). Existing paging state otherwise wins: it already
        * points further back.
        */
-      const directHistoryCursor =
-        value.historyPaging === "direct" ? value.historyCursor : undefined;
+      const directHistoryCursor = value.historyCursor;
       const adoptDirectCursor =
         directHistoryCursor !== undefined &&
         (!pagingCarriesOver ||
@@ -1568,7 +1566,6 @@ export function useNativeAgentSession<TMessage = unknown>({
         transcriptHistoryEpoch: value.historyEpoch,
         transcriptHistoryMetadata: {
           historyCursor: value.historyCursor,
-          historyPaging: value.historyPaging,
           historyComplete: value.historyComplete,
           historyReconciliationToken: value.historyReconciliationToken,
         },
@@ -3313,8 +3310,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     const view = lastTranscriptViewRef.current;
     const held = projectionRef.current?.messages;
     if (heldHistoryReconcileRunRef.current || !view?.historyCursor || !held) return;
-    if (view.historyPaging !== "direct" || progressiveTranscriptTokenRef.current === undefined)
-      return;
+    if (progressiveTranscriptTokenRef.current === undefined) return;
     // An owed remount requests a fresh snapshot before walking. Its temporary
     // delta base includes held rows, so it cannot yet identify the live tail.
     const run = {};

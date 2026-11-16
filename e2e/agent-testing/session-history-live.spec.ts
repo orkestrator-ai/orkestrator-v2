@@ -63,13 +63,13 @@ type Row = {
   turnId?: string;
   latestSourceMessageId?: string;
 };
-type ProjectionUpdate = {
+type TranscriptUpdate = {
   status: string;
-  projection?: {
-    turn: { phase: string; error?: string };
-    messages: Row[];
-    messageWindow?: { truncated?: boolean };
-  };
+  value?: { messages: Row[]; messageWindow?: { truncated?: boolean } };
+};
+type StateUpdate = {
+  status: string;
+  value?: { turn: { phase: string; error?: string } };
 };
 type ForkOutcome = { sessionId: string; title?: string; draft?: string; controls?: unknown };
 type Platform = "codex" | "pi";
@@ -376,18 +376,26 @@ test.describe("fork and rewind on loopback models", () => {
         await invoke("ensure_native_agent_session", { ...source, ...(model ? { model } : {}) });
 
         const snapshot = async (identity: ReturnType<typeof tab>) => {
-          const update = await invoke<ProjectionUpdate>("get_native_agent_projection_update", {
-            ...identity,
-            syncVersion: 1,
-            liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
-            forceSnapshot: true,
-          });
-          expect(update.status).toBe("snapshot");
+          const [transcript, state] = await Promise.all([
+            invoke<TranscriptUpdate>("get_native_agent_transcript_update", {
+              ...identity,
+              viewVersion: 1,
+              liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+              forceSnapshot: true,
+            }),
+            invoke<StateUpdate>("get_native_agent_session_state_update", {
+              ...identity,
+              viewVersion: 1,
+              forceSnapshot: true,
+            }),
+          ]);
+          expect(transcript.status).toBe("snapshot");
+          expect(state.status).toBe("snapshot");
           expect(
-            update.projection?.messageWindow?.truncated,
+            transcript.value?.messageWindow?.truncated,
             "a short conversation fits the live window",
           ).not.toBe(true);
-          return update.projection!;
+          return { messages: transcript.value!.messages, turn: state.value!.turn };
         };
         const rowsOf = async (identity: ReturnType<typeof tab>) =>
           (await snapshot(identity)).messages;

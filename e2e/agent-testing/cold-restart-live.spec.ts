@@ -99,9 +99,9 @@ type Project = { id: string; name: string; localPath: string | null };
 type Environment = { id: string; name: string; worktreePath?: string | null };
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
-type ProjectionUpdate = {
+type StateUpdate = {
   status: string;
-  projection?: { turn: { phase: string; error?: string }; messages: Row[] };
+  value?: { turn: { phase: string; error?: string } };
 };
 type PipelineRead =
   | { unchanged: true; revision: number }
@@ -536,20 +536,19 @@ test.describe("live cold restart", () => {
         if (update.status !== "snapshot") return [];
         return update.value.messages;
       };
-      const projection = () =>
-        invoke<ProjectionUpdate>("get_native_agent_projection_update", {
+      const state = () =>
+        invoke<StateUpdate>("get_native_agent_session_state_update", {
           ...identity,
-          syncVersion: 1,
-          liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+          viewVersion: 1,
           forceSnapshot: true,
         });
-      const phase = async () => (await projection()).projection?.turn.phase;
+      const phase = async () => (await state()).value?.turn.phase;
       const waitForIdle = async () => {
         await page.waitForTimeout(3_000);
         await expect
           .poll(
             async () => {
-              const turn = (await projection()).projection?.turn;
+              const turn = (await state()).value?.turn;
               if (turn?.phase === "error") {
                 throw new Error(`${NATIVE_LABEL} turn failed: ${turn.error ?? "no error"}`);
               }

@@ -16,7 +16,6 @@ import {
   getNativeAgentLiveUpdateCommand,
   getNativeAgentMessagePageCommand,
   getNativeAgentProjectionCommand,
-  getNativeAgentProjectionUpdateCommand,
   getNativeAgentSessionCommand,
   getNativeAgentSessionStateUpdateCommand,
   getNativeAgentSignInResendCommand,
@@ -262,7 +261,6 @@ export function registerNativeAgentCommands(
   });
 
   register(getNativeAgentSyncCapabilitiesCommand, (_args, context) => ({
-    projectionSyncVersions: [1],
     historyPagingVersions: [1],
     progressiveViewVersions: [1],
     // Additive (step 07): activity announcements name their session and carry
@@ -387,37 +385,6 @@ export function registerNativeAgentCommands(
           ? undefined
           : asRequiredBoolean(args.forceSnapshot, "forceSnapshot"),
     });
-  });
-
-  register(getNativeAgentProjectionUpdateCommand, async (args, context) => {
-    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
-    if (args.syncVersion !== 1) throw new Error("Native agent sync version is unsupported");
-    if (
-      !args.liveWindow ||
-      typeof args.liveWindow !== "object" ||
-      Array.isArray(args.liveWindow) ||
-      (args.liveWindow as { messages?: unknown }).messages !== 100 ||
-      (args.liveWindow as { targetBytes?: unknown }).targetBytes !== 512 * 1024
-    ) {
-      throw new Error("Native agent live window is unsupported");
-    }
-    return markSpliceableResult(
-      await context.nativeAgents.getProjectionUpdate({
-        environmentId: asNonBlankString(args.environmentId, "environmentId"),
-        agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-        logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
-        syncVersion: 1,
-        liveWindow: { messages: 100, targetBytes: 512 * 1024 },
-        knownToken:
-          args.knownToken === undefined
-            ? undefined
-            : asBoundedNonBlankString(args.knownToken, "knownToken", 1024),
-        forceSnapshot:
-          args.forceSnapshot === undefined
-            ? undefined
-            : asRequiredBoolean(args.forceSnapshot, "forceSnapshot"),
-      }),
-    );
   });
 
   register(getNativeAgentMessagePageCommand, async (args, context) => {

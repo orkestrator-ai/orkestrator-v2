@@ -47,7 +47,6 @@ import {
   type NativeAgentDiscoveryUpdate,
   type NativeAgentDiscoveryView,
   type NativeAgentLiveUpdate,
-  type NativeAgentProjectionUpdate,
   type NativeAgentSessionProjection,
   type NativeAgentSessionStateUpdate,
   type NativeAgentSessionStateView,
@@ -179,9 +178,7 @@ export function fakeNativeAgentTranscriptView(
     messages: projection.messages,
     ...(messageWindow ? { messageWindow } : {}),
     ...(projection.title ? { title: projection.title } : {}),
-    ...(historyRows > 0
-      ? { historyCursor: historyCursor(historyRows), historyPaging: "direct" as const }
-      : {}),
+    ...(historyRows > 0 ? { historyCursor: historyCursor(historyRows) } : {}),
     historyEpoch: FAKE_NATIVE_AGENT_HISTORY_EPOCH,
     historyComplete: historyRows === 0 && projection.messageWindow?.truncated !== true,
   };
@@ -295,7 +292,6 @@ export function createNativeAgentSessionBackend(options: NativeAgentSessionBacke
 
   const api = {
     getNativeAgentSyncCapabilities: mock(async () => ({
-      projectionSyncVersions: [1],
       historyPagingVersions: [1],
       progressiveViewVersions: [1],
       ...(options.capabilities?.observationEvents
@@ -329,18 +325,6 @@ export function createNativeAgentSessionBackend(options: NativeAgentSessionBacke
           viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
           transcript: transcriptUpdate,
           state: stateUpdate,
-        };
-      },
-    ),
-    getNativeAgentProjectionUpdate: mock(
-      async (input: ReadInput): Promise<NativeAgentProjectionUpdate<unknown>> => {
-        const projection = await read(input);
-        if (!projection) return { syncVersion: 1, status: "missing" };
-        return {
-          syncVersion: 1,
-          status: "snapshot",
-          token: contentToken("projection", projection),
-          projection,
         };
       },
     ),

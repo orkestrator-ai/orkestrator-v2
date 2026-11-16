@@ -116,7 +116,6 @@ const stopNativeAgentSessionMock = mock(
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getNativeAgentSyncCapabilities: async () => ({
-    projectionSyncVersions: [1],
     historyPagingVersions: [1],
     progressiveViewVersions: [1],
   }),
@@ -124,9 +123,6 @@ mock.module("@/lib/backend", () => ({
   getNativeAgentSessionStateUpdate: getNativeAgentSessionStateUpdateMock,
   getNativeAgentDiscoveryUpdate: async () => ({ viewVersion: 1, status: "missing" }),
   getNativeAgentMessagePage: getNativeAgentMessagePageMock,
-  getNativeAgentProjectionUpdate: async () => {
-    throw new Error("A direct cursor never needs the joined snapshot");
-  },
   ensureNativeAgentSession: async () => ({
     providerSessionId: "session-1",
     logicalSessionKey: SESSION_KEY,
@@ -197,7 +193,6 @@ function tail(
       historyEpoch: EPOCH,
       historyComplete: false,
       historyCursor: cursor,
-      historyPaging: "direct",
       ...view,
     },
   };

@@ -1,7 +1,7 @@
 # `Electron backend command registry > backend-owned diff statistics` scans time out under aggregate load (`apps/backend/tests/commands-integration.test.ts`)
 
 - **ID:** 9854
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-25
 - **Tests:** `computes counts for a tracked local environment and announces them`
   (8,100 ms) and `serves the Files panel from the scan the badge already ran`
@@ -439,4 +439,12 @@ The unchanged owning file passed: `mise run test:logged -- --name merge-unit-own
 - **Tried and reverted:** holding `Date.now` at the announcement while the panel reads (the cache is valid for `DIFF_CACHE_MAX_AGE_MS`, 3 s, unless the watcher is qualified). It did not help: 0 of 4 under the same runner (`ec-9854-diag`). So the cache's age is not the cause; the likelier one is a watcher hint (for example a late event from the fixture's own write of `tracked.txt`) that raises the required epoch or starts a rescan the read then joins. Not established. A deterministic version needs a signal that tracking is quiescent (qualified watcher, no scan queued or in flight) before the read. The test is unchanged from `HEAD`.
 - **Base:** `a8b89f154` (working tree).
 
-- **Follow-up (2026-11-15):** the product signal this test needs is to-do [8302](../../../todo/cross-cutting/8302-signals-for-deterministic-flake-fixes.md).
+- **Follow-up (2026-11-15):** the product signal this test needs is to-do 8302 (retired 2026-11-16; the signals are described in the [testing guide](../../../development/testing-guide.md#controlled-time)).
+
+## Resolution (2026-11-16)
+
+- **Observed on:** base `c1fcc573b`, branch `20261116-015626-a440226a702f`.
+- **Root cause:** the remaining failure was the Files-panel case reading straight after the badge's first announcement, while a watcher hint during that scan (or a scan begun before qualified coverage) made its file list unusable, so the panel's read correctly scanned again. Details in case [2404](../backend-services-and-tooling/2404-files-panel-scan-under-load.md#resolution-2026-11-16).
+- **Fix:** the test waits on `DiffStatsService.fileListCurrency` until the badge's file list is current under qualified watcher coverage before reading. The timeout part rests on the 2026-11-15 change above (the generic 5 s budget replaced by the 60 s default hang watchdog, and an event-driven wait in `enables git's scan caches on a newly created worktree`).
+- **Reproduced:** yes for the Files-panel part — the unchanged test failed 8 of 10 under `bun scripts/test-under-contention.ts --burners 12 -- bun test --cwd=apps/backend <HEAD copy of the owner> -t "serves the Files panel from the scan the badge already ran" --rerun-each=10`. Not re-run for the timeout part.
+- **Stress:** the changed test passed 10 of 10 under the same 12-burner command. No new stress run of the timeout case was made here; reopen this case on a recurrence of either symptom.

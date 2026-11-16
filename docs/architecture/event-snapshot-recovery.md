@@ -305,6 +305,12 @@ are invalidations only; the file list and tree are re-read with
 
 - The snapshot contains announced state only: a live value (for example a
   watcher becoming qualified) is announced before a snapshot can show it.
+- `DiffStatsService.fileListCurrency(id)` is a content-free reading (epochs
+  and flags) of whether a read arriving now would reuse the cached file list:
+  scanned at the current dirty epoch, under qualified watcher coverage the
+  entry still has, with no scan running or held back by the minimum gap.
+  It is not part of the event contract; tests wait on it rather than on the
+  watcher's timing (flakes 2404 and 9854).
 - Revisions advance on semantic changes. A same-count, different-path list is
   a new file-list revision; a new empty folder is a new tree revision; an edit
   that leaves path, status and line counts unchanged is neither. Open editors

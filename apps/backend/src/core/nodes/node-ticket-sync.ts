@@ -434,25 +434,31 @@ export class NodeTicketSync {
       // is not applied yet and stays queued with everything after it.
       let upTo: number | undefined;
       let held = false;
-      let droppedHere = 0;
+      const gone = new Set<string>();
+      let droppedPrefix = 0;
       for (const item of decided) {
         const drop = removed.has(item.sourceProjectId);
         if (!drop && item.seq > result.appliedSeq) {
           held = true;
           break;
         }
-        if (drop) droppedHere += 1;
+        if (drop) {
+          gone.add(item.sourceProjectId);
+          droppedPrefix += 1;
+        }
         upTo = item.seq;
       }
       if (upTo !== undefined) {
-        const gone = [...removed];
-        await sync.ackOutbox({
+        const acknowledgement = await sync.ackOutbox({
           controllerId,
           epoch: batch.epoch,
           upTo,
-          ...(gone.length ? { removedProjects: gone } : {}),
+          ...(gone.size ? { removedProjects: [...gone] } : {}),
         });
         after = upTo;
+        // Count the prefix we discarded even if the leaf has already trimmed it;
+        // the leaf also knows about discarded changes beyond this batch.
+        const droppedHere = Math.max(droppedPrefix, acknowledgement.dropped);
         dropped += droppedHere;
         if (droppedHere) log.warn("ticket-sync.removed-project-dropped", { dropped: droppedHere });
       }

@@ -194,21 +194,75 @@ describe("leaf changes for a command node project that was removed (to-do 8111 t
     expect((await f.commandTicket(stays.id))?.title).toBe("Other board, edited");
   });
 
-  test("from a pre-contract leaf are dropped too, and its acknowledgement carries only the keys it accepts", async () => {
-    const f = await fleet({ domains: null });
-    const { gone, stays } = await withSecondBoard(f);
-    await f.leaf.kanban.updateKanbanTask(gone.id, { title: "Edited after removal" });
-    await f.leaf.kanban.updateKanbanTask(stays.id, { title: "Other board, edited" });
+  test("a removed project after a held change is named only after the fence clears", async () => {
+    const f = await fleet();
+    const { commandOther, gone, stays } = await withSecondBoard(f);
+    const prefixProject = await f.command.addProject(
+      createProject("https://github.com/acme/prefix.git"),
+    );
+    await f.leaf.addProject(createProject("https://github.com/acme/prefix.git"));
+    const prefix = await f.command.kanban.addKanbanTask(prefixProject.id, "Prefix", "");
+    await f.sync.sync(LEAF_ID);
+    await f.leaf.kanban.updateKanbanTask(prefix.id, { title: "Applied first" });
+    await f.leaf.kanban.updateKanbanTask(stays.id, { title: "Held" });
+    await f.leaf.kanban.updateKanbanTask(gone.id, { title: "Gone" });
     await f.command.removeProject(f.commandProject.id);
-
+    const kanban = storageInternals(f.command).repos.kanban;
+    kanban.fenceProjectContent(commandOther.id);
+    f.requests.length = 0;
+    expect(await f.sync.sync(LEAF_ID)).toMatchObject({ state: "error" });
+    const acks = f.requests.filter((r) => r.command === "ack_ticket_sync_outbox");
+    expect(acks).toHaveLength(1);
+    expect(acks[0]!.args.removedProjects).toBeUndefined();
+    expect((await f.commandTicket(prefix.id))?.title).toBe("Applied first");
+    expect((await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toHaveLength(2);
+    kanban.releaseProjectContentFence(commandOther.id);
     expect(await f.sync.sync(LEAF_ID)).toMatchObject({ state: "in-sync", dropped: 1 });
-    expect((await f.commandTicket(stays.id))?.title).toBe("Other board, edited");
-    const acks = f.requests.filter(({ command }) => command === "ack_ticket_sync_outbox");
-    expect(acks.length).toBeGreaterThan(0);
-    for (const { args } of acks) {
-      expect(Object.keys(args).sort()).toEqual(["controllerId", "epoch", "upTo"]);
-    }
-    // Such a leaf is not told, so its copy still names the removed board.
-    expect((await f.leafTicket(gone.id))?.sync?.replica).toBeDefined();
   });
+
+  test("counts discarded changes beyond the collected batch", async () => {
+    const f = await fleet();
+    const { gone, stays } = await withSecondBoard(f);
+    await f.leaf.kanban.updateKanbanTask(gone.id, { title: "First" });
+    await f.leaf.kanban.updateKanbanTask(stays.id, { title: "Keep" });
+    await f.leaf.kanban.updateKanbanTask(gone.id, { title: "Beyond batch" });
+    const collect = f.leaf.ticketSync.collectTicketSyncOutbox.bind(f.leaf.ticketSync);
+    f.leaf.ticketSync.collectTicketSyncOutbox = (controller, after) =>
+      collect(controller, after, 1);
+    await f.command.removeProject(f.commandProject.id);
+    f.requests.length = 0;
+    expect(await f.sync.sync(LEAF_ID)).toMatchObject({ state: "in-sync", dropped: 2 });
+    const acks = f.requests.filter((r) => r.command === "ack_ticket_sync_outbox");
+    expect(acks[0]!.args.removedProjects).toEqual([f.commandProject.id]);
+    expect((await f.commandTicket(stays.id))?.title).toBe("Keep");
+    expect((await collect(COMMAND_ID, 0)).items).toEqual([]);
+  });
+
+  test.each(["mismatched", "matching"])(
+    "%s epoch releases copies and discards removed items above upTo only",
+    async (kind) => {
+      const f = await fleet();
+      const { gone, stays } = await withSecondBoard(f);
+      await f.leaf.kanban.updateKanbanTask(stays.id, { title: "Keep queued" });
+      await f.leaf.kanban.updateKanbanTask(gone.id, { title: "Discard above upTo" });
+      const batch = await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0);
+      const result = await f.leaf.ticketSync.ackTicketSyncOutbox(
+        COMMAND_ID,
+        kind === "matching" ? batch.epoch! : "stale-epoch",
+        kind === "matching" ? 0 : batch.items.at(-1)!.seq,
+        [f.commandProject.id],
+      );
+      expect(result).toEqual({ remaining: 1, dropped: 1 });
+      expect((await f.leafTicket(gone.id))?.sync?.replica).toBeUndefined();
+      expect((await f.leafTicket(stays.id))?.sync?.replica).toBeDefined();
+      expect((await f.leaf.ticketSync.getTicketSyncLeafOverview(f.leafProject.id)).links).toEqual(
+        [],
+      );
+      expect(
+        (await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0)).items.map(
+          (item) => item.sourceProjectId,
+        ),
+      ).toEqual([batch.items[0]!.sourceProjectId]);
+    },
+  );
 });

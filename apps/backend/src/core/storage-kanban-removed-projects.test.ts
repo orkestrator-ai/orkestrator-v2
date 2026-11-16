@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
@@ -123,6 +123,38 @@ function deliveryRecordCount(dataDir: string): number {
 }
 
 describe("removed-project sweep", () => {
+  test("no-orphan owner reads stay constant across many rows", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const project = await storage.addProject(createProject("https://github.com/acme/live.git"));
+      const files = new StorageFiles(dataDir);
+      const rows = Array.from({ length: 100 }, (_, i) => ({
+        id: `row-${i}`,
+        projectId: project.id,
+        pipelineId: "live-pipeline",
+      }));
+      seedStore(dataDir, path.basename(files.projectNotesFile()), rows);
+      seedStore(dataDir, path.basename(files.featurePlansFile()), rows);
+      seedStore(dataDir, path.basename(files.linearCompletionCommentsFile()), rows);
+      seedStore(dataDir, path.basename(files.githubCompletionCommentsFile()), rows);
+      const { repos } = storageInternals(storage);
+      const projects = spyOn(
+        repos.projects as unknown as { projectIdsForCleanupNow: () => ReadonlySet<string> },
+        "projectIdsForCleanupNow",
+      );
+      const pipelines = spyOn(repos.buildPipelines, "pipelineIdsForCleanupNow").mockReturnValue(
+        new Set(["live-pipeline"]),
+      );
+      try {
+        expect((await storage.sweepRemovedProjectContent()).skipped).toEqual([]);
+        expect(projects).toHaveBeenCalledTimes(5);
+        expect(pipelines).toHaveBeenCalledTimes(2);
+      } finally {
+        projects.mockRestore();
+        pipelines.mockRestore();
+      }
+    });
+  });
+
   test("deletes what an earlier removal left, and no other project's rows", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const files = new StorageFiles(dataDir);

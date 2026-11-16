@@ -108,12 +108,13 @@ export const ackTicketSyncOutboxCommand = defineCommand({
     upTo: optionalUnknown,
     // The command node's projects this acknowledgement dropped changes for
     // because they were removed there (to-do 8111 task 2): the leaf keeps its
-    // copies of them as its own, as when a command node detaches. Not
-    // critical: a leaf that ignores it still drops the acknowledged changes,
-    // and its copies only keep queueing changes the command node drops.
+    // copies of them as its own, as when a command node detaches.
     removedProjects: optionalUnknown,
   }),
-  result: Schema.Struct({ remaining: optionalSequence }),
+  result: Schema.Struct({
+    remaining: optionalSequence,
+    dropped: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  }),
   critical: [],
 });
 

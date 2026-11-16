@@ -655,9 +655,9 @@ it and its conflicts are dropped. So:
   drops anything else queued for it. The sync result counts the dropped
   changes (`dropped`). When the projects store cannot be read, nothing is
   dropped: the changes from the first unknown project on stay queued and the
-  sync reports an error and is retried. A pre-contract leaf is acknowledged
-  without `removedProjects`, so its copies keep queueing changes that are
-  dropped the same way.
+  sync reports an error and is retried. The leaf returns the actual discarded
+  count, including queued changes beyond the collected batch. Only removed
+  projects reached in the settled prefix are named in the acknowledgement.
 
 **Rows left by earlier removals.** Before 2026-11-15 removing a project left
 its board behind. Each backend start runs `sweepRemovedProjectContentAtStartup`

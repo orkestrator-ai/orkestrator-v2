@@ -385,10 +385,12 @@ export class KanbanSyncRepository {
     epoch: string,
     upTo: number,
     removedProjects: readonly string[] = [],
-  ): Promise<{ remaining: number }> {
+  ): Promise<{ remaining: number; dropped: number }> {
     return this.board.enqueue(async () => {
       const { store, fresh } = await this.board.loadSyncStore();
       const outbox = store.outbox[controllerId];
+      const gone = new Set(removedProjects);
+      const dropped = outbox?.items.filter((item) => gone.has(item.sourceProjectId)).length ?? 0;
       let syncChanged = false;
       if (outbox && outbox.epoch === epoch) {
         const remaining = outbox.items.filter((item) => item.seq > upTo);
@@ -397,7 +399,6 @@ export class KanbanSyncRepository {
           syncChanged = true;
         }
       }
-      const gone = new Set(removedProjects);
       const tasks = gone.size && !fresh ? await this.board.loadTasks() : [];
       const released = new Set<string>();
       for (const task of tasks) {
@@ -428,7 +429,7 @@ export class KanbanSyncRepository {
         });
         for (const projectId of released) this.context.changes.announce("kanban", projectId);
       }
-      return { remaining: outbox?.items.length ?? 0 };
+      return { remaining: outbox?.items.length ?? 0, dropped };
     });
   }
 

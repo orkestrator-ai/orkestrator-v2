@@ -168,7 +168,9 @@ export async function sweepRemovedProjectRows(
 
   const sweepList = (file: string, count: (removed: string[]) => void) => () => {
     const rows = strictRows<{ projectId?: unknown }>(file);
-    if (!rows.some((row) => orphan(liveProjects(), row?.projectId))) return;
+    if (!rows.length) return;
+    const live = liveProjects();
+    if (!rows.some((row) => orphan(live, row?.projectId))) return;
     const removed = context.updateStore(
       file,
       (): Array<{ projectId?: unknown }> => [],
@@ -208,7 +210,9 @@ export async function sweepRemovedProjectRows(
   ] as const) {
     await step(name, () => {
       const rows = strictRows<{ pipelineId?: unknown }>(file);
-      if (!rows.some((row) => orphan(livePipelines(), row?.pipelineId))) return;
+      if (!rows.length) return;
+      const live = livePipelines();
+      if (!rows.some((row) => orphan(live, row?.pipelineId))) return;
       result.completionComments += context.updateStore(
         file,
         (): Array<{ pipelineId?: unknown }> => [],

@@ -106,6 +106,46 @@ async function setServers(control: ClaudeQueryControl, servers: SdkMcpServersCon
   });
 }
 
+/** Where an HTTP or SSE server lives, without anything that could be a credential. */
+function serverLocation(config: SdkMcpServersConfig[string] | undefined): string | undefined {
+  if (!config || !("url" in config) || typeof config.url !== "string") return undefined;
+  try {
+    const url = new URL(config.url);
+    return `${url.protocol}//${url.host}${url.pathname}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Why a turn joining a running CLI was refused over a required server.
+ *
+ * A server the CLI reports `failed` (or `needs-auth`) did not come up when the
+ * CLI launched and is not retried by the CLI, so asking for a retry cannot
+ * help: in a container this is the agent tools port the host does not let
+ * containers reach (to-do 8172). Name the address and the notice that carries
+ * the fix. Only a server still connecting is worth a plain retry. The CLI's
+ * own error text is left out: it is not ours to bound or vet.
+ */
+export function requiredServerRefusal(
+  name: string,
+  status: McpServerStatus | undefined,
+  config: SdkMcpServersConfig[string] | undefined,
+): string {
+  if (status?.status === "failed" || status?.status === "needs-auth") {
+    const location = serverLocation(config);
+    return [
+      `Claude required MCP server "${name}" could not connect${location ? ` to ${location}` : ""}, so the prompt was not sent.`,
+      "This agent cannot reach Orkestrator's agent tools server; Orkestrator's agent tools reachability notice names the fix.",
+      "Retry once the server is reachable.",
+    ].join(" ");
+  }
+  if (status?.status === "pending") {
+    return `Claude required MCP server "${name}" is still connecting; retry the prompt`;
+  }
+  return `Claude required MCP server "${name}" is not connected; retry the prompt`;
+}
+
 /**
  * Bring the running CLI's MCP servers to `next`.
  *
@@ -152,13 +192,11 @@ export async function syncClaudeRuntimeMcp(
       throw conflict("Claude required MCP server could not be confirmed; retry the prompt");
     });
   }
-  if (
-    !next.required.every((name) =>
-      statuses?.some((server) => server.name === name && server.status === "connected"),
-    )
-  ) {
+  for (const name of next.required) {
+    const status = statuses?.find((server) => server.name === name);
+    if (status?.status === "connected") continue;
     runtime.mcpServers = "";
-    throw conflict("Claude required MCP server is not connected; retry the prompt");
+    throw conflict(requiredServerRefusal(name, status, next.servers[name]));
   }
   // Without a status to read, only an update that reported a server removed
   // proves it is gone.

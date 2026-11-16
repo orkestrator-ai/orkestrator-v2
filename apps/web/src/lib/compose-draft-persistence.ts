@@ -8,8 +8,10 @@ import {
   type DraftRevisionState,
   isDraftRevisionConflict,
 } from "@/lib/draft-conflict";
+import { DraftWriteRetries } from "@/lib/compose-draft-retry";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
+import { getNodeConnectivity, onNodeReconnected } from "@/lib/transport-connectivity";
 
 /*
  * Compose drafts live on the node that owns the environment, so the write
@@ -26,16 +28,35 @@ interface ComposeDraftWrites {
     ReturnType<typeof createWorkflowsApi>,
     "getComposeDraft" | "saveComposeDraft" | "deleteComposeDraft"
   >;
+  /** Failed saves and discards awaiting retry; see `compose-draft-retry.ts`. */
+  readonly retries: DraftWriteRetries;
 }
 
-const composeDraftWrites = defineScopedSlot<ComposeDraftWrites>(
-  "compose-draft-writes",
-  (scope) => ({
-    writeChains: new Map(),
+function isRetryableDraftWriteError(error: unknown): boolean {
+  return !(error instanceof DraftRevisionConflictError) && !isDraftRevisionConflict(error);
+}
+
+const composeDraftWrites = defineScopedSlot<ComposeDraftWrites>("compose-draft-writes", (scope) => {
+  const writeChains = new Map<string, Promise<void>>();
+  const retries = new DraftWriteRetries({
+    enqueue: (draftKey, operation) => enqueueOnChain(writeChains, draftKey, operation),
+    isRetryable: isRetryableDraftWriteError,
+    isDisconnected: () => getNodeConnectivity(scope).disconnected,
+  });
+  // A write that failed while the node was unreachable lands as soon as it
+  // is back, not on the next edit to that draft (which may never come).
+  const stopListening = onNodeReconnected(scope, () => retries.retryNow());
+  scope.onDispose("compose-draft-writes", () => {
+    stopListening();
+    retries.dispose();
+  });
+  return {
+    writeChains,
     defaultRevisionStates: new Map(),
     api: backendApiForScope(scope, createWorkflowsApi, backend),
-  }),
-);
+    retries,
+  };
+});
 
 export { createDraftRevisionState, DraftRevisionConflictError };
 export type { DraftRevisionState };
@@ -86,7 +107,14 @@ function enqueue<TResult>(
   draftKey: string,
   operation: () => Promise<TResult>,
 ): Promise<TResult> {
-  const { writeChains } = writes;
+  return enqueueOnChain(writes.writeChains, draftKey, operation);
+}
+
+function enqueueOnChain<TResult>(
+  writeChains: Map<string, Promise<void>>,
+  draftKey: string,
+  operation: () => Promise<TResult>,
+): Promise<TResult> {
   const previous = writeChains.get(draftKey) ?? Promise.resolve();
   const result = previous.catch(() => undefined).then(operation);
   // The chain itself must never reject, or one failure would skip every
@@ -99,6 +127,32 @@ function enqueue<TResult>(
   void settled.then(() => {
     if (writeChains.get(draftKey) === settled) writeChains.delete(draftKey);
   });
+  return result;
+}
+
+/**
+ * Queue a save or discard that is retried if it fails.
+ *
+ * The caller still receives the first attempt's outcome and reports it as
+ * before. A retryable failure is then repeated in the background until it
+ * lands, unless a newer write for the key overtakes it (see
+ * `DraftWriteRetries`). Without this a discard that failed during an outage
+ * left a stale draft behind, and a stale draft holds the backend's queue.
+ */
+function enqueueRetriedWrite<TResult>(
+  writes: ComposeDraftWrites,
+  draftKey: string,
+  operation: () => Promise<TResult>,
+): Promise<TResult> {
+  const seq = writes.retries.begin(draftKey);
+  const result = enqueue(writes, draftKey, operation);
+  const repeat = async (): Promise<void> => {
+    await operation();
+  };
+  void result.then(
+    () => writes.retries.settled(draftKey, seq, null, repeat),
+    (error: unknown) => writes.retries.settled(draftKey, seq, { error }, repeat),
+  );
   return result;
 }
 
@@ -137,6 +191,9 @@ export function loadComposeDraft<T>(
 ): Promise<Awaited<ReturnType<typeof backend.getComposeDraft<T>>>> {
   const writes = composeDraftWrites(scope);
   return enqueue(writes, draftKey, async () => {
+    // A save or discard that failed earlier goes first, so a reopened tab does
+    // not hydrate the draft it already submitted. A failure leaves it pending.
+    await writes.retries.flushInline(draftKey).catch(() => undefined);
     const draft = await writes.api.getComposeDraft<T>(draftKey);
     const state = revisionStateFor(writes, draftKey, revisionState);
     state.revision = draft?.revision ?? 0;
@@ -155,7 +212,7 @@ export function persistComposeDraft<T>(
 ): Promise<SavedComposeDraft<T> | undefined> {
   const writes = composeDraftWrites(scope);
   const state = revisionStateFor(writes, draftKey, revisionState);
-  return enqueue(writes, draftKey, async () => {
+  return enqueueRetriedWrite(writes, draftKey, async () => {
     if (state.conflictRevision !== null) {
       throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
     }
@@ -187,7 +244,7 @@ export function discardComposeDraft(
 ): Promise<void> {
   const writes = composeDraftWrites(scope);
   const state = revisionStateFor(writes, draftKey, revisionState);
-  return enqueue(writes, draftKey, async () => {
+  return enqueueRetriedWrite(writes, draftKey, async () => {
     if (state.conflictRevision !== null) {
       throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
     }
@@ -237,6 +294,7 @@ export function updateSavedComposeDraft<T>(
 ): Promise<void> {
   const writes = composeDraftWrites(scope);
   return enqueue(writes, draftKey, async () => {
+    await writes.retries.flushInline(draftKey).catch(() => undefined);
     const saved = await writes.api.getComposeDraft<T>(draftKey);
     if (!saved) return;
     const value = update(saved.value);
@@ -256,4 +314,9 @@ export function updateSavedComposeDraft<T>(
       await recordComposeConflict(writes, draftKey, state, error);
     }
   });
+}
+
+/** Draft keys on `scope`'s node with a failed save or discard awaiting retry. */
+export function composeDraftWritesAwaitingRetry(scope: NodeScope = appCommandScope()): string[] {
+  return composeDraftWrites(scope).retries.pendingKeys();
 }

@@ -31,6 +31,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 const compose = await import("./compose-draft-persistence");
+const { setTransportDisconnected } = await import("./transport-connectivity");
 const files = await import("./file-draft-persistence");
 const { useDurableComposeDraft } = await import("../hooks/useDurableComposeDraft");
 const { NATIVE_COMPOSE_DRAFT_SAVE_DEBOUNCE_MS, useNativeComposeDraftPersistence } =
@@ -365,6 +366,93 @@ describe("compose draft persistence", () => {
 
     await compose.resolveComposeDraftSaveConflict(key, "project", "project", "second", secondState);
     expect(saveComposeDraft.mock.calls.map((call) => (call as unknown[])[4])).toEqual([1, 1, 2]);
+  });
+});
+
+describe("compose draft write retries", () => {
+  /**
+   * A saved draft holds the backend's queue drain and agent mail for its tab.
+   * A discard that failed while the window's connection was down used to
+   * leave that draft behind, so a queued prompt sat unsent with nothing on
+   * screen to say why.
+   */
+  afterEach(() => {
+    setTransportDisconnected("gateway-event-stream", false);
+  });
+
+  function reconnect(): void {
+    setTransportDisconnected("gateway-event-stream", true);
+    setTransportDisconnected("gateway-event-stream", false);
+  }
+
+  test("a discard that failed is retried when the node reconnects", async () => {
+    const key = "native-claude:env-1:retry-on-reconnect";
+    deleteComposeDraft.mockRejectedValueOnce(new Error("backend unreachable"));
+
+    await expect(compose.discardComposeDraft(key)).rejects.toThrow("backend unreachable");
+    expect(compose.composeDraftWritesAwaitingRetry()).toContain(key);
+
+    reconnect();
+    await compose.awaitComposeDraftWrites(key);
+
+    expect(deleteComposeDraft).toHaveBeenCalledTimes(2);
+    expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
+  });
+
+  test("a read runs the failed discard first, so a submitted draft does not resurface", async () => {
+    const key = "native-claude:env-1:retry-before-read";
+    const order: string[] = [];
+    deleteComposeDraft
+      .mockImplementationOnce(async () => {
+        order.push("delete");
+        throw new Error("backend unreachable");
+      })
+      .mockImplementationOnce(async () => {
+        order.push("delete");
+      });
+    getComposeDraft.mockImplementationOnce(async () => {
+      order.push("get");
+      return null;
+    });
+
+    await compose.discardComposeDraft(key).catch(() => undefined);
+    await expect(compose.loadComposeDraft(key)).resolves.toBeNull();
+
+    expect(order).toEqual(["delete", "delete", "get"]);
+    expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
+  });
+
+  test("a newer save replaces the failed discard instead of being undone by it", async () => {
+    const key = "native-claude:env-1:newer-write-wins";
+    deleteComposeDraft.mockRejectedValueOnce(new Error("backend unreachable"));
+    saveComposeDraft.mockResolvedValueOnce({ revision: 1 });
+
+    await compose.discardComposeDraft(key).catch(() => undefined);
+    await compose.persistComposeDraft(key, "environment", "env-1", "typed after");
+    reconnect();
+    await compose.awaitComposeDraftWrites(key);
+
+    expect(deleteComposeDraft).toHaveBeenCalledTimes(1);
+    expect(saveComposeDraft).toHaveBeenCalledTimes(1);
+    expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
+  });
+
+  test("a revision conflict is left for the user, not retried", async () => {
+    const key = "native-claude:env-1:conflict-not-retried";
+    deleteComposeDraft.mockRejectedValueOnce(new Error("Compose draft revision conflict"));
+    getComposeDraft.mockResolvedValueOnce({
+      draftKey: key,
+      ownerType: "environment",
+      ownerId: "env-1",
+      value: "newer elsewhere",
+      updatedAt: "2026-11-16T00:00:00.000Z",
+      revision: 4,
+    });
+
+    await expect(compose.discardComposeDraft(key)).rejects.toBeInstanceOf(
+      compose.DraftRevisionConflictError,
+    );
+    expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
   });
 });
 

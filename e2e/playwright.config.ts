@@ -59,7 +59,9 @@ export default defineConfig({
   retries: process.env.ORKESTRATOR_REVIEW_VALIDATION === "1" ? 1 : 0,
   forbidOnly: Boolean(process.env.CI),
   reporter: "line",
-  globalSetup: "./fixture-server-owner.ts",
+  // Checks the fixture server belongs to this checkout, then ends the run if it
+  // stops answering (Playwright watches it only while it starts).
+  globalSetup: "./fixture-server-setup.ts",
   outputDir: path.join(repositoryRoot, "output/playwright/test-results"),
   webServer: {
     command: `bunx vite ../../e2e/fixture --config vite.config.ts --host 127.0.0.1 --port ${port} --strictPort`,

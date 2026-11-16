@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MAX_JOURNAL_ENTRIES } from "@orkestrator/protocol/node/command-change-journal";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { EngineItem } from "../engine/types.js";
 import type { NormalizedMessage, NormalizedPart } from "../messages/types.js";
@@ -224,6 +225,110 @@ describe("journal", () => {
         );
       }
       expect(await adoptLoginCommandChanges(account, source, 2)).toBe(0);
+    } finally {
+      if (saved === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
+      else process.env.CODEX_BRIDGE_STATE_DIR = saved;
+    }
+  });
+
+  test("a login journal that cannot be read stays for the next start", async () => {
+    const host = await temporaryCodexHome();
+    const account = await temporaryCodexHome();
+    const saved = process.env.CODEX_BRIDGE_STATE_DIR;
+    const source = join(account, "orkestrator-bridge", "command-changes");
+    const stash = join(account, "stash");
+    try {
+      delete process.env.CODEX_BRIDGE_STATE_DIR;
+      await recordCommandChanges(account, "thread-1", "call-old", change);
+      await recordCommandChanges(account, "thread-2", "call-other", change);
+      // thread-1's journal becomes a link to a directory: reading it fails.
+      await mkdir(stash);
+      await rename(join(source, "thread-1.jsonl"), join(stash, "journal"));
+      await mkdir(join(stash, "unreadable"));
+      await symlink(join(stash, "unreadable"), join(source, "thread-1.jsonl"));
+
+      process.env.CODEX_BRIDGE_STATE_DIR = join(host, "orkestrator-bridge");
+      await expect(adoptLoginCommandChanges(account, source)).rejects.toThrow(/next start/);
+      expect(existsSync(join(source, "thread-1.jsonl"))).toBe(true);
+      expect(existsSync(`${source}.adopted`)).toBe(false);
+      // The readable journal was still merged and retired.
+      expect(await readCommandChanges(account, "thread-2")).toEqual(
+        new Map([["call-other", change]]),
+      );
+      expect(existsSync(join(source, "thread-2.jsonl"))).toBe(false);
+
+      // Once the journal reads again, the next start imports its badges.
+      await rm(join(stash, "unreadable"), { recursive: true });
+      await rename(join(stash, "journal"), join(stash, "unreadable"));
+      expect(await adoptLoginCommandChanges(account, source)).toBe(1);
+      expect(await readCommandChanges(account, "thread-1")).toEqual(
+        new Map([["call-old", change]]),
+      );
+      expect(existsSync(source)).toBe(false);
+      expect(existsSync(`${source}.adopted`)).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
+      else process.env.CODEX_BRIDGE_STATE_DIR = saved;
+    }
+  });
+
+  test("a merge that cannot be published keeps the login journal for the next start", async () => {
+    const host = await temporaryCodexHome();
+    const account = await temporaryCodexHome();
+    const saved = process.env.CODEX_BRIDGE_STATE_DIR;
+    const source = join(account, "orkestrator-bridge", "command-changes");
+    const target = join(host, "orkestrator-bridge", "command-changes");
+    try {
+      delete process.env.CODEX_BRIDGE_STATE_DIR;
+      await recordCommandChanges(account, "thread-1", "call-old", change);
+
+      process.env.CODEX_BRIDGE_STATE_DIR = join(host, "orkestrator-bridge");
+      // The shared directory's path is taken by a file, so nothing can be written there.
+      await mkdir(join(host, "orkestrator-bridge"), { recursive: true });
+      await writeFile(target, "");
+      await expect(adoptLoginCommandChanges(account, source)).rejects.toThrow(/next start/);
+      expect(existsSync(join(source, "thread-1.jsonl"))).toBe(true);
+      expect(existsSync(`${source}.adopted`)).toBe(false);
+
+      await rm(target);
+      expect(await adoptLoginCommandChanges(account, source)).toBe(1);
+      expect(await readCommandChanges(account, "thread-1")).toEqual(
+        new Map([["call-old", change]]),
+      );
+      expect(existsSync(`${source}.adopted`)).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
+      else process.env.CODEX_BRIDGE_STATE_DIR = saved;
+    }
+  });
+
+  test("adopted measurements never evict the shared journal's own at the entry limit", async () => {
+    const host = await temporaryCodexHome();
+    const account = await temporaryCodexHome();
+    const saved = process.env.CODEX_BRIDGE_STATE_DIR;
+    const source = join(account, "orkestrator-bridge", "command-changes");
+    const line = (id: string) => `${JSON.stringify({ id, change })}\n`;
+    try {
+      // 1,000 current measurements (the journal's limit) and five older ones.
+      const target = join(host, "orkestrator-bridge", "command-changes");
+      await mkdir(target, { recursive: true });
+      const currentIds = Array.from(
+        { length: MAX_JOURNAL_ENTRIES },
+        (_, index) => `current-${index}`,
+      );
+      await writeFile(join(target, "thread-1.jsonl"), currentIds.map(line).join(""));
+      await mkdir(source, { recursive: true });
+      const olderIds = Array.from({ length: 5 }, (_, index) => `older-${index}`);
+      await writeFile(join(source, "thread-1.jsonl"), olderIds.map(line).join(""));
+
+      process.env.CODEX_BRIDGE_STATE_DIR = join(host, "orkestrator-bridge");
+      expect(await adoptLoginCommandChanges(account, source)).toBe(1);
+      const records = await readCommandChanges(account, "thread-1");
+      expect(records.size).toBe(MAX_JOURNAL_ENTRIES);
+      expect(Array.from(records.keys())).toEqual(currentIds);
+      // A restart reads the same bounded journal from disk.
+      const lines = (await Bun.file(join(target, "thread-1.jsonl")).text()).trim().split("\n");
+      expect(lines).toHaveLength(MAX_JOURNAL_ENTRIES);
     } finally {
       if (saved === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
       else process.env.CODEX_BRIDGE_STATE_DIR = saved;

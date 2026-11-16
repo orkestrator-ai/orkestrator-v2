@@ -21,6 +21,7 @@ import { codexBridgeStateDir } from "../bridge-state-dir.js";
 import {
   CommandChangeJournal,
   hasMeasuredChanges,
+  readCommandChangeJournalFile,
 } from "@orkestrator/protocol/node/command-change-journal";
 import { isFileEditToolName, type MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
@@ -96,14 +97,20 @@ const ADOPTED_JOURNAL_SUFFIX = ".adopted";
 /**
  * Part of the one-time upgrade at bridge start (`login-state-adoption.ts`):
  * the per-thread journals a bridge before the shared state directory wrote
- * into this login's own `command-changes` directory. A call id the shared
- * journal lacks is appended to it; the shared journal keeps the call ids it
- * already holds. Each source file is renamed `<name>.jsonl.adopted` once it
- * is merged, so a start that reaches the per-start limit leaves only the
- * unmerged files for the next one. Once a start finds none left, the
- * directory is renamed `command-changes.adopted` and never read again. A
- * rerun after a crash appends nothing twice, since the ids it appended are
- * then held. Returns the number of journals merged.
+ * into this login's own `command-changes` directory. Each is merged under the
+ * shared journal (`CommandChangeJournal.adoptOlder`): its records go before
+ * the shared ones, so at the entry limit they are the ones dropped, and a call
+ * id the shared journal holds keeps the shared value. The merged journal is
+ * published atomically.
+ *
+ * A source file is renamed `<name>.jsonl.adopted` only once its merge has
+ * been published, so a start that reaches the per-start limit leaves only the
+ * unmerged files for the next one. A file that cannot be read, or whose merge
+ * cannot be published, stays in place for the next start; once a start
+ * merges every file left, the directory is renamed `command-changes.adopted`
+ * and never read again. A rerun after a crash adds nothing twice, since the
+ * ids it merged are then held. Returns the number of journals merged, and
+ * rejects after merging the rest when any journal failed.
  */
 export async function adoptLoginCommandChanges(
   codexHome: string,
@@ -120,26 +127,36 @@ export async function adoptLoginCommandChanges(
     throw error;
   }
   const batch = names.slice(0, limit);
+  let merged = 0;
+  let failed = 0;
+  let firstError: unknown;
   for (const name of batch) {
     // A file name is a folded thread id, which folds to itself.
     const threadId = name.slice(0, -".jsonl".length);
     const journal = commandChangeJournalFor(codexHome, threadId);
     const path = join(source, name);
-    if (journal) {
-      const legacy = await new CommandChangeJournal(path).read();
-      if (legacy.size > 0) {
-        const current = await journal.read();
-        for (const [id, change] of legacy) {
-          if (!current.has(id)) await journal.append(id, change);
-        }
+    try {
+      if (journal) {
+        const legacy = await readCommandChangeJournalFile(path);
+        if (legacy.size > 0) await journal.adoptOlder(legacy);
       }
+      // Retired only once its merge is published; a file no thread id names
+      // has nothing to merge and is retired with the rest.
+      await rename(path, `${path}${ADOPTED_JOURNAL_SUFFIX}`);
+      merged += 1;
+    } catch (error) {
+      failed += 1;
+      firstError ??= error;
     }
-    // Retired only after its records are appended; a file no thread id
-    // names has nothing to merge and is retired with the rest.
-    await rename(path, `${path}${ADOPTED_JOURNAL_SUFFIX}`);
+  }
+  if (failed > 0) {
+    throw new Error(
+      `${failed} login command-change journal(s) could not be adopted and stay for the next start`,
+      { cause: firstError },
+    );
   }
   if (batch.length === names.length) await rename(source, `${source}.adopted`);
-  return batch.length;
+  return merged;
 }
 
 /** Journal one measurement. Never rejects; a lost record costs a badge. */

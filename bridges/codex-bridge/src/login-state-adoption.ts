@@ -11,8 +11,12 @@
  * directory. Session records are not adopted: they expire after seven days
  * without access, so none written before #1295 is still live.
  *
- * - Titles and command changes are appended where the shared copy lacks them,
- *   then the source is renamed `*.adopted`.
+ * - Titles are appended where the shared copy lacks them, then the source is
+ *   renamed `*.adopted`.
+ * - Each command-change journal is merged under the shared one (the shared
+ *   records keep priority at the entry limit and on a shared call id) and
+ *   published atomically; only then is the source renamed `*.adopted`. One
+ *   that cannot be read or published stays for the next start.
  * - The dispatch journal is merged with its at-most-once rules (a conflicting
  *   record is quarantined), published, then removed. A journal that cannot be
  *   merged makes the runtime refuse every dispatch, as an unreadable journal

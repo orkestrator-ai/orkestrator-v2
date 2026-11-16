@@ -6,6 +6,7 @@ import {
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PINNED_TOOL_VERSIONS } from "@orkestrator/toolchain/manifest";
 import type { CommandContext } from "../commands-context.js";
 import { claudePlanResets, codexResetItems } from "./resets.js";
 import { ERROR_CACHE_TTL_MS, contextUsageWithPlanUsage } from "./cache.js";
@@ -716,6 +717,11 @@ describe("createPlanUsageReader", () => {
     expect(seen[0]?.url).toBe(`${CLAUDE_USAGE_URL}?cedar_ember=1`);
     expect(seen[0]?.headers.Authorization).toBe("Bearer oauth-token");
     expect(seen[0]?.headers["anthropic-beta"]).toBe("oauth-2025-04-20");
+    // Without Claude Code's User-Agent the endpoint answers every account
+    // `cedar_ember.eligible: false` ("surface") and lists no resets.
+    expect(seen[0]?.headers["User-Agent"]).toBe(
+      `claude-cli/${PINNED_TOOL_VERSIONS.claude} (external, cli)`,
+    );
   });
 
   test("asks for a Claude sign-in rather than requesting without one", async () => {

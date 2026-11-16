@@ -11,6 +11,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { PINNED_TOOL_VERSIONS } from "@orkestrator/toolchain/manifest";
 import {
   accountWindowsFromPlanUsage,
   CURSOR_API_BASE,
@@ -108,6 +109,17 @@ export { CURSOR_API_BASE };
 
 /** Beta header Claude Code itself sends on the OAuth usage read. */
 const CLAUDE_OAUTH_BETA = "oauth-2025-04-20";
+
+/**
+ * The User-Agent the pinned Claude Code sends on the OAuth usage read.
+ *
+ * The endpoint decides reset eligibility by the calling surface: without a
+ * Claude Code User-Agent it answers every account `cedar_ember.eligible:
+ * false` with `ineligible_reason: "surface"` and no grants, so an account
+ * holding resets looked as if it held none. Checked against Claude Code
+ * 2.1.319, which builds `claude-cli/<version> (external, cli)`.
+ */
+export const CLAUDE_USAGE_USER_AGENT = `claude-cli/${PINNED_TOOL_VERSIONS.claude} (external, cli)`;
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -792,6 +804,7 @@ async function readClaudePlanUsage(
     headers: {
       Authorization: `Bearer ${token}`,
       "anthropic-beta": CLAUDE_OAUTH_BETA,
+      "User-Agent": CLAUDE_USAGE_USER_AGENT,
       Accept: "application/json",
     },
   };

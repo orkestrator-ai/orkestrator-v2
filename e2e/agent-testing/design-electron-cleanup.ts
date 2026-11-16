@@ -132,6 +132,9 @@ export async function closeElectron(
   ]);
 }
 
+/** How long Electron's descendants may take to follow its browser process out after `close()`. */
+const CLOSED_HELPER_EXIT_GRACE_MS = 2_000;
+
 /**
  * Close Playwright's Electron handle, waiting at most `timeoutMs`.
  *
@@ -158,6 +161,14 @@ export async function closeElectronWithin(
   ]).finally(() => clearTimeout(timer));
   if (!owned.length && !settled) {
     throw new Error("Electron did not close and exposes no process to stop");
+  }
+  // `close()` resolves when the browser process exits; its helpers (zygote,
+  // GPU, utility, a child backend) notice and leave a moment later. Checking
+  // them at once counted a clean code-0 exit on Linux CI as "killed". Give
+  // them a bounded grace, only after a settled close; a timed-out close is
+  // still killed at once, and a descendant that outlives the grace still is.
+  if (settled) {
+    await waitForStopped(owned, CLOSED_HELPER_EXIT_GRACE_MS).catch(() => undefined);
   }
   if (!owned.some(processAlive)) return "closed";
   for (const pid of owned.filter(processAlive)) signalProcess(pid, "SIGKILL");

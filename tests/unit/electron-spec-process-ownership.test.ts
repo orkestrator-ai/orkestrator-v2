@@ -247,6 +247,33 @@ describe("Electron spec process ownership", () => {
     }
   });
 
+  test("a helper that leaves shortly after a settled close counts as closed, not killed", async () => {
+    // Linux CI: Electron exited with code 0, but its helpers were still alive
+    // the instant close() resolved, and the clean quit was reported "killed".
+    const electronProcess = spawn("sh", ["-c", "sleep 1 & echo $!; read command; exit 0"], {
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const helper = Number(await firstLine(electronProcess));
+    const exited = new Promise((resolve) => electronProcess.once("exit", resolve));
+    let helperAliveAtClose = false;
+    try {
+      const app = {
+        close: async () => {
+          electronProcess.stdin!.end("quit\n");
+          await exited;
+          helperAliveAtClose = processAlive(helper);
+        },
+        process: () => electronProcess,
+      };
+      expect(await closeElectronWithin(app as never, 1_000)).toBe("closed");
+      expect(helperAliveAtClose).toBe(true);
+      expect(processAlive(helper)).toBe(false);
+    } finally {
+      killIfAlive(helper);
+      killIfAlive(electronProcess.pid);
+    }
+  });
+
   test.each([false, true])(
     "retains orphaned descendants when close exits the root (pending=%s)",
     async (pending) => {

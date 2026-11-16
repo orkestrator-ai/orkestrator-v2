@@ -76,9 +76,9 @@ describe("Claude tmux mail delivery", () => {
         path.join(transcriptDir, `${status.session_id}.jsonl`),
         `${JSON.stringify(line)}\n`,
       );
-      await expect(invoke(handlers, "claude_tmux_transcript", args, context)).resolves.toEqual([
-        line,
-      ]);
+      await expect(invoke(handlers, "claude_tmux_transcript", args, context)).resolves.toEqual(
+        expect.objectContaining({ lines: [line], earlierCursor: null }),
+      );
 
       await invoke(handlers, "claude_tmux_stop", args, context);
     });

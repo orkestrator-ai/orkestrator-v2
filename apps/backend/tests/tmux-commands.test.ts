@@ -840,7 +840,12 @@ describe("Electron tmux hooks and transcripts", () => {
             tabId: "tab-space",
             environmentId: environment.id,
           }),
-        ).resolves.toEqual([{ type: "user", message: { role: "user", content: "Hello" } }]);
+        ).resolves.toEqual(
+          expect.objectContaining({
+            lines: [{ type: "user", message: { role: "user", content: "Hello" } }],
+            earlierCursor: null,
+          }),
+        );
 
         await invoke(
           handlers,

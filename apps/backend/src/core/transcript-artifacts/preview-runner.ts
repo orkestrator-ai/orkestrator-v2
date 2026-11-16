@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { installArtifactFrameRuntime } from "@orkestrator/protocol/artifact-frame-channel";
 import { installDesignRuntime } from "@orkestrator/protocol/design-runtime";
+import { createStaticHtmlSanitizer } from "@orkestrator/protocol/static-html-sanitizer";
 import {
   INTERACTIVE_HTML_POLICY,
   MERMAID_POLICY,
@@ -212,7 +213,14 @@ export function defaultWorkerCommand(
   return entry ? { command: process.execPath, args: [entry] } : null;
 }
 
-const STATIC_RENDERER_HASH = sha256Hex(`static:${installDesignRuntime.toString()}`);
+/**
+ * The static renderer is the design runtime and the sanitizer it is handed
+ * (shared with the transcript's presentation runtime, which is not part of
+ * this identity).
+ */
+const STATIC_RENDERER_HASH = sha256Hex(
+  `static:${installDesignRuntime.toString()}:${createStaticHtmlSanitizer.toString()}`,
+);
 const INTERACTIVE_RENDERER_HASH = sha256Hex(
   `interactive:${installArtifactFrameRuntime.toString()}`,
 );

@@ -430,8 +430,8 @@ export interface NativeAgentServiceOptions {
   abortGraceMs?: number;
   /**
    * The environment's OpenCode server: the host one of a local environment
-   * (`opencode2-host-server.ts`) or the in-container one
-   * (`opencode2-container-server.ts`). `start: false` never spawns one.
+   * (`opencode2/host-server.ts`) or the in-container one
+   * (`opencode2/container-server-lifecycle.ts`). `start: false` never spawns one.
    */
   openCodeServer?: (
     environmentId: string,

@@ -6,7 +6,7 @@ import type { RegistryDependencies } from "./commands-registry-types.js";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { agentAccountLoginProgress } from "./agent-accounts.js";
 import { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
-import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
+import { OpenCodeProviderLoginSlot } from "./opencode2/provider-login-slot.js";
 
 import * as cursorBridge from "./cursor-sdk-bridge.js";
 import { decodeCommandArgs } from "@orkestrator/protocol/contract/command";

@@ -269,14 +269,9 @@ const AGENT_PINS: Record<string, AgentPins> = {
         tracksCli: false,
       },
       { file: "bridges/claude-bridge/package.json", dep: "@anthropic-ai/sdk", tracksCli: false },
-      // The published `orkestrator` CLI pins the Agent SDK a second time. Its
-      // dependencies are only what the bundler leaves external, so this is a
-      // real runtime pin for npm users rather than a stale duplicate.
-      {
-        file: "packages/cli/package.json",
-        dep: "@anthropic-ai/claude-agent-sdk",
-        tracksCli: false,
-      },
+      // The published `orkestrator` CLI has no pin of its own: its build
+      // inlines the bridge's SDK (`packages/cli/scripts/bridges.ts`), so the
+      // install never pulls the SDK's Claude Code platform binary.
     ],
   },
   codex: {

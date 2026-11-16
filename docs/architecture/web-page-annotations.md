@@ -1,9 +1,10 @@
 # Web page annotations
 
-Status: Living — implemented behind capability negotiation. Live implement
-and Discuss runs pass on all six providers (2026-10-24); Docker, remote and
-milestone sign-offs are still open. Gates and evidence are in
-[0044-web-annotation-qualification.md](../todo/previews-and-annotations/0044-web-annotation-qualification.md).
+Status: Living — implemented behind capability negotiation and on by
+default. Live implement and Discuss runs pass on all six providers
+(2026-10-24); milestones A to C were signed off on 2026-11-14 with a remote
+backend, the iOS wrapper, macOS for the native-window gate, and native focus
+and keyboard resolve deferred. See [Qualification](#qualification).
 
 Select part of a preview, save a note without any agent open, discuss it with
 one chosen native-agent session, request a change, and review and accept the
@@ -698,12 +699,12 @@ and copies them as JSON; counts reset when the backend or app restarts.
 | Backend disconnected | Cached content with connection status; unsaved text retained. |
 | Storage degraded | Read-only for affected items with the reason. |
 
-What has actually been exercised on a real stack (details and dates in
-[0044-web-annotation-qualification.md](../todo/previews-and-annotations/0044-web-annotation-qualification.md)):
+What has actually been exercised on a real stack (sign-off and history under
+[Qualification](#qualification)):
 
 | Area | Exercised | Not exercised |
 | --- | --- | --- |
-| Desktop capture and native window | macOS (Electron 44, display scale 1, DPR 2 forced); Linux headless (Electron 45, 2026-11-06 and again 2026-11-11, every local case of the Electron spec) | Windows; a physical Retina display; OS-level focus on a shared desktop; a Linux Wayland or X11 window |
+| Desktop capture and native window | macOS (Electron 44, display scale 1, DPR 2 forced); Linux headless (Electron 45, 2026-11-06 and 2026-11-11, every local case of the Electron spec; 2026-11-16 the same, except that the capture-alignment case passed only alone, [flake 9806](../tests/flaky-tests/previews-annotations-and-gateway/9806-annotation-capture-stale-frame-after-dpr2-relaunch.md)); Linux X11 window on a disposable Xvfb display in CI (`electron-qualification.yml`, weekly since 2026-11-15), with the window really focused, so the keyboard case's OS-focus assertion runs | Windows; a physical Retina display; OS-level focus on a shared desktop; a Linux Wayland window. Under Xvfb the capture-alignment case fails: the highlight measures 3 px taller at DPR 1, zoom 1 ([8095](../todo/previews-and-annotations/8095-annotation-capture-alignment-under-xvfb.md)) |
 | Pins and Show on page | Reorder, hot reload, duplication, offscreen, closed and open modal, late-font shift (blocking and script-loaded), expired sign-in redirect (macOS; Linux headless) | — |
 | Open shadow roots | An element note and a quote inside an open root captured in the desktop's preview view (isolated world, main-side parse), stored, then pinned and shown on page again after a reload (Linux headless, 2026-11-11) | Closed roots (unsupported); a Linux Wayland or X11 window; macOS |
 | Development source hints | Fixture HTML and a real Vite 8 dev server with the documented emitter, captured from the desktop in a local worktree and in a container (Linux, 2026-11-06); fixture HTML in a container (macOS desktop); the container path check through the gateway (Linux) | webpack, Next.js and other Babel setups (unqualified) |
@@ -765,4 +766,154 @@ What has actually been exercised on a real stack (details and dates in
   sends a message in its chat; the request card shows the reason.
 - Not yet exercised on a real stack: a remote backend on another host, the
   iOS wrapper, Windows, and a physical Retina display. See the matrix above
-  and [0044-web-annotation-qualification.md](../todo/previews-and-annotations/0044-web-annotation-qualification.md).
+  and [Qualification](#qualification).
+
+## Qualification
+
+The feature is on by default. Its qualification ran as to-do 0044 (retired
+2026-11-16); every dated run, command and count it recorded from 2026-09-25
+to 2026-11-11 is in
+`git show a0920f1a7:docs/todo/previews-and-annotations/0044-web-annotation-qualification.md`.
+The runs that need a person or a second machine are in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md),
+under 0044 (retired) tasks 2 to 4.
+
+### Rollout and rollback
+
+`apps/backend/src/core/web-annotations/rollout.ts` defaults to `enabled`
+(decided 2026-10-15); Settings → Web page annotations or
+`ORKESTRATOR_WEB_ANNOTATIONS_MODE` overrides it. `read-only` refuses every
+authoring command but keeps reads, resolution, drafts and spool recovery.
+`disabled` keeps only capabilities, rollout and metrics. In every mode the
+reconciler keeps settling requests already sent, and a rollout change must
+keep that. Dispatch goes through the same per-tab prompt queue as a chat
+send, and annotation-specific failures show on the request card rather than
+losing data. Revisit the default if a live run shows duplicate execution,
+lost data or a write outside the workspace.
+
+### Real-stack specs
+
+- `e2e/agent-testing/web-annotations-electron.spec.ts`
+  (`mise run test:agent:electron`; headless on Linux with
+  `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`, see
+  [agent-testing.md](../development/agent-testing.md#electron-specs-and-their-display)):
+  capture without an agent tab across reload and restart, masking, inert
+  adversarial strings, pins and Show on page (reorder, hot reload,
+  duplication, offscreen, modal, late fonts, expired sign-in), route
+  identity, text, region and page modes, open shadow roots, result
+  comparisons, source hints (fixture HTML and a real Vite 8 dev server,
+  locally and in a container), the native view beside the Notes column at
+  several app zooms, keyboard-only create and send, capture alignment at
+  preview zoom 0.8, 1 and 1.5 and DPR 1 and 2, and the baselines below. It
+  also records the desktop captures the gateway spec replays
+  (`web-annotations-native-captures.json`) and fails when they drift.
+- `e2e/agent-testing/web-annotations-gateway.spec.ts`
+  (`mise run test:agent:browser:isolated`; its `Docker fixture` cases with
+  `mise run test:agent:docker`): batches, local and container evidence
+  materialization and cleanup, web review in Chromium and WebKit, the live
+  implement, needs-input and approval cases behind their opt-ins, and a
+  metrics baseline.
+- The fault-injection matrix, the stale-result acceptance race and migration
+  crash and retry are unit-level (`web-annotation-dispatch-flow.test.ts`,
+  `web-annotation-service-results.test.ts`, `web-annotation-migration*.test.ts`);
+  the sign-off accepts them for gate A.
+
+### Sign-off
+
+Milestones A to C were written up by a worker agent on 2026-10-25 and
+accepted by the maintainer on 2026-11-14. The records below are as accepted,
+with the reviewer line filled in; what changed since (Linux runs, open
+shadow roots from 0047) is in the matrix above. The gate-scope answers:
+
+- **Native-window gate:** Linux is enough; macOS is deferred.
+- **Remote backend:** deferred, not in scope now.
+- **Gate A:** the unit-level fault, race and migration tests count; no
+  real-stack run of the acceptance race or a migration restart is required.
+- **iOS:** the WebKit run of the web review case is the engine-level signal
+  only; it does not qualify the `WKWebView` wrapper.
+
+Deferred, each with its run in the manual-test checklist where one exists:
+a remote backend on another host (0044 (retired) task 2), the iOS wrapper
+(task 3), native focus and keyboard resolve with a live provider (task 4),
+and the native window on macOS for the gate.
+
+```text
+Milestone / PR / commit: A, core loop (capture, store, request, dispatch,
+  review); main ba7cc8d4
+Implemented scope and remaining deferrals: capture without an agent tab,
+  durable spool and recovery, request send and dispatch through the prompt
+  queue, evidence materialization and cleanup, needs-input, review. Deferred:
+  remote backend on another host; native OS focus and keyboard resolve
+Platforms, providers, and client versions exercised: macOS 27.0 (arm64),
+  Electron 44.7.0, Docker Desktop 29.9.2, Playwright Chromium and WebKit 27.2;
+  live implement on all six providers (2026-10-18/24, Claude and Codex again
+  2026-10-25); needs-input and disruption on Claude
+Logged commands and results: 0044 (retired), "Runs on 2026-10-25" and earlier
+Real workflow and inactive-environment evidence: an approval pending in one
+  environment while the client switched to another, reloaded and lost its
+  event stream; capture without an agent tab across reload and restart
+Fault-injection boundaries exercised: graceful restart and backend SIGKILL
+  with an approval pending (withdrawn, never applied); a second answer to an
+  applied approval (stale); unit-level matrix unchanged
+Capability matrix and known limitations: this document, "Client capability
+  matrix" and "Known limitations"
+Migration and rollback verification: unit level only (web-annotation-
+  migration*.test.ts, web-annotation-rollout.test.ts); not run on a real stack
+Reviewer / date: the maintainer, 2026-11-14, accepted
+
+Milestone / PR / commit: B, targets and batches; same commit
+Implemented scope and remaining deferrals: anchors, live pins, Show on page,
+  hash/query identity, batch reservation. Deferred: shadow/iframe targets
+  (0047)
+Platforms, providers, and client versions exercised: macOS Electron (pins,
+  Show on page); gateway Chromium (batches)
+Logged commands and results: pins after reorder, hot reload, duplication,
+  offscreen, modal open/closed, blocking and script-loaded late fonts, expired
+  sign-in redirect; overlapping batches from two clients
+Real workflow and inactive-environment evidence: batches held across reload
+Fault-injection boundaries exercised: two clients racing a send (all-or-none)
+Capability matrix and known limitations: pins resolve after a loading page's
+  load event; hidden targets are reported, not shown
+Migration and rollback verification: not applicable
+Reviewer / date: the maintainer, 2026-11-14, accepted
+
+Milestone / PR / commit: C, results, modes and clients; same commit
+Implemented scope and remaining deferrals: result captures and comparison
+  labels, Discuss modes, web review, container file checks. Deferred: the
+  iOS wrapper run; pixel differences (0047)
+Platforms, providers, and client versions exercised: macOS Electron (result
+  captures); gateway Chromium and WebKit 27.2 (web review); Docker container
+  (file checks, live Claude report)
+Logged commands and results: 0044 (retired), "Runs on 2026-10-25"
+Real workflow and inactive-environment evidence: web review of a desktop
+  capture with no capture available in that client
+Fault-injection boundaries exercised: an unaddressable container path check
+  is unavailable (unit); a symlink out of /workspace is outside-workspace
+Capability matrix and known limitations: as milestone A
+Migration and rollback verification: not run
+Reviewer / date: the maintainer, 2026-11-14, accepted
+```
+
+### Baselines
+
+From the Electron spec's `baselines` case and `web_annotations_metrics`, on
+a shared 16-core Linux host at load 5 to 14 (2026-11-11, headless): selection
+→ spool median 133 ms (p90 151, max 158; 18 captures), spool → saved median
+34 ms (p90 66, max 164; 19), backend create `command_ms` mean 2 / max 6 ms,
+asset stage 2 / 4 ms. No latency target is set: shared hosts are never idle
+and timing assertions in these suites are a recorded flake source. The
+regression guard for storage cost is the row-count assertion under
+[Commit cost](#commit-cost).
+
+### OS focus on Linux
+
+The keyboard case's OS-level checks (`isFocused()` on the window and on the
+preview while selecting) run only when the window really is focused, and
+record `window-focused` and `preview-focused-while-selecting`. Headless
+Electron reports focus unconditionally, so a headless run says nothing about
+them. The weekly `electron-qualification.yml` job runs the suite in real X11
+windows on Xvfb, where the window does take focus: the case passed with both
+`true` in every run from its first on 2026-11-15 to the scheduled run on
+`main` at `da2561021` on 2026-11-16 (run 43869578513). The workspace realm's
+`nativeFocus` and `getFocusedWebContents()` polls that also needed a
+frontmost host went with `workspace-realm-electron.spec.ts`, deleted in #1983.

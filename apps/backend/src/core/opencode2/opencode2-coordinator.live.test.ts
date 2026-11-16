@@ -22,7 +22,7 @@ import { openCode2HostLaunch, waitForOpenCode2Ready } from "./server.js";
 
 /**
  * A coordinator's OpenCode 2.x server, launched the way
- * `opencode2-host-server.ts` launches one, against the real pinned binary and
+ * `host-server.ts` launches one, against the real pinned binary and
  * a scripted local model (no credentials, no remote calls):
  *
  * - a coordinator turn cannot write a file or run a command, its rules come

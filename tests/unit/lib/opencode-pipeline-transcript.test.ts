@@ -14,7 +14,7 @@ import { classifyTranscriptEntry } from "@/lib/chat/transcript-skew";
 import {
   normalizeOpenCodeDisplayEntries,
   normalizeOpenCodeDisplayEntry,
-} from "../../../apps/backend/src/core/opencode-display-transcript";
+} from "../../../apps/backend/src/core/opencode2/index.js";
 
 const FALLBACK = "2026-07-29T00:00:00.000Z";
 

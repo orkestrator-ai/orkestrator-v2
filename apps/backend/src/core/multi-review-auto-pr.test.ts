@@ -101,7 +101,7 @@ for (const queued of [false, true]) {
           reused: true,
           queued,
           completionActionArmed: true,
-        };
+        } as never;
       },
       {
         getEnvironment: async () => ({ id: "env-1", projectId: "project-1" }) as never,

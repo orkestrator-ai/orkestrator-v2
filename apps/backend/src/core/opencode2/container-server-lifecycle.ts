@@ -14,7 +14,7 @@
  *   must be rebuilt;
  * - on an `opencode2-launch=1` image, started by the root-owned launcher from
  *   root's binary and configuration, with its listening socket recorded
- *   (`opencode2-container-launch.ts`), as 1.x was; on an older image, by
+ *   (`container-launch.ts`), as 1.x was; on an older image, by
  *   `buildOpenCode2ContainerStartScript` from node's login shell. Either way
  *   the password goes on stdin to a root-only file (`opencode2-token`) and to
  *   the server alone, the credential plugin keeps it from the agent's tools,
@@ -22,7 +22,7 @@
  * - ready once `/api/info` answers as 2.x, then warmed once in `/workspace`
  *   (`/api/agent`) so its plugins load before any tool can run;
  * - every request re-checks the listener after a refused connection or an
- *   answer the password does not open (`opencode-listener-recheck.ts`);
+ *   answer the password does not open (`listener-recheck.ts`);
  * - reused while it answers with the persisted password and was started with
  *   the current plugins, and adopted after a backend restart (it outlives
  *   the backend, as every container server does).
@@ -36,40 +36,37 @@
 import { createHash } from "node:crypto";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { mintBridgeToken } from "@orkestrator/protocol/node/bridge-credential";
-import { ProviderUnavailableError } from "./agent-provider-contract.js";
-import { syncContainerLoginUnlocked } from "./agent-accounts-containers.js";
-import type { CommandContext } from "./commands-context.js";
-import { dockerExec, getHostPort, isContainerRunning } from "./commands-container-exec.js";
-import { isHttpServerReachable, waitForHttpServerExit } from "./commands-server-health.js";
-import { OPENCODE2_SERVER_PORT } from "./constants.js";
+import { ProviderUnavailableError } from "../agent-provider-contract.js";
+import { syncContainerLoginUnlocked } from "../agent-accounts-containers.js";
+import type { CommandContext } from "../commands-context.js";
+import { dockerExec, getHostPort, isContainerRunning } from "../commands-container-exec.js";
+import { isHttpServerReachable, waitForHttpServerExit } from "../commands-server-health.js";
+import { OPENCODE2_SERVER_PORT } from "../constants.js";
 import {
   containerBridgeOperationId,
   enqueueContainerBridgeOperation,
-} from "./container-bridge-operations.js";
+} from "../container-bridge-operations.js";
 import {
   launchContainerScript,
   readContainerBridgeToken,
   readContainerOpenCodeCredential,
   recheckContainerOpenCodeListener,
   removeContainerBridgeCredential,
-} from "./container-bridge-credential.js";
-import {
-  openCodeListenerRecheckFetch,
-  type OpenCodeListenerRecheck,
-} from "./opencode-listener-recheck.js";
+} from "../container-bridge-credential.js";
+import { openCodeListenerRecheckFetch, type OpenCodeListenerRecheck } from "./listener-recheck.js";
 import {
   containerOpenCode2Mode,
   type OpenCode2ContainerMode,
-} from "./container-credential-mode.js";
-import { currentRuntimeIdentity } from "./container-lifecycle-service.js";
-import { boundDiagnosticTail, boundedTailCommand } from "./container-log-bounds.js";
-import { networkOwnerContainer } from "./container-network-owner.js";
-import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
-import { readImageManifest } from "./docker-image.js";
-import { retryableBridgeStartupError } from "./local-server-runtime.js";
-import type { Environment } from "./models.js";
+} from "../container-credential-mode.js";
+import { currentRuntimeIdentity } from "../container-lifecycle-service.js";
+import { boundDiagnosticTail, boundedTailCommand } from "../container-log-bounds.js";
+import { networkOwnerContainer } from "../container-network-owner.js";
+import { assertContainerNotDraining, ensureCurrentBootReady } from "../container-readiness.js";
+import { readImageManifest } from "../docker-image.js";
+import { retryableBridgeStartupError } from "../local-server-runtime.js";
+import type { Environment } from "../models.js";
+import { OpenCode2Client } from "./client.js";
 import {
-  OpenCode2Client,
   OPENCODE2_CONTAINER_DIRECTORY,
   OPENCODE2_CONTAINER_LOG,
   OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT,
@@ -78,17 +75,17 @@ import {
   buildOpenCode2ContainerStartScript,
   manifestRunsOpenCode2,
   publishesOpenCode2Port,
-  type OpenCode2ServerConnection,
-  waitForOpenCode2Ready,
-} from "./opencode2/index.js";
+} from "./container-server.js";
+import type { OpenCode2ServerConnection } from "./environment-provider.js";
+import { waitForOpenCode2Ready } from "./server.js";
 import {
   OPENCODE2_LAUNCH_FINGERPRINT,
   recordOpenCode2Listener,
   startOpenCode2WithLauncher,
   stopOpenCode2Listeners,
-} from "./opencode2-container-launch.js";
-import { ensureOpenCode2HostServer, peekOpenCode2HostServer } from "./opencode2-host-server.js";
-import { runCommand } from "./shell.js";
+} from "./container-launch.js";
+import { ensureOpenCode2HostServer, peekOpenCode2HostServer } from "./host-server.js";
+import { runCommand } from "../shell.js";
 
 const log = createLogger("native-agent.opencode2");
 
@@ -126,7 +123,7 @@ function serversOf(context: Pick<CommandContext, "runtime">): ContainerServers {
 /**
  * A new password is a new server, so the router rebuilds its 2.x provider.
  * Every request goes through the listener re-check
- * (`opencode-listener-recheck.ts`): after a refused connection or an answer
+ * (`listener-recheck.ts`): after a refused connection or an answer
  * the password does not open, root is asked which socket listens on the port,
  * and once it is not the recorded one nothing more is sent on this connection.
  */
@@ -245,7 +242,7 @@ async function waitForContainerOpenCode2(
  *
  * On an `opencode2-launch=1` image (`opencode2-launcher`) the root-owned
  * launcher starts it from root's binary and configuration
- * (`opencode2-container-launch.ts`), its socket is recorded, and a server is
+ * (`container-launch.ts`), its socket is recorded, and a server is
  * reused only while that socket is still the only listener.
  */
 export async function startContainerOpenCode2Server(

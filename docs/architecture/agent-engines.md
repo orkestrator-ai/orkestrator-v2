@@ -604,6 +604,42 @@ The file is read from its start only by the poll loop's tail, once per session i
 each backend process; that pass keeps the task list current and records each task
 call's snapshot, so a page from anywhere can stamp its lines without a replay.
 
+### Claude MCP tasks
+
+Since Claude Code 2.1.319 a call to an MCP tool that declares `taskSupport`
+in `tools/list` can run as an MCP task (gated by the CLI's
+`tengu_glowing_lark` flag; `CLAUDE_CODE_DISABLE_MCP_TASKS` turns it off). No
+MCP server Orkestrator ships declares it. Such a call is reported in two
+parts:
+
+- **The placeholder.** The call's `tool_result` is the CLI's own text,
+  "MCP tool "server - tool" started server-side task …, running in the
+  background as task k…" (or "… It was moved to the background as task k…"),
+  and a `task_started` frame of `task_type` `mcp_task` names the call. The
+  tool card shows that text as a successful result, and the background task
+  appears as a live task row until it ends.
+- **The real result.** When the task ends the CLI emits `task_notification`
+  (its `summary` is only the server's status line) and queues a
+  `<task-notification>` user turn whose `<result>` holds the tool's real
+  output. Unlike an agent's or a shell command's report, that turn carries a
+  `<task-id>` but no `<tool-use-id>`.
+
+The bridge folds the report onto the card all the same: `ToolTracker` keeps a
+task-id-to-call map, filled from each `task_started`/`task_notification`
+frame (live), each persisted task record (reload) and the placeholder itself
+(`claude-mcp-task-results.ts`, read only from an MCP tool's successful
+result), and a report without a `<tool-use-id>` is matched through it. The
+card then shows the real result, or a failure carrying the server's detail,
+and no separate status row; a report for a task no tracked call launched
+still becomes a status row. Before 2026-11-16 the card kept the placeholder
+as its final output and the real result was a row of its own (to-do 8150
+(retired)). Tests: `claude-mcp-task-results.test.ts`, synthetic frames written
+from the pinned CLI's builders. A live MCP task on a real Claude login is a
+checklist item in
+[7568](../todo/manual-test/7568-manual-test-checklist.md), under Agent engines and provider SDKs.
+Re-check the placeholder wording on every Claude bump
+([upgrade-agents.md](../development/upgrade-agents.md#how-to-upgrade-claude)).
+
 ## Codex
 
 **Bridge:** `bridges/codex-bridge/` · **Transport:** JSON-RPC over private stdio
@@ -837,10 +873,10 @@ its SDK were retired on 2026-11-11: there is no 1.x server, no
   (`opencode2/user-config.ts`), the credential plugin that keeps the password
   out of the agent's tools, and explicit feature flags (`opencode2/server.ts`).
   Every host server shares that one database, so starts take turns
-  (`OpenCode2HostServerState.startGate`). `opencode2-host-server.ts` turns the
+  (`OpenCode2HostServerState.startGate`). `opencode2/host-server.ts` turns the
   running server into a connection for the provider.
 - *Containers:* the in-container server on port 4102
-  (`opencode2-container-server.ts`), started by the root-owned launcher on an
+  (`opencode2/container-server-lifecycle.ts`), started by the root-owned launcher on an
   `opencode2-launch=1` image. A container from an image without `opencode2`
   must be rebuilt. `start_opencode_server`, `stop_opencode_server` and
   `get_opencode_server_status` all reach it.
@@ -908,13 +944,13 @@ strict as an HTTP one:
   transcripts as every other platform (`opencode2/transcript.ts`).
   Build-pipeline and Multi Review transcripts that older versions persisted in
   OpenCode 1.x's `{ info, parts }` shape are still normalized for display on
-  the way out (`opencode-display-transcript.ts`).
+  the way out (`opencode2/display-transcript.ts`).
 
 Every OpenCode 2 session can be steered (`opencode2/steer.ts`); tab close stops
 owned work and releases the session but never deletes the conversation
 (`OpenCode2Provider.closeSession`). Sign-in writes credentials into the host
 database through `/api/integration` and `/api/credential`
-(`opencode-provider-login.ts`, `opencode2/credentials.ts`); the host
+(`opencode2/provider-login.ts`, `opencode2/credentials.ts`); the host
 `auth.json` is kept only as the copy containers are handed.
 
 ### Maintaining the OpenCode integration

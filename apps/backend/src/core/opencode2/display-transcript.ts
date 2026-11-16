@@ -21,8 +21,8 @@
 import { providerInlineErrorMessageId } from "@orkestrator/protocol/native-agent";
 import { redactArtifactGrantArgs } from "@orkestrator/protocol/transcript-artifacts";
 import { toolDiffFromOpenCodeToolState } from "@orkestrator/protocol/tool-diff";
-import { TURN_STOPPED_BY_USER_MESSAGE } from "./agent-provider-contract.js";
-import { asRecord, boundedText, nonEmptyString } from "./agent-provider-runtime.js";
+import { TURN_STOPPED_BY_USER_MESSAGE } from "../agent-provider-contract.js";
+import { asRecord, boundedText, nonEmptyString } from "../agent-provider-runtime.js";
 
 /**
  * How long a settled OpenCode tool call ran, from the provider's own

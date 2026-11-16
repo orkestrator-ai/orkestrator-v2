@@ -1,4 +1,4 @@
-import { recordOpenCode2Listener } from "../src/core/opencode2-container-launch";
+import { recordOpenCode2Listener } from "../src/core/opencode2/container-launch";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   BRIDGE_AUTHORITY_HEADER,

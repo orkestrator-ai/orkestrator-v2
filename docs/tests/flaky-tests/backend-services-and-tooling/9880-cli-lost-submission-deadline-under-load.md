@@ -1,7 +1,7 @@
 # CLI lost-submission lookup misses the shared deadline under load
 
 - **ID:** 9880
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-22
 - **Test:** `waiting through a lost submission response > submission and an absent-key lookup share one deadline`
 - **File:** `packages/cli/tests/client-waits.test.ts:351`
@@ -36,3 +36,30 @@ Full failure names, counts, evidence paths and unresolved limitations are in [98
 - **Fix:** `submitForWait` takes its clock from `observationClock(context.io)`: in the executable that is still `Date.now` (its IO has no `sleep`), so production behaviour is unchanged; a test IO that supplies `now`/`sleep` governs the submission, the lookups and the poll delays with one clock. The returned `deadline` is translated back to `Date.now()` for callers. The test (`packages/cli/tests/client-waits.test.ts`) now advances a virtual clock by 4.25 s when the fake gateway receives the submission (`onSubmit`), uses a 10 s `--timeout`, and asserts the exact poll schedule (250, 500, 1000, 2000, 2000 ms) and one lookup per poll. No wall-clock bound remains.
 - **Reproduced:** yes. The unchanged test under `bun scripts/test-under-contention.ts --core 10 --burners 6 -- bun --cwd=packages/cli test --preload ../../tests/setup-node.ts <copy of HEAD's test> -t "share one deadline" --rerun-each=10` failed 10 of 10 with zero lookups. The rewritten test passed 10 of 10 under the same command. Base `a8b89f1541e7abb6af36d45121593ae14640a3ca`.
 - **Stress:** `mise run test:logged -- --name f3-fix-new -- bun scripts/test-under-contention.ts --burners 6 -- bun --cwd=packages/cli test --preload ../../tests/setup-node.ts ./tests/client-waits.test.ts -t "share one deadline" --rerun-each=10` passed (10/10). The complete owner passed alone. Sibling cases in the same `describe` (`a stalled lookup is bounded…`, `recovery and final observation share…`) still assert real elapsed bounds; they are not part of this case.
+
+
+## OpenCode domain review validation — 2026-11-16
+
+- **Branch / base:** `backend-domain-folder-83c01c878209-r1`, reviewed commit
+  `afe628c689611933b5b946785ee2a3983e83e59c`, merge base
+  `a0920f1a707332319d71e64dd1c8445ccd75f227`.
+- **Original command:** `mise run test:logged -- --name slow-tests -- mise run test:slow`;
+  workspace/root/bridge reservations 4/1/2, CLI two isolated Bun workers,
+  component browser validation running concurrently.
+- **Exact test:** `waiting through a lost submission response > recovery and final observation share the remaining deadline`,
+  `packages/cli/tests/client-waits.test.ts:412`.
+- **Failure:** expected `deadline-exceeded`, received `transport-uncertain`
+  after 342.54 ms. CLI slow group: 61 passed, one failed across 62 tests in
+  four files (21.18 s). This sibling still uses a real 160 ms submission delay and
+  a 300 ms overall timeout; the virtual-clock repair above covered the other
+  shared-deadline case, not this one.
+- **Owning-file rerun:** `mise run test:logged -- --name address-cli-waits-owner -- bun test --cwd packages/cli --preload ../../tests/setup-node.ts ./tests/client-waits.test.ts --parallel=1 --only-failures`
+  passed unchanged (exit 0, 7.2 s).
+- **Evidence:** host temporary directory `orkestrator-test-run.FVTiB8/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+  (compressed on aggregate completion); outer run `orkestrator-test-run.AEsIYA`.
+- **Classification:** reopened for the remaining real-clock sibling. The
+  recurrence checker (`mise run flaky:recurrence 9880 --base a0920f1a707332319d71e64dd1c8445ccd75f227`)
+  confirms the base contains the earlier fix. This is not evidence that its
+  virtual-clock case regressed. No CLI code, assertion, timeout or skip changed;
+  contention consuming the recovery budget is a hypothesis, not an established
+  product cause.

@@ -45,7 +45,7 @@ import {
   type EnsureNativeAgentSessionInput,
   type NativeAgentProjectionInput,
 } from "./native-agent-service-shared.js";
-import { normalizeOpenCodeDisplayEntries } from "./opencode-display-transcript.js";
+import { normalizeOpenCodeDisplayEntries } from "./opencode2/index.js";
 import { deliveredAgentHandoffIds } from "./storage-shared-native-sessions.js";
 import { pendingPaneLayoutAgentHandoffId } from "./storage-shared-pane-layout.js";
 import type { StorageService } from "./storage.js";

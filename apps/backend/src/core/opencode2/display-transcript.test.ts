@@ -1,6 +1,6 @@
 /**
  * The display normalizer for OpenCode 1.x `{ info, parts }` transcripts that
- * older versions persisted (`opencode-display-transcript.ts`).
+ * older versions persisted (`display-transcript.ts`).
  */
 import { describe, expect, test } from "bun:test";
 import {
@@ -18,7 +18,7 @@ import {
   normalizeOpenCodeEnvelope,
   normalizeOpenCodeInlineError,
   OPEN_CODE_TOOL_SCHEMA_REJECTION_HINT,
-} from "./opencode-display-transcript.js";
+} from "./display-transcript.js";
 
 function message(parts: unknown[]): unknown {
   return {

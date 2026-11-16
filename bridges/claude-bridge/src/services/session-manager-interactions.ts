@@ -220,6 +220,30 @@ export function getSessionInitData(sessionId: string): SessionInitData | undefin
 /** How long the managed CLI's `--version` probe may run before the bundled version answers. */
 const CLAUDE_CLI_VERSION_PROBE_TIMEOUT_MS = 5_000;
 
+/** The Agent SDK manifest fields the bridge reports. */
+interface ClaudeSdkManifest {
+  version?: string;
+  claudeCodeVersion?: string;
+}
+
+/**
+ * Inlined by a build that bundles the Agent SDK into the bridge (the published
+ * CLI's, `packages/cli/scripts/build.ts`). Such a bundle has no installed SDK
+ * whose `package.json` it could resolve, so the build supplies the fields.
+ */
+declare const __CLAUDE_AGENT_SDK_MANIFEST__: ClaudeSdkManifest | undefined;
+
+/** The SDK's manifest: inlined by the build when it bundles the SDK, else read from the install. */
+async function readClaudeSdkManifest(): Promise<ClaudeSdkManifest> {
+  if (typeof __CLAUDE_AGENT_SDK_MANIFEST__ === "object" && __CLAUDE_AGENT_SDK_MANIFEST__) {
+    return __CLAUDE_AGENT_SDK_MANIFEST__;
+  }
+  const sdkEntryUrl = import.meta.resolve("@anthropic-ai/claude-agent-sdk");
+  return JSON.parse(
+    await readFile(new URL("./package.json", sdkEntryUrl), "utf8"),
+  ) as ClaudeSdkManifest;
+}
+
 export async function getClaudeRuntimeVersions(
   probeTimeoutMs = CLAUDE_CLI_VERSION_PROBE_TIMEOUT_MS,
 ): Promise<{
@@ -229,11 +253,7 @@ export async function getClaudeRuntimeVersions(
   let sdkVersion: string | undefined;
   let bundledCliVersion: string | undefined;
   try {
-    const sdkEntryUrl = import.meta.resolve("@anthropic-ai/claude-agent-sdk");
-    const manifest = JSON.parse(await readFile(new URL("./package.json", sdkEntryUrl), "utf8")) as {
-      version?: string;
-      claudeCodeVersion?: string;
-    };
+    const manifest = await readClaudeSdkManifest();
     sdkVersion = manifest.version;
     bundledCliVersion = manifest.claudeCodeVersion;
   } catch (error) {

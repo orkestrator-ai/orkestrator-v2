@@ -100,7 +100,7 @@ import {
   openCodeContainerServerStatus,
   startOpenCodeContainerServer,
   stopOpenCodeContainerServer,
-} from "./opencode2-container-server.js";
+} from "./opencode2/container-server-lifecycle.js";
 import { OPENCODE2_CONTAINER_LOG } from "./opencode2/index.js";
 import {
   type ContainerBridgeKind,
@@ -209,7 +209,7 @@ export function registerServerCommands(
 ): void {
   const registerBridgeStart = containerBridgeStartRegistrar(register);
   const { claudeModelCatalogRefreshes, validatedClaudeModelCatalogs, commands } = dependencies;
-  // The container's OpenCode server (`opencode2-container-server.ts`).
+  // The container's OpenCode server (`opencode2/container-server-lifecycle.ts`).
   register(startOpencodeServerCommand, ({ containerId }, context) =>
     startOpenCodeContainerServer(context, asString(containerId, "containerId")),
   );

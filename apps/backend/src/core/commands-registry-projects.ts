@@ -131,7 +131,7 @@ import {
   seedHostModelCatalogIfMissing,
 } from "./host-model-catalog-seed.js";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
-import { openCode2EnvironmentServer } from "./opencode2-container-server.js";
+import { openCode2EnvironmentServer } from "./opencode2/container-server-lifecycle.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   ensureHostPiModelCatalogCommand,

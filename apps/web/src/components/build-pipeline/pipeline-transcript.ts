@@ -5,7 +5,7 @@
  *
  * The snapshot field is `unknown[]` by contract. Bridge providers already store
  * the flat native shape; OpenCode's `{ info, parts }` envelopes are normalized
- * by the backend when it serves the transcript (`opencode-display-transcript`),
+ * by the backend when it serves the transcript (`opencode2/display-transcript.ts`),
  * so every entry arrives flat. A pipeline persisted by an older build can still
  * hold a shape this client no longer expects, so everything here is validated
  * rather than cast — an entry that cannot be understood is dropped, not

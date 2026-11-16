@@ -16,23 +16,22 @@ import {
   type OpenCodeProviderLoginProgress,
 } from "@orkestrator/protocol/opencode-provider-auth";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
-import { ProviderUnavailableError } from "./agent-provider-contract.js";
-import { pushedLoginHostFile } from "./agent-accounts-containers.js";
-import type { CommandContext } from "./commands-context.js";
-import type { OpenCodeLoginOperation } from "./opencode-provider-login-slot.js";
+import { asRecord, nonEmptyString } from "../agent-provider-runtime.js";
+import { ProviderUnavailableError } from "../agent-provider-contract.js";
+import { pushedLoginHostFile } from "../agent-accounts-containers.js";
+import type { CommandContext } from "../commands-context.js";
+import type { OpenCodeLoginOperation } from "./provider-login-slot.js";
+import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
 import {
-  OpenCode2RequestError,
-  type OpenCode2Client,
   exportOpenCode2Logins,
   openCode2RefreshLineageFile,
   keepActiveOpenCode2Credential,
   removeOpenCode2Credentials,
-} from "./opencode2/index.js";
+} from "./credentials.js";
 import {
   withOpenCode2HostDatabaseServer,
   type WithOpenCode2HostDatabaseServer,
-} from "./opencode2-host-database-server.js";
+} from "./host-database-server.js";
 
 const log = createLogger("native-agent.opencode");
 

@@ -30,7 +30,7 @@ import { readOpenCode2ModelCatalogue } from "./opencode2/index.js";
 import {
   probeWorkingDirectory,
   withOpenCode2HostDatabaseServer,
-} from "./opencode2-host-database-server.js";
+} from "./opencode2/host-database-server.js";
 import {
   applyClaudeHostCredentialEnvironment,
   resolveCursorHostCredentialMaterial,
@@ -72,7 +72,7 @@ type HostRefreshDependencies = {
   fetchAcpModels: typeof fetchAcpNormalizedModelsAt;
   fetchClaudeCatalog: typeof fetchClaudeBridgeModelCatalog;
   openCodeModelListTimeoutMs: number;
-  /** A 2.x server on the host OpenCode 2.x database (`opencode2-host-database-server.ts`). */
+  /** A 2.x server on the host OpenCode 2.x database (`opencode2/host-database-server.ts`). */
   withOpenCode2Server: typeof withOpenCode2HostDatabaseServer;
 };
 

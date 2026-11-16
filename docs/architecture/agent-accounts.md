@@ -18,7 +18,7 @@ Status: Living — `apps/backend/src/core/agent-accounts*.ts`,
 `apps/backend/src/core/agent-accounts-shared-usage.ts`,
 `apps/backend/src/core/nodes/node-usage-sync.ts`,
 `apps/web/src/components/settings/UsageReading.tsx`;
-`apps/backend/src/core/opencode-provider-login.ts`,
+`apps/backend/src/core/opencode2/provider-login.ts`,
 `packages/protocol/src/opencode-provider-auth.ts`,
 `apps/web/src/components/settings/OpenCodeProvidersSection.tsx`.
 
@@ -497,11 +497,11 @@ the providers and signs each in, replaces its login or signs it out
 (`OpenCodeProvidersSection`).
 
 Each operation runs against a server on that database
-(`withOpenCode2HostDatabaseServer`, `opencode2-host-database-server.ts`): a
+(`withOpenCode2HostDatabaseServer`, `opencode2/host-database-server.ts`): a
 running host server for the short requests, a private one for an OAuth
 sign-in, whose attempt and callback listener live in the server that started
 it. It calls OpenCode 2's integration and credential routes
-(`opencode-provider-login.ts`, `opencode2/credentials.ts`):
+(`opencode2/provider-login.ts`, `opencode2/credentials.ts`):
 
 - **List:** `GET /api/integration` and `GET /api/provider`, read field by
   field (provider rows carry their settings, API keys included, so only id,
@@ -546,7 +546,7 @@ A database that existed before OpenCode 1.x was retired (the preview's) is
 reconciled with `auth.json` once, at its first use after the upgrade
 (`opencode2/credential-upgrade.ts`): an environment's host server start, or
 the server that Settings sign-in and the host model catalogue use
-(`opencode2-host-database-server.ts`), so a user who only runs containers is
+(`opencode2/host-database-server.ts`), so a user who only runs containers is
 reconciled too. It takes the file's logins, as the old per-start reconcile
 did, except an OAuth login it holds newer than the file's copy of the same
 login, which it keeps; a login the file cannot hold (`external`) stays. A
@@ -644,7 +644,11 @@ provider's own app.
 
 - **Claude** reads `cedar_ember` from `/api/oauth/usage?cedar_ember=1`, the
   query Claude Code's own `/limit-reset` check sends; without it the payload
-  has no resets. Each grant holds `resets_left` resets, says what it clears
+  has no resets. The read must also send Claude Code's User-Agent
+  (`claude-cli/<pinned version> (external, cli)`, `CLAUDE_USAGE_USER_AGENT`):
+  the endpoint judges eligibility by the calling surface and otherwise answers
+  every account `eligible: false`, `ineligible_reason: "surface"`, with no
+  grants. Each grant holds `resets_left` resets, says what it clears
   (`type`: `session`, `weekly`, `full`) and when it ends (`ends_at`). Paused,
   ended and empty grants and an account with `eligible: false` hold nothing. A
   400/404/422 on the query falls back to the plain endpoint so the windows

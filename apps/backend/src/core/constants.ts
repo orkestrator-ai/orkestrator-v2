@@ -66,7 +66,7 @@ export const CURSOR_BRIDGE_PORT = 4099;
 export const GROK_ACP_BRIDGE_PORT = 4100;
 export const PI_BRIDGE_PORT = 4101;
 /**
- * The OpenCode (2.x) server inside a container (`opencode2-container-server.ts`).
+ * The OpenCode (2.x) server inside a container (`opencode2/container-server-lifecycle.ts`).
  * Published on every new container; only an image with `opencode2` runs it.
  */
 export const OPENCODE2_SERVER_PORT = 4102;

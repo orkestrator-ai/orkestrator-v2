@@ -42,8 +42,9 @@ inside tasks 2 to 6.
 **Problem.** Six optional extensions are listed with no order, so none starts.
 
 **Context.** The file says to qualify the core loop first
-([0044](0044-web-annotation-qualification.md)); 0044 still has a remote backend,
-the iOS wrapper and native focus runs open. 0043 is finished.
+(0044, retired 2026-11-16 with milestones A to C signed off; see
+[web-page-annotations.md](../../architecture/web-page-annotations.md#qualification)); a remote backend,
+the iOS wrapper and native focus runs are deferred to the manual-test checklist. 0043 is finished.
 
 **Investigation.** None of the six has started. The capability gates the file
 cites still exist: `operations.resultTools` and `operations.comparison` in
@@ -66,7 +67,8 @@ Responsive capture sets have shipped
     - Cons: decode-memory and mask work; easy to misread as pass or fail.
   - **None until 0044 closes.**
     - Pros: follows the file's "qualify the core loop first".
-    - Cons: 0044's remaining runs need hardware and may take a long time.
+    - Cons: 0044's remaining runs needed hardware and a person. (0044 closed
+      on 2026-11-16, with those runs deferred, so this option no longer waits.)
 
 ### 2. Controlled pixel diffs
 
@@ -257,7 +259,8 @@ iframes, capture outside the desktop app, and a few product extensions
 the shipped workflow. Each should arrive behind its own
 capability flag, the way `WebAnnotationCapabilities.operations.comparison` and
 `.resultTools` gate the existing surfaces. Qualify the core loop first
-([0044-web-annotation-qualification.md](0044-web-annotation-qualification.md)).
+(done: 0044, retired 2026-11-16; see
+[web-page-annotations.md](../../architecture/web-page-annotations.md#qualification)).
 
 ## Assumptions and decisions
 
@@ -333,10 +336,12 @@ own filtering.
 The documented reference emitter and thread source-candidate display shipped
 through to-do 0950 (deleted 2026-11-06; evidence remains in git history).
 macOS local/container captures ran there. Remaining Linux captures, a real
-Vite dev-pipeline capture and the disposition of other Babel integrations are
-open in [0044 task 8](0044-web-annotation-qualification.md#8-source-hint-capture-off-macos-and-on-a-real-dev-server).
+Vite dev-pipeline capture and the disposition of other Babel integrations
+were done in 0044 (retired) task 8 on 2026-11-06 (see
+[web-page-annotations.md](../../architecture/web-page-annotations.md#client-capability-matrix)
+and [source-hint-emitter.md](../../development/source-hint-emitter.md#other-babel-build-setups-are-unqualified)).
 Windows remains unrun and out of the current support scope under 0042 D18,
-as recorded in that task.
+as recorded there.
 
 ### Task 4: retirement review correction (2026-11-06)
 
@@ -516,7 +521,7 @@ pins were shown was a known gap, recorded in
 predates this work), text selections inside roots (task 2) and a live desktop
 run (task 4). Tasks 1 and 3 were done on 2026-11-03, task 2 on 2026-11-05 and
 task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
-[0044](0044-web-annotation-qualification.md)), and 2580 was retired.
+0044 (retired)), and 2580 was retired.
 
 ## Current state
 
@@ -640,7 +645,8 @@ task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
 
 ## Related
 
-- [0044-web-annotation-qualification.md](0044-web-annotation-qualification.md).
+- 0044 (retired 2026-11-16): qualification and sign-off, now in
+  [web-page-annotations.md](../../architecture/web-page-annotations.md#qualification).
 - [0046-embedded-service-previews.md](0046-embedded-service-previews.md) (web iframe and
   iOS `WKWebView` surfaces).
 - [web-page-annotations.md](../../architecture/web-page-annotations.md)

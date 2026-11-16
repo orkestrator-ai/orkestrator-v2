@@ -170,6 +170,42 @@ describe("startWorktreeWatcher, per-directory platforms", () => {
     expect(coverage()).toBe(1);
   });
 
+  // git-scan-caches.md, "The establishing hint and the second scan of a
+  // track": the owner's first scan starts with the root watch, when only
+  // the root's direct children are watched. A write below a subdirectory
+  // after that scan read it and before the plan attached its watch reaches
+  // no watch, so this no-path hint is its only report. It is sent once the
+  // subdirectory watches exist, and coverage is announced before it lands,
+  // so the rescan it causes runs under qualified coverage.
+  test("the first plan reports the interval before its subdirectory watches existed", async () => {
+    const context = standardTree();
+    let releaseList!: () => void;
+    const listed = context.io.listExcluded;
+    context.io.listExcluded = async (root) => {
+      await new Promise<void>((resolve) => (releaseList = resolve));
+      return listed(root);
+    };
+    const delivered: Array<{ hint: WorktreeChangeHint | undefined; qualified: boolean }> = [];
+    let watcher: WorktreeWatcher | undefined;
+    const started = split(context, {
+      onChange: (hint) => delivered.push({ hint, qualified: watcher?.qualified === true }),
+    });
+    watcher = started.watcher;
+
+    await until(() => releaseList !== undefined);
+    await Promise.resolve();
+    expect(context.live()).toEqual(["direct /wt"]);
+    expect(delivered).toEqual([]);
+
+    releaseList();
+    await until(() => delivered.length > 0);
+    expect(context.live()).toEqual(SPLIT_WATCHES);
+    expect(delivered).toEqual([
+      { hint: { fileList: true, tree: true, overflow: false }, qualified: true },
+    ]);
+    expect(started.coverage()).toBe(1);
+  });
+
   test("reports a path relative to the worktree from any watch", async () => {
     const context = standardTree();
     const { watcher, hints } = split(context);

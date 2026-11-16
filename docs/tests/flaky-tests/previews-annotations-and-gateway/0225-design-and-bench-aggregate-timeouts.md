@@ -32,7 +32,7 @@
 ## Design parts resolved (2026-10-16)
 
 The two design timeouts are fixed; the annotation bench stays open here, owned
-by [0044-web-annotation-qualification.md](../../../todo/previews-and-annotations/0044-web-annotation-qualification.md).
+by to-do 0044 (retired 2026-11-16; see [web-page-annotations.md](../../../architecture/web-page-annotations.md#qualification)).
 
 - The design service replay case is [0218](../design-canvas-and-artifacts/0218-design-service-replay-aggregate-timeout.md),
   resolved by reaching the change-log bound in 12 commits instead of 260.
@@ -63,7 +63,8 @@ No bound was raised, and the 60-second total bound stays.
   collection (median 0.34 ms empty, 1.34 ms at 500, 2.84 ms at 1,000 and
   4.11 ms at 1,900 annotations). That is not quadratic and not a flake. It is
   recorded as a follow-up in
-  [0044-web-annotation-qualification.md](../../../todo/previews-and-annotations/0044-web-annotation-qualification.md).
+  to-do 0044 (retired 2026-11-16; the follow-up became 0124, also retired, with its
+  numbers in [web-page-annotations.md](../../../architecture/web-page-annotations.md#commit-cost)).
 
 ## Review correction (2026-10-17)
 

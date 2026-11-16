@@ -2654,7 +2654,7 @@ kill the bridge, or replace it between two of the backend's checks of the
 socket on its port ([a replaced bridge is refused](agent-approvals.md#a-replaced-bridge-is-refused)),
 and on an older image catch the token on the bridge's port or plant code for the
 next start. OpenCode has no bridge and takes the plain password. Its server
-(`opencode2-container-server.ts`, container port 4102) keeps it in
+(`opencode2/container-server-lifecycle.ts`, container port 4102) keeps it in
 `opencode2-token` in the same directory and in its own environment alone; on
 an `opencode2-launch=1` image the launcher starts it from root's binary and
 configuration and the backend sends the password only to the listening socket

@@ -6,17 +6,17 @@ import {
   expectNoCanary,
   expectNothingSecretLogged,
   expectOnlyLoginSecrets,
-} from "../../../../tests/helpers/auth-secret-canaries.js";
-import type { CommandContext } from "./commands-context.js";
+} from "../../../../../tests/helpers/auth-secret-canaries.js";
+import type { CommandContext } from "../commands-context.js";
 import {
   createOpenCodeProviderLogin,
   normalizeOpenCodeProviderAuth,
   OPENCODE_LOGIN_EXPORT_FAILED_MESSAGE,
   openCodeProviderLoginProgress,
   type OpenCodeProviderLoginDependencies,
-} from "./opencode-provider-login.js";
-import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
-import { FakeOpenCode2Server } from "./opencode2/fake-server.test-support.js";
+} from "./provider-login.js";
+import { OpenCodeProviderLoginSlot } from "./provider-login-slot.js";
+import { FakeOpenCode2Server } from "./fake-server.test-support.js";
 
 const SECRET_KEY = AUTH_SECRET_CANARIES.openAiApiKey;
 const EXPORT_FILE = "/export/opencode/auth.json";

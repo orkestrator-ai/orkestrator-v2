@@ -25,7 +25,7 @@
  * inode. A start replaces whatever listens with a new server and a new password,
  * which the old listener never sees. What remains is the race between the
  * check and the requests that follow it, narrowed by a re-check after a
- * refused connection or an unexpected answer (`opencode-listener-recheck.ts`);
+ * refused connection or an unexpected answer (`listener-recheck.ts`);
  * see docs/architecture/agent-approvals.md.
  *
  * The OpenCode 1.x server's record (`opencode-listener`, port 4096) was

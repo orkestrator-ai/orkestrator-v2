@@ -8,15 +8,15 @@ import {
   openCode2EnvironmentServer,
   peekOpenCode2ContainerServer,
   startContainerOpenCode2Server,
-} from "../src/core/opencode2-container-server";
+} from "../src/core/opencode2/container-server-lifecycle";
 import {
   OPENCODE2_CONTAINER_CLI_PATH,
   OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT,
   OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT_FILE,
 } from "../src/core/opencode2/container-server";
-import { OPENCODE2_LAUNCH_FINGERPRINT } from "../src/core/opencode2-container-launch";
+import { OPENCODE2_LAUNCH_FINGERPRINT } from "../src/core/opencode2/container-launch";
 import { OPENCODE2_LAUNCH_ROOT } from "../src/core/agent-credential-files";
-import { OPENCODE2_LISTENER_RECORD } from "../src/core/opencode-listener-identity";
+import { OPENCODE2_LISTENER_RECORD } from "../src/core/opencode2/listener-identity";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createCommandFixtures } from "./command-fixtures";

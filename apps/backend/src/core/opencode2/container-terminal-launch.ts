@@ -18,7 +18,7 @@
  *   (only `opencode run` does); a `model` in inline config selects it
  *   (verified on 2.2.6). The reasoning level stays out.
  * - **The container server's storage and configuration**
- *   (`opencode2-container-launch.ts`, `container-server.ts`): its database
+ *   (`container-launch.ts`, `container-server.ts`): its database
  *   (`opencode2.db`, on the persistent mount when the runtime has one), so
  *   the sessions and the sign-ins Orkestrator stores there reach the tab and
  *   1.x's `opencode.db` is never migrated; its configuration directory, which

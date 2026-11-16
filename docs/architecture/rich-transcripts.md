@@ -867,17 +867,30 @@ byte and element budgets before the document becomes visible. Its click handling
 is deliberately narrower than the design runtime's: only `a` and `area` have their
 default prevented, so `<summary>` still toggles and text still selects.
 
-Its sanitizer is a copy of the design runtime's rules rather than a shared
-function, pinned line for line by `static-html-presentation.test.ts`, which
-compares both runtimes' output on the reference and hostile documents.
-`installDesignRuntime.toString()` is the identity of the static renderer
-(`STATIC_RENDERER_HASH`, compared at publication) and part of the preview worker
-image's context digest, so refactoring it would invalidate every unpublished
-receipt and every prepared worker image with no change in behaviour. Unifying them
-belongs with the next intentional change to the design runtime.
+Its sanitizer is the design runtime's, shared by reference:
+`createStaticHtmlSanitizer` (`packages/protocol/src/static-html-sanitizer.ts`) is
+a self-contained factory that each runtime's script serializes beside the runtime
+and passes to it as an argument, because a serialized function has no module
+scope (`designRuntimeSource`/`designBootstrap` and
+`staticHtmlPresentationRuntimeSource`). A document is therefore cleaned by the
+same code when it is verified and when it is shown.
+`static-html-presentation.test.ts` checks that both scripts embed that one source
+and that neither runtime's own body carries the rules, and still compares both
+runtimes' output on the reference and hostile documents;
+`static-html-sanitizer.test.ts` covers the rules themselves. The static
+renderer's identity, `STATIC_RENDERER_HASH` (compared at publication), covers
+`installDesignRuntime` and the sanitizer's source, and both reach the preview
+worker bundle and so its image's context digest. Any change to the sanitizer,
+even a refactor, makes unpublished `html-static` receipts stale (publication refuses them until the draft is previewed
+again; published revisions are untouched) and
+asks every install with a prepared worker image to prepare it again once. The
+change that unified the two copies (to-do 4650 (retired), task 3) paid that
+cost once.
+`ARTIFACT_VERSIONS.staticSanitizer` (`design-runtime-sanitizer:v1`) names the
+rule set in receipts; bump it when the rules' behaviour changes.
 
 The presentation runtime is the other side of that line. Neither
-`installStaticHtmlPresentationRuntime` nor anything else in this file reaches the
+`installStaticHtmlPresentationRuntime` nor anything else in its file reaches the
 worker bundle, so changing it moves neither `STATIC_RENDERER_HASH` nor the context
 digest: no receipt is re-verified and no image rebuilt
 (`preview-worker-context-digest.test.ts` pins the bundle's contents).
@@ -1074,9 +1087,20 @@ the backend stores as `search-text`, for the same document (the container case
 of `preview-static-search-text.test.ts`;
 [evidence](../development/container-qualification.md#tmux-reopen-static-search-text-and-streamed-reads-in-real-containers-2026-11-13),
 to-do 7670 (retired)).
-Multiple automatically executing JavaScript documents, more chart types and a
-convenience publishing tool are out of scope:
-[`4650`](../todo/transcripts-and-observation/4650-static-html-presentation-follow-ups.md).
+Multiple automatically executing JavaScript documents and more chart types are
+out of scope.
+
+**Publishing tool.** Publishing a visual takes four tool calls
+(`create_artifact`, `preview_artifact`, `get_artifact_operation`,
+`publish_artifact`), and no thinner wrapper is built. The lifecycle is
+sufficient and the shared instructions describe it; a wrapper would add
+protocol surface, and it would have to keep the inspect-and-repair step and
+honest pending states or it would report visuals as finished before they are.
+It waits on evidence that the four calls stop real agents, which the
+manual-test checklist collects
+([7568](../todo/manual-test/7568-manual-test-checklist.md), 4650 (retired)
+task 4); if that evidence shows a need, a new to-do builds the wrapper over the
+existing services.
 
 ## Rollout
 

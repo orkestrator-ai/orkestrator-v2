@@ -7,7 +7,7 @@
  * Content-Security-Policy a deployment sends.
  *
  * The matching is `apps/web-public/vercel-routing.ts`'s model of Vercel. Only a
- * real deployment proves Vercel itself matches that way (7568, 4650 task 1).
+ * real deployment proves Vercel itself matches that way (7568, 4650 (retired) task 1).
  *
  * Usage: bun vercel-static-server.ts --dist <dir> --config <vercel.json> --port <n>
  */

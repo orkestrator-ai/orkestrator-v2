@@ -9,6 +9,7 @@ import { MAX_SUBAGENT_PARTS_PER_CALL } from "./session-manager-prompt-stream.js"
 import {
   MAX_REHYDRATED_PARTS_PER_CALL,
   MAX_REHYDRATED_SUBAGENTS,
+  ownSubagentRecords,
   rehydrateSubagentParts,
 } from "./session-manager-subagent-rehydration.js";
 
@@ -402,5 +403,258 @@ describe("rehydrateSubagentParts", () => {
     const steps = row.parts.filter((part) => part.parentTaskUseId === "toolu_agent");
     expect(steps).toHaveLength(MAX_REHYDRATED_PARTS_PER_CALL);
     expect(steps.at(-1)?.content).toBe(`step ${MAX_REHYDRATED_PARTS_PER_CALL + 19}`);
+  });
+});
+
+/*
+ * To-do 8303 (retired). A background worker launched three forks in one
+ * response. The CLI (2.1.319) writes the worker's own history into each fork's
+ * transcript ahead of the fork's prompt, so a later sibling's file holds the
+ * earlier siblings' launch calls without their results. Shapes follow
+ * `buildForkedMessages`; every text is a placeholder.
+ */
+const WORKER = "toolu_worker";
+const FORKS = ["toolu_fork_a", "toolu_fork_b", "toolu_fork_c"] as const;
+
+function forkLaunch(id: string): Record_ {
+  return assistant(
+    `w-${id}`,
+    [{ type: "tool_use", id, name: "Agent", input: { subagent_type: "fork", description: id } }],
+    WORKER,
+    "msg_worker_batch",
+  );
+}
+
+/** A root turn that started the background worker. */
+function rootWithWorker() {
+  return normalizePersistedSessionMessages([
+    {
+      type: "user",
+      uuid: "u-1",
+      session_id: "sdk-1",
+      message: { role: "user", content: "Fix the flakes" },
+      parent_tool_use_id: null,
+    },
+    assistant("a-1", [
+      {
+        type: "tool_use",
+        id: WORKER,
+        name: "Agent",
+        input: { description: "Worker", prompt: "Split it", run_in_background: true },
+      },
+    ]),
+    toolResult("u-2", WORKER, "Async agent launched"),
+  ]).messages;
+}
+
+/** The worker's own transcript: a note, then the three launches and their results. */
+function workerTranscript(): Record_[] {
+  return [
+    {
+      type: "user",
+      uuid: "w-u0",
+      session_id: "sdk-1",
+      message: { role: "user", content: "Split it" },
+      parent_tool_use_id: WORKER,
+    },
+    assistant("w-a0", [{ type: "text", text: "worker plans" }], WORKER),
+    ...FORKS.map(forkLaunch),
+    ...FORKS.map((id) => toolResult(`w-r-${id}`, id, "Async agent launched", WORKER)),
+  ];
+}
+
+/** A fork's transcript: inherited history, its own prompt, then its own work. */
+function forkTranscript(index: number): Record_[] {
+  const own = FORKS[index]!;
+  const stamp = (record: Record_): Record_ => ({ ...record, parent_tool_use_id: own });
+  const inherited = [
+    ...workerTranscript().slice(0, 2),
+    // Earlier siblings' launches were already in the worker's history; their
+    // results were not.
+    ...FORKS.slice(0, index).map(forkLaunch),
+  ].map(stamp);
+  return [
+    ...inherited,
+    stamp({ ...forkLaunch(own), uuid: `clone-${own}` }),
+    {
+      type: "user",
+      uuid: `prompt-${own}`,
+      session_id: "sdk-1",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: own,
+            content: [{ type: "text", text: "placeholder" }],
+          },
+          { type: "text", text: "<fork-boilerplate>\nplaceholder directive" },
+        ],
+      },
+      parent_tool_use_id: own,
+    },
+    assistant(
+      `${own}-a1`,
+      [
+        { type: "text", text: `${own} works` },
+        { type: "tool_use", id: `${own}-read`, name: "Read", input: { file_path: "/a" } },
+      ],
+      own,
+    ),
+    toolResult(`${own}-u1`, `${own}-read`, "file body", own),
+    assistant(`${own}-a2`, [{ type: "text", text: `${own} done` }], own),
+  ];
+}
+
+describe("forks started from a subagent (to-do 8303, retired)", () => {
+  const transcripts: Record<string, Record_[]> = {
+    // Forks listed first: placement must not depend on listing order.
+    "fork-c": forkTranscript(2),
+    "fork-b": forkTranscript(1),
+    "fork-a": forkTranscript(0),
+    worker: workerTranscript(),
+  };
+
+  async function rehydrated() {
+    const messages = rootWithWorker();
+    await rehydrateSubagentParts(
+      {
+        listSubagents: async () => Object.keys(transcripts),
+        getSubagentMessages: async (_session, agentId) => transcripts[agentId] ?? [],
+      },
+      "sdk-1",
+      "/workspace",
+      messages,
+    );
+    return messages.flatMap((message) => message.parts);
+  }
+
+  test("every fork launch is one settled card, not a pending copy per later sibling", async () => {
+    const parts = await rehydrated();
+    for (const fork of FORKS) {
+      const launches = parts.filter((part) => part.toolUseId === fork);
+      expect(launches).toHaveLength(1);
+      expect(launches[0]).toMatchObject({ toolName: "Agent", toolState: "success" });
+    }
+    expect(
+      parts.filter((part) => part.type === "tool-invocation" && part.toolState === "pending"),
+    ).toEqual([]);
+  });
+
+  test("a fork keeps only its own steps, not the history it inherited", async () => {
+    const parts = await rehydrated();
+    for (const fork of FORKS) {
+      expect(
+        parts
+          .filter((part) => part.parentTaskUseId === fork)
+          .map((part) => part.toolUseId ?? part.content),
+      ).toEqual([`${fork} works`, `${fork}-read`, `${fork} done`]);
+    }
+    // The worker's note is shown once, as the worker's.
+    expect(parts.filter((part) => part.content === "worker plans")).toHaveLength(1);
+  });
+
+  test("a subagent that is not a fork keeps every record", () => {
+    const records = workerTranscript();
+    expect(ownSubagentRecords(records)).toBe(records);
+    expect(ownSubagentRecords(forkTranscript(1)).map((record) => record.uuid)).toEqual([
+      "toolu_fork_b-a1",
+      "toolu_fork_b-u1",
+      "toolu_fork_b-a2",
+    ]);
+  });
+
+  test("the pinned SDK returns a fork's inherited history as the fork's own records", async () => {
+    const root = await mkdtemp(join(tmpdir(), "claude-fork-sdk-"));
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = root;
+    try {
+      const dir = join(root, "workspace");
+      const sessionId = randomUUID();
+      const project = join(root, "projects", dir.replace(/[^a-zA-Z0-9]/g, "-"));
+      const agents = join(project, sessionId, "subagents");
+      await mkdir(agents, { recursive: true });
+      await writeFile(
+        join(project, `${sessionId}.jsonl`),
+        JSON.stringify({
+          type: "user",
+          uuid: randomUUID(),
+          parentUuid: null,
+          sessionId,
+          cwd: dir,
+          message: { role: "user", content: "Fix the flakes" },
+        }) + "\n",
+      );
+      let parentUuid: string | null = null;
+      const rows = forkTranscript(2).map(({ type, message }) => {
+        const uuid = randomUUID();
+        const row = { type, uuid, parentUuid, sessionId, isSidechain: true, message };
+        parentUuid = uuid;
+        return row;
+      });
+      await writeFile(
+        join(agents, "agent-forkc.jsonl"),
+        rows.map((row) => JSON.stringify(row)).join("\n") + "\n",
+      );
+      await writeFile(
+        join(agents, "agent-forkc.meta.json"),
+        JSON.stringify({ toolUseId: FORKS[2] }),
+      );
+      const records = await getSubagentMessages(sessionId, "forkc", { dir });
+      // The premise of the fix: the copies come back stamped as the fork's.
+      const copied = records.filter((record) => {
+        const content = (record.message as { content?: unknown }).content;
+        return (
+          Array.isArray(content) &&
+          content.some((block) => (block as { id?: unknown }).id === FORKS[0])
+        );
+      });
+      expect(copied.length).toBeGreaterThan(0);
+      expect(copied.every((record) => record.parent_tool_use_id === FORKS[2])).toBe(true);
+
+      const messages = rootWithWorker();
+      await rehydrateSubagentParts(
+        {
+          listSubagents: async () => ["worker", "forkc"],
+          getSubagentMessages: async (session, agentId, options) =>
+            agentId === "worker"
+              ? workerTranscript()
+              : getSubagentMessages(session, agentId, options),
+        },
+        sessionId,
+        dir,
+        messages,
+      );
+      const parts = messages.flatMap((message) => message.parts);
+      for (const fork of FORKS) {
+        expect(parts.filter((part) => part.toolUseId === fork)).toHaveLength(1);
+      }
+      expect(parts.filter((part) => part.parentTaskUseId === FORKS[2]).at(-1)?.content).toBe(
+        `${FORKS[2]} done`,
+      );
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a copied call is dropped even without the fork prompt marker", async () => {
+    const messages = rootWithWorker();
+    const unmarked = forkTranscript(2).filter((record) => !record.uuid.startsWith("prompt-"));
+    await rehydrateSubagentParts(
+      {
+        listSubagents: async () => ["worker", "fork-c"],
+        getSubagentMessages: async (_session, agentId) =>
+          agentId === "worker" ? workerTranscript() : unmarked,
+      },
+      "sdk-1",
+      "/workspace",
+      messages,
+    );
+    const parts = messages.flatMap((message) => message.parts);
+    for (const fork of FORKS) {
+      expect(parts.filter((part) => part.toolUseId === fork)).toHaveLength(1);
+    }
   });
 });

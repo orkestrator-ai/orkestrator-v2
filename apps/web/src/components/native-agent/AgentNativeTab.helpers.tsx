@@ -225,7 +225,7 @@ export function useNativeAgentActivityAnnouncement(
         continue;
       }
       if (previous.status !== "active" || !next || next.status === "active") continue;
-      lifecycleUpdates.push(`${next.label} ${next.status === "failed" ? "failed" : "finished"}.`);
+      lifecycleUpdates.push(`${next.label} ${next.status}.`);
     }
 
     const activeChanged = snapshots.some((snapshot) => {

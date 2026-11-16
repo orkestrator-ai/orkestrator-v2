@@ -181,7 +181,12 @@ test("a tree left out while the watcher is distrusted keeps coverage withdrawn w
     await until(() => settled() > 0);
 
     // The owner's scan found a change no event announced: distrusted.
-    watcher.unannouncedChange?.();
+    // Report it until the grace timer is armed, proving the watcher held it
+    // against delivery rather than forgiving it during a settling burst.
+    await until(() => {
+      watcher.unannouncedChange?.();
+      return grace.pendingCount() === 1;
+    });
     expect(grace.advance()).toBe(1);
     expect(watcher.qualified).toBe(false);
     expect(coverage()).toBe(2);

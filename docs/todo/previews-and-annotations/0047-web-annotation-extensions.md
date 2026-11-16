@@ -389,7 +389,8 @@ the manual path the to-do keeps for state that cannot be reproduced.
 request is reviewable (the card's existing rule), the panel can capture and
 the backend advertises `operations.comparison`, the latest result is not
 provisional (or there is none: a turn with no report is still worth
-capturing), and the result holds no after-capture for this note. An
+capturing), the note is unresolved, the request is the note’s latest with
+matching content and capture revisions, and the result holds no after-capture for this note. An
 observation for another note of a batch does not count; a capture recorded
 before observations existed counts for every note, as the review section
 already treats it. Otherwise the plain button stays, so manual capture is
@@ -519,8 +520,8 @@ task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
 
 ## Current state
 
-- When a request's turn has finished and the note has no after-capture
-  yet, the request card offers **Capture the result**, a one-click prompt
+- When the latest request’s turn has finished, the note is unresolved with
+  matching content and capture revisions, and it has no after-capture yet, the request card offers **Capture the result**, a one-click prompt
   that says whether the preview shows the note's page and never navigates
   (task 3, 2026-11-16; `ResultCapturePrompt.tsx`). See
   [web-page-annotations.md](../../architecture/web-page-annotations.md#review-and-resolution).

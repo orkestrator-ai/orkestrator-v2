@@ -137,6 +137,12 @@ export function RequestCard({
     (annotation.contentRevision !== selection!.contentRevision ||
       annotation.currentCaptureId !== selection!.captureId);
 
+  const capturePromptEligible =
+    annotation.state !== "resolved" &&
+    annotation.requestIds.at(-1) === request.id &&
+    Boolean(selection) &&
+    !locallyStale;
+
   // The response excerpt is fetched only for settled requests.
   useEffect(() => {
     if (!terminal || request.state === "cancelled" || request.state === "abandoned-unconfirmed")
@@ -319,11 +325,18 @@ export function RequestCard({
     const previous = previousStateRef.current;
     previousStateRef.current = request.state;
     if (previous === request.state || !RUNNING_STATES.has(previous)) return;
-    if (!reviewable || !canCaptureResult) return;
+    if (!reviewable || !canCaptureResult || !capturePromptEligible) return;
     announce(
       `${destinationName(request.destination)} finished. Capture the current result from the request card to compare.`,
     );
-  }, [announce, canCaptureResult, request.destination, request.state, reviewable]);
+  }, [
+    announce,
+    canCaptureResult,
+    capturePromptEligible,
+    request.destination,
+    request.state,
+    reviewable,
+  ]);
 
   return (
     <article
@@ -649,6 +662,7 @@ export function RequestCard({
             requestId={request.id}
             page={annotation.page}
             historical={showHistorical}
+            promptEligible={capturePromptEligible}
           />
           <div className="flex flex-wrap gap-1.5">
             <Button

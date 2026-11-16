@@ -13,7 +13,7 @@ import type {
 import { samePage, type CurrentAnnotationPage } from "./format";
 
 export type ResultCapturePromptState =
-  /** The turn is still reporting (provisional result): only the manual button. */
+  /** The turn is still reporting or this review is no longer current: manual button only. */
   | { kind: "not-ready" }
   /** This note already has an after-capture in the current result. */
   | { kind: "captured" }
@@ -33,11 +33,12 @@ export function hasAfterCapture(result: WebAnnotationResult | null, annotationId
 
 export function resultCapturePromptState(input: {
   result: WebAnnotationResult | null;
+  promptEligible?: boolean;
   annotationId: string;
   page: Pick<WebAnnotationPageIdentity, "service" | "route">;
   currentPage: CurrentAnnotationPage | null;
 }): ResultCapturePromptState {
-  if (input.result?.provisional) return { kind: "not-ready" };
+  if (input.promptEligible === false || input.result?.provisional) return { kind: "not-ready" };
   if (hasAfterCapture(input.result, input.annotationId)) return { kind: "captured" };
   return { kind: "ready", samePage: samePage(input.page, input.currentPage) };
 }

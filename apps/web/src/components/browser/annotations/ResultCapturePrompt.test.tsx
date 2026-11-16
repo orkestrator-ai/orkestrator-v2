@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
+  WebAnnotation,
+  WebAnnotationRequestState,
   WebAnnotationComparisonMetadata,
   WebAnnotationResult,
 } from "@orkestrator/protocol/web-annotations";
@@ -17,6 +19,7 @@ import {
   FakeWebAnnotationBackend,
   installFakeOrkestrator,
   invokeMock,
+  fixtureCapabilities,
 } from "@/test/web-annotation-fakes";
 import {
   AnnotationHarness,
@@ -75,7 +78,8 @@ function result(overrides: Partial<WebAnnotationResult> = {}): WebAnnotationResu
 function seed(
   options: {
     result?: WebAnnotationResult | null;
-    state?: "awaiting-review" | "running";
+    state?: WebAnnotationRequestState;
+    annotation?: Partial<WebAnnotation>;
     route?: string;
   } = {},
 ) {
@@ -92,6 +96,7 @@ function seed(
     currentCaptureId: "capture-element",
     requestIds: [request.id],
     page: { ...fixturePage, route: options.route ?? fixturePage.route },
+    ...options.annotation,
   });
   seedBrowserLayout({ open: true, selectedAnnotationId: "annotation-1" });
   return request;
@@ -189,6 +194,66 @@ describe("turn-end result capture prompt", () => {
     await waitFor(() => expect(captureButton(article)).toBeTruthy());
     expect(screen.queryByRole("region", { name: "Capture the result" }) === null).toBe(true);
   });
+
+  const ineligibleNotes: Array<[string, Partial<WebAnnotation>]> = [
+    ["resolved", { state: "resolved" }],
+    ["superseded", { requestIds: [REQUEST_ID, "newer-request"] }],
+    ["edited", { contentRevision: 2 }],
+    ["recaptured", { currentCaptureId: "new-capture" }],
+  ];
+  for (const [name, annotation] of ineligibleNotes) {
+    test(`a ${name} note keeps manual capture without a prompt after remount`, async () => {
+      seed({ result: result(), annotation });
+      if (name === "superseded")
+        backend.requests.set("newer-request", fixtureRequest("cancelled", { id: "newer-request" }));
+      const view = renderInAppCommandScope(<AnnotationHarness />);
+      const article = (await screen.findAllByRole("article", { name: /Change request/ })).find(
+        (card) => card.dataset.request === REQUEST_ID,
+      )!;
+      expect(captureButton(article)).toBeTruthy();
+      expect(screen.queryByRole("region", { name: "Capture the result" })).toBeNull();
+      view.unmount();
+      renderInAppCommandScope(<AnnotationHarness />);
+      const again = (await screen.findAllByRole("article", { name: /Change request/ })).find(
+        (card) => card.dataset.request === REQUEST_ID,
+      )!;
+      expect(captureButton(again)).toBeTruthy();
+      expect(screen.queryByRole("region", { name: "Capture the result" })).toBeNull();
+    });
+  }
+
+  test("initial mount in review does not announce a turn ending", async () => {
+    seed();
+    renderInAppCommandScope(<AnnotationHarness />);
+    await screen.findByRole("region", { name: "Capture the result" });
+    expect(screen.getByRole("status").textContent).not.toMatch(/finished\. Capture/);
+  });
+
+  for (const unavailable of ["comparison", "capture", "non-running"] as const) {
+    test(`no turn-end announcement for ${unavailable}`, async () => {
+      const request = seed({ state: unavailable === "non-running" ? "failed" : "running" });
+      if (unavailable === "comparison")
+        backend.capabilities = fixtureCapabilities({ comparison: false });
+      if (unavailable === "capture") {
+        bus.restore();
+        bus = installFakeOrkestrator();
+      }
+      renderInAppCommandScope(<AnnotationHarness />);
+      await screen.findByRole("article", { name: /Change request/ });
+      await act(async () => {
+        backend.requests.set(
+          request.id,
+          fixtureRequest("awaiting-review", { id: request.id, revision: request.revision + 1 }),
+        );
+        refreshWebAnnotations("env-1", {
+          requestIds: [request.id],
+          annotationIds: ["annotation-1"],
+        });
+      });
+      await screen.findByText("Review response", { exact: true });
+      expect(screen.getByRole("status").textContent).not.toMatch(/finished\. Capture/);
+    });
+  }
 
   test("a turn with no structured result still offers the capture", async () => {
     seed({ result: null });

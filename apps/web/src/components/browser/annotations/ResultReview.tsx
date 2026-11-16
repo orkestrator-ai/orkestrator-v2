@@ -259,6 +259,7 @@ function ObservedByOrkestrator({
  */
 export function ResultReview({
   result,
+  promptEligible = true,
   annotationId,
   originalCaptureId,
   requestId,
@@ -266,6 +267,7 @@ export function ResultReview({
   historical,
 }: {
   result: WebAnnotationResult | null;
+  promptEligible?: boolean;
   annotationId: string;
   originalCaptureId: string | null;
   requestId: string;
@@ -304,6 +306,7 @@ export function ResultReview({
       )}
       {features.comparison && capture.available && !historical && (
         <ResultCapture
+          promptEligible={promptEligible}
           result={result}
           annotationId={annotationId}
           page={page}

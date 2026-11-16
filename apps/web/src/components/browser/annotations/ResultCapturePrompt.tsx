@@ -22,12 +22,14 @@ import {
  */
 export function ResultCapture({
   result,
+  promptEligible = true,
   annotationId,
   page,
   originalCaptureId,
   requestId,
 }: {
   result: WebAnnotationResult | null;
+  promptEligible?: boolean;
   annotationId: string;
   page: WebAnnotationPageIdentity;
   originalCaptureId: string | null;
@@ -37,7 +39,13 @@ export function ResultCapture({
   const [dismissed, setDismissed] = useState(() =>
     isResultCapturePromptDismissed(environmentId, requestId, annotationId),
   );
-  const state = resultCapturePromptState({ result, annotationId, page, currentPage });
+  const state = resultCapturePromptState({
+    result,
+    annotationId,
+    page,
+    currentPage,
+    promptEligible,
+  });
   const masks = capture.desktopCapabilities?.features.resultCapture.masks ?? false;
 
   const start = () =>

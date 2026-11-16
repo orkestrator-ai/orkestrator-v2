@@ -625,7 +625,8 @@ action only), **Open changes** (labelled as the current workspace diff),
 **Capture current result** for a side-by-side comparison, **Accept and
 resolve**, and **Reply / request another change**.
 
-When the turn has finished (the result is not provisional) and the note has
+When the turn has finished (the result is not provisional), the note is unresolved,
+the request is the note’s latest request with matching content and capture, and the note has
 no after-capture in the current result yet, **Capture current result** is
 offered as a prompt, **Capture the result**, rather than a plain button
 (`ResultCapturePrompt.tsx`, `result-capture-prompt.ts`). It says whether the

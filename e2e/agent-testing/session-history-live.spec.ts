@@ -65,8 +65,11 @@ type Row = {
 };
 type ProjectionUpdate = {
   status: string;
-  projection?: { turn: { phase: string; error?: string }; messages: Row[] };
-  historyCursor?: string;
+  projection?: {
+    turn: { phase: string; error?: string };
+    messages: Row[];
+    messageWindow?: { truncated?: boolean };
+  };
 };
 type ForkOutcome = { sessionId: string; title?: string; draft?: string; controls?: unknown };
 type Platform = "codex" | "pi";
@@ -380,7 +383,10 @@ test.describe("fork and rewind on loopback models", () => {
             forceSnapshot: true,
           });
           expect(update.status).toBe("snapshot");
-          expect(update.historyCursor, "a short conversation fits the live window").toBeFalsy();
+          expect(
+            update.projection?.messageWindow?.truncated,
+            "a short conversation fits the live window",
+          ).not.toBe(true);
           return update.projection!;
         };
         const rowsOf = async (identity: ReturnType<typeof tab>) =>

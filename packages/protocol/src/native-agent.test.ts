@@ -448,8 +448,6 @@ describe("native agent projection synchronization", () => {
         status: "delta",
         baseToken: "base",
         token: "next",
-        historyEpoch: "epoch",
-        historyComplete: true,
         delta: {
           messageUpserts: [{ id: "live" }, { id: "live" }],
           liveMessageIds: ["live"],
@@ -470,8 +468,6 @@ describe("native agent projection synchronization", () => {
         status: "delta",
         baseToken: "base",
         token: "next",
-        historyEpoch: "epoch",
-        historyComplete: true,
         delta: {
           messageUpserts: [],
           deletedMessageIds: [],
@@ -491,8 +487,6 @@ describe("native agent projection synchronization", () => {
         status: "delta",
         baseToken: "base",
         token: "next",
-        historyEpoch: "epoch",
-        historyComplete: true,
         delta: {
           messageUpserts: [],
           deletedMessageIds: [],
@@ -528,8 +522,6 @@ describe("native agent projection synchronization", () => {
         status: "delta",
         baseToken: "base",
         token: "next",
-        historyEpoch: "epoch",
-        historyComplete: true,
         delta: {
           messageUpserts: [],
           deletedMessageIds: [],

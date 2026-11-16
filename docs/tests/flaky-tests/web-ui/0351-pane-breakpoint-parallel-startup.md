@@ -186,7 +186,7 @@ Observed on `qualify-browser-suites-636969d215a9-r1`, whose base is
 Playwright 1.65.0) shared with about nine other builds. The read-only
 `mise run flaky:recurrence -- 0351 --base 17d28238c` check returned `open`.
 
-The command, for to-do 7020 task 2:
+The command, for to-do 7020 (retired) task 2:
 
 ```sh
 ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=7000000 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=6 ORKESTRATOR_E2E_PORT=14722 ORKESTRATOR_PUBLIC_E2E_PORT=14723 mise run test:logged -- --name browser-wrapper-macos-3 -- bash -o pipefail -c "mise run test:browser 2>&1 | tee >(tail -n 800 > output/agent-testing/7020-macos/run3.tail.txt)"

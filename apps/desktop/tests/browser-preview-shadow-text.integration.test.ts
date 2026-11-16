@@ -192,11 +192,23 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
   // The launch is a real Chromium process, so its duration is the host's. Each
   // phase is a hang watchdog that names the step that stalled (a failure here
   // once reported only "(unnamed) timed out after 60000ms"), below the hook's
-  // own budget (`tests/default-test-timeout.ts`), never a speed bound.
-  const phase = async <T>(name: string, work: Promise<T>): Promise<T> => {
+  // own budget, never a speed bound.
+  //
+  // The launch gets its own, longer watchdog. On a GitHub runner this file
+  // took 41.6 s alone against about 6 s locally, and under the aggregate run
+  // the launch alone passed 45 s (flake 9930, main at 0d12d63ee). A launch is heavy work with nothing to await
+  // but the process, so its budget is the host's, not the code's.
+  const LAUNCH_WATCHDOG_MS = 120_000;
+  const STEP_WATCHDOG_MS = 45_000;
+  const SETUP_BUDGET_MS = LAUNCH_WATCHDOG_MS + 60_000;
+  const phase = async <T>(
+    name: string,
+    work: Promise<T>,
+    watchdogMs = STEP_WATCHDOG_MS,
+  ): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const stalled = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`Chromium setup stalled at: ${name}`)), 45_000);
+      timer = setTimeout(() => reject(new Error(`Chromium setup stalled at: ${name}`)), watchdogMs);
     });
     try {
       return await Promise.race([work, stalled]);
@@ -205,7 +217,11 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
     }
   };
   beforeAll(async () => {
-    browser = await phase("launch", chromium.launch({ executablePath: CHROMIUM }));
+    browser = await phase(
+      "launch",
+      chromium.launch({ executablePath: CHROMIUM }),
+      LAUNCH_WATCHDOG_MS,
+    );
     const page = await phase(
       "new page",
       browser.newPage({ viewport: { width: 1000, height: 700 } }),
@@ -220,7 +236,7 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
       page,
       await phase("CDP session", page.context().newCDPSession(page)),
     );
-  });
+  }, SETUP_BUDGET_MS);
   afterAll(async () => {
     await browser?.close();
   });

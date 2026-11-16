@@ -49,3 +49,25 @@ budget.
 ## Triage note (2026-11-15)
 
 Diagnostics only; stays `open`. In `apps/desktop/tests/browser-preview-shadow-text.integration.test.ts` each `beforeAll` step (launch, new page, route, CDP session) now runs under a 45 s watchdog that names the step that stalled, and the explicit 60 s hook and 30 s test arguments are removed (the 60 s default applies). The hook budget is unchanged at 60 s, so the recorded 60 s stall is not fixed; the next recurrence will say which step stalled. Passed alone on Linux with `/usr/bin/chromium`.
+
+## Recurrence (2026-11-16)
+
+- **CI run:** 43968208216, job `Tests (workspace)` (133653296043), `main`
+  at `0d12d63ee` (the case's triage diagnostics are on that base).
+- **Original command:** `mise run test:full` (CI workspace shard).
+- **Failure:** `Chromium setup stalled at: launch` after 45,002.94 ms: the
+  `chromium.launch` step, not the new page, route or CDP session.
+- **Rerun alone (same job):** passed, 19 pass, 0 fail, 41.58 s for the file.
+  The same file passes alone locally in about 6 to 10 s, so the launch on a
+  GitHub runner is slow even without load, and the 45 s watchdog sat within
+  a few seconds of a normal run there.
+
+## Budget change (2026-11-16)
+
+As the "Next evidence" section planned, now that the stalled step is known:
+the `launch` phase has its own 120 s hang watchdog and the hook an explicit
+180 s budget; the other phases keep 45 s and still name the step that
+stalled. This is a raised budget for genuinely heavy work, which is weaker
+evidence than a fix, so the case stays `open`. Why Chromium starts so slowly
+on the runner (first-run work, the binary chosen from the candidate list) is
+not known; the next recurrence or a timed launch on a runner should show it.

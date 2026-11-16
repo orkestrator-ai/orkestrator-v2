@@ -13,6 +13,7 @@ import {
   connectionListDisconnected,
   getNodeConnectivity,
   getTransportConnectivity,
+  onNodeReconnected,
   resetTransportConnectivityForTests,
   setTransportDisconnected,
   startTransportConnectivity,
@@ -122,6 +123,84 @@ describe("transport connectivity", () => {
 
 describe("per node and the window aggregate", () => {
   afterEach(() => resetWindowScopeForTests());
+
+  test("reconnect listeners follow only their node's final owner, even while the window stays offline", () => {
+    const leaf = getWindowScope().open({
+      role: "leaf",
+      client: new FakeNodeClient({ nodeId: "bk_reconnect-leaf" as BackendId }),
+    });
+    const command = getWindowScope().commandScope();
+    let leafCalls = 0;
+    let commandCalls = 0;
+    const stopLeaf = onNodeReconnected(leaf, () => {
+      leafCalls += 1;
+    });
+    const stopCommand = onNodeReconnected(command, () => {
+      commandCalls += 1;
+    });
+    expect(leafCalls).toBe(0);
+    setTransportDisconnected("desktop-connection", true, command);
+    setTransportDisconnected("gateway-event-stream", true, leaf);
+    setTransportDisconnected("desktop-connection", true, leaf);
+    setTransportDisconnected("gateway-event-stream", false, leaf);
+    expect(leafCalls).toBe(0);
+    expect(commandCalls).toBe(0);
+    setTransportDisconnected("desktop-connection", false, leaf);
+    expect(leafCalls).toBe(1);
+    expect(commandCalls).toBe(0);
+    expect(getTransportConnectivity().disconnected).toBe(true);
+    setTransportDisconnected("desktop-connection", false, leaf);
+    expect(leafCalls).toBe(1);
+    setTransportDisconnected("desktop-connection", false, command);
+    expect(commandCalls).toBe(1);
+    expect(leafCalls).toBe(1);
+    stopLeaf();
+    stopCommand();
+  });
+
+  test("unsubscribe and scope disposal remove reconnect listeners without announcing a reconnect", () => {
+    const leaf = getWindowScope().open({ role: "leaf", client: new FakeNodeClient() });
+    let calls = 0;
+    const stop = onNodeReconnected(leaf, () => {
+      calls += 1;
+    });
+    stop();
+    stop();
+    setTransportDisconnected("gateway-event-stream", true, leaf);
+    setTransportDisconnected("gateway-event-stream", false, leaf);
+    expect(calls).toBe(0);
+    onNodeReconnected(leaf, () => {
+      calls += 1;
+    });
+    setTransportDisconnected("gateway-event-stream", true, leaf);
+    leaf.dispose();
+    expect(calls).toBe(0);
+    // Registration and reports after disposal must be harmless no-ops.
+    const stopDisposed = onNodeReconnected(leaf, () => {
+      calls += 1;
+    });
+    setTransportDisconnected("gateway-event-stream", true, leaf);
+    setTransportDisconnected("gateway-event-stream", false, leaf);
+    stopDisposed();
+    expect(calls).toBe(0);
+    expect(getNodeConnectivity(leaf).disconnected).toBe(false);
+  });
+
+  test("a throwing reconnect listener does not suppress later listeners", () => {
+    const scope = getWindowScope().commandScope();
+    let calls = 0;
+    const stopFirst = onNodeReconnected(scope, () => {
+      throw new Error("listener failed");
+    });
+    const stopSecond = onNodeReconnected(scope, () => {
+      calls += 1;
+    });
+    setTransportDisconnected("gateway-event-stream", true, scope);
+    setTransportDisconnected("gateway-event-stream", false, scope);
+    expect(calls).toBe(1);
+    stopFirst();
+    stopSecond();
+  });
 
   test("a leaf's outage is its own, and the window aggregate shows it", () => {
     const client = new FakeNodeClient({ nodeId: "bk_leaf" as BackendId });

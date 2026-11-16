@@ -1720,7 +1720,20 @@ name proves it broken. Three checks share one probe script and parser:
 | --- | --- | --- |
 | Backend startup (Linux, desktop and backend-only runs) | Throwaway containers of a pinned ~1 MB `busybox` image on the default bridge and on a temporary per-environment style network (both in parallel) | Publishes `container-host-reachability-changed`; the app shows a banner and a fix dialog |
 | Bridge start (`resolveContainerAgentToolConnection`, Cursor/Grok/Pi starts) | `docker exec` in the environment container, after the host alias and network-policy repair | Logged; a result that contradicts the host verdict re-runs the host check (at most once a minute) |
-| Before a tool-mode workflow stage dispatches (Multi Review, build pipeline, feature planning) | Same, cached 60 s for success and 10 s for failure | A proven block fails the stage at once with the cause and the fix; an inconclusive probe passes |
+| Before a tool-mode workflow stage dispatches (Multi Review, build pipeline, feature planning), and before every Claude Multi Review step or reviewer turn in a container on either result transport | Same, cached 60 s for success and 10 s for failure | A proven block fails the stage at once with the cause and the fix; an inconclusive probe passes |
+
+A Claude Multi Review turn on the structured-output transport needs no result tool,
+but it is preflighted on both the bespoke and graph engines: a container's
+Claude bridge is always given the Orkestrator MCP server (`ORKESTRATOR_AGENT_MCP_URL`), runs a new CLI's first
+turn without waiting for it, and refuses every later turn that joins that CLI
+while the server is not connected (`syncClaudeRuntimeMcp`). Without the
+preflight a review's first turn ran and its schema repair or consolidation
+was refused (to-do 8172, retired 2026-11-16). That refusal now names the
+address the server could not reach and this notice instead of asking for a
+retry, which cannot help: the CLI does not reconnect a server that failed at
+launch. Only a server still `pending` keeps the plain retry advice. Build
+pipeline turns keep the tool-mode-only preflight. Non-Claude structured-output
+turns do not require the agent tools server and skip this extra check.
 
 The startup check pulls busybox once (`--pull never` on every run afterwards)
 and falls back to the environment image; with neither it reports

@@ -512,6 +512,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     await host.assertFence();
     const toolTransport = branch.resultTransport === "tool-v1";
     const agentMcp = toolTransport ? await host.agentMcp?.(branch, requestId) : undefined;
+    if (!toolTransport) await host.assertAgentToolsReachable?.(branch);
     if (toolTransport && host.prepareResult) {
       await host.prepareResult(branch, requestId, host.resultSchema(branch));
     }

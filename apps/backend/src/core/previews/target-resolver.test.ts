@@ -5,11 +5,11 @@ import type { AddressInfo } from "node:net";
 
 import { fixturePreviewDefinition } from "@orkestrator/protocol/testing/preview-contract-fixtures";
 
-import { resolvePreviewTargetIntent } from "./preview-intent.js";
-import { PreviewReadinessProber } from "./preview-readiness.js";
-import type { ResolvedPreviewTarget } from "./preview-service-registry.js";
-import { parseContainerInspection, selectLoopbackBinding } from "./preview-target-resolver.js";
-import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
+import { resolvePreviewTargetIntent } from "./intent.js";
+import { PreviewReadinessProber } from "./readiness.js";
+import type { ResolvedPreviewTarget } from "./service-registry.js";
+import { parseContainerInspection, selectLoopbackBinding } from "./target-resolver.js";
+import { createPreviewHarness, type PreviewHarness } from "./test-support.js";
 
 describe("docker binding selection", () => {
   test("parses inspect output including missing labels", () => {

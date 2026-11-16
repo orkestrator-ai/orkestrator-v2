@@ -18,10 +18,7 @@ import {
   type PreviewLimits,
 } from "@orkestrator/protocol/preview-services";
 
-import type {
-  PreviewRevocationReason,
-  PreviewServiceRegistry,
-} from "./preview-service-registry.js";
+import type { PreviewRevocationReason, PreviewServiceRegistry } from "./service-registry.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("preview");

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { LoopbackListenerOwnership } from "./preview-listener-ownership.js";
-import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
-import { CommandFailedError } from "./shell.js";
+import { LoopbackListenerOwnership } from "./listener-ownership.js";
+import { createPreviewHarness, type PreviewHarness } from "./test-support.js";
+import { CommandFailedError } from "../shell.js";
 
 const PORT = 3000;
 

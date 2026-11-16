@@ -14,7 +14,7 @@ import type { CommandContext } from "../../backend/src/core/commands-context";
 import {
   createPreviewHarness,
   type PreviewHarness,
-} from "../../backend/src/core/preview-test-support";
+} from "../../backend/src/core/previews/test-support";
 import { upstreamRequestHeaders } from "@orkestrator/protocol/preview-header-policy";
 
 import { PreviewMetrics } from "../../backend/src/preview-metrics";

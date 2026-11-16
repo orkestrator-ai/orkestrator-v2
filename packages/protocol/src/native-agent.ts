@@ -2967,9 +2967,6 @@ export type NativeAgentProjectionUpdate<TMessage = unknown> =
       status: "snapshot";
       token: string;
       projection: NativeAgentSessionProjection<TMessage>;
-      historyCursor?: string;
-      historyEpoch: string;
-      historyComplete: boolean;
       resetReason?: "initial" | "forced" | "unknown-token" | "expired" | "identity-changed";
     }
   | {
@@ -2983,9 +2980,6 @@ export type NativeAgentProjectionUpdate<TMessage = unknown> =
       baseToken: string;
       token: string;
       delta: NativeAgentProjectionDelta<TMessage>;
-      historyCursor?: string;
-      historyEpoch: string;
-      historyComplete: boolean;
     }
   | {
       syncVersion: typeof NATIVE_AGENT_SYNC_VERSION;
@@ -3000,6 +2994,12 @@ export interface NativeAgentMessagePage<TMessage = unknown> {
   /** False when the provider supplied only a bounded tail. */
   complete: boolean;
   truncated: boolean;
+  /**
+   * A row of this page was trimmed to fit (its leading parts or content are
+   * missing). `truncated` cannot say so on its own: it is also true whenever
+   * older rows remain.
+   */
+  rowsTrimmed?: true;
 }
 
 const PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
@@ -3123,12 +3123,6 @@ export function isNativeAgentProjectionUpdate(
   if (candidate.status === "snapshot") {
     return Boolean(
       isNativeAgentSessionProjection(candidate.projection) &&
-      typeof candidate.historyEpoch === "string" &&
-      candidate.historyEpoch.length > 0 &&
-      candidate.historyEpoch.length <= 128 &&
-      typeof candidate.historyComplete === "boolean" &&
-      (candidate.historyCursor === undefined ||
-        (typeof candidate.historyCursor === "string" && candidate.historyCursor.length <= 1024)) &&
       (candidate.resetReason === undefined ||
         ["initial", "forced", "unknown-token", "expired", "identity-changed"].includes(
           candidate.resetReason as string,
@@ -3139,9 +3133,7 @@ export function isNativeAgentProjectionUpdate(
     candidate.status !== "delta" ||
     typeof candidate.baseToken !== "string" ||
     candidate.baseToken.length === 0 ||
-    candidate.baseToken.length > 1024 ||
-    (candidate.historyCursor !== undefined &&
-      (typeof candidate.historyCursor !== "string" || candidate.historyCursor.length > 1024))
+    candidate.baseToken.length > 1024
   ) {
     return false;
   }
@@ -3182,10 +3174,6 @@ export function isNativeAgentProjectionUpdate(
     return false;
   }
   return (
-    typeof candidate.historyEpoch === "string" &&
-    candidate.historyEpoch.length > 0 &&
-    candidate.historyEpoch.length <= 128 &&
-    typeof candidate.historyComplete === "boolean" &&
     operationCount <= 1024 &&
     Number.isSafeInteger(delta.revision) &&
     (delta.revision as number) >= 0 &&
@@ -3521,7 +3509,8 @@ export function isNativeAgentMessagePage(value: unknown): value is NativeAgentMe
     (candidate.nextCursor === undefined ||
       (typeof candidate.nextCursor === "string" && candidate.nextCursor.length <= 1024)) &&
     typeof candidate.complete === "boolean" &&
-    typeof candidate.truncated === "boolean"
+    typeof candidate.truncated === "boolean" &&
+    (candidate.rowsTrimmed === undefined || candidate.rowsTrimmed === true)
   ) {
     const ids = candidate.messages.map((message) => (message as { id?: unknown })?.id);
     return (

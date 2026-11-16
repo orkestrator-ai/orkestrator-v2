@@ -27,16 +27,6 @@ import {
 export const COMPATIBILITY_PATH_IDS = [
   /** A container bridge's token was read from its `node`-readable `/tmp` file. */
   "bridge-credential.token-file",
-  /**
-   * A history page was served from the joined sync-v1 projection while the
-   * session's latest view carried a direct cursor, or no view was read: a
-   * caller paging with a v1 cursor it did not need (0232 item 3).
-   */
-  "history.joined-v1-page",
-  /** A joined page for a view whose source has no direct pages (no provider cursor). */
-  "history.joined-v1-page.unpaged-source",
-  /** A joined page for a view whose source pages directly but could name or wrap no cursor. */
-  "history.joined-v1-page.unnamed-cursor",
   /** An older renderer built a "Continue in…" handoff itself (`save_agent_handoff`). */
   "agent-handoff.renderer-saved",
   /**

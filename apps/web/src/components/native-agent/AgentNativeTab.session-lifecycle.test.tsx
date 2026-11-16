@@ -47,6 +47,7 @@ import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { mockToastError, mockToastInfo, mockToastWarning } from "../../../../../tests/mocks/sonner";
 import { appCommandStore } from "@/test/app-command-store";
+import { FAKE_NATIVE_AGENT_HISTORY_EPOCH } from "@/test/native-agent-session-backend";
 import {
   latestRenderedMessageActions,
   flushPaneLayoutNowMock,
@@ -66,6 +67,7 @@ import {
   defaultProjection,
   sessionProjectionMock,
   sessionHistoryMock,
+  sessionBackend,
   getLocalFileTreeMock,
   composeDraftRecords,
   deliverResourceChange,
@@ -89,6 +91,28 @@ import {
 } from "./AgentNativeTab.test-support";
 
 await installAgentNativeTabFixture();
+
+/**
+ * Hold the next history page until the returned release is called, then
+ * answer it with `messages`. Pages after it read the fake backend as usual.
+ */
+function holdNextHistoryPage(messages: NativeMessage[]): () => void {
+  let release = (): void => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  sessionBackend.api.getNativeAgentMessagePage.mockImplementationOnce(async () => {
+    await gate;
+    return {
+      syncVersion: 1,
+      messages,
+      historyEpoch: FAKE_NATIVE_AGENT_HISTORY_EPOCH,
+      complete: true,
+      truncated: false,
+    };
+  });
+  return release;
+}
 
 describe("AgentNativeTab", () => {
   test("does not show dispatch recovery while an ordinary send is still in flight", async () => {
@@ -871,6 +895,10 @@ describe("AgentNativeTab", () => {
       messages: [recentPrompt],
     }));
     sessionHistoryMock.mockImplementation(async () => [olderPrompt]);
+    // The view names a direct cursor before the window, and the tab pages
+    // the older row in on its own while the reader is at the top. Hold that
+    // page until after the submit, so the older row arrives afterwards.
+    const releasePage = holdNextHistoryPage([olderPrompt]);
     dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
       outcome: "unknown" as const,
       requestId: input.requestId,
@@ -891,7 +919,7 @@ describe("AgentNativeTab", () => {
 
     // Loading earlier history introduces user rows the submit never saw. They
     // are not this prompt's echo, so they must not clear the composer.
-    fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
+    releasePage();
     await waitFor(() =>
       expect(
         appCommandStore(nativeAgentProjectionStore).getState().projections.get(sessionKey)?.messages
@@ -929,6 +957,10 @@ describe("AgentNativeTab", () => {
       messages: [recentReply],
     }));
     sessionHistoryMock.mockImplementation(async () => [olderPrompt]);
+    // The view names a direct cursor before the window, and the tab pages
+    // the older row in on its own while the reader is at the top. Hold that
+    // page until after the submit, so the older row arrives afterwards.
+    const releasePage = holdNextHistoryPage([olderPrompt]);
     dispatchNativeAgentIntentMock.mockImplementationOnce(async (dispatchInput) => ({
       outcome: "unknown" as const,
       requestId: dispatchInput.requestId,
@@ -945,7 +977,7 @@ describe("AgentNativeTab", () => {
         appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.requestId,
       ).toMatch(/\S/),
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
+    releasePage();
     await waitFor(() =>
       expect(
         appCommandStore(nativeAgentProjectionStore).getState().projections.get(sessionKey)?.messages

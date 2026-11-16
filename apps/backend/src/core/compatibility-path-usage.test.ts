@@ -48,17 +48,17 @@ describe("CompatibilityPathUsage", () => {
       merge(pending) {
         merges += 1;
         if (pending.size > 0) writes += 1;
-        return { version: 1, paths: { "history.joined-v1-page": stored } };
+        return { version: 1, paths: { "agent-handoff.renderer-saved": stored } };
       },
     });
-    expect(usage.peek().paths["history.joined-v1-page"]?.count).toBe(5);
+    expect(usage.peek().paths["agent-handoff.renderer-saved"]?.count).toBe(5);
     expect(merges).toBe(1);
 
-    usage.record("history.joined-v1-page");
+    usage.record("agent-handoff.renderer-saved");
     usage.record("bridge-credential.token-file");
     for (let index = 0; index < 3; index += 1) {
       const { paths } = usage.peek();
-      expect(paths["history.joined-v1-page"]?.count).toBe(6);
+      expect(paths["agent-handoff.renderer-saved"]?.count).toBe(6);
       expect(paths["bridge-credential.token-file"]?.count).toBe(1);
     }
     expect(merges).toBe(1);
@@ -72,8 +72,8 @@ describe("CompatibilityPathUsage", () => {
 
   test("peek without a sink is the pending counts", () => {
     const usage = new CompatibilityPathUsage();
-    usage.record("history.joined-v1-page.unpaged-source");
-    expect(usage.peek().paths["history.joined-v1-page.unpaged-source"]?.count).toBe(1);
+    usage.record("usage-limit.text-classified");
+    expect(usage.peek().paths["usage-limit.text-classified"]?.count).toBe(1);
   });
 
   test("counts each path with its first and last use, without a sink", () => {
@@ -82,7 +82,7 @@ describe("CompatibilityPathUsage", () => {
     usage.record("bridge-credential.token-file");
     time.advance(1_000);
     usage.record("bridge-credential.token-file");
-    usage.record("history.joined-v1-page");
+    usage.record("agent-handoff.renderer-saved");
 
     expect(usage.snapshot()).toEqual({
       version: 1,
@@ -92,7 +92,7 @@ describe("CompatibilityPathUsage", () => {
           firstSeenAt: "2026-10-24T10:00:00.000Z",
           lastSeenAt: "2026-10-24T10:00:01.000Z",
         },
-        "history.joined-v1-page": {
+        "agent-handoff.renderer-saved": {
           count: 1,
           firstSeenAt: "2026-10-24T10:00:01.000Z",
           lastSeenAt: "2026-10-24T10:00:01.000Z",
@@ -147,14 +147,14 @@ describe("CompatibilityPathUsage", () => {
     const merged: number[] = [];
     const sink: CompatibilityPathUsageSink = {
       merge: (pending) => {
-        merged.push(pending.get("history.joined-v1-page.unpaged-source")?.count ?? 0);
+        merged.push(pending.get("usage-limit.text-classified")?.count ?? 0);
         return { version: 1, paths: {} };
       },
     };
     const usage = new CompatibilityPathUsage(undefined, 5);
     usage.attach(sink);
-    usage.record("history.joined-v1-page.unpaged-source");
-    usage.record("history.joined-v1-page.unpaged-source");
+    usage.record("usage-limit.text-classified");
+    usage.record("usage-limit.text-classified");
     const deadline = Date.now() + 1_000;
     while (merged.length === 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -181,14 +181,14 @@ describe("CompatibilityPathUsage", () => {
         }),
       );
       usage.attach(sink);
-      usage.record("history.joined-v1-page");
+      usage.record("agent-handoff.renderer-saved");
       expect(usage.snapshot().paths).not.toHaveProperty("future.path");
       usage.detach(sink);
       expect(database.readStore(COMPATIBILITY_PATH_USAGE_STORE)?.value).toEqual({
         version: 1,
         paths: {
           "future.path": future,
-          "history.joined-v1-page": { ...future, count: 1 },
+          "agent-handoff.renderer-saved": { ...future, count: 1 },
         },
       });
     } finally {
@@ -211,13 +211,13 @@ describe("CompatibilityPathUsage", () => {
     const usage = new CompatibilityPathUsage(clock().now, 5);
     usage.attach(sink);
     try {
-      usage.record("history.joined-v1-page");
+      usage.record("agent-handoff.renderer-saved");
       const deadline = Date.now() + 1_000;
       while (attempts < 2 && Date.now() < deadline) await Bun.sleep(5);
       expect(attempts).toBe(2);
-      expect(normalizeCompatibilityPathUsage(stored).paths["history.joined-v1-page"]?.count).toBe(
-        1,
-      );
+      expect(
+        normalizeCompatibilityPathUsage(stored).paths["agent-handoff.renderer-saved"]?.count,
+      ).toBe(1);
     } finally {
       usage.detach(sink);
     }
@@ -233,13 +233,13 @@ describe("CompatibilityPathUsage", () => {
     };
     const usage = new CompatibilityPathUsage(clock().now, 5);
     usage.attach(sink);
-    usage.record("history.joined-v1-page");
+    usage.record("agent-handoff.renderer-saved");
     usage.snapshot();
     usage.detach(sink);
     const detachedAttempts = attempts;
     await Bun.sleep(25);
     expect(attempts).toBe(detachedAttempts);
-    expect(usage.snapshot().paths["history.joined-v1-page"]?.count).toBe(1);
+    expect(usage.snapshot().paths["agent-handoff.renderer-saved"]?.count).toBe(1);
   });
 
   test("failed snapshots include historical totals plus pending counts without double counting", () => {
@@ -255,16 +255,16 @@ describe("CompatibilityPathUsage", () => {
     const usage = new CompatibilityPathUsage(time.now);
     usage.attach(sink);
     try {
-      usage.record("history.joined-v1-page");
+      usage.record("agent-handoff.renderer-saved");
       usage.record("bridge-credential.token-file");
       const original = usage.snapshot();
       time.advance(1_000);
-      usage.record("history.joined-v1-page");
+      usage.record("agent-handoff.renderer-saved");
       fail = true;
       for (let i = 0; i < 2; i++) {
         expect(usage.snapshot().paths).toEqual({
           "bridge-credential.token-file": original.paths["bridge-credential.token-file"],
-          "history.joined-v1-page": {
+          "agent-handoff.renderer-saved": {
             count: 2,
             firstSeenAt: "2026-10-24T10:00:00.000Z",
             lastSeenAt: "2026-10-24T10:00:01.000Z",
@@ -272,9 +272,9 @@ describe("CompatibilityPathUsage", () => {
         });
       }
       fail = false;
-      expect(usage.snapshot().paths["history.joined-v1-page"]?.count).toBe(2);
+      expect(usage.snapshot().paths["agent-handoff.renderer-saved"]?.count).toBe(2);
       fail = true;
-      expect(usage.snapshot().paths["history.joined-v1-page"]?.count).toBe(2);
+      expect(usage.snapshot().paths["agent-handoff.renderer-saved"]?.count).toBe(2);
     } finally {
       usage.detach(sink);
     }
@@ -288,8 +288,8 @@ describe("CompatibilityPathUsage", () => {
         return {
           version: 1,
           paths: {
-            "history.joined-v1-page.unpaged-source": {
-              ...pending.get("history.joined-v1-page.unpaged-source")!,
+            "usage-limit.text-classified": {
+              ...pending.get("usage-limit.text-classified")!,
             },
           },
         };
@@ -297,11 +297,11 @@ describe("CompatibilityPathUsage", () => {
     };
     const usage = new CompatibilityPathUsage(clock().now);
     usage.attach(sink);
-    usage.record("history.joined-v1-page.unpaged-source");
-    expect(usage.snapshot().paths["history.joined-v1-page.unpaged-source"]?.count).toBe(1);
+    usage.record("usage-limit.text-classified");
+    expect(usage.snapshot().paths["usage-limit.text-classified"]?.count).toBe(1);
     fail = false;
-    usage.record("history.joined-v1-page.unpaged-source");
-    expect(usage.snapshot().paths["history.joined-v1-page.unpaged-source"]?.count).toBe(2);
+    usage.record("usage-limit.text-classified");
+    expect(usage.snapshot().paths["usage-limit.text-classified"]?.count).toBe(2);
     usage.detach(sink);
   });
 
@@ -352,7 +352,7 @@ describe("normalizeCompatibilityPathUsage", () => {
             firstSeenAt: "2026-10-20T00:00:00.000Z",
             lastSeenAt: "2026-10-20T00:00:00.000Z",
           },
-          "history.joined-v1-page": { count: -1, firstSeenAt: "x", lastSeenAt: "y" },
+          "agent-handoff.renderer-saved": { count: -1, firstSeenAt: "x", lastSeenAt: "y" },
         },
       }),
     ).toEqual({
@@ -396,7 +396,7 @@ test("an idle reader refreshes another backend's totals on each bounded timer ti
     reader.attach(sink);
     writer.attach(sink);
     expect(reader.peek().paths).toEqual({});
-    writer.record("history.joined-v1-page.unpaged-source");
+    writer.record("usage-limit.text-classified");
     writer.snapshot();
     const before = reads;
     expect(reader.peek().paths).toEqual({});
@@ -404,7 +404,7 @@ test("an idle reader refreshes another backend's totals on each bounded timer ti
     time.advance(60_000);
     // peek replaced the initial attach timer; tick the reader's current timer.
     callbacks[2]!();
-    expect(reader.peek().paths["history.joined-v1-page.unpaged-source"]?.count).toBe(1);
+    expect(reader.peek().paths["usage-limit.text-classified"]?.count).toBe(1);
     expect(writes).toBe(1);
     expect(callbacks.length).toBeGreaterThan(2);
   } finally {

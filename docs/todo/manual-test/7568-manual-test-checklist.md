@@ -29,13 +29,18 @@ results under the item. The 5340 (retired) task 2 reading of
 `bridge-transcript.messages-fallback` went, its counter and fallback having
 been removed, and 8110 (retired) task 1's real-provider paging check came in.
 
+Updated 2026-11-16: 8303 was retired once its stuck fork cards were fixed on
+both sides (the bridge's subagent rehydration and the renderer's Ended
+floor); its live reproduction with real fork subagents came in here as
+8303 (retired) task 1. It is in Git history at `c1fcc573b`.
+
 Updated 2026-11-16: 8050 was retired once the desktop app stopped packing the
 Agent SDK's Claude binary; its signed-release check came in as 8050 (retired)
 task 2, and the CLI's copy went to to-do 8250.
 
 ### Tasks
 
-1. **Manual tests and live checks** (345 items): run each check under
+1. **Manual tests and live checks** (346 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (24 items): make each call
@@ -198,8 +203,8 @@ agent can apply it.
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 16 | 1 |
-| Transcripts, observation and bandwidth | 28 | 2 |
-| **Total** | 345 | 24 |
+| Transcripts, observation and bandwidth | 29 | 2 |
+| **Total** | 346 | 24 |
 
 ## Outstanding work
 
@@ -808,6 +813,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[7100](../transcripts-and-observation/7100-long-soak-follow-ups.md) task 2: a Linux node whose agent can reach Docker, for the container long soak.** beelink2's agent account cannot reach Docker (it is not in the `docker` group, and RootlessKit is not installed for `mise run docker:disposable`), so the soak cannot start there. Either let an agent use a Docker daemon (install RootlessKit on beelink2 so `docker:disposable` can start a rootless daemon, or name a fleet node whose agent already reaches Docker; adding an account to the `docker` group is root-equivalent, so decide that deliberately), or run the soak yourself with the command in 7100 task 2 on such a host and `mise run dev:stop`/`dev:reset` its `rw-ctrsoak` profiles if the driver did not. Record: the node (or "ran it myself" with the host), and for a run of your own its output JSON path, cycles completed, any failed steps and the footprint trend, in 7100 task 2's Investigation; an agent then runs or reads the soak.
 - [ ] **7670 (retired) task 1: the container preview worker on Docker Desktop for Mac (Apple Silicon).** (Background: the [2026-11-13 Linux run](../../development/container-qualification.md#tmux-reopen-static-search-text-and-streamed-reads-in-real-containers-2026-11-13), which found that the worker's seccomp profile stopped runc 1.5.2 from starting the worker container at all and changed the profile; the [container isolation](../../architecture/transcript-artifacts-runtime.md) section describes the profile.) No agent node has a running Docker Desktop, so this needs your Mac. With Docker Desktop running, in a checkout of `main` that has the 2026-11-13 profile change, run `docker/artifact-preview-worker/build.sh`, then `bun test --cwd apps/backend ./src/core/transcript-artifacts/preview-static-search-text.test.ts ./src/core/transcript-artifacts/preview-print.test.ts ./src/core/transcript-artifacts/preview-container.test.ts --parallel=1` and check that no case reports "container case skipped" or "live cases skipped". Then remove the image you built (`docker image rm orkestrator-artifact-preview-worker:1`) and the `docker/artifact-preview-worker/image-pin.json` the build wrote. Record: in the 2026-11-13 section of `docs/development/container-qualification.md`, the Docker Desktop version, `docker info --format '{{.Runtimes}}'`, and the pass, fail and skip counts of each file; a failure there means the profile needs another syscall for that runtime.
 - [ ] **7571 (retired) task 1: bridge observers still go live against the observe-only bridges.** The Claude and Codex bridges now serve only `?observe=1` and keep no replay ring. In a disposable `dev:test` profile (`--no-host-seed`, never the production instance) with a fake model or a disposable login, open a native Claude tab and a native Codex tab in a fixture environment, run one short turn in each, switch to another environment while it runs, then let both idle for five minutes. Expected: each turn's status and messages arrive without a reload, the backend log shows the observation stream connected for both bridges (no repeated `400` on `/event/subscribe`), and the observer group backs off while idle (no reconnect loop). Record: the bridge versions, what you saw and any log lines (no prompts or contents), as a reply to the coordinator. A failure goes to a new to-do for an agent.
+- [ ] **8303 (retired) task 1: real parallel forks from a background subagent leave the Agents panel.** (Background: [Sub-agent card states](../../architecture/agent-engines.md#sub-agent-card-states) and the fork note under "Claude offers fork at a message" in the same doc.) The cause was found in the pinned Claude Code (2.1.319) and covered with recorded-shape fixtures; no real fork run was made, because it needs billed turns. In a disposable profile signed in to Claude (`mise run dev:test --profile fork-cards --fixture --credential-source claude --agent-platforms claude`), in a native Claude tab on the fixture, ask the agent to start one general-purpose agent with `run_in_background: true` whose prompt tells it to start three `fork` agents (`subagent_type: "fork"`) in one response, each running one short read-only command and reporting. When every fork has reported, check the pinned **Agents** panel holds none of them; switch to another environment and back; reload the page; then restart the profile (`mise run dev:stop --profile fork-cards`, start it again) and reopen the tab, which makes the bridge rehydrate the subagents from their transcripts. After each step check that each fork has exactly one card and none reads Active (a fork the CLI was killed under may read Stopped or Ended). Stop and reset the profile afterwards. Record: the date, the Claude Code version, and for each step the number of fork cards and their labels, as a reply to the coordinator; any card still Active needs a new to-do.
 
 ### Decisions, approvals and outward actions
 

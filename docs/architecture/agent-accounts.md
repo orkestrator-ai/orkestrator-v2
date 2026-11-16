@@ -644,7 +644,11 @@ provider's own app.
 
 - **Claude** reads `cedar_ember` from `/api/oauth/usage?cedar_ember=1`, the
   query Claude Code's own `/limit-reset` check sends; without it the payload
-  has no resets. Each grant holds `resets_left` resets, says what it clears
+  has no resets. The read must also send Claude Code's User-Agent
+  (`claude-cli/<pinned version> (external, cli)`, `CLAUDE_USAGE_USER_AGENT`):
+  the endpoint judges eligibility by the calling surface and otherwise answers
+  every account `eligible: false`, `ineligible_reason: "surface"`, with no
+  grants. Each grant holds `resets_left` resets, says what it clears
   (`type`: `session`, `weekly`, `full`) and when it ends (`ends_at`). Paused,
   ended and empty grants and an account with `eligible: false` hold nothing. A
   400/404/422 on the query falls back to the plain endpoint so the windows

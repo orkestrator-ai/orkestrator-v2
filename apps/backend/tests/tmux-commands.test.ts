@@ -3,6 +3,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { compatibilityPathUsage } from "../src/core/compatibility-path-usage";
 import path from "node:path";
 import { TmuxBackend } from "../src/core/tmux-backend";
+import { encodeCwd as backendEncodeCwd } from "../src/core/tmux-hooks";
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
@@ -18,6 +19,13 @@ import {
 } from "./tmux-test-harness.js";
 
 describe("Electron tmux hooks and transcripts", () => {
+  test("the transcript fixture normalizes trailing slashes like the backend", () => {
+    for (const cwd of ["/a/b", "/a/b/", "/a/b///"]) {
+      expect(encodeCwd(cwd)).toBe("-a-b");
+      expect(encodeCwd(cwd)).toBe(backendEncodeCwd(cwd));
+    }
+  });
+
   test("stopped history uses the recreated container backend", async () => {
     const handlers = createHandlers();
     const environment = {

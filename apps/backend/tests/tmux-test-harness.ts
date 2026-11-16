@@ -83,7 +83,7 @@ export function createEnvironment(worktreePath: string, environmentId: string): 
 
 /** Claude Code's own folder name, independent of the backend's `encodeCwd`. */
 export function encodeCwd(cwd: string): string {
-  return claudeProjectSlug(cwd);
+  return claudeProjectSlug(cwd.replace(/\/+$/, ""));
 }
 
 export async function withFakeTmuxRuntime(

@@ -583,6 +583,14 @@ test.describe("failed native turns ring the right bell", () => {
                     before: bridgeBefore,
                     after: containerBridgePid(containerId!),
                   };
+                  expect(
+                    bridgeBefore,
+                    "no container bridge was running before the restart",
+                  ).toBeGreaterThan(0);
+                  expect(
+                    record.containerBridgePid.after,
+                    "the container bridge was replaced or disappeared during the backend restart",
+                  ).toBe(bridgeBefore);
                   const seen = new Set<string>();
                   let quiet = true;
                   for (let sample = 0; sample < 10; sample += 1) {
@@ -590,6 +598,14 @@ test.describe("failed native turns ring the right bell", () => {
                       environmentId: bell.id,
                     });
                     seen.add(environment?.agentActivityState ?? "unknown");
+                    expect(
+                      environment,
+                      "the held environment disappeared after the restart",
+                    ).not.toBeNull();
+                    expect(
+                      environment?.agentActivityState,
+                      `the held turn was not working after the restart (sample ${sample + 1})`,
+                    ).toBe("working");
                     if (environment?.hasUnreadWork === true) quiet = false;
                     await sleep(1_000);
                   }

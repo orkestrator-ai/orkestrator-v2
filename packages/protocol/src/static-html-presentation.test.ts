@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { installDesignRuntime } from "./design-runtime.js";
+import { designRuntimeSource, installDesignRuntime } from "./design-runtime.js";
 import { FRAME_CHANNEL_POLICY, STATIC_PRESENTATION_POLICY } from "./rich-content-policy.js";
+import { createStaticHtmlSanitizer } from "./static-html-sanitizer.js";
 import {
   STATIC_HTML_FRAME_CHANNEL,
   STATIC_HTML_MAX_FIND_QUERY_CHARACTERS,
   STATIC_HTML_MAX_TEXT_CHUNKS,
   installStaticHtmlPresentationRuntime,
+  staticHtmlPresentationRuntimeSource,
   parseStaticHtmlFrameMessage,
   staticHtmlFrameBootstrap,
   staticHtmlFrameDocument,
@@ -43,7 +45,7 @@ async function frameWith(url = "https://frame.invalid/doc"): Promise<Frame> {
     "window.__posted = []; window.parent = { postMessage: (message) => window.__posted.push(message) };",
   );
   window.eval(
-    `(${installStaticHtmlPresentationRuntime.toString()})(${JSON.stringify({
+    staticHtmlPresentationRuntimeSource({
       nonce: NONCE,
       maxHtmlBytes: STATIC_PRESENTATION_POLICY.maxDocumentBytes,
       maxElements: STATIC_PRESENTATION_POLICY.maxElements,
@@ -52,7 +54,7 @@ async function frameWith(url = "https://frame.invalid/doc"): Promise<Frame> {
       maxTextCharacters: STATIC_PRESENTATION_POLICY.maxSearchTextCharacters,
       textChunkCharacters: STATIC_PRESENTATION_POLICY.searchTextChunkCharacters,
       maxFindQueryCharacters: STATIC_HTML_MAX_FIND_QUERY_CHARACTERS,
-    })})`,
+    }),
   );
   return {
     window,
@@ -277,10 +279,33 @@ describe("presentation runtime", () => {
     expect(frame.evaluate("window.__authored")).toBeUndefined();
   });
 
-  test("matches the design runtime's sanitizer exactly", async () => {
+  test("both runtimes run the one shared sanitizer and carry no copy of its rules", () => {
+    const sanitizer = createStaticHtmlSanitizer.toString();
+    const source = staticHtmlPresentationRuntimeSource({
+      nonce: NONCE,
+      maxHtmlBytes: 1,
+      maxElements: 1,
+      maxLinkCharacters: 1,
+      maxReportedHeight: 1,
+      maxTextCharacters: 1,
+      textChunkCharacters: 1,
+      maxFindQueryCharacters: 1,
+    });
+    expect(source).toContain(sanitizer);
+    expect(designRuntimeSource()).toContain(sanitizer);
+    expect(staticHtmlFrameBootstrap(NONCE)).toContain(sanitizer);
+    // The rule set's distinctive strings live only in the shared factory.
+    for (const rule of ["script,iframe,frame,object,embed", "formaction", "vbscript"]) {
+      expect(sanitizer).toContain(rule);
+      expect(installStaticHtmlPresentationRuntime.toString()).not.toContain(rule);
+      expect(installDesignRuntime.toString()).not.toContain(rule);
+    }
+  });
+
+  test("renders exactly what the design runtime renders", async () => {
     for (const html of [HOSTILE_REPORT_HTML, ACTIVITY_REPORT_HTML]) {
       const design = new Window();
-      design.eval(`(${installDesignRuntime.toString()})()`);
+      design.eval(designRuntimeSource());
       const run = (design as unknown as { orkDesign: (operation: unknown) => unknown }).orkDesign;
       run({ op: "render", html });
       const frame = await frameWith();

@@ -133,7 +133,7 @@ describe("OpenCode stop with a pending-request reject the server refuses", () =>
 
 /**
  * A user steer whose acknowledgement was lost stays a pending steer in storage.
- * When it is still held behind a card, the stop withdraws it (to-do 8100
+ * When it is still held behind a card, the stop withdraws it (#2250
  * (retired)), and OpenCode's answer for it becomes `absent`: the pending steer
  * clears and the next prompt runs alone, without the stopped redirect.
  */

@@ -91,7 +91,7 @@ export function supervisionDemand(
  * running, and nothing announces the turn's end afterwards: these sessions
  * are not native agent sessions, so the activity sweep that raises
  * `provider-transition` never sees them. The caller polls an accepted slot on
- * a short settle cadence instead of the observation interval (todo 7557).
+ * a short settle cadence instead of the observation interval (#2079).
  */
 export function resultKeysAwaitingTurnEnd(workflow: MultiReviewWorkflow): string[] {
   const keys: string[] = [];
@@ -126,7 +126,7 @@ export function isGraphEngineProjection(workflow: MultiReviewWorkflow): boolean 
 /**
  * Whether the workflow's validation run is running and started less than
  * `windowMs` ago. A short run usually ends inside that window, and its end
- * raises no wake (todo 7564 task 3). A graph-engine projection is driven by
+ * raises no wake (#2131). A graph-engine projection is driven by
  * its graph run, and a run being stopped has no completion to wait for, so
  * neither gets the fast cadence; nor does a run whose start is unreadable.
  */

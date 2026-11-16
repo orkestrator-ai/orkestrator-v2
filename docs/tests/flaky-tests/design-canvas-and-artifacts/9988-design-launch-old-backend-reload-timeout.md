@@ -58,7 +58,7 @@ stays open.
 
 - **Base:** `17d28238c098b4443d1289df5c4ed75e7cc2802e`; `mise run flaky:recurrence -- 9988 --base 17d28238c --registry-ref origin/main` answered open.
 - **Observed head:** branch `remove-dead-bridge-be98778b92d1-r1` at
-  `16561abbc` (7571 removals). Its only startup change removes one background
+  `16561abbc` (7571 (retired) removals). Its only startup change removes one background
   effect from `App.tsx` (the localStorage pipeline import); it touches no
   design, usage, background-task or keyboard component.
 - **Command:** `mise run test:logged -- --name browser-rerun -- mise run test:browser`

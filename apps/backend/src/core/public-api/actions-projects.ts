@@ -384,7 +384,7 @@ async function removeEmptyProject(
   return {
     state: "succeeded",
     // The registration and this machine's tickets, ticket images, labels,
-    // notes and feature plans for it (to-do 5820); checkouts on disk, remote
+    // notes and feature plans for it (#2295); checkouts on disk, remote
     // repositories and other machines' copies are untouched.
     result: { removed: projectId, effects: PROJECT_REMOVE_EFFECTS, ...extra },
   };

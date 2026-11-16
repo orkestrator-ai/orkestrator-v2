@@ -320,11 +320,88 @@ mise run dev:reset --profile ork-bell
 
 Each platform writes `output/agent-testing/<run>/failed-turn-bell/<platform>.json`
 and the toasts are saved as `output/visual-previews/5160-bell-<platform>-<case>.png`.
-On beelink on 2026-11-14 (to-do 5160 task 4) all sixteen cases passed:
+On beelink on 2026-11-14 (to-do 5160 (retired) task 4) all sixteen cases passed:
 the refused turn rang within 4 to 16 s on every platform, the bridge kill
 within 13 to 14 s for Claude, Codex and Pi and 80 s for OpenCode (its
 unsettled-run grace), and the restart within 18 to 25 s. Cursor and Grok have
-no loopback seam, so their refused logins are a manual-test item.
+no loopback seam, so their refused logins are a manual-test item. The
+environment's own cleanup retries a delete the writer lease refuses (a
+backend restarted just after a crash refuses container changes until it wins
+the lease late, up to about a minute) and fails the run softly, naming what
+it could not delete, instead of leaving a container behind.
+
+**A container's bridge surviving the restart.** With
+`ORKESTRATOR_AGENT_TEST_BELL_ENVIRONMENT=container` the bell environment is a
+container, for native Claude only, and the cases default to `restart`
+(`refused` and `stop` may be added; `bridge-kill` signals a host process and
+is refused). The same `refused-login-model.ts` runs on the container's
+loopback under the image's own `bun` (`--port 47123`), the container user's
+Claude settings point at it, and the spec holds and releases it with
+`docker exec curl`. A container's bridge outlives the backend's SIGKILL and
+restart, so the turn is still held afterwards: the case samples the restarted
+backend for 10 s (it must read `working` and must not ring), checks the
+request is still held, then releases it, and the refusal the surviving bridge
+reports must ring `agent_failed`. Build the profile's image first:
+
+```bash
+mise run docker:build:dev --profile ork-bell-ctr
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile ork-bell-ctr --fixture --no-agent-credentials --no-host-seed \
+  --headless --agent-platforms claude
+ORKESTRATOR_AGENT_TEST_PROFILE=ork-bell-ctr ORKESTRATOR_AGENT_TEST_LIVE_FAILED_TURN_BELL=1 \
+  ORKESTRATOR_AGENT_TEST_BELL_ENVIRONMENT=container ORKESTRATOR_AGENT_TEST_BELL_CASES=refused,stop,restart \
+  mise run test:logged -- --name failed-turn-bell-ctr -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts failed-turn-bell-live.spec.ts
+```
+
+A host whose firewall drops container traffic to the profile needs the
+`docker:disposable --host-loopback` daemon, as the container Claude CLI row in
+[container-qualification.md](container-qualification.md) does. On arktech-mini
+(macOS, Docker Desktop) on 2026-11-16 (to-do 5160 (retired) task 6) it passed
+three times on `orkestrator-v2:dev-33e9ce000cda`: the in-container bridge kept
+its PID across the restart every time, the restarted backend read `working`
+and stayed silent until the hold was released, and the release rang
+`agent_failed` (whole case 36 to 45 s). In the same runs `refused` rang in 5 to 6 s
+("Claude ended the turn on an API error.") and `stop` rang `agent_finished`.
+
+**A refused login in a `claude-tmux` tab.**
+`e2e/agent-testing/failed-turn-bell-tmux-live.spec.ts`
+(`ORKESTRATOR_AGENT_TEST_LIVE_FAILED_TURN_BELL_TMUX=1`) opens one host
+`claude-tmux` tab (turning `experimentalTmux` on for the run) while the page
+sits on another environment. The profile's own Claude directory is pointed at
+`refused-login-model.ts` with a bearer token, so the interactive CLI asks no
+API-key question, and its first-run screens (onboarding, bypass consent,
+trust for the worktree) are answered in its `.claude.json`; both files and the
+setting are restored afterwards. A prompt submitted from outside the view must
+ring `agent_failed`, the tab must stop reading busy, the toast must show, and
+the tab must find the CLI's transcript and show its error ("Not logged in ·
+Please run /login", the CLI's wording for a 401). It then submits one more
+prompt and records, for up to 120 s, whether it reaches the model and the tab
+settles (the gap 8092 (retired) recorded for the container CLI, now settled
+from the CLI's notice; see [container-lifecycle.md](../architecture/container-lifecycle.md#turns-no-hook-ends)). It writes
+`output/agent-testing/<run>/failed-turn-bell/claude-tmux.json` and
+`output/visual-previews/5160-bell-claude-tmux-*.png`.
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile ork-bell-tmux --fixture --no-agent-credentials --no-host-seed \
+  --headless --agent-platforms claude
+ORKESTRATOR_AGENT_TEST_PROFILE=ork-bell-tmux ORKESTRATOR_AGENT_TEST_LIVE_FAILED_TURN_BELL_TMUX=1 \
+  mise run test:logged -- --name failed-turn-bell-tmux -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts failed-turn-bell-tmux-live.spec.ts
+```
+
+On arktech-mini on 2026-11-16 (to-do 5160 (retired) task 7) the refused turn
+rang `agent_failed` within 10 ms of the model's single 401 (the CLI does not
+retry a 401 marked `x-should-retry: false`) and the tab read idle. The first
+runs found the tab showing only "Waiting for Claude…": the backend looked for
+the transcript under a folder name that replaced only `/`, while Claude
+replaces every non-alphanumeric character, and the profile's worktrees sit
+under `Application Support`. With that fixed (`claudeProjectSlug`) the tab
+showed the prompt and the error in six passing runs. The CLI took 1 to 47 s
+on that host to send a submitted prompt; with the 120 s window the next
+prompt reached the model in 10 to 36 s, settled and rang `agent_failed` again
+in all three runs, so 8092's gap did not show in a host tab.
 
 The container **Claude CLI** tab is covered by
 `container-claude-terminal-signal.spec.ts` with
@@ -338,7 +415,7 @@ minutes.
 
 `e2e/agent-testing/schedules-two-backends-live.spec.ts` shows Settings →
 Schedules on two real backends sharing one profile's data directory (to-do
-5160 task 3). It turns scheduling on, saves an operator schedule due in 2099,
+5160 (retired) task 3). It turns scheduling on, saves an operator schedule due in 2099,
 starts a second backend with the profile backend's own arguments and only
 another gateway port and gateway token, then overwrites the writer lease
 under a token neither backend holds. It checks, without reloads: no notice
@@ -2475,6 +2552,12 @@ token or session id) to
 Non-baseline scenarios add the whole turn's bridge totals and the exact
 head-row recovery reads (`/messages`); `trimmed-head` also captures the first
 viewer to `output/visual-previews/`. Stop and reset the profile afterwards.
+The renderer counts include each discovery answer's status
+(`discovery:snapshot`, `discovery:unchanged`) and their bytes
+(`discoveryBytes`). A discovery read comes about once per 30 s backstop, so
+the default windows can miss it: `E10_WINDOW_MS=40000` and
+`E10_IDLE_WINDOW_MS=120000` (with `E10_ROUNDS=26` so the turn outlasts both
+streaming windows) are what to-do 8151 measured with.
 The latest figures are in
 [native-transcripts.md](../architecture/native-transcripts.md#one-request-per-round).
 

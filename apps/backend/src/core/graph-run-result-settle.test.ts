@@ -1,5 +1,5 @@
 /**
- * Todo 7564: a graph agent node finished up to one observation pass (3 s
+ * #2131: a graph agent node finished up to one observation pass (3 s
  * plus a per-run spread) after its model submitted the node's last output.
  *
  * The model submits through a tool call inside its turn, so the acceptance
@@ -121,7 +121,7 @@ async function accept(s: Started): Promise<void> {
   await settleKeyedWork(s.time, [s.service]);
 }
 
-describe("graph run result settle cadence (todo 7564)", () => {
+describe("graph run result settle cadence (#2131)", () => {
   test("without a result, a turn that ends silently waits for the observation cadence", async () => {
     const s = await started();
     // The order 7564 describes: the last observation saw the turn running and

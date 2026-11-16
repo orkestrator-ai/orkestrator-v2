@@ -1170,9 +1170,22 @@ export interface ClaudeBackgroundTaskState {
   endReason?: NativeBackgroundTask["endReason"];
 }
 
+export interface ClaudeBackgroundTaskStateOptions {
+  /**
+   * The session's turn has stopped (idle, or ended on an error), as its
+   * authoritative snapshot reports it. Only launches in that turn can use
+   * its liveness; older launches need a live, linked parent agent task.
+   * Absent while the snapshot is unknown.
+   */
+  turnSettled?: boolean;
+  /** Snapshot turn start; also identifies older rows in a paged transcript. */
+  turnStartedAt?: number;
+}
+
 export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
   messages: TMessage[],
   backgroundTasks: Record<string, ClaudeBackgroundTaskState>,
+  options: ClaudeBackgroundTaskStateOptions = {},
 ): TMessage[] {
   const tasksById = new Map<string, ClaudeBackgroundTaskState>();
   const tasksByToolUseId = new Map<string, ClaudeBackgroundTaskState>();
@@ -1189,6 +1202,51 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
     tasksById.set(task.id, task);
     if (task.toolUseId) tasksByToolUseId.set(task.toolUseId, task);
   }
+  const latestUserIndex = messages.findLastIndex((message) => message.role === "user");
+  const agentLaunches = new Map<
+    string,
+    { message: NativeMessage; index: number; part: NativeMessagePart }
+  >();
+  messages.forEach((message, index) => {
+    for (const part of message.parts) {
+      if (part.toolUseId && isTaskTool(part.toolName)) {
+        agentLaunches.set(part.toolUseId, { message, index, part });
+      }
+    }
+  });
+  const launchCanRun = (
+    message: NativeMessage,
+    messageIndex: number,
+    part: NativeMessagePart,
+  ): boolean => {
+    // A child of a background agent can outlive the foreground turn, but an
+    // unrelated task (especially a shell) says nothing about this launch.
+    // Follow foreground parents too. Bound the walk so corrupt/cyclic parent
+    // edges cannot hang the renderer.
+    for (let remaining = agentLaunches.size; part.parentTaskUseId; remaining -= 1) {
+      const parent = tasksByToolUseId.get(part.parentTaskUseId);
+      if (parent) return parent.kind !== "shell" && isLiveBackgroundTask(parent.status);
+      const launch = agentLaunches.get(part.parentTaskUseId);
+      if (
+        !launch ||
+        remaining === 0 ||
+        launch.part.toolState === "success" ||
+        launch.part.toolState === "failure" ||
+        (launch.part.agentState !== undefined && launch.part.agentState !== "active")
+      )
+        return false;
+      message = launch.message;
+      messageIndex = launch.index;
+      part = launch.part;
+    }
+    if (options.turnSettled || messageIndex < latestUserIndex) return false;
+    const launchedAt = Date.parse(part.createdAt ?? message.createdAt ?? "");
+    return (
+      options.turnStartedAt === undefined ||
+      !Number.isFinite(launchedAt) ||
+      launchedAt >= options.turnStartedAt
+    );
+  };
   const isCleanupLaunch = (part: NativeMessagePart, recoveredId: string | undefined): boolean =>
     (part.toolUseId !== undefined && cleanupToolUseIds.has(part.toolUseId)) ||
     (recoveredId !== undefined && cleanupTaskIds.has(recoveredId));
@@ -1247,7 +1305,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
   }
 
   let messagesChanged = false;
-  const nextMessages = messages.map((message) => {
+  const nextMessages = messages.map((message, messageIndex) => {
     let partsChanged = false;
     const parts = message.parts.map((part) => {
       if (part.type !== "tool-invocation") return part;
@@ -1278,14 +1336,18 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
          * result is the whole lifecycle. Stating it explicitly is what promotes
          * the row to the shared agent card: the grouper deliberately refuses to
          * infer a child from a task-shaped tool name alone, since other
-         * providers use those names for ordinary foreground work.
+         * providers use those names for ordinary foreground work. A launch
+         * still waiting on its result is only live while a turn could be
+         * running it.
          */
         agentState =
           part.toolState === "failure"
             ? "failed"
             : part.toolState === "success"
               ? "finished"
-              : "active";
+              : launchCanRun(message, messageIndex, part)
+                ? "active"
+                : "ended";
       }
 
       if (!isAgentTool && isBackgroundTaskLaunch(part, recoveredId)) {

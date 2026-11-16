@@ -624,8 +624,9 @@ checks it under the lease or transaction the delete also takes: creating a
 ticket, applying a sync snapshot, recording a leaf's pairing, creating a
 label, saving notes, creating a feature plan. So a write racing the removal
 either lands before the delete (and goes with it) or is refused; a command
-node leaves a leaf's changes for a fenced project queued, as it does for an
-unknown one. The fence outlives a completed removal and is lifted only when a
+node neither applies nor acknowledges a leaf's change for a fenced project, so
+it stays queued on the leaf with every change after it until the removal
+settles. The fence outlives a completed removal and is lifted only when a
 failed removal kept the project. Image ids are journaled
 (`kanban-image-deletions`) in the commit that deletes their tickets and
 unlinked from the journal; a file or sidecar that cannot be removed fails the
@@ -643,11 +644,40 @@ it and its conflicts are dropped. So:
   command node stay queued, because they name the command node's project;
 - removed on the command node, its board is gone from that machine and it no
   longer sends that project to any leaf; each leaf's own project and its
-  copies are that machine's to remove.
+  copies are that machine's to remove. A change a leaf queues for the removed
+  project is dropped when the command node next collects (`NodeTicketSync`;
+  from to-do 8111 task 2, retired 2026-11-16): project ids are never reused,
+  so a project absent from a strict read of the projects store
+  (`loadProjectIdsForCleanup`) is gone for good. The command node acknowledges it in its place, in order, so it no
+  longer holds back the leaf's changes for other projects, and names the
+  project in the acknowledgement's `removedProjects`; the leaf then keeps its
+  copies of that board as its own, as when a command node detaches, and
+  drops anything else queued for it. The sync result counts the dropped
+  changes (`dropped`). When the projects store cannot be read, nothing is
+  dropped: the changes from the first unknown project on stay queued and the
+  sync reports an error and is retried. The leaf returns the actual discarded
+  count, including queued changes beyond the collected batch. Only removed
+  projects reached in the settled prefix are named in the acknowledgement.
+
+**Rows left by earlier removals.** Before 2026-11-15 removing a project left
+its board behind. Each backend start runs `sweepRemovedProjectContentAtStartup`
+(`removed-project-content-sweep.ts`; from to-do 8111 task 1, retired
+2026-11-16), which deletes the tickets, ticket image files, deleted-ticket
+delivery sidecars, label catalogues, notes, feature plans and sync
+bookkeeping that name a project no longer stored, and the Linear and GitHub completion comment records of
+pipelines no longer stored (`sweepRemovedProjectRows`,
+`storage-kanban-removed-projects.ts`). Each decision reads the owner store
+strictly inside the lease or transaction that deletes, so a project added
+meanwhile keeps its rows; an unreadable or invalid projects store, or one
+holding no project, refuses the whole sweep and deletes nothing, and an
+unreadable store being swept, or a missing or unreadable pipelines store,
+skips only that step. Nothing is queued for a command node, and a machine
+with nothing left over writes nothing.
 
 Kanban tickets are not linked to Linear issues or GitHub issues (see
 [Linear](#linear)), so removing a project changes nothing in either.
-`storage-kanban-project-removal.test.ts` and
+`storage-kanban-project-removal.test.ts`,
+`storage-kanban-removed-projects.test.ts` and
 `nodes/node-ticket-sync-project-removal.test.ts` cover it.
 
 ## Linear
@@ -765,3 +795,38 @@ a machine from before board links answers `unknown-command`, and its older
 `get_linear_issue`, `get_linear_issues` and `post_linear_issue_comment` would
 ignore `projectId`. `add_linear_comment` is not idempotent: a retry posts
 again.
+
+**Decisions behind the design** (from to-do 7767, retired 2026-11-16):
+
+- *Kanban first is said in the tool descriptions, not the coordinator's
+  context prompt.* Each Linear tool says Kanban (`list_tickets`) stays the
+  default board and to use Linear when the user works from Linear or names an
+  issue, and an unlinked project answers "no Linear board linked". A context
+  line would cost every coordinator turn for projects that never use Linear;
+  if coordinators are seen reaching for Linear unasked, a prompt line is the
+  next step. A per-project "Linear is the source of truth" switch was not
+  asked for and nothing depends on it.
+- *Board-link sync is its own small service.* `NodeLinearSync` swaps the
+  whole (small) state each pass instead of adding a third record kind to
+  Kanban sync's cursors and outbox: a machine has one link per repository, so
+  a full read is simpler to reason about. The cost is that a leaf's change
+  waits for the command node's next pass (at most a minute).
+- *A synced link names no project*, because project ids differ between
+  machines; lookups go by the repository key.
+- *A status read keeps when the key was connected.* `get_linear_connection`
+  refreshes the viewer but not `connectedAt`, since a disconnect made
+  elsewhere is compared with it; rewriting it would let a status read undo a
+  disconnect.
+- *Only non-secret state syncs* (links, disconnects, the connection's
+  fingerprint and viewer name), and each machine keeps working with Linear
+  when it is cut off from the others.
+
+**Verification.** Every path has deterministic tests with real storage and a
+faked Linear API and node link (`linear-boards.test.ts`,
+`commands-registry-linear.test.ts`, `nodes/node-linear-sync.test.ts`,
+`control-mcp/linear-tools*.test.ts`), and `linear-two-machines.test.ts` runs
+the whole two-machine sequence through the real command handlers and the
+command node's real sync: connect and link on a leaf, a sync pass, Use it
+here, a board read, disconnect everywhere and reconnect. The same sequence on
+two live profiles with a throwaway Linear key is in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).

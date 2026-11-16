@@ -4,12 +4,12 @@ Checked against `main` at `2459b05c` (2026-10-15).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice.
+Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice.
 
 ### Tasks
 
 1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: partly done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), the `http-bridge` move is done (2026-11-06, the procedure proof), and the `web-annotations` and `control-mcp` moves are done (2026-11-11, one change each; see "Assumptions and decisions"); `keyed-record-format.ts` is placed in the shared kernel at the `core/` root (2026-11-13, see task 7); the `opencode` move is open.
-2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: partly done: the `plan-usage` move is done (2026-11-13) and the `features` move is done (2026-11-14), one change each (see "Assumptions and decisions"); the other nine (`coordinator` to `native-agent`) are open, one domain per change.
+2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: partly done: the `plan-usage` move is done (2026-11-13), the `features` move is done (2026-11-14) and the `previews` move is done (2026-11-16), one change each (see "Assumptions and decisions"); the other eight (`coordinator`, `agent-accounts`, `worktrees`, `git`, `workflows`, `review`, `build-pipeline`, `native-agent`) are open, one domain per change.
 3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
 5. **Record the type-level import cycle**: re-measure and record it here. Status: done for the baseline (2026-10-28, see "Current state"); re-measure when the waves finish.
@@ -50,7 +50,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-
 
 **Context.** `plan-usage`, `features`, `coordinator`, `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`, `build-pipeline`, `native-agent`.
 
-**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) are the subject of the open size todo [0057](0057-native-agent-service-size.md). Re-measured 2026-11-13 on `17d28238c` for the first slice: `plan-usage*` was 2 source / 3 tests, with 10 production importers outside the domain, and no open pull request touched it (two were open). Re-measured 2026-11-14 on `dc90609bf` for the second slice: `feature-*` was 5 source / 4 tests, with 6 production importers outside the domain (five in `core/` and `apps/backend/scripts/recurring-baseline-workflows.ts`) using four symbols, and neither open pull request touched it.
+**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) are the subject of the open size todo [0057](0057-native-agent-service-size.md). Re-measured 2026-11-13 on `17d28238c` for the first slice: `plan-usage*` was 2 source / 3 tests, with 10 production importers outside the domain, and no open pull request touched it (two were open). Re-measured 2026-11-14 on `dc90609bf` for the second slice: `feature-*` was 5 source / 4 tests, with 6 production importers outside the domain (five in `core/` and `apps/backend/scripts/recurring-baseline-workflows.ts`) using four symbols, and neither open pull request touched it. Re-measured 2026-11-16 on `c1fcc573b` for the third slice: `preview-*` was 8 source (7 modules and `preview-test-support.ts`) / 12 tests, with 12 production importers outside the domain (three in `core/` and nine `apps/backend/src/preview-*.ts` and `gateway-*.ts` files) using six symbols, plus the two test-only harness entrypoints (one more symbol and the test support); no pull request was open.
 
 **Decisions.**
 
@@ -281,6 +281,24 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   and all six import it. No named exceptions were needed: routing them
   through `index.ts` closes no runtime cycle. See "Assumptions and
   decisions".
+- Done (task 2's `previews` slice, 2026-11-16, against `main` at
+  `c1fcc573b`): the eight `preview-*` source files (test support included)
+  and their twelve tests are in `core/previews/` without the prefix
+  (`previews/runtime.ts`, `previews/access.ts`, `previews/intent.ts`,
+  `previews/readiness.ts`, `previews/listener-ownership.ts`,
+  `previews/service-registry.ts`, `previews/target-resolver.ts`,
+  `previews/test-support.ts`), with an `index.ts` and both lint patterns.
+  `index.ts` re-exports the six symbols the twelve production importers
+  outside the folder use (`PreviewRuntime`, `resolvePreviewTargetIntent` and
+  the types `AuthenticatedPreviewAccess`, `LegacyLoopbackPortAccess`,
+  `PreviewPublicationPort` and `ResolvedPreviewTarget`), and all of them
+  import it; it also re-exports `defaultProbeFamily` for
+  `preview-browser-harness.ts`. One module is a named
+  exception in the `apps/backend/src/**` pattern: `test-support.js`, which
+  the test-only entrypoints `preview-browser-harness.ts` and
+  `preview-baseline-harness.ts` import; their names fall outside the
+  tests-off override's globs. No runtime cycle needed an exception. See
+  "Assumptions and decisions".
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -305,7 +323,9 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   and 925, after OpenCode 1.x's retirement and the `control-mcp` slice
   on 2026-11-11 it holds 803 and 852, after the `plan-usage` slice on
   2026-11-13 it holds 806 and 856, and after the `features` slice on
-  2026-11-14 it holds 807 and 867, down from 812 and 871 just before it).
+  2026-11-14 it holds 807 and 867, down from 812 and 871 just before it,
+  and after the `previews` slice on 2026-11-16 it holds 813 and 875, down
+  from 821 and 887 just before it).
 - Prefix counts at the root:
 
   | Domain | Prefixes | Source | Tests |
@@ -320,7 +340,7 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   | coordinator | `coordinator-*` | 7 | 5 |
   | agent-accounts | `agent-accounts*` | 7 | 7 |
   | worktrees | `worktree-*` | 6 | 4 |
-  | previews | `preview-*` | 7 | 5 |
+  | previews | `preview-*` | done (8 / 12 moved, 2026-11-16) | |
   | git | `git-*`, `github*`, `pr-*` | 11 | 8 |
   | workflows | `workflow-*` | 9 | 7 |
   | review | `multi-review-*`, `review-*`, `looped-review-*` | 26 | 26 |
@@ -374,12 +394,13 @@ before the busy ones move.
    `public-api/`; the `http-bridge`, `web-annotations` and `control-mcp`
    moves; `keyed-record-format.ts` placed in the shared kernel.)
 2. **Wave 2 (mid-tier):** `coordinator`,
-   `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`,
-   `build-pipeline`, `native-agent`. (Done: `plan-usage`, `features`.)
+   `agent-accounts`, `worktrees`, `git`, `workflows`, `review`,
+   `build-pipeline`, `native-agent`. (Done: `plan-usage`, `features`,
+   `previews`.)
 3. **Wave 3 (hubs):** `terminals`, `tmux`, `recurring`, `containers`,
-   `environments`, `storage`. Many files import these, and `containers` and
-   `previews` are also imported from outside `core/`, so these slices touch the
-   most files.
+   `environments`, `storage`. Many files import these, and `containers` is
+   also imported from outside `core/` (as `previews` was), so these slices
+   touch the most files.
 4. **Last: `commands`.** It depends on most other domains. Its former
    `commands-runtime-state.ts` was deleted by todo 0011;
    the state now lives in `BackendRuntime` (`backend-runtime.ts`,
@@ -444,8 +465,109 @@ Decisions taken while doing tasks 5 and 6 (2026-10-28), task 1's
 task 1's `web-annotations` slice with the codemod fix from todo 7490
 (2026-11-11), to-do 7800 and task 1's `control-mcp` slice (2026-11-11), and task 1's
 `keyed-record-format.ts` placement with task 2's `plan-usage` slice
-(2026-11-13), and task 2's `features` slice (2026-11-14). The other moves in waves 1 to 4 (tasks 1 to 4) were
+(2026-11-13), task 2's `features` slice (2026-11-14), and task 2's
+`previews` slice (2026-11-16). The other moves in waves 1 to 4 (tasks 1 to 4) were
 left open on purpose: they move many files that other work in flight touches.
+
+### Task 2: `previews` as the third wave 2 slice
+
+- Chosen: one domain, `previews`, moved with the codemod
+  (`--prefix preview- --into previews`) against `main` at `c1fcc573b`. No
+  pull request was open. The ticket asked to avoid native-agent transcript
+  projection, build-pipeline and container files. Of the wave 2 domains
+  left, `workflows` is imported mostly by `build-pipeline-*`,
+  `multi-review-*` and `native-agent-*` files, `worktrees` had just been
+  changed by #2305 and is imported by `container-*` and `change-tracking/`
+  files, and `coordinator` and `agent-accounts` are larger and reached by
+  other domains' named exceptions. `previews` is self-contained (its
+  `core/` importers are the composition root, `commands-context.ts` and
+  `commands-registry-previews.ts`; the rest are the gateway and the
+  `apps/backend/src/preview-*.ts` transport files) and touches none of the
+  files the ticket excluded. `commands-registry-previews.ts` stays at the
+  root (a `commands-*` file), and the `transcript-artifacts/preview-*.ts`
+  files are another domain's and are untouched.
+- File names: `--prefix` works (every file starts with `preview-`):
+  `preview-runtime.ts` → `runtime.ts`, `preview-access.ts` → `access.ts`,
+  `preview-intent.ts` → `intent.ts`, `preview-readiness.ts` →
+  `readiness.ts`, `preview-listener-ownership.ts` → `listener-ownership.ts`,
+  `preview-service-registry.ts` → `service-registry.ts`,
+  `preview-target-resolver.ts` → `target-resolver.ts`,
+  `preview-test-support.ts` → `test-support.ts`, and the twelve tests to
+  match (`preview-docker.test.ts` → `docker.test.ts`, …). The folder is
+  `previews/` (the plan's domain name and the protocol contract domain's
+  name).
+- Measured before the move: 12 production importers outside the folder
+  (`index.ts`, `commands-context.ts` and `commands-registry-previews.ts` in
+  `core/`, and `gateway-context.ts`, `gateway-handlers.ts`,
+  `gateway-support-core.ts`, `preview-http-proxy.ts`,
+  `preview-publication.ts`, `preview-tunnel-mux-server.ts`,
+  `preview-tunnel-server.ts`, `preview-upstream-pool.ts` and
+  `preview-upstream.ts` in `apps/backend/src/`) using six symbols from four
+  modules, all but two of the twelve type-only; two test-only entrypoints
+  (`preview-browser-harness.ts`, `preview-baseline-harness.ts`); tests
+  outside the folder (three in `core/`, seven in `apps/backend/src/`,
+  `apps/backend/tests/gateway-preview.test.ts` and three
+  `apps/desktop/tests` files, all but one importing only the test
+  support); path strings in `mise.toml` (`test:preview:docker`),
+  `tests/unit/mise-tasks.test.ts`, `scripts/test-tiers.ts` (the slow-tier
+  entry for `local-discovery.test.ts`) and `tests/source-guards/baseline.json`;
+  and path strings in one architecture doc, one development report, three
+  to-do files and fourteen flake files. No `mock.module()` or `spyOn`
+  targeted the files, no worker or bundle entry point names them, and no
+  `<revision>:<path>` string named a moved file. The codemod moved 20 files
+  and reported 71 rewrites (the moved files included).
+- `index.ts` holds the six production symbols plus `defaultProbeFamily`,
+  which `preview-browser-harness.ts` hands to the test support in place of
+  its stubbed probe. All twelve production importers use it;
+  `commands-registry-previews.ts`, `preview-http-proxy.ts`,
+  `preview-publication.ts`, both tunnel servers and `preview-upstream-pool.ts`
+  had their several imports merged into one. `preview-upstream-pool.test.ts`
+  uses only `index.ts` symbols, so it imports `index.js` too; tests that use
+  the test support keep their deep import (procedure step 3).
+- Named exception: `test-support.js`. The two harness entrypoints are
+  test-only, but their names (`*-harness.ts`) do not match the tests-off
+  override's `*test-harness*` glob, so the `apps/backend/src/**` pattern
+  reported their `createPreviewHarness` imports. Options: (a) an exception
+  for `test-support.js` in that pattern; (b) re-export `createPreviewHarness`
+  from `index.ts`; (c) add the two harness files to the tests-off override.
+  Chosen (a): it keeps test support out of the domain's surface, and (c)
+  would also drop the protocol `testing/*` rule for those files. Cons: a
+  production file could import `test-support.js` without a lint error, but
+  the name makes that plain in review; the `tests/unit/**` pattern stays
+  strict. `defaultProbeFamily` went into `index.ts` rather than a second
+  exception because it is a plain function of the domain's surface (the
+  runtime's own default). No runtime cycle needed an exception:
+  `bunx oxlint` (`import/no-cycle`) is clean with every importer on
+  `index.ts`.
+- Hand fixes after the codemod: the bare names in `constants.ts`'s comment,
+  `target-resolver.ts`'s own comment, `docs/architecture/browser-previews.md`,
+  `docs/architecture/future-windows-support.md`, to-do 0046, and the folder
+  list in `docs/development/linting.md` (which now also names test support
+  as a kind of exception). Flake records and the dated
+  `worktree-watcher-validation.md` report keep the codemod's path rewrites,
+  as in the earlier slices. The done plan record `plans/unified/7004` keeps
+  the old name. `@orkestrator/protocol/preview-access` and the protocol's
+  own `preview-access.ts` (cited by `preview-tunnel-mux.ts`) are other
+  modules with the same name and are untouched.
+- One test fix outside the pure move, in a separate commit:
+  `previews/local-discovery.test.ts` failed alone (2 of 19) because a
+  comment added to its single-quoted fixture script on 2026-11-15 contained
+  an apostrophe. The comment is reworded, behaviour is unchanged, and flake
+  record 1145 has the details. It is in the slow tier, so the default suite
+  had not caught it.
+- Lint patterns: `**/previews/*` with `!**/previews/index.js` and
+  `!**/previews/test-support.js` under `apps/backend/src/**`, and the
+  `**/backend/src/core/previews/*` form under `tests/unit/**`. No backend
+  or `tests/unit` import path has another `previews/` segment
+  (`@orkestrator/protocol/contract/domains/previews` ends in it, so it does
+  not match). Checked with probe files (deleted): a deep import of
+  `runtime.js` is reported under both overrides, `index.js` is not reported
+  under either, and `test-support.js` is reported only under
+  `tests/unit/**`.
+- No manual checking is left: the move changes no behaviour, and what
+  remains (`mise run test`, `build:backend`, `verify:packaged-backend` and
+  the preview scenario suites) is agent work for the validation stage, so
+  nothing was added to the manual-test checklist (7568).
 
 ### Task 2: `features` as the second wave 2 slice
 

@@ -34,15 +34,9 @@ export interface NativeAgentSyncCacheEntry {
   /** Server-reported boundary between retained history and the live tail. */
   historyBoundaryCursor?: string;
   /**
-   * True when the transcript reports earlier messages but no cursor exists yet,
-   * so a click still has to mint one through the joined snapshot. Cached so a
-   * remount can act on the control it paints from this entry.
-   */
-  historyBootstrap?: boolean;
-  /**
-   * True after a joined-snapshot bootstrap proved this client cannot mint a
-   * cursor or recover more content. Sticky across polls so an incomplete
-   * server window cannot put an inert control back on screen.
+   * True after a click found no cursor to page from, so nothing more can be
+   * recovered. Sticky across polls so an incomplete server window cannot put
+   * an inert control back on screen.
    */
   historyUnpageable?: boolean;
   historyComplete: boolean;

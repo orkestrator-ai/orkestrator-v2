@@ -706,7 +706,7 @@ describe("coordinator schedule edits", () => {
   });
 });
 
-describe("the turn a schedule's fires are framed from (to-do 6080 task 5)", () => {
+describe("the turn a schedule's fires are framed from (to-do 6080 (retired) task 5)", () => {
   const setOrigin = (origin: "user" | "mail") =>
     Object.assign(
       currentWorkspace.conversations.find((item) => item.id === "main-1")!,

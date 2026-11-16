@@ -49,6 +49,7 @@ import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 import type { MachineLoadHistoryStorage } from "./storage-machine-load-history.js";
 import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
 import type { KanbanStorage } from "./storage-kanban.js";
+import type { RemovedProjectSweepResult } from "./storage-kanban-removed-projects.js";
 import type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
 import type { LinearStorage } from "./storage-linear.js";
 import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
@@ -183,7 +184,7 @@ export class StorageService {
   readonly clientState: ClientStateStorage;
   readonly setupApprovals: SetupApprovalsStorage;
   readonly watchedPullRequests: WatchedPullRequestsStorage;
-  /** This machine's load history (`machine-load.ts`, to-do 8104). */
+  /** This machine's load history (`machine-load.ts`, #2287). */
   readonly machineLoadHistory: MachineLoadHistoryStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
@@ -266,7 +267,7 @@ export class StorageService {
 
   /**
    * Publish a provider-authoritative projection after its cache is committed.
-   * `cause` names the announcing code path (content-free; todo 0049 task 4).
+   * `cause` names the announcing code path (content-free; #1659).
    */
   announceNativeAgentSessionProjection(
     environmentId: string,
@@ -438,6 +439,10 @@ export class StorageService {
 
   loadProjectIdsForCleanup(): Promise<Set<string>> {
     return this.repos.projects.loadProjectIdsForCleanup();
+  }
+
+  sweepRemovedProjectContent(): Promise<RemovedProjectSweepResult> {
+    return this.repos.projects.sweepRemovedProjectContent();
   }
 
   loadEnvironmentIdsForCleanup(): Promise<Set<string>> {

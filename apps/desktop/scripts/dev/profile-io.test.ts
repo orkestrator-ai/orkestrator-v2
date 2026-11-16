@@ -263,7 +263,7 @@ describe("development profile lifecycle primitives", () => {
   });
 
   // Docker Desktop on macOS can refuse every bind under a directory it has
-  // looked up once that directory is deleted and recreated (todo 0200).
+  // looked up once that directory is deleted and recreated (#1415).
   for (const keepToolchains of [false, true]) {
     test(`${keepToolchains ? "toolchain-preserving" : "full"} reset keeps the directories on every bind source's path`, async () => {
       const { roots, profile } = await modelCacheFixture();
@@ -1931,7 +1931,7 @@ describe("development profile lifecycle primitives", () => {
 
     // Electron (33) gets SIGTERM at its top process only: a group SIGTERM kills
     // Chromium's GPU process and zygote under a running browser, which then
-    // dumps core with SIGTRAP (to-dos 7552 and 7554).
+    // dumps core with SIGTRAP (#2080).
     expect(signals).toEqual([
       { pid: 22, signal: "SIGTERM", processGroup: true },
       { pid: 33, signal: "SIGTERM", processGroup: false },

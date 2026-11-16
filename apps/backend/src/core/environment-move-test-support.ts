@@ -16,7 +16,7 @@ import { BackendRuntime } from "./backend-runtime.js";
 import { removeFixturesAfterSettlement } from "../../tests/fixture-cleanup.js";
 import { ownedTempDirPrefix, sweepStaleTempDirs } from "../../../../tests/temp-sweep.js";
 
-// An Arch Linux sweep (0247) found `ork-env-move-*` roots left by runs whose
+// An Arch Linux sweep (#1339) found `ork-env-move-*` roots left by runs whose
 // tests passed: a diff scan still running at teardown wrote the project's
 // `.git/info/exclude`, so teardown also settles diff scans. Roots carry their
 // owner's PID and a later run removes those of dead owners.

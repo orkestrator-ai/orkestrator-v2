@@ -1,7 +1,7 @@
 /**
  * Fork, rewind and branch switching on the profile's real Codex app-server and
  * real Pi SDK, against a loopback model (`session-history-loopback-model.ts`):
- * no login and no billed turn. To-do 0006, task 6.
+ * no login and no billed turn. #1957.
  *
  * Opt-in (`ORKESTRATOR_AGENT_TEST_LIVE_SESSION_HISTORY=1`) against an already
  * running `dev:test --fixture` profile. Start it with a made-up Codex key so no
@@ -65,8 +65,11 @@ type Row = {
 };
 type ProjectionUpdate = {
   status: string;
-  projection?: { turn: { phase: string; error?: string }; messages: Row[] };
-  historyCursor?: string;
+  projection?: {
+    turn: { phase: string; error?: string };
+    messages: Row[];
+    messageWindow?: { truncated?: boolean };
+  };
 };
 type ForkOutcome = { sessionId: string; title?: string; draft?: string; controls?: unknown };
 type Platform = "codex" | "pi";
@@ -380,7 +383,10 @@ test.describe("fork and rewind on loopback models", () => {
             forceSnapshot: true,
           });
           expect(update.status).toBe("snapshot");
-          expect(update.historyCursor, "a short conversation fits the live window").toBeFalsy();
+          expect(
+            update.projection?.messageWindow?.truncated,
+            "a short conversation fits the live window",
+          ).not.toBe(true);
           return update.projection!;
         };
         const rowsOf = async (identity: ReturnType<typeof tab>) =>

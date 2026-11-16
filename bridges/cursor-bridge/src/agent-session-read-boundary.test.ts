@@ -1,6 +1,6 @@
 /**
  * Which attaches run Cursor's reading tools on the bridge's path-checking
- * executors (to-do 7400 task 1): a read-only coordinator's, and nothing else.
+ * executors (#2082): a read-only coordinator's, and nothing else.
  *
  * Split from `agent-session.test.ts`, which is near the repository's file-size
  * limit. The SDK is replaced through the bridge's test seams, as in the owner,

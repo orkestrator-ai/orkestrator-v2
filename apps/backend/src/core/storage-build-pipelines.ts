@@ -526,6 +526,20 @@ export class BuildPipelinesRepository {
       .map((record) => structuredClone(record));
   }
 
+  /**
+   * Every stored pipeline id, read strictly for a destructive sweep (the
+   * removed-project sweep's completion comment records, to-do 8111): a
+   * missing or unreadable store throws rather than read as "no pipelines".
+   * Rows that fail validation still count, so their records stay.
+   */
+  pipelineIdsForCleanupNow(): Set<string> {
+    const snapshot = this.context.loadStoreStrict<unknown>(this.files.buildPipelinesFile());
+    if (!snapshot || !isRecord(snapshot.value)) {
+      throw new Error("Build pipeline store is missing or invalid; cleanup refused");
+    }
+    return new Set(Object.keys(snapshot.value));
+  }
+
   async listBuildPipelines(projectId: string): Promise<PersistedBuildPipeline[]> {
     if (!isNonBlankString(projectId)) {
       throw new Error("Build pipeline project ID must not be blank");
@@ -764,7 +778,7 @@ export class BuildPipelinesRepository {
       const loaded = await this.loadBuildPipelineState();
       const record = loaded.records[pipelineId];
       // Its completion comment records have nothing left to guard (to-do
-      // 5820); deleted before the row, so a retry after a failure finds them.
+      // #2295); deleted before the row, so a retry after a failure finds them.
       await this.repos.kanban.deleteCompletionCommentsForPipelines([pipelineId]);
       await this.importTranscriptsBeforeDelete(record ? [record] : []);
       const removed = record ? [pipelineId] : [];
@@ -827,7 +841,7 @@ export class BuildPipelinesRepository {
         const removedIds = removedPipelines.map((pipeline) => pipeline.id);
         const removedIdSet = new Set(removedIds);
         const transcriptOnly = linkedId && !removedIdSet.has(linkedId) ? [linkedId] : [];
-        // Completion comment records go before the rows (to-do 5820): every
+        // Completion comment records go before the rows (#2295): every
         // pipeline removed here, plus an eligible linked pipeline whose row is
         // already gone, so a retry after a failed commit still finds them.
         await this.repos.kanban.deleteCompletionCommentsForPipelines([

@@ -32,7 +32,7 @@ import {
 import { publishConnections } from "@/lib/connections";
 import { errorCode } from "./SshRouteDialog";
 import { NODE_STATE_TEXT } from "./machine-list";
-import { FormError, TokenInput, errorText } from "./machine-ui";
+import { FormError, NativeTokenNote, TokenInput, errorText, nativeTokenEntry } from "./machine-ui";
 import type { ConnectionsApi } from "./useMachines";
 
 type RouteKind = "https" | "ssh";
@@ -97,6 +97,10 @@ export function AddMachineDialog({
   const sshAvailable = deviceOnly ? typeof api?.connectSsh === "function" : true;
   const canSaveOnDevice = !deviceOnly && kind === "https" && typeof api?.connect === "function";
   const blocked = leaf || registrationOff || (deviceOnly && !api);
+  // Saved only on this device over HTTPS, the token is for this device alone,
+  // so the iOS app takes it in its own editor. Registering hands the token to
+  // the command node, so that path keeps the field.
+  const nativeSave = deviceOnly && kind === "https" ? nativeTokenEntry(api) : null;
 
   const reset = () => {
     setToken("");
@@ -142,6 +146,9 @@ export function AddMachineDialog({
   const addToDevice = async (displayName: string | undefined): Promise<ConnectionList> => {
     if (!api) throw new Error("This client cannot save machines itself.");
     const nickname = normalizeConnectionNickname(displayName);
+    if (kind === "https" && nativeSave) {
+      return nativeSave({ address: httpsOrigin(), ...(nickname ? { nickname } : {}) });
+    }
     if (kind === "https") {
       return api.connect({
         address: httpsOrigin(),
@@ -403,16 +410,20 @@ export function AddMachineDialog({
             </div>
           )}
 
-          <div className="space-y-2">
-            <Label htmlFor="add-machine-token">Gateway token of that machine</Label>
-            <TokenInput
-              id="add-machine-token"
-              value={token}
-              onChange={setToken}
-              disabled={saving}
-              required
-            />
-          </div>
+          {nativeSave ? (
+            <NativeTokenNote />
+          ) : (
+            <div className="space-y-2">
+              <Label htmlFor="add-machine-token">Gateway token of that machine</Label>
+              <TokenInput
+                id="add-machine-token"
+                value={token}
+                onChange={setToken}
+                disabled={saving}
+                required
+              />
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label htmlFor="add-machine-name">
@@ -485,7 +496,7 @@ export function AddMachineDialog({
             </Button>
             <Button type="submit" disabled={saving || blocked || hostKey !== null}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {saving ? "Connecting…" : "Add machine"}
+              {saving ? (nativeSave ? "Waiting for the app…" : "Connecting…") : "Add machine"}
             </Button>
           </DialogFooter>
         </form>

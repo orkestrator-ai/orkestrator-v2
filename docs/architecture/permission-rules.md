@@ -237,10 +237,17 @@ made-up API key and a loopback model, through the real codex-bridge process,
   request in the next turn asks again; Deny then blocks it.
 - Under the host default (no sandbox, so Codex runs with full access) Codex
   does not route through its proxy: nothing asks and the request goes
-  straight out. A requirements file whose `allowed_sandbox_modes` leaves out
-  `danger-full-access` makes such a session's turns fail instead (`turn/start`
-  refused, the bridge answers 503). Follow-up:
-  [8085](../todo/agent-engines/8085-codex-managed-host-sandbox-default.md).
+  straight out. The session's reported policy says so in its note ("…its
+  network requests bypass the proxy…"), which Agent Info shows (to-do 8085
+  (retired) task 2).
+- A requirements file whose `allowed_sandbox_modes` leaves out
+  `danger-full-access` used to make every turn of such a session fail
+  (`turn/start` refused, the bridge answered 503). The bridge now reads the
+  requirements from app-server (`configRequirements/read`) and runs the host
+  default in Codex's `workspace-write` sandbox there, reporting the provider
+  sandbox with a note; the proxy then applies and the same request shows the
+  card (to-do 8085 (retired) task 1, the live file's second run with
+  `CODEX_MANAGED_HOST_FORBIDS_FULL_ACCESS=1`).
 
 `NativeAgentInteractionCard.test.tsx` and `e2e/RememberRulePanel.spec.ts`
 render the card the live test projected

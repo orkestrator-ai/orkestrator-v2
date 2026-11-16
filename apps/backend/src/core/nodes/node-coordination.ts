@@ -452,6 +452,7 @@ export class NodeCoordination {
           ...(node.loadedAt === null ? { summaryPending: true } : {}),
         })),
       localProjects: () => storage.loadProjects(),
+      storedProjectIds: () => storage.loadProjectIdsForCleanup(),
       ticketSync: storage.ticketSync,
       localImage: (imageId) => storage.kanban.getKanbanImageData(imageId).catch(() => null),
       emit: options.emit,

@@ -172,7 +172,7 @@ describe("Electron readiness", () => {
     ["development", "darwin", true, false, "window", null, false],
     ["development", "win32", true, false, "window", null, false],
     // ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1 opens a loopback debugging port
-    // on an agent-test profile only, ahead of main.js (0050 task 4).
+    // on an agent-test profile only, ahead of main.js (#2141).
     ["agent-test", "linux", true, true, "ozone", null, true],
     ["agent-test", "darwin", true, true, "hidden", null, true],
     ["development", "linux", undefined, false, "window", null, true],

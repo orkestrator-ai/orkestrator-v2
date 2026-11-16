@@ -51,6 +51,66 @@ describe("pinNativeAgentParts", () => {
     expect(last?.id === "active-agents").toBe(expectPinned);
   });
 
+  test("does not pin a pending subagent launch nothing can still be running (to-do 8303, retired)", () => {
+    // A reload can hold a fork's launch with no result: the row's own copy is
+    // all that says "running". With the turn settled and no live task, nothing
+    // backs it, so it must not sit in the Agents panel with a ticking timer.
+    const launch = () => [
+      assistantMessage("assistant-launch", [
+        {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolUseId: "fork-1",
+          toolState: "pending",
+          toolArgs: { subagent_type: "fork", description: "Fix flaky cases batch 1" },
+        },
+      ]),
+      assistantMessage("assistant-later", [{ type: "text", content: "Reported back" }]),
+    ];
+
+    const settled = normalizeNativeMessages(
+      applyClaudeBackgroundTaskStates(launch(), {}, { turnSettled: true }),
+    );
+    expect(pinNativeAgentParts(settled).some((message) => message.id === "active-agents")).toBe(
+      false,
+    );
+    expect(snapshotNativeAgentActivity(settled)).toEqual([
+      expect.objectContaining({ status: "ended", kind: "subagent" }),
+    ]);
+
+    // Always recompute from the same raw launch, just as remount/reload does.
+    // A new turn and an unrelated task must never revive the historical child.
+    const history = launch();
+    const nextUser: NativeMessage = {
+      id: "next-prompt",
+      createdAt: "2026-08-16T11:00:00.000Z",
+      role: "user",
+      content: "Continue",
+      parts: [{ type: "text", content: "Continue" }],
+    };
+    for (const turnSettled of [false, true]) {
+      const later = normalizeNativeMessages(
+        applyClaudeBackgroundTaskStates(
+          [...history, nextUser],
+          {
+            worker: {
+              id: "unrelated",
+              toolUseId: "unrelated-launch",
+              status: "running",
+              kind: "agent",
+            },
+          },
+          { turnSettled },
+        ),
+      );
+      expect(snapshotNativeAgentActivity(later).map((entry) => entry.status)).toEqual(["ended"]);
+      expect(pinNativeAgentParts(later).some((message) => message.id === "active-agents")).toBe(
+        false,
+      );
+    }
+  });
+
   test("moves active subagents to the bottom as temporary message rows", () => {
     const messages: NativeMessage[] = [
       assistantMessage("assistant-1", [

@@ -519,3 +519,51 @@ for (const failure of ["setup", "lost"] as const) {
     });
   });
 }
+
+test("graph Multi Review structured Claude preflight refuses before sends, including retry", async () => {
+  let probes = 0;
+  const explanation = "Container cannot reach the agent tools server";
+  const { world, run } = await launched(
+    {},
+    {
+      runId: "multi-review-preflight",
+      environmentType: "containerized",
+      toolResults: false,
+      assertAgentToolsReachable: async () => {
+        probes++;
+        throw new Error(explanation);
+      },
+    },
+  );
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const failed = await world.drive(run.id);
+    const activation = activationOf(failed);
+    expect(activation.state).toBe("failed");
+    expect(activation.error).toContain(explanation);
+    expect(world.provider.deliveries).toHaveLength(0);
+    expect(probes).toBe(attempt + 1);
+    if (attempt === 0) await world.current().service.restart(run.id, activation.key);
+  }
+});
+
+for (const scope of ["codex", "local", "other-graph"] as const) {
+  test(`graph structured preflight skips ${scope}`, async () => {
+    let probes = 0;
+    const { world, run } = await launched(
+      {},
+      {
+        agent: scope === "codex" ? "codex" : "claude",
+        runId: scope === "other-graph" ? "ordinary-graph" : "multi-review-preflight",
+        environmentType: scope === "local" ? "local" : "containerized",
+        toolResults: false,
+        assertAgentToolsReachable: async () => {
+          probes++;
+          throw new Error("unreachable");
+        },
+      },
+    );
+    await world.drive(run.id);
+    expect(world.provider.deliveries.length).toBeGreaterThan(0);
+    expect(probes).toBe(0);
+  });
+}

@@ -139,8 +139,6 @@ describe("mixed-version: command fields in projection and discovery payloads", (
     status: "snapshot",
     token: "t-1",
     projection: value,
-    historyEpoch: "epoch-1",
-    historyComplete: true,
   });
 
   test("an older backend's commands section without catalogue state is accepted as is", async () => {
@@ -235,8 +233,6 @@ describe("mixed-version: command fields in projection and discovery payloads", (
       status: "delta",
       baseToken: "t-1",
       token: "t-2",
-      historyEpoch: "epoch-1",
-      historyComplete: true,
       delta: {
         messageUpserts: [],
         deletedMessageIds: [],

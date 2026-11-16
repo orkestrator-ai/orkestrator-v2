@@ -210,7 +210,7 @@ describe("authStatus", () => {
   });
 
   test("a lookup that never answers falls back within the bound, and is not cached", async () => {
-    // To-do 1173: the label is all `Cursor.me` buys, so a hung API must not
+    // #1526: the label is all `Cursor.me` buys, so a hung API must not
     // hold the status read or turn a signed-in key into a signed-out one.
     stored = { apiKey: "hung-key", email: "hung@example.com" };
     let answer: ((account: { apiKeyName: string }) => void) | undefined;

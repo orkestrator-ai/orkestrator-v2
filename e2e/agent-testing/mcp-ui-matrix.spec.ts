@@ -1165,7 +1165,7 @@ test.describe("MCP settings and live panel UI matrix (claude)", () => {
         expect(starts("mcpui-ok"), "a probe CLI ran instead of the live control").toBe(okStarts);
         await expectSessionInventory("after-warm-reconnect", "connected");
         // The open panel follows the action without a reload: the backend
-        // re-reads the list and announces it (to-do 7221). A reload must
+        // re-reads the list and announces it (#1963). A reload must
         // then show the same.
         await expect(panel).not.toContainText("down", { timeout: 30_000 });
         await panelMatchesBackend(panel);

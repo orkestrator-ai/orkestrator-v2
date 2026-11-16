@@ -5,7 +5,7 @@ import { installPlaywrightRunnerSigterm } from "../tests/playwright-runner-sigte
 import { enterPrivateTestTmpdir } from "../tests/private-tmpdir";
 
 // Workers inherit a private TMPDIR, so the browser profiles of a worker that is
-// killed land where a later run can remove them (0248). Workers load this file
+// killed land where a later run can remove them (#1425). Workers load this file
 // too and reuse the runner's directory.
 process.once("exit", enterPrivateTestTmpdir());
 // A SIGTERM to the runner stops its `webServer` too, which Playwright starts

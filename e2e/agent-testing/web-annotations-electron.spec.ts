@@ -3,8 +3,10 @@
  *
  * Launches Electron with a disposable agent-test profile under a temporary
  * root (never the user's profile or backend data), serves the synthetic
- * annotation fixture from a real local-environment worktree, and drives the
- * native preview through the production preload API. Selection clicks are
+ * annotation fixture from a real local-environment worktree, registers it as
+ * that environment's preview service, and drives the native service preview
+ * through the production preload API (every page byte crosses the service's
+ * loopback ingress and the desktop tunnel). Selection clicks are
  * delivered by `webContents.sendInputEvent`, so the page runtime sees trusted
  * input exactly as it does from a user; nothing calls page hooks to select.
  *
@@ -37,6 +39,7 @@ import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,8 +48,10 @@ import type {
   BrowserPreviewPendingCapture,
   BrowserPreviewPendingCaptureDescriptor,
   BrowserPreviewSelectionStatus,
+  BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { formatPreviewServiceUri } from "@orkestrator/protocol/preview-services";
 import {
   WEB_ANNOTATION_COMMANDS as C,
   webAnnotationPageKey,
@@ -126,6 +131,19 @@ interface Stack {
   environmentId: string;
   worktreePath: string;
   fixture: FixtureServer;
+  /** The fixture's preview service, registered on the local environment. */
+  service: PreviewService;
+  /** The service's loopback ingress origin, as the native view last loaded it. */
+  fixtureOrigin: string | null;
+}
+
+interface PreviewService {
+  backendInstanceId: string;
+  /** The local environment the service belongs to (a container test swaps `environmentId`). */
+  environmentId: string;
+  serviceId: string;
+  /** The tail of the service's partition name, which identifies its web contents. */
+  partitionHash: string;
 }
 
 let stack: Stack | null = null;
@@ -169,6 +187,8 @@ async function launchElectron(
       ELECTRON_DEV: "1",
       VITE_DEV_SERVER_URL: current.rendererUrl,
       ORKESTRATOR_RUNTIME_PROFILE_FILE: current.profilePath,
+      // Service previews load through the desktop tunnel.
+      ORKESTRATOR_PREVIEW_TRANSPORT: "1",
       // Never contend for the fixed control-MCP port an installed app may own.
       ORKESTRATOR_CONTROL_MCP_PORT: "0",
     }),
@@ -334,12 +354,97 @@ async function waitForApi(window: Page): Promise<void> {
 }
 
 /**
- * The origin whose web contents the page helpers below drive: the annotation
- * fixture, or another server a test points the preview at for its duration.
+ * The origin whose web contents the page helpers below drive: the fixture
+ * service's ingress, or another service a test points the preview at for its
+ * duration.
  */
 let previewOriginOverride: string | null = null;
 function previewOrigin(): string {
-  return previewOriginOverride ?? s().fixture.url;
+  return previewOriginOverride ?? fixtureOrigin();
+}
+
+/** The fixture service's ingress origin, as last seen; refresh with `refreshFixtureOrigin`. */
+function fixtureOrigin(): string {
+  // Never a prefix of a real URL, so a lookup before the first load finds nothing.
+  return s().fixtureOrigin ?? "http://fixture-service-not-loaded.invalid";
+}
+
+/**
+ * Find the fixture service's web contents by its partition and record its
+ * ingress origin. The ingress port is hinted, but an ingress released after
+ * its last view closes (or a relaunch) may come back on another port.
+ */
+async function refreshFixtureOrigin(): Promise<string> {
+  const found = await s()
+    .app.evaluate(({ webContents }, partitionHash) => {
+      for (const contents of webContents.getAllWebContents()) {
+        if (contents.isDestroyed() || !contents.getURL().startsWith("http")) continue;
+        if (contents.session.getStoragePath()?.endsWith(partitionHash)) {
+          return new URL(contents.getURL()).origin;
+        }
+      }
+      return null;
+    }, s().service.partitionHash)
+    .catch(() => null);
+  if (found) s().fixtureOrigin = found;
+  return fixtureOrigin();
+}
+
+/** The tail of a service's partition name (`browserPreviewServicePartition`). */
+function servicePartitionHash(backendInstanceId: string, serviceId: string): string {
+  return createHash("sha256")
+    .update(`${backendInstanceId}:${serviceId}`)
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/** Register a worktree service for `port` on the local environment. */
+async function registerPreviewService(
+  label: string,
+  port: number,
+  readinessPath: string,
+): Promise<PreviewService> {
+  const environmentId = s().service?.environmentId ?? s().environmentId;
+  const { backendInstanceId } = await invoke<{ backendInstanceId: string }>(
+    "get_preview_capabilities",
+  );
+  const created = await invoke<{ kind: string; definition?: { serviceId: string } }>(
+    "register_preview_service",
+    {
+      service: {
+        environmentId,
+        label,
+        targetKind: "worktree",
+        applicationPort: port,
+        addressFamily: "ipv4",
+        readinessPath,
+      },
+      operationId: `register-${label}-${port}`,
+    },
+  );
+  expect(created.kind).toBe("definition");
+  const serviceId = created.definition!.serviceId;
+  return {
+    backendInstanceId,
+    environmentId,
+    serviceId,
+    partitionHash: servicePartitionHash(backendInstanceId, serviceId),
+  };
+}
+
+/** The attach target for `route` (path, query and hash) on `service`. */
+function serviceTarget(route: string, service: PreviewService = s().service) {
+  return {
+    backendInstanceId: service.backendInstanceId,
+    environmentId: service.environmentId,
+    serviceId: service.serviceId,
+    path: route,
+  };
+}
+
+/** A stored browser tab's address for the fixture service at `route`. */
+function fixtureTabUrl(route: string): string {
+  return formatPreviewServiceUri(serviceTarget(route));
 }
 
 const invoke: Invoke = (command, args = {}) =>
@@ -456,18 +561,67 @@ async function settledRect(
   }
 }
 
-async function attachPreview(route: string): Promise<void> {
-  await preview("attach", {
-    tabId: TAB_ID,
-    url: `${s().fixture.url}${route}`,
-    bounds: { x: 0, y: 0, ...FIXTURE_VIEWPORT },
+/**
+ * Attach `tabId` to `route` of a service and wait until the view has
+ * committed its first navigation, so its ingress URL is known. An existing
+ * view of the same service is attached against its current navigation, so it
+ * goes to `route` from wherever its page has moved since its last attach.
+ */
+async function attachService(
+  route: string,
+  options: {
+    tabId?: string;
+    service?: PreviewService;
+    bounds?: { x: number; y: number; width: number; height: number };
+    navigationBasis?: number;
+  } = {},
+): Promise<BrowserPreviewState> {
+  const tabId = options.tabId ?? TAB_ID;
+  const navigationBasis =
+    options.navigationBasis ??
+    (await preview<BrowserPreviewState | null>("setVisible", tabId, true))?.service?.navigation;
+  const state = await preview<BrowserPreviewState>("attach", {
+    tabId,
+    service: serviceTarget(route, options.service),
+    ...(navigationBasis === undefined ? {} : { navigationBasis }),
+    bounds: options.bounds ?? { x: 0, y: 0, ...FIXTURE_VIEWPORT },
     visible: true,
   });
+  let current = state;
+  await expect
+    .poll(
+      async () => {
+        current = (await preview<BrowserPreviewState | null>("setVisible", tabId, true)) ?? state;
+        return current.url;
+      },
+      { timeout: 30_000 },
+    )
+    .toMatch(/^http:\/\//);
+  return current;
+}
+
+async function attachPreview(
+  route: string,
+  bounds?: { x: number; y: number; width: number; height: number },
+): Promise<void> {
+  const state = await attachService(route, { bounds });
+  s().fixtureOrigin = new URL(state.url).origin;
   await waitForFixturePage(route);
 }
 
+/**
+ * Load `route` in the direct preview. A service view navigates by attaching
+ * the new path against its current navigation; asking for the path it
+ * already shows loads it again, as a navigation to the same URL did.
+ */
 async function navigate(route: string): Promise<void> {
-  await preview("navigate", TAB_ID, `${s().fixture.url}${route}`);
+  const state = await preview<BrowserPreviewState | null>("setVisible", TAB_ID, true);
+  if (!state?.service) throw new Error("The direct preview shows no service page");
+  if (state.service.path === route) {
+    await preview("reload", TAB_ID);
+  } else {
+    await attachService(route);
+  }
   await waitForFixturePage(route);
 }
 
@@ -506,7 +660,8 @@ async function waitForFixturePage(route: string): Promise<void> {
   const expected = new URL(route, s().fixture.url);
   await expect
     .poll(
-      () =>
+      async () =>
+        (await refreshFixtureOrigin()) &&
         inPreview<boolean>(
           `document.readyState === "complete" && Boolean(window.__annotationFixture) && location.pathname + location.search === ${JSON.stringify(expected.pathname + expected.search)}`,
         ).catch(() => false),
@@ -769,6 +924,12 @@ exit 91
   partial.worktreePath = hydrated.worktreePath!;
   // Served from the environment worktree: a source edit there is what renders.
   partial.fixture = await startFixtureServer(partial.worktreePath, fixturePort);
+  partial.fixtureOrigin = null;
+  partial.service = await registerPreviewService(
+    "annotation-fixture",
+    partial.fixture.port,
+    "/health",
+  );
   await attachPreview(ROUTE_VARIANTS.settings);
 });
 
@@ -823,7 +984,7 @@ test("Home native preview hides beneath board panels and returns without losing 
           {
             id: tabId,
             type: "browser",
-            browserData: { url: `${s().fixture.url}${ROUTE_VARIANTS.settings}` },
+            browserData: { url: fixtureTabUrl(ROUTE_VARIANTS.settings) },
           },
         ],
       },
@@ -848,6 +1009,7 @@ test("Home native preview hides beneath board panels and returns without losing 
       await expect(s().window.getByRole("dialog"))
         .toHaveCount(0, { timeout: 1_000 })
         .catch(() => undefined);
+      const origin = await refreshFixtureOrigin();
       return s().app.evaluate(({ BrowserWindow }, origin) => {
         const host = BrowserWindow.getAllWindows()[0];
         return (
@@ -859,7 +1021,7 @@ test("Home native preview hides beneath board panels and returns without losing 
             return child.webContents?.getURL().startsWith(origin) && child.getVisible();
           }) ?? false
         );
-      }, s().fixture.url);
+      }, origin);
     };
     await expect.poll(visiblePreview, { timeout: 30_000 }).toBe(true);
     for (const board of ["Kanban", "Coordinator"]) {
@@ -922,7 +1084,12 @@ test("a capture saved without any agent tab survives renderer reload and backend
   const serialized = JSON.stringify(pending.capture);
   for (const secret of SYNTHETIC_SECRET_VALUES) expect(serialized.includes(secret)).toBe(false);
   expect(pending.capture.target.kind).toBe("element");
-  expect(pending.capture.page.service).toEqual({ kind: "port", port: s().fixture.port });
+  // The capture names the service, never its ingress address.
+  expect(pending.capture.page.service).toEqual({
+    kind: "service",
+    serviceId: s().service.serviceId,
+  });
+  expect(JSON.stringify(pending.capture.page)).not.toContain(fixtureOrigin());
   expect(pending.capture.page.route).toBe(ROUTE_VARIANTS.settings);
 
   // Sensitive fields are masked in the image, not only in the text evidence.
@@ -1304,7 +1471,7 @@ async function trustedInput(events: Array<Record<string, unknown>>): Promise<voi
         await new Promise((resolve) => setTimeout(resolve, 30));
       }
     },
-    { origin: s().fixture.url, events },
+    { origin: fixtureOrigin(), events },
   );
 }
 
@@ -1600,7 +1767,8 @@ const MARKER_ID = "annotation-alignment-marker";
 type DipRect = WebAnnotationRect;
 
 /** The fixture's native view as main holds it: bounds in window DIPs. */
-function nativePreviewView(): Promise<{ bounds: DipRect; visible: boolean } | null> {
+async function nativePreviewView(): Promise<{ bounds: DipRect; visible: boolean } | null> {
+  const origin = await refreshFixtureOrigin();
   return s().app.evaluate(({ BrowserWindow }, origin) => {
     const host = BrowserWindow.getAllWindows()[0];
     for (const view of host?.contentView.children ?? []) {
@@ -1614,7 +1782,7 @@ function nativePreviewView(): Promise<{ bounds: DipRect; visible: boolean } | nu
       }
     }
     return null;
-  }, s().fixture.url);
+  }, origin);
 }
 
 /** Renderer rects scaled to window DIPs by the host's native zoom factor. */
@@ -1754,7 +1922,7 @@ async function showRendererPreview(
           {
             id: UI_TAB_ID,
             type: "browser",
-            browserData: { url: `${s().fixture.url}${ROUTE_VARIANTS.settings}` },
+            browserData: { url: fixtureTabUrl(ROUTE_VARIANTS.settings) },
           },
           ...extraTabs,
         ],
@@ -1924,7 +2092,9 @@ test("a desktop capture in a container environment has its source hints checked 
  * The documented Vite 8 app (`source-hint-emitter-vite-app.ts`), served by the
  * real Vite CLI from the local worktree as a developer would run it.
  */
-async function startViteApp(workspace: string): Promise<{ url: string; stop(): Promise<void> }> {
+async function startViteApp(
+  workspace: string,
+): Promise<{ url: string; port: number; stop(): Promise<void> }> {
   const linked = spawnSync("bun", [VITE_APP_SCRIPT, "link", workspace], {
     cwd: repositoryRoot,
     encoding: "utf8",
@@ -1949,7 +2119,7 @@ async function startViteApp(workspace: string): Promise<{ url: string; stop(): P
   recordProcessOutput("vite-app", server);
   const url = `http://127.0.0.1:${port}`;
   await waitForUrl(url);
-  return { url, stop: () => stopProcessGroup(server) };
+  return { url, port, stop: () => stopProcessGroup(server) };
 }
 
 /**
@@ -1961,14 +2131,12 @@ async function captureViteSourceHints(): Promise<void> {
   const vite = await startViteApp(s().worktreePath);
   const tabId = "annotation-vite-tab";
   await preview("destroy", TAB_ID);
-  previewOriginOverride = vite.url;
+  let service: PreviewService | null = null;
   try {
-    await preview("attach", {
-      tabId,
-      url: `${vite.url}/`,
-      bounds: { x: 0, y: 0, ...FIXTURE_VIEWPORT },
-      visible: true,
-    });
+    // The dev server is its own preview service of the local environment.
+    service = await registerPreviewService("annotation-vite", vite.port, "/");
+    const state = await attachService("/", { tabId, service });
+    previewOriginOverride = new URL(state.url).origin;
     // React renders once the dev server has transformed the module graph.
     const selector = JSON.stringify(VITE_APP.selector);
     await expect
@@ -1995,6 +2163,12 @@ async function captureViteSourceHints(): Promise<void> {
   } finally {
     previewOriginOverride = null;
     await preview("destroy", tabId).catch(() => undefined);
+    if (service) {
+      await invoke("remove_preview_service", {
+        serviceId: service.serviceId,
+        operationId: `remove-${service.serviceId}`,
+      }).catch(() => undefined);
+    }
     await vite.stop().catch(() => undefined);
     await attachPreview(ROUTE_VARIANTS.settings);
   }
@@ -2257,7 +2431,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
     await trackWebContentsFocus(s().app);
     const focusedViews = async () =>
       (await focusedWebContentsUrls(s().app)).map((url) =>
-        url.startsWith(s().fixture.url) ? "preview" : url === s().window.url() ? "host" : url,
+        url.startsWith(fixtureOrigin()) ? "preview" : url === s().window.url() ? "host" : url,
       );
     const windowFocused = await s().app.evaluate(async ({ app, BrowserWindow }) => {
       const host = BrowserWindow.getAllWindows()[0]!;
@@ -2276,7 +2450,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
         .getAllWebContents()
         .find((contents) => !contents.isDestroyed() && contents.getURL().startsWith(origin))
         ?.focus();
-    }, s().fixture.url);
+    }, fixtureOrigin());
     for (let step = 0; step < 100; step++) {
       const onTarget = await inPreview<boolean>(
         `document.activeElement?.getAttribute('data-testid') === ${JSON.stringify(TEST_IDS.saveSettings)}`,
@@ -2309,7 +2483,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
           .getAllWebContents()
           .find((candidate) => !candidate.isDestroyed() && candidate.getURL().startsWith(origin));
         return contents?.isFocused() ?? false;
-      }, s().fixture.url);
+      }, fixtureOrigin());
     await expect.poll(focusedViews).toEqual(["preview"]);
     if (windowFocused) await expect.poll(previewFocus).toBe(true);
     record(testInfo, "preview-focused-while-selecting", String(await previewFocus()));
@@ -3029,7 +3203,7 @@ async function setPreviewZoom(factor: number): Promise<void> {
         .find((candidate) => !candidate.isDestroyed() && candidate.getURL().startsWith(origin))
         ?.setZoomFactor(factor);
     },
-    { origin: s().fixture.url, factor },
+    { origin: fixtureOrigin(), factor },
   );
 }
 
@@ -3067,13 +3241,7 @@ test("capture pixels stay on the target at preview zoom 0.8, 1 and 1.5 and at DP
         const tabId = layout === "direct" ? TAB_ID : UI_TAB_ID;
         if (layout === "direct") {
           // 800 DIPs keeps DPR 2 below the 2000-pixel reduction bound.
-          await preview("attach", {
-            tabId,
-            url: `${s().fixture.url}${ROUTE_VARIANTS.settings}`,
-            bounds: { x: 0, y: 0, width: 800, height: 600 },
-            visible: true,
-          });
-          await waitForFixturePage(ROUTE_VARIANTS.settings);
+          await attachPreview(ROUTE_VARIANTS.settings, { x: 0, y: 0, width: 800, height: 600 });
         } else {
           await setHostWindowSize(1280, 900);
           await showRendererPreview();

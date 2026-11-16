@@ -131,13 +131,66 @@ describe("gateway browser sessions", () => {
     expect(status.status).toBe(200);
   });
 
-  test("marks the cookie Secure when the browser reached the gateway over HTTPS", async () => {
-    const { info } = await startGateway();
-    const forwarded = await signIn(info, { "x-forwarded-proto": "https" });
-    expect(forwarded.setCookie).toContain("; Secure");
+  test("issues the __Host- name, Secure and host-only, when the browser reached the gateway over HTTPS", async () => {
+    const { gateway, info } = await startGateway();
+    const sessions = (gateway as unknown as SessionInternals).browserSessions;
     const host = new URL(info.url).host;
-    const origin = await signIn(info, { origin: `https://${host}` });
-    expect(origin.setCookie).toContain("; Secure");
+    const variants: Record<string, string>[] = [
+      { "x-forwarded-proto": "https" },
+      { origin: `https://${host}` },
+    ];
+    for (const headers of variants) {
+      const { cookie, setCookie } = await signIn(info, headers);
+      expect(cookie).toStartWith("__Host-orkestrator_gateway_auth=");
+      // What the prefix requires: Secure, Path=/ and no Domain.
+      expect(setCookie).toBe(`${cookie}; HttpOnly; SameSite=Strict; Path=/; Secure`);
+      expect(sessions.has(cookie.slice("__Host-orkestrator_gateway_auth=".length))).toBe(true);
+    }
+  });
+
+  test("over HTTPS only the __Host- name authenticates; over HTTP the plain name does", async () => {
+    const { info } = await startGateway();
+    const https = { "x-forwarded-proto": "https" };
+    const secure = await signIn(info, https);
+    const session = secure.cookie.slice("__Host-orkestrator_gateway_auth=".length);
+    const status = async (headers: Record<string, string>) =>
+      (await requestUrl(`${info.url}__orkestrator/status`, { headers })).status;
+
+    expect(await status({ ...https, cookie: secure.cookie })).toBe(200);
+    // A plain-name cookie set by a sibling host or a plain-HTTP page counts for
+    // nothing over HTTPS, even when it carries a live session.
+    expect(await status({ ...https, cookie: `orkestrator_gateway_auth=${session}` })).toBe(401);
+    const host = new URL(info.url).host;
+    expect(
+      await status({ origin: `https://${host}`, cookie: `orkestrator_gateway_auth=${session}` }),
+    ).toBe(401);
+    // A browser that signed in over HTTPS behind a proxy sending no
+    // X-Forwarded-Proto still authenticates on requests without an Origin.
+    expect(await status({ cookie: secure.cookie })).toBe(200);
+    // The __Host- cookie wins over a tossed plain one.
+    const other = await signIn(info);
+    expect(other.cookie).toStartWith("orkestrator_gateway_auth=");
+    expect(await status({ cookie: other.cookie })).toBe(200);
+    expect(await status({ ...https, cookie: `${other.cookie}; ${secure.cookie}` })).toBe(200);
+  });
+
+  test("logout expires both cookie names over HTTP and HTTPS", async () => {
+    const { info } = await startGateway();
+    for (const headers of [{}, { "x-forwarded-proto": "https" }] as Record<string, string>[]) {
+      const { cookie } = await signIn(info, headers);
+      const logout = await requestUrl(`${info.url}__orkestrator/logout`, {
+        headers: { ...headers, cookie },
+      });
+      expect(logout.status).toBe(303);
+      expect(logout.headers["set-cookie"]).toEqual([
+        "__Host-orkestrator_gateway_auth=; HttpOnly; SameSite=Strict; Path=/; Secure; Max-Age=0",
+        "orkestrator_gateway_auth=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+      ]);
+      expect(
+        (await requestUrl(`${info.url}__orkestrator/status`, { headers: { ...headers, cookie } }))
+          .status,
+      ).toBe(401);
+    }
   });
 
   test("refuses the durable token in a cookie and clears that cookie", async () => {
@@ -148,8 +201,8 @@ describe("gateway browser sessions", () => {
       headers: { cookie: legacy },
     });
     expect(api.status).toBe(401);
-    expect(api.headers["set-cookie"]?.[0]).toContain("orkestrator_gateway_auth=;");
-    expect(api.headers["set-cookie"]?.[0]).toContain("Max-Age=0");
+    expect(api.headers["set-cookie"]?.[1]).toStartWith("orkestrator_gateway_auth=;");
+    expect(api.headers["set-cookie"]?.[1]).toContain("Max-Age=0");
 
     // A browser that held the old cookie lands on the login page with a reason.
     const page = await requestUrl(info.url, {
@@ -323,19 +376,34 @@ describe("BrowserSessionStore", () => {
 });
 
 describe("gateway session cookies", () => {
-  test("reads the __Host- name first and builds Secure only when asked", () => {
+  test("reads only the __Host- name over HTTPS and either name over HTTP", () => {
+    const both = "orkestrator_gateway_auth=plain; __Host-orkestrator_gateway_auth=hosted";
+    const plain = "orkestrator_gateway_auth=plain";
+    expect(getGatewayAuthCookie(fakeRequest({ cookie: both }))).toBe("hosted");
+    expect(getGatewayAuthCookie(fakeRequest({ cookie: plain }))).toBe("plain");
+    expect(getGatewayAuthCookie(fakeRequest({ cookie: both }, true))).toBe("hosted");
+    expect(getGatewayAuthCookie(fakeRequest({ cookie: plain }, true))).toBeNull();
     expect(
-      getGatewayAuthCookie({
-        cookie: "orkestrator_gateway_auth=plain; __Host-orkestrator_gateway_auth=hosted",
-      }),
-    ).toBe("hosted");
-    expect(getGatewayAuthCookie({ cookie: "orkestrator_gateway_auth=plain" })).toBe("plain");
+      getGatewayAuthCookie(fakeRequest({ cookie: plain, "x-forwarded-proto": "https" })),
+    ).toBeNull();
+    expect(
+      getGatewayAuthCookie(
+        fakeRequest({ cookie: plain, host: "desk.ts.net", origin: "https://desk.ts.net" }),
+      ),
+    ).toBeNull();
+  });
+
+  test("names the cookie by scheme and expires both names", () => {
     expect(gatewaySessionCookie("abc", false)).toBe(
       "orkestrator_gateway_auth=abc; HttpOnly; SameSite=Strict; Path=/",
     );
-    expect(gatewaySessionCookie("abc", true)).toEndWith("; Secure");
-    expect(clearedGatewayCookies(false)).toHaveLength(1);
-    expect(clearedGatewayCookies(true)[1]).toContain("__Host-orkestrator_gateway_auth=;");
+    expect(gatewaySessionCookie("abc", true)).toBe(
+      "__Host-orkestrator_gateway_auth=abc; HttpOnly; SameSite=Strict; Path=/; Secure",
+    );
+    expect(clearedGatewayCookies()).toEqual([
+      "__Host-orkestrator_gateway_auth=; HttpOnly; SameSite=Strict; Path=/; Secure; Max-Age=0",
+      "orkestrator_gateway_auth=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+    ]);
   });
 
   test("detects HTTPS from TLS, the forwarded protocol, or a same-host https Origin", () => {

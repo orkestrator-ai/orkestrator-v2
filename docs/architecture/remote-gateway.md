@@ -650,8 +650,8 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
 - The gateway requires a credential before serving the app, backend API, event
   stream, or loopback proxy routes: the gateway token as a bearer header, a
   client grant, or a browser session cookie.
-- Signing in with the login form (or a `dev:login` link) sets
-  `orkestrator_gateway_auth` to an opaque session id, never the gateway token.
+- Signing in with the login form (or a `dev:login` link) sets the gateway
+  cookie to an opaque session id, never the gateway token.
   Cookies are scoped by host, not port, so every other service on the same
   host (a container dev server on a published loopback port, any HTTP service
   on the Tailscale address) receives the cookie; the session limits what that
@@ -681,12 +681,23 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   and on Linux Engine
   ([record](../development/container-qualification.md#gateway-reach-and-project-seed-files-on-linux-engine-2026-11-05));
   if a restricted container reaches the gateway elsewhere, revisit this.
-- The cookie is `HttpOnly; SameSite=Strict; Path=/`, plus `Secure` when the
+- The cookie is `HttpOnly; SameSite=Strict; Path=/` with no `Domain`. When the
   browser reached the gateway over HTTPS (TLS, `X-Forwarded-Proto: https`, or
-  a same-host `https:` `Origin`). The gateway reads and strips the
-  `__Host-orkestrator_gateway_auth` name too, but does not issue it yet: older
-  iOS builds look the cookie up by its plain name (todo
-  [2960](../todo/cross-cutting/2960-host-prefixed-gateway-cookie.md)).
+  a same-host `https:` `Origin`) it is `__Host-orkestrator_gateway_auth` and
+  also `Secure`, so no sibling host under the same registrable domain (another
+  machine on the tailnet) and no plain-HTTP page can set or overwrite it. Over
+  HTTPS the gateway reads only that name, so a plain-name cookie tossed in by
+  such a page cannot sign a browser in to a session the attacker chose. Over
+  plain HTTP, where a `__Host-` cookie cannot be set, the gateway issues
+  `orkestrator_gateway_auth` and reads the `__Host-` name first, then the
+  plain one (a TLS proxy that sends no `X-Forwarded-Proto` makes a request
+  without an `Origin` look like HTTP). Logout expires both names. A proxy in
+  front of the gateway must pass `X-Forwarded-Proto: https`, as Tailscale
+  Serve does: without it, a sign-in with no `Origin` (the iOS app's native
+  login, a `dev:login` link) gets the plain, non-`Secure` cookie, which the
+  iOS app does not accept and which later `Origin`-bearing requests over
+  HTTPS do not read. The iOS app connects only over HTTPS and accepts only the
+  `__Host-` name.
 - `e2e/preview/gateway-browser-security.spec.ts` (part of
   `mise run test:preview:browser`, served by
   `apps/backend/src/gateway-browser-harness.ts`) checks the parts of these rules

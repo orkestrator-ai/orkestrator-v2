@@ -375,11 +375,10 @@ struct RemoteWebView: UIViewRepresentable {
                 guard let name = field.key as? String else { return }
                 result[name] = String(describing: field.value)
             }
-            // The cookie holds an opaque gateway session. The `__Host-` name is
-            // accepted ahead of the backend issuing it over HTTPS.
+            // The cookie holds an opaque gateway session. Over HTTPS the gateway
+            // issues and reads only the `__Host-` name.
             let cookies = HTTPCookie.cookies(withResponseHeaderFields: headers, for: loginURL)
-            guard let cookie = cookies.first(where: { $0.name == "__Host-orkestrator_gateway_auth" })
-                ?? cookies.first(where: { $0.name == "orkestrator_gateway_auth" }) else {
+            guard let cookie = cookies.first(where: { $0.name == GatewayLogoutClient.sessionCookieName }) else {
                 throw NativeGatewayLoginError.missingCookie
             }
             return cookie
@@ -844,7 +843,7 @@ struct RemoteWebView: UIViewRepresentable {
                     guard belongsToForgotten || (!knownIssuer && !hasSibling) else { continue }
                     await cookieStore.deleteCookie(cookie)
                     self.issuedCookies.removeValue(forKey: key)
-                    if belongsToForgotten && GatewayLogoutClient.sessionCookieNames.contains(cookie.name) {
+                    if belongsToForgotten && cookie.name == GatewayLogoutClient.sessionCookieName {
                         logoutCookies.append(cookie)
                     }
                 }

@@ -44,7 +44,8 @@ To-dos that already own a removal and were unblocked on 2026-11-14:
 [0078](0078-legacy-prompt-queue-claim-state.md),
 [6080](../coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)
 task 7, [4740](4740-workflow-vocabulary-stage-two.md) and
-[2960](2960-host-prefixed-gateway-cookie.md).
+2960 (retired 2026-11-16, once the gateway issued the `__Host-` cookie over
+HTTPS; see [remote gateway, security notes](../../architecture/remote-gateway.md#security-notes)).
 
 **Investigation.** Paths seen on 2026-11-14 with no open task that removes
 them: the restart notice for bridges that predate `POST /session/:id/close`

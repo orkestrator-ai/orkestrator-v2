@@ -859,14 +859,6 @@ final class RemoteWebViewPolicyTests: XCTestCase {
             )!
         }
 
-        let valid = response(303, headers: [
-            "Set-Cookie": "orkestrator_gateway_auth=session-value; Path=/; Secure; HttpOnly; SameSite=Strict",
-        ])
-        XCTAssertEqual(
-            try RemoteWebView.Coordinator.loginCookie(from: valid, loginURL: loginURL).value,
-            "session-value"
-        )
-
         let hostPrefixed = response(303, headers: [
             "Set-Cookie": "__Host-orkestrator_gateway_auth=host-session; Path=/; Secure; HttpOnly; SameSite=Strict",
         ])
@@ -874,6 +866,15 @@ final class RemoteWebViewPolicyTests: XCTestCase {
             try RemoteWebView.Coordinator.loginCookie(from: hostPrefixed, loginURL: loginURL).value,
             "host-session"
         )
+
+        // The gateway issues the plain name only over plain HTTP, which this app
+        // never uses, and does not read it over HTTPS.
+        let plain = response(303, headers: [
+            "Set-Cookie": "orkestrator_gateway_auth=session-value; Path=/; Secure; HttpOnly; SameSite=Strict",
+        ])
+        XCTAssertThrowsError(try RemoteWebView.Coordinator.loginCookie(from: plain, loginURL: loginURL)) {
+            XCTAssertTrue($0.localizedDescription.contains("did not create a secure web session"))
+        }
 
         let invalid = URLResponse(
             url: loginURL,
@@ -938,7 +939,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
 
     func testSessionCookieKeepsItsProtectionsInTheWebViewStore() async throws {
         let loginURL = URL(string: "https://desk.example/__orkestrator/login")!
-        for name in ["orkestrator_gateway_auth", "__Host-orkestrator_gateway_auth"] {
+        for name in [GatewayLogoutClient.sessionCookieName] {
             let response = HTTPURLResponse(url: loginURL, statusCode: 303, httpVersion: "HTTP/1.1", headerFields: [
                 "Set-Cookie": "\(name)=session-value; HttpOnly; SameSite=Strict; Path=/; Secure",
             ])!
@@ -1538,7 +1539,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
                     httpVersion: "HTTP/1.1",
                     headerFields: [
                         "Location": "https://new.example/",
-                        "Set-Cookie": "orkestrator_gateway_auth=session-value; Path=/; Secure; HttpOnly; SameSite=Strict",
+                        "Set-Cookie": "__Host-orkestrator_gateway_auth=session-value; Path=/; Secure; HttpOnly; SameSite=Strict",
                     ]
                 )!,
                 Data()
@@ -1974,14 +1975,14 @@ final class RemoteWebViewPolicyTests: XCTestCase {
             return (
                 HTTPURLResponse(url: request.url!, statusCode: 303, httpVersion: "HTTP/1.1", headerFields: [
                     "Location": "https://desk.example/",
-                    "Set-Cookie": "orkestrator_gateway_auth=session-value; Path=/; Secure; HttpOnly; SameSite=Strict",
+                    "Set-Cookie": "__Host-orkestrator_gateway_auth=session-value; Path=/; Secure; HttpOnly; SameSite=Strict",
                 ])!,
                 Data()
             )
         }
 
         let cookie = try await coordinator.loginCookie(for: target)
-        XCTAssertEqual(cookie.name, "orkestrator_gateway_auth")
+        XCTAssertEqual(cookie.name, "__Host-orkestrator_gateway_auth")
         XCTAssertEqual(cookie.value, "session-value")
 
         let request = try XCTUnwrap(captured)
@@ -2010,7 +2011,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
             captured = request
             return (
                 HTTPURLResponse(url: request.url!, statusCode: 303, httpVersion: "HTTP/1.1", headerFields: [
-                    "Set-Cookie": "orkestrator_gateway_auth=session-value; Path=/; Secure; HttpOnly; SameSite=Strict",
+                    "Set-Cookie": "__Host-orkestrator_gateway_auth=session-value; Path=/; Secure; HttpOnly; SameSite=Strict",
                 ])!,
                 Data()
             )

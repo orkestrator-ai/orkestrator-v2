@@ -162,6 +162,13 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
   executionPolicy(branch: B): Promise<NativeAgentExecutionPolicy>;
   agentMcp?(branch: B, requestId: string): Promise<AgentToolConnection | undefined>;
   /**
+   * Preflight for a turn that resolves no workflow-result connection
+   * (structured output): throws when the branch's container cannot reach the
+   * agent tools server. A tool-transport turn's `agentMcp` makes the same
+   * check itself.
+   */
+  assertAgentToolsReachable?(branch: B): Promise<void>;
+  /**
    * The branch's own mail identity on a turn without a workflow-result
    * connection (build pipeline workers). Absent: such turns keep the
    * bridge's environment connection.

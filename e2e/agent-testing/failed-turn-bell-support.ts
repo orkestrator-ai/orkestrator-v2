@@ -1,5 +1,5 @@
 /**
- * Pure helpers for `failed-turn-bell-live.spec.ts` (to-do 5160 task 4): which
+ * Pure helpers for `failed-turn-bell-live.spec.ts` (to-do 5160 (retired) task 4): which
  * platforms and cases a run selects, and which process of the profile's
  * backend tree is a platform's bridge. Nothing here runs at import time or
  * signals a process.
@@ -43,6 +43,60 @@ export function bellPlatforms(value: string | undefined): BellPlatform[] {
 
 export function bellCases(value: string | undefined): BellCase[] {
   return selection(value, BELL_CASES, "case");
+}
+
+/**
+ * Where the bell environment runs (`ORKESTRATOR_AGENT_TEST_BELL_ENVIRONMENT`).
+ * `container` is to-do 5160 (retired) task 6: a container's bridge outlives a backend
+ * restart, so the restarted backend must read the turn's end from the bridge.
+ */
+export type BellEnvironment = "local" | "container";
+
+/** A container run covers native Claude only, the platform its fake serves. */
+export const CONTAINER_BELL_PLATFORMS = ["claude"] as const satisfies readonly BellPlatform[];
+/** `bridge-kill` signals a host process, so a container run cannot select it. */
+export const CONTAINER_BELL_CASES = [
+  "refused",
+  "stop",
+  "restart",
+] as const satisfies readonly BellCase[];
+
+export function bellEnvironment(value: string | undefined): BellEnvironment {
+  const picked = value?.trim() || "local";
+  if (picked !== "local" && picked !== "container") {
+    throw new Error(`unknown bell environment: ${picked}`);
+  }
+  return picked;
+}
+
+/**
+ * The platforms and cases a run selects. A local run defaults to all of
+ * them; a container run defaults to Claude's `restart` case, the one only a
+ * container can show, and refuses what it cannot run.
+ */
+export function bellSelection(
+  environment: BellEnvironment,
+  platforms: string | undefined,
+  cases: string | undefined,
+): { platforms: BellPlatform[]; cases: BellCase[] } {
+  if (environment === "local") {
+    return { platforms: bellPlatforms(platforms), cases: bellCases(cases) };
+  }
+  const pickedPlatforms = platforms?.trim() ? bellPlatforms(platforms) : ["claude" as const];
+  const pickedCases = cases?.trim() ? bellCases(cases) : ["restart" as const];
+  const platformAllowed = (entry: BellPlatform) =>
+    (CONTAINER_BELL_PLATFORMS as readonly BellPlatform[]).includes(entry);
+  const caseAllowed = (entry: BellCase) =>
+    (CONTAINER_BELL_CASES as readonly BellCase[]).includes(entry);
+  const badPlatforms = pickedPlatforms.filter((entry) => !platformAllowed(entry));
+  if (badPlatforms.length) {
+    throw new Error(`a container bell run cannot cover: ${badPlatforms.join(", ")}`);
+  }
+  const badCases = pickedCases.filter((entry) => !caseAllowed(entry));
+  if (badCases.length) {
+    throw new Error(`a container bell run cannot run: ${badCases.join(", ")}`);
+  }
+  return { platforms: pickedPlatforms, cases: pickedCases };
 }
 
 export type ProcessRow = { pid: number; ppid: number; command: string };
@@ -121,3 +175,95 @@ export const TOAST_TITLES = {
   agent_failed: "Agent stopped with an error",
   agent_finished: "Agent finished",
 } as const;
+
+type JsonObject = Record<string, unknown>;
+
+function asObject(value: unknown): JsonObject {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : {};
+}
+
+/**
+ * The profile's Claude `settings.json` for a `claude-tmux` refused-login run
+ * (to-do 5160 (retired) task 7): the loopback model's address and a bearer token rather
+ * than an API key, because an interactive CLI stops at a "use this API key?"
+ * question for `ANTHROPIC_API_KEY` and asks nothing for a token. Every other
+ * key the file holds (hooks above all) is kept.
+ */
+export function refusedLoginTmuxSettings(earlier: unknown, origin: string): JsonObject {
+  const settings = asObject(earlier);
+  const { ANTHROPIC_API_KEY: _apiKey, ...env } = asObject(settings.env) as Record<string, string>;
+  return {
+    ...settings,
+    env: {
+      ...env,
+      ANTHROPIC_BASE_URL: origin,
+      ANTHROPIC_AUTH_TOKEN: "fixture-only-not-a-key",
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+      DISABLE_AUTOUPDATER: "1",
+    },
+    skipDangerousModePermissionPrompt: true,
+  };
+}
+
+/**
+ * The profile's Claude `.claude.json` with the first-run screens an
+ * interactive CLI would stop at already answered: onboarding, the bypass
+ * consent and the trust question for `worktreePath`. Every other key is kept.
+ */
+export function onboardedClaudeState(earlier: unknown, worktreePath: string): JsonObject {
+  const state = asObject(earlier);
+  const projects = asObject(state.projects);
+  return {
+    ...state,
+    hasCompletedOnboarding: true,
+    bypassPermissionsModeAccepted: true,
+    projects: {
+      ...projects,
+      [worktreePath]: { ...asObject(projects[worktreePath]), hasTrustDialogAccepted: true },
+    },
+  };
+}
+
+/** `RegistryWriterLeaseBusyError`'s message (`registry-writer-lease.ts`). */
+const WRITER_LEASE_BUSY =
+  "Another Orkestrator backend is managing this data directory's containers";
+
+/**
+ * Stop and delete the environments a run created. A backend restarted while
+ * the crashed one's writer lease is still fresh refuses every container
+ * change until it wins that lease late (up to about a minute; to-do 5160 (retired)
+ * task 3), so a refusal naming the lease is retried until `timeoutMs`. Any
+ * other failure is not retried. Returns the ids it could not delete, never
+ * throws: the caller reports them instead of leaving a container behind
+ * unnoticed, as the first container run did on 2026-11-16.
+ */
+export async function removeEnvironments(
+  invoke: (command: string, args: Record<string, unknown>) => Promise<unknown>,
+  environmentIds: readonly string[],
+  options: { timeoutMs?: number; retryMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<Array<{ environmentId: string; error: string }>> {
+  const sleep = options.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  const retryMs = options.retryMs ?? 5_000;
+  let budget = options.timeoutMs ?? 120_000;
+  const failures: Array<{ environmentId: string; error: string }> = [];
+  for (const environmentId of environmentIds) {
+    for (;;) {
+      try {
+        await invoke("stop_environment", { environmentId }).catch(() => undefined);
+        await invoke("delete_environment", { environmentId });
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes(WRITER_LEASE_BUSY) && budget > 0) {
+          budget -= retryMs;
+          await sleep(retryMs);
+          continue;
+        }
+        failures.push({ environmentId, error: message.slice(0, 200) });
+        break;
+      }
+    }
+  }
+  return failures;
+}

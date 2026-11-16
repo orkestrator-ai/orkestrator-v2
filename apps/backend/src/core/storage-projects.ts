@@ -126,6 +126,10 @@ import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import { FrozenStoreSnapshot } from "./storage-frozen-snapshot.js";
 import type { StorageRepositories } from "./storage-repositories.js";
+import {
+  NoStoredProjectsError,
+  type RemovedProjectSweepResult,
+} from "./storage-kanban-removed-projects.js";
 import type { LegacyJsonItemCleanup } from "./storage-stores.js";
 
 /**
@@ -659,6 +663,40 @@ export class ProjectsRepository {
 
   /** Every project id, or a throw: a sweep must not read a lost store as "no projects". */
   async loadProjectIdsForCleanup(): Promise<Set<string>> {
+    return this.projectIdsForCleanupNow();
+  }
+
+  /**
+   * Deletes what projects removed before to-do 5820 left behind: their
+   * tickets, ticket images, deleted-ticket delivery records, labels, notes,
+   * feature plans and sync bookkeeping, and the completion comment records of
+   * pipelines that are gone (to-do 8111 task 1, `sweepRemovedProjectRows`).
+   *
+   * Every decision reads the projects store strictly and completely
+   * (`loadProjectIdsForCleanup`): an unreadable or invalid store refuses the
+   * sweep, and so does one that is absent or holds no project at all
+   * (`NoStoredProjectsError`), so a store that reads as empty never deletes
+   * every project's tickets. A machine whose projects were all removed keeps
+   * their rows until a project is added again.
+   */
+  async sweepRemovedProjectContent(): Promise<RemovedProjectSweepResult> {
+    // Absent (a new install) is not damage, but there is nothing to compare with either.
+    if (!this.context.loadStoreStrict<unknown>(this.files.projectsFile())) {
+      throw new NoStoredProjectsError();
+    }
+    const liveProjects = () => {
+      const ids = this.projectIdsForCleanupNow();
+      if (!ids.size) throw new NoStoredProjectsError();
+      return ids;
+    };
+    liveProjects();
+    return this.repos.kanban.sweepRemovedProjectRows(liveProjects, () =>
+      this.repos.buildPipelines.pipelineIdsForCleanupNow(),
+    );
+  }
+
+  /** {@link loadProjectIdsForCleanup}, synchronous, for a check inside a transaction. */
+  private projectIdsForCleanupNow(): Set<string> {
     const snapshot = this.context.loadStoreStrict<unknown>(this.files.projectsFile());
     if (!snapshot || !Array.isArray(snapshot.value)) {
       throw new Error("Project store is missing or invalid; cleanup refused");

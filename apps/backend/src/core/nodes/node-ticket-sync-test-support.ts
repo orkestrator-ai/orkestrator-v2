@@ -132,6 +132,7 @@ export async function fleet(
       },
     ],
     localProjects: () => command.loadProjects(),
+    storedProjectIds: () => command.loadProjectIdsForCleanup(),
     ticketSync: command.ticketSync,
     localImage: (imageId) => command.kanban.getKanbanImageData(imageId).catch(() => null),
     emit: eventSink((event, payload) => events.push({ event, payload })),

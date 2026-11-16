@@ -10,6 +10,11 @@
 # directory holding a made-up key. A loopback server plays the model and the
 # probe host, which `--add-host` points at loopback; `allow_local_binding`
 # lets an approved request reach it. No login and no credits are involved.
+#
+# The file runs twice: once with only the proxy on, and once with a
+# requirements file that also leaves `danger-full-access` out of
+# `allowed_sandbox_modes`, where the host default must run in Codex's sandbox
+# instead of being refused every turn (8085 (retired)).
 # Privileged only because Codex's bubblewrap sandbox needs user namespaces.
 #
 # On a shared host, point Docker at a disposable daemon first:
@@ -25,10 +30,17 @@ docker run --rm --privileged --add-host probe-host.example.test:127.0.0.1 \
   apt-get update -qq >/dev/null
   apt-get install -y -qq bubblewrap curl ca-certificates >/dev/null
   mkdir -p /etc/codex
-  printf "[network_proxy]\nenabled = true\nallow_local_binding = true\n" >/etc/codex/requirements.toml
+  proxy="[network_proxy]\nenabled = true\nallow_local_binding = true\n"
   bun scripts/download-agent.ts codex --dir /tmp/codex
   cd apps/backend
-  RUN_LIVE_CODEX_MANAGED_NETWORK_CARD=1 CODEX_PROTOCOL_BINARY=/tmp/codex/codex TMPDIR=/tmp \
-    bun test --preload ../../tests/setup-node.ts ./tests/codex-managed-network-card-live.test.ts \
-    --timeout 300000
+  run() {
+    RUN_LIVE_CODEX_MANAGED_NETWORK_CARD=1 CODEX_PROTOCOL_BINARY=/tmp/codex/codex TMPDIR=/tmp "$@" \
+      bun test --preload ../../tests/setup-node.ts ./tests/codex-managed-network-card-live.test.ts \
+      --timeout 300000
+  }
+  printf "$proxy" >/etc/codex/requirements.toml
+  run
+  printf "allowed_sandbox_modes = [\"read-only\", \"workspace-write\"]\n\n$proxy" \
+    >/etc/codex/requirements.toml
+  run env CODEX_MANAGED_HOST_FORBIDS_FULL_ACCESS=1
 '

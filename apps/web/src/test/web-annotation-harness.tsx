@@ -26,7 +26,7 @@ export const PAGE_URL = "http://localhost:5173/settings?tab=profile";
  * manual address were saved. Production tabs no longer take such notes, but
  * stored ones still read back with this identity.
  */
-function currentPageForManualUrl(displayUrl: string): CurrentAnnotationPage | null {
+export function currentPageForManualUrl(displayUrl: string): CurrentAnnotationPage | null {
   if (!displayUrl) return null;
   let url: URL;
   try {

@@ -123,7 +123,7 @@ function serverLocation(config: SdkMcpServersConfig[string] | undefined): string
  * A server the CLI reports `failed` (or `needs-auth`) did not come up when the
  * CLI launched and is not retried by the CLI, so asking for a retry cannot
  * help: in a container this is the agent tools port the host does not let
- * containers reach (to-do 8172). Name the address and the notice that carries
+ * containers reach (to-do 8172 (retired)). Name the address and the notice that carries
  * the fix. Only a server still connecting is worth a plain retry. The CLI's
  * own error text is left out: it is not ours to bound or vet.
  */

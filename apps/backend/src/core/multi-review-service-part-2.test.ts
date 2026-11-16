@@ -3008,7 +3008,7 @@ test("MultiReviewService fails a container stage at once when its agent tools ar
   const preflights: Array<{ environmentId: string; stage: string }> = [];
   // Structured output needs no result tool, but a container's Claude bridge
   // refuses every turn after the first while its required Orkestrator MCP
-  // server is not connected (to-do 8172), so both transports are refused up
+  // server is not connected (to-do 8172 (retired)), so both transports are refused up
   // front with the preflight's explanation.
   for (const toolMode of [true, false]) {
     for (const packageFlow of [false, true]) {

@@ -17,6 +17,14 @@ import {
   type SignalHealthStatus,
 } from "./recurring-diagnostics.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  CLAUDE_SIGN_IN_NOTICE_CHECK_MS,
+  SignInNoticeWatch,
+  terminalOutputMarks,
+  type ClaudeStateSettleTarget,
+  type ClaudeStateSettler,
+  type ClaudeTerminalScreens,
+} from "./claude-terminal-settle.js";
 
 const log = createLogger("tmux");
 type CommandContext = shared.CommandContext;
@@ -95,6 +103,20 @@ export type ClaudeStatePoll = {
   /** Rate window for {@link CLAUDE_STATE_SIGNAL_MAX_RINGS_PER_MINUTE}. */
   ringWindowStartedAt?: number;
   ringsInWindow: number;
+  /**
+   * Each container terminal's output revision at the last read of a state
+   * that was not `working`: where a sign-in notice for the next prompt can
+   * start (`claude-terminal-settle.ts`, to-do 8092, retired).
+   */
+  outputMarks?: Map<string, number>;
+  /** Watches the `working` snapshot being read for the CLI's local refusal. */
+  noticeWatch?: SignInNoticeWatch;
+  noticeTimer?: unknown;
+  settling: boolean;
+  /** The revision this poll's own settle wrote, and the outcome it persists with. */
+  settled?: { revision: number; outcome: "failed" | "none" };
+  /** Settles written, which announce their own change as a ring does. */
+  settles: number;
 };
 
 /** `unknown`: the image could not be inspected right now; ask again later. */
@@ -122,6 +144,13 @@ export type ClaudeStatePollManagerOptions = {
   metrics?: RecurringWorkMetrics;
   /** Without one every container keeps the 1 s poll. */
   signal?: ClaudeStateSignalInstaller;
+  /**
+   * Rewrites a `working` snapshot no hook will end (to-do 8092, retired). Without one
+   * the poll never writes to a container.
+   */
+  settle?: ClaudeStateSettler;
+  /** The container terminals' output; defaults to `context.runtime.terminals`. */
+  screens?: (context: CommandContext) => ClaudeTerminalScreens | undefined;
 };
 
 /** How long the agent has to answer before a state read is abandoned. */
@@ -235,6 +264,8 @@ export class ClaudeStatePollManager {
   private readonly nowMs: () => number;
   private readonly metrics: RecurringWorkMetrics;
   private readonly signalInstaller: ClaudeStateSignalInstaller | null;
+  private readonly settler: ClaudeStateSettler | null;
+  private readonly screens: (context: CommandContext) => ClaudeTerminalScreens | undefined;
   /** Lifetime counters for {@link status}. */
   private readonly demotions: Partial<Record<SignalDemotionReason, number>> = {};
   private acceptedRings = 0;
@@ -243,6 +274,8 @@ export class ClaudeStatePollManager {
   constructor(options: ClaudeStatePollManagerOptions = {}) {
     this.metrics = options.metrics ?? recurringWorkMetrics;
     this.signalInstaller = options.signal ?? null;
+    this.settler = options.settle ?? null;
+    this.screens = options.screens ?? containerTerminalScreens;
     this.readState =
       options.readState ??
       (async (containerId) => {
@@ -265,7 +298,12 @@ export class ClaudeStatePollManager {
       const lost = !demand && existing.demand;
       const gained = demand && !existing.demand;
       existing.demand = demand;
-      if (lost) this.reschedule(containerId, existing, CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+      if (lost) {
+        this.reschedule(containerId, existing, CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+        // The last terminal and tab are gone, and with them any Claude that
+        // could end this turn: settle it quietly rather than read working forever.
+        if (existing.lastState === "working") this.settle(containerId, existing, "idle");
+      }
       if (gained) {
         // A terminal or tab just opened: back to the fast read until the next
         // observation decides the cadence, and read now.
@@ -294,6 +332,8 @@ export class ClaudeStatePollManager {
       rings: 0,
       ringsAtPreviousRead: 0,
       ringsInWindow: 0,
+      settling: false,
+      settles: 0,
     };
     poll.timer = this.schedule(
       () => this.requestPoll(containerId, poll),
@@ -549,6 +589,7 @@ export class ClaudeStatePollManager {
     poll.active = false;
     this.cancel(poll.timer);
     if (poll.demandTimer !== undefined) this.cancel(poll.demandTimer);
+    this.stopNoticeWatch(poll);
     this.revokeSignal(poll);
     this.polls.delete(containerId);
   }
@@ -585,9 +626,11 @@ export class ClaudeStatePollManager {
     containerId: string,
     poll: ClaudeStatePoll,
     rings: number,
+    state: string,
     revision?: number,
     completions?: number,
   ): void {
+    this.observeTurn(containerId, poll, state, revision, completions);
     poll.ringsAtPreviousRead = rings;
     poll.lastRevision = revision;
     poll.lastCompletions = completions;
@@ -600,6 +643,98 @@ export class ClaudeStatePollManager {
       slow ? CLAUDE_STATE_SAFETY_READ_INTERVAL_MS : CLAUDE_STATE_POLL_INTERVAL_MS,
     );
     poll.observationRetry = false;
+  }
+
+  /**
+   * Keeps the sign-in notice watch in step with the state just read: a
+   * `working` snapshot is watched, anything else records where each terminal's
+   * output stands, so the next prompt's notice is looked for only after it.
+   */
+  private observeTurn(
+    containerId: string,
+    poll: ClaudeStatePoll,
+    state: string,
+    revision?: number,
+    completions?: number,
+  ): void {
+    const screens = this.settler ? this.screens(poll.context) : undefined;
+    if (!screens) return;
+    if (state !== "working" || revision === undefined || completions === undefined) {
+      this.stopNoticeWatch(poll);
+      poll.outputMarks = terminalOutputMarks(screens, containerId);
+      return;
+    }
+    if (poll.noticeWatch?.revision === revision) return;
+    this.stopNoticeWatch(poll);
+    const watch = new SignInNoticeWatch(
+      revision,
+      completions,
+      poll.outputMarks ?? terminalOutputMarks(screens, containerId),
+      this.nowMs(),
+    );
+    poll.noticeWatch = watch;
+    poll.noticeTimer = this.schedule(
+      () => this.checkNoticeWatch(containerId, poll, watch),
+      CLAUDE_SIGN_IN_NOTICE_CHECK_MS,
+    );
+  }
+
+  /** In memory only: no exec until the notice is found and the terminal is quiet. */
+  private checkNoticeWatch(
+    containerId: string,
+    poll: ClaudeStatePoll,
+    watch: SignInNoticeWatch,
+  ): void {
+    if (!this.isCurrent(containerId, poll) || poll.noticeWatch !== watch) return;
+    const screens = this.screens(poll.context);
+    if (!screens || !watch.refused(screens, containerId, this.nowMs())) return;
+    this.stopNoticeWatch(poll);
+    this.settle(containerId, poll, "failed", {
+      revision: watch.revision,
+      completions: watch.completions,
+    });
+  }
+
+  private stopNoticeWatch(poll: ClaudeStatePoll): void {
+    if (poll.noticeTimer !== undefined) this.cancel(poll.noticeTimer);
+    poll.noticeTimer = undefined;
+    poll.noticeWatch = undefined;
+  }
+
+  /**
+   * Ends a `working` turn no hook will end by rewriting the container's
+   * snapshot, compare-and-set against `expected` (`claude-terminal-settle.ts`).
+   * A settle that finds the snapshot moved on writes nothing. A failed exec is
+   * logged; the next read of the same snapshot starts a fresh watch.
+   */
+  private settle(
+    containerId: string,
+    poll: ClaudeStatePoll,
+    target: ClaudeStateSettleTarget,
+    expected = { revision: poll.lastRevision, completions: poll.lastCompletions },
+  ): void {
+    const settler = this.settler;
+    const { revision, completions } = expected;
+    if (!settler || poll.settling || revision === undefined || completions === undefined) return;
+    poll.settling = true;
+    void Promise.resolve()
+      .then(() => settler(containerId, { revision, completions }, target))
+      .then((wrote) => {
+        if (!wrote || !this.isCurrent(containerId, poll)) return;
+        poll.settles += 1;
+        poll.settled = { revision: revision + 1, outcome: target === "failed" ? "failed" : "none" };
+        log.info("terminal-claude.settled", {
+          containerId,
+          reason: target === "failed" ? "sign-in-notice" : "no-terminal",
+        });
+        this.requestPoll(containerId, poll);
+      })
+      .catch((error: unknown) => {
+        log.warn("terminal-claude.settle-failed", { containerId, error: formatLogError(error) });
+      })
+      .finally(() => {
+        poll.settling = false;
+      });
   }
 
   private isCurrent(containerId: string, poll: ClaudeStatePoll): boolean {
@@ -624,8 +759,9 @@ export class ClaudeStatePollManager {
   ): Promise<void> {
     // Any doorbell since the previous read started announces what this read
     // finds: that read may have run before the hook wrote the file.
+    // A settle this poll wrote announces its own change the same way.
     const ringsBeforePreviousRead = poll.ringsAtPreviousRead;
-    const ringsAtReadStart = poll.rings;
+    const ringsAtReadStart = poll.rings + poll.settles;
     const { state, revision, completions, absent, failed } = parseClaudeStateSnapshot(
       (await this.readState(containerId).catch(() => "")).trim(),
     );
@@ -655,7 +791,7 @@ export class ClaudeStatePollManager {
     // only has to be timely enough to stop polling a container that has gone.
     if (!changed && !this.isRetirementCheckDue(poll)) {
       if (observed) {
-        this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
+        this.acceptObservation(containerId, poll, ringsAtReadStart, state, revision, completions);
       }
       return;
     }
@@ -686,16 +822,21 @@ export class ClaudeStatePollManager {
       poll.lastState = previous;
       poll.stale = true;
       if (absent)
-        this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
+        this.acceptObservation(containerId, poll, ringsAtReadStart, state, revision, completions);
       return;
     }
     if (!changed) {
       if (observed) {
-        this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
+        this.acceptObservation(containerId, poll, ringsAtReadStart, state, revision, completions);
       }
       return;
     }
     const occurredAt = this.now();
+    // A settle for a closed tab ends the turn with no bell (`"none"`).
+    const settledOutcome =
+      revision !== undefined && poll.settled?.revision === revision
+        ? poll.settled.outcome
+        : undefined;
     // Storage rings `agent_failed` on this source's own working edge.
     const persisted = await poll.context.storage.setEnvironmentAgentActivity(
       environment.id,
@@ -704,7 +845,11 @@ export class ClaudeStatePollManager {
       "claude-terminal",
       undefined,
       false,
-      failed ? { completionOutcome: "failed" } : {},
+      failed
+        ? { completionOutcome: "failed" }
+        : settledOutcome
+          ? { completionOutcome: settledOutcome }
+          : {},
     );
     if (!this.isCurrent(containerId, poll)) return;
     const persistedTerminal = persisted?.agentActivitySources?.["claude-terminal"];
@@ -738,11 +883,11 @@ export class ClaudeStatePollManager {
       !poll.observationRetry &&
       poll.lastState !== "" &&
       (state !== poll.lastState || revisionChanged) &&
-      poll.rings === ringsBeforePreviousRead
+      poll.rings + poll.settles === ringsBeforePreviousRead
     ) {
       this.demoteSignal(containerId, poll, "missed-change");
     }
-    this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
+    this.acceptObservation(containerId, poll, ringsAtReadStart, state, revision, completions);
     // Production hooks write `working` at UserPromptSubmit, `waiting` at
     // Stop and `failed` (read as idle) at StopFailure. `idle` is also retained
     // for older hook writers and recovery from a backend restart. Storage's
@@ -808,6 +953,20 @@ export class ClaudeStatePollManager {
       warn(error);
     }
   }
+}
+
+/**
+ * The backend's container terminals as the sign-in notice watch reads them.
+ * Lightweight fixtures without a terminal runtime have none to read.
+ */
+function containerTerminalScreens(context: CommandContext): ClaudeTerminalScreens | undefined {
+  const runtime = context.runtime as Partial<CommandContext["runtime"]> | undefined;
+  const terminals = runtime?.terminals as Partial<ClaudeTerminalScreens> | undefined;
+  return terminals?.containerSessionIds &&
+    terminals.outputRevision &&
+    terminals.retainedOutputDeltas
+    ? (terminals as ClaudeTerminalScreens)
+    : undefined;
 }
 
 /**

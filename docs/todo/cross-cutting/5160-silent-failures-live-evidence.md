@@ -121,8 +121,11 @@ billed; commands are in
   and 310 ms of the Stop hook), with the signal confirmed and rings going
   1 → 8: the host-loopback daemon lets the ring reach the profile through
   beelink's firewall. The next prompt in that session is answered "Not
-  logged in" by the CLI with no hook, so the tab reads `working` for good:
-  recorded as a known gap, [8092](../containers-and-environments/8092-claude-cli-prompt-after-refused-login-reads-working.md).
+  logged in" by the CLI with no hook, so the tab read `working` for good:
+  recorded as a known gap, then fixed by 8092 (retired 2026-11-16), which
+  settles such a prompt from the CLI's notice and rings `agent_failed`
+  ([container-lifecycle.md](../../architecture/container-lifecycle.md#turns-no-hook-ends));
+  the spec now asserts it.
 - **Not reachable with a fake model:** Cursor's SDK and Grok's CLI have no
   endpoint override, and with no credential they refuse before a turn
   starts. Their refused logins need a made-up key sent to Cursor's and xAI's
@@ -180,8 +183,10 @@ to answer or pre-seed in that directory only.
 
 **Investigation.** Not run. Two findings from task 4 apply: the image's CLI
 retries a 401 for about three minutes before `StopFailure`, and it then
-answers the next prompt "Not logged in" with no hook (8092), which probably
-holds for `claude-tmux` too.
+answers the next prompt "Not logged in" with no hook (8092, retired: the
+container Claude CLI tab now settles that prompt from the CLI's notice),
+which may hold for `claude-tmux` too
+([8094](../containers-and-environments/8094-claude-tmux-prompt-refused-locally.md)).
 
 **Decisions.**
 
@@ -269,8 +274,9 @@ live check is in the
 ### Task 4: the container prompt that reads working is recorded, not fixed
 
 The gap is the CLI's (no hook for a locally refused prompt), and each fix
-needs a choice (screen reading, a ceiling, or a CLI change), so it is to-do
-8092 and the spec records it as a known gap.
+needs a choice (screen reading, a ceiling, or a CLI change), so it became
+to-do 8092 and the spec recorded it as a known gap. 8092 (retired
+2026-11-16) settled it from the CLI's notice, and the spec now asserts it.
 
 ## Open questions
 
@@ -280,7 +286,8 @@ needs a choice (screen reading, a ceiling, or a CLI change), so it is to-do
 
 - [0002 session lifecycle consistency](../agent-engines/0002-session-lifecycle-consistency.md), which covers resume behaviour itself
 - 8045 (retired; fixed by `opencode2/restart-cut.ts`): an OpenCode turn whose restarted server still lists it as active, which the grace in task 4 does not cover.
-- [8092](../containers-and-environments/8092-claude-cli-prompt-after-refused-login-reads-working.md): found by task 4.
+- 8092 (retired 2026-11-16; [container-lifecycle.md](../../architecture/container-lifecycle.md#turns-no-hook-ends)): found by task 4, the container prompt refused locally after a refused login.
+- [8094](../containers-and-environments/8094-claude-tmux-prompt-refused-locally.md): the same question for claude-tmux tabs.
 - 8093 (retired 2026-11-15, with 8101; Git history at `a8b89f154`): found by task 4's OpenCode restart case, which left an `opencode2 serve` running after the profile was reset; fixed in `apps/backend/src/core/local-server-reaper.ts`.
 - [Application logging](../../architecture/logging.md#failures-that-would-otherwise-leave-no-trace)
 - [Scheduled jobs](../../architecture/scheduled-jobs.md#exactly-once)

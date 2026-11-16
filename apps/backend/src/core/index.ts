@@ -128,6 +128,7 @@ import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
 import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { backendClaudeStateSignal, backendTmuxHookSignal } from "./claude-state-signal.js";
+import { backendClaudeStateSettler } from "./claude-terminal-settle.js";
 import { ContainerLifecycleReactor } from "./container-lifecycle-events.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
@@ -727,7 +728,10 @@ export class OrkestratorBackend {
           : { dockerAvailability: { probe: () => checkDockerAvailability() } }),
         tmux: {
           localClaudeConfigDirectory: tmuxLocalClaudeConfigDirectory,
-          claudeStatePolls: { signal: backendClaudeStateSignal() },
+          claudeStatePolls: {
+            signal: backendClaudeStateSignal(),
+            settle: backendClaudeStateSettler(),
+          },
           hookSignal: backendTmuxHookSignal(),
         },
         // Read at call time: the keeper and the Codex refresher exist only

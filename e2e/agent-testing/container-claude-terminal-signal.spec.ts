@@ -48,8 +48,10 @@ import { terminalVisibleText } from "./terminal-visible-text";
  * a third turn in the background that the fake refuses with a 401, as a wrong
  * key would be (to-do 5160 task 4): the sidebar must leave working, the
  * environment must ring `agent_failed` and opening it must show "Agent
- * stopped with an error". The next prompt in that session is recorded: the
- * CLI then answers "Not logged in" locally, with no hook (to-do 8092).
+ * stopped with an error". The next prompt in that session must also leave
+ * working: the CLI answers it "Not logged in" locally with no hook, and the
+ * backend settles it from that notice and rings `agent_failed` again
+ * (to-do 8092, retired; `claude-terminal-settle.ts`).
  * Screenshots go to `output/visual-previews/5160-container-claude-*.png`.
  *
  * Nothing at module scope spawns `mise` or `docker`, so the file stays inert
@@ -548,9 +550,9 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
       step("toast shown");
       // The next prompt in the same session. After a refused login the CLI
       // says "Not logged in" and answers nothing locally. An answer must ring
-      // waiting; a local refusal is recorded, not asserted: the CLI fires no
-      // Stop or StopFailure hook for it, so the tab reads working until the
-      // next hook (to-do 8092).
+      // waiting. A local refusal fires no Stop or StopFailure hook; the
+      // backend settles it from the CLI's notice once the tab has been quiet
+      // for 3 s, so it must ring agent_failed (to-do 8092, retired).
       await focusTerminal();
       await page.keyboard.type(
         "Reply with only the word PONG and then 60 plus 6 as digits. No tools.",
@@ -566,22 +568,18 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
       );
       const answered = /PONG\s*66/.test(await output());
       step(answered ? "next prompt answered" : "next prompt refused locally");
-      // Long enough for a working ring, and a Stop or StopFailure ring, to land.
+      // Long enough for a working ring, and a Stop, StopFailure or settle, to land.
       await page.waitForTimeout(15_000);
       failedTurn.followingTurn = answered ? "answered" : "not-logged-in";
       failedTurn.followingTurnBackendState = (await backendState()) ?? null;
       failedTurn.followingTurnSidebar = await sidebarActivity(page, containerName);
       failedTurn.followingTurnUnreadReason = await unreadReason();
       process.stderr.write(`[claude-terminal-failed-turn] ${JSON.stringify(failedTurn)}\n`);
-      if (answered) {
-        expect(failedTurn.followingTurnBackendState).not.toBe("working");
-        expect(failedTurn.followingTurnUnreadReason).toBe("agent_waiting");
-      } else {
-        testInfo.annotations.push({
-          type: "known gap",
-          description: `after a refused login the next prompt reads ${String(failedTurn.followingTurnBackendState)} (to-do 8092)`,
-        });
-      }
+      expect(failedTurn.followingTurnBackendState).not.toBe("working");
+      expect(failedTurn.followingTurnSidebar).not.toBe("working");
+      expect(failedTurn.followingTurnUnreadReason).toBe(
+        answered ? "agent_waiting" : "agent_failed",
+      );
       await containerItem.click();
       await page.waitForTimeout(1_000);
       await shot("container-claude-following-turn");

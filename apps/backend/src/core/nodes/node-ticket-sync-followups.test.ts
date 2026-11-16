@@ -500,7 +500,7 @@ describe("image metadata remains readable by peers", () => {
 });
 
 // An unknown project is an error only while this machine's projects store
-// cannot be read; a project it confirms removed is dropped (to-do 8111).
+// cannot be read; a project it confirms removed is dropped (#2328).
 for (const failure of ["unknown-project", "unreadable"] as const) {
   test(`image wants survive ${failure} outbox errors and complete after recovery`, async () => {
     const f = await fleet();

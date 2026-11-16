@@ -83,7 +83,7 @@ async function withSecondBoard(f: Fleet) {
   return { commandOther, leafOther, gone, stays };
 }
 
-describe("leaf changes for a command node project that was removed (to-do 8111 task 2)", () => {
+describe("leaf changes for a command node project that was removed (#2328)", () => {
   test("are dropped, the leaf's other changes apply, and the leaf keeps its copies as its own", async () => {
     const f = await fleet();
     const { leafOther, gone, stays } = await withSecondBoard(f);

@@ -8,7 +8,7 @@ import { createProviderStub, withService } from "./native-agent-service-projecti
 import type { NativeAgentService } from "./native-agent-service.js";
 
 /*
- * Todo 8151 (retired): in a quiet Claude tab every discovery answer was a whole body
+ * #2314: in a quiet Claude tab every discovery answer was a whole body
  * (about 32 KB), two per 30 s backstop where nothing had changed. A backstop
  * read found each section just expired and was answered `stale` (a new view,
  * plus a 2 s follow-up), and the follow-up was answered `ready` again with the
@@ -203,7 +203,7 @@ async function withQuietClaude(
   );
 }
 
-describe("discovery reads during a quiet turn (todo 8151 (retired))", () => {
+describe("discovery reads during a quiet turn (#2314)", () => {
   test("a quiet view's renewals answer unchanged instead of re-sending the whole view", async () => {
     await withQuietClaude(async ({ window, announcements, reads }) => {
       const before = { runtime: reads.runtime(), mcp: reads.mcp() };

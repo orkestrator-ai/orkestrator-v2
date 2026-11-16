@@ -1,6 +1,6 @@
 /**
  * A refused login in a host `claude-tmux` tab rings "Agent stopped with an
- * error", live (to-do 5160 (retired) task 7). Opt-in
+ * error", live (#2317). Opt-in
  * (`ORKESTRATOR_AGENT_TEST_LIVE_FAILED_TURN_BELL_TMUX=1`) against a running
  * credential-free agent-test profile with Claude in its toolchain. No login
  * and nothing billed: the profile's own Claude directory
@@ -25,7 +25,7 @@
  * must show the toast, and the tab must find the CLI's transcript and show
  * its API-error reply. A second prompt is then submitted and the tab sampled
  * for up to 120 s, as evidence for the "Not logged in" gap the container CLI
- * showed (to-do 8092); it is recorded, not asserted.
+ * showed (#2315); it is recorded, not asserted.
  *
  * Writes `output/agent-testing/<run>/failed-turn-bell/claude-tmux.json` and
  * saves the toast as `output/visual-previews/5160-bell-claude-tmux-refused.png`.

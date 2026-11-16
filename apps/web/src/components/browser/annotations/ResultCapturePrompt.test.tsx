@@ -192,6 +192,7 @@ describe("turn-end result capture prompt", () => {
 
     const article = await screen.findByRole("article", { name: /Change request/ });
     await waitFor(() => expect(captureButton(article)).toBeTruthy());
+    // Compare before asserting so a failure cannot dump an unbounded DOM tree.
     expect(screen.queryByRole("region", { name: "Capture the result" }) === null).toBe(true);
   });
 

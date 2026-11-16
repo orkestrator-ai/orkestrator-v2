@@ -117,7 +117,7 @@ export interface NodeTicketSyncResult {
   sent: number;
   /** Images delivered to the leaf. */
   images?: number;
-  /** Leaf changes dropped because their project was removed here (to-do 8111 task 2). */
+  /** Leaf changes dropped because their project was removed here (#2328). */
   dropped?: number;
   /** Nothing was paired yet: the node's projects are still being read; retried shortly. */
   waiting?: boolean;
@@ -390,8 +390,8 @@ export class NodeTicketSync {
           message: `${node.displayName} sent a ticket change this machine cannot read. Update this machine to sync tickets with it.`,
         };
       }
-      // A change for a project removed here has nowhere to go (to-do 8111
-      // task 2). Project ids are never reused, so a project the strict read
+      // A change for a project removed here has nowhere to go (#2328).
+      // Project ids are never reused, so a project the strict read
       // does not hold is gone for good: its changes are dropped and
       // acknowledged in their place, so they no longer hold back the leaf's
       // other projects, and the leaf is told to keep its copies as its own.

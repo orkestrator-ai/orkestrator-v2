@@ -35,7 +35,7 @@ import {
 import { KanbanBoardStore, normalizeKanbanTask } from "./storage-kanban-board.js";
 import { forgetSyncProject } from "./storage-kanban-sync.js";
 import {
-  sweepRemovedProjectRows,
+  KanbanRemovedProjectStore,
   type LiveOwnerIds,
   type RemovedProjectSweepResult,
 } from "./storage-kanban-removed-projects.js";
@@ -131,6 +131,7 @@ export type KanbanDeliveryPolicyListener = (
 
 export class KanbanRepository {
   private deliveryPolicyListener?: KanbanDeliveryPolicyListener;
+  private readonly removedProjects: KanbanRemovedProjectStore;
   private readonly labelCatalogue: KanbanLabelCatalogueStore;
 
   constructor(
@@ -138,6 +139,7 @@ export class KanbanRepository {
     private readonly files: StorageFiles,
     private readonly board: KanbanBoardStore,
   ) {
+    this.removedProjects = new KanbanRemovedProjectStore(context, files, board);
     this.labelCatalogue = new KanbanLabelCatalogueStore(context, files, board.removal);
   }
 
@@ -732,19 +734,14 @@ export class KanbanRepository {
   }
 
   /**
-   * Deletes the rows that projects removed before to-do 5820 left behind,
-   * and the completion comment records of pipelines that are gone (to-do
-   * 8111 task 1); see `sweepRemovedProjectRows`.
+   * Deletes the rows that projects removed before #2295 left behind,
+   * and the completion comment records of pipelines that are gone (#2328); see `sweepRemovedProjectRows`.
    */
   sweepRemovedProjectRows(
     liveProjects: LiveOwnerIds,
     livePipelines: LiveOwnerIds,
   ): Promise<RemovedProjectSweepResult> {
-    return sweepRemovedProjectRows(
-      { context: this.context, files: this.files, board: this.board },
-      liveProjects,
-      livePipelines,
-    );
+    return this.removedProjects.sweepRemovedProjectRows(liveProjects, livePipelines);
   }
 
   /**

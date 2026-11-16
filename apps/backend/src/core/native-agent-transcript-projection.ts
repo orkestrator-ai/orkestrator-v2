@@ -532,7 +532,7 @@ export class NativeAgentTranscriptProjection {
    * Expired discovery sections whose renewal a job limit refused, oldest
    * first, each a retry of that schedule. A finishing job starts them, so a
    * section is never left waiting for the view's next read: those reads are
-   * 30 s apart once renewals no longer change the view (todo 8151 (retired)).
+   * 30 s apart once renewals no longer change the view (#2314).
    */
   private readonly deferredDiscoveryRenewals = new Map<
     string,
@@ -4085,7 +4085,7 @@ export class NativeAgentTranscriptProjection {
   }
 
   /**
-   * Remember a renewal a job limit refused. Before todo 8151 (retired) a refused
+   * Remember a renewal a job limit refused. Before #2314 a refused
    * section waited for the view's next read, which the `stale` answer made
    * 2 s later; that answer was itself a whole changed view. A retry whose
    * session moved to a new epoch (identity change, invalidation) is dropped:
@@ -4253,7 +4253,7 @@ export class NativeAgentTranscriptProjection {
       // runs: the view, and its token, change only if the renewed value does,
       // and that change is announced. Serving it `stale` made every 30 s
       // backstop a whole new view plus a 2 s follow-up that was another one
-      // (todo 8151 (retired)). `stale` now means a renewal failed and the value shown
+      // (#2314). `stale` now means a renewal failed and the value shown
       // is the one before it.
       const state: NativeAgentDiscoverySectionState<unknown> = cached
         ? {
@@ -4292,7 +4292,7 @@ export class NativeAgentTranscriptProjection {
         }
         // `fetchedAt` moves on every renewal, read or not, and no view shows
         // it: carried here it made each 30 s renewal a whole new discovery
-        // view (todo 8151 (retired)). The catalogue's revision already moves when the
+        // view (#2314). The catalogue's revision already moves when the
         // rows or their state do.
         if (detail) {
           const { fetchedAt: _fetchedAt, ...shown } = detail;

@@ -2,11 +2,46 @@ import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findi
 import { resolveEnvironmentActionDefault } from "./action-default-selection.js";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
-import type { CommandInvoker } from "./build-pipeline-service-helpers.js";
 import type { StorageService } from "./storage.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("pull-request");
+
+/**
+ * The command layer as these launches use it. They treat every reply as
+ * untrusted and read it field by field (`readLaunchReceipt`), so the reply is
+ * `unknown` rather than a caller-chosen type. The backend's generic
+ * `CommandInvoker` is assignable to it, and a test fake needs no cast.
+ */
+export type LaunchCommandInvoker = (
+  command: string,
+  args?: Record<string, unknown>,
+) => Promise<unknown>;
+
+/** The fields a `launch_native_agent_job` reply may carry, each checked before use. */
+interface LaunchReceipt {
+  tabId?: string;
+  status?: unknown;
+  error?: string;
+  completionActionArmed?: unknown;
+}
+
+/**
+ * Reads a `launch_native_agent_job` reply. A reply that is not an object (a
+ * missing or `null` result) carries no acknowledgement, so the launch reads as
+ * unacknowledged and is retried, instead of throwing a `TypeError`.
+ */
+function readLaunchReceipt(reply: unknown): LaunchReceipt {
+  if (typeof reply !== "object" || reply === null) return {};
+  return {
+    ...("tabId" in reply && typeof reply.tabId === "string" ? { tabId: reply.tabId } : {}),
+    ...("status" in reply ? { status: reply.status } : {}),
+    ...("error" in reply && typeof reply.error === "string" ? { error: reply.error } : {}),
+    ...("completionActionArmed" in reply
+      ? { completionActionArmed: reply.completionActionArmed }
+      : {}),
+  };
+}
 
 /** Pane title of the PR tab, matching the action bar's Create PR launch. */
 export const MULTI_REVIEW_AUTO_PR_TAB_TITLE = "PR";
@@ -160,21 +195,16 @@ export type ResolveConflictsLaunchOutcome =
  * and the prompt goes to the environment's open Resolve tab when it has one.
  */
 export async function launchResolveConflictsAgent(
-  invoke: CommandInvoker,
+  invoke: LaunchCommandInvoker,
   storage: Pick<StorageService, "getEnvironment" | "loadConfig">,
   input: { environmentId: string; targetBranch: string; requestId: string },
 ): Promise<ResolveConflictsLaunchOutcome> {
   const environment = await storage.getEnvironment(input.environmentId);
   if (!environment) return { kind: "rejected", message: "Environment no longer exists" };
   const action = await resolveEnvironmentActionDefault(storage, environment, "resolve");
-  let result: {
-    tabId?: unknown;
-    status?: unknown;
-    error?: unknown;
-    completionActionArmed?: unknown;
-  };
+  let result: LaunchReceipt;
   try {
-    result = await invoke("launch_native_agent_job", {
+    const reply = await invoke("launch_native_agent_job", {
       requestId: input.requestId,
       environmentId: input.environmentId,
       agent: action.agent,
@@ -192,11 +222,11 @@ export async function launchResolveConflictsAgent(
       ...(action.reasoningEffort ? { reasoningId: action.reasoningEffort } : {}),
       ...(typeof action.fastMode === "boolean" ? { fastMode: action.fastMode } : {}),
     });
+    result = readLaunchReceipt(reply);
   } catch (error) {
     return { kind: "retry", message: error instanceof Error ? error.message : String(error) };
   }
-  const tabId = typeof result.tabId === "string" ? result.tabId : undefined;
-  const error = typeof result.error === "string" ? result.error : undefined;
+  const { tabId, error } = result;
   if (result.status === "rejected")
     return { kind: "rejected", message: error || "The agent rejected the conflict resolution" };
   if (result.status !== "accepted" || !tabId)
@@ -219,7 +249,7 @@ export type AutoPrLaunchOutcome =
  * consolidated report found nothing to fix.
  */
 export async function launchMultiReviewAutoPr(
-  invoke: CommandInvoker,
+  invoke: LaunchCommandInvoker,
   storage: Pick<StorageService, "getEnvironment" | "loadConfig">,
   workflow: MultiReviewWorkflow,
   requestId: string,
@@ -250,7 +280,7 @@ export async function launchMultiReviewAutoPr(
  * original job instead of creating a second PR agent.
  */
 export async function launchPrAgent(
-  invoke: CommandInvoker,
+  invoke: LaunchCommandInvoker,
   storage: Pick<StorageService, "getEnvironment" | "loadConfig">,
   input: {
     environmentId: string;
@@ -275,9 +305,9 @@ export async function launchPrAgent(
   const admission = await beforeLaunch?.();
   if (admission) return admission;
 
-  let result: { tabId?: unknown; status?: unknown; error?: unknown };
+  let result: LaunchReceipt;
   try {
-    result = await invoke("launch_native_agent_job", {
+    const reply = await invoke("launch_native_agent_job", {
       requestId,
       environmentId,
       agent: action.agent,
@@ -290,11 +320,11 @@ export async function launchPrAgent(
       ...(action.reasoningEffort ? { reasoningId: action.reasoningEffort } : {}),
       ...(typeof action.fastMode === "boolean" ? { fastMode: action.fastMode } : {}),
     });
+    result = readLaunchReceipt(reply);
   } catch (error) {
     return { kind: "retry", message: error instanceof Error ? error.message : String(error) };
   }
-  const tabId = typeof result.tabId === "string" ? result.tabId : undefined;
-  const error = typeof result.error === "string" ? result.error : undefined;
+  const { tabId, error } = result;
   if (result.status === "rejected") {
     return { kind: "rejected", message: error || "The agent rejected the pull request request" };
   }

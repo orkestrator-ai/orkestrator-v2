@@ -42,6 +42,7 @@ import {
   resendToOpenJobTab,
   jobPromptFingerprint,
 } from "./native-agent-job-tab-reuse.js";
+import { adoptPipelineResolveSessionIntoTab } from "./native-agent-job-pipeline-resolve.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");
@@ -307,6 +308,19 @@ async function launchNativeAgentJobInternal(
       return { status: "skipped" };
     }
     if (tabReuse && completionAction) {
+      // A Resolve with no Resolve tab open first reopens the conversation a
+      // build pipeline's own Resolve Conflicts step had, so the resend below
+      // continues that session instead of starting another.
+      if (completionAction === "refresh-pr-after-agent-completion") {
+        await adoptPipelineResolveSessionIntoTab(context, {
+          environmentId,
+          agent,
+          enabledAgents: enabled,
+          tabReuse,
+          title: title || "Resolve",
+          authorized,
+        });
+      }
       const resent = await resendToOpenJobTab(context, {
         authorized,
         onDispatchStarted: () => {

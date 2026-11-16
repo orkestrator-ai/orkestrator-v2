@@ -208,8 +208,11 @@ export class NativeAgentPromptDispatch {
    * Whether an existing tab's session can take another prompt, for a caller
    * choosing between that tab and a new one. `busy` means the prompt has to wait
    * in the durable queue. `unavailable` means it would not run there: no session,
-   * a tab being closed, a parked dispatch or queue, or a failed provider session
-   * (the queue parks a prompt behind a terminal error rather than sending it).
+   * a tab being closed, a parked dispatch or queue (the queue parks a prompt
+   * behind a terminal dispatch error rather than sending it), or a provider
+   * session that is gone. A session whose last turn failed is `idle`: it takes
+   * the next prompt as a user typing into it would, and a dispatch the provider
+   * refuses still sends the caller to a new tab.
    * Never creates a session; a read that fails answers `unavailable`.
    */
   async promptReadiness(
@@ -256,7 +259,7 @@ export class NativeAgentPromptDispatch {
         contextUsage,
       );
       if (status === "running" || status === "blocked") return "busy";
-      if (status !== "idle") return "unavailable";
+      if (status !== "idle" && status !== "error") return "unavailable";
       // Sending past a backlog would overtake prompts the user queued first.
       return queue &&
         (queue.outstandingClaim !== undefined ||

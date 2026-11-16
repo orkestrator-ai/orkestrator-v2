@@ -370,6 +370,12 @@ export const clientEnvironmentFields = {
   /** Recoverable Resolve identity, retained across pre-dispatch failures. */
   autoMergeResolveRequestId: optionalString,
   autoMergeResolveCompletedAt: optionalString,
+  /**
+   * Pull request head when the current Resolve episode started. A Resolve that
+   * moved the head made progress, so conflicts found after it are new ones (the
+   * base moved again) and do not count toward the attempt limit.
+   */
+  autoMergeResolveHeadSha: optionalString,
   autoMergeResolveAttempts: optionalNumber,
   createdAt: Schema.String,
   /** Last prompt dispatch or agent completion/waiting transition. */

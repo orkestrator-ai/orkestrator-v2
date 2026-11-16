@@ -554,6 +554,7 @@ describe("launch_control_job command", () => {
         dispatchIntent: ReturnType<typeof mock>;
         ensureSession: ReturnType<typeof mock>;
         notifyPromptQueueChanged: ReturnType<typeof mock>;
+        adoptSession: ReturnType<typeof mock>;
         openJobTab: (
           tabId: string,
           agent?: "codex" | "claude",
@@ -585,9 +586,18 @@ describe("launch_control_job command", () => {
       const dispatchIntent = mock(async () => ({ outcome: "accepted" as const }));
       const ensureSession = mock(async () => ({ providerSessionId: "provider-new" }));
       const notifyPromptQueueChanged = mock(() => undefined);
+      const adoptSession = mock(async (input: { providerSessionId: string }) => ({
+        providerSessionId: input.providerSessionId,
+      }));
       const context = {
         storage,
-        nativeAgents: { promptReadiness, dispatchIntent, ensureSession, notifyPromptQueueChanged },
+        nativeAgents: {
+          promptReadiness,
+          dispatchIntent,
+          ensureSession,
+          notifyPromptQueueChanged,
+          adoptSession,
+        },
       } as unknown as CommandContext;
       const command = createCommandRegistry().get("launch_native_agent_job");
       if (!command) throw new Error("launch_native_agent_job was not registered");
@@ -628,6 +638,7 @@ describe("launch_control_job command", () => {
           dispatchIntent,
           ensureSession,
           notifyPromptQueueChanged,
+          adoptSession,
           openJobTab,
           launch: async (args = {}) =>
             (await command(
@@ -718,6 +729,78 @@ describe("launch_control_job command", () => {
           queued: true,
         });
         expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(1);
+      });
+    });
+
+    test("reopens a finished pipeline's resolve session as the Resolve tab instead of a new session", async () => {
+      await withResolveEnvironment(async ({ storage, launch, ...fakes }) => {
+        const resolveSession = {
+          phase: "resolve-conflicts",
+          agent: "codex",
+          iteration: 1,
+          sessionKey: "pipeline-1:resolve-conflicts:1:a",
+          sdkSessionId: "provider-pipeline-resolve",
+          status: "idle",
+          startedAt: "2026-11-15T10:00:00.000Z",
+          completedAt: "2026-11-15T10:10:00.000Z",
+          label: "Resolve Conflicts",
+        };
+        storage.listBuildPipelinesForEnvironment = (async () => [
+          {
+            version: 1,
+            id: "pipeline-1",
+            projectId: "project-1",
+            environmentId: "env-1",
+            updatedAt: "2026-11-15T10:10:00.000Z",
+            revision: 1,
+            snapshot: {
+              id: "pipeline-1",
+              taskId: "task-1",
+              projectId: "project-1",
+              environmentId: "env-1",
+              environmentType: "local",
+              agentType: "codex",
+              phase: "complete",
+              sessions: [resolveSession],
+              currentSessionIndex: 0,
+              iteration: 1,
+              maxIterations: 3,
+              createdAt: "2026-11-15T09:00:00.000Z",
+              taskTitle: "Conflicts",
+              taskSnapshot: {
+                title: "Conflicts",
+                description: "",
+                acceptanceCriteria: "",
+                comments: [],
+                images: [],
+              },
+              backendRevision: 1,
+              controller: "backend",
+            },
+          },
+        ]) as unknown as typeof storage.listBuildPipelinesForEnvironment;
+
+        const result = await launch({ activateTab: false });
+
+        expect(fakes.adoptSession).toHaveBeenCalledTimes(1);
+        expect(fakes.adoptSession.mock.calls[0]?.[0]).toMatchObject({
+          agent: "codex",
+          providerSessionId: "provider-pipeline-resolve",
+        });
+        const tabs = await tabIds(storage);
+        expect(tabs).toHaveLength(1);
+        expect(result).toMatchObject({
+          tabId: tabs[0],
+          status: "accepted",
+          reused: true,
+          completionActionArmed: true,
+        });
+        expect(fakes.ensureSession).not.toHaveBeenCalled();
+        expect(fakes.dispatchIntent).toHaveBeenCalledTimes(1);
+        expect(fakes.dispatchIntent.mock.calls[0]?.[0]).toMatchObject({
+          logicalSessionKey: `env-env-1:${tabs[0]}`,
+          requestId: "resolve-request-2",
+        });
       });
     });
 

@@ -1049,6 +1049,7 @@ export class ProjectsRepository {
         "cleanupAfterMergeError",
         "deletionError",
         "autoMergeResolveCompletedAt",
+        "autoMergeResolveHeadSha",
         "lifecycleOperationStartedAt",
         "setupSessionId",
         "setupStartedAt",
@@ -1280,6 +1281,7 @@ export class ProjectsRepository {
       if ("autoMerge" in updates) {
         environment.autoMergeResolveAttempts = 0;
         environment.autoMergeResolveCompletedAt = undefined;
+        environment.autoMergeResolveHeadSha = undefined;
         // Off is an explicit `false`, like lifecycleError's `null`: renderers
         // merge snapshots field-by-field, so a dropped key would leave it on.
         environment.autoMerge =
@@ -1324,6 +1326,7 @@ export class ProjectsRepository {
       if (environment.hasMergeConflicts === false) {
         environment.autoMergeResolveAttempts = 0;
         environment.autoMergeResolveCompletedAt = undefined;
+        environment.autoMergeResolveHeadSha = undefined;
       }
       if ("tabTeardownIntents" in updates) {
         const intents = updates.tabTeardownIntents;
@@ -1570,6 +1573,7 @@ export class ProjectsRepository {
       if (!claim?.autoMergePrUrl) {
         environment.autoMergeResolveRequestId = undefined;
         environment.autoMergeResolveCompletedAt = undefined;
+        environment.autoMergeResolveHeadSha = undefined;
       }
       if (claim?.autoMergePrUrl && !environment.autoMergeResolveRequestId)
         environment.autoMergeResolveRequestId = claim.requestId;

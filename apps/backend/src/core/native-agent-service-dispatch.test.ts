@@ -2015,8 +2015,14 @@ describe("NativeAgentService", () => {
       });
     });
 
-    test("a failed session, a missing one or a parked queue is unavailable", async () => {
+    test("a session whose last turn failed takes the next prompt", async () => {
       await withSession("error", async ({ service }) => {
+        expect(await service.promptReadiness(input)).toBe("idle");
+      });
+    });
+
+    test("a missing provider session, a missing mapping or a parked queue is unavailable", async () => {
+      await withSession("missing", async ({ service }) => {
         expect(await service.promptReadiness(input)).toBe("unavailable");
       });
       await withSession("idle", async ({ service }) => {

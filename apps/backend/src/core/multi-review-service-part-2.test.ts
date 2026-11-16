@@ -3053,6 +3053,36 @@ test("MultiReviewService fails a container stage at once when its agent tools ar
   }
 });
 
+test("MultiReviewService dispatches non-Claude structured turns despite blocked agent tools", async () => {
+  for (const packageFlow of [false, true]) {
+    const provider = new Provider(false);
+    let probes = 0;
+    await withService(
+      `env-codex-structured-${packageFlow}`,
+      provider,
+      async ({ service, start }) => {
+        const selection = { agent: "codex" as const, model: "gpt-5" };
+        const started = await start([selection], selection);
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return provider.sends.size > 0;
+        });
+        expect(probes).toBe(0);
+      },
+      {
+        packageFlow,
+        environmentType: "containerized",
+        serviceOptions: {
+          assertAgentToolsReachable: async () => {
+            probes++;
+            throw new Error("unreachable");
+          },
+        },
+      },
+    );
+  }
+});
+
 test("MultiReviewService skips the agent tools preflight for local worktrees", async () => {
   for (const toolMode of [true, false]) {
     const provider = new Provider(false);

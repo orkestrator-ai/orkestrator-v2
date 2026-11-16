@@ -4010,8 +4010,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       executionPolicy: () => this.executionPolicy(workflow),
       agentMcp: (selection, resultKey) =>
         this.workflowAgentMcp(workflow, resultKey, selection.agent, "Multi Review reviewer"),
-      assertAgentToolsReachable: () =>
-        this.assertWorkflowAgentToolsReachable(workflow, "Multi Review reviewer"),
+      assertAgentToolsReachable: (selection) =>
+        this.assertWorkflowAgentToolsReachable(workflow, "Multi Review reviewer", selection.agent),
       ...(this.options.artifactDispatch
         ? {
             artifactTurns: {
@@ -4613,7 +4613,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       if (request.resultTransport === "tool-v1") {
         agentMcp = await this.workflowAgentMcp(workflow, request.requestId, selection.agent, stage);
       } else {
-        await this.assertWorkflowAgentToolsReachable(workflow, stage);
+        await this.assertWorkflowAgentToolsReachable(workflow, stage, selection.agent);
       }
       if (request.resultTransport === "tool-v1" && this.options.workflowResults) {
         await this.options.workflowResults.prepare({
@@ -5731,8 +5731,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   /**
-   * Refuse a container turn up front when its container cannot reach the
-   * agent tools server, whatever the result transport. A container's bridge
+   * Refuse a structured-output Claude container turn up front when it cannot
+   * reach the agent tools server. A container's Claude bridge
    * is always given the Orkestrator MCP server and refuses every turn after
    * the first while it is not connected, so a structured-output turn that
    * went ahead would fail at its first schema repair or follow-up with a
@@ -5741,8 +5741,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   private async assertWorkflowAgentToolsReachable(
     workflow: MultiReviewWorkflow,
     stage: string,
+    agent: StructuredOutputProvider,
   ): Promise<void> {
-    if (!this.options.assertAgentToolsReachable) return;
+    if (agent !== "claude" || !this.options.assertAgentToolsReachable) return;
     const environment = await this.storage.getEnvironment(workflow.environmentId);
     if (!environment || environment.environmentType === "local") return;
     await this.options.assertAgentToolsReachable(workflow.environmentId, stage);

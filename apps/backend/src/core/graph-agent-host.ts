@@ -73,6 +73,7 @@ import {
 } from "./graph-agent-state.js";
 import type { GraphActivationReport, GraphExecutorContext } from "./graph-run-executors.js";
 import type { Environment } from "./models.js";
+import { multiReviewWorkflowIdOfRun } from "./multi-review-graph-engine.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 
 import type { GraphAgentExecutorDependencies } from "./graph-node-agent.js";
@@ -380,6 +381,19 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
     return keys.length === 1
       ? service.capabilityToken(scope, keys[0]!)
       : service.activationCapabilityToken(scope, keys);
+  }
+
+  async assertAgentToolsReachable(branch: AgentBranchRecord): Promise<void> {
+    if (
+      branch.agent !== "claude" ||
+      !multiReviewWorkflowIdOfRun(this.context.run.id) ||
+      this.input.environment.environmentType === "local"
+    )
+      return;
+    await this.dependencies.assertAgentToolsReachable?.(
+      this.context.environmentId,
+      "Multi Review graph step",
+    );
   }
 
   async agentMcp(

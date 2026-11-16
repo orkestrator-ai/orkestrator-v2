@@ -6,10 +6,13 @@
  * See docs/architecture/agent-accounts.md ("Automatic switching").
  *
  * The rule itself is in `@orkestrator/protocol/agent-account-auto-switch`. This
- * class owns the reads, the switch and the waits. Nothing here sees a credential:
+ * class owns the reads, the switch and the waits, and remembers which logins a
+ * fresh reading put past the threshold, so leaving an account and choosing it
+ * again use one threshold ("One threshold"). Nothing here sees a credential:
  * every switch only records which existing login is active.
  */
 import {
+  AUTO_SWITCH_THRESHOLD_PERCENT,
   MAX_USAGE_LIMIT_RESENDS,
   confirmedLimitResetsAt,
   decideAutoSwitch,
@@ -199,6 +202,77 @@ function boundedUsageReading(
   );
 }
 
+const WEEK_MS = 7 * 24 * 60 * 60_000;
+const FIVE_HOUR_MS = 5 * 60 * 60_000;
+
+/** One limit a fresh reading put at or past the threshold, held until it resets. */
+interface HeldLimit {
+  usedPercent: number;
+  /** Epoch ms: the limit's reset, or its window's length from the reading when unknown. */
+  until: number;
+}
+
+/** What fresh readings last said past the threshold about one login. */
+interface HeldLogin {
+  weekly?: HeldLimit;
+  fiveHour?: HeldLimit;
+}
+
+/** Twins share one allowance, so one is held for every entry of the login. */
+function heldLoginKey(platform: AgentAccountPlatform, entry: AutoSwitchAccount): string {
+  const email = entry.account.identity?.email?.trim().toLowerCase();
+  return email
+    ? `${platform}:${email}`
+    : `${platform}:id:${entry.account.id}:${JSON.stringify(entry.account.identity)}`;
+}
+
+type HeldLevel = {
+  freshness: UsageLimitReading["freshness"];
+  usedPercent?: number;
+  resetsAt?: number;
+};
+
+/**
+ * What the fresh readings of one limit, across a login's entries, say now:
+ * `hold` at or past the threshold, `release` below it, nothing without one.
+ */
+function heldLimitFrom(
+  levels: readonly (HeldLevel | undefined)[],
+  now: number,
+  windowMs: number,
+): HeldLimit | "release" | undefined {
+  let held: HeldLimit | undefined;
+  let release = false;
+  for (const level of levels) {
+    if (level?.freshness !== "fresh" || level.usedPercent === undefined) continue;
+    if (level.usedPercent < AUTO_SWITCH_THRESHOLD_PERCENT) {
+      release = true;
+      continue;
+    }
+    const until = level.resetsAt ?? now + windowMs;
+    if (!held || level.usedPercent > held.usedPercent)
+      held = { usedPercent: level.usedPercent, until };
+  }
+  return held ?? (release ? "release" : undefined);
+}
+
+/**
+ * A level no fresh reading speaks for, as the held limit says it: past the
+ * threshold, with its reset ahead, which is what keeps an idle account out.
+ */
+function heldLevel(
+  level: HeldLevel | undefined,
+  held: HeldLimit | undefined,
+  now: number,
+): { freshness: "stale"; usedPercent: number; resetsAt: number } | undefined {
+  if (!held || now >= held.until || level?.freshness === "fresh") return undefined;
+  return {
+    freshness: "stale",
+    usedPercent: Math.max(level?.usedPercent ?? 0, held.usedPercent),
+    resetsAt: level?.resetsAt ?? held.until,
+  };
+}
+
 export class AgentAccountAutoSwitcher {
   /** One decision at a time per provider: a switch moves what the next one reads. */
   private readonly queues = new Map<AgentAccountPlatform, Promise<unknown>>();
@@ -224,6 +298,13 @@ export class AgentAccountAutoSwitcher {
   private readonly probed = new Map<string, number>();
   /** When each account's sign-in was last asked for, may next be, and the failures in a row. */
   private readonly renewals = new Map<string, { at: number; next: number; failures: number }>();
+  /**
+   * Logins a fresh reading put at or past the threshold, keyed by `heldLoginKey`.
+   * The rule that moved the machine off one and the rule that picks where to go
+   * share one threshold, so a later reading that is not fresh cannot make it look
+   * like it has room again before a fresh reading says so or the limit resets.
+   */
+  private readonly held = new Map<string, HeldLogin>();
   private timer: ReturnType<typeof setInterval> | undefined;
   /** Per provider, the check due when an account's 5-hour limit resets. */
   private readonly fiveHourWakes = new Map<AgentAccountPlatform, ReturnType<typeof setTimeout>>();
@@ -771,7 +852,73 @@ export class AgentAccountAutoSwitcher {
           }
           return { account, included, reading };
         }),
-    ).then((entries) => (mode === "probe" ? this.renewUnread(platform, entries, read) : entries));
+    )
+      .then((entries) => (mode === "probe" ? this.renewUnread(platform, entries, read) : entries))
+      .then((entries) => this.holdPastThreshold(platform, entries, state.activeId, confirmedOut));
+  }
+
+  /**
+   * Remember each login a fresh reading puts at or past the threshold, on either
+   * limit, and forget it once a fresh reading puts it below or the limit resets.
+   * Until then an idle entry of it reads as held past the threshold with its reset
+   * ahead wherever no fresh reading speaks for it, so between turns it is no place
+   * to go (`levelHasRoom`). The active entry keeps its own reading: only a fresh
+   * one moves the machine.
+   */
+  private holdPastThreshold(
+    platform: AgentAccountPlatform,
+    entries: AutoSwitchAccount[],
+    activeId: string,
+    confirmedOut: ReadonlySet<string>,
+  ): AutoSwitchAccount[] {
+    const now = this.now();
+    const logins = new Map<string, AutoSwitchAccount[]>();
+    for (const entry of entries) {
+      // A confirmed stop is already held out, as a reading made up for it.
+      if (confirmedOut.has(entry.account.id)) continue;
+      const key = heldLoginKey(platform, entry);
+      logins.set(key, [...(logins.get(key) ?? []), entry]);
+    }
+    for (const [key, twins] of logins) {
+      const previous = this.held.get(key);
+      const next: HeldLogin = {};
+      const weekly = heldLimitFrom(
+        twins.map(({ reading }) => reading),
+        now,
+        WEEK_MS,
+      );
+      const fiveHour = heldLimitFrom(
+        twins.map(({ reading }) => reading.fiveHour),
+        now,
+        FIVE_HOUR_MS,
+      );
+      const keep = (limit: HeldLimit | "release" | undefined, before: HeldLimit | undefined) =>
+        limit === "release"
+          ? undefined
+          : (limit ?? (before && now < before.until ? before : undefined));
+      const heldWeekly = keep(weekly, previous?.weekly);
+      const heldFiveHour = keep(fiveHour, previous?.fiveHour);
+      if (heldWeekly) next.weekly = heldWeekly;
+      if (heldFiveHour) next.fiveHour = heldFiveHour;
+      if (!next.weekly && !next.fiveHour) {
+        this.held.delete(key);
+        continue;
+      }
+      if (!this.held.has(key) && this.held.size >= MAX_TRACKED_STOPS) this.held.clear();
+      this.held.set(key, next);
+    }
+    return entries.map((entry) => {
+      if (entry.account.id === activeId || confirmedOut.has(entry.account.id)) return entry;
+      const held = this.held.get(heldLoginKey(platform, entry));
+      if (!held) return entry;
+      const weekly = heldLevel(entry.reading, held.weekly, now);
+      const fiveHour = heldLevel(entry.reading.fiveHour, held.fiveHour, now);
+      if (!weekly && !fiveHour) return entry;
+      return {
+        ...entry,
+        reading: { ...entry.reading, ...weekly, ...(fiveHour ? { fiveHour } : {}) },
+      };
+    });
   }
 
   /**

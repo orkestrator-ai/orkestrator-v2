@@ -1,6 +1,6 @@
 import { environmentDeletionFailure } from "@orkestrator/protocol/node-summaries";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
-import { environmentBrowserTarget } from "@/lib/preview-service-entry";
+import { environmentBrowserTarget, environmentEntryIntent } from "@/lib/preview-service-entry";
 import {
   ensurePreviewServiceSync,
   previewServiceStore,
@@ -1323,7 +1323,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     // Prefer the registered entry service: the tab then follows the service
     // across container recreation instead of pinning today's host port.
     void environmentBrowserTarget(selectedEnvironment, environmentBrowserUrl, actionBarScope)
-      .catch(() => environmentBrowserUrl ?? undefined)
+      .catch(() => environmentEntryIntent(selectedEnvironment, environmentBrowserUrl))
       .then((initialUrl) => {
         if (initialUrl) {
           paneLayouts.getState().updateTabBrowserUrl(tabId, initialUrl, environmentId);

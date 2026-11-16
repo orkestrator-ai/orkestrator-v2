@@ -62,10 +62,13 @@ function pendingHandoffState(
 }
 
 /**
- * Whether the backend delivers handoffs. An answer that cannot be read counts as
- * "no": this renderer then prepends the history, and a backend that delivers
- * recognises the carrier and does not add a second one, so the wrong guess costs
- * nothing, where assuming "yes" could drop the history.
+ * Whether the backend delivers handoffs. Every supported backend does, so an
+ * answer that cannot be read counts as "yes" and the renderer sends plain text.
+ * Prepending here instead would put a second copy of the history in front of
+ * the prompt whenever dispatch adds a block before the text (a user-command
+ * block, coordinator attachment paths), because only the backend can see the
+ * final prompt. The backend also leaves a prompt that already holds the
+ * carrier alone, so neither answer can send the history twice.
  */
 async function backendDeliversHandoffs(scope: NodeScope): Promise<boolean> {
   try {
@@ -73,7 +76,7 @@ async function backendDeliversHandoffs(scope: NodeScope): Promise<boolean> {
       await backendApiForScope(scope, createAgentHandoffsApi, backend).getAgentHandoffCapabilities()
     ).delivery;
   } catch {
-    return false;
+    return true;
   }
 }
 

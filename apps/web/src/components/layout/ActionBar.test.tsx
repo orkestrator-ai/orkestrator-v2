@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
+import { formatPreviewIntentUri } from "@orkestrator/protocol/preview-services";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import {
   act,
@@ -1714,7 +1715,7 @@ describe("ActionBar browser tabs", () => {
     return root?.kind === "leaf" ? root.tabs[0]?.browserData?.url : undefined;
   };
 
-  test("opens a browser tab at once, then points it at the mapped backend port", async () => {
+  test("opens a browser tab at once, then points it at the environment's entry port", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       entryPort: 3000,
@@ -1729,8 +1730,17 @@ describe("ActionBar browser tabs", () => {
       expect(createTabMock).toHaveBeenCalledWith("browser", {
         tabId: expect.stringMatching(/^tab-/),
       });
-      // Without preview-service support the entry button keeps its legacy target.
-      await waitFor(() => expect(browserTabUrl()).toBe("http://localhost:49152/"));
+      // Without an entry service the tab resolves the container's entry port,
+      // as a typed address would, rather than loading the published host port.
+      await waitFor(() =>
+        expect(browserTabUrl()).toBe(
+          formatPreviewIntentUri({
+            environmentId: "env-1",
+            source: "container-terminal",
+            url: "http://localhost:3000/",
+          }),
+        ),
+      );
     } finally {
       restore();
     }

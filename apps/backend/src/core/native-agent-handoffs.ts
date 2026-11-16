@@ -28,6 +28,7 @@ import {
   AGENT_HANDOFF_PROVIDER_LABELS,
   parseAgentHandoffSnapshot,
   prependAgentHandoffHistory,
+  textCarriesAgentHandoff,
 } from "@orkestrator/protocol/agent-handoff";
 import { NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX } from "@orkestrator/protocol/native-agent";
 import { parseGoalCommandArguments } from "@orkestrator/protocol/native-agent-goal";
@@ -147,8 +148,14 @@ export function coordinatorPromptWithAttachmentPaths(
 
 /**
  * The prompt a dispatch sends: `prompt` with the pending handoff's carrier in
- * front, unless the journal already recorded it delivered. `deliveredId` is
- * the handoff this send delivers, for the journal.
+ * front, unless the journal already recorded it delivered or the prompt
+ * already holds that carrier. `deliveredId` is the handoff this send delivers,
+ * for the journal.
+ *
+ * The carrier check looks anywhere in the prompt, not only at its start:
+ * dispatch puts a user-command block or coordinator attachment paths in front
+ * of the text, which defeats `prependAgentHandoffHistory`'s own prefix check,
+ * and the history must never reach the agent twice.
  */
 export function promptWithPendingAgentHandoff(
   prompt: string,
@@ -156,6 +163,7 @@ export function promptWithPendingAgentHandoff(
   session: PersistedNativeAgentSession,
 ): { prompt: string; deliveredId?: string } {
   if (!handoff || deliveredAgentHandoffIds(session).includes(handoff.id)) return { prompt };
+  if (textCarriesAgentHandoff(prompt, handoff.id)) return { prompt, deliveredId: handoff.id };
   return {
     prompt: prependAgentHandoffHistory(handoff.bootstrapPrompt, prompt),
     deliveredId: handoff.id,

@@ -38,7 +38,6 @@ import {
   readProviderStatus,
   type NativeAgentRuntimeProvider,
 } from "./agent-provider-contract.js";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { PersistedNativeAgentSession } from "./models.js";
 import type { CommandDispatchPlan } from "./native-agent-command-dispatch.js";
 import {
@@ -150,8 +149,13 @@ export function coordinatorPromptWithAttachmentPaths(
 /**
  * The prompt a dispatch sends: `prompt` with the pending handoff's carrier in
  * front, unless the journal already recorded it delivered or the prompt
- * already carries it (an older renderer prepends the history itself).
- * `deliveredId` is the handoff this send delivers, for the journal.
+ * already holds that carrier. `deliveredId` is the handoff this send delivers,
+ * for the journal.
+ *
+ * The carrier check looks anywhere in the prompt, not only at its start:
+ * dispatch puts a user-command block or coordinator attachment paths in front
+ * of the text, which defeats `prependAgentHandoffHistory`'s own prefix check,
+ * and the history must never reach the agent twice.
  */
 export function promptWithPendingAgentHandoff(
   prompt: string,
@@ -159,10 +163,7 @@ export function promptWithPendingAgentHandoff(
   session: PersistedNativeAgentSession,
 ): { prompt: string; deliveredId?: string } {
   if (!handoff || deliveredAgentHandoffIds(session).includes(handoff.id)) return { prompt };
-  if (textCarriesAgentHandoff(prompt, handoff.id)) {
-    compatibilityPathUsage.record("agent-handoff.renderer-carried");
-    return { prompt, deliveredId: handoff.id };
-  }
+  if (textCarriesAgentHandoff(prompt, handoff.id)) return { prompt, deliveredId: handoff.id };
   return {
     prompt: prependAgentHandoffHistory(handoff.bootstrapPrompt, prompt),
     deliveredId: handoff.id,

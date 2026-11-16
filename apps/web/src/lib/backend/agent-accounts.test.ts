@@ -161,22 +161,22 @@ test("plugin catalog requests preserve the selected command node or leaf", async
   ]);
 });
 
-test("a machine that predates the account switch grant reads as none, on any path", async () => {
+test("an account switch grant read failure, an unknown command included, is the caller's, on any path", async () => {
   const unknown = new Error(
     unknownBackendCommandMessage(GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND),
   );
   workspace.mockRejectedValueOnce(unknown);
-  expect(await getCoordinatorAccountSwitchGrant("claude")).toBeNull();
+  await expect(getCoordinatorAccountSwitchGrant("claude")).rejects.toThrow(
+    GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
+  );
   workspace.mockClear();
   // A routed answer arrives with the command node's text unchanged.
   portal.mockRejectedValueOnce(unknown);
-  expect(await getCoordinatorAccountSwitchGrant("claude", "leaf")).toBeNull();
+  await expect(getCoordinatorAccountSwitchGrant("claude", "leaf")).rejects.toThrow(
+    GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
+  );
   expect(portal.mock.calls[0]?.[1]).toMatchObject({
     nodeId: "leaf",
     command: GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
   });
-
-  const failure = new Error("offline");
-  portal.mockRejectedValueOnce(failure);
-  await expect(getCoordinatorAccountSwitchGrant("claude", "leaf")).rejects.toBe(failure);
 });

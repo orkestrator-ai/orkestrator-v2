@@ -21,8 +21,7 @@ export const MCP_MANAGEMENT_PROTOCOL_VERSION = 1;
 /**
  * Bridges that report which saved MCP files a runtime loaded put this number
  * in every `/session/:id/runtime-health` body as `mcpConfigReporting`, even
- * for a session they do not hold. A body without it (and without `mcpConfig`)
- * comes from a bridge older than the report, which cannot prove an apply.
+ * for a session they do not hold. The backend no longer reads it.
  */
 export const MCP_CONFIG_REPORTING_VERSION = 1;
 
@@ -933,14 +932,6 @@ export function mcpManagementErrorFromUnknown(error: unknown): McpManagementErro
     ...(detail ? { message: detail } : {}),
     ...(correlationId ? { correlationId } : {}),
   });
-}
-
-/** A *specifically unsupported* command from an older backend. */
-export function isUnknownMcpManagementCommandError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  return /Unknown (?:backend )?command:?\s*(?:list_mcp_management_targets|get_mcp_management_snapshot|get_mcp_definition|validate_mcp_mutation|mutate_mcp_definition|apply_mcp_configuration|get_mcp_operation|cancel_mcp_apply|get_mcp_management_rollout|set_mcp_management_rollout|resolve_mcp_environment_overlay|preview_mcp_environment_defaults|refresh_mcp_environment_defaults)/i.test(
-    message,
-  );
 }
 
 // ---------------------------------------------------------------------------

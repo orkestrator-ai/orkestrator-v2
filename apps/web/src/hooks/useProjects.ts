@@ -264,7 +264,7 @@ export function useProjects() {
       invalidateProjectSnapshots();
       arrangeProjectsInStore(preview.projectIds, preview.folders);
       try {
-        setProjects(await projectsApi(scope).arrangeProjectsByIntent(intent, preview));
+        setProjects(await projectsApi(scope).arrangeProjectsByIntent(intent));
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to arrange projects";
         // A folder-free arrangement is a plain reorder — the most common drag

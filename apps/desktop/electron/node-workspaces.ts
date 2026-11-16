@@ -98,12 +98,7 @@ export async function openNodeWorkspace(options: {
         ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
       });
       // The route must reach the node the grant was issued by.
-      outcome =
-        checked.kind !== "hello"
-          ? "legacy"
-          : checked.hello.installationId === opened.nodeId
-            ? "hello"
-            : "other-node";
+      outcome = checked.hello.installationId === opened.nodeId ? "hello" : "other-node";
     } catch (error) {
       outcome = isConnectionCheckError(error) ? error.code : "error";
     }

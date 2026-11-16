@@ -43,7 +43,7 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
-import { BACKEND_CAPABILITIES, hasBackendCapability } from "@orkestrator/protocol/backend-profile";
+import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
 import { isBackendId } from "@orkestrator/protocol/federation";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { ResultOf } from "@orkestrator/protocol/contract/command";
@@ -52,7 +52,6 @@ import {
   type deliverNodeMailCommand,
   type NodeMailApi,
 } from "@orkestrator/protocol/contract/domains/node-mail";
-import { ticketSyncClient } from "@orkestrator/protocol/contract/domains/ticket-sync";
 import { routedDomainApi, type ContractEnvelope } from "./nodes/index.js";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
@@ -61,7 +60,6 @@ import {
 } from "@orkestrator/protocol/review-evidence-frames";
 
 import {
-  assertNodeTakesMailAttachments,
   attachmentReferences,
   pushCallerAttachmentsToNode,
   readCallerAttachments,
@@ -136,16 +134,12 @@ export interface CoordinatorNodeTarget {
   /** This project's copy on that node, matched by repository identity. */
   projectId: string;
   call<T>(command: string, args?: JsonRecord, requestKey?: string): Promise<T>;
-  /** Whether that node's hello advertises the capability (`BACKEND_CAPABILITIES`). */
-  supports(capability: string): boolean;
   /**
    * That node's `node-mail` domain client (plan item 1010): version 1 when its
    * hello advertises the domain, else today's capability gating. Calls are
    * routed like {@link call}, with `requestKey` for the outcome ledger.
    */
   nodeMail(requestKey?: string): NodeMailApi;
-  /** Whether that node syncs tickets with this one (the `ticket-sync` domain client). */
-  syncsTickets(): boolean;
   /** One of this project's worker environments there, or an error naming why not. */
   environment(environmentId: string): Promise<JsonRecord>;
 }
@@ -243,21 +237,10 @@ export async function coordinatorNodeTarget(
     nodeName: node.view.displayName,
     projectId: project.ref.projectId,
     call,
-    supports: (capability: string) =>
-      isBackendId(nodeId) && hasBackendCapability(context.nodes?.link(nodeId)?.hello, capability),
     nodeMail: (requestKey?: string) =>
       routedDomainApi(nodeMailClient, hello, (command, args, envelope) =>
         route(command, args, requestKey, envelope),
       ),
-    syncsTickets: () => {
-      try {
-        return routedDomainApi(ticketSyncClient, hello, (command, args, envelope) =>
-          route(command, args, undefined, envelope),
-        ).syncs;
-      } catch {
-        return false;
-      }
-    },
     environment: async (environmentId: string) => {
       const value = await call<unknown>("get_environment", { environmentId });
       if (!record(value) || value.projectId !== project.ref.projectId) {
@@ -781,10 +764,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         throw new Error("Reply parent is not from that node");
       return sendToNodeCoordinator(target, {
         ...turnOrigin,
-        // An older node is refused below, naming the address it does not know.
-        ...(target.nodeMail().supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)
-          ? await pushImages(target, { projectId: target.projectId })
-          : {}),
+        ...(await pushImages(target, { projectId: target.projectId })),
         coordinatorId: caller.coordinatorId,
         mailbox: own,
         ...(parent
@@ -977,7 +957,6 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       }
     } else {
       const target = await coordinatorNodeTarget(context, caller, nodeId);
-      assertNodeTakesMailAttachments(target);
       await target.environment(environmentId);
     }
     // Each transfer is its own copy, as a repeated call of this tool always was.
@@ -1052,15 +1031,6 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         typeof input.delegationBaseCommit !== "string"
       ) {
         throw new Error("Invalid scoped build pipeline request");
-      }
-      if (
-        !input.existingEnvironmentId &&
-        !target.supports(BACKEND_CAPABILITIES.nodeCoordinatorBuildOrigin)
-      ) {
-        compatibilityPathUsage.record("coordinator-build.origin-upgrade-required");
-        throw new Error(
-          "Update this node before launching a coordinator build: it cannot prove build creation authority",
-        );
       }
       if (typeof input.existingEnvironmentId === "string") {
         await target.environment(input.existingEnvironmentId);

@@ -11,7 +11,6 @@ import { webAnnotationStore } from "@/stores/webAnnotationStore";
 import {
   commitPendingCapture,
   resultCaptureMetadata,
-  withAdvertisedShadowScope,
   withAdvertisedSourceHints,
 } from "./capture-commit";
 import { forgetCaptureIntent, rememberCaptureIntent } from "./capture-intents";
@@ -155,7 +154,7 @@ describe("source hint capability gate", () => {
   }
 });
 
-describe("shadow-root targets follow the backend's advertisement", () => {
+describe("shadow-root targets", () => {
   const shadowScope = {
     kind: "shadow" as const,
     hosts: [{ tagName: "app-shell", cssPath: "html > body > app-shell" }],
@@ -168,79 +167,33 @@ describe("shadow-root targets follow the backend's advertisement", () => {
     invokeMock.mockImplementation(() => Promise.resolve());
   });
 
-  function shadowRecord(captureId: string) {
+  test("send the root path to every backend", async () => {
+    appCommandStore(webAnnotationStore)
+      .getState()
+      .update("env-1", () => ({
+        capabilities: fixtureCapabilities({ shadowTargets: false }),
+        capabilityStatus: "available",
+      }));
     const fake = createFakeCaptureApi();
-    const record = seedPending(fake.spool, { captureId, image: null });
+    const record = seedPending(fake.spool, { captureId: "cap-shadow", image: null });
     const target = record.capture.target;
     if (target.kind !== "element") throw new Error("expected an element fixture");
     record.capture = {
       ...record.capture,
       target: { ...target, anchor: { ...target.anchor, scope: shadowScope } },
     };
-    return { fake, record };
-  }
-
-  test("leaves non-shadow targets alone either way", () => {
-    const record = seedPending(createFakeCaptureApi().spool, { captureId: "cap-plain" });
-    expect(withAdvertisedShadowScope(record.capture, false)).toBe(record.capture);
-  });
-
-  test("a text range's container follows the advertisement too", () => {
-    const record = seedPending(createFakeCaptureApi().spool, { captureId: "cap-quote" });
-    const element = record.capture.target;
-    if (element.kind !== "element") throw new Error("expected an element fixture");
-    const capture = {
-      ...record.capture,
-      target: {
-        kind: "text-range" as const,
-        label: "“Quote”",
-        quote: { exact: "Quote", prefix: "", suffix: "" },
-        container: { ...element.anchor, scope: shadowScope },
-        rect: element.rect,
-        rects: [],
-      },
-    };
-    expect(withAdvertisedShadowScope(capture, true)).toBe(capture);
-    const older = withAdvertisedShadowScope(capture, false).target;
-    if (older.kind !== "text-range") throw new Error("expected a text range");
-    expect(older.container.scope).toEqual({ kind: "unsupported", reason: "shadow-root" });
-    expect(older.quote).toEqual(capture.target.quote);
-  });
-
-  for (const [label, advertised, expected] of [
-    ["sends the root path when the backend advertises it", true, shadowScope],
-    [
-      "sends the older unsupported scope when the backend does not advertise it",
-      false,
-      { kind: "unsupported", reason: "shadow-root" },
-    ],
-    [
-      "sends the older unsupported scope to a backend without the flag",
-      undefined,
-      { kind: "unsupported", reason: "shadow-root" },
-    ],
-  ] as const) {
-    test(label, async () => {
-      appCommandStore(webAnnotationStore)
-        .getState()
-        .update("env-1", () => ({
-          capabilities: fixtureCapabilities({ shadowTargets: advertised }),
-          capabilityStatus: "available",
-        }));
-      const { fake, record } = shadowRecord(`cap-shadow-${String(advertised)}`);
-      await commitPendingCapture({
-        api: fake.api,
-        environmentId: "env-1",
-        captureId: record.descriptor.captureId,
-        record,
-        input: { body: "Inside a component." },
-      });
-      const args = backend.callsOf("web_annotation_create")[0]!.args as {
-        capture: { target: { anchor: { scope: unknown } } };
-      };
-      expect(args.capture.target.anchor.scope).toEqual(expected);
+    await commitPendingCapture({
+      api: fake.api,
+      environmentId: "env-1",
+      captureId: record.descriptor.captureId,
+      record,
+      input: { body: "Inside a component." },
     });
-  }
+    const args = backend.callsOf("web_annotation_create")[0]!.args as {
+      capture: { target: { anchor: { scope: unknown } } };
+    };
+    expect(args.capture.target.anchor.scope).toEqual(shadowScope);
+  });
 });
 
 describe("capture commit on another machine's environment", () => {
@@ -381,20 +334,18 @@ describe("capture commit branches on another machine's environment", () => {
     };
   };
 
-  for (const [label, localFlags, remoteFlags, expectedHints, expectedScope] of [
+  for (const [label, localFlags, remoteFlags, expectedHints] of [
     [
       "follows the owning node's advertisement when only it advertises",
       { sourceHints: false, shadowTargets: false },
       { sourceHints: true, shadowTargets: true },
       [hint],
-      shadowScope,
     ],
     [
       "ignores this window's advertisement when the owning node does not advertise",
       { sourceHints: true, shadowTargets: true },
       { sourceHints: false, shadowTargets: false },
       undefined,
-      { kind: "unsupported", reason: "shadow-root" },
     ],
   ] as const) {
     test(label, async () => {
@@ -411,7 +362,7 @@ describe("capture commit branches on another machine's environment", () => {
       });
       const args = client.calls("web_annotation_create")[0]!.args as unknown as SentCapture;
       expect(args.capture.evidence.sourceHints).toEqual(expectedHints);
-      expect(args.capture.target.anchor.scope).toEqual(expectedScope);
+      expect(args.capture.target.anchor.scope).toEqual(shadowScope);
       expect(local.calls).toEqual([]);
     });
   }

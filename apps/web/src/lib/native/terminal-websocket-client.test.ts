@@ -4,7 +4,6 @@ import {
   encodeTerminalBinaryFrame,
   TERMINAL_BINARY_FRAME_TYPE,
   TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES,
-  TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
   TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
   TERMINAL_WEBSOCKET_SUBPROTOCOL,
 } from "@orkestrator/protocol/terminal-websocket";
@@ -85,6 +84,8 @@ function createHarness(overrides: Partial<TerminalWebSocketClientOptions> = {}):
     maxReconnectDelayMs: 0,
     subscriptionRetryDelayMs: 0,
     acknowledgementDelayMs: 0,
+    // Every ready socket answers pings; the heartbeat has its own suite.
+    heartbeatIntervalMs: 0,
     createSocket: (url, protocols) => {
       const socket = new MockWebSocket(url, protocols);
       sockets.push(socket);
@@ -340,10 +341,9 @@ describe("TerminalWebSocketClient cumulative input results", () => {
     expect(socket.closes).toEqual([]);
   });
 
-  test("an older server's one result per input still settles each", async () => {
+  test("a per-input success frame is a protocol error, not a settlement", async () => {
     const { client, socket } = connected();
-    const first = trackInput(client, "session-a", "a");
-    const second = trackInput(client, "session-a", "b");
+    trackInput(client, "session-a", "a");
     const ids = sentBinaries(socket).map((frame) => frame.revision);
     socket.receive(
       JSON.stringify({
@@ -355,8 +355,7 @@ describe("TerminalWebSocketClient cumulative input results", () => {
       }),
     );
     await tick();
-    expect(first.settled).toBe("resolved");
-    expect(second.settled).toBe("pending");
+    expect(socket.closes.at(-1)?.code).toBe(4004);
   });
 });
 
@@ -368,10 +367,7 @@ describe("TerminalWebSocketClient", () => {
     const unsubscribeA = client.subscribe("session-a", outputA);
     const unsubscribeB = client.subscribe("session-b", outputB);
     expect(sockets).toHaveLength(1);
-    expect(sockets[0]!.protocols).toEqual([
-      TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
-      TERMINAL_WEBSOCKET_SUBPROTOCOL,
-    ]);
+    expect(sockets[0]!.protocols).toEqual([TERMINAL_WEBSOCKET_SUBPROTOCOL]);
     expect(sockets[0]!.binaryType).toBe("arraybuffer");
 
     const first = sockets[0]!;
@@ -417,13 +413,7 @@ describe("TerminalWebSocketClient", () => {
       (frame) => frame.type === TERMINAL_BINARY_FRAME_TYPE.input,
     )!;
     first.receive(
-      JSON.stringify({
-        type: "operation-result",
-        channelId: 11,
-        operationId: input.revision,
-        operation: "input",
-        ok: true,
-      }),
+      JSON.stringify({ type: "input-results", channelId: 11, throughOperationId: input.revision }),
     );
     expect(await inputResult).toBe(true);
 
@@ -991,13 +981,7 @@ describe("TerminalWebSocketClient", () => {
       (frame) => frame.type === TERMINAL_BINARY_FRAME_TYPE.input,
     )!;
     socket.receive(
-      JSON.stringify({
-        type: "operation-result",
-        channelId: 4,
-        operationId: input.revision,
-        operation: "input",
-        ok: true,
-      }),
+      JSON.stringify({ type: "input-results", channelId: 4, throughOperationId: input.revision }),
     );
     expect(await pending).toBe(true);
   });
@@ -1338,13 +1322,7 @@ describe("TerminalWebSocketClient", () => {
     ).toBe(value);
     for (const frame of frames) {
       socket.receive(
-        JSON.stringify({
-          type: "operation-result",
-          channelId: 4,
-          operationId: frame.revision,
-          operation: "input",
-          ok: true,
-        }),
+        JSON.stringify({ type: "input-results", channelId: 4, throughOperationId: frame.revision }),
       );
     }
     expect(await result).toBe(true);

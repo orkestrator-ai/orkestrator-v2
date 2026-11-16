@@ -7,7 +7,6 @@ import {
   type ProjectArrangement,
   type ProjectArrangementIntent,
 } from "@/lib/project-folders";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { projects } from "@/lib/node-scope/domains/projects";
 import type { FederatedProject } from "./summaries";
 import { routedBackendClient } from "@/lib/portal/routed-backend-client";
@@ -83,9 +82,7 @@ function arrangementFromOwner(result: unknown): ProjectArrangement | null {
  * Project arrangements on other machines ("by machine"). A gesture is sent to
  * the owner as an intent with `arrange_projects_by_intent`, which resolves it
  * against the owner's current projects; each one is delivered in order, one at
- * a time. An owner that predates the command gets the latest arrangement
- * through `arrange_projects` instead, which also covers everything still queued.
- * The arrangement is shown until the owner's summary reflects it.
+ * a time. The arrangement is shown until the owner's summary reflects it.
  * Owned by the portal, like environment reorders.
  */
 export function createRemoteProjectWrites(portal: PortalStore) {
@@ -124,35 +121,26 @@ export function createRemoteProjectWrites(portal: PortalStore) {
   };
 
   const send = (entry: Pending, write: Write) => {
+    const intent = entry.intents.shift();
+    if (!intent) {
+      settle(entry, write);
+      return;
+    }
     entry.writing = true;
     // The `projects` domain client over the routed call (plan item 7005): a
     // routed call carries no negotiated range, so it is today's call (version 0).
     const node = projects(routedBackendClient(portal, write.nodeId))();
-    const whole = (): Promise<unknown> =>
-      node.arrange_projects({
-        projectIds: [...write.arrangement.projectIds],
-        folders: { ...write.arrangement.folders },
-      });
-    const intent = entry.intents.shift();
-    const request: Promise<unknown> = intent
-      ? node.arrange_projects_by_intent({ intent }).catch((error: unknown) => {
-          if (incompatibility(error, "arrange_projects_by_intent")?.code !== "unknown-command")
-            throw error;
-          entry.intents.length = 0;
-          return whole();
-        })
-      : whole();
-    void request.then(
-      (result) => {
+    void node.arrange_projects_by_intent({ intent }).then(
+      (result: unknown) => {
         entry.writing = false;
-        if (entry.latest !== write || entry.intents.length > 0) {
+        if (entry.intents.length > 0) {
           send(entry, entry.latest);
           return;
         }
         // The owner resolved the gesture against its own state, which may differ
         // from this client's preview. Show that, or the overlay would wait out
         // its deadline for a summary that will never match.
-        const owner = intent ? arrangementFromOwner(result) : null;
+        const owner = arrangementFromOwner(result);
         const settled = owner ? { ...write, arrangement: owner } : write;
         if (owner) store.setState((current) => new Map(current).set(write.nodeId, owner), true);
         settle(entry, settled);
@@ -170,7 +158,7 @@ export function createRemoteProjectWrites(portal: PortalStore) {
       nodeId: BackendId,
       arrangement: ProjectArrangement,
       onError: Write["onError"],
-      intent?: ProjectArrangementIntent,
+      intent: ProjectArrangementIntent,
     ) {
       if (arrangement.projectIds.length > MAX_SUMMARY_PROJECTS) {
         onError(new Error("This project order is too large to submit."));
@@ -192,7 +180,7 @@ export function createRemoteProjectWrites(portal: PortalStore) {
         entry = { latest: write, writing: false, intents: [] };
         pending.set(nodeId, entry);
       }
-      if (intent) entry.intents.push(intent);
+      entry.intents.push(intent);
       store.setState((current) => new Map(current).set(nodeId, merged), true);
       if (!entry.writing) send(entry, write);
     },

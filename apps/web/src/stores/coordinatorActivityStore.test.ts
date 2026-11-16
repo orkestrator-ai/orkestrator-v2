@@ -216,15 +216,14 @@ describe("coordinator activity store", () => {
     release();
   });
 
-  test("stops asking a backend that predates the command", async () => {
+  test("an unknown command is a failed read, asked again on the next check", async () => {
     failWith = new Error(`Unknown backend command: ${COORDINATOR_ACTIVITY_COMMAND}`);
     const release = appCommandStore(coordinatorActivityStore).getState().retain();
     await settled();
     expect(reads).toBe(1);
     requestViewSafetyChecks("interval");
     await settled();
-    expect(reads).toBe(1);
-    expect(appCommandStore(coordinatorActivityStore).getState().projects.size).toBe(0);
+    expect(reads).toBe(2);
     release();
   });
 

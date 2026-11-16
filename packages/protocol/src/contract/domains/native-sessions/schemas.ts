@@ -596,6 +596,7 @@ export const DispatchOutcomeSchema = openRecord({
   outcome: Schema.String,
   requestId: optionalString,
   error: optionalString,
+  /** No longer set (every bridge confirms compaction instructions); kept so the registered result schema is unchanged. */
   instructionsIgnored: optionalBoolean,
   requestIdRetired: optionalBoolean,
   /** A temporary refusal with nothing sent: a new request id may succeed. */
@@ -608,6 +609,7 @@ export const DispatchOutcomeSchema = openRecord({
 /** `NativeAgentSessionActionOutcome` (native-agent.ts), including a verified steer refusal. */
 export const SessionActionOutcomeSchema = openRecord({
   outcome: Schema.String,
+  /** No longer set (every bridge confirms compaction instructions); kept so the registered result schema is unchanged. */
   instructionsIgnored: optionalBoolean,
   shareUrl: optionalString,
   preview: Schema.optional(Schema.Unknown),

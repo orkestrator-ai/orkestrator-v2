@@ -6,7 +6,7 @@ import type { MultiReviewPhase } from "@orkestrator/protocol/multi-review";
 // `failed` stays active on purpose: the tab offers "Retry failed stage" and
 // "Abandon" (which cancels) on it, and closing the tab leaves it for the
 // launcher to reattach. So the refusal stands, but it must not call a failed
-// review "running", and it names the two ways out (to-do 8172 task 2).
+// review "running", and it names the two ways out (to-do 8172 (retired) task 2).
 
 /** The refusal of a delete of a workflow in `phase`. */
 export function multiReviewDeleteRefusal(phase: MultiReviewPhase): string {

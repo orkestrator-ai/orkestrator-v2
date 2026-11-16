@@ -351,8 +351,6 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     return coordination(context).leafMail.collect(
       args.controllerId,
       after,
-      args.coordinatorMail === true,
-      args.attachmentMail === true,
       notices
         ? {
             repositoryHints: Array.isArray(notices.repositoryHints)
@@ -386,9 +384,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
       args.controllerId,
       args.upTo,
       sequences as number[] | undefined,
-      args.coordinatorMail === true,
-      args.attachmentMail === true,
-      notices ? { declined } : undefined,
+      { declined },
     );
   });
 

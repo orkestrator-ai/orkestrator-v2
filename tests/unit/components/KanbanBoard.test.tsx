@@ -76,6 +76,8 @@ function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
     title: "Task",
     description: "",
     acceptanceCriteria: "",
+    kind: "feature",
+    sections: {},
     status: "backlog",
     comments: [],
     images: [],

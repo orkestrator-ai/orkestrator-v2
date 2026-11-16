@@ -16,12 +16,9 @@ import { pipeline, type Readable } from "node:stream";
 import path from "node:path";
 import { constants as zlibConstants, createGzip, type Gzip } from "node:zlib";
 import {
-  BROWSER_PREVIEW_SANDBOX_CSP,
-  MAX_BROWSER_PREVIEW_BODY_BYTES,
   IMMUTABLE_ASSET_CACHE_CONTROL,
   REVALIDATED_DOCUMENT_CACHE_CONTROL,
   DYNAMIC_GZIP_LEVEL,
-  MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES,
   SSE_COMPRESSION_CHUNK_BYTES,
   MAX_STATIC_FALLBACK_SOURCE_BYTES,
   normalizeContentEncoding,
@@ -40,9 +37,7 @@ import {
   ifNoneMatchMatches,
   ifModifiedSinceMatches,
   isDynamicCompressionSizeEligible,
-  canBufferBodyChunk,
   dynamicProxyCompressionBufferBudget,
-  browserPreviewDecodeBudget,
   allocateBufferedProxySource,
   canAppendToProxySourceBuffer,
   shouldAbandonBufferedProxyBody,
@@ -50,7 +45,6 @@ import {
   compressStaticFileWithinLimits,
   responseCompressionContexts,
   prepareCompressedBody,
-  settleRewrittenProxyBodyResponse,
   jsonResponse,
   textResponse,
   sanitizeTargetRequestHeaders,
@@ -59,16 +53,11 @@ import {
   parseStrictContentLengthHeader,
   stripCodedContentHeaders,
   stripTransformedRepresentationHeaders,
-  browserPreviewContentKind,
-  browserPreviewContentDecoder,
-  rewriteBrowserPreviewBody,
 } from "./gateway-internals.js";
 import type { StaticCompressionEncoding, StaticContentEncoding } from "./gateway-internals.js";
-import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 import {
-  browserPreviewRewriteKey,
   derivedProxyEtag,
   mapIfNoneMatchForUpstream,
   restoreDerivedEtag,
@@ -182,30 +171,14 @@ export class GatewayProxy {
     response: ServerResponse,
     target: URL,
     proxyPrefix?: string,
-    browserPreview = false,
     stripOrigin = false,
   ): Promise<void> {
-    // Legacy path previews address arbitrary loopback ports, so bound their
-    // concurrency explicitly (per port and overall) before connecting.
-    let releaseLegacySlot = () => {};
-    if (browserPreview) {
-      compatibilityPathUsage.record("preview.legacy-loopback-route");
-      const slot = this.ctx.legacyPreviewAdmission.tryAcquire(target.port || "80");
-      if (!slot) {
-        jsonResponse(response, 503, { error: "Browser preview is at capacity; retry shortly" });
-        return;
-      }
-      releaseLegacySlot = () => slot.release();
-    }
     await new Promise<void>((resolve) => {
       let settled = false;
       let activeProxyResponse: IncomingMessage | null = null;
-      let headersTimer: ReturnType<typeof setTimeout> | null = null;
       const finish = () => {
         if (settled) return;
         settled = true;
-        if (headersTimer) clearTimeout(headersTimer);
-        releaseLegacySlot();
         // Keep-alive sockets outlive individual requests; drop this
         // request's disconnect handler so they do not accumulate.
         request.socket.removeListener("close", cancelProxyForDisconnect);
@@ -222,14 +195,11 @@ export class GatewayProxy {
       };
       const targetHeaders = sanitizeTargetRequestHeaders(request.headers, target, stripOrigin);
       // The gateway owns representation negotiation on the remote-facing hop.
-      // Keeping the loopback hop decoded prevents double compression and lets
-      // preview rewriting enforce its decoded-byte bound.
+      // Keeping the loopback hop decoded prevents double compression.
       targetHeaders["accept-encoding"] = "identity";
       // Tags this gateway derived for transformed bytes go upstream as the
       // upstream's own tags, so the application can still answer 304.
-      const rewriteKey =
-        browserPreview && proxyPrefix ? browserPreviewRewriteKey(proxyPrefix, target) : null;
-      const preconditions = mapIfNoneMatchForUpstream(targetHeaders, rewriteKey);
+      const preconditions = mapIfNoneMatchForUpstream(targetHeaders);
       const proxyRequest = http.request(
         {
           host: target.hostname,
@@ -239,7 +209,6 @@ export class GatewayProxy {
           headers: targetHeaders,
         },
         (proxyResponse) => {
-          if (headersTimer) clearTimeout(headersTimer);
           activeProxyResponse = proxyResponse;
           const responseHeaders = sanitizeProxyResponseHeaders(
             proxyResponse.headers,
@@ -266,188 +235,6 @@ export class GatewayProxy {
             ?.toLowerCase()
             .split(",")
             .some((directive) => directive.trim() === "no-transform");
-          if (browserPreview) {
-            delete responseHeaders["x-frame-options"];
-            delete responseHeaders["content-security-policy-report-only"];
-            // The upstream's own policy is replaced, not merged: its
-            // frame-ancestors would block the client's iframe, and the
-            // sandbox keeps the document off the gateway origin (M1).
-            responseHeaders["content-security-policy"] = BROWSER_PREVIEW_SANDBOX_CSP;
-            // Never credentialed: a sandboxed document's `null` origin is
-            // shared by every preview (M2).
-            delete responseHeaders["access-control-allow-credentials"];
-            responseHeaders["access-control-allow-origin"] = "*";
-            if (request.headers.origin === "null") appendHeadersVary(responseHeaders, "Origin");
-          }
-
-          // `Cache-Control: no-transform` forbids the body rewrite; such
-          // responses stream through unchanged with the documented limitation.
-          const previewContentKind =
-            browserPreview && proxyPrefix && transformableRepresentation && transformAllowed
-              ? browserPreviewContentKind(proxyResponse.headers["content-type"])
-              : null;
-          if (browserPreview && proxyPrefix && previewContentKind) {
-            const decoder = browserPreviewContentDecoder(proxyResponse.headers["content-encoding"]);
-            if (decoder === undefined) {
-              proxyResponse.destroy();
-              fail(new Error("Browser preview response used an unsupported content encoding"));
-              return;
-            }
-
-            const contentLengthHeader = proxyResponse.headers["content-length"];
-            const contentLengthValue = Array.isArray(contentLengthHeader)
-              ? contentLengthHeader[0]
-              : contentLengthHeader;
-            const contentLength = Number.parseInt(contentLengthValue ?? "", 10);
-            if (Number.isFinite(contentLength) && contentLength > MAX_BROWSER_PREVIEW_BODY_BYTES) {
-              proxyResponse.destroy();
-              fail(
-                new Error(
-                  `Browser preview response exceeded ${MAX_BROWSER_PREVIEW_BODY_BYTES} bytes`,
-                ),
-              );
-              return;
-            }
-
-            const chunks: Buffer[] = [];
-            let sourceBytes = 0;
-            let decodedBytes = 0;
-            let bodySettled = false;
-            // Decoded preview bodies have no declared size to reserve up front, so
-            // the aggregate ceiling is charged per chunk and returned once the
-            // downstream response settles — the point at which both the chunk list
-            // and the rewritten copy become unreachable.
-            let acquiredPreviewBytes = 0;
-            let previewBytesReleased = false;
-            const releasePreviewBytes = () => {
-              previewBytesReleased = true;
-              // Zero the running total rather than guarding on the flag alone, so
-              // a second call releases nothing and any byte charged between two
-              // calls is still returned by the later one.
-              const outstanding = acquiredPreviewBytes;
-              acquiredPreviewBytes = 0;
-              browserPreviewDecodeBudget.release(outstanding);
-            };
-            releaseReservationOnResponseSettled(response, releasePreviewBytes);
-            const bodyStream: Readable = decoder ? proxyResponse.pipe(decoder) : proxyResponse;
-            const abortBody = (error: Error) => {
-              if (bodySettled) return;
-              bodySettled = true;
-              releasePreviewBytes();
-              decoder?.destroy();
-              proxyResponse.destroy();
-              fail(error);
-            };
-
-            // A stalled rewrite would hold its decode budget indefinitely:
-            // bound the time between upstream chunks, not the whole body.
-            const rewriteIdle = setTimeout(
-              () => abortBody(new Error("Browser preview response stalled")),
-              this.ctx.proxyBodyIdleTimeoutMs,
-            );
-            rewriteIdle.unref?.();
-            releaseReservationOnResponseSettled(response, () => clearTimeout(rewriteIdle));
-            // A refresh after the clears below does nothing, and one after the
-            // timer fired cannot abort twice: `abortBody` has already settled.
-            proxyResponse.on("data", () => rewriteIdle.refresh());
-            proxyResponse.once("end", () => clearTimeout(rewriteIdle));
-
-            if (decoder) {
-              proxyResponse.on("data", (chunk: Buffer | string) => {
-                sourceBytes += Buffer.byteLength(chunk);
-                if (sourceBytes > MAX_BROWSER_PREVIEW_BODY_BYTES) {
-                  abortBody(
-                    new Error(
-                      `Browser preview response exceeded ${MAX_BROWSER_PREVIEW_BODY_BYTES} bytes`,
-                    ),
-                  );
-                }
-              });
-              decoder.once("error", (error) => abortBody(error));
-            }
-
-            bodyStream.on("data", (chunk: Buffer | string) => {
-              // A decoder can emit buffered output after the downstream response
-              // has gone; charging the shared budget then would strand bytes that
-              // nothing is left to release.
-              if (bodySettled || previewBytesReleased) return;
-              const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-              if (
-                !canBufferBodyChunk(
-                  decodedBytes,
-                  chunks.length,
-                  buffer.byteLength,
-                  MAX_BROWSER_PREVIEW_BODY_BYTES,
-                )
-              ) {
-                abortBody(
-                  new Error(
-                    `Browser preview response exceeded ${MAX_BROWSER_PREVIEW_BODY_BYTES} decoded bytes`,
-                  ),
-                );
-                return;
-              }
-              if (!browserPreviewDecodeBudget.tryAcquire(buffer.byteLength)) {
-                abortBody(
-                  new Error(
-                    `Browser preview decoding exceeded the shared ${MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES} byte budget`,
-                  ),
-                );
-                return;
-              }
-              acquiredPreviewBytes += buffer.byteLength;
-              decodedBytes += buffer.byteLength;
-              chunks.push(buffer);
-            });
-            bodyStream.once("end", () => {
-              if (bodySettled) return;
-              const rewritten = Buffer.from(
-                rewriteBrowserPreviewBody(
-                  Buffer.concat(chunks).toString("utf8"),
-                  proxyPrefix,
-                  target,
-                  previewContentKind,
-                ),
-              );
-              if (rewritten.byteLength > MAX_BROWSER_PREVIEW_BODY_BYTES) {
-                bodySettled = true;
-                releasePreviewBytes();
-                decoder?.destroy();
-                proxyResponse.destroy();
-                fail(
-                  new Error(
-                    `Browser preview response exceeded ${MAX_BROWSER_PREVIEW_BODY_BYTES} rewritten bytes`,
-                  ),
-                );
-                return;
-              }
-              bodySettled = true;
-              delete responseHeaders["content-encoding"];
-              const upstreamEtag = responseHeaders.etag;
-              stripTransformedRepresentationHeaders(responseHeaders);
-              settleRewrittenProxyBodyResponse(
-                response,
-                proxyResponse.statusCode ?? 502,
-                responseHeaders,
-                prepareCompressedBody(rewritten, contentType, compressionContext).then(
-                  (prepared) => {
-                    const etag = derivedProxyEtag(upstreamEtag, prepared.encoding, rewriteKey);
-                    if (etag) responseHeaders.etag = etag;
-                    return prepared;
-                  },
-                ),
-                () => settled,
-                finish,
-                fail,
-              );
-            });
-            proxyResponse.once("error", (error) => abortBody(error));
-            proxyResponse.once("aborted", () =>
-              abortBody(new Error("Browser preview response was aborted")),
-            );
-            return;
-          }
-
           const isEventStream =
             contentType?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream";
           const contentLengthValue = headerValueToString(proxyResponse.headers["content-length"]);
@@ -647,7 +434,7 @@ export class GatewayProxy {
                     delete responseHeaders["content-encoding"];
                   } else {
                     responseHeaders["content-encoding"] = prepared.encoding;
-                    const etag = derivedProxyEtag(responseHeaders.etag, prepared.encoding, null);
+                    const etag = derivedProxyEtag(responseHeaders.etag, prepared.encoding);
                     stripTransformedRepresentationHeaders(responseHeaders);
                     if (etag) responseHeaders.etag = etag;
                   }
@@ -691,14 +478,6 @@ export class GatewayProxy {
       });
 
       proxyRequest.once("error", fail);
-      if (browserPreview) {
-        // Covers both connect and response headers: Bun's client does not
-        // expose a separate connect phase.
-        headersTimer = setTimeout(() => {
-          proxyRequest.destroy(new Error("Browser preview upstream did not respond in time"));
-        }, this.ctx.browserPreviewHeadersTimeoutMs);
-        headersTimer.unref?.();
-      }
 
       const cancelProxyForDisconnect = () => {
         if (!settled && !response.writableFinished) {

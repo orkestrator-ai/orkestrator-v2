@@ -56,7 +56,6 @@ import type {
 import { clearProtectedRichContent } from "@/lib/chat/rich-content-reset";
 import {
   resolveGatewayApiUrl,
-  resolveNodeBrowserPreviewUrl,
   resolveNodeGatewayUrl,
   resolveNodeLoopbackBaseUrl,
 } from "@/lib/gateway-url";
@@ -117,12 +116,6 @@ export interface LeafNodeClient extends NodeClient, ExternalLoopbackAddressing {
   resolveMediaUrl(pathname: string): string;
   /** A loopback URL on the leaf, through its loopback proxy (relayed, as media). */
   resolveLoopbackUrl(url: string): string;
-  /**
-   * A loopback page on the leaf for a preview iframe. Relayed even for a
-   * direct leaf: no grant cookie exists, and a frame cannot send a bearer
-   * (report §6.2 step 5).
-   */
-  resolvePreviewUrl(url: string): string;
 }
 
 /** What the registry needs of the client over one transport (the browser `NodeClient`). */
@@ -364,7 +357,6 @@ function createLease(
       if (disposed) throw disposedError();
       return resolveNodeLoopbackBaseUrl(relayBase(), url);
     },
-    resolvePreviewUrl: (url) => resolveNodeBrowserPreviewUrl(relayBase(), url),
     invoke: typedInvoke(invokeRaw),
     invokeRaw,
     listenRaw,

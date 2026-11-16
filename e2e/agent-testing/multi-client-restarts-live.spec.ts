@@ -1,6 +1,6 @@
 /**
- * Two browser clients, backend and bridge restarts at durable transition
- * boundaries, and an older backend, against a real `dev:test` profile with a
+ * Two browser clients and backend and bridge restarts at durable transition
+ * boundaries, against a real `dev:test` profile with a
  * fake model (todo 0048 task 11,
  * docs/todo/transcripts-and-observation/0048-recurring-work-qualification.md).
  *
@@ -20,15 +20,6 @@
  *     mise run test:logged -- --name multi-client -- \
  *     bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
  *     multi-client-restarts-live.spec.ts --workers=1
- *
- * The older-backend case runs first, and only when `ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_URL`
- * and `ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_AUTH_FILE` name a running older
- * backend (its gateway URL and its `gateway-auth.json`), started with
- * `--renderer-dev-server-url` set to this profile's renderer, so the browser
- * runs today's renderer against it. `scripts/older-release-stack.ts backend
- * --tag v2.21.0 --renderer-profile q48t11 --toolchain-bin-dir <the profile's
- * toolchain>` starts one and prints both values. Its Claude CLI must already point at the
- * same fake model (`ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT` fixes the port).
  *
  * Every measurement is a wall-clock interval read in this process, recorded
  * as an annotation and in `evidence-*.json` beside the run. Prompts are
@@ -68,8 +59,6 @@ type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "q48t11";
 const LIVE = process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_CLIENT === "1";
-const OLDER_URL = process.env.ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_URL;
-const OLDER_AUTH = process.env.ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_AUTH_FILE;
 const FAKE_MODEL_PORT = Number(process.env.ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT ?? "0");
 const TAB_ID = "mc-claude";
 /** Rounds of the two-client and queued cases, for a p95 rather than one sample. */
@@ -383,7 +372,7 @@ async function activity(page: Page, environmentName: string): Promise<string | n
   return page.evaluate(environmentMarkerState, environmentName).catch(() => null);
 }
 
-/** The sidebar change badge's text for one environment row, projection or legacy. */
+/** The sidebar change badge's text for one environment row. */
 async function badgeText(page: Page, environmentName: string): Promise<string | null> {
   return page
     .evaluate((name) => {
@@ -391,10 +380,7 @@ async function badgeText(page: Page, environmentName: string): Promise<string | 
         if (label.textContent !== name) continue;
         const badge = label
           .closest('[role="button"]')
-          // An older backend has no projection; its rows show the legacy counts.
-          ?.querySelector(
-            '[data-testid="environment-change-badge"], [data-testid="environment-diff-stats"]',
-          );
+          ?.querySelector('[data-testid="environment-change-badge"]');
         if (badge) return badge.textContent;
       }
       return null;
@@ -641,125 +627,6 @@ test.afterAll(async ({ browser }) => {
 
 // ---------------------------------------------------------------------------
 // Cases
-
-test("older backend: today's renderer against the oldest supported backend", async ({
-  browser,
-}) => {
-  test.skip(
-    !OLDER_URL || !OLDER_AUTH,
-    "No older backend named (ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_URL)",
-  );
-  test.setTimeout(8 * 60_000);
-  const token = (JSON.parse(readFileSync(OLDER_AUTH!, "utf8")) as { token: string }).token;
-  const clients: Client[] = [];
-  try {
-    for (const label of ["older-a", "older-b"]) {
-      const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-      await fetchModulesOutsideChromium(context);
-      const page = await context.newPage();
-      page.setDefaultTimeout(30_000);
-      // The token goes only into the login form's body, never a URL or output.
-      const login = await page.request.post(new URL("/__orkestrator/login", OLDER_URL!).href, {
-        form: { token },
-        maxRedirects: 0,
-      });
-      expect([200, 303]).toContain(login.status());
-      clients.push({ label, context, page });
-    }
-    const [a, b] = clients as [Client, Client];
-    const invoke = invokeThrough(a.page, OLDER_URL!);
-    const version = await invoke<unknown>("get_app_version").catch(() => null);
-    record("older-backend", "backend-version", version);
-    const projects = await invoke<Project[]>("get_projects");
-    expect(projects.length, "the older backend has no project").toBeGreaterThan(0);
-    const project = projects[0]!;
-    const older = await invoke<Environment>("create_environment", {
-      projectId: project.id,
-      name: `older-${Date.now()}`,
-      environmentType: "local",
-      networkAccessMode: "restricted",
-    });
-    await invoke("start_environment", { environmentId: older.id });
-    await seedClaudeTab(invoke, older.id);
-    const consoleErrors: string[] = [];
-    for (const client of clients) {
-      client.page.on("pageerror", (error) => consoleErrors.push(error.name));
-      const loadedAt = Date.now();
-      await client.page.goto(OLDER_URL!);
-      await openEnvironment(client.page, project.name, older.name);
-      record("older-backend", `${client.label}-open-ms`, Date.now() - loadedAt);
-    }
-    const word = tag("MCOLD");
-    const hold = word.toLowerCase();
-    const sentAt = await send(a.page, `${word} on an older backend [hold:${hold}]`);
-    record(
-      "older-backend",
-      "b-sees-prompt-ms",
-      await msUntil(sentAt, async () => (await rowsWith(b.page, word)) >= 1, "B prompt row"),
-    );
-    record(
-      "older-backend",
-      "a-activity-working-ms",
-      await msUntil(
-        sentAt,
-        async () => (await activity(a.page, older.name)) === "working",
-        "A working",
-      ),
-      BUDGET.activityMs,
-    );
-    await expect.poll(() => model.callsWith(word).length, { timeout: 60_000 }).toBe(1);
-    const releasedAt = Date.now();
-    model.release(hold);
-    const answer = answerFor(`${word} on an older backend [hold:${hold}]`);
-    for (const client of clients) {
-      record(
-        "older-backend",
-        `${client.label}-turn-completion-ms`,
-        await msUntil(
-          releasedAt,
-          async () => (await rowsWith(client.page, answer)) >= 1,
-          `${client.label} answer`,
-        ),
-        BUDGET.turnCompletionMs,
-      );
-      record(
-        "older-backend",
-        `${client.label}-idle-ms`,
-        await msUntil(
-          releasedAt,
-          async () => (await activity(client.page, older.name)) === "idle",
-          `${client.label} idle`,
-        ),
-        BUDGET.activityMs,
-      );
-    }
-    const worktree = (await invoke<Environment>("get_environment", { environmentId: older.id }))
-      .worktreePath;
-    if (worktree) {
-      const writtenAt = Date.now();
-      await fs.writeFile(path.join(worktree, `older-${word.toLowerCase()}.txt`), "a\nb\nc\n");
-      for (const client of clients) {
-        record(
-          "older-backend",
-          `${client.label}-diff-badge-ms`,
-          await msUntil(
-            writtenAt,
-            async () => (await badgeText(client.page, older.name))?.includes("+3") === true,
-            `${client.label} badge`,
-            60_000,
-          ),
-          BUDGET.watchedDiffMs,
-        );
-      }
-    }
-    record("older-backend", "page-errors", consoleErrors);
-    expect(model.callsWith(word)).toHaveLength(1);
-    await invoke("stop_environment", { environmentId: older.id }).catch(() => undefined);
-    await invoke("delete_environment", { environmentId: older.id }).catch(() => undefined);
-  } finally {
-    for (const client of clients) await closeClient(client);
-  }
-});
 
 test("two clients, one disconnected: the connected one meets the budgets, the other converges", async ({
   browser,

@@ -6,8 +6,6 @@
  * only to compare it with what was typed; the comparison, never the text,
  * leaves the page.
  */
-import { TERMINAL_WEBSOCKET_SUBPROTOCOL } from "@orkestrator/protocol/terminal-websocket";
-
 import { TerminalWebSocketClient } from "../../web/src/lib/native/terminal-websocket-client.ts";
 import {
   CHANNEL_STARTUP_TIMEOUT_MS,
@@ -18,8 +16,6 @@ export type ProbePageStart = {
   /** The terminal endpoint's path on the page's own origin. */
   path: string;
   sessionId: string;
-  /** Offer only v1, as a renderer from before input results does. */
-  v1Only: boolean;
   /** Fail startup when the channel is not ready by then (`CHANNEL_STARTUP_TIMEOUT_MS`). */
   startupTimeoutMs?: number;
 };
@@ -32,7 +28,7 @@ export type ProbePageCounts = {
   inputFrames: number;
   /** `input-results` frames received. */
   cumulativeResultFrames: number;
-  /** `operation-result` frames for an input received. */
+  /** `operation-result` frames for an input received (failures only). */
   perInputResultFrames: number;
   resultBytes: number;
   settled: number;
@@ -96,8 +92,7 @@ async function start(options: ProbePageStart): Promise<void> {
   const client = new TerminalWebSocketClient({
     url,
     createSocket: (socketUrl, protocols) => {
-      const offered = options.v1Only ? [TERMINAL_WEBSOCKET_SUBPROTOCOL] : protocols;
-      const socket = new WebSocket(socketUrl, offered);
+      const socket = new WebSocket(socketUrl, protocols);
       const send = socket.send.bind(socket);
       socket.send = (data) => {
         if (typeof data !== "string") counts.inputFrames += 1;

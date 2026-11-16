@@ -1,33 +1,18 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 
-import {
-  encodePreviewTunnelFrame,
-  parsePreviewTunnelClientFrame,
-  PREVIEW_TUNNEL_CLOSE,
-  PREVIEW_TUNNEL_HELLO_TIMEOUT_MS,
-  PREVIEW_TUNNEL_PATH,
-  PREVIEW_TUNNEL_SUBPROTOCOL,
-  type PreviewTunnelServerFrame,
-} from "@orkestrator/protocol/preview-access";
+import { PREVIEW_TUNNEL_CLOSE, PREVIEW_TUNNEL_PATH } from "@orkestrator/protocol/preview-access";
 import { PREVIEW_TUNNEL_SUBPROTOCOL_V2 } from "@orkestrator/protocol/preview-tunnel-mux";
-import {
-  previewError,
-  previewErrorFromUnknown,
-  type PreviewError,
-  type PreviewErrorCategory,
-} from "@orkestrator/protocol/preview-services";
 import {
   acceptPreviewWebSocket,
   type PreviewWebSocket,
 } from "@orkestrator/protocol/node/preview-websocket";
 
-import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
-import type { AuthenticatedPreviewAccess, PreviewRuntime } from "./core/previews/index.js";
-import { PreviewAdmission, type PreviewSlot } from "./preview-admission.js";
+import type { PreviewRuntime } from "./core/previews/index.js";
+import { PreviewAdmission } from "./preview-admission.js";
 import type { PreviewMetrics } from "./preview-metrics.js";
 import { acceptPreviewTunnelMux } from "./preview-tunnel-mux-server.js";
-import { connectPreviewUpstream, type PreviewUpstreamOptions } from "./preview-upstream.js";
+import type { PreviewUpstreamOptions } from "./preview-upstream.js";
 
 export interface PreviewTunnelServerOptions {
   runtime: PreviewRuntime;
@@ -37,16 +22,6 @@ export interface PreviewTunnelServerOptions {
   pingIntervalMs?: number;
 }
 
-type TunnelState = "authenticating" | "ready" | "opening" | "open" | "closing" | "closed";
-
-const CLOSE_FOR: Partial<Record<PreviewErrorCategory, number>> = {
-  forbidden: PREVIEW_TUNNEL_CLOSE.forbidden,
-  "access-expired": PREVIEW_TUNNEL_CLOSE.revoked,
-  "generation-changed": PREVIEW_TUNNEL_CLOSE.generationChanged,
-  "capacity-exceeded": PREVIEW_TUNNEL_CLOSE.capacity,
-  "invalid-request": PREVIEW_TUNNEL_CLOSE.protocol,
-};
-
 function rejectUpgrade(socket: Duplex, status: number, message: string): void {
   socket.end(
     `HTTP/1.1 ${status} ${message}\r\ncontent-type: text/plain\r\ncontent-length: ${Buffer.byteLength(message)}\r\nconnection: close\r\n\r\n${message}`,
@@ -55,17 +30,18 @@ function rejectUpgrade(socket: Duplex, status: number, message: string): void {
 }
 
 /**
- * Desktop preview tunnel. A v2 client carries many upstream TCP connections
- * over one authenticated WebSocket (`preview-tunnel-mux-server.ts`); a v1
- * client opens one authenticated WebSocket per connection. The attachment credential authorizes exactly one service at one
- * endpoint generation; the client never names a host, port, container, or
- * path. Bytes are relayed in bounded frames with real socket backpressure in
- * both directions and are never replayed after a disconnect.
+ * Desktop preview tunnel. A client carries many upstream TCP connections over
+ * one authenticated WebSocket (`preview-tunnel-mux-server.ts`). The
+ * attachment credential authorizes exactly one service at one endpoint
+ * generation; the client never names a host, port, container, or path. Bytes
+ * are relayed in bounded frames with real socket backpressure in both
+ * directions and are never replayed after a disconnect.
  */
 export class PreviewTunnelServer {
   private readonly sockets = new Set<PreviewWebSocket>();
+  /** Upstream connections, across every session. */
   private readonly admission: PreviewAdmission;
-  /** v2 sessions; their upstream connections take `admission` slots. */
+  /** Sessions; their upstream connections take `admission` slots. */
   private readonly sessions: PreviewAdmission;
   private readonly upstream: PreviewUpstreamOptions;
   private pendingHandshakes = 0;
@@ -131,8 +107,7 @@ export class PreviewTunnelServer {
     const offered = String(request.headers["sec-websocket-protocol"] ?? "")
       .split(",")
       .map((value) => value.trim());
-    const multiplexed = offered.includes(PREVIEW_TUNNEL_SUBPROTOCOL_V2);
-    if (!multiplexed && !offered.includes(PREVIEW_TUNNEL_SUBPROTOCOL)) {
+    if (!offered.includes(PREVIEW_TUNNEL_SUBPROTOCOL_V2)) {
       rejectUpgrade(socket, 426, "Upgrade Required");
       return true;
     }
@@ -142,7 +117,7 @@ export class PreviewTunnelServer {
       return true;
     }
     const ws = acceptPreviewWebSocket(request, socket, head, {
-      protocol: multiplexed ? PREVIEW_TUNNEL_SUBPROTOCOL_V2 : PREVIEW_TUNNEL_SUBPROTOCOL,
+      protocol: PREVIEW_TUNNEL_SUBPROTOCOL_V2,
       maxPayload: this.options.runtime.limits.tunnelFrameMaxBytes,
     });
     if (!ws) return true;
@@ -153,11 +128,6 @@ export class PreviewTunnelServer {
       counted = false;
       this.pendingHandshakes -= 1;
     };
-    if (!multiplexed) {
-      compatibilityPathUsage.record("preview.tunnel-v1");
-      this.accept(ws, endHandshake);
-      return true;
-    }
     this.sockets.add(ws);
     acceptPreviewTunnelMux(ws, {
       runtime: this.options.runtime,
@@ -172,271 +142,6 @@ export class PreviewTunnelServer {
       onClosed: () => this.sockets.delete(ws),
     });
     return true;
-  }
-
-  private accept(ws: PreviewWebSocket, endHandshake: () => void): void {
-    const { runtime, metrics } = this.options;
-    const limits = runtime.limits;
-    const opened = Date.now();
-    this.sockets.add(ws);
-    let state: TunnelState = "authenticating";
-    let access: AuthenticatedPreviewAccess | null = null;
-    let slot: PreviewSlot | null = null;
-    let untrack: (() => void) | null = null;
-    let upstream: Duplex | null = null;
-    let upstreamEnded = false;
-    let clientEnded = false;
-    let alive = true;
-    let leaseTimer: ReturnType<typeof setTimeout> | undefined;
-    const opening = new AbortController();
-
-    const send = (frame: PreviewTunnelServerFrame) => {
-      ws.send(encodePreviewTunnelFrame(frame), false);
-    };
-    const cleanup = () => {
-      if (state === "closed") return;
-      state = "closed";
-      endHandshake();
-      clearTimeout(helloTimer);
-      clearInterval(ping);
-      clearTimeout(leaseTimer);
-      opening.abort();
-      upstream?.destroy();
-      upstream = null;
-      slot?.release();
-      slot = null;
-      untrack?.();
-      untrack = null;
-      this.sockets.delete(ws);
-      metrics.increment("tunnel.closed");
-    };
-    const fail = (
-      code: number,
-      category: PreviewErrorCategory,
-      frame?: "open-failed" | "error",
-      error?: PreviewError,
-    ) => {
-      if (state === "closed" || state === "closing") return;
-      if (frame) send({ type: frame, error: error ?? previewError(category) });
-      state = "closing";
-      upstream?.destroy();
-      ws.close(code, category);
-    };
-
-    const helloTimer = setTimeout(
-      () => fail(PREVIEW_TUNNEL_CLOSE.timeout, "access-expired"),
-      this.options.helloTimeoutMs ?? PREVIEW_TUNNEL_HELLO_TIMEOUT_MS,
-    );
-    // Liveness on Orkestrator's own protocol only; application bytes are never touched.
-    // Any frame from the client proves it is alive. A client that stopped
-    // reading (its browser is not consuming, e.g. paused media) cannot see
-    // this ping behind the queued data, so it sends its own pings instead.
-    const ping = setInterval(() => {
-      // Closing sockets cannot send pings. Let the WebSocket's drain deadline
-      // and post-flush grace own termination, including peer-initiated closes.
-      if (!ws.isOpen) {
-        clearInterval(ping);
-        return;
-      }
-      if (!alive) {
-        ws.terminate();
-        return;
-      }
-      alive = false;
-      ws.ping();
-    }, this.options.pingIntervalMs ?? 30_000);
-    ping.unref?.();
-    const markAlive = () => {
-      alive = true;
-    };
-    ws.on("pong", markAlive);
-    ws.on("ping", markAlive);
-    ws.on("close", cleanup);
-
-    const resumeOnDrain = (socket: Duplex) => {
-      socket.pause();
-      ws.once("drain", () => {
-        if (upstream === socket && state === "open") socket.resume();
-      });
-    };
-    const pumpToClient = (chunk: Buffer) => {
-      const socket = upstream;
-      if (!socket) return;
-      const frameMax = limits.tunnelFrameMaxBytes;
-      let flushed = true;
-      for (let offset = 0; offset < chunk.length; offset += frameMax) {
-        if (ws.bufferedBytes >= limits.tunnelQueueMaxBytesPerDirection) {
-          // A slow reader: hand the rest of this read back to the upstream
-          // and wait for drain. One upstream read can far exceed the queue
-          // (Bun reads 512 KiB), so the queue stays within one frame of the
-          // bound and a reader that is slow, or stopped, is never closed for it.
-          resumeOnDrain(socket);
-          socket.unshift(chunk.subarray(offset));
-          return;
-        }
-        flushed = ws.send(chunk.subarray(offset, offset + frameMax), true) && flushed;
-      }
-      const overAggregate = this.aggregateQueuedBytes() >= limits.tunnelQueueMaxBytesAggregate;
-      if (!flushed || ws.bufferedBytes >= limits.tunnelQueueMaxBytesPerDirection) {
-        resumeOnDrain(socket);
-      } else if (overAggregate) {
-        // This tunnel's own socket is flushed, so no drain will come: poll the
-        // shared ceiling instead of waiting on an event that never fires.
-        socket.pause();
-        const recheck = () => {
-          if (upstream !== socket || state !== "open") return;
-          if (this.aggregateQueuedBytes() < limits.tunnelQueueMaxBytesAggregate) socket.resume();
-          else setTimeout(recheck, 25).unref?.();
-        };
-        setTimeout(recheck, 25).unref?.();
-      }
-    };
-
-    const open = async () => {
-      if (!access) return;
-      state = "opening";
-      try {
-        runtime.access.assertCurrent(access);
-        const target = await runtime.registry.acquireTarget(access.serviceId, access.generation);
-        if (target.tls) {
-          throw Object.assign(new Error("tls upstream"), {
-            preview: previewError("unsupported", {
-              message: "The desktop tunnel carries HTTP services only.",
-            }),
-          });
-        }
-        const socket = await connectPreviewUpstream(target, this.upstream, opening.signal);
-        if (state !== "opening") {
-          socket.destroy();
-          return;
-        }
-        upstream = socket;
-        state = "open";
-        metrics.observe("tunnel.open_ms", Date.now() - opened);
-        metrics.increment("tunnel.open");
-        socket.on("data", pumpToClient);
-        socket.once("end", () => {
-          upstreamEnded = true;
-          send({ type: "eof" });
-          if (clientEnded) ws.close(PREVIEW_TUNNEL_CLOSE.normal);
-        });
-        socket.once("close", () => {
-          if (state === "open") {
-            state = "closing";
-            ws.close(PREVIEW_TUNNEL_CLOSE.normal);
-          }
-        });
-        send({ type: "open-ok" });
-      } catch (error) {
-        const failure =
-          (error as { preview?: PreviewError }).preview ??
-          previewErrorFromUnknown(error) ??
-          previewError("internal");
-        metrics.increment("tunnel.failed", failure.category);
-        if (state === "opening") {
-          fail(
-            CLOSE_FOR[failure.category] ?? PREVIEW_TUNNEL_CLOSE.upstreamFailed,
-            failure.category,
-            "open-failed",
-            failure,
-          );
-        }
-      }
-    };
-
-    const hello = (attachmentId: string, credential: string) => {
-      try {
-        access = runtime.access.authenticateTunnel(attachmentId, credential);
-      } catch (error) {
-        const category = previewErrorFromUnknown(error)?.category ?? "forbidden";
-        metrics.increment("tunnel.rejected", category);
-        fail(
-          category === "forbidden"
-            ? PREVIEW_TUNNEL_CLOSE.unauthenticated
-            : (CLOSE_FOR[category] ?? PREVIEW_TUNNEL_CLOSE.forbidden),
-          category,
-        );
-        return;
-      }
-      clearTimeout(helloTimer);
-      endHandshake();
-      slot = this.admission.tryAcquire(access.serviceId);
-      if (!slot) {
-        metrics.increment("tunnel.rejected", "capacity-exceeded");
-        fail(PREVIEW_TUNNEL_CLOSE.capacity, "capacity-exceeded", "error");
-        return;
-      }
-      try {
-        untrack = runtime.access.track(access, {
-          close: () => fail(PREVIEW_TUNNEL_CLOSE.revoked, "access-expired", "error"),
-        });
-      } catch (error) {
-        const category = previewErrorFromUnknown(error)?.category ?? "access-expired";
-        fail(CLOSE_FOR[category] ?? PREVIEW_TUNNEL_CLOSE.revoked, category);
-        return;
-      }
-      leaseTimer = setTimeout(
-        () => fail(PREVIEW_TUNNEL_CLOSE.revoked, "access-expired", "error"),
-        Math.max(0, access.expiresAt - Date.now()),
-      );
-      leaseTimer.unref?.();
-      state = "ready";
-      send({
-        type: "ready",
-        serviceId: access.serviceId,
-        endpointGeneration: access.generation,
-        expiresAt: new Date(access.expiresAt).toISOString(),
-      });
-    };
-
-    ws.on("message", (data: Buffer, isBinary: boolean) => {
-      markAlive();
-      if (state === "closed" || state === "closing") return;
-      if (isBinary) {
-        // Application bytes are only accepted after OPEN_OK; never buffered
-        // before authorization.
-        const socket = upstream;
-        if (state !== "open" || !socket || clientEnded) {
-          fail(PREVIEW_TUNNEL_CLOSE.protocol, "invalid-request");
-          return;
-        }
-        if (!socket.write(data)) {
-          ws.pause();
-          socket.once("drain", () => ws.resume());
-        }
-        return;
-      }
-      const frame = parsePreviewTunnelClientFrame(data.toString("utf8"));
-      if (!frame) {
-        fail(PREVIEW_TUNNEL_CLOSE.protocol, "invalid-request");
-        return;
-      }
-      switch (frame.type) {
-        case "hello":
-          if (state !== "authenticating") fail(PREVIEW_TUNNEL_CLOSE.protocol, "invalid-request");
-          else hello(frame.attachmentId, frame.credential);
-          return;
-        case "open":
-          if (state !== "ready") fail(PREVIEW_TUNNEL_CLOSE.protocol, "invalid-request");
-          else void open();
-          return;
-        case "eof":
-          if (state !== "open" || clientEnded) {
-            fail(PREVIEW_TUNNEL_CLOSE.protocol, "invalid-request");
-            return;
-          }
-          clientEnded = true;
-          upstream?.end();
-          if (upstreamEnded) ws.close(PREVIEW_TUNNEL_CLOSE.normal);
-          return;
-        case "cancel":
-          state = "closing";
-          upstream?.destroy();
-          ws.close(PREVIEW_TUNNEL_CLOSE.normal);
-          return;
-      }
-    });
-    ws.start();
   }
 
   /** Close every tunnel (shutdown or credential rotation). */

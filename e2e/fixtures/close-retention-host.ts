@@ -28,10 +28,9 @@
  * `/seed-native-session` (map a tab to a provider session, as an earlier
  * backend run would have).
  *
- * Claude has no real bridge here: `peekBridge` answers a stale Claude bridge
- * that predates `POST /session/:id/close` (it answers 404, as every Claude
- * bridge before the route did) and records any `DELETE`, which must never
- * come.
+ * Claude has no real bridge here: `peekBridge` answers a Claude bridge that
+ * never confirms `POST /session/:id/close` (it answers 404), so the close
+ * must stay pending, and records any `DELETE`, which must never come.
  *
  * Nothing here reads provider credentials or reaches the network.
  */
@@ -203,9 +202,9 @@ const bridges = Object.fromEntries(
 ) as Record<BridgePlatform, Bridge>;
 
 /**
- * A Claude bridge from before `POST /session/:id/close`: health answers, the
- * close route is a 404, and a legacy `DELETE` (which deletes a Claude
- * conversation) is recorded and refused.
+ * A Claude bridge that does not confirm a close: health answers, the close
+ * route is a 404, and a `DELETE` (which an old Claude bridge served by
+ * deleting the conversation) is recorded and refused.
  */
 const staleClaudeBridge = Bun.serve({
   hostname: "127.0.0.1",

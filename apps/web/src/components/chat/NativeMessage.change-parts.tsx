@@ -420,8 +420,8 @@ export function resetChangePartCachesForTests(): void {
 
 /**
  * Backend measurement of a legacy row's recorded payload, requested once per
- * distinct input. A failure (or an older backend) leaves the row without
- * numbers rather than with a locally computed one.
+ * distinct input. A failure leaves the row without numbers rather than with
+ * a locally computed one.
  */
 export function useLegacyPayloadMeasurement(
   rowKey: string,

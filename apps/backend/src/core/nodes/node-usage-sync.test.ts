@@ -415,7 +415,7 @@ describe("shared usage readings", () => {
     }
   });
 
-  test("a node that predates the commands takes no part and the rest still sync", async () => {
+  test("a node that answers unknown-command fails like any other, and the rest still sync", async () => {
     const { sync, node } = await fleet([
       ["bk_old", "omarchy-gram", [TRADING]],
       ["bk_beelink", "beelink", [TRADING]],
@@ -424,7 +424,7 @@ describe("shared usage readings", () => {
     node("bk_old").older = true;
     await node("bk_beelink").read(TRADING, 64, 2);
     const pass = await sync.syncAll();
-    expect(pass.nodes.find((entry) => entry.nodeId === "bk_old")?.state).toBe("unsupported");
+    expect(pass.nodes.find((entry) => entry.nodeId === "bk_old")?.state).toBe("failed");
     expect((await node("bk_omarchy").show(TRADING)).windows[0]?.usedPercent).toBe(64);
   });
 

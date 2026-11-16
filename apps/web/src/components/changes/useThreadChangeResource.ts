@@ -55,8 +55,7 @@ export function useThreadChangeResource(
           );
         },
         () => {
-          // An older backend without change tracking or a transient failure:
-          // keep what was shown; the next turn edge asks again.
+          // A failed read: keep what was shown; the next turn edge asks again.
         },
       );
     return () => {

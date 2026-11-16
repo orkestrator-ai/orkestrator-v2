@@ -10,6 +10,6 @@
 // real loopback family probe to the test support in place of its stub.
 export { type AuthenticatedPreviewAccess, type PreviewPublicationPort } from "./access.js";
 export { resolvePreviewTargetIntent } from "./intent.js";
-export { type LegacyLoopbackPortAccess, PreviewRuntime } from "./runtime.js";
+export { PreviewRuntime } from "./runtime.js";
 export { type ResolvedPreviewTarget } from "./service-registry.js";
 export { defaultProbeFamily } from "./target-resolver.js";

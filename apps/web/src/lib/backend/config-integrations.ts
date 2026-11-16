@@ -52,7 +52,6 @@ import { accountsOn } from "@/lib/node-scope/domains/accounts";
 import { pullRequests } from "@/lib/node-scope/domains/pull-requests";
 import { systemApiOn } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import {
   commandBackendClient,
@@ -223,35 +222,17 @@ export interface CreateControlMcpCredentialInput {
   capabilities?: PublicCapability[];
 }
 
-export async function updateRepositoryConfig(
-  projectId: string,
-  repoConfig: RepositoryConfig,
-): Promise<AppConfig> {
-  return invokeRepositoryConfigCommand("update_repository_config", { projectId, repoConfig });
-}
-
-/**
- * Change only the repository settings the user edited. `fallback` is the
- * whole record the form would have saved; it is sent with the older replace
- * command only to a backend that predates the patch.
- */
+/** Change only the repository settings the user edited. */
 export async function patchRepositorySettings(
   projectId: string,
   updates: Partial<RepositoryConfig>,
   unset: readonly (keyof RepositoryConfig)[],
-  fallback: RepositoryConfig,
 ): Promise<AppConfig> {
-  try {
-    return await invokeRepositoryConfigCommand("patch_repository_settings", {
-      projectId,
-      updates,
-      ...(unset.length > 0 ? { unset: [...unset] } : {}),
-    });
-  } catch (error) {
-    if (incompatibility(error, "patch_repository_settings")?.code !== "unknown-command")
-      throw error;
-    return updateRepositoryConfig(projectId, fallback);
-  }
+  return invokeRepositoryConfigCommand("patch_repository_settings", {
+    projectId,
+    updates,
+    ...(unset.length > 0 ? { unset: [...unset] } : {}),
+  });
 }
 
 export interface LogStorageStats {
@@ -335,8 +316,8 @@ export function createConfigIntegrationsApi(client: BackendClient) {
    * `seed: true`, the backend also downloads every enabled platform's missing
    * catalogue before answering, so only a caller that can wait in the background
    * asks for it. `seed: false` reads the cache exactly as stored, with no Pi
-   * probe, for startup's read before its first render. An older backend treats
-   * `false` as omitted. `machine` selects the node whose catalogue is read.
+   * probe, for startup's read before its first render. `machine` selects the
+   * node whose catalogue is read.
    */
   async function getAgentModelCatalogCache(
     machine?: AccountMachine,

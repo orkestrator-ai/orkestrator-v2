@@ -79,11 +79,7 @@ import {
 } from "@/components/projects/CoordinatorActivityIcon";
 import { cn } from "@/lib/utils";
 import { ReviewLaunchDialog } from "@/components/review/ReviewLaunchDialog";
-import {
-  defaultMultiReviewLaunchSelection,
-  MultiReviewLaunchDialog,
-  StackedEyes,
-} from "@/components/review/MultiReviewLaunchDialog";
+import { MultiReviewLaunchDialog, StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
 import { AgentLaunchDialog } from "@/components/launch/AgentLaunchDialog";
 import { LocalEnvironmentDeleteDialog } from "@/components/environments/LocalEnvironmentDeleteDialog";
 import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
@@ -480,16 +476,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   const multiReviewShortcutStateRef = useRef({
     canCreateTab,
-    addressFindingsLaunchDefaults,
     handleMultiReview,
     isRunning,
     multiReviewLaunchPending,
-    multiReviewReviewerDefaults,
-    multiReviewAutoAddressFindings,
-    multiReviewAutoPr,
-    reviewLaunchDefaults,
-    reviewPreparationLaunchDefaults,
-    reviewModelCatalog,
     selectedEnvironmentId,
     setupRunning,
     tabCount,
@@ -498,16 +487,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   useLayoutEffect(() => {
     multiReviewShortcutStateRef.current = {
       canCreateTab,
-      addressFindingsLaunchDefaults,
       handleMultiReview,
       isRunning,
       multiReviewLaunchPending,
-      multiReviewReviewerDefaults,
-      multiReviewAutoAddressFindings,
-      multiReviewAutoPr,
-      reviewLaunchDefaults,
-      reviewPreparationLaunchDefaults,
-      reviewModelCatalog,
       selectedEnvironmentId,
       setupRunning,
       tabCount,
@@ -543,22 +525,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       if (!state.canCreateTab) return;
 
       event.preventDefault();
-      // The environment's node fills every row; the window's own resolution is
-      // only for a node too old to do so.
-      void state.handleMultiReview(undefined, () =>
-        defaultMultiReviewLaunchSelection({
-          defaultAgent: state.reviewLaunchDefaults.defaultAgent,
-          catalog: state.reviewModelCatalog,
-          preferredModels: state.reviewLaunchDefaults.preferredModels,
-          preferredReasoningEfforts: state.reviewLaunchDefaults.preferredReasoningEfforts,
-          preferredFastModes: state.reviewLaunchDefaults.preferredFastModes,
-          defaultAutoAddressFindings: state.multiReviewAutoAddressFindings,
-          defaultAutoPr: state.multiReviewAutoPr,
-          reviewerDefaults: state.multiReviewReviewerDefaults,
-          reviewModelDefaults: state.reviewPreparationLaunchDefaults,
-          addressFindingsModelDefaults: state.addressFindingsLaunchDefaults,
-        }),
-      );
+      // The environment's node fills every row.
+      void state.handleMultiReview();
     };
 
     window.addEventListener("keydown", handleMultiReviewShortcut);
@@ -1040,24 +1008,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           event.preventDefault();
                           return;
                         }
-                        // The environment's node fills every row; the
-                        // window's own resolution is only for a node too
-                        // old to do so.
-                        void handleMultiReview(undefined, () =>
-                          defaultMultiReviewLaunchSelection({
-                            defaultAgent: reviewLaunchDefaults.defaultAgent,
-                            catalog: reviewModelCatalog,
-                            preferredModels: reviewLaunchDefaults.preferredModels,
-                            preferredReasoningEfforts:
-                              reviewLaunchDefaults.preferredReasoningEfforts,
-                            preferredFastModes: reviewLaunchDefaults.preferredFastModes,
-                            defaultAutoAddressFindings: multiReviewAutoAddressFindings,
-                            defaultAutoPr: multiReviewAutoPr,
-                            reviewerDefaults: multiReviewReviewerDefaults,
-                            reviewModelDefaults: reviewPreparationLaunchDefaults,
-                            addressFindingsModelDefaults: addressFindingsLaunchDefaults,
-                          }),
-                        );
+                        // The environment's node fills every row.
+                        void handleMultiReview();
                       }}
                       onContextMenu={(event) => {
                         event.preventDefault();

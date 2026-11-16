@@ -1,7 +1,9 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, mock, test } from "bun:test";
-import { BrowserPreviewManager } from "../electron/browser-preview-manager";
-import { nodePreviewRequestOrigin, nodePreviewUrl } from "../electron/node-previews";
+import {
+  BrowserPreviewManager,
+  type BrowserPreviewServiceTransport,
+} from "../electron/browser-preview-manager";
 import {
   configurePreviewServiceSession,
   createBrowserPreviewAddressFocusHandler,
@@ -92,280 +94,58 @@ describe("browser preview startup wiring", () => {
     expect(emitFocus).toHaveBeenCalledTimes(3);
   });
 
-  test("requires scoped visible user activation for clipboard writes and installs preview-only auth", async () => {
+  test("builds the window's manager over the service transport, with no shared session", async () => {
     FakeWebContentsView.instances.length = 0;
-    let permissionCheck:
-      | ((
-          webContents: unknown,
-          permission: string,
-          requestingOrigin: string,
-          details: { isMainFrame: boolean },
-        ) => boolean)
-      | undefined;
-    let permissionRequest:
-      | ((
-          webContents: unknown,
-          permission: string,
-          callback: (allowed: boolean) => void,
-          details: { isMainFrame: boolean; requestingUrl: string },
-        ) => void)
-      | undefined;
-    let beforeHeaders: ((details: any, callback: (response: any) => void) => void) | undefined;
-    let receivedHeaders: ((details: any, callback: (response: any) => void) => void) | undefined;
-    const webRequest = {
-      onBeforeSendHeaders: mock((_filter: unknown, listener: typeof beforeHeaders) => {
-        beforeHeaders = listener;
-      }),
-      onHeadersReceived: mock((_filter: unknown, listener: typeof receivedHeaders) => {
-        receivedHeaders = listener;
-      }),
-    };
-    const browserSession = {
-      webRequest,
-      setPermissionCheckHandler: mock((handler: typeof permissionCheck) => {
-        permissionCheck = handler;
-      }),
-      setPermissionRequestHandler: mock((handler: typeof permissionRequest) => {
-        permissionRequest = handler;
-      }),
-    };
-    const fromPartition = mock(() => browserSession);
     const addChildView = mock((_view: FakeWebContentsView) => undefined);
     const window = {
       isDestroyed: () => false,
       contentView: { addChildView, removeChildView: mock(() => undefined) },
     };
-    const emitState = mock(() => undefined);
-    const emitOpenLink = mock(() => undefined);
-    const openExternal = mock(() => undefined);
-    const writeClipboardText = mock(() => undefined);
     const focusAddressBar = mock(() => undefined);
-    const requestPreviewShortcut = mock(() => undefined);
-    const menuTemplates: Array<Array<{ label?: string; click?: (...args: never[]) => void }>> = [];
-    const buildFromTemplate = mock(
-      (template: Array<{ label?: string; click?: (...args: never[]) => void }>) => {
-        menuTemplates.push(template);
-        return { popup: () => undefined };
-      },
-    );
-
+    const sessionFor = mock((partition: string) => ({ partition }) as never);
+    const transport: BrowserPreviewServiceTransport = {
+      acquire: async () => ({
+        serviceKey: "backend-1:service-web",
+        partition: "persist:service-web",
+        url: "http://127.0.0.1:41001/",
+      }),
+      release: () => undefined,
+      scopeFor: () => "service:backend-1:service-web",
+      describe: () => null,
+      target: () => null,
+      transportState: () => ({ mode: "desktop-tunnel", state: "ready" }),
+      sessionFor,
+      resetSiteData: async () => undefined,
+    };
     const runtime = initializeBrowserPreviews({
-      fromPartition: fromPartition as never,
-      partition: "orkestrator-browser-previews-window-1",
       WebContentsViewCtor: FakeWebContentsView as never,
-      menu: { buildFromTemplate } as never,
+      menu: { buildFromTemplate: () => ({ popup: () => undefined }) } as never,
       getWindow: () => window as never,
-      emitState,
-      emitOpenLink,
-      openExternal,
-      writeClipboardText,
+      emitState: mock(() => undefined),
+      emitOpenLink: mock(() => undefined),
+      openExternal: mock(() => undefined),
+      writeClipboardText: mock(() => undefined),
       focusAddressBar,
-      requestPreviewShortcut,
-      getAuthorization: (url) =>
-        url.startsWith("https://desk.example/__orkestrator/") ? "Bearer test" : null,
+      requestPreviewShortcut: mock(() => undefined),
+      transport,
     });
-
-    expect(fromPartition).toHaveBeenCalledWith("orkestrator-browser-previews-window-1");
-    expect(runtime.browserSession).toBe(browserSession as never);
+    expect(Object.keys(runtime)).toEqual(["manager"]);
     expect(runtime.manager).toBeInstanceOf(BrowserPreviewManager);
-    expect(
-      permissionCheck?.({}, "clipboard-sanitized-write", "http://localhost:3000", {
-        isMainFrame: true,
-      }),
-    ).toBe(false);
-    expect(
-      permissionCheck?.({}, "clipboard-read", "http://localhost:3000", {
-        isMainFrame: true,
-      }),
-    ).toBe(false);
-    expect(
-      permissionCheck?.({}, "clipboard-sanitized-write", "https://embedded.example", {
-        isMainFrame: false,
-      }),
-    ).toBe(false);
 
     await runtime.manager.attach({
       tabId: "browser-1",
-      url: "http://localhost:3000/",
-      environmentId: "env-1",
+      service: {
+        backendInstanceId: "backend-1",
+        environmentId: "env-1",
+        serviceId: "service-web",
+        path: "/",
+      },
       bounds: { x: 1, y: 2, width: 300, height: 200 },
       visible: true,
     });
-    const previewView = addChildView.mock.calls[0]![0];
-    const previewContents = previewView.webContents;
-    previewContents.emit(
-      "before-input-event",
-      { preventDefault: () => undefined },
-      {
-        type: "keyDown",
-        key: "/",
-        code: "Slash",
-        meta: true,
-        control: false,
-        shift: true,
-        alt: false,
-        isAutoRepeat: false,
-      },
-    );
-    expect(requestPreviewShortcut).toHaveBeenCalledWith("browser-1", "show-shortcuts");
-
-    const ambientWriteResult = mock(() => undefined);
-    permissionRequest?.(previewContents, "clipboard-sanitized-write", ambientWriteResult, {
-      isMainFrame: true,
-      requestingUrl: "http://localhost:3000/",
-    });
-    expect(ambientWriteResult).toHaveBeenCalledWith(false);
-
-    previewContents.emit("input-event", {}, { type: "mouseDown" });
-    const activatedWriteResult = mock(() => undefined);
-    permissionRequest?.(previewContents, "clipboard-sanitized-write", activatedWriteResult, {
-      isMainFrame: true,
-      requestingUrl: "http://localhost:3000/copy",
-    });
-    expect(activatedWriteResult).toHaveBeenCalledWith(true);
-
-    const reusedActivationResult = mock(() => undefined);
-    permissionRequest?.(previewContents, "clipboard-sanitized-write", reusedActivationResult, {
-      isMainFrame: true,
-      requestingUrl: "http://localhost:3000/copy-again",
-    });
-    expect(reusedActivationResult).toHaveBeenCalledWith(false);
-
-    previewContents.emit("input-event", {}, { type: "keyDown" });
-    runtime.manager.setVisible("browser-1", false);
-    const hiddenWriteResult = mock(() => undefined);
-    permissionRequest?.(previewContents, "clipboard-sanitized-write", hiddenWriteResult, {
-      isMainFrame: true,
-      requestingUrl: "http://localhost:3000/hidden",
-    });
-    expect(hiddenWriteResult).toHaveBeenCalledWith(false);
-
-    runtime.manager.setVisible("browser-1", true);
-    previewContents.emit("input-event", {}, { type: "mouseDown" });
-    const wrongScopeResult = mock(() => undefined);
-    permissionRequest?.(previewContents, "clipboard-sanitized-write", wrongScopeResult, {
-      isMainFrame: true,
-      requestingUrl: "https://desk.example/__orkestrator/browser/loopback/3000/",
-    });
-    expect(wrongScopeResult).toHaveBeenCalledWith(false);
-
-    await runtime.manager.navigate(
-      "browser-1",
-      "https://desk.example/__orkestrator/browser/loopback/3000/",
-    );
-    previewContents.emit("input-event", {}, { type: "pointerDown" });
-    const gatewayWriteResult = mock(() => undefined);
-    permissionRequest?.(previewContents, "clipboard-sanitized-write", gatewayWriteResult, {
-      isMainFrame: true,
-      requestingUrl: "https://desk.example/__orkestrator/browser/loopback/3000/copy",
-    });
-    expect(gatewayWriteResult).toHaveBeenCalledWith(true);
-
-    const unrelatedPermissionResult = mock(() => undefined);
-    permissionRequest?.(previewContents, "geolocation", unrelatedPermissionResult, {
-      isMainFrame: true,
-      requestingUrl: previewContents.getURL(),
-    });
-    expect(unrelatedPermissionResult).toHaveBeenCalledWith(false);
-
-    const subframeClipboardWriteResult = mock(() => undefined);
-    permissionRequest?.(
-      previewContents,
-      "clipboard-sanitized-write",
-      subframeClipboardWriteResult,
-      { isMainFrame: false, requestingUrl: previewContents.getURL() },
-    );
-    expect(subframeClipboardWriteResult).toHaveBeenCalledWith(false);
-
-    const previewRequestResult = mock(() => undefined);
-    beforeHeaders?.(
-      {
-        url: "https://desk.example/__orkestrator/browser/loopback/3000/",
-        resourceType: "mainFrame",
-        webContentsId: previewContents.id,
-        requestHeaders: {},
-      },
-      previewRequestResult,
-    );
-    expect(previewRequestResult).toHaveBeenCalledWith({
-      requestHeaders: {
-        Authorization: "Bearer test",
-        Origin: "https://orkestrator.dev",
-        // The environment the renderer attached the view for (M2).
-        "x-orkestrator-preview-environment": "env-1",
-      },
-    });
-
-    // The view was opened on port 3000; another port gets no credential (M2).
-    const otherPortResult = mock(() => undefined);
-    beforeHeaders?.(
-      {
-        url: "https://desk.example/__orkestrator/browser/loopback/4000/",
-        resourceType: "mainFrame",
-        webContentsId: previewContents.id,
-        requestHeaders: { Authorization: "Bearer ambient" },
-      },
-      otherPortResult,
-    );
-    expect(otherPortResult).toHaveBeenCalledWith({ requestHeaders: {} });
-
-    const privilegedRequestResult = mock(() => undefined);
-    beforeHeaders?.(
-      {
-        url: "https://desk.example/__orkestrator/invoke",
-        resourceType: "mainFrame",
-        requestHeaders: {
-          Authorization: "Bearer ambient",
-          Cookie: "gateway=ambient",
-        },
-      },
-      privilegedRequestResult,
-    );
-    expect(privilegedRequestResult).toHaveBeenCalledWith({
-      requestHeaders: {},
-    });
-
-    const previewResponseResult = mock(() => undefined);
-    receivedHeaders?.(
-      {
-        url: "https://desk.example/__orkestrator/browser/loopback/3000/",
-        resourceType: "mainFrame",
-        webContentsId: previewContents.id,
-        responseHeaders: {
-          "Access-Control-Allow-Origin": ["https://desk.example"],
-        },
-      },
-      previewResponseResult,
-    );
-    expect(previewResponseResult).toHaveBeenCalledWith({
-      responseHeaders: { "Access-Control-Allow-Origin": ["*"] },
-    });
-
-    expect(addChildView).toHaveBeenCalledTimes(1);
-    expect(emitState).toHaveBeenCalledWith(expect.objectContaining({ tabId: "browser-1" }));
-
-    FakeWebContentsView.instances[0]!.webContents.emit(
-      "context-menu",
-      {},
-      {
-        linkURL: "http://localhost:3000/docs",
-        isEditable: false,
-        selectionText: "",
-        x: 10,
-        y: 20,
-      },
-    );
-    const menuTemplate = menuTemplates[0];
-    menuTemplate?.find((item) => item.label === "Open Link in New Tab")?.click?.();
-    menuTemplate?.find((item) => item.label === "Open in External Browser")?.click?.();
-    menuTemplate?.find((item) => item.label === "Copy Link Address")?.click?.();
-    expect(emitOpenLink).toHaveBeenCalledWith({
-      tabId: "browser-1",
-      url: "http://localhost:3000/docs",
-    });
-    expect(openExternal).toHaveBeenCalledWith("http://localhost:3000/docs");
-    expect(writeClipboardText).toHaveBeenCalledWith("http://localhost:3000/docs");
-
+    // The view opens in its service's own partition.
+    expect(sessionFor).toHaveBeenCalledWith("persist:service-web");
+    const previewContents = addChildView.mock.calls[0]![0].webContents;
     const inputEvent = { preventDefault: mock(() => undefined) };
     previewContents.emit("before-input-event", inputEvent, {
       type: "keyDown",
@@ -377,68 +157,6 @@ describe("browser preview startup wiring", () => {
     });
     expect(inputEvent.preventDefault).toHaveBeenCalledTimes(1);
     expect(focusAddressBar).toHaveBeenCalledWith("browser-1");
-  });
-
-  test("another node's runtime presents that node's own origin on its authorized preview requests (4006)", async () => {
-    let beforeHeaders: ((details: any, callback: (response: any) => void) => void) | undefined;
-    const browserSession = {
-      webRequest: {
-        onBeforeSendHeaders: mock((_filter: unknown, listener: typeof beforeHeaders) => {
-          beforeHeaders = listener;
-        }),
-        onHeadersReceived: mock(() => undefined),
-      },
-      setPermissionCheckHandler: mock(() => undefined),
-      setPermissionRequestHandler: mock(() => undefined),
-    };
-    const addChildView = mock((_view: FakeWebContentsView) => undefined);
-    const window = {
-      isDestroyed: () => false,
-      contentView: { addChildView, removeChildView: mock(() => undefined) },
-    };
-    const leaf = "https://leaf.example";
-    const runtime = initializeBrowserPreviews({
-      fromPartition: (() => browserSession) as never,
-      partition: "orkestrator-browser-previews-window-1-node",
-      WebContentsViewCtor: FakeWebContentsView as never,
-      menu: { buildFromTemplate: () => ({ popup: () => undefined }) } as never,
-      getWindow: () => window as never,
-      emitState: mock(() => undefined),
-      emitOpenLink: mock(() => undefined),
-      openExternal: mock(() => undefined),
-      writeClipboardText: mock(() => undefined),
-      focusAddressBar: mock(() => undefined),
-      requestPreviewShortcut: mock(() => undefined),
-      getAuthorization: (url) => (url.startsWith(`${leaf}/__orkestrator/`) ? "Bearer grant" : null),
-      resolveAddress: (url) => nodePreviewUrl(leaf, url),
-      requestOrigin: nodePreviewRequestOrigin,
-    });
-    await runtime.manager.attach({
-      tabId: "browser-leaf",
-      url: "http://localhost:3000/",
-      environmentId: "env-leaf",
-      bounds: { x: 1, y: 2, width: 300, height: 200 },
-      visible: true,
-    });
-    const previewContents = addChildView.mock.calls[0]![0].webContents;
-    const result = mock(() => undefined);
-    beforeHeaders?.(
-      {
-        url: `${leaf}/__orkestrator/browser/loopback/3000/`,
-        resourceType: "mainFrame",
-        webContentsId: previewContents.id,
-        requestHeaders: {},
-      },
-      result,
-    );
-    // A workspace grant is refused from the desktop's default origin.
-    expect(result).toHaveBeenCalledWith({
-      requestHeaders: {
-        Authorization: "Bearer grant",
-        Origin: leaf,
-        "x-orkestrator-preview-environment": "env-leaf",
-      },
-    });
   });
 
   test("destroys previews on close and only clears the window that actually closed", () => {

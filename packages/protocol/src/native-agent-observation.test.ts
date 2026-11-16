@@ -152,7 +152,7 @@ describe("nativeSessionInvalidationNamesDiscovery", () => {
     ]);
   });
 
-  test("counts a change it cannot place: no cause, or one a newer backend added", () => {
+  test("counts a change it cannot place: no cause, or one this client does not know", () => {
     expect(nativeSessionInvalidationNamesDiscovery(undefined)).toBe(true);
     expect(nativeSessionInvalidationNamesDiscovery("a-newer-cause")).toBe(true);
   });

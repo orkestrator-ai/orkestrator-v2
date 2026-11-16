@@ -167,54 +167,6 @@ test("the first read waits for the per-node stream, and a release during it leav
   expect(handlers.get(PER_NODE_EVENT)?.size).toBe(0);
 });
 
-test("an older command node relays on the old name, and no per-node listener opens", async () => {
-  const sub = subscriber();
-  const stop = subscribeNodeEvents(LEAF, sub);
-  await settle();
-  expect(listenOrder).not.toContain(PER_NODE_EVENT);
-  emit(RELAYED_NODE_EVENT, {
-    nodeId: LEAF,
-    kind: "event",
-    event: "change-projection-changed",
-    payload: 1,
-  });
-  expect(sub.onEvent).toHaveBeenCalledWith("change-projection-changed", 1);
-  emit(RELAYED_NODE_EVENT, { nodeId: LEAF, kind: "resync" });
-  expect(sub.onResync).toHaveBeenCalledTimes(2);
-  stop();
-  await settle();
-});
-
-test("frames on the old name still arrive with a per-node command node, for the desktop relay", async () => {
-  perNodeEvents = true;
-  const sub = subscriber();
-  const stop = subscribeNodeEvents(LEAF, sub);
-  await settle();
-  emit(RELAYED_NODE_EVENT, {
-    nodeId: LEAF,
-    kind: "event",
-    event: "change-projection-changed",
-    payload: 2,
-  });
-  expect(sub.onEvent).toHaveBeenCalledTimes(1);
-  stop();
-  await settle();
-});
-
-test("a command node downgraded under the lease drops the per-node listener", async () => {
-  perNodeEvents = true;
-  const sub = subscriber();
-  const stop = subscribeNodeEvents(LEAF, sub);
-  await settle();
-  expect(handlers.get(PER_NODE_EVENT)?.size).toBe(1);
-  perNodeEvents = false;
-  clock.tick(NODE_EVENT_WATCH_RENEW_MS);
-  await settle();
-  expect(handlers.get(PER_NODE_EVENT)?.size).toBe(0);
-  stop();
-  await settle();
-});
-
 test("renews the same lease before expiry; an expired lease resyncs every subscriber", async () => {
   const first = subscriber();
   const second = subscriber();

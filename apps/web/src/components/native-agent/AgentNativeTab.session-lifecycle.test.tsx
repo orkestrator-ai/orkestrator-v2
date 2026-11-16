@@ -2695,6 +2695,41 @@ describe("AgentNativeTab", () => {
     expect(tab?.consumedAgentHandoffId).toBeUndefined();
   });
 
+  test("sends plain text and leaves delivery to the backend when its capabilities cannot be read", async () => {
+    fixtureState.renderVirtualizedMessages = true;
+    getAgentHandoffCapabilitiesMock.mockRejectedValue(new Error("connection lost"));
+    const snapshot = grokToCursorHandoff("handoff-capabilities-unreadable");
+    getAgentHandoffMock.mockResolvedValue({
+      id: snapshot.id,
+      environmentId: snapshot.environmentId,
+      version: AGENT_HANDOFF_VERSION,
+      snapshot,
+    });
+    const tabId = "tab-capabilities-unreadable";
+    seedEnvTab({
+      id: tabId,
+      type: "agent-native",
+      agentHandoffId: snapshot.id,
+      nativeAgentData: identity("cursor"),
+    });
+
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    expect(await screen.findByText("Investigate the layout")).toBeTruthy();
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "First instruction" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    const dispatched = dispatchNativeAgentIntentMock.mock.calls[0]?.[0] as { prompt?: string };
+    // The backend adds the carrier once it has built the final prompt.
+    expect(dispatched.prompt).toBe("First instruction");
+    expect(dispatched.prompt).not.toContain("orkestrator-handoff");
+    const tab = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0];
+    expect(tab?.agentHandoffId).toBe(snapshot.id);
+    expect(tab?.consumedAgentHandoffId).toBeUndefined();
+  });
+
   test("consumes and retains a first handoff after enqueueing on a running turn", async () => {
     fixtureState.renderVirtualizedMessages = true;
     const snapshot = grokToCursorHandoff("handoff-queue-cursor");

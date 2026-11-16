@@ -44,13 +44,9 @@ export function createCoordinatorApi(client: BackendClient) {
   // envelope and decodes results; version 0 is today's untyped call.
   const domain = () => coordinatorDomainApi(client);
 
-  /**
-   * `keepConversationErrors`: this panel offers Retry for a conversation that
-   * failed to start, so opening it must not clear the failure. An older backend
-   * ignores the argument.
-   */
+  /** Opening the panel never clears a failed conversation: its pane offers Retry. */
   const ensureProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot> =>
-    domain().ensure_project_coordinator({ projectId, keepConversationErrors: true });
+    domain().ensure_project_coordinator({ projectId });
 
   /** Clears a conversation's startup failure so its pane can connect again. */
   const retryCoordinatorConversation = (

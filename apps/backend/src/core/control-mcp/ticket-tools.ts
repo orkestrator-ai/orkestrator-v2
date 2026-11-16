@@ -184,7 +184,7 @@ export function registerTicketTools(
       title: "Create a Kanban ticket",
       description:
         "Create a ticket in one configured project. Give either sections (structured) or description and acceptanceCriteria (plain text); both forms are kept in step. " +
-        "With nodeId, the ticket is created on this board and synced to that machine (now, or when it reconnects: sync.state says which), so start_build_pipeline with the same nodeId can build it by this id. A machine too old to sync gets a ticket of its own instead (sync.state update-required).",
+        "With nodeId, the ticket is created on this board and synced to that machine (now, or when it reconnects: sync.state says which), so start_build_pipeline with the same nodeId can build it by this id.",
       inputSchema: toolInput(
         Schema.Struct({
           requestId: str({ trim: true, min: 1, max: 256 }),

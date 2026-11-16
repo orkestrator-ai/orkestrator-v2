@@ -89,7 +89,6 @@ async function startContractGateway() {
     port: 0,
     env: { ORKESTRATOR_GATEWAY_TOKEN: TOKEN },
     allowNonTailscaleBind: true,
-    legacyPreviewPortAccess: async () => "allowed" as const,
   });
   const info = await gateway.start();
   if (!info) throw new Error("Gateway did not start");

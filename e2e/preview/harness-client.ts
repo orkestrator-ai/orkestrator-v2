@@ -25,8 +25,6 @@ export interface HarnessReady {
   spki: string;
   services: string[];
   gateway: string;
-  /** Ports the legacy `/__orkestrator/browser/loopback/<port>/` route can reach. */
-  loopbackPorts: Record<string, number>;
   redirectPort: number;
 }
 

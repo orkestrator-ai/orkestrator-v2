@@ -27,21 +27,11 @@ const LEAF = "bk_leaf";
 
 async function fixture(
   respond: (request: RecordedRequest) => Response | undefined,
-  options: { nodeRouting?: boolean } = {},
 ): Promise<{ box: ClientSandbox; gateway: FakeGateway }> {
   const box = await createSandbox();
-  const own = capabilities();
   const gateway = await startFakeGateway((request) => {
     const answer = respond(request);
     if (answer) return answer;
-    if (request.body.args.action === "capabilities") {
-      return envelope(
-        publicSuccessEnvelope("capabilities", {
-          ...own,
-          features: { ...own.features, nodeRouting: options.nodeRouting ?? true },
-        }),
-      );
-    }
     return defaultResponder()(request);
   });
   cleanups.push(
@@ -69,7 +59,7 @@ function receipt(action: PublicReceipt["action"]): PublicReceipt {
 }
 
 describe("--node", () => {
-  test("sends request.node after checking the connected node can route it", async () => {
+  test("sends request.node with no capability probe first", async () => {
     const { box, gateway } = await fixture((request) =>
       request.body.args.action === "project.list" && request.body.args.node === LEAF
         ? envelope({
@@ -83,18 +73,9 @@ describe("--node", () => {
     );
     const run = await box.run(["--node", LEAF, "project", "list", "--json"]);
     expect(run.code).toBe(0);
-    const capabilitiesProbe = requestsFor(gateway, "capabilities");
-    expect(capabilitiesProbe[0]?.body.args.node).toBeUndefined();
+    expect(requestsFor(gateway, "capabilities")).toHaveLength(0);
     expect(requestsFor(gateway, "project.list")[0]?.body.args.node).toBe(LEAF);
     expect(JSON.parse(run.out).result.items[0].id).toBe("p1");
-  });
-
-  test("a backend without node routing is refused before anything is routed", async () => {
-    const { box, gateway } = await fixture(() => undefined, { nodeRouting: false });
-    const run = await box.run(["--node", LEAF, "project", "list", "--json"]);
-    expect(run.code).toBe(8);
-    expect(JSON.parse(run.out).error.code).toBe("backend-incompatible");
-    expect(requestsFor(gateway, "project.list")).toHaveLength(0);
   });
 
   test("the backend's node codes keep their exit classes", async () => {

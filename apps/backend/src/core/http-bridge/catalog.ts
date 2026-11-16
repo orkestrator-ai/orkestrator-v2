@@ -21,7 +21,6 @@ import { createLogger } from "@orkestrator/protocol/logger";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { asRecord, nonEmptyString } from "../agent-provider-runtime.js";
 import { assertOk, assertOkWithErrorDetail, boundedJson, bridgeFetch } from "./transport.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 
 export type HttpBridgeAgent = "claude" | "codex" | "cursor" | "grok" | "pi";
 
@@ -31,7 +30,8 @@ const log = createLogger("native-agent");
  * Session catalogue reads refused because the bridge is older than the
  * contract (a 404, or an answer without `catalogueVersion`), per agent, since
  * this backend started. Content-free: no command names, sessions or
- * environments. The legacy-route support window rests on it.
+ * environments. Such a bridge is typically a container built from an older
+ * image; the refusal is permanent.
  */
 const outdatedBridgeCatalogueReads = new Map<HttpBridgeAgent, number>();
 
@@ -60,7 +60,6 @@ export class HttpBridgeCatalogAdapter {
   private noteOutdatedBridge(kind: "session-route-404" | "unversioned-catalogue"): never {
     const count = (outdatedBridgeCatalogueReads.get(this.agent) ?? 0) + 1;
     outdatedBridgeCatalogueReads.set(this.agent, count);
-    compatibilityPathUsage.record("slash-catalogue.outdated-bridge");
     log.throttled("warn", "catalogue.outdated-bridge", {
       scope: this.logScope,
       kind,

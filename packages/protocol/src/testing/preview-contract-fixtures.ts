@@ -112,7 +112,10 @@ export function fixturePreviewCapabilities(
         reason: "Embedded previews are not validated.",
         platforms: [],
       },
-      legacyPath: { available: true },
+      legacyPath: {
+        available: false,
+        reason: "The legacy gateway preview route was removed; open a registered service.",
+      },
     },
     relay: { available: false, reason: "The container relay is disabled." },
     limits: { ...PREVIEW_LIMITS },

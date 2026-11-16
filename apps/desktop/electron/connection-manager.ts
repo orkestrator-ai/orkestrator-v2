@@ -353,7 +353,7 @@ export class ConnectionManager {
       const byAddress = this.catalogue.backends.find((backend) =>
         backend.routes.some((route) => route.kind === "https" && route.origin === address),
       );
-      const hello = outcome.kind === "hello" ? outcome.hello : null;
+      const hello = outcome.hello;
       if (input.connectionId) {
         // "Add connection method": only for a verified machine, and only when
         // the new address proves that same installation.
@@ -515,7 +515,7 @@ export class ConnectionManager {
         transport.release();
         throw error;
       }
-      const hello = outcome.kind === "hello" ? outcome.hello : null;
+      const hello = outcome.hello;
       try {
         if (
           target?.verifiedInstallationId &&
@@ -883,7 +883,6 @@ export class ConnectionManager {
         });
         if (route.kind === "ssh") assertSshOutcome(outcome);
         if (
-          outcome.kind === "hello" &&
           backend.verifiedInstallationId &&
           outcome.hello.installationId !== backend.verifiedInstallationId
         ) {
@@ -909,7 +908,7 @@ export class ConnectionManager {
         const currentRoute = current.routes.find((candidate) => candidate.id === route.id);
         if (!currentRoute) throw new Error("That connection method no longer exists.");
         const record = replaceRoute(current, { ...currentRoute, encryptedToken });
-        return outcome.kind === "hello" ? this.recordHello(record, outcome.hello) : record;
+        return this.recordHello(record, outcome.hello);
       });
       this.assertScopeGeneration(scope, generation);
       this.sessionTokens.set(route.id, token);
@@ -1397,9 +1396,7 @@ export class ConnectionManager {
           },
         );
       }
-      if (established.outcome.kind === "hello") {
-        record = this.recordHello(record, established.outcome.hello);
-      }
+      record = this.recordHello(record, established.outcome.hello);
       const committed = record;
       return {
         ...current,
@@ -1491,14 +1488,12 @@ export class ConnectionManager {
     if (existing && existing.transport === established.transport) return;
     this.sessionTokens.set(established.route.id, established.token);
     this.markHello(connectionId, established.outcome);
-    if (established.outcome.kind === "hello") {
-      const hello = established.outcome.hello;
-      const backend = this.findBackend(connectionId);
-      if (backend && this.recordHello(backend, hello) !== backend) {
-        void this.updateBackend(connectionId, (current) => this.recordHello(current, hello)).catch(
-          () => undefined,
-        );
-      }
+    const hello = established.outcome.hello;
+    const backend = this.findBackend(connectionId);
+    if (backend && this.recordHello(backend, hello) !== backend) {
+      void this.updateBackend(connectionId, (current) => this.recordHello(current, hello)).catch(
+        () => undefined,
+      );
     }
     this.installRemote(
       connectionId,
@@ -1517,7 +1512,7 @@ export class ConnectionManager {
     token: string,
     outcome: HelloOutcome,
   ): void {
-    const generation = outcome.kind === "hello" ? outcome.hello.generation : null;
+    const generation = outcome.hello.generation;
     const existing = this.remoteConnections.get(connectionId);
     if (existing) {
       const sameRoute =
@@ -1911,12 +1906,6 @@ export class ConnectionManager {
 
   private markHello(connectionId: string, outcome: HelloOutcome): void {
     const status = this.statusFor(connectionId);
-    if (outcome.kind !== "hello") {
-      status.identity = "provisional";
-      delete status.hello;
-      if (outcome.latencyMs !== undefined) status.latencyMs = outcome.latencyMs;
-      return;
-    }
     status.hello = outcome.hello;
     status.lastHelloAt = new Date().toISOString();
     if (outcome.latencyMs !== undefined) status.latencyMs = outcome.latencyMs;

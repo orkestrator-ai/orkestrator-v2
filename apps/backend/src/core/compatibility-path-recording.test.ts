@@ -1,57 +1,9 @@
 import { expect, mock, test } from "bun:test";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
-import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
+import { httpProvider } from "./agent-provider-test-support.js";
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
-import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
-import { compatibilityPathUsage, type CompatibilityPathId } from "./compatibility-path-usage.js";
-
-const count = (id: CompatibilityPathId) => compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;
-
-test("catalogue rejection counts every outdated bridge read and leaves current reads uncounted", async () => {
-  const id = "slash-catalogue.outdated-bridge";
-  const before = count(id);
-  const current = httpProvider(() =>
-    Response.json({ catalogueVersion: 1, status: "ready", commands: [] }),
-  );
-  await current.provider.commandCatalogue!("session-1");
-  expect(count(id)).toBe(before);
-  const legacy = httpProvider(
-    (url) =>
-      url.includes("/session/")
-        ? new Response(null, { status: 404 })
-        : Response.json({ commands: [] }),
-    codexConnection,
-  );
-  await expect(legacy.provider.commandCatalogue!("session-1")).rejects.toMatchObject({
-    catalogueErrorCode: "outdated-bridge",
-  });
-  expect(count(id)).toBe(before + 1);
-  await expect(legacy.provider.commandCatalogue!("session-1")).rejects.toMatchObject({
-    catalogueErrorCode: "outdated-bridge",
-  });
-  expect(count(id)).toBe(before + 2);
-  expect(legacy.requests).toHaveLength(2);
-  expect(legacy.requests.every((request) => request.url.includes("/session/"))).toBe(true);
-  // A pre-2.21 bridge that answers the session route without a version.
-  const unversioned = httpProvider(() => Response.json({ commands: [] }), codexConnection);
-  await expect(unversioned.provider.commandCatalogue!("session-1")).rejects.toMatchObject({
-    catalogueErrorCode: "outdated-bridge",
-  });
-  expect(count(id)).toBe(before + 3);
-});
-
-test("retaining close counts only the restart notice", async () => {
-  const upgrade = count("bridge-close.upgrade-required");
-  await closeBridgeSessionRetaining("claude", "s1", async () =>
-    Response.json({ closed: true, retained: true }),
-  );
-  expect(count("bridge-close.upgrade-required")).toBe(upgrade);
-  await expect(
-    closeBridgeSessionRetaining("codex", "s1", async () => new Response(null, { status: 404 })),
-  ).rejects.toThrow("predates non-destructive tab close");
-  expect(count("bridge-close.upgrade-required")).toBe(upgrade + 1);
-});
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 test("a transcript read never falls back to /messages, so it counts no compatibility use", async () => {
   const before = compatibilityPathUsage.snapshot().paths;
@@ -82,7 +34,7 @@ test("a transcript read never falls back to /messages, so it counts no compatibi
   expect(compatibilityPathUsage.snapshot().paths).toEqual(before);
 });
 
-test("the local branch read and the upstream auto-merge setting count every call (to-do 7570)", async () => {
+test("the local branch read and the upstream auto-merge setting count every call (to-do 8304)", async () => {
   const record = mock((_id: string) => undefined);
   const original = compatibilityPathUsage.record.bind(compatibilityPathUsage);
   compatibilityPathUsage.record = record as typeof compatibilityPathUsage.record;

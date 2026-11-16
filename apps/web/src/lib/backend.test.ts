@@ -72,7 +72,6 @@ const {
   appendFeaturePlanMessage,
   appendFeatureStoryMessage,
   cancelFeaturePlanning,
-  claimFeaturePlanBuild,
   createFeaturePlan,
   createProjectFromScratch,
   getFeaturePlans,
@@ -2069,15 +2068,6 @@ describe("backend command wrapper coverage", () => {
     });
   });
 
-  test("claims a feature build with both ownership identifiers", async () => {
-    await claimFeaturePlanBuild("feature-1", "task-1");
-
-    expect(invokeMock).toHaveBeenCalledWith("claim_feature_plan_build", {
-      featureId: "feature-1",
-      taskId: "task-1",
-    });
-  });
-
   test("forwards feature planning lifecycle command payloads", async () => {
     await startFeaturePlanning("feature-1", "feature", "Plan search");
     expect(invokeMock).toHaveBeenLastCalledWith("start_feature_planning", {
@@ -2150,52 +2140,39 @@ describe("backend command wrapper coverage", () => {
     });
   });
 
-  describe("commands an older backend may not know", () => {
+  describe("commands that write only what changed", () => {
     // The backend's own wording, so a drift in it fails here.
     const unknown = (name: string) => new Error(unknownBackendCommandMessage(name));
 
-    test("arrangeProjectsByIntent sends the gesture, and the preview only to an older backend", async () => {
+    test("arrangeProjectsByIntent sends the gesture; any failure, an unknown command included, is the caller's", async () => {
       const intent = { kind: "sort-folder", folder: "Work" } as const;
-      const preview = { projectIds: ["b", "a"], folders: {} };
       invokeMock.mockResolvedValueOnce([]);
-      await backendWrappers.arrangeProjectsByIntent(intent, preview);
+      await backendWrappers.arrangeProjectsByIntent(intent);
       expect(invokeMock).toHaveBeenLastCalledWith("arrange_projects_by_intent", { intent });
 
-      invokeMock.mockRejectedValueOnce(unknown("arrange_projects_by_intent"));
-      invokeMock.mockResolvedValueOnce([]);
-      await backendWrappers.arrangeProjectsByIntent(intent, preview);
-      expect(invokeMock).toHaveBeenLastCalledWith("arrange_projects", preview);
-
       invokeMock.mockClear();
-      invokeMock.mockRejectedValueOnce(new Error("denied"));
-      await expect(backendWrappers.arrangeProjectsByIntent(intent, preview)).rejects.toThrow(
-        "denied",
+      invokeMock.mockRejectedValueOnce(unknown("arrange_projects_by_intent"));
+      await expect(backendWrappers.arrangeProjectsByIntent(intent)).rejects.toThrow(
+        "arrange_projects_by_intent",
       );
       expect(invokeMock).toHaveBeenCalledTimes(1);
     });
 
-    test("patchRepositorySettings sends edits, and the whole record only to an older backend", async () => {
-      const whole = { defaultBranch: "dev", prBaseBranch: "main" };
+    test("patchRepositorySettings sends the edits; an unknown command is the caller's", async () => {
       invokeMock.mockResolvedValueOnce({});
-      await backendWrappers.patchRepositorySettings(
-        "p",
-        { defaultBranch: "dev" },
-        ["filesToCopy"],
-        whole,
-      );
+      await backendWrappers.patchRepositorySettings("p", { defaultBranch: "dev" }, ["filesToCopy"]);
       expect(invokeMock).toHaveBeenLastCalledWith("patch_repository_settings", {
         projectId: "p",
         updates: { defaultBranch: "dev" },
         unset: ["filesToCopy"],
       });
 
+      invokeMock.mockClear();
       invokeMock.mockRejectedValueOnce(unknown("patch_repository_settings"));
-      invokeMock.mockResolvedValueOnce({});
-      await backendWrappers.patchRepositorySettings("p", { defaultBranch: "dev" }, [], whole);
-      expect(invokeMock).toHaveBeenLastCalledWith("update_repository_config", {
-        projectId: "p",
-        repoConfig: whole,
-      });
+      await expect(
+        backendWrappers.patchRepositorySettings("p", { defaultBranch: "dev" }, []),
+      ).rejects.toThrow("patch_repository_settings");
+      expect(invokeMock).toHaveBeenCalledTimes(1);
     });
 
     test("writeLocalFile and writeContainerFile carry a precondition only when given one", async () => {

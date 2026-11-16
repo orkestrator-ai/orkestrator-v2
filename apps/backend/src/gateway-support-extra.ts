@@ -1,6 +1,4 @@
 import * as support from "./gateway-support-core.js";
-import { BROWSER_PREVIEW_ENVIRONMENT_HEADER } from "@orkestrator/protocol/browser-preview";
-import type { GatewayRelayedEventsMode } from "@orkestrator/protocol/gateway-event-stream";
 import { GATEWAY_LOGIN_CONTENT_SECURITY_POLICY } from "@orkestrator/protocol/renderer-content-security-policy";
 import {
   API_PREFIX,
@@ -11,9 +9,7 @@ import {
   MAX_JSON_BODY_BYTES,
   RequestBodyTooLargeError,
   SSE_COMPRESSION_CHUNK_BYTES,
-  createBrotliDecompress,
   createGzip,
-  createUnzip,
   getGatewayTokenValidationError,
   mkdir,
   normalizeGatewayToken,
@@ -350,8 +346,6 @@ export function sanitizeTargetRequestHeaders(
   delete sanitized.authorization;
   delete sanitized.connection;
   delete sanitized["proxy-authorization"];
-  // Gateway routing metadata, not the application's business.
-  delete sanitized[BROWSER_PREVIEW_ENVIRONMENT_HEADER];
   const openCodePasswordHeader = sanitized["x-orkestrator-opencode-token"];
   delete sanitized["x-orkestrator-opencode-token"];
   const openCodePassword = Array.isArray(openCodePasswordHeader)
@@ -527,122 +521,6 @@ export function stripTransformedRepresentationHeaders(headers: OutgoingHttpHeade
   delete headers["accept-ranges"];
 }
 
-export type BrowserPreviewContentKind = "html" | "css" | "js";
-
-export function browserPreviewContentKind(
-  contentType: string | string[] | undefined,
-): BrowserPreviewContentKind | null {
-  const value = Array.isArray(contentType) ? contentType.join(";") : (contentType ?? "");
-  // The rewriter decodes and re-encodes as UTF-8; pass other charsets through
-  // untouched and let the Referer-based redirect recover their asset requests.
-  const charset = /charset\s*=\s*"?([\w-]+)/i.exec(value)?.[1]?.toLowerCase();
-  if (charset && charset !== "utf-8" && charset !== "utf8" && charset !== "us-ascii") return null;
-  if (/text\/html/i.test(value)) return "html";
-  if (/text\/css/i.test(value)) return "css";
-  if (/(?:text|application)\/(?:javascript|x-javascript)/i.test(value)) return "js";
-  return null;
-}
-
-export function browserPreviewContentDecoder(
-  contentEncoding: string | string[] | undefined,
-): Transform | null | undefined {
-  const rawValue = (Array.isArray(contentEncoding) ? contentEncoding.join(",") : contentEncoding)
-    ?.trim()
-    .toLowerCase();
-  if (rawValue?.includes(",")) return undefined;
-  const value = rawValue;
-  if (!value || value === "identity") return null;
-  if (value === "gzip" || value === "x-gzip" || value === "deflate") return createUnzip();
-  if (value === "br") return createBrotliDecompress();
-  return undefined;
-}
-
-/**
- * Keep root-relative development assets inside the browser-preview namespace.
- *
- * Rewriting is deliberately narrow: HTML URL attributes, CSS url()/@import
- * values, and JavaScript module specifiers. Generic string literals stay
- * untouched — values like `split("/")` or router paths are code, not URLs.
- * Requests those produce at runtime are recovered by the gateway's
- * Referer-based preview redirect instead.
- */
-export function rewriteBrowserPreviewBody(
-  body: string,
-  proxyPrefix: string,
-  target: URL,
-  kind: BrowserPreviewContentKind,
-): string {
-  const escapedPrefix = proxyPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const alreadyProxied = new RegExp(`^(?:${escapedPrefix}(?:/|$)|//)`);
-  const rewritePath = (value: string) =>
-    alreadyProxied.test(value)
-      ? value
-      : `${proxyPrefix}${value.startsWith("/") ? value : `/${value}`}`;
-
-  let rewritten = body;
-  const rewriteQuotedAfter = (pattern: RegExp) => {
-    rewritten = rewritten.replace(
-      pattern,
-      (_match, before: string, quote: string, value: string) =>
-        `${before}${quote}${rewritePath(value)}${quote}`,
-    );
-  };
-
-  if (kind === "html") {
-    rewriteQuotedAfter(/(\b(?:src|href|action|poster)\s*=\s*)(["'])(\/(?!\/)[^"']*)\2/gi);
-    rewritten = rewritten.replace(
-      /(\b(?:src|href|action|poster)\s*=\s*)(\/(?!\/)[^\s>"']+)/gi,
-      (_match, prefix: string, value: string) => `${prefix}${rewritePath(value)}`,
-    );
-  }
-  if (kind === "html" || kind === "css") {
-    rewritten = rewritten.replace(
-      /(url\(\s*)(["']?)(\/(?!\/)[^)"'\s]+)\2(\s*\))/gi,
-      (_match, start: string, quote: string, value: string, end: string) =>
-        `${start}${quote}${rewritePath(value)}${quote}${end}`,
-    );
-    rewriteQuotedAfter(/(@import\s+)(["'])(\/(?!\/)[^"']*)\2/gi);
-  }
-  if (kind === "html" || kind === "js") {
-    rewriteQuotedAfter(/(\bfrom\s*)(["'])(\/(?!\/)[^"'\r\n]*)\2/g);
-    rewriteQuotedAfter(/(\bimport\s*\(\s*)(["'])(\/(?!\/)[^"'\r\n]*)\2/g);
-    rewriteQuotedAfter(/(\bimport\s+)(["'])(\/(?!\/)[^"'\r\n]*)\2/g);
-    rewriteQuotedAfter(/(\bnew\s+URL\s*\(\s*)(["'])(\/(?!\/)[^"'\r\n]*)\2/g);
-  }
-
-  const loopbackOrigin = new RegExp(
-    `(["'\u0060])http:\\/\\/(?:localhost|127\\.0\\.0\\.1|\\[::1\\]):${target.port || "80"}(\\/[^"'\u0060\\r\\n]*)?\\1`,
-    "g",
-  );
-  rewritten = rewritten.replace(
-    loopbackOrigin,
-    (_match, quote: string, pathname = "/") => `${quote}${rewritePath(pathname)}${quote}`,
-  );
-
-  return rewritten;
-}
-
-/**
- * Resolve the preview namespace a request originated from, based on its
- * Referer. Lets the gateway recover root-relative requests produced by
- * previewed application code that the body rewriter intentionally leaves
- * alone (runtime-built URLs, plain string literals).
- */
-export function browserPreviewRefererPrefix(request: IncomingMessage): string | null {
-  const referer = request.headers.referer;
-  if (!referer) return null;
-  try {
-    const pathname = new URL(referer).pathname;
-    const match = new RegExp(`^${API_PREFIX}/browser/loopback/(\\d{1,5})(?:/|$)`).exec(pathname);
-    if (!match) return null;
-    const port = Number.parseInt(match[1] ?? "", 10);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
-    return `${API_PREFIX}/browser/loopback/${port}`;
-  } catch {
-    return null;
-  }
-}
-
 export interface EventClientWriter {
   /** Uncompressed bytes accepted from the application but not yet discharged. */
   readonly writableLength: number;
@@ -775,8 +653,6 @@ export type GatewayEventClient = {
   includedPrefixes: string[] | null;
   /** Prefixes omitted unless explicitly restored by `includedPrefixes`. */
   excludedPrefixes: string[] | null;
-  /** How this stream asked for relayed node events; null when it did not say. */
-  relayedEvents?: GatewayRelayedEventsMode | null;
   /**
    * Carries only per-node relayed events. Its cursor and replay window are the
    * relayed ring's, so nothing about it touches the main sequence.
@@ -837,11 +713,6 @@ export function parseEventSubscriptionFilter(value: string | null): string[] | n
     .map((prefix) => prefix.trim())
     .filter(Boolean);
   return prefixes.length > 0 ? prefixes : null;
-}
-
-/** Explicit unknown values retain legacy delivery without counting as omission. */
-export function parseRelayedEventsMode(value: string | null): GatewayRelayedEventsMode | null {
-  return value === null ? null : value === "per-node" ? "per-node" : "legacy";
 }
 
 export function eventMatchesSubscription(

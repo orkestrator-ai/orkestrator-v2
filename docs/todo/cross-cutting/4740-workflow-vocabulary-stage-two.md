@@ -158,4 +158,4 @@ Stage one is in: visible text, agent prompts, internal functions, types and file
 - [`docs/architecture/version-compatibility.md`](../../architecture/version-compatibility.md)
 - [`docs/architecture/build-pipeline-view.md`](../../architecture/build-pipeline-view.md)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, confirming every machine and client runs a stage-one build) moved there on 2026-11-10; task 2 was answered on 2026-11-14 by the user's legacy-retirement decision, so that item goes.
-- [8108](8108-legacy-retirement-sweep.md): the 2026-11-14 legacy-retirement sweep.
+- 8108 (retired): the 2026-11-14 legacy-retirement sweep.

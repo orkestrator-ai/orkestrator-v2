@@ -475,16 +475,22 @@ describe("preload API factory", () => {
       args: [true],
     });
     const bounds = { x: 10, y: 20, width: 640, height: 480 };
+    const previewService = {
+      backendInstanceId: "backend-1",
+      environmentId: "env-1",
+      serviceId: "service-web",
+      path: "/",
+    };
     await expect(
       api.browserPreview.attach({
         tabId: "browser-1",
-        url: "http://localhost:3000/",
+        service: previewService,
         bounds,
         visible: true,
       }),
     ).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:browser-preview:attach",
-      args: [{ tabId: "browser-1", url: "http://localhost:3000/", bounds, visible: true }],
+      args: [{ tabId: "browser-1", service: previewService, bounds, visible: true }],
     });
     await expect(api.browserPreview.setBounds("browser-1", bounds)).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:browser-preview:set-bounds",
@@ -493,12 +499,6 @@ describe("preload API factory", () => {
     await expect(api.browserPreview.setVisible("browser-1", false)).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:browser-preview:set-visible",
       args: ["browser-1", false],
-    });
-    await expect(
-      api.browserPreview.navigate("browser-1", "http://localhost:4000/"),
-    ).resolves.toEqual<IpcEcho>({
-      channel: "orkestrator:browser-preview:navigate",
-      args: ["browser-1", "http://localhost:4000/"],
     });
     await expect(api.browserPreview.goBack("browser-1")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:browser-preview:go-back",

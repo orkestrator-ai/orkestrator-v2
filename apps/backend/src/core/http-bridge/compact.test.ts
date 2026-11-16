@@ -1,6 +1,6 @@
 /**
  * `/compact` over an HTTP bridge: instructions travel only where the platform
- * honours them, and a bridge that predates them is detected by its answer.
+ * honours them.
  */
 import { describe, expect, test } from "bun:test";
 import {
@@ -11,10 +11,6 @@ import {
   piConnection,
 } from "../agent-provider-test-support.js";
 import { ProviderUnavailableError } from "../agent-provider-contract.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
-
-const ignoredCount = () =>
-  compatibilityPathUsage.snapshot().paths["compact.instructions-ignored"]?.count ?? 0;
 
 describe("HTTP bridge compaction", () => {
   test.each([
@@ -34,31 +30,13 @@ describe("HTTP bridge compaction", () => {
   test.each([
     ["Claude", claudeConnection, { status: "processing", instructions: "applied" }],
     ["Pi", piConnection, { compacted: true, instructions: "applied" }],
-  ] as const)("%s receives instructions and confirms them", async (_name, connection, answer) => {
-    const before = ignoredCount();
+  ] as const)("%s receives instructions", async (_name, connection, answer) => {
     const { provider, requests } = httpProvider(() => Response.json(answer), connection);
     await expect(
       provider.performSessionAction!("s-1", { kind: "compact", instructions: " keep the plan " }),
     ).resolves.toEqual({ outcome: "applied" });
     expect(JSON.parse(String(requests[0]!.init.body))).toEqual({ instructions: "keep the plan" });
-    expect(ignoredCount()).toBe(before);
   });
-
-  test.each([
-    ["an older Claude bridge", claudeConnection, () => Response.json({ status: "processing" })],
-    ["an older Pi bridge", piConnection, () => Response.json({ compacted: true })],
-    ["an unreadable answer", piConnection, () => new Response("not json", { status: 200 })],
-  ] as const)(
-    "%s compacts without confirming, which is reported, not failed",
-    async (_name, connection, answer) => {
-      const before = ignoredCount();
-      const { provider } = httpProvider(answer, connection);
-      await expect(
-        provider.performSessionAction!("s-1", { kind: "compact", instructions: "keep the plan" }),
-      ).resolves.toEqual({ outcome: "applied", instructionsIgnored: true });
-      expect(ignoredCount()).toBe(before + 1);
-    },
-  );
 
   test("a compaction Pi was asked to stop is refused in Pi's own words", async () => {
     const message =

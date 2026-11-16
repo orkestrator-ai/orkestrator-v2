@@ -15,13 +15,10 @@ import {
   useBuildPipelineStore,
   type BuildPipeline,
 } from "@/stores/buildPipelineStore";
-import { useConfigStore } from "@/stores";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
-import { legacyBuildPipelineStartInput } from "@/lib/build-pipeline-launch-compat";
 import type { DefaultAgent, EnvironmentType, NetworkAccessMode } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
@@ -78,7 +75,6 @@ function findBuildTabInTree(
 
 export function useBuildPipeline() {
   const nodeBackend = useScopeBackend();
-  const config = useConfigStore((state) => state.config);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   // This node's pipelines (plan item 3011).
   const scope = useNodeScope();
@@ -142,13 +138,7 @@ export function useBuildPipeline() {
           });
           return remote.id;
         }
-        const authoritative = await nodeBackend
-          .launchBuildPipeline(request)
-          .catch((error: unknown) => {
-            if (incompatibility(error, "launch_build_pipeline")?.code !== "unknown-command")
-              throw error;
-            return nodeBackend.startBuildPipeline(legacyBuildPipelineStartInput(config, request));
-          });
+        const authoritative = await nodeBackend.launchBuildPipeline(request);
         const pipeline = authoritative as BuildPipeline;
         replacePipeline(pipeline);
         // An idempotent admission can return a pipeline whose environment is
@@ -174,7 +164,7 @@ export function useBuildPipeline() {
         return undefined;
       }
     },
-    [config, replacePipeline, scope, nodeBackend],
+    [replacePipeline, scope, nodeBackend],
   );
 
   const startBuild = useCallback(

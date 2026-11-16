@@ -24,7 +24,6 @@ import type {
   BrowserPreviewBounds,
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
-import { browserPreviewEnvironmentId } from "@orkestrator/protocol/browser-preview";
 import { isOpaquePreviewId, normalizePreviewPath } from "@orkestrator/protocol/preview-services";
 import {
   isMacOsPrivacySettingsPane,
@@ -147,7 +146,6 @@ export type BrowserPreviewController = {
   attach(input: BrowserPreviewAttachInput): Promise<BrowserPreviewState>;
   setBounds(tabId: string, bounds: BrowserPreviewBounds): BrowserPreviewState;
   setVisible(tabId: string, visible: boolean): BrowserPreviewState | null;
-  navigate(tabId: string, url: string): Promise<BrowserPreviewState>;
   goBack(tabId: string): BrowserPreviewState;
   goForward(tabId: string): BrowserPreviewState;
   reload(tabId: string): BrowserPreviewState;
@@ -318,13 +316,6 @@ function browserPreviewServiceTarget(value: unknown): BrowserPreviewServiceTarge
     throw new Error("Expected a browser preview service reference");
   }
   return { backendInstanceId, environmentId, serviceId, path: normalizePreviewPath(path) };
-}
-
-function browserPreviewUrl(value: unknown): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error("Expected a browser preview URL");
-  }
-  return value;
 }
 
 function externalBrowserUrl(value: unknown): string {
@@ -674,39 +665,28 @@ export function registerMainIpc({
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("Expected browser preview attachment details");
     }
-    const { tabId, url, environmentId, service, navigationBasis, bounds, visible, nodeId } =
-      value as Record<string, unknown>;
+    const { tabId, service, navigationBasis, bounds, visible, nodeId } = value as Record<
+      string,
+      unknown
+    >;
     if (typeof visible !== "boolean") {
-      throw new Error("Expected a browser preview URL and visibility");
+      throw new Error("Expected a browser preview service and visibility");
     }
     const tab = browserPreviewTabId(tabId);
     // Validated before a node is resolved, so a malformed attach opens nothing.
     const node = nodeId === undefined || nodeId === null ? undefined : parseNodeId(nodeId);
     const viewBounds = browserPreviewBounds(bounds);
-    const serviceTarget = service === undefined ? undefined : browserPreviewServiceTarget(service);
-    const legacyUrl = serviceTarget ? undefined : browserPreviewUrl(url);
+    // Every preview is a service preview; an attach without one is refused.
+    const serviceTarget = browserPreviewServiceTarget(service);
     const controller = await attachPreviews(event, tab, node);
-    // A malformed basis is dropped, which keeps the older-renderer rule.
+    // A malformed basis is dropped: only a path not already asked for is new.
     const basis =
       Number.isSafeInteger(navigationBasis) && (navigationBasis as number) >= 0
         ? { navigationBasis: navigationBasis as number }
         : {};
-    if (serviceTarget) {
-      return controller.attach({
-        tabId: tab,
-        service: serviceTarget,
-        ...basis,
-        bounds: viewBounds,
-        visible,
-      });
-    }
-    // A malformed environment is dropped; the gateway then refuses the
-    // view's requests rather than guessing an environment.
-    const environment = browserPreviewEnvironmentId(environmentId);
     return controller.attach({
       tabId: tab,
-      url: legacyUrl!,
-      ...(environment ? { environmentId: environment } : {}),
+      service: serviceTarget,
       ...basis,
       bounds: viewBounds,
       visible,
@@ -757,10 +737,6 @@ export function registerMainIpc({
     const tab = browserPreviewTabId(tabId);
     if (typeof visible !== "boolean") throw new Error("Expected browser preview visibility");
     return tabPreviews(event, tab).setVisible(tab, visible);
-  });
-  handle("orkestrator:browser-preview:navigate", (event, tabId: unknown, url: unknown) => {
-    const tab = browserPreviewTabId(tabId);
-    return tabPreviews(event, tab).navigate(tab, browserPreviewUrl(url));
   });
   handle("orkestrator:browser-preview:go-back", (event, tabId: unknown) => {
     const tab = browserPreviewTabId(tabId);

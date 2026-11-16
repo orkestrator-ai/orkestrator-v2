@@ -176,6 +176,7 @@ test("the confirmation shows what a restart interrupts and can wait until idle",
     waitingAgents: 0,
     activePipelines: 1,
     terminals: 3,
+    containerTerminals: 0,
     hostServers: 1,
     measuredAt: "2026-10-16T12:00:00.000Z",
   });
@@ -186,7 +187,7 @@ test("the confirmation shows what a restart interrupts and can wait until idle",
   render(<UpdatesSettings />);
   fireEvent.click(await screen.findByRole("button", { name: "Install 2.22.0" }));
   expect(
-    await screen.findByText("2 agents working · 1 build pipeline · 3 open terminals"),
+    await screen.findByText("2 agents working · 1 build pipeline · 3 host terminals"),
   ).toBeTruthy();
   fireEvent.click(
     screen.getByRole("switch", { name: "Wait until no agent or pipeline is running" }),
@@ -246,8 +247,6 @@ test("restart confirmation separates container terminals, whose shells keep runn
     "1 container terminal (its shell keeps running)",
   );
   expect(describeRestartImpact({ ...impact, containerTerminals: 0 })).toBe("3 host terminals");
-  // An older backend reports one count for both.
-  expect(describeRestartImpact(impact)).toBe("3 open terminals");
 });
 
 test("switches the host's update channel", async () => {

@@ -263,7 +263,7 @@ describe("refreshEnvironmentSnapshot", () => {
     const list = spyOn(backend, "getEnvironmentSnapshots");
     const read = reads({ ...environment("env-1", "project-1"), status: "running" });
 
-    expect(await refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope())).toBe(true);
+    await refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope());
 
     const [first, second] = appCommandStore(environmentStore).getState().environments;
     expect(first!.status).toBe("running");
@@ -279,14 +279,14 @@ describe("refreshEnvironmentSnapshot", () => {
       environments: [environment("env-1", "project-1")],
     });
     const read = reads(null);
-    expect(await refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope())).toBe(true);
+    await refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope());
     expect(appCommandStore(environmentStore).getState().environments).toEqual([]);
     read.mockRestore();
   });
 
   test("adds one another client created", async () => {
     const read = reads(environment("env-new", "project-1"));
-    expect(await refreshEnvironmentSnapshot("project-1", "env-new", appCommandScope())).toBe(true);
+    await refreshEnvironmentSnapshot("project-1", "env-new", appCommandScope());
     expect(
       appCommandStore(environmentStore)
         .getState()
@@ -335,7 +335,7 @@ describe("refreshEnvironmentSnapshot", () => {
         }
         await act(async () => {
           finishRead(created);
-          expect(await snapshot).toBe(true);
+          await snapshot;
         });
         expect(appCommandStore(environmentStore).getState().environments).toEqual(
           settled ? [other] : [],
@@ -357,23 +357,6 @@ describe("refreshEnvironmentSnapshot", () => {
       }
     },
   );
-
-  test("reports a backend that predates the read, changing nothing", async () => {
-    const held = environment("env-1", "project-1");
-    appCommandStore(environmentStore).setState({ environments: [held] });
-    const read = reads(new Error("Unknown backend command: get_environment_snapshot"));
-    expect(await refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope())).toBe(false);
-    expect(appCommandStore(environmentStore).getState().environments[0]).toBe(held);
-    read.mockRestore();
-  });
-
-  test("a failed read is not mistaken for a missing command", async () => {
-    const read = reads(new Error("backend down"));
-    await expect(
-      refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope()),
-    ).rejects.toThrow("backend down");
-    read.mockRestore();
-  });
 });
 
 describe("HTTPS remedy lifecycle", () => {

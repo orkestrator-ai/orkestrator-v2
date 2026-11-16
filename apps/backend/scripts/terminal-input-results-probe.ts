@@ -16,8 +16,7 @@
  * 25 ms apart, then keys with no delay, then a reload and a few more keys.
  *
  * Routes: `direct` (the leaf), `relay` (the command node's relay to the leaf)
- * and `latency` (the leaf behind the delaying proxy), each with both
- * subprotocols offered and with only v1 offered, as an older renderer does.
+ * and `latency` (the leaf behind the delaying proxy).
  * Per run it reports the negotiated subprotocol, input and result frame counts,
  * result bytes, failures, refusals, socket closes, fallbacks, key-to-result
  * latency, whether the backend received and echoed exactly what was typed, and
@@ -90,7 +89,6 @@ export type PhaseResult = {
 
 export type RunResult = {
   route: Route;
-  offer: "both" | "v1-only";
   protocol: string;
   typing: PhaseResult;
   noDelay: PhaseResult;
@@ -107,7 +105,6 @@ export type RunResult = {
 /** A run whose terminal channel never became ready (bounded by the page's startup deadline). */
 export type RunFailure = {
   route: Route;
-  offer: "both" | "v1-only";
   status: "startup-failed";
   /** Which page load failed: the first, or the one after the reload. */
   load: "initial" | "reload";
@@ -335,25 +332,19 @@ async function run(
   type: BrowserType,
   targets: Targets,
   route: Route,
-  offer: RunResult["offer"],
 ): Promise<RunResult | RunFailure> {
   const browser = await type.launch();
   try {
-    return await observeRun(browser, targets, route, offer);
+    return await observeRun(browser, targets, route);
   } catch (error) {
     if (!(error instanceof StartupFailed)) throw error;
-    return { route, offer, status: "startup-failed", load: error.load, reason: error.reason };
+    return { route, status: "startup-failed", load: error.load, reason: error.reason };
   } finally {
     await browser.close();
   }
 }
 
-async function observeRun(
-  browser: Browser,
-  targets: Targets,
-  route: Route,
-  offer: RunResult["offer"],
-): Promise<RunResult> {
+async function observeRun(browser: Browser, targets: Targets, route: Route): Promise<RunResult> {
   const { page: base, gateway, path: socketPath } = targets.route(route);
   const context = await browser.newContext();
   const session = (
@@ -366,7 +357,6 @@ async function observeRun(
   const start: ProbePageStart = {
     path: socketPath,
     sessionId: SESSION,
-    v1Only: offer === "v1-only",
   };
   targets.resetWrites();
   await startPage(page, base, start);
@@ -395,7 +385,6 @@ async function observeRun(
   await context.close();
   return {
     route,
-    offer,
     protocol: afterBurst.protocol,
     typing: phaseBetween(initial, afterTyping),
     noDelay: phaseBetween(afterTyping, afterBurst),
@@ -428,9 +417,7 @@ async function probeEngine(
   }
   const runs: Array<RunResult | RunFailure> = [];
   for (const route of ["direct", "relay", "latency"] as const) {
-    for (const offer of ["both", "v1-only"] as const) {
-      runs.push(await run(type, targets, route, offer));
-    }
+    runs.push(await run(type, targets, route));
   }
   return { engine: name, status: "observed", version, runs };
 }

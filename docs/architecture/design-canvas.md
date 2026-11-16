@@ -654,8 +654,9 @@ the 2026-11-13 runs that closed it are in
   unsigned macOS bundle (2026-11-13, 8 of 8 after flake 9969). Ctrl/⌘+0
   passed in all 17 runs of the packaged spec on macOS that reached it.
 - **Mixed versions.** The backend over one data directory with the published
-  2.22.3 (2026-10-25, `scripts/qualify-design-mixed-versions.ts`): upgrade,
-  legacy migration, the downgrade fence and export-then-import. The renderer
+  2.22.3 (2026-10-25, with a qualifier retired with mixed-version
+  qualification on 2026-11-14, to-do 8108): upgrade, legacy migration, the
+  downgrade fence and export-then-import. The renderer
   pairing (2026-11-13, both directions with v2.22.3) passed and found no
   compatibility defect. In the v2.22.3 renderer ⌘0 still leaves a focused
   canvas off 100%, which is the defect fixed on 2026-10-22. Ask agent and

@@ -26,6 +26,8 @@ export const STANDALONE_PACKAGE = "orkestrator";
  * dependencies, relative to its package root.
  */
 export const RELEASE_RUNTIME_PATH = "resources/release-runtime";
+/** The first published release with {@link RELEASE_RUNTIME_PATH}; older ones are refused. */
+export const FIRST_LOCKED_RELEASE = "2.36.4-beta";
 /** Boots of a newly activated release before the launcher rolls back. */
 export const STANDALONE_MAX_BOOT_ATTEMPTS = 2;
 
@@ -340,7 +342,8 @@ async function writeReleaseManifest(directory: string, version: string): Promise
  * cache entries cannot bypass the frozen install's integrity checks. It resolves
  * dependencies afresh, so it runs no scripts and
  * everything but the package is discarded; a frozen install of the published
- * lockfile then supplies the dependencies.
+ * lockfile then supplies the dependencies. A release published without that
+ * lockfile (before {@link FIRST_LOCKED_RELEASE}) is refused.
  *
  * The directory appears only once the install verified, by one rename, and an
  * existing complete release is reused.
@@ -382,46 +385,43 @@ export async function installRelease(
       },
     );
     options.signal?.throwIfAborted();
-    const fetched = path.join(fetching, "node_modules", STANDALONE_PACKAGE);
+    if (readReleaseManifest(fetching)?.version !== version) {
+      throw new Error(`Installing ${STANDALONE_PACKAGE}@${version} produced no usable release`);
+    }
+    const fetched = releasePackageRoot(fetching);
     const runtime = path.join(fetched, RELEASE_RUNTIME_PATH);
-    if (existsSync(runtime)) {
-      // A runtime with no lockfile fails here: `--frozen-lockfile` only freezes
-      // a lockfile that exists, and without one bun would resolve afresh.
-      await copyFile(path.join(runtime, "package.json"), path.join(staging, "package.json"));
-      await copyFile(path.join(runtime, "bun.lock"), path.join(staging, "bun.lock"));
-      await run(
-        options.bun,
-        installArguments(
-          options.registry,
-          "--frozen-lockfile",
-          "--cache-dir",
-          path.join(staging, ".cache"),
-          "--production",
-          // Resolution from `node_modules/orkestrator` walks up to a flat tree.
-          "--linker=hoisted",
-          "--ignore-scripts",
-        ),
-        {
-          cwd: staging,
-          timeoutMs,
-          signal: options.signal,
-          env: { ...process.env, BUN_INSTALL_CACHE_DIR: path.join(staging, ".cache") },
-        },
-      );
-      await rm(path.join(fetched, "node_modules"), { recursive: true, force: true });
-      await mkdir(path.join(staging, "node_modules"), { recursive: true });
-      await rename(fetched, path.join(staging, "node_modules", STANDALONE_PACKAGE));
-    } else {
-      // Older releases resolve afresh, but still own their installed tree.
-      // The caller's isolated global store can otherwise leave the published
-      // release pointing outside itself into an install cache that may be removed.
-      await writeReleaseManifest(staging, version);
-      await run(
-        options.bun,
-        installArguments(options.registry, "--production", "--linker=hoisted"),
-        { cwd: staging, timeoutMs, signal: options.signal },
+    if (!existsSync(runtime)) {
+      // Installing it would resolve its dependencies afresh, not as shipped.
+      throw new Error(
+        `${STANDALONE_PACKAGE}@${version} was published without its dependency lockfile (${RELEASE_RUNTIME_PATH}), so it cannot be installed with the dependencies it shipped. Install ${FIRST_LOCKED_RELEASE} or later.`,
       );
     }
+    // A runtime with no lockfile fails here: `--frozen-lockfile` only freezes
+    // a lockfile that exists, and without one bun would resolve afresh.
+    await copyFile(path.join(runtime, "package.json"), path.join(staging, "package.json"));
+    await copyFile(path.join(runtime, "bun.lock"), path.join(staging, "bun.lock"));
+    await run(
+      options.bun,
+      installArguments(
+        options.registry,
+        "--frozen-lockfile",
+        "--cache-dir",
+        path.join(staging, ".cache"),
+        "--production",
+        // Resolution from `node_modules/orkestrator` walks up to a flat tree.
+        "--linker=hoisted",
+        "--ignore-scripts",
+      ),
+      {
+        cwd: staging,
+        timeoutMs,
+        signal: options.signal,
+        env: { ...process.env, BUN_INSTALL_CACHE_DIR: path.join(staging, ".cache") },
+      },
+    );
+    await rm(path.join(fetched, "node_modules"), { recursive: true, force: true });
+    await mkdir(path.join(staging, "node_modules"), { recursive: true });
+    await rename(fetched, path.join(staging, "node_modules", STANDALONE_PACKAGE));
     options.signal?.throwIfAborted();
     await rm(path.join(staging, ".cache"), { recursive: true, force: true });
     const manifest = readReleaseManifest(staging);

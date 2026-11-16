@@ -340,7 +340,7 @@ describe("discovery on return to an idle view", () => {
         startedJobs.push(internals.progressiveReads.size);
         await waitForCondition(() => internals.progressiveReads.size === 0);
         // An expired section is served as it was while it renews, so a
-        // renewal that changes nothing keeps the reader's token (todo 8151).
+        // renewal that changes nothing keeps the reader's token (todo 8151 (retired)).
         // Before, each expired section read `stale` and refilled one two-job
         // batch per view read: three whole views where none had changed.
         expect(availability(update)).toBe("unchanged");

@@ -56,10 +56,6 @@ export interface FeaturePlanState {
       >
     >,
   ) => Promise<FeaturePlan | undefined>;
-  claimFeatureBuild: (
-    featureId: string,
-    taskId: string,
-  ) => Promise<{ claimed: boolean; feature: FeaturePlan } | undefined>;
   appendMessage: (
     featureId: string,
     role: FeaturePlanMessage["role"],
@@ -126,7 +122,6 @@ function featurePlanApi(scope: NodeScope) {
     appendFeaturePlanMessage: backend.appendFeaturePlanMessage,
     appendFeatureStoryMessage: backend.appendFeatureStoryMessage,
     cancelFeaturePlanning: backend.cancelFeaturePlanning,
-    claimFeaturePlanBuild: backend.claimFeaturePlanBuild,
     createFeaturePlan: backend.createFeaturePlan,
     getFeaturePlans: backend.getFeaturePlans,
     retryFeaturePlanning: backend.retryFeaturePlanning,
@@ -197,19 +192,6 @@ export const featurePlanStore = defineScopedStore<FeaturePlanState>(
           return feature;
         } catch (error) {
           log.error("feature.update-failed", { featureId, error: formatLogError(error) });
-          return undefined;
-        }
-      },
-
-      claimFeatureBuild: async (featureId, taskId) => {
-        try {
-          const result = await api().claimFeaturePlanBuild(featureId, taskId);
-          set((state) => ({
-            features: upsertFeature(state.features, result.feature),
-          }));
-          return result;
-        } catch (error) {
-          log.error("build.claim-failed", { featureId, taskId, error: formatLogError(error) });
           return undefined;
         }
       },

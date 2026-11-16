@@ -21,8 +21,7 @@
  * project search) hiding the view; keyboard use of the picker, service dialog,
  * diagnostics and Cmd/Ctrl+L; the narrowest window at 100 and 150 % zoom; a
  * Vite application updated by HMR while its tab is hidden, unmounted and
- * reloaded; a legacy URL tab whose link and Back survive re-attaches sent
- * before the renderer saw them; **Reset site data** removing a hostile service
+ * reloaded; a stored URL tab migrating to its service; **Reset site data** removing a hostile service
  * worker and the service's storage but not its sibling's; a second window on a
  * second backend (a disposable standalone backend) with connection switches
  * and window close releasing on the backend that issued each attachment; and
@@ -750,7 +749,7 @@ test("the tunnel is advertised and a service loads through its credentialed loop
 
   const [view] = await viewsOn(origin("a"));
   expect(view?.visible).toBe(true);
-  // Its own persistent service partition, not the shared legacy preview session.
+  // Its own persistent service partition.
   expect(view?.storagePath ?? "").toContain("orkestrator-preview-svc-");
 
   // The application saw its own private authority and no transport credential.
@@ -771,23 +770,6 @@ test("the tunnel is advertised and a service loads through its credentialed loop
     status: 403,
     category: "forbidden",
   });
-
-  // A legacy (shared-partition) tab pointed at the ingress gets no credential either.
-  const before = fixture.requests.length;
-  await preview("attach", {
-    tabId: "legacy-probe",
-    url: `${origin("a")}/`,
-    bounds: BOUNDS,
-    visible: true,
-  });
-  await expect
-    .poll(async () => {
-      const views = await viewsOn(origin("a"));
-      return views.some((item) => !item.storagePath?.includes("orkestrator-preview-svc-"));
-    })
-    .toBe(true);
-  await preview("destroy", "legacy-probe");
-  expect(fixture.requests.length).toBe(before);
 });
 
 test("WebSocket upgrades cross the tunnel with the subprotocol and no ingress credential", async () => {
@@ -1024,6 +1006,15 @@ test("history, app zoom, DevTools, screenshots and capture work after reattach",
     )
     .toMatch(/^(captured|error)$/);
   if (status.status !== "captured") throw new Error(`Capture failed: ${JSON.stringify(status)}`);
+  // A fresh capture opens the Notes panel, and in a narrow pane the Notes
+  // surface, which hides the native view. Whether the renderer sees the
+  // capture before the discard below is a race, so wait for the panel, and
+  // close it afterwards: discarding does not, and a panel left open hid this
+  // tab's view from the next test (flake 9811).
+  const closeAnnotations = s()
+    .window.getByRole("button", { name: "Close annotations", exact: true })
+    .first();
+  await expect(closeAnnotations).toBeVisible({ timeout: 20_000 });
   const pending = await preview<BrowserPreviewPendingCapture | null>(
     "readPendingCapture",
     status.pending.captureId,
@@ -1038,6 +1029,9 @@ test("history, app zoom, DevTools, screenshots and capture work after reattach",
   } finally {
     await preview("discardPendingCapture", status.pending.captureId);
   }
+  await closeAnnotations.click();
+  await expect(closeAnnotations).toBeHidden();
+  await expectVisibility("a", [true]);
 });
 
 test("a crashed service renderer reports the failure and recovers on reload", async () => {
@@ -1049,8 +1043,10 @@ test("a crashed service renderer reports the failure and recovers on reload", as
   await s().window.getByRole("button", { name: "Reload preview" }).first().click();
   await expect.poll(() => onServiceContents<boolean>("a", "isCrashed")).toBe(false);
   await waitForService("a", "/app/next");
-  const [view] = await viewsOn(origin("a"));
-  expect(view?.visible).toBe(true);
+  // Through `expectVisibility`, as every other visibility read here: a startup
+  // dialog can open after the reload and correctly hides the view, and only a
+  // locator assertion lets its dismiss handler run (flake 9811).
+  await expectVisibility("a", [true]);
 });
 
 test("a path typed into the address bar loads instead of bouncing back to the page being left", async () => {
@@ -1995,14 +1991,42 @@ test("at a 519 px pane the address takes its own full-width row in service and U
       const [width, height] = window.getMinimumSize();
       window.setSize(width!, height!);
     });
+    // The new size has reached the renderer: at 100 % zoom its viewport is
+    // the window's content width.
+    await expect
+      .poll(
+        async () =>
+          (await page.evaluate(() => window.innerWidth)) ===
+          (await host.evaluate((window) => window.getContentBounds().width)),
+        { timeout: 20_000, message: "the renderer never laid out the minimum window" },
+      )
+      .toBe(true);
     await expect.poll(paneWidth, { timeout: 20_000 }).toBeGreaterThan(0);
     // At 100 % zoom one DIP is one CSS pixel, so widening the window by the
     // shortfall lands the pane on 519 px whatever the sidebar takes.
     const shortfall = Math.round(NARROW_PANE_WIDTH - (await paneWidth()));
-    record(testInfo, "toolbar-window-adjust", JSON.stringify({ shortfall }));
+    // What the pane is measured against, so a failure says which part of the
+    // window took the width (flake 9812).
+    const geometry = {
+      shortfall,
+      window: await host.evaluate((window) => ({
+        size: window.getSize(),
+        minimum: window.getMinimumSize(),
+        content: window.getContentBounds().width,
+        maximized: window.isMaximized(),
+        zoom: window.webContents.getZoomFactor(),
+      })),
+      renderer: await page.evaluate(() => ({
+        innerWidth: window.innerWidth,
+        panels: Array.from(document.querySelectorAll("[data-panel]"), (panel) =>
+          Math.round(panel.getBoundingClientRect().width),
+        ),
+      })),
+    };
+    record(testInfo, "toolbar-window-adjust", JSON.stringify(geometry));
     expect(
       shortfall,
-      "the minimum window already gives a pane wider than 519 px",
+      `the minimum window already gives a pane wider than 519 px: ${JSON.stringify(geometry)}`,
     ).toBeGreaterThanOrEqual(0);
     if (shortfall > 0) {
       await host.evaluate((window, shortfall) => {
@@ -2322,185 +2346,7 @@ test("a Vite app keeps HMR updates made while its tab is hidden, unmounted or re
 });
 
 // ---------------------------------------------------------------------------
-// Legacy URL tabs and re-attaches, and Reset site data with a hostile worker.
-
-const LEGACY_TAB = "legacy-ui-tab";
-
-/** The renderer host rect of a tab's native preview, in CSS pixels. */
-function hostRect(tabId: string) {
-  return s().window.evaluate((tabId) => {
-    const rect = document
-      .querySelector(`[data-native-browser-preview="${tabId}"]`)
-      ?.getBoundingClientRect();
-    if (!rect) throw new Error(`No preview host for ${tabId}`);
-    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-  }, tabId);
-}
-
-/** Jiggle the main window's width, as a user dragging its edge would. */
-function resizeBurst(steps = 24, everyMs = 16): Promise<void> {
-  return s().app.evaluate(
-    async ({ BrowserWindow }, { id, steps, everyMs }) => {
-      const host = BrowserWindow.fromId(id);
-      if (!host) throw new Error("Main window not found");
-      const [width, height] = host.getSize();
-      for (let step = 0; step < steps; step += 1) {
-        host.setSize(width! - (step % 2 === 0 ? 9 : 0), height!);
-        await new Promise((resolve) => setTimeout(resolve, everyMs));
-      }
-      host.setSize(width!, height!);
-    },
-    { id: s().windowId, steps, everyMs },
-  );
-}
-
-test("a legacy URL tab keeps a link and Back through routine re-attaches", async () => {
-  const testInfo = test.info();
-  testInfo.setTimeout(180_000);
-  const page = s().window;
-  const legacyOrigin = `http://localhost:${fixtureOf("a").port}`;
-  await showTabs(
-    LEGACY_TAB,
-    [{ id: LEGACY_TAB, type: "browser", browserData: { url: `${legacyOrigin}/` } }],
-    "legacy",
-  );
-  try {
-    const legacyPath = () =>
-      inOrigin<string>(
-        legacyOrigin,
-        `document.readyState === "complete" && document.body?.dataset.loaded === "svc-a" ? location.pathname : ""`,
-      ).catch(() => "");
-    await expect.poll(legacyPath, { timeout: 30_000 }).toBe("/");
-    await expect.poll(() => visibilityOn(legacyOrigin), { timeout: 30_000 }).toEqual([true]);
-    const [legacyView] = await viewsOn(legacyOrigin);
-    // A legacy tab: the window's shared preview session, never a service partition.
-    expect(legacyView?.storagePath ?? "").not.toContain("orkestrator-preview-svc-");
-    const address = page.getByRole("textbox", { name: "Browser address" }).first();
-
-    // Every main-frame commit of the view, so a bounce shows even once it settles.
-    await s().app.evaluate(({ webContents }, viewOrigin) => {
-      const contents = webContents
-        .getAllWebContents()
-        .find((candidate) => !candidate.isDestroyed() && candidate.getURL().startsWith(viewOrigin));
-      if (!contents) throw new Error("Legacy preview web contents not found");
-      const trace: string[] = [];
-      (globalThis as Record<string, unknown>).__legacyTrace = trace;
-      contents.on("did-navigate", (_event, url) => trace.push(new URL(url).pathname));
-      contents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
-        if (isMainFrame) trace.push(new URL(url).pathname);
-      });
-    }, legacyOrigin);
-    const trace = () =>
-      s().app.evaluate(() => [
-        ...((globalThis as Record<string, unknown>).__legacyTrace as string[]),
-      ]);
-    const resetTrace = () =>
-      s().app.evaluate(() => {
-        ((globalThis as Record<string, unknown>).__legacyTrace as string[]).length = 0;
-      });
-    const followLink = async () => {
-      await inOrigin(
-        legacyOrigin,
-        `(() => {
-          document.body.insertAdjacentHTML("beforeend", '<a id="legacy-next" href="/app/next">next</a>');
-          document.querySelector("#legacy-next").click();
-          return true;
-        })()`,
-      );
-      await expect.poll(legacyPath).toBe("/app/next");
-      // The renderer has applied the link: its next re-attach carries /app/next.
-      await expect(address).toHaveValue(`${legacyOrigin}/app/next`);
-    };
-
-    // From the UI: a link, then Back while the window is being resized, so
-    // the renderer re-attaches with the address it showed before Back.
-    const rounds: Array<{ path: string; trace: string[]; address: string }> = [];
-    for (let round = 0; round < 5; round += 1) {
-      await followLink();
-      await resetTrace();
-      const burst = resizeBurst();
-      await page.getByRole("button", { name: "Back", exact: true }).click();
-      await burst;
-      // As in the service history test: long enough to catch any bounce.
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
-      const path = await legacyPath();
-      rounds.push({ path, trace: await trace(), address: await address.inputValue() });
-      if (path !== "/") break;
-      await expect(address).toHaveValue(`${legacyOrigin}/`);
-    }
-    record(testInfo, "legacy-back-rounds", JSON.stringify(rounds));
-
-    // The same race, ordered on purpose: the attach a bounds sync sends before
-    // the renderer has seen the view's navigation, with the basis of the state
-    // it last applied. Back: sent right behind the Back call. Link: sent once
-    // the link has committed in main.
-    const stale: Record<string, { path: string; trace: string[] }> = {};
-    const staleAttach = (url: string, basis: number | undefined, back: boolean) =>
-      hostRect(LEGACY_TAB).then((bounds) =>
-        page.evaluate(
-          async ({ tabId, environmentId, url, bounds, basis, back }) => {
-            const api = (globalThis as any).orkestrator.browserPreview;
-            // Keep the renderer's identity: omitting it replaces the view and
-            // discards the history this stale-URL race is meant to exercise.
-            const reattach = { tabId, environmentId, url, bounds, visible: true };
-            if (typeof basis === "number") Object.assign(reattach, { navigationBasis: basis });
-            await Promise.all([back ? api.goBack(tabId) : null, api.attach(reattach)]);
-          },
-          { tabId: LEGACY_TAB, environmentId: s().environmentId, url, bounds, basis, back },
-        ),
-      );
-    const appliedBasis = async () =>
-      (
-        (await preview<BrowserPreviewState | null>("setVisible", LEGACY_TAB, true)) as
-          (BrowserPreviewState & { navigation?: number }) | null
-      )?.navigation;
-
-    await followLink();
-    let basis = await appliedBasis();
-    await resetTrace();
-    await staleAttach(`${legacyOrigin}/app/next`, basis, true);
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    stale.back = { path: await legacyPath(), trace: await trace() };
-
-    await expect(address).toHaveValue(`${legacyOrigin}/`);
-    await expect.poll(legacyPath).toBe("/");
-    basis = await appliedBasis();
-    await resetTrace();
-    await inOrigin(
-      legacyOrigin,
-      `(() => {
-        document.body.insertAdjacentHTML("beforeend", '<a id="legacy-link" href="/app/next">next</a>');
-        document.querySelector("#legacy-link").click();
-        return true;
-      })()`,
-    );
-    await expect.poll(legacyPath).toBe("/app/next");
-    await staleAttach(`${legacyOrigin}/`, basis, false);
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    stale.link = { path: await legacyPath(), trace: await trace() };
-    record(testInfo, "legacy-stale-reattach", JSON.stringify(stale));
-
-    expect(rounds.filter((round) => round.path !== "/" || round.trace.join() !== "/")).toEqual([]);
-    expect(stale).toEqual({
-      back: { path: "/", trace: ["/"] },
-      link: { path: "/app/next", trace: ["/app/next"] },
-    });
-
-    // An address typed here loads; the view's report of the page it is leaving
-    // must not cancel it.
-    await resetTrace();
-    await address.fill(`${legacyOrigin}/`);
-    await address.press("Enter");
-    await expect.poll(legacyPath).toBe("/");
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    expect(await legacyPath()).toBe("/");
-    await expect(address).toHaveValue(`${legacyOrigin}/`);
-    expect(await trace()).toEqual(["/"]);
-  } finally {
-    await uiStore("selectProject", null).catch(() => undefined);
-    await preview("destroy", LEGACY_TAB).catch(() => undefined);
-  }
-});
+// Stored URL tabs that migrate, and Reset site data with a hostile worker.
 
 test("a stored 127.0.0.1 URL tab migrates to its service and stays migrated after a reload", async () => {
   const testInfo = test.info();

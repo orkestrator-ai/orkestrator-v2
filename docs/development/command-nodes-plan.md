@@ -294,7 +294,7 @@ Other behaviour:
 
   It reports which path is in use.
 - **Relay.** `/__orkestrator/nodes/<nodeId>/__orkestrator/{hello,invoke,events,
-  terminal,proxy/loopback/<port>,browser/loopback/<port>}` on the command node
+  terminal,proxy/loopback/<port>}` on the command node
   (the relay base is a prefix, so a client joins its ordinary paths to it):
   - authenticated with the client's command-node credential;
   - forwarded over the node link with the leaf token and the controller

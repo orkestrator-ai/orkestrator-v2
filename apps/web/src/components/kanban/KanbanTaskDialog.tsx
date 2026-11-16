@@ -59,7 +59,6 @@ import {
   type TicketViewTab,
 } from "./ticket-view/ticket-view-model";
 import { useEnvironmentStore } from "@/stores";
-import { ticketContentOf } from "@/components/tickets/ticket-content";
 import { useCriteriaEnvironmentHead } from "@/components/tickets/useCriteriaEnvironmentHead";
 import { pipelineDeliveryTooLateNote } from "@orkestrator/protocol/build-pipeline";
 import { sectionsFromTicketText, type DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
@@ -628,7 +627,7 @@ export function KanbanTaskDialog({
 
   if (!task && !isCreateMode) return null;
 
-  const content = task ? ticketContentOf(task) : null;
+  const content = task ?? null;
   const originalMarkdown = content ? ticketMarkdown(content.sections) : "";
 
   const handleStartEdit = () => {

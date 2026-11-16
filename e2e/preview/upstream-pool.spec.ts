@@ -2,13 +2,11 @@ import { expect, test } from "@playwright/test";
 import { startPreviewHarnessClient, type PreviewHarnessClient } from "./harness-client";
 
 /**
- * Real browsers against the private-origin proxy's upstream connection pool,
- * and the legacy preview route's derived validators:
+ * Real browsers against the private-origin proxy's upstream connection pool:
  *
  * - a page load and its follow-up requests share upstream connections;
  * - revoking access, or moving the service to a new endpoint generation,
- *   closes the idle ones at once;
- * - a script the legacy route rewrites and compresses revalidates to 304.
+ *   closes the idle ones at once.
  *
  * The harness keeps idle connections for a minute here, so a connection that
  * closes during a test was closed by revocation, not by the idle timeout.
@@ -88,30 +86,4 @@ test("a new endpoint generation closes idle upstream connections", async () => {
   await expect(fresh.locator("body")).toHaveAttribute("data-service-marker", "browser-pool-alt");
   await context.close();
   await client.next("rebound", "rebind pool");
-});
-
-test("the legacy preview route revalidates a rewritten script by its derived ETag", async () => {
-  const { token } = await client.next<{ token: string }>("gateway-token", "gateway-token");
-  const context = await client.newContext();
-  const prefix = `/__orkestrator/browser/loopback/${client.ready.loopbackPorts.app}`;
-  const url = `${client.ready.gateway}${prefix}/conditional/app.js`;
-  const headers = { authorization: `Bearer ${token}`, origin: "null" };
-
-  const first = await context.request.get(url, { headers });
-  expect(first.status()).toBe(200);
-  expect(await first.text()).toContain(`import("${prefix}/assets/app.js")`);
-  const etag = first.headers().etag!;
-  expect(etag).toMatch(/^W\/"js-browser-app\|ork:w:[a-z]+:[0-9a-f]{16}"$/);
-
-  const again = await context.request.get(url, { headers: { ...headers, "if-none-match": etag } });
-  expect(again.status()).toBe(304);
-  expect(again.headers().etag).toBe(etag);
-
-  // A tag from another route or rewrite is refused upstream: a full answer.
-  const forged = etag.replace(/:[0-9a-f]{16}"$/, `:${"0".repeat(16)}"`);
-  const other = await context.request.get(url, {
-    headers: { ...headers, "if-none-match": forged },
-  });
-  expect(other.status()).toBe(200);
-  await context.close();
 });

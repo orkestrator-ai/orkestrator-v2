@@ -710,7 +710,8 @@ export class BuildPipelineLifecycle {
         const requestId = randomUUID();
         const startedAt = new Date().toISOString();
         // An Address session resumes with a result slot only when it was
-        // opened with one; an older session keeps its text report.
+        // opened with one; an older session has none, and its turn's end
+        // fails the stage (`finishAddressFindings`).
         const structuredReview =
           phase === "building" ||
           phase === "fixing" ||

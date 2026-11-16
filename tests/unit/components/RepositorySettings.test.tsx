@@ -23,11 +23,20 @@ let updateRepositoryConfigImpl = (_projectId: string, repoConfig: unknown) =>
     repositories: { "project-1": repoConfig as Record<string, unknown> },
   });
 
-// The fourth argument is the whole record, sent only to an older backend; the
-// assertions below read it to check what the form built.
+// The record the backend holds after each save: the stored record with the
+// patch applied. The assertions below read it to check what the form built.
+const savedRecords: Record<string, unknown>[] = [];
 const mockPatchRepositorySettings = mock(
-  (projectId: string, _updates: unknown, _unset: unknown, repoConfig: unknown) =>
-    updateRepositoryConfigImpl(projectId, repoConfig),
+  (projectId: string, updates: Record<string, unknown>, unset: readonly string[]) => {
+    const stored = appCommandStore(configStore).getState().config?.repositories[projectId];
+    const record: Record<string, unknown> = {
+      ...(stored ? editableRepositorySettings(stored) : {}),
+      ...updates,
+    };
+    for (const key of unset) delete record[key];
+    savedRecords.push(record);
+    return updateRepositoryConfigImpl(projectId, record);
+  },
 );
 const mockUpdateProject = mock(async (project: unknown) => project);
 const mockGetGitRemoteUrl = mock(async (_path: string): Promise<string | null> => null);
@@ -175,6 +184,7 @@ import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { RepositorySettings } from "../../../apps/web/src/components/settings/RepositorySettings";
 import type { AppConfig, Project } from "@/types";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
+import { editableRepositorySettings } from "../../../apps/web/src/components/settings/repository-settings-patch";
 
 /** The picker asks the node of the scope the dialog renders in: here the command scope (3017). */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -282,7 +292,7 @@ function getMockSelects() {
 }
 
 function getSavedConfig() {
-  return mockPatchRepositorySettings.mock.calls[0]?.[3] as Record<string, unknown>;
+  return savedRecords[0]!;
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +312,7 @@ describe("RepositorySettings", () => {
       });
 
     mockPatchRepositorySettings.mockClear();
+    savedRecords.length = 0;
     mockUpdateProject.mockClear();
     mockGetGitRemoteUrl.mockReset();
     mockGetGitRemoteUrl.mockImplementation(async () => null);
@@ -353,10 +364,7 @@ describe("RepositorySettings", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       await waitFor(() =>
-        expect(mockPatchRepositorySettings).toHaveBeenCalledWith(
-          "project-1",
-          expect.anything(),
-          expect.anything(),
+        expect(savedRecords.at(-1)).toEqual(
           expect.objectContaining({
             agentSettings: expect.objectContaining({ defaultAgent: "codex" }),
           }),
@@ -377,7 +385,7 @@ describe("RepositorySettings", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       await waitFor(() => {
-        const saved = mockPatchRepositorySettings.mock.calls.at(-1)?.[3] as {
+        const saved = savedRecords.at(-1) as {
           agentSettings?: { platforms?: Record<string, unknown> };
         };
         expect(saved.agentSettings?.platforms).toEqual({ codex: { mode: "terminal" } });
@@ -406,7 +414,7 @@ describe("RepositorySettings", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       await waitFor(() => {
-        const saved = mockPatchRepositorySettings.mock.calls.at(-1)?.[3] as {
+        const saved = savedRecords.at(-1) as {
           agentSettings?: { platforms?: Record<string, unknown> };
         };
         expect(saved.agentSettings?.platforms).toEqual({ claude: { reasoningEffort: "high" } });
@@ -433,7 +441,7 @@ describe("RepositorySettings", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       await waitFor(() => {
-        const saved = mockPatchRepositorySettings.mock.calls.at(-1)?.[3] as {
+        const saved = savedRecords.at(-1) as {
           agentSettings?: { platforms?: Record<string, unknown> };
         };
         expect(saved.agentSettings?.platforms).toEqual({ codex: { reasoningEffort: "high" } });
@@ -445,14 +453,8 @@ describe("RepositorySettings", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-      await waitFor(() =>
-        expect(mockPatchRepositorySettings).toHaveBeenCalledWith(
-          "project-1",
-          expect.anything(),
-          expect.anything(),
-          expect.objectContaining({ agentSettings: {} }),
-        ),
-      );
+      await waitFor(() => expect(mockPatchRepositorySettings).toHaveBeenCalledTimes(1));
+      expect(savedRecords.at(-1)?.agentSettings ?? {}).toEqual({});
     });
   });
 

@@ -244,12 +244,6 @@ describe("environment network policy status", () => {
     render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
     await screen.findByText(/image predates name checks/);
     cleanup();
-    // A backend that predates the field says nothing about name checks.
-    install({ ...base, policyVersion: 3, enforcement: "gateway" });
-    render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
-    await screen.findByText(/Enforced by the environment's egress gateway/);
-    expect(screen.queryByText(/name checks/i) === null).toBe(true);
-    cleanup();
     // An in-container firewall never had them; nothing is claimed either way.
     install({ ...base, enforcement: "container" });
     render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);

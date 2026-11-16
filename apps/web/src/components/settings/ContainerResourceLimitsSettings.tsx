@@ -167,9 +167,7 @@ export function ContainerResourceLimitsSettings({
     };
   }, [machine, nodeBackend]);
 
-  // An older backend reports no built-in default and applies none.
   const builtIn = capacity?.builtInDefault;
-  const legacyBackend = capacity !== null && !builtIn;
   // Shown while editing; the backend's answer on save is authoritative. A
   // capacity without `support` (an older backend) says nothing either way.
   const draftUnenforceable =
@@ -215,7 +213,7 @@ export function ContainerResourceLimitsSettings({
           value={mode}
           onValueChange={setMode}
           options={[
-            { value: "default", label: "Built-in default", disabled: legacyBackend },
+            { value: "default", label: "Built-in default" },
             { value: "custom", label: "Custom" },
             { value: "unrestricted", label: "No limits" },
           ]}
@@ -239,11 +237,6 @@ export function ContainerResourceLimitsSettings({
         {draftUnenforceable.length > 0 ? (
           <p role="alert" className="text-xs text-yellow-700 dark:text-yellow-400">
             {unenforceableBudgetMessage(draftUnenforceable)}
-          </p>
-        ) : null}
-        {legacyBackend ? (
-          <p className="text-xs text-muted-foreground">
-            This backend has no built-in default; without custom limits it applies none.
           </p>
         ) : null}
       </div>

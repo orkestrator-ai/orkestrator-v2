@@ -24,7 +24,16 @@ describe("browser preview main adapters", () => {
       canGoForward: false,
       error: null,
     };
-    const event = { tabId: "browser-1", url: "http://localhost:3000/docs" };
+    const event = {
+      tabId: "browser-1",
+      url: "http://localhost:3000/docs",
+      service: {
+        backendInstanceId: "backend-1",
+        environmentId: "env-1",
+        serviceId: "service-web",
+        path: "/docs",
+      },
+    };
 
     adapters.emitState(state);
     adapters.emitOpenLink(event);

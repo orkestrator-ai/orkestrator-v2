@@ -575,15 +575,12 @@ describe("ticket-sync domain client (plan item 1010)", () => {
 });
 
 describe("older leaves", () => {
-  test("a leaf without ticket-sync is reported as needing an update and is never called", async () => {
+  test("a leaf that cannot sync fails like any other error and receives nothing", async () => {
     const f = await fleet({ capability: false, domains: null });
     await f.command.kanban.addKanbanTask(f.commandProject.id, "Not for old leaves", "");
     const result = await f.sync.sync(LEAF_ID);
-    expect(result.state).toBe("update-required");
-    expect(result.message).toContain("Update that machine");
+    expect(result.state).toBe("error");
     expect(f.received).toEqual([]);
-    const status = await f.sync.status(f.commandProject.id);
-    expect(status.nodes[0]).toMatchObject({ state: "update-required" });
   });
 
   test("a detached command node's copies become the leaf's own tickets", async () => {

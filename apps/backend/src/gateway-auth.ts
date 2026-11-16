@@ -20,14 +20,13 @@ const GRANT_ALLOWED_PATHS = [
   /^\/__orkestrator\/events$/,
   /^\/__orkestrator\/client-metrics$/,
   /^\/__orkestrator\/proxy\/loopback\/\d+(?:\/.*)?$/,
-  /^\/__orkestrator\/browser\/loopback\/\d+(?:\/.*)?$/,
 ];
 import type { GatewayContext } from "./gateway-context.js";
 import type { GatewayHandlers } from "./gateway-handlers.js";
 import type { GatewayLifecycle } from "./gateway-lifecycle.js";
 import type { GatewayProxy } from "./gateway-proxy.js";
 import { randomBytes } from "node:crypto";
-import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { GatewayTokenValidationError } from "@orkestrator/protocol/gateway-token";
 import type { GuessPeer } from "./gateway-credential-throttle.js";
 import { REFUSED_HOST_MESSAGE } from "./gateway-host-policy.js";
@@ -41,7 +40,6 @@ import {
 import {
   API_PREFIX,
   AGENT_TEST_BOOTSTRAP_TTL_MS,
-  BROWSER_PREVIEW_SANDBOX_CSP,
   MAX_AGENT_TEST_BOOTSTRAPS,
   CORS_ALLOWED_METHODS,
   CORS_ALLOWED_HEADERS,
@@ -56,7 +54,6 @@ import {
   originMatchesRule,
   appendVary,
   appendResponseVary,
-  appendHeadersVary,
   responseCompressionContexts,
   jsonResponse,
   getBearerToken,
@@ -68,7 +65,6 @@ import {
   loginPage,
   loginPageResponse,
   wantsHtml,
-  browserPreviewRefererPrefix,
 } from "./gateway-internals.js";
 import type { ListenerKind, GatewayRequestMetrics } from "./gateway-internals.js";
 import { parseHostUpdaterReport } from "@orkestrator/protocol/host-maintenance";
@@ -96,12 +92,7 @@ function throttledMessage(retryAfterSeconds: number): string {
  */
 export type GatewayRouteHandlers = Pick<
   GatewayHandlers,
-  | "handleInvoke"
-  | "handleEvents"
-  | "handleMetrics"
-  | "handleClientMetrics"
-  | "handleLoopbackProxy"
-  | "handleBrowserLoopbackProxy"
+  "handleInvoke" | "handleEvents" | "handleMetrics" | "handleClientMetrics" | "handleLoopbackProxy"
 >;
 
 /** Request routing, CORS, credentials, login and the agent-test session flow. */
@@ -285,30 +276,6 @@ export class GatewayAuth {
     response.end();
   }
 
-  handleBrowserPreviewCorsPreflight(request: IncomingMessage, response: ServerResponse): void {
-    const requestedHeaders = request.headers["access-control-request-headers"];
-    const allowedHeaders = Array.isArray(requestedHeaders)
-      ? requestedHeaders.join(", ")
-      : requestedHeaders?.trim() || CORS_ALLOWED_HEADERS;
-    // A wildcard, never `null` with credentials: every sandboxed document
-    // shares the `null` origin, so a credentialed grant to it would let any
-    // preview read another port's authenticated responses (M2).
-    response.writeHead(204, {
-      "access-control-allow-origin": "*",
-      "access-control-allow-methods": CORS_ALLOWED_METHODS,
-      "access-control-allow-headers": allowedHeaders,
-      "access-control-max-age": "600",
-      ...(request.headers["access-control-request-private-network"] === "true"
-        ? { "access-control-allow-private-network": "true" }
-        : {}),
-      vary: appendVary(
-        null,
-        "Origin, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
-      ),
-    });
-    response.end();
-  }
-
   async handle(
     request: IncomingMessage,
     response: ServerResponse,
@@ -340,61 +307,14 @@ export class GatewayAuth {
       jsonResponse(response, 421, { error: REFUSED_HOST_MESSAGE });
       return;
     }
-    const isBrowserPreviewRequest = url.pathname.startsWith(`${API_PREFIX}/browser/loopback/`);
-    // Legacy previews serve agent-controlled HTML on the gateway's own origin.
-    // Sandboxing every response keeps such a document opaque-origin even when
-    // it is opened top-level, outside the client's sandboxed iframe, so it can
-    // never call gateway routes as the signed-in user. Error and login pages
-    // under the prefix get it too: nothing there needs the gateway origin.
-    if (isBrowserPreviewRequest) {
-      response.setHeader("content-security-policy", BROWSER_PREVIEW_SANDBOX_CSP);
-    }
-
     if (request.method === "OPTIONS" && url.pathname.startsWith(`${API_PREFIX}/`)) {
-      if (isBrowserPreviewRequest && request.headers.origin === "null") {
-        this.handleBrowserPreviewCorsPreflight(request, response);
-      } else {
-        this.handleCorsPreflight(request, response);
-      }
+      this.handleCorsPreflight(request, response);
       return;
     }
 
-    if (isBrowserPreviewRequest && request.headers.origin === "null") {
-      response.setHeader("access-control-allow-origin", "*");
-      response.setHeader("vary", "Origin");
-    } else if (
-      url.pathname.startsWith(`${API_PREFIX}/`) &&
-      !this.applyCorsHeaders(request, response)
-    ) {
+    if (url.pathname.startsWith(`${API_PREFIX}/`) && !this.applyCorsHeaders(request, response)) {
       jsonResponse(response, 403, { error: "Origin not allowed" });
       return;
-    }
-
-    // Root-relative requests issued by a preview document (fetch("/api"),
-    // runtime-built asset URLs) escape the preview namespace; steer them back
-    // via their Referer. Runs before authentication on purpose: the redirect
-    // is a deterministic transform of the request's own headers, and the
-    // redirected request still has to pass the preview namespace's auth.
-    if (!url.pathname.startsWith(`${API_PREFIX}/`)) {
-      const previewPrefix = browserPreviewRefererPrefix(request);
-      if (previewPrefix) {
-        if (request.method === "OPTIONS" && request.headers.origin === "null") {
-          this.handleBrowserPreviewCorsPreflight(request, response);
-          return;
-        }
-        const redirectHeaders: OutgoingHttpHeaders = {
-          location: `${previewPrefix}${url.pathname}${url.search}`,
-          "cache-control": "no-store",
-          vary: appendVary(null, "Referer"),
-        };
-        if (request.headers.origin === "null") {
-          redirectHeaders["access-control-allow-origin"] = "*";
-          appendHeadersVary(redirectHeaders, "Origin");
-        }
-        response.writeHead(307, redirectHeaders);
-        response.end();
-        return;
-      }
     }
 
     if (url.pathname === `${API_PREFIX}/login`) {
@@ -553,11 +473,6 @@ export class GatewayAuth {
 
     if (url.pathname.startsWith(`${API_PREFIX}/proxy/loopback/`)) {
       await this.handlers.handleLoopbackProxy(request, response, url);
-      return;
-    }
-
-    if (url.pathname.startsWith(`${API_PREFIX}/browser/loopback/`)) {
-      await this.handlers.handleBrowserLoopbackProxy(request, response, url);
       return;
     }
 

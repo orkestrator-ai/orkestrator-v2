@@ -10,7 +10,6 @@ import {
   TERMINAL_WEBSOCKET_CHANNEL_HARD_BUFFER_BYTES,
   TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES,
   TERMINAL_WEBSOCKET_CLOSE,
-  TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
   TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
   TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES,
   TERMINAL_WEBSOCKET_PATH,
@@ -22,7 +21,6 @@ import {
   type TerminalWebSocketServerControlFrame,
 } from "@orkestrator/protocol/terminal-websocket";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 
 const log = createLogger("gateway.terminal");
 
@@ -108,8 +106,6 @@ type SocketState = {
   inFlightSends: number;
   /** Channel backlog is waiting on the socket; a send callback will resume it. */
   flushPaused: boolean;
-  /** The client took the input-results subprotocol; an older one gets a frame per input. */
-  cumulativeInputResults: boolean;
   /**
    * Newest input that succeeded per channel since the last flush. It holds one
    * entry per channel with a completed operation, so the pending-operation
@@ -221,11 +217,7 @@ export class TerminalWebSocketGateway {
     noServer: true,
     maxPayload: TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
     handleProtocols: (protocols) =>
-      protocols.has(TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL)
-        ? TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL
-        : protocols.has(TERMINAL_WEBSOCKET_SUBPROTOCOL)
-          ? TERMINAL_WEBSOCKET_SUBPROTOCOL
-          : false,
+      protocols.has(TERMINAL_WEBSOCKET_SUBPROTOCOL) ? TERMINAL_WEBSOCKET_SUBPROTOCOL : false,
   });
   private readonly sockets = new Set<SocketState>();
   private readonly upgradeSockets = new Set<Duplex>();
@@ -271,10 +263,7 @@ export class TerminalWebSocketGateway {
     const protocols = String(request.headers["sec-websocket-protocol"] ?? "")
       .split(",")
       .map((value) => value.trim());
-    if (
-      !protocols.includes(TERMINAL_WEBSOCKET_SUBPROTOCOL) &&
-      !protocols.includes(TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL)
-    ) {
+    if (!protocols.includes(TERMINAL_WEBSOCKET_SUBPROTOCOL)) {
       this.rejectUpgrade(socket, 426, "Terminal WebSocket protocol required", {
         "Sec-WebSocket-Protocol": TERMINAL_WEBSOCKET_SUBPROTOCOL,
       });
@@ -363,7 +352,6 @@ export class TerminalWebSocketGateway {
 
   private accept(ws: WebSocket, request: IncomingMessage): void {
     const authenticated = this.options.tokenMatches(request);
-    const cumulativeInputResults = ws.protocol === TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL;
     const state: SocketState = {
       ws,
       authenticated,
@@ -380,7 +368,6 @@ export class TerminalWebSocketGateway {
       flushScheduled: false,
       inFlightSends: 0,
       flushPaused: false,
-      cumulativeInputResults,
       pendingInputResults: new Map(),
       invalidChannelFrames: 0,
       pendingOperations: 0,
@@ -887,9 +874,6 @@ export class TerminalWebSocketGateway {
   }
 
   private ready(state: SocketState): void {
-    if (!state.cumulativeInputResults) {
-      compatibilityPathUsage.record("terminal-websocket.per-input-results");
-    }
     this.sendControl(state, {
       type: "ready",
       version: TERMINAL_WEBSOCKET_PROTOCOL_VERSION,
@@ -1155,10 +1139,10 @@ export class TerminalWebSocketGateway {
     ok: boolean,
     message?: string,
   ): void {
-    if (ok && operation === "input" && state.cumulativeInputResults) {
+    if (ok && operation === "input") {
       if (state.ws.readyState !== WebSocket.OPEN) return;
-      // No wait of its own: the flush this schedules is the one a single
-      // `operation-result` would have gone out in.
+      // Input that succeeded is answered by the cumulative `input-results`
+      // frame of the next flush, which this schedules with no wait of its own.
       state.pendingInputResults.set(channelId, operationId);
       this.scheduleFlush(state);
       return;

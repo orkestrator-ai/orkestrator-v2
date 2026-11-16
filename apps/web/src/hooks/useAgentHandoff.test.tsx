@@ -261,23 +261,34 @@ describe("useAgentHandoff", () => {
     delivers.unmount();
   });
 
-  test.each([
-    ["an older backend", async () => ({ create: false, delivery: false, pruning: false })],
-    [
-      "an unreadable answer",
-      async (): Promise<{ create: boolean; delivery: boolean; pruning: boolean }> => {
-        throw new Error("connection lost");
-      },
-    ],
-  ] as const)("keeps the history itself against %s", async (_label, answer) => {
+  test("keeps the history itself against a backend that says it does not deliver", async () => {
     const snapshot = handoff("handoff-keeps");
     mockGetAgentHandoff.mockImplementation(async () => record(snapshot));
-    mockGetAgentHandoffCapabilities.mockImplementation(answer);
+    mockGetAgentHandoffCapabilities.mockImplementation(async () => ({
+      create: false,
+      delivery: false,
+      pruning: false,
+    }));
     const { result } = renderHookInAppCommandScope(() =>
       useAgentHandoff(snapshot.id, "codex", "env-1", EMPTY_MESSAGES),
     );
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.backendDelivers).toBe(false);
+    expect(result.current.pendingHistory).toBe(snapshot.bootstrapPrompt);
+  });
+
+  test("leaves delivery to the backend when its answer cannot be read", async () => {
+    const snapshot = handoff("handoff-unreadable-capabilities");
+    mockGetAgentHandoff.mockImplementation(async () => record(snapshot));
+    mockGetAgentHandoffCapabilities.mockImplementation(async () => {
+      throw new Error("connection lost");
+    });
+    const { result } = renderHookInAppCommandScope(() =>
+      useAgentHandoff(snapshot.id, "codex", "env-1", EMPTY_MESSAGES),
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.backendDelivers).toBe(true);
+    // Still pending for display; only the backend puts it in the prompt.
     expect(result.current.pendingHistory).toBe(snapshot.bootstrapPrompt);
   });
 

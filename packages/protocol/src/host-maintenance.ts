@@ -165,7 +165,7 @@ export interface HostRestartImpact {
   /**
    * Of `terminals`, those whose shell runs in a container. The shell keeps
    * running there, but the backend's attachment ends: the tab opens a new
-   * shell when the backend is back. Older backends leave it out.
+   * shell when the backend is back. Absent reads as none.
    */
   containerTerminals?: number;
   /** Bridges and servers the backend runs on the host; they restart with it. */

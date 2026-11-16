@@ -44,7 +44,6 @@ export interface PreviewServicePickerProps {
   selectedServiceId: string | null;
   onSelect: (service: PreviewServiceSnapshot) => void;
   onRegister?: () => void;
-  onManual?: () => void;
   disabled?: boolean;
   /** The trigger, e.g. to return focus to it when a dialog opened from the menu closes. */
   triggerRef?: Ref<HTMLButtonElement>;
@@ -59,7 +58,6 @@ export function PreviewServicePicker({
   selectedServiceId,
   onSelect,
   onRegister,
-  onManual,
   disabled,
   triggerRef,
 }: PreviewServicePickerProps) {
@@ -117,17 +115,11 @@ export function PreviewServicePicker({
             </DropdownMenuItem>
           );
         })}
-        {(onRegister || onManual) && <DropdownMenuSeparator />}
+        {onRegister && <DropdownMenuSeparator />}
         {onRegister && (
           <DropdownMenuItem onSelect={onRegister} className="gap-2">
             <Plus className="h-3.5 w-3.5" />
             Register a service…
-          </DropdownMenuItem>
-        )}
-        {onManual && (
-          <DropdownMenuItem onSelect={onManual} className="gap-2">
-            <Server className="h-3.5 w-3.5" />
-            Backend host port (manual)…
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>

@@ -12,7 +12,6 @@ import {
   PREVIEW_TUNNEL_MUX,
   PREVIEW_TUNNEL_MUX_DATA_MAX_BYTES,
   PREVIEW_TUNNEL_MUX_VERSION,
-  PREVIEW_TUNNEL_OFFERED_SUBPROTOCOLS,
   PREVIEW_TUNNEL_SUBPROTOCOL_V2,
   type PreviewTunnelMuxClientFrame,
 } from "@orkestrator/protocol/preview-tunnel-mux";
@@ -22,12 +21,10 @@ import type { PreviewWebSocket } from "@orkestrator/protocol/node/preview-websoc
 import {
   CATEGORY_FOR_CLOSE,
   connectPreviewTunnelSocket,
-  openPreviewTunnel,
-  startV1Tunnel,
   type PreviewTunnelOpenOptions,
 } from "./preview-tunnel-client.js";
 
-/** A tunnelled upstream connection, on either protocol version. */
+/** A tunnelled upstream connection: one stream on a tunnel session. */
 export type PreviewTunnelConnection = Duplex & { readonly openMs: number };
 
 const WINDOW = PREVIEW_TUNNEL_MUX.windowBytes;
@@ -526,31 +523,21 @@ export interface PreviewTunnelConnectorOptions {
 }
 
 /**
- * Opens tunnelled upstream connections for one preview service. Against a
- * backend that speaks v2 it keeps one authenticated WebSocket per attachment
- * and opens every connection as a stream on it, so a page's first burst of
- * parallel requests pays one handshake and one HELLO. Against an older
- * backend it falls back to v1, one WebSocket per connection.
+ * Opens tunnelled upstream connections for one preview service. It keeps one
+ * authenticated WebSocket per attachment and opens every connection as a
+ * stream on it, so a page's first burst of parallel requests pays one
+ * handshake and one HELLO.
  */
 export class PreviewTunnelConnector {
   private readonly sessions = new Map<string, PreviewTunnelSession[]>();
-  private readonly connecting = new Map<string, Promise<PreviewTunnelSession | null>>();
-  /** Tunnel URLs whose backend advertised v2 and still answered v1. */
-  private readonly legacy = new Set<string>();
+  private readonly connecting = new Map<string, Promise<PreviewTunnelSession>>();
   private closed = false;
 
   constructor(private readonly options: PreviewTunnelConnectorOptions = {}) {}
 
-  /**
-   * Open one upstream connection. `multiplex` says the attachment advertised
-   * v2; without it this opens a v1 socket, as for a backend that predates v2.
-   */
-  async open(
-    options: PreviewTunnelOpenOptions,
-    multiplex = true,
-  ): Promise<PreviewTunnelConnection> {
+  /** Open one upstream connection. */
+  async open(options: PreviewTunnelOpenOptions): Promise<PreviewTunnelConnection> {
     const started = performance.now();
-    if (!multiplex || this.legacy.has(options.url)) return openPreviewTunnel(options);
     const key = `${options.url}\u0000${options.attachmentId}`;
     // A session can fill up between connecting and opening; then use another.
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -559,13 +546,10 @@ export class PreviewTunnelConnector {
       if (!session) {
         const joined = this.connecting.get(key);
         if (joined) {
-          const result = await withSignal(joined, options.signal);
-          if (!result) return openPreviewTunnel(options);
+          await withSignal(joined, options.signal);
           continue;
         }
-        const connected = await this.connect(key, options, started);
-        if (!(connected instanceof PreviewTunnelSession)) return connected;
-        session = connected;
+        session = await this.connect(key, options);
         if (!session.canOpen) continue;
       }
       return session.openStream(options.signal, started);
@@ -604,11 +588,10 @@ export class PreviewTunnelConnector {
   private async connect(
     key: string,
     options: PreviewTunnelOpenOptions,
-    started: number,
-  ): Promise<PreviewTunnelSession | PreviewTunnelConnection> {
-    let settle!: (session: PreviewTunnelSession | null) => void;
+  ): Promise<PreviewTunnelSession> {
+    let settle!: (session: PreviewTunnelSession) => void;
     let refuse!: (error: unknown) => void;
-    const shared = new Promise<PreviewTunnelSession | null>((resolve, reject) => {
+    const shared = new Promise<PreviewTunnelSession>((resolve, reject) => {
       settle = resolve;
       refuse = reject;
     });
@@ -617,16 +600,15 @@ export class PreviewTunnelConnector {
     try {
       const ws = await connectPreviewTunnelSocket(
         { ...options, signal: undefined },
-        PREVIEW_TUNNEL_OFFERED_SUBPROTOCOLS,
+        PREVIEW_TUNNEL_SUBPROTOCOL_V2,
       );
       if (ws.protocol !== PREVIEW_TUNNEL_SUBPROTOCOL_V2) {
-        this.legacy.add(options.url);
-        settle(null);
-        if (options.signal?.aborted) {
-          ws.terminate();
-          throw cancelled();
-        }
-        return await startV1Tunnel(ws, options, started);
+        // The handshake accepts only an offered subprotocol; anything else
+        // is a broken backend, never a reason to speak another version.
+        ws.terminate();
+        throw previewFailure("backend-unavailable", {
+          message: "The preview tunnel answered with an unsupported protocol.",
+        });
       }
       const session = new PreviewTunnelSession(ws, {
         attachmentId: options.attachmentId,

@@ -20,51 +20,18 @@ import * as backend from "@/lib/backend";
 import { base64ToBytes, downloadBlob } from "@/lib/chat/artifact-download";
 import { sha256HexOfBytes } from "@/lib/chat/static-html-document";
 import { cn } from "@/lib/utils";
-import { incompatibilityNotice, type IncompatibilityNotice } from "@/lib/federation/fleet-currency";
-import { portalStore } from "@/lib/portal/portal-store";
 import { useAccountMachine } from "./account-machine";
 import { formatDiagnosticsBytes } from "./DatabaseStorageCard";
 
-/** The node a Settings machine choice names: `null` is the command node, `undefined` this view's. */
-function settingsMachineNodeId(machine: string | null | undefined): string | null {
-  if (typeof machine === "string") return machine;
-  return portalStore.getState().selfId;
+/** What a failed step says: the backend's message, or `fallback` when it gave none. */
+function failureText(error: unknown, fallback: string): string {
+  return (error instanceof Error ? error.message : "") || fallback;
 }
 
-function failureNotice(
-  error: unknown,
-  fallback: string,
-  machine: string | null | undefined,
-  machineName: string | null,
-  command: string,
-): IncompatibilityNotice {
-  // A typed incompatibility leads to the machine's update (plan item 5006).
-  const tooOld = incompatibilityNotice(
-    error,
-    { nodeId: settingsMachineNodeId(machine), label: machineName ?? "this machine" },
-    command,
-  );
-  if (tooOld) return tooOld;
-  return { text: (error instanceof Error ? error.message : "") || fallback };
-}
-
-const UPDATE_IT = "Update it.";
-
-/** The failure; an incompatibility's closing "Update it." opens the machine's update. */
-function FailureText({ failure }: { failure: IncompatibilityNotice }) {
-  const linked = failure.update && failure.text.endsWith(UPDATE_IT);
+function FailureText({ failure }: { failure: string }) {
   return (
     <p className="text-xs text-destructive" role="alert">
-      {linked ? failure.text.slice(0, -UPDATE_IT.length) : failure.text}
-      {linked ? (
-        <button
-          type="button"
-          className="underline underline-offset-2 hover:text-foreground"
-          onClick={failure.update!.onClick}
-        >
-          {UPDATE_IT}
-        </button>
-      ) : null}
+      {failure}
     </p>
   );
 }
@@ -191,13 +158,13 @@ function ContainerLogChoice({
  * bytes. It goes to a download here, and nowhere else.
  */
 export function DiagnosticsExportCard() {
-  const { machine, name } = useAccountMachine();
+  const { machine } = useAccountMachine();
   const [plan, setPlanState] = useState<DiagnosticsBundlePlan | null>(null);
   const [chosen, setChosen] = useState<string[]>([]);
   const [isPlanning, setIsPlanning] = useState(false);
   const [isReplanning, setIsReplanning] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState<IncompatibilityNotice | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [savedName, setSavedName] = useState<string | null>(null);
 
   // The choice always starts from what the plan on screen holds.
@@ -213,19 +180,11 @@ export function DiagnosticsExportCard() {
     try {
       setPlan(await backend.planDiagnosticsBundle(machine));
     } catch (planError) {
-      setError(
-        failureNotice(
-          planError,
-          "The diagnostics bundle could not be built.",
-          machine,
-          name,
-          "plan_diagnostics_bundle",
-        ),
-      );
+      setError(failureText(planError, "The diagnostics bundle could not be built."));
     } finally {
       setIsPlanning(false);
     }
-  }, [machine, name, setPlan]);
+  }, [machine, setPlan]);
 
   const replan = useCallback(async () => {
     setIsReplanning(true);
@@ -234,20 +193,12 @@ export function DiagnosticsExportCard() {
       setPlan(await backend.planDiagnosticsBundle(machine, { containerLogs: chosen }));
     } catch (planError) {
       setError(
-        failureNotice(
-          planError,
-          "The diagnostics bundle could not be built with those logs.",
-          machine,
-          name,
-          chosen.length > 0
-            ? "plan_diagnostics_bundle_with_container_logs"
-            : "plan_diagnostics_bundle",
-        ),
+        failureText(planError, "The diagnostics bundle could not be built with those logs."),
       );
     } finally {
       setIsReplanning(false);
     }
-  }, [chosen, machine, name, setPlan]);
+  }, [chosen, machine, setPlan]);
 
   const save = useCallback(async () => {
     if (!plan) return;
@@ -258,19 +209,11 @@ export function DiagnosticsExportCard() {
       setSavedName(plan.fileName);
       setPlan(null);
     } catch (saveError) {
-      setError(
-        failureNotice(
-          saveError,
-          "The diagnostics bundle could not be saved.",
-          machine,
-          name,
-          "read_diagnostics_bundle",
-        ),
-      );
+      setError(failureText(saveError, "The diagnostics bundle could not be saved."));
     } finally {
       setIsSaving(false);
     }
-  }, [machine, name, plan, setPlan]);
+  }, [machine, plan, setPlan]);
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">

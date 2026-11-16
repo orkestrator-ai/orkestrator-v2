@@ -838,8 +838,6 @@ export type NativeAgentDispatchOutcome =
   | {
       outcome: "accepted";
       requestId: string;
-      /** Compaction ran, but an older bridge ignored its summary instructions. */
-      instructionsIgnored?: boolean;
       /**
        * A retried steer that missed its turn and was delivered another way;
        * `requestId` then names that turn or queued prompt.
@@ -1411,11 +1409,6 @@ export type NativeAgentSessionActionOutcome =
       outcome: "applied" | "idle" | "mismatch" | "unknown";
       /** A steer that missed its turn and was delivered another way. */
       deliveredAs?: NativeAgentSteerDelivery;
-      /**
-       * The compaction ran, but the bridge did not confirm it used the
-       * instructions that were sent: it predates them and dropped them.
-       */
-      instructionsIgnored?: boolean;
       shareUrl?: string;
       preview?: unknown;
       requestId?: string;

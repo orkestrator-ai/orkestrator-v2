@@ -69,7 +69,7 @@ describe("the renderer error upload", () => {
     expect(ring.hasUnsent()).toBe(true);
   });
 
-  test("a backend that predates the command stops the upload", async () => {
+  test("an unknown-command answer is retried like any other failure", async () => {
     const ring = new RendererErrorRing();
     const clock = manualTimer();
     startRendererErrorUpload({
@@ -82,7 +82,8 @@ describe("the renderer error upload", () => {
     });
     ring.record(new TypeError("x"), "root", "window");
     await clock.fire();
-    expect(clock.pending).toHaveLength(0);
+    expect(clock.pending).toHaveLength(1);
+    expect(ring.hasUnsent()).toBe(true);
   });
 
   test("stop clears the timer", () => {

@@ -1,6 +1,6 @@
 /**
  * A refused login in a host `claude-tmux` tab rings "Agent stopped with an
- * error", live (to-do 5160 task 7). Opt-in
+ * error", live (to-do 5160 (retired) task 7). Opt-in
  * (`ORKESTRATOR_AGENT_TEST_LIVE_FAILED_TURN_BELL_TMUX=1`) against a running
  * credential-free agent-test profile with Claude in its toolchain. No login
  * and nothing billed: the profile's own Claude directory

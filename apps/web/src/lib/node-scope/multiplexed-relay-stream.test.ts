@@ -274,7 +274,7 @@ describe("multiplexed relay streams", () => {
     expect(command.longLived()).toBe(1);
   });
 
-  test("an older command node (404) leaves every node on its own stream for the page", async () => {
+  test("a 404 falls back like any failure: own streams during the cooldown", async () => {
     const command = fakeCommandNode();
     command.state.muxStatus = 404;
     const mux = relayStreams();
@@ -285,24 +285,22 @@ describe("multiplexed relay streams", () => {
       "own streams",
     );
     expect(command.shared).toHaveLength(0);
-    expect(mux.snapshot().groups[0]?.unsupported).toBe(true);
     command.openOwn(B)[0]!.push(frame("h:1", "environment-changed", { id: "b" }));
     await waitFor(() => b.received.length === 1, "B on its own stream");
-    // A third node never tries the route again.
+    // Within the cooldown a third node does not try the route again.
     relayedNode(mux, C);
     await waitFor(() => command.openOwn(C).length === 1, "C's own stream");
     expect(mux.snapshot().groups[0]?.requests).toBe(1);
     expect(a.state()).toBe("connected");
   });
 
-  test("a 405 is the same; another failure answer falls back for a while, not for good", async () => {
+  test("a 405 and other failure answers fall back the same way", async () => {
     const command = fakeCommandNode();
     command.state.muxStatus = 405;
     const mux = relayStreams();
     relayedNode(mux, A);
     relayedNode(mux, B);
     await waitFor(() => command.openOwn(B).length === 1, "own streams");
-    expect(mux.snapshot().groups[0]?.unsupported).toBe(true);
 
     const other = fakeCommandNode();
     other.state.muxStatus = 503;
@@ -310,7 +308,6 @@ describe("multiplexed relay streams", () => {
     relayedNode(later, A);
     relayedNode(later, B);
     await waitFor(() => other.openOwn(B).length === 1, "own streams after a 503");
-    expect(later.snapshot().groups[0]?.unsupported).toBe(false);
 
     // No answer at all (a blocked path) is the same: own streams, not a stall.
     const blocked = fakeCommandNode();

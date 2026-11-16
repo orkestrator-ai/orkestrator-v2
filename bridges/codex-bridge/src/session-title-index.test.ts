@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import { buildPromptWithTranscriptAnnotations } from "@orkestrator/protocol/transcript-annotations";
 import {
+  adoptLoginSessionTitles,
   buildFallbackSessionTitle,
   persistSessionTitle,
   readPersistedSessionTitleEntries,
@@ -166,10 +167,11 @@ describe("Codex session-title index", () => {
     await expect(persistSessionTitle(blockedHome, "thread", "Valid title")).rejects.toThrow();
     expect(await readPersistedSessionTitles(blockedHome)).toEqual(new Map());
   });
-  test("an added account shares the host's titles and keeps its own earlier ones", async () => {
+  test("an added account shares the host's titles and adopts its own earlier ones once", async () => {
     const host = createTemporaryDirectory();
     const account = createTemporaryDirectory();
     const saved = process.env.CODEX_BRIDGE_STATE_DIR;
+    const source = join(account, "orkestrator-bridge", "session-titles.jsonl");
     try {
       // Written on the account before the state directory was shared.
       delete process.env.CODEX_BRIDGE_STATE_DIR;
@@ -179,24 +181,42 @@ describe("Codex session-title index", () => {
       await persistSessionTitle(account, "both", "Account title", {
         updatedAt: new Date(2026, 0, 1),
       });
+      await persistSessionTitle(account, "renamed", "Account rename", {
+        source: "explicit",
+        updatedAt: new Date(2026, 0, 1),
+      });
 
       process.env.CODEX_BRIDGE_STATE_DIR = join(host, "orkestrator-bridge");
       await persistSessionTitle(account, "both", "Shared title", {
         updatedAt: new Date(2026, 0, 1),
       });
+      await persistSessionTitle(account, "renamed", "Shared generated", {
+        updatedAt: new Date(2026, 0, 2),
+      });
       await persistSessionTitle(account, "newer", "Newer title");
-      expect(existsSync(join(host, "orkestrator-bridge", "session-titles.jsonl"))).toBe(true);
-      expect(await readPersistedSessionTitles(account)).toEqual(
-        new Map([
-          ["older", "Older title"],
-          ["both", "Shared title"],
-          ["newer", "Newer title"],
-        ]),
-      );
+      // Reads never look at the login's own index.
+      expect((await readPersistedSessionTitles(account)).has("older")).toBe(false);
+
+      expect(await adoptLoginSessionTitles(account, source)).toBe(true);
+      const expected = new Map([
+        ["both", "Shared title"],
+        ["renamed", "Account rename"],
+        ["newer", "Newer title"],
+        ["older", "Older title"],
+      ]);
+      expect(await readPersistedSessionTitles(account)).toEqual(expected);
+      expect(existsSync(source)).toBe(false);
+      expect(existsSync(`${source}.adopted`)).toBe(true);
+
+      // A crash before the rename runs it again; nothing changes.
+      renameSync(`${source}.adopted`, source);
+      expect(await adoptLoginSessionTitles(account, source)).toBe(true);
+      expect(await readPersistedSessionTitles(account)).toEqual(expected);
+      expect(await adoptLoginSessionTitles(account, source)).toBe(false);
 
       // The host login's bridge reads what the account's wrote.
       delete process.env.CODEX_BRIDGE_STATE_DIR;
-      expect((await readPersistedSessionTitles(host)).get("newer")).toBe("Newer title");
+      expect((await readPersistedSessionTitles(host)).get("older")).toBe("Older title");
     } finally {
       if (saved === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
       else process.env.CODEX_BRIDGE_STATE_DIR = saved;

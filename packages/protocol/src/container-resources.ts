@@ -191,7 +191,7 @@ export interface DockerCapacity {
   };
   /**
    * The built-in budget new runtimes get on this daemon when nothing else is
-   * set. Absent from backends older than the default, which apply none.
+   * set.
    */
   builtInDefault?: BuiltInResourceDefault;
 }

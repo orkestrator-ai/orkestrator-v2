@@ -5,13 +5,14 @@ import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 
 /**
- * What the gateway's cookie and preview fixes rely on browsers to do, which its
- * backend tests can only assume (security report H1, M1, M2, §8):
+ * What the gateway's cookie fixes rely on browsers to do, which its backend
+ * tests can only assume (security report H1, §8):
  *
  * - H1: cookie scope across ports.
  * - H1: `SameSite=Strict` on a typed navigation and on a cross-site one.
- * - M1: the sandbox header on a legacy preview opened top-level.
- * - M2: credentials on a request from `Origin: null`.
+ *
+ * The M1 and M2 checks covered the legacy gateway preview route, which was
+ * removed with it.
  *
  * Playwright's WebKit is engine coverage, not shipping Safari.
  *
@@ -24,9 +25,6 @@ interface Ready {
   gatewayPort: number;
   token: string;
   otherPort: number;
-  previewPort: number;
-  secretPort: number;
-  secretResponse: string;
 }
 
 let harness: ChildProcessByStdio<Writable, Readable, null>;
@@ -128,82 +126,4 @@ test("H1: a form posted from another site cannot invoke a command", async ({ con
   // The origin is refused before credentials are looked at.
   expect(response?.status()).toBe(403);
   expect(await invokes()).toEqual(before);
-});
-
-test("M1: a legacy preview opened top-level has an opaque origin", async ({ context }) => {
-  const page = await signIn(context);
-  const response = await page.goto(
-    `${gateway}/__orkestrator/browser/loopback/${ready.previewPort}/`,
-  );
-  expect(response?.status()).toBe(200);
-  expect(response?.headers()["content-security-policy"]).toContain("sandbox");
-  await expect(page.locator("#preview")).toHaveText("preview");
-
-  expect(await page.evaluate(() => self.origin)).toBe("null");
-  // An opaque origin has no cookie jar at all, so reading one throws.
-  const cookieRead = await page.evaluate(() => {
-    try {
-      return { value: document.cookie };
-    } catch (error) {
-      return { error: (error as Error).name };
-    }
-  });
-  expect(cookieRead).toEqual({ error: "SecurityError" });
-});
-
-test("M1 and M2: a sandboxed preview cannot act as the signed-in user", async ({ context }) => {
-  const page = await signIn(context);
-  await page.goto(`${gateway}/__orkestrator/browser/loopback/${ready.previewPort}/`);
-  const before = await invokes();
-
-  const attempts = await page.evaluate(async (origin) => {
-    const attempt = async (url: string, init: RequestInit) => {
-      try {
-        const response = await fetch(url, { credentials: "include", ...init });
-        return { status: response.status, body: await response.text() };
-      } catch (error) {
-        return { failed: (error as Error).name };
-      }
-    };
-    return {
-      status: await attempt(`${origin}/__orkestrator/status`, {}),
-      invoke: await attempt(`${origin}/__orkestrator/invoke`, {
-        method: "POST",
-        headers: { "content-type": "text/plain" },
-        body: JSON.stringify({ command: "list_projects", args: {} }),
-      }),
-      settings: await attempt(`${origin}/__orkestrator/gateway-settings`, {}),
-    };
-  }, gateway);
-
-  expect(attempts.status).toEqual({ failed: "TypeError" });
-  expect(attempts.invoke).toEqual({ failed: "TypeError" });
-  expect(attempts.settings).toEqual({ failed: "TypeError" });
-  expect(await invokes()).toEqual(before);
-});
-
-test("M2: from Origin null, another preview's content needs credentials it cannot send", async ({
-  context,
-}) => {
-  const page = await signIn(context);
-  await page.goto(`${gateway}/__orkestrator/browser/loopback/${ready.previewPort}/`);
-  const other = `${gateway}/__orkestrator/browser/loopback/${ready.secretPort}/`;
-
-  const attempts = await page.evaluate(async (url) => {
-    const attempt = async (credentials: RequestCredentials) => {
-      try {
-        const response = await fetch(url, { credentials });
-        return { status: response.status, body: await response.text() };
-      } catch (error) {
-        return { failed: (error as Error).name };
-      }
-    };
-    return { withCookie: await attempt("include"), withoutCookie: await attempt("omit") };
-  }, other);
-
-  // `Access-Control-Allow-Origin: *` is never enough for a credentialed read.
-  expect(attempts.withCookie).toEqual({ failed: "TypeError" });
-  // Without the cookie the gateway refuses it, so the content stays out of reach.
-  expect(attempts.withoutCookie).toMatchObject({ status: 401 });
-  expect(JSON.stringify(attempts)).not.toContain(ready.secretResponse);
 });

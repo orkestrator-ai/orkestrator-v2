@@ -118,24 +118,6 @@ export function snapshotBaseUrl(snapshot: unknown): string | null {
 
 const NODE_ROUTE_UNAVAILABLE = "This machine is reconnecting; open the link again once it is back.";
 
-/** The preview store's view of a client that addresses its node's previews (plan item 3012). */
-interface PreviewAddressing {
-  resolvePreviewUrl(url: string): string;
-}
-
-/**
- * Another node's address-bar preview, as this window sends it to main: the
- * canonical address, unchanged. The tab's attach names the node
- * (`previewNodeFor`), and main's preview runtime for that node loads it
- * through the node's own gateway on its current route (`nodePreviewUrl` in
- * `apps/desktop/electron/node-previews.ts`). Resolving here against the
- * window's gateway, the default for a client without this, would load the
- * command node's page in the leaf's view (4006 Finding 1).
- */
-export function desktopNodePreviewUrl(url: string): string {
-  return url;
-}
-
 export function createDesktopNodeClient(options: DesktopNodeClientOptions): NodeClient {
   const host = options.host ?? windowHost;
   const commandNodeId =
@@ -261,7 +243,7 @@ export function createDesktopNodeClient(options: DesktopNodeClientOptions): Node
     return resolveNodeLoopbackBaseUrl(baseUrl, url);
   }
 
-  const client: NodeClient & PreviewAddressing & ExternalLoopbackAddressing = {
+  const client: NodeClient & ExternalLoopbackAddressing = {
     nodeId,
     invoke: typedInvoke(invokeRaw),
     invokeRaw,
@@ -276,7 +258,6 @@ export function createDesktopNodeClient(options: DesktopNodeClientOptions): Node
     connection,
     domains: negotiation.domains,
     capabilities: negotiation.capabilities,
-    resolvePreviewUrl: desktopNodePreviewUrl,
     resolveExternalLoopbackUrl,
     // Main owns the node's stream and closes it when the scope goes idle; a
     // suspended client only stops delivering, and resumes without a reopen.

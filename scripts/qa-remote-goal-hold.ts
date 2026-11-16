@@ -8,7 +8,7 @@
  * that idle is the loop's, not the worker's answer: its coordinator must not
  * be woken until the goal stops. This runs that path across a real node link:
  *
- * - Two backends of this checkout (`mixed-version/harness.ts`: own data
+ * - Two backends of this checkout (`two-node/harness.ts`: own data
  *   directory, HOME and loopback port each, a constructed environment with
  *   nothing `ORKESTRATOR_*` inherited, `agent-test` runtime with no toolchain
  *   and no credentials, so no agent turn and no provider request can happen).
@@ -37,7 +37,7 @@
  *   mise run qa:remote-goal-hold -- [--report <file>] [--keep]
  *   bun scripts/qa-remote-goal-hold.ts [--report <file>] [--keep]
  *
- * Scheduled weekly by `.github/workflows/mixed-version-qualification.yml`.
+ * Scheduled weekly by `.github/workflows/remote-goal-hold.yml`.
  * `tests/unit/qa-remote-goal-hold.test.ts` runs the seeded goal through the
  * registry, `NodeCoordinatorRemote` and the coordinator in process.
  *
@@ -57,10 +57,15 @@ import { nativeAgentSessionStorageKey } from "../apps/backend/src/core/native-ag
 import { NodeCoordinatorRemote } from "../apps/backend/src/core/nodes/node-coordinator-remote.ts";
 import { StorageService } from "../apps/backend/src/core/storage.ts";
 import { WorkerTabCloseAdmission } from "../apps/backend/src/core/worker-tab-close-admission.ts";
-import { currentCommands } from "./qualify-contract-mixed-versions.ts";
-import { PairFixtures } from "./mixed-version/fixtures.ts";
-import { makeNode, ROOT, tokenLeaks, until, type PeerNode } from "./mixed-version/harness.ts";
-import { gatewayInvoker } from "./mixed-version/scenarios/coordinator-list-nodes.ts";
+import { PairFixtures } from "./two-node/fixtures.ts";
+import {
+  gatewayInvoker,
+  makeNode,
+  ROOT,
+  tokenLeaks,
+  until,
+  type PeerNode,
+} from "./two-node/harness.ts";
 
 /** The coordinator's start-up grace (`DELEGATION_IDLE_RECONCILE_GRACE_MS`) and a margin. */
 const PAST_GRACE_MS = 15_000 + 3_000;
@@ -184,21 +189,8 @@ export async function runGoalHold(options: { keep: boolean }): Promise<{
   let world: MailWorld | undefined;
   let setupError: string | undefined;
   try {
-    const commands = currentCommands();
-    const command = await makeNode({
-      name: "Command",
-      role: "command",
-      build: { kind: "current" },
-      root,
-      commands,
-    });
-    const leaf = await makeNode({
-      name: "Leaf",
-      role: "leaf",
-      build: { kind: "current" },
-      root,
-      commands,
-    });
+    const command = await makeNode({ name: "Command", role: "command", root });
+    const leaf = await makeNode({ name: "Leaf", role: "leaf", root });
     nodes.push(command, leaf);
     await Promise.all(nodes.map((node) => node.start()));
     await attach(command, leaf);

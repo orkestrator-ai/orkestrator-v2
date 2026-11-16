@@ -17,7 +17,6 @@ import { COMMAND_NODE_COORDINATOR_MAIL_ADDRESS } from "@orkestrator/protocol/coo
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 
 import { MailWorld, type MailActor } from "./agent-mail-world-test-support.js";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
 import { registerNodeCommands } from "./commands-registry-nodes.js";
@@ -284,21 +283,6 @@ describe("command node coordinator ↔ leaf coordinator", () => {
       });
       expect(outbox.items).toEqual([]);
     });
-
-  test("an older command collector cannot consume coordinator mail as worker mail", async () => {
-    const world = await link();
-    await world.tell("Keep this until the command node is updated");
-    const old = await world.leafCall("collect_node_outbox", { controllerId: "bk_cmd", after: 0 });
-    expect(old.items).toEqual([]);
-    await world.leafCall("ack_node_outbox", { controllerId: "bk_cmd", upTo: 999 });
-    const modern = await world.leafCall("collect_node_outbox", {
-      controllerId: "bk_cmd",
-      after: 0,
-      coordinatorMail: true,
-    });
-    expect(modern.items).toHaveLength(1);
-    expect(await world.collect()).toBe(true);
-  });
 
   test("cross-node hop limits refuse before a reply is queued", async () => {
     const world = await link({ budget: 50 });
@@ -594,27 +578,6 @@ describe("command node coordinator ↔ leaf coordinator", () => {
     expect(world.leaf.wakes(leafSide)).toBe(0);
     expect(world.leaf.wakes(world.leafMain)).toBe(1);
     expect(world.routed.filter((entry) => entry.command === "deliver_node_mail")).toHaveLength(1);
-  });
-
-  test("an older leaf gets a clear update refusal and nothing is sent", async () => {
-    const world = await link({ capabilities: { "node-attachment": 1, "node-mail-steer": 1 } });
-    const counted = () =>
-      compatibilityPathUsage.snapshot().paths["node-coordinator-mail.older-node"]?.count ?? 0;
-    const before = counted();
-    await expect(world.ask("Status?")).rejects.toThrow(
-      "Build box runs an older Orkestrator whose coordinator cannot take mail from this one; update that machine",
-    );
-    expect(world.routed.some((entry) => entry.command === "deliver_node_mail")).toBe(false);
-    const reach = await world.run("get_coordinator_node_mailbox", {
-      scope: world.scopeOf(world.command, world.commandMain),
-      nodeId: "bk_leaf",
-    });
-    expect(reach.coordinator).toMatchObject({ reachable: false });
-    expect((reach.coordinator as { reason: string }).reason).toContain("update that machine");
-    expect(world.routed.some((entry) => entry.command === "get_node_project_coordinator")).toBe(
-      false,
-    );
-    expect(counted()).toBe(before + 2);
   });
 
   test("discovery says whether a node's project has a coordinator", async () => {

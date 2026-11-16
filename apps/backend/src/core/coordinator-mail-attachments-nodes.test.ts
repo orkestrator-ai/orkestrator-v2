@@ -15,8 +15,6 @@ import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail"
 import { MailWorld, type MailActor } from "./agent-mail-world-test-support.js";
 import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
-import { outboxMailAttachmentBatch, mailAttachmentSpoolDir } from "./mail-attachments.js";
 import type { Environment } from "./models.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import {
@@ -439,10 +437,7 @@ describe("a command node's coordinator sending to a leaf", () => {
     expect(await world.inbox(world.leaf, worker)).toEqual([]);
   });
 
-  test("an older leaf is refused rather than sent a message without its images", async () => {
-    const usage = () =>
-      compatibilityPathUsage.snapshot().paths["node-mail-attachments.older-node"]?.count ?? 0;
-    const before = usage();
+  test("a leaf that cannot take images fails the send; no message goes without them", async () => {
     const world = await link({
       capabilities: { "node-attachment": 1, "node-mail-steer": 1, "node-coordinator-mail": 1 },
     });
@@ -451,10 +446,9 @@ describe("a command node's coordinator sending to a leaf", () => {
     for (const toEnvironmentId of [worker.environmentId, "coordinator"]) {
       await expect(
         world.sendDown({ requestId: `r-${toEnvironmentId}`, toEnvironmentId, attachments }),
-      ).rejects.toThrow(/older Orkestrator that cannot receive images/);
+      ).rejects.toThrow();
     }
     expect(world.count("deliver_node_mail")).toBe(0);
-    expect(usage()).toBe(before + 2);
   });
 
   test("another conversation's attachment is refused before the node hears of it", async () => {
@@ -605,7 +599,7 @@ describe("a leaf's coordinator sending to the command node", () => {
         ],
       },
     });
-    await mail.ack("bk_cmd" as never, receipt.seq, undefined, true, true);
+    await mail.ack("bk_cmd" as never, receipt.seq);
     for (const change of [
       { replyToMessageId: "new-parent" },
       { nodeParent: { id: "parent", threadId: "thread", hopCount: 1 } },
@@ -718,34 +712,6 @@ describe("a leaf's coordinator sending to the command node", () => {
     );
     expect(delivered.body).toContain("Accepted");
     expect((await fs.readFile(messages[0]!.attachments![0]!.path)).equals(PNG)).toBe(true);
-  });
-
-  test("an older command node leaves it queued rather than dropping the images", async () => {
-    const world = await link({
-      capabilities: { "node-attachment": 1, "node-mail-steer": 1, "node-coordinator-mail": 1 },
-    });
-    const sent = await world.sendUp({
-      requestId: "up-1",
-      attachments: [await world.paste(world.leaf, world.leafMain)],
-    });
-    await world.sendUp({ requestId: "up-2" });
-
-    expect(await world.collect()).toBe(true);
-
-    const messages = await world.inbox(world.command, world.commandMain);
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.attachments).toBeUndefined();
-    expect(await world.leafCoordination.leafMail.pending("bk_cmd" as never)).toBe(1);
-    expect(sent.outboxSeq).toBe(1);
-    const batch = (await world.leafCoordination.leafMail.collect("bk_cmd" as never, 0, true, true))
-      .items[0]!.attachments!.batch;
-    expect(
-      (
-        await fs.stat(
-          mailAttachmentSpoolDir(world.leaf.storage.getDataDir(), outboxMailAttachmentBatch(batch)),
-        )
-      ).isDirectory(),
-    ).toBe(true);
   });
 
   test("a send the outbox refuses leaves no copy behind", async () => {

@@ -69,12 +69,6 @@ type WebContentsViewConstructor = new (
 interface ManagedPreview {
   view: WebContentsView;
   requestedUrl: string;
-  /**
-   * Legacy previews: the environment the renderer attached the view for.
-   * Gateway preview requests name it, and the gateway opens only that
-   * environment's preview targets.
-   */
-  environmentId: string | null;
   navigationScope: string;
   loadGeneration: number;
   loading: boolean;
@@ -85,12 +79,12 @@ interface ManagedPreview {
    */
   documentGeneration: number;
   /**
-   * Service previews: transport key, the partition the view was created with,
+   * The service's transport key, the partition the view was created with,
    * and the transport holder the view keeps (unique per attach, so a stale
    * attach can release its own hold without dropping a newer one). `path` is
    * the path the renderer last asked for, which can lag the view's own.
    */
-  service?: { key: string; partition: string; holderId: string; path: string };
+  service: { key: string; partition: string; holderId: string; path: string };
   /**
    * Main-frame navigations (commits, and history moves from the moment they
    * start), reported to the renderer as `service.navigation`.
@@ -134,7 +128,6 @@ export interface BrowserPreviewServiceTransport {
 
 export interface BrowserPreviewManagerOptions {
   WebContentsViewCtor: WebContentsViewConstructor;
-  browserSession: Session;
   menu: MenuLike;
   getWindow: () => BrowserWindow | null;
   emitState: (state: BrowserPreviewState) => void;
@@ -147,14 +140,8 @@ export interface BrowserPreviewManagerOptions {
    * Native preview keys never reach the renderer's DOM listener.
    */
   requestPreviewShortcut: (tabId: string, shortcut: AppShortcutId) => void;
-  /** Service previews are unavailable without a transport (old backend, feature off). */
+  /** Previews are unavailable without a transport. */
   transport?: BrowserPreviewServiceTransport;
-  /**
-   * The address an address-bar URL loads, applied on every attach and
-   * navigation: another node's runtime puts it on that node's gateway
-   * (`nodePreviewUrl` in `node-previews.ts`). Absent, the URL loads as sent.
-   */
-  resolveAddress?: (url: string) => string;
   /** Open a service in the default browser through the private preview origin. */
   openServiceExternally?: (target: BrowserPreviewServiceTarget) => Promise<void>;
   /** Process-wide pending capture spool; capture is unavailable without it. */
@@ -172,7 +159,6 @@ export interface BrowserPreviewManagerOptions {
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
 const CLIPBOARD_USER_ACTIVATION_WINDOW_MS = 5_000;
 const CLIPBOARD_USER_ACTIVATION_INPUTS = new Set<InputEvent["type"]>([
   "mouseDown",
@@ -181,67 +167,6 @@ const CLIPBOARD_USER_ACTIVATION_INPUTS = new Set<InputEvent["type"]>([
   "rawKeyDown",
   "keyDown",
 ]);
-
-function gatewayPreviewMatch(url: URL): RegExpExecArray | null {
-  const match = GATEWAY_PREVIEW_PATH.exec(url.pathname);
-  if (!match) return null;
-  const port = Number(match[1]);
-  return Number.isInteger(port) && port >= 1 && port <= 65_535 ? match : null;
-}
-
-function previewNavigationScope(value: string): string | null {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return null;
-  }
-
-  if (url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname)) {
-    return `loopback:${url.origin}`;
-  }
-
-  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-  const gatewayMatch = gatewayPreviewMatch(url);
-  return gatewayMatch ? `gateway:${url.origin}:${gatewayMatch[1]}` : null;
-}
-
-function browserTabUrlFromPreviewLink(value: string, sourcePreviewUrl: string): string | null {
-  let url: URL;
-  let sourceUrl: URL;
-  try {
-    url = new URL(value);
-    sourceUrl = new URL(sourcePreviewUrl);
-  } catch {
-    return null;
-  }
-
-  if (url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname)) {
-    return url.toString();
-  }
-
-  const gatewayMatch = gatewayPreviewMatch(url);
-  const sourceGatewayMatch = gatewayPreviewMatch(sourceUrl);
-  if (
-    url.protocol !== "https:" ||
-    !gatewayMatch ||
-    sourceUrl.protocol !== "https:" ||
-    !sourceGatewayMatch ||
-    url.origin !== sourceUrl.origin
-  ) {
-    return null;
-  }
-
-  try {
-    const destination = new URL(`http://localhost:${gatewayMatch[1]}`);
-    destination.pathname = gatewayMatch[2] ?? "/";
-    destination.search = url.search;
-    destination.hash = url.hash;
-    return destination.toString();
-  } catch {
-    return null;
-  }
-}
 
 function isLoopbackUrl(value: string): boolean {
   try {
@@ -350,9 +275,7 @@ export class BrowserPreviewManager {
         const bounds = preview.view.getBounds();
         return { width: bounds.width, height: bounds.height };
       },
-      ...(preview.service && transport
-        ? { describeService: (url: string) => transport.describe(url) }
-        : {}),
+      describeService: (url: string) => transport?.describe(url) ?? null,
     };
   }
 
@@ -387,9 +310,9 @@ export class BrowserPreviewManager {
     return typeof factor === "number" && Number.isFinite(factor) && factor > 0 ? factor : 1;
   }
 
-  /** Service transport scope first, then the legacy loopback/gateway rules. */
+  /** The service transport's scope of `url`, or null outside every service. */
   private scopeFor(url: string): string | null {
-    return this.options.transport?.scopeFor(url) ?? previewNavigationScope(url);
+    return this.options.transport?.scopeFor(url) ?? null;
   }
 
   private withinScope(url: string, scope: string): boolean {
@@ -406,9 +329,7 @@ export class BrowserPreviewManager {
     const tabId = input.tabId;
     const token = ++this.attachSequence;
     this.attachTokens.set(tabId, token);
-    const attempt = input.service
-      ? this.attachService(input, input.service, token)
-      : this.attachUrl(input, token);
+    const attempt = this.attachService(input, input.service, token);
     this.pendingAttaches.set(tabId, attempt);
     const settle = () => {
       if (this.pendingAttaches.get(tabId) === attempt) this.pendingAttaches.delete(tabId);
@@ -441,63 +362,6 @@ export class BrowserPreviewManager {
     throw this.attachCancelled();
   }
 
-  private async attachUrl(
-    input: BrowserPreviewAttachInput,
-    token: number,
-  ): Promise<BrowserPreviewState> {
-    const url =
-      typeof input.url === "string" && this.options.resolveAddress
-        ? this.options.resolveAddress(input.url)
-        : input.url;
-    const navigationScope = typeof url === "string" ? previewNavigationScope(url) : null;
-    if (!url || !navigationScope)
-      throw new Error("Browser previews require a loopback or authenticated gateway-preview URL");
-    const bounds = validateBounds(input.bounds, this.hostZoomFactor());
-    let preview = this.previews.get(input.tabId);
-    if (preview?.service) {
-      // A tab switching from a service to a manual URL needs the shared legacy session.
-      this.removePreview(input.tabId);
-      preview = undefined;
-    }
-
-    // As for service previews (see `attachService`): the renderer learns the
-    // view's URL from state events and re-attaches on every resize and scroll,
-    // so an attach sent before it applied a link, a redirect or Back carries
-    // the previous URL, and loading it would undo the navigation (seen live:
-    // Back during a resize bounced between the two URLs). A URL chosen against
-    // an older navigation is stale. Renderers that send no basis keep the old
-    // rule: any URL other than the view's is new.
-    const basis = input.navigationBasis;
-    // Set before any load below, so the first request already names it.
-    const environmentId = input.environmentId ?? null;
-    if (!preview) {
-      preview = this.createPreview(input.tabId, url, navigationScope, undefined, environmentId);
-    } else if (preview.environmentId !== environmentId) {
-      // A tab never changes environment; a different one is a different
-      // tab's identity, so its documents must not keep the old one's access.
-      this.removePreview(input.tabId);
-      preview = this.createPreview(input.tabId, url, navigationScope, undefined, environmentId);
-    } else if (
-      preview.requestedUrl !== url &&
-      (basis === undefined || basis >= preview.navigation)
-    ) {
-      this.clipboardUserActivations.delete(preview.view.webContents);
-      preview.requestedUrl = url;
-      preview.navigationScope = navigationScope;
-      preview.error = null;
-      await this.load(input.tabId, preview, url);
-      if (!this.isCurrentAttach(input.tabId, token)) return this.supersededAttach(input.tabId);
-    }
-
-    preview.view.setBounds(bounds);
-    this.applyVisibility(
-      input.tabId,
-      preview,
-      input.visible && bounds.width > 0 && bounds.height > 0,
-    );
-    return this.snapshot(input.tabId, preview);
-  }
-
   private async attachService(
     input: BrowserPreviewAttachInput,
     target: BrowserPreviewServiceTarget,
@@ -515,10 +379,10 @@ export class BrowserPreviewManager {
       return this.supersededAttach(input.tabId);
     }
     let preview = this.previews.get(input.tabId);
-    // A session cannot change after a view exists: another service (or a
-    // legacy tab) needs a fresh view on this service's partition.
+    // A session cannot change after a view exists: another service needs a
+    // fresh view on this service's partition.
     // Partitions derive from the service key, so an equal partition is the same service.
-    if (preview && preview.service?.partition !== descriptor.partition) {
+    if (preview && preview.service.partition !== descriptor.partition) {
       this.removePreview(input.tabId);
       preview = undefined;
     }
@@ -541,8 +405,8 @@ export class BrowserPreviewManager {
       // send no basis fall back to: only a path not already asked for is new.
       const basis = input.navigationBasis;
       const requested =
-        basis === undefined ? preview.service?.path !== path : basis >= preview.navigation;
-      if (preview.service) preview.service.path = path;
+        basis === undefined ? preview.service.path !== path : basis >= preview.navigation;
+      preview.service.path = path;
       if (current?.serviceKey !== descriptor.serviceKey || (requested && current.path !== path)) {
         this.clipboardUserActivations.delete(preview.view.webContents);
         preview.requestedUrl = descriptor.url;
@@ -576,7 +440,7 @@ export class BrowserPreviewManager {
     this.resettingServices.add(key);
     try {
       for (const [tabId, preview] of this.previews) {
-        const owner = preview.service && transport.target(preview.service.key);
+        const owner = transport.target(preview.service.key);
         if (
           owner?.serviceId !== target.serviceId ||
           owner.backendInstanceId !== target.backendInstanceId
@@ -593,7 +457,7 @@ export class BrowserPreviewManager {
       if (pending) await Promise.allSettled([pending]);
       await transport.resetSiteData(target);
       for (const [tabId, preview] of this.previews) {
-        const owner = preview.service && transport.target(preview.service.key);
+        const owner = transport.target(preview.service.key);
         if (
           owner?.serviceId === target.serviceId &&
           owner.backendInstanceId === target.backendInstanceId
@@ -613,9 +477,9 @@ export class BrowserPreviewManager {
   async startSessionImport(tabId: string): Promise<BrowserPreviewState> {
     const preview = this.get(tabId);
     const transport = this.options.transport;
-    const target = preview.service && transport?.target(preview.service.key);
+    const target = transport?.target(preview.service.key);
     const write = transport?.importSessionCookies?.bind(transport);
-    if (!preview.service || !target || !write || !transport?.sessionImportAvailable?.()) {
+    if (!target || !write || !transport?.sessionImportAvailable?.()) {
       throw previewFailure("unsupported", {
         message: "This preview cannot copy a sign-in from your browser.",
       });
@@ -664,7 +528,7 @@ export class BrowserPreviewManager {
             };
             preview.blockedHost = null;
             for (const [otherTabId, other] of this.previews) {
-              if (other.service?.key === serviceKey) this.reload(otherTabId);
+              if (other.service.key === serviceKey) this.reload(otherTabId);
             }
           } else {
             preview.sessionImport = { state: result.kind };
@@ -703,7 +567,7 @@ export class BrowserPreviewManager {
   async openServiceSignIn(tabId: string, port: number): Promise<BrowserPreviewState> {
     const preview = this.get(tabId);
     const transport = this.options.transport;
-    if (!preview.service || !transport?.sessionImportAvailable?.()) {
+    if (!transport?.sessionImportAvailable?.()) {
       throw previewFailure("unsupported", {
         message: "This preview cannot open a sign-in in your browser.",
       });
@@ -731,7 +595,6 @@ export class BrowserPreviewManager {
 
   /** Report a refused navigation out of a service: without this, a page just appears to hang. */
   private noteBlockedNavigation(tabId: string, preview: ManagedPreview, url: string): void {
-    if (!preview.service) return;
     let parsed: URL;
     try {
       parsed = new URL(url);
@@ -757,7 +620,7 @@ export class BrowserPreviewManager {
   /** Re-emit state for every tab of a service whose transport state changed. */
   refreshService(serviceKey: string): void {
     for (const [tabId, preview] of this.previews) {
-      if (preview.service?.key === serviceKey) this.emit(tabId, preview);
+      if (preview.service.key === serviceKey) this.emit(tabId, preview);
     }
   }
 
@@ -782,25 +645,6 @@ export class BrowserPreviewManager {
 
   ownsWebContents(id: number): boolean {
     return [...this.previews.values()].some((preview) => preview.view.webContents.id === id);
-  }
-
-  /**
-   * The URL the app last asked this view to load, kept current only by
-   * in-scope navigation. Gateway auth for the view is scoped to its namespace.
-   */
-  requestedUrlForWebContents(id: number): string | undefined {
-    for (const preview of this.previews.values()) {
-      if (preview.view.webContents.id === id) return preview.requestedUrl;
-    }
-    return undefined;
-  }
-
-  /** The environment a legacy preview view was attached for, if any. */
-  environmentForWebContents(id: number): string | null {
-    for (const preview of this.previews.values()) {
-      if (preview.view.webContents.id === id) return preview.environmentId;
-    }
-    return null;
   }
 
   webContentsIdForTab(tabId: string): number | undefined {
@@ -898,21 +742,17 @@ export class BrowserPreviewManager {
     return activationAge >= 0 && activationAge <= CLIPBOARD_USER_ACTIVATION_WINDOW_MS;
   }
 
-  async navigate(tabId: string, requested: string): Promise<BrowserPreviewState> {
+  /**
+   * Load another page of the view's own service (show-on-page moving to a
+   * pin's route). Another service is a new attach, never a navigation.
+   */
+  async navigate(tabId: string, url: string): Promise<BrowserPreviewState> {
     const preview = this.get(tabId);
-    const url =
-      !preview.service && this.options.resolveAddress
-        ? this.options.resolveAddress(requested)
-        : requested;
-    const navigationScope = this.scopeFor(url);
-    if (preview.service && navigationScope !== preview.navigationScope) {
+    if (this.scopeFor(url) !== preview.navigationScope) {
       throw new Error("Service previews navigate by service path; attach the new path instead");
     }
-    if (!navigationScope)
-      throw new Error("Browser previews require a loopback or authenticated gateway-preview URL");
     this.clipboardUserActivations.delete(preview.view.webContents);
     preview.requestedUrl = url;
-    preview.navigationScope = navigationScope;
     preview.error = null;
     await this.load(tabId, preview, url);
     return this.snapshot(tabId, preview);
@@ -931,11 +771,9 @@ export class BrowserPreviewManager {
     preview.error = null;
     preview.loading = true;
     this.advanceDocument(tabId, preview);
-    if (preview.service) {
-      // reload() has no target if the first document never committed. Retry
-      // the requested application URL explicitly, including refused paths.
-      void this.load(tabId, preview, preview.requestedUrl);
-    } else preview.view.webContents.reload();
+    // reload() has no target if the first document never committed. Retry
+    // the requested application URL explicitly, including refused paths.
+    void this.load(tabId, preview, preview.requestedUrl);
     return this.snapshot(tabId, preview);
   }
 
@@ -1066,8 +904,7 @@ export class BrowserPreviewManager {
     this.previews.delete(tabId);
     this.forgetWindowFocusWait(tabId, preview);
     this.clipboardUserActivations.delete(preview.view.webContents);
-    if (preview.service)
-      this.options.transport?.release(preview.service.key, preview.service.holderId);
+    this.options.transport?.release(preview.service.key, preview.service.holderId);
     const window = this.options.getWindow();
     if (window && !window.isDestroyed()) {
       window.contentView.removeChildView(preview.view);
@@ -1081,16 +918,14 @@ export class BrowserPreviewManager {
     tabId: string,
     url: string,
     navigationScope: string,
-    service?: { session: Session; service: NonNullable<ManagedPreview["service"]> },
-    environmentId: string | null = null,
+    service: { session: Session; service: ManagedPreview["service"] },
   ): ManagedPreview {
     const window = this.options.getWindow();
     if (!window || window.isDestroyed()) throw new Error("The main window is not available");
     const view = new this.options.WebContentsViewCtor({
       webPreferences: {
-        // Service previews get their own partition; legacy previews share the
-        // window/connection partition as before.
-        session: service?.session ?? this.options.browserSession,
+        // Each service has its own partition.
+        session: service.session,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -1110,7 +945,6 @@ export class BrowserPreviewManager {
     const preview: ManagedPreview = {
       view,
       requestedUrl: url,
-      environmentId,
       navigationScope,
       loadGeneration: 0,
       loading: true,
@@ -1122,7 +956,7 @@ export class BrowserPreviewManager {
       sessionImportHandle: null,
       sessionImportAbort: null,
       sessionImportRun: 0,
-      ...(service ? { service: service.service } : {}),
+      service: service.service,
     };
     this.previews.set(tabId, preview);
     this.installListeners(tabId, preview);
@@ -1177,45 +1011,34 @@ export class BrowserPreviewManager {
 
       const template: MenuItemConstructorOptions[] = [];
       if (params.linkURL) {
-        // Service previews open same-service links as service tabs; anything
-        // else is external-only, so a remote page cannot open a client-local URL.
-        const serviceLink = preview.service
-          ? this.options.transport?.describe(params.linkURL)
-          : null;
+        // Same-service links open as service tabs; anything else is
+        // external-only, so a remote page cannot open a client-local URL.
+        const serviceLink = this.options.transport?.describe(params.linkURL) ?? null;
         const serviceTarget =
-          serviceLink && serviceLink.serviceKey === preview.service?.key
+          serviceLink && serviceLink.serviceKey === preview.service.key
             ? this.options.transport?.target(serviceLink.serviceKey)
             : null;
-        const browserTabUrl = preview.service
-          ? (serviceLink?.displayUrl ?? null)
-          : browserTabUrlFromPreviewLink(params.linkURL, preview.requestedUrl);
         const externalBrowserUrl = isExternalBrowserUrl(params.linkURL);
         template.push(
           {
             label: "Open Link in New Tab",
-            enabled: browserTabUrl !== null && (!preview.service || Boolean(serviceTarget)),
+            enabled: Boolean(serviceTarget && serviceLink),
             click: () => {
-              if (!browserTabUrl) return;
-              if (serviceTarget && serviceLink) {
-                this.options.emitOpenLink({
-                  tabId,
-                  url: browserTabUrl,
-                  service: { ...serviceTarget, path: serviceLink.path },
-                });
-              } else if (!preview.service) {
-                this.options.emitOpenLink({ tabId, url: browserTabUrl });
-              }
+              if (!serviceTarget || !serviceLink) return;
+              this.options.emitOpenLink({
+                tabId,
+                url: serviceLink.displayUrl,
+                service: { ...serviceTarget, path: serviceLink.path },
+              });
             },
           },
           {
             label: "Open in External Browser",
             // A service link's runtime ingress URL means nothing outside this
             // app; it opens through the private preview origin instead.
-            enabled: preview.service
-              ? serviceTarget
-                ? Boolean(this.options.openServiceExternally)
-                : externalBrowserUrl && !serviceLink && !isLoopbackUrl(params.linkURL)
-              : externalBrowserUrl,
+            enabled: serviceTarget
+              ? Boolean(this.options.openServiceExternally)
+              : externalBrowserUrl && !serviceLink && !isLoopbackUrl(params.linkURL),
             click: () => {
               if (serviceTarget && serviceLink) {
                 void this.options
@@ -1397,8 +1220,7 @@ export class BrowserPreviewManager {
     const contents = preview.view.webContents;
     const url = contents.isDestroyed() ? "" : contents.getURL();
     const transport = this.options.transport;
-    const described =
-      preview.service && transport ? transport.describe(url || preview.requestedUrl) : null;
+    const described = transport ? transport.describe(url || preview.requestedUrl) : null;
     return {
       tabId,
       url,
@@ -1406,7 +1228,7 @@ export class BrowserPreviewManager {
       canGoBack: !contents.isDestroyed() && contents.navigationHistory.canGoBack(),
       canGoForward: !contents.isDestroyed() && contents.navigationHistory.canGoForward(),
       error: preview.error,
-      ...(preview.service && transport
+      ...(transport
         ? {
             ...(described
               ? {
@@ -1428,7 +1250,7 @@ export class BrowserPreviewManager {
                 }
               : {}),
           }
-        : { navigation: preview.navigation }),
+        : {}),
     };
   }
 

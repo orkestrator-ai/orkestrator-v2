@@ -799,21 +799,11 @@ describe("project coordinator", () => {
       await expect(service.retryConversation(project.id, "missing")).rejects.toThrow("not found");
     });
 
-    test("opening the panel keeps the failure for a renderer that offers Retry", async () => {
+    test("opening the panel keeps the failure: only Retry clears it", async () => {
       const { project, service, side } = await failedConversation();
       const ensured = await service.ensure(project.id);
       expect(errorOf(ensured, side.id)).toBe("bridge failed");
       expect(ensured.workspace.lifecycleState).toBe("ready");
-    });
-
-    test("an older renderer, whose only recovery is opening the panel, clears it", async () => {
-      const { project, service, side } = await failedConversation();
-      // An older renderer reads the workspace field, which no failure touches.
-      const before = await service.get(project.id);
-      expect(before?.workspace.lifecycleState).toBe("ready");
-      expect(before?.workspace.lastStartupError).toBeUndefined();
-      const ensured = await service.ensure(project.id, { clearConversationErrors: true });
-      expect(errorOf(ensured, side.id)).toBeUndefined();
     });
   });
 
@@ -1963,7 +1953,7 @@ describe("project coordinator", () => {
         expect(current.createdFromCommit).toBe("a".repeat(40));
         return { ...current, createdFromCommit: current.delegationBaseCommit };
       },
-      async () => null,
+      async () => "boot-1",
     );
 
     expect(order).toEqual(["prepare", "reconcile"]);

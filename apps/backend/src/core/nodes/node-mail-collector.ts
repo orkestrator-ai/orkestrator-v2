@@ -1,8 +1,6 @@
-import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
 import { nodeMailClient, type NodeMailApi } from "@orkestrator/protocol/contract/domains/node-mail";
 import type { BackendId } from "@orkestrator/protocol/federation";
 
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import type { MailAttachmentBatch } from "../mail-attachments.js";
 import {
   describeLeafCoordinatorMail,
@@ -23,28 +21,11 @@ const log = createLogger("nodes");
  * that fails leaves the item in the leaf's outbox for the next attempt.
  *
  * The leaf is called through the `node-mail` domain client
- * (`@orkestrator/protocol/contract/domains/node-mail`, plan item 1010): a leaf
- * that advertises the domain takes every outbox flag; a pre-contract leaf gets
- * only the flags its hello capabilities name, as before.
+ * (`@orkestrator/protocol/contract/domains/node-mail`, plan item 1010).
  */
 
 export interface CollectorLink extends EnvelopeLink {
   readonly connected: boolean;
-}
-
-/**
- * Whether the leaf behind `link` takes coordinator notices through its outbox:
- * one with the `node-mail` domain does, a pre-contract one when its hello
- * names `coordinator-notices`. The collector and the auto-switch notice
- * bridge read the same answer, so a notice goes one way only.
- */
-export function leafTakesCoordinatorNotices(link: EnvelopeLink): boolean {
-  try {
-    return linkDomainApi(link, nodeMailClient).supports(BACKEND_CAPABILITIES.coordinatorNotices);
-  } catch {
-    // No version in common: nothing is collected from it either.
-    return false;
-  }
 }
 
 export interface CollectorDeps {
@@ -179,11 +160,7 @@ export class NodeMailCollector {
     let failed = false;
     let deliveredPrefix = 0;
     let deferred = false;
-    // Notices go only to a leaf that takes them; the client drops the other
-    // flags for a pre-contract leaf that does not name them.
-    const notices = mail.supports(BACKEND_CAPABILITIES.coordinatorNotices)
-      ? this.deps.notices
-      : undefined;
+    const notices = this.deps.notices;
     const repositoryHints = notices ? await notices.repositoryHints() : [];
     for (let round = 0; round < 20; round += 1) {
       const batch = (await mail.collectOutbox({
@@ -275,7 +252,7 @@ export class NodeMailCollector {
    * An agent's mail to "coordinator" for a repository with no coordinator here
    * goes back to the leaf's own. True once the leaf has taken it. Anything else
    * stays in the outbox: mail addressed to a conversation, a coordinator's own
-   * mail, an older leaf, or a leaf with no coordinator either.
+   * mail, or a leaf with no coordinator either.
    */
   private async handBack(
     mail: NodeMailApi,
@@ -289,10 +266,6 @@ export class NodeMailCollector {
       item.fromCoordinator ||
       item.allowLocalFallback === false
     ) {
-      return false;
-    }
-    if (!mail.supports(BACKEND_CAPABILITIES.nodeMailReturn)) {
-      compatibilityPathUsage.record("node-mail-return.older-leaf");
       return false;
     }
     return mail

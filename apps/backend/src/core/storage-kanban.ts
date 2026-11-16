@@ -732,7 +732,7 @@ export class KanbanRepository {
   }
 
   /**
-   * Deletes the rows that projects removed before to-do 5820 left behind,
+   * Deletes the rows that projects removed before #2295 left behind,
    * and the completion comment records of pipelines that are gone (to-do
    * 8111 task 1); see `sweepRemovedProjectRows`.
    */

@@ -95,7 +95,7 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
   get_ticket_sync_cursor: ["controllerId", "projectId"],
   // `features` added with images on synced tickets (#2027).
   collect_ticket_sync_outbox: ["controllerId", "after", "features"],
-  // `removedProjects` added for a command node's removed projects (to-do 8111).
+  // `removedProjects` added for a command node's removed projects (#2328).
   ack_ticket_sync_outbox: ["controllerId", "epoch", "upTo", "removedProjects"],
   get_ticket_sync_status: ["projectId"],
   sync_node_tickets: ["nodeId"],

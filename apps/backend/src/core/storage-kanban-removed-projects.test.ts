@@ -21,7 +21,7 @@ import {
 
 /**
  * The startup sweep for rows that projects removed before project removal
- * deleted their content left behind (to-do 8111 task 1): it deletes them,
+ * deleted their content left behind (#2328): it deletes them,
  * leaves every other project's rows as stored, and deletes nothing when the
  * projects store cannot be read completely or holds no project.
  */

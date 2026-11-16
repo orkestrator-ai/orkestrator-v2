@@ -6,7 +6,7 @@ import type { StorageService } from "./storage.js";
 const log = createLogger("storage");
 
 /**
- * Startup pass for to-do 8111 task 1: deletes the rows that projects removed
+ * Startup pass for #2328: deletes the rows that projects removed
  * before project removal deleted their content left behind
  * (`StorageService.sweepRemovedProjectContent`). Runs once per backend start,
  * in the background; it never rejects. A refusal deletes nothing and is

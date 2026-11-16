@@ -1,5 +1,5 @@
 /**
- * Container Claude CLI turns no hook ends (to-do 8092).
+ * Container Claude CLI turns no hook ends (#2315).
  *
  * After a refused login the CLI answers the next prompt "Not logged in ·
  * Please run /login" locally: `UserPromptSubmit` rang `working`, and neither

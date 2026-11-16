@@ -107,7 +107,7 @@ export const ackTicketSyncOutboxCommand = defineCommand({
     epoch: optionalUnknown,
     upTo: optionalUnknown,
     // The command node's projects this acknowledgement dropped changes for
-    // because they were removed there (to-do 8111 task 2): the leaf keeps its
+    // because they were removed there (#2328): the leaf keeps its
     // copies of them as its own, as when a command node detaches.
     removedProjects: optionalUnknown,
   }),

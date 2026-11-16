@@ -667,10 +667,10 @@ export class ProjectsRepository {
   }
 
   /**
-   * Deletes what projects removed before to-do 5820 left behind: their
+   * Deletes what projects removed before #2295 left behind: their
    * tickets, ticket images, deleted-ticket delivery records, labels, notes,
    * feature plans and sync bookkeeping, and the completion comment records of
-   * pipelines that are gone (to-do 8111 task 1, `sweepRemovedProjectRows`).
+   * pipelines that are gone (#2328, `sweepRemovedProjectRows`).
    *
    * Every decision reads the projects store strictly and completely
    * (`loadProjectIdsForCleanup`): an unreadable or invalid store refuses the

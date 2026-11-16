@@ -375,7 +375,7 @@ export class KanbanSyncRepository {
   /**
    * Leaf: the command node applied everything up to `upTo` in this epoch.
    * `removedProjects` are its projects that were removed there, whose changes
-   * it dropped (to-do 8111 task 2): this leaf's copies of their tickets
+   * it dropped (#2328): this leaf's copies of their tickets
    * become its own, keeping what they say now, their links go, and any
    * change for them still queued is dropped too, as when a command node
    * detaches (`forgetTicketSyncController`), for those projects only.

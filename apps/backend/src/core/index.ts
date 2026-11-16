@@ -2426,7 +2426,7 @@ export class OrkestratorBackend {
     void runStartupEnvironmentCleanup(this.context);
     this.startupProgress("durable-work");
     // Rows that projects removed before removal deleted their content left
-    // behind (to-do 8111 (retired)); background, never rejects.
+    // behind (#2328); background, never rejects.
     void sweepRemovedProjectContentAtStartup(this.context.storage);
     const reconcileTabTeardowns = this.commands.get("reconcile_tab_teardowns");
     if (reconcileTabTeardowns) {

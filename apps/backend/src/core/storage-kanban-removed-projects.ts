@@ -47,8 +47,8 @@ export interface RemovedProjectSweepResult {
 }
 
 /**
- * Deletes the rows that projects removed before to-do 5820 left behind
- * (to-do 8111 task 1): their tickets and ticket image files, the delivery
+ * Deletes the rows that projects removed before #2295 left behind
+ * (#2328): their tickets and ticket image files, the delivery
  * records of their deleted tickets, their label catalogues, notes and
  * feature plans, the ticket-sync bookkeeping naming them
  * (`forgetSyncProject`), and the Linear and GitHub completion comment

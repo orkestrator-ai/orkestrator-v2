@@ -83,7 +83,7 @@ type Answer = {
   command: string;
   transcript?: string;
   state?: string;
-  /** A discovery answer's status (`snapshot`, `unchanged`): to-do 8151. */
+  /** A discovery answer's status (`snapshot`, `unchanged`): #2314. */
   discovery?: string;
   bytes: number;
   ms: number;

@@ -2,7 +2,7 @@ import { runCommand } from "./shell.js";
 
 /**
  * Settling a container terminal Claude turn that no hook will ever end
- * (to-do 8092).
+ * (#2315).
  *
  * Terminal Claude reports its state only through the hooks the image installs
  * (`UserPromptSubmit` writes `working`, `Stop` and `StopFailure` end the turn).

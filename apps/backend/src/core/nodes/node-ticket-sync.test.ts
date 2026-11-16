@@ -647,7 +647,7 @@ describe("outbox collection interleavings", () => {
     }
   }
 
-  test("an entry for a project the command node does not have is dropped, and the rest apply (to-do 8111)", async () => {
+  test("an entry for a project the command node does not have is dropped, and the rest apply (#2328)", async () => {
     const f = await fleet();
     await f.sync.sync(LEAF_ID);
     const a = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "known", "");

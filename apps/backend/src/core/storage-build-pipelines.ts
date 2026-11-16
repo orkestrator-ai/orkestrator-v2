@@ -528,7 +528,7 @@ export class BuildPipelinesRepository {
 
   /**
    * Every stored pipeline id, read strictly for a destructive sweep (the
-   * removed-project sweep's completion comment records, to-do 8111): a
+   * removed-project sweep's completion comment records, #2328): a
    * missing or unreadable store throws rather than read as "no pipelines".
    * Rows that fail validation still count, so their records stay.
    */

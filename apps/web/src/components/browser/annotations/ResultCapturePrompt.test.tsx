@@ -211,14 +211,14 @@ describe("turn-end result capture prompt", () => {
         (card) => card.dataset.request === REQUEST_ID,
       )!;
       expect(captureButton(article)).toBeTruthy();
-      expect(screen.queryByRole("region", { name: "Capture the result" })).toBeNull();
+      expect(screen.queryByRole("region", { name: "Capture the result" }) === null).toBe(true);
       view.unmount();
       renderInAppCommandScope(<AnnotationHarness />);
       const again = (await screen.findAllByRole("article", { name: /Change request/ })).find(
         (card) => card.dataset.request === REQUEST_ID,
       )!;
       expect(captureButton(again)).toBeTruthy();
-      expect(screen.queryByRole("region", { name: "Capture the result" })).toBeNull();
+      expect(screen.queryByRole("region", { name: "Capture the result" }) === null).toBe(true);
     });
   }
 

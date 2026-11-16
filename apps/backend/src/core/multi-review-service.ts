@@ -5736,7 +5736,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * is always given the Orkestrator MCP server and refuses every turn after
    * the first while it is not connected, so a structured-output turn that
    * went ahead would fail at its first schema repair or follow-up with a
-   * message that asks for a retry (to-do 8172).
+   * message that asks for a retry (#2321).
    */
   private async assertWorkflowAgentToolsReachable(
     workflow: MultiReviewWorkflow,

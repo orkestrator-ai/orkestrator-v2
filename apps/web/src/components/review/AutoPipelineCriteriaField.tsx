@@ -35,7 +35,7 @@ export function AutoPipelineCriteriaField({
                     rows={1}
                     aria-invalid={invalid}
                     aria-describedby={invalid ? errorId : undefined}
-                    placeholder="Describe one observable outcome…"
+                    placeholder="Given …, when …, then …"
                     className="min-h-9 resize-none py-1.5 leading-relaxed"
                     value={criterion}
                     onChange={(event) =>

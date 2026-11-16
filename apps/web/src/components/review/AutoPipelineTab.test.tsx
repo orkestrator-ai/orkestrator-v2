@@ -92,6 +92,10 @@ test("the draft walks through details, acceptance criteria and confirm in one ta
   // Criteria are the next step, not on the same page.
   expect(screen.queryByLabelText("Criterion 1") === null).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Next" }));
+  // The step asks for requirements seen by a user, not a codebase checklist.
+  expect(
+    screen.getByText(/requirement seen by a user or other actor: Given a situation/),
+  ).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Move criterion 2 up" }));
   expect((screen.getByLabelText("Criterion 1") as HTMLTextAreaElement).value).toBe("Second check");
   fireEvent.click(screen.getByRole("button", { name: "Remove criterion 2" }));

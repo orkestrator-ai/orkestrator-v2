@@ -20,6 +20,9 @@ import { rpc, useControlMcpServerHarness } from "./server-test-support.js";
 // stay under the byte bound.
 // 2026-11-15: 124,991 bytes once request_root_changes took nodeId (to-do
 // 0395 (retired) task 2); its description was trimmed to pay for the field.
+// 2026-11-16: 124,990 bytes once acceptance criteria were asked for as
+// user-facing Given/When/Then requirements; the ticket sections guidance that
+// carries the rule was trimmed to pay for it.
 const MAX_TOOLS = 93;
 const MAX_SCHEMA_BYTES = 125_000;
 

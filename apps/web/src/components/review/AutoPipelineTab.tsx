@@ -485,7 +485,9 @@ export function AutoPipelineTab({
               {currentStep === "criteria" && (
                 <div className="space-y-3">
                   <p className="text-sm text-muted-foreground">
-                    Each criterion is checked independently by Verify.
+                    Each criterion is checked independently by Verify. Write each as a requirement
+                    seen by a user or other actor: Given a situation, when they act, then what they
+                    can see or rely on.
                   </p>
                   <AutoPipelineCriteriaField
                     criteria={edits.acceptanceCriteria}

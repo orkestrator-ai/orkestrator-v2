@@ -38,12 +38,27 @@ export function terminateDotRun(chunk: string): string {
 export async function forwardWithDotLines(
   stream: ReadableStream<Uint8Array>,
   write: (text: string) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const decoder = new TextDecoder();
-  for await (const chunk of stream) {
-    const text = decoder.decode(chunk, { stream: true });
-    if (text) write(terminateDotRun(text));
+  const reader = stream.getReader();
+  const cancel = () => {
+    // Cancellation releases a pending read even if an inherited writer lives on.
+    void reader.cancel().catch(() => {});
+  };
+  signal?.addEventListener("abort", cancel, { once: true });
+  if (signal?.aborted) cancel();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      if (text) write(terminateDotRun(text));
+    }
+    const rest = decoder.decode();
+    if (rest) write(rest);
+  } finally {
+    signal?.removeEventListener("abort", cancel);
+    reader.releaseLock();
   }
-  const rest = decoder.decode();
-  if (rest) write(rest);
 }

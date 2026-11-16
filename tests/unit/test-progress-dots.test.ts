@@ -69,3 +69,18 @@ describe("forwardWithDotLines", () => {
     expect(written.join("")).toBe(".\n.\nfail é\n");
   });
 });
+
+test("forwarding can cancel a pending read without waiting for EOF", async () => {
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const controller = new AbortController();
+  const forwarded = forwardWithDotLines(stream, () => {}, controller.signal);
+  controller.abort();
+  await forwarded;
+  expect(cancelled).toBe(true);
+  expect(stream.locked).toBe(false);
+});

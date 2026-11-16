@@ -41,7 +41,10 @@ if (!selection) {
 // the child running unsignalled (flake 9945).
 let child: { kill(signal: NodeJS.Signals): void } | undefined;
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-  process.on(signal, () => child?.kill(signal));
+  process.on(signal, () => {
+    if (child) child.kill(signal);
+    else process.exit(128 + { SIGINT: 2, SIGTERM: 15, SIGHUP: 1 }[signal]);
+  });
 }
 // Bun's reporter writes to stderr; it is piped only to close each run of
 // progress dots with a newline for Turbo's line-at-a-time output.
@@ -50,7 +53,22 @@ const spawned = Bun.spawn([process.execPath, "test", ...selection, ...flags], {
   env: process.env,
 });
 child = spawned;
-const forwarded = forwardWithDotLines(spawned.stderr, (text) => process.stderr.write(text));
+const drain = new AbortController();
+const forwarded = forwardWithDotLines(
+  spawned.stderr,
+  (text) => process.stderr.write(text),
+  drain.signal,
+);
+// Observe forwarding errors immediately, while the test runner is still alive.
+void forwarded.catch(() => {});
 const status = await spawned.exited;
-await forwarded;
+child = undefined;
+// A descendant may keep its inherited stderr open after bun test exits. Give
+// buffered diagnostics time to drain, then release our reader regardless of EOF.
+const drainTimer = setTimeout(() => drain.abort(), 250);
+try {
+  await forwarded;
+} finally {
+  clearTimeout(drainTimer);
+}
 process.exitCode = status;

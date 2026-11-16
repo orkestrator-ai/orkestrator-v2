@@ -15,6 +15,6 @@ describe("default test timeout preload", () => {
   });
 
   test("is far above Bun's five-second default so a loaded host cannot fail a healthy test", () => {
-    expect(DEFAULT_TEST_TIMEOUT_MS).toBeGreaterThanOrEqual(30_000);
+    expect(DEFAULT_TEST_TIMEOUT_MS).toBe(60_000);
   });
 });

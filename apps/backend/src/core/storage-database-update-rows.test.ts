@@ -7,7 +7,7 @@ import { StorageDatabase, StoreTooLargeError, type StoreLayout } from "./storage
 /**
  * `StorageDatabase.updateStoreRows`: several rows of a store and an envelope's
  * document in one commit, without assembling or reserializing the store
- * (todo 6120 task 6), and `rows().list({ owner: null })`.
+ * (#2029), and `rows().list({ owner: null })`.
  */
 
 const directories: string[] = [];

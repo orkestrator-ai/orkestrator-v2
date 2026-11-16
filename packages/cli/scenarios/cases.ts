@@ -1039,7 +1039,7 @@ export const SCENARIOS: ScenarioDefinition[] = [
       const receipt = started.envelope?.receipt as PublicReceipt;
       // Read before anything else touches the session (`session config get`
       // below is a state read that records usage too), so the count proves
-      // the settle of `--wait` itself recorded the turn (to-do 7815).
+      // the settle of `--wait` itself recorded the turn (#2170).
       const settledUsage = await recordSettledStartUsage(context, "session start --wait");
       // Recorded before the outcome is judged, so a failed run still says
       // which model it ran on.

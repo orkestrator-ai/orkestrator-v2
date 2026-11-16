@@ -1470,7 +1470,7 @@ describe("agent accounts", () => {
     ).rejects.toThrow();
   });
 
-  // Todo 0003 task 2: the Codex gate above, for Claude. A Claude bridge sends
+  // #2214: the Codex gate above, for Claude. A Claude bridge sends
   // its plan windows only near a limit (`rate_limit_event`, and the SDK usage
   // report's account windows), so a live run could not be arranged; the gate
   // is the same code for both platforms, and the reporting account is what

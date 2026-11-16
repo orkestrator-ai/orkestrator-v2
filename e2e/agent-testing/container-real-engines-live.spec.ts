@@ -65,7 +65,7 @@ import {
  * The backend stages each platform's credential into the container on every
  * bridge start; nothing here reads or copies one. Profile:
  * `--fixture-environments local,container` with the platform in
- * `--agent-platforms`; the manual-test checklist (7568, 7040 tasks 1 and 2)
+ * `--agent-platforms`; the manual-test checklist (7568, #2242)
  * has the commands.
  */
 

@@ -11,7 +11,7 @@ import { StorageService } from "./storage.js";
 /**
  * Deleting an environment's agent mail commits only the rows it changes, from
  * the shared read model, instead of cloning and rewriting the whole store
- * (todo 6120 task 6). The deletion's meaning is covered with the rest of agent
+ * (#2029). The deletion's meaning is covered with the rest of agent
  * mail in `storage-agent-mail.test.ts`.
  */
 

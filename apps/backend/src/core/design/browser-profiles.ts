@@ -20,7 +20,7 @@ import {
  *
  * Each launch also needs an artifacts directory (downloads, traces, video).
  * Left to itself Playwright makes `playwright-artifacts-*` beside the profile,
- * which is off Chromium's command line and so cannot be recorded (0830). The
+ * which is off Chromium's command line and so cannot be recorded (#1463). The
  * ledger makes one inside its own directory instead, named for this backend,
  * and removes it with the record.
  */

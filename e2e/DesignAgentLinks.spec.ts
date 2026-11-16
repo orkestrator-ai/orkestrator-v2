@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 /**
  * The Ask agent dialog's closed design links, rendered by the real component
  * against fixed backend answers (`fixture/DesignAgentLinksFixture.tsx`):
- * a resumable conversation, one the agent archived (to-do 0038) and one that
+ * a resumable conversation, one the agent archived (#2174) and one that
  * never started.
  */
 

@@ -1,7 +1,6 @@
 import type { Duplex } from "node:stream";
 
-import type { AuthenticatedPreviewAccess } from "./core/preview-access.js";
-import type { ResolvedPreviewTarget } from "./core/preview-service-registry.js";
+import type { AuthenticatedPreviewAccess, ResolvedPreviewTarget } from "./core/previews/index.js";
 
 export interface PreviewUpstreamPoolLimits {
   /** Idle connections kept per access (one browser session for one service). */

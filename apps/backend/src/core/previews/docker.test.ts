@@ -4,10 +4,10 @@ import { createServer, type AddressInfo, type Server } from "node:net";
 
 import { http1Request } from "@orkestrator/protocol/node/preview-http1";
 
-import { connectPreviewUpstream } from "../preview-upstream.js";
-import { publishedPortArguments } from "./commands-containers.js";
-import { runCommand } from "./shell.js";
-import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
+import { connectPreviewUpstream } from "../../preview-upstream.js";
+import { publishedPortArguments } from "../commands-containers.js";
+import { runCommand } from "../shell.js";
+import { createPreviewHarness, type PreviewHarness } from "./test-support.js";
 
 /**
  * Opt-in owned-Docker journeys (same-port containers with a host decoy, then

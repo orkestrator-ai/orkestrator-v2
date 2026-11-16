@@ -12,7 +12,7 @@
  * and a `hang` worker then ran on indefinitely, reparented to the init
  * process, holding its scratch inside the test's private TMPDIR (which the
  * in-use check then keeps too). One was found 13 hours after its test died
- * (0248). So the worker leaves, with its grandchild, once the process that
+ * (#1425). So the worker leaves, with its grandchild, once the process that
  * started it is gone.
  *
  * The launcher passes its own PID as `--fake-launcher-pid=<pid>` (every test

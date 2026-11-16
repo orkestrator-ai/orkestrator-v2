@@ -176,3 +176,75 @@ and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.y1VCr
 confirmed the case is open. The recorded failure triage remains `undetermined`
 (`dependency-graph-incomplete`): passing alone confirms intermittence, not an
 environmental cause or a repair. No assertion, timeout or skip changed.
+
+## Fork-card review repair recurrence — 2026-11-16
+
+Observed on the branch based on `c1fcc573bc079b4d856d53e31c45d5ebf2485d11`,
+with repair commit `0967f5b2e`. `mise run flaky:recurrence -- 6063 --base
+c1fcc573bc079b4d856d53e31c45d5ebf2485d11` reported this case open and instructed
+recording a recurrence. The branch changes Claude fork rehydration and renderer
+card lifecycle; neither this test nor `scripts/activity-sweep-bridge.ts` changes.
+
+Command: `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name
+fix-default-runtime -- mise run test`. Guards were run separately by the exact
+recorded default command, which stopped on the unchanged watcher-test source
+guard. Runtime groups were then allowed to execute without that guard.
+The root/support group used one worker alongside workspace (six slots), bridges
+(two slots), and Codex protocol (one slot).
+
+`activity sweep bridge ownership > readiness timeout reaps the child and removes
+copied credentials (ignores TERM: %s)` failed after 183.18 ms: process-group
+cleanup at `tests/unit/activity-sweep-bridge.test.ts:111` raised `kill() failed:
+EPERM`. Root/support totals: 5,003 passed, 29 skipped, eight failed in 392.21 s;
+seven other failures were installer-plan tests returning status 6. Their fixed
+script PATH cannot find this Mac's `/opt/homebrew/bin/flock`, so those seven
+are not counted as flakes.
+
+The complete unchanged activity-sweep owner then passed alone:
+`mise run test:logged -- --name fix-activity-owner -- bun test
+./tests/unit/activity-sweep-bridge.test.ts --parallel=1 --only-failures`
+(exit 0, 0.6 s). Passing output was deleted; test counts are not inferred.
+Evidence directory:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.0s0ejx/`
+(root/support log). This establishes intermittence, not its cause or a repair.
+No assertion, skip or timeout changed.
+
+The same runtime aggregate also timed out in the unchanged CLI owner:
+`process start reader > reads a real child's start time on this host`,
+`packages/cli/tests/client-descriptor-process.test.ts:191`, after 60,002.13 ms
+(60,000 ms budget). CLI totals: 546 passed, two skipped, one failed across
+42 files in 69.06 s. The workspace ran at concurrency two, with the CLI's
+package tests using the runner's isolated worker pool. The full unchanged owner
+then passed alone in 0.6 s (exit 0):
+`mise run test:logged -- --name fix-cli-process-owner -- bun test --cwd
+packages/cli ./tests/client-descriptor-process.test.ts --parallel=1 --only-failures`.
+Its aggregate evidence is the workspace log in the same `0s0ejx` directory.
+The CLI process reader and test are outside this branch's diff. This is another
+intermittent owner in this aggregate observation, with no confirmed cause;
+no timeout, skip or assertion changed.
+
+Final runtime result: exit 1 in 1,019.7 s. Web passed 14,952 tests (ten skipped,
+zero failed); backend passed 18,577 (206 skipped, one failed). The backend
+failure was `LoopbackListenerOwnership on this host > attributes a real
+127.0.0.1 listener and refuses another environment` at
+`apps/backend/src/core/preview-listener-ownership.test.ts:452`: expected
+`other-environment`, received `unchecked` (3,019.68 ms). A manual complete-owner
+rerun with one worker also failed, this time on the `::` variant with the same
+unchecked attribution (22 passed, one failed, 9.71 s):
+`mise run test:logged -- --name fix-listener-owner -- bun test --cwd
+apps/backend ./src/core/preview-listener-ownership.test.ts --parallel=1 --only-failures`.
+That manual failure is preserved in `orkestrator-test-run.f80QKM` under the
+same host temporary root.
+
+The aggregate runner then retried every failed owner by itself. The listener
+owner passed in 4.0 s; CLI passed in 1.1 s; activity sweep passed in 939 ms.
+Installer-plan still failed in 5.3 s. These retries establish intermittence for
+the listener, CLI and activity-sweep owners, without establishing a cause.
+The listener test and implementation are unchanged on this branch.
+The CLI package used two isolated workers in the original workspace run.
+
+All group evidence is now compressed under `orkestrator-test-run.0s0ejx`:
+`workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`,
+`root-and-agent-support-tests.log.gz`, and each `rerun-*.log.gz`.
+The outer command's failure log is
+`orkestrator-test-run.v2cwL4/fix-default-runtime.log.gz`.

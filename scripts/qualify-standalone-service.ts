@@ -5,7 +5,7 @@
  * RUN THIS ONLY IN A DISPOSABLE VM, CONTAINER OR USER ACCOUNT. It installs real
  * launchd/systemd user units into the account that runs it. On 2026-10-26 an
  * earlier version, run beside a live desktop install, took that install's
- * Control MCP port and coincided with its backend exiting (todo 0244). It now
+ * Control MCP port and coincided with its backend exiting (#1302). It now
  * refuses to start when it finds an Orkestrator on the host (a live default
  * data directory, a backend or launcher process, an `orkestrator-backend` unit,
  * or a listener on 34121/34122); `--allow-shared-host` overrides that and is
@@ -53,7 +53,7 @@
  *   `succeeded`; `current` and `previous` move. Both release directories
  *   must hold the `package.json` and `bun.lock` their package publishes in
  *   `resources/release-runtime/`, byte for byte, with every installed package
- *   at its locked version and none the lockfile does not list (to-do 5022
+ *   at its locked version and none the lockfile does not list (#2245
  *   task 2, retired 2026-11-14), and `sharp` must load from the release and encode a PNG. The
  *   report also lists the locked entries a fresh resolution would move today.
  * - rollback: the unit's environment points Bun at a registry served by this

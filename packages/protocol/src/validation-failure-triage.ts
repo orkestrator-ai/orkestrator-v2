@@ -165,7 +165,7 @@ export interface ValidationFailureSummary {
 
 /**
  * How far, in import edges from the test's own code, a changed file may be
- * and still make the failure `related` on its own (to-do 6920). A direct
+ * and still make the failure `related` on its own (#2026). A direct
  * import is one hop; one module between them is two. A backend test's graph
  * holds over a thousand files, so any-depth matching made a change to one
  * widely shared module `related` to most of the repository's failures.

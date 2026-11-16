@@ -220,7 +220,7 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
     });
     if (environment === "unavailable") return "unavailable";
     if (!isRecord(environment)) return null;
-    // The node relays its monitor's health in its summaries (todo 0796); a
+    // The node relays its monitor's health in its summaries (#1470); a
     // node that predates it, or summaries that are not current, never vouch.
     const summaries = await this.deps.summaries([nodeId]).catch(() => null);
     const node = summaries?.nodes.find((entry) => entry.nodeId === nodeId);

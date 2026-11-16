@@ -284,7 +284,7 @@ type DirectCursorSource = {
  * to attribute the joined pages that follow (0232 item 3): a source with no
  * direct pages, or one that pages but still named or wrapped no cursor. The
  * `/messages` fallback that made the first common retired (0050 task 1), and
- * the second's known causes have direct recovery (8110), so both should be
+ * the second's known causes have direct recovery (#2285), so both should be
  * quiet; joined paging itself retires with 0232 task 4.
  */
 type DirectHistoryGap = "unpaged-source" | "unnamed-cursor";
@@ -504,7 +504,7 @@ export class NativeAgentTranscriptProjection {
   private projectionHistoryBytes = 0;
   /** By session key: why its latest progressive view had no direct cursor. */
   private readonly directHistoryGaps = new Map<string, DirectHistoryGap>();
-  /** Provider cursors too long to wrap, named by handle (8110). */
+  /** Provider cursors too long to wrap, named by handle (#2285). */
   private readonly directHistoryCursorHandles = new DirectHistoryCursorHandles();
   /**
    * When each projection key's current run of `missing` provider reads began.
@@ -2595,7 +2595,7 @@ export class NativeAgentTranscriptProjection {
      * end at). Rows between the view's start and that position come back on
      * the first page as well, and the client deduplicates them by id; rows the
      * bound dropped come back after them. A window at the first message names
-     * one too, although it carries no `historyCursor` of its own (8110).
+     * one too, although it carries no `historyCursor` of its own (#2285).
      *
      * When no kept row can name a cursor (only an OpenCode inline error row
      * remains, its response's main row dropped by the bound), the cursor at
@@ -4264,7 +4264,7 @@ export class NativeAgentTranscriptProjection {
    * the cached MCP section. Without this nothing announced the change, so an
    * open panel kept the row it had (a reconnected server still "failed")
    * until its 30 s discovery backstop, and that read found only an empty
-   * `loading` section and kept the old row for another round (todo 7221).
+   * `loading` section and kept the old row for another round (#2031).
    * The bridge updates its inventory before it answers the action, so one
    * read here is the list the user acted on.
    *

@@ -1,16 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { ProviderUnavailableError } from "./agent-provider-contract.js";
-import {
-  judgeOpenCodeListener,
-  type OpenCodeListenerJudgement,
-} from "./opencode-listener-identity.js";
+import { ProviderUnavailableError } from "../agent-provider-contract.js";
+import { judgeOpenCodeListener, type OpenCodeListenerJudgement } from "./listener-identity.js";
 import {
   OPENCODE_LISTENER_RECHECK_INTERVAL_MS,
   OPENCODE_LISTENER_REPLACED_MESSAGE,
   openCodeListenerRecheckFetch,
   unexpectedOpenCodeResponse,
-} from "./opencode-listener-recheck.js";
+} from "./listener-recheck.js";
 
 function harness(
   answers: Array<Response | Error>,

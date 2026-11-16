@@ -38,7 +38,7 @@ projectId, conversationKey }`:
   tool argument, `redactArtifactGrantArgs`
   (`@orkestrator/protocol/transcript-artifacts`) replaces `scopeCapability`
   with `"[redacted]"` in OpenCode transcript normalization
-  (`opencode2/transcript-tools.ts`, and `opencode-display-transcript.ts` for
+  (`opencode2/transcript-tools.ts`, and `opencode2/display-transcript.ts` for
   stored 1.x transcripts) and in every projected part (`projectionPart`,
   before the projected-message cache), for canonical artifact tool calls and
   for any value shaped like a grant (`oag1.`). The provider's own history may

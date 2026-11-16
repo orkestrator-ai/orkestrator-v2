@@ -451,7 +451,7 @@ not close with them open:
   clearing the last, so a repeated init leaked a 60 s interval. `init` now
   starts it once, the way node coordination's timers already are, and the test
   names that timer and requires exactly one.
-- `opencode2-host-server.test.ts`: an agent-test start reconciles OpenCode
+- `opencode2/host-server.test.ts`: an agent-test start reconciles OpenCode
   2.x logins from `$XDG_DATA_HOME/opencode/auth.json`. The test isolated
   `XDG_CONFIG_HOME` only, so on a host that sets `XDG_DATA_HOME` (beelink
   does) it read the developer's real credential store and its fake server,

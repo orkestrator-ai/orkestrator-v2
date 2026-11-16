@@ -17,12 +17,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { ScriptedModel } from "../../../../../scripts/opencode2-steer-probe.js";
 import { OPENCODE2_LAUNCH_ROOT } from "../agent-credential-files.js";
-import { filterProjectOpenCodeConfig } from "../opencode-project-config.js";
+import { filterProjectOpenCodeConfig } from "./project-config.js";
 import {
   OPENCODE_HOST_CONFIG_INPUT,
   openCode2LaunchConfigScript,
   openCode2LaunchPlugins,
-} from "../opencode2-container-launch.js";
+} from "./container-launch.js";
 import { startOpenCode2OnFreePort } from "./live-server.test-support.js";
 import {
   OPENCODE2_GITHUB_ENV_PLUGIN_ID,

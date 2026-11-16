@@ -20,11 +20,8 @@ import {
   OPENCODE2_LAUNCH_ROOT,
 } from "../agent-credential-files.js";
 import { CONTAINER_BRIDGE_LAUNCHER } from "../container-bridge-credential.js";
-import { openCodePackageCacheScript } from "../opencode-package-cache.js";
-import {
-  OPENCODE_HOST_CONFIG_INPUT,
-  openCode2LaunchConfigScript,
-} from "../opencode2-container-launch.js";
+import { openCodePackageCacheScript } from "./package-cache.js";
+import { OPENCODE_HOST_CONFIG_INPUT, openCode2LaunchConfigScript } from "./container-launch.js";
 import { startOpenCode2OnFreePort } from "./live-server.test-support.js";
 import { OPENCODE2_FLAGS } from "./server.js";
 import { mintOpenCode2InputId } from "./steer.js";

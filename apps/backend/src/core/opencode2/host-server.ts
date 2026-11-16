@@ -19,7 +19,7 @@
  * - in the worktree, ready once `/api/info` answers.
  *
  * A container environment is refused here: its server runs inside the
- * container (`opencode2-container-server.ts`, which picks between the two).
+ * container (`container-server-lifecycle.ts`, which picks between the two).
  *
  * A coordinator runtime's server runs in the project checkout with the
  * coordinator's process authority (`opencode2/coordinator.ts`): the read-only
@@ -28,19 +28,15 @@
  * guard plugin. Its Control MCP credential is the one the supervisor issued
  * for the launch, held beside the process and attached per session.
  */
-import { ProviderUnavailableError } from "./agent-provider-contract.js";
-import { loadCoordinatorResearch } from "./coordinator-research-context.js";
-import {
-  openCode2CoordinatorSignature,
-  writeOpenCode2CoordinatorConfig,
-  writeOpenCode2HostConfig,
-  openCode2ServerKey,
-  type OpenCode2HostServerRecord,
-  type OpenCode2ServerConnection,
-} from "./opencode2/index.js";
-import type { CommandContext } from "./commands-context.js";
+import { ProviderUnavailableError } from "../agent-provider-contract.js";
+import { loadCoordinatorResearch } from "../coordinator-research-context.js";
+import { openCode2CoordinatorSignature, writeOpenCode2CoordinatorConfig } from "./coordinator.js";
+import type { OpenCode2ServerConnection } from "./environment-provider.js";
+import { openCode2ServerKey, type OpenCode2HostServerRecord } from "./host-server-state.js";
+import { writeOpenCode2HostConfig } from "./server.js";
+import type { CommandContext } from "../commands-context.js";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
-import { assertLocalServerStartAllowed, startLocalServer } from "./commands-servers.js";
+import { assertLocalServerStartAllowed, startLocalServer } from "../commands-servers.js";
 
 /** The first start imports the user's credentials and migrates an empty database. */
 export const OPENCODE2_HOST_READY_TIMEOUT_MS = 60_000;

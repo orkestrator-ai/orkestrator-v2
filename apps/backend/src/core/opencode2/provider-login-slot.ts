@@ -14,7 +14,7 @@ export interface OpenCodeLoginOperation {
  * One backend's OpenCode provider sign-in: the operation in progress, the
  * reservation that lets one login change run at a time, and the provider list
  * single flight. Owned by `LocalServerRuntime` as `openCodeProviderLogin` and
- * driven by `createOpenCodeProviderLogin` in `opencode-provider-login.ts`, which
+ * driven by `createOpenCodeProviderLogin` in `provider-login.ts`, which
  * cannot be constructed here because it reaches the server modules that import
  * `local-server-runtime.ts`.
  */

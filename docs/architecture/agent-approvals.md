@@ -108,7 +108,7 @@ follows the same design, recorded here as the 1.x launcher had it:
 - **The backend checks the socket before it sends the password.** After the
   server answers the fresh password and has loaded its plugins, a root exec
   records the inode of the socket listening on port 4096 in
-  `/run/orkestrator-bridge/opencode-listener` (`opencode-listener-identity.ts`).
+  `/run/orkestrator-bridge/opencode-listener` (`opencode2/listener-identity.ts`).
   Every read of the password (start, status, peek) lists the port's listening
   sockets from `/proc/net/tcp` in the same root exec and withholds the password
   unless that socket is the only one. A process the agent puts on the port, even
@@ -133,14 +133,14 @@ An image without `opencode2-launch=1` starts the 2.x server from node's login
 shell, with the password in root's file and the server's environment alone on
 a `bridge-credential=1` image; an image that would leave the password where
 `node` reads it is refused (`containerOpenCode2Mode`,
-`opencode2-container-server.ts`).
+`opencode2/container-server-lifecycle.ts`).
 
 ### OpenCode 2.x, the package cache and project configuration (`opencode2-launch=1`)
 
 To-do 7550 (done 2026-11-10) extended the same start to the rest of what a container's OpenCode
 servers load. On an `opencode2-launch=1` image:
 
-- **The 2.x server starts the same way** (`opencode2-container-launch.ts`):
+- **The 2.x server starts the same way** (`opencode2/container-launch.ts`):
   `orkestrator-bridge-launch opencode2` runs the root-owned
   `/opt/opencode/bin/opencode2` (node's `~/.opencode/bin/opencode2` is a
   symlink) under `env -i` on port 4102, with project configuration off. 2.2.6
@@ -170,7 +170,7 @@ servers load. On an `opencode2-launch=1` image:
   launcher points the server's `XDG_CACHE_HOME` at
   `/run/orkestrator-opencode2/cache`, root-owned and read-only to it. Root
   installs the providers the user's configuration names before each start
-  (the image's Bun, `--ignore-scripts`; `opencode-package-cache.ts`) into the
+  (the image's Bun, `--ignore-scripts`; `opencode2/package-cache.ts`) into the
   directory 2.2.6 imports from, `npm/<name>@<tag>/1`: the tag is the configured
   version or `latest`, except that 2.2.6 always asks for a bare
   `@ai-sdk/<name>` as its `ai-v6` dist-tag (read from 2.2.6's npm service,
@@ -193,7 +193,7 @@ servers load. On an `opencode2-launch=1` image:
   removes `plugin`/`plugins`, every `{env:}` reference (the server's own
   environment holds the password) and every `{file:}` reference outside the
   checkout, inlines those inside it, and root writes the result where the
-  launcher passes it as `OPENCODE_CONFIG` (`opencode-project-config.ts`), which
+  launcher passes it as `OPENCODE_CONFIG` (`opencode2/project-config.ts`), which
   2.2.6 honours with project configuration off (as 1.19.5 did). MCP servers,
   agents, commands and permission rules from the checkout apply again; they
   are the agent's to change, as before 7252. The checkout's `.opencode/`
@@ -207,7 +207,7 @@ servers load. On an `opencode2-launch=1` image:
   edit reaches the server at its next start. An image without
   `opencode2-launch=1` starts the server from node's login shell, which reads
   the checkout itself; rebuild it.
-- **A failed answer re-checks the socket** (`opencode-listener-recheck.ts`).
+- **A failed answer re-checks the socket** (`opencode2/listener-recheck.ts`).
   After a refused connection, a 401 or a 403 from the server, the backend
   asks root which socket listens; once it is not the recorded one, the
   connection sends nothing more until a fresh start records its own server.

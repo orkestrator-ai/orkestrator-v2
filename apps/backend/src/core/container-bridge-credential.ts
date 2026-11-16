@@ -44,7 +44,7 @@ import {
   parseOpenCodeListeners,
   type OpenCodeListenerJudgement,
   type OpenCodeServerKind,
-} from "./opencode-listener-identity.js";
+} from "./opencode2/index.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 import { runCommand } from "./shell.js";
 
@@ -73,7 +73,7 @@ import { runCommand } from "./shell.js";
 export type ContainerBridgeKind = Exclude<LocalServerKind, "opencode">;
 /**
  * Whose credential a root file holds: a bridge, or the OpenCode (2.x) server
- * (`opencode2-container-server.ts`), which has no `node`-readable token file
+ * (`opencode2/container-server-lifecycle.ts`), which has no `node`-readable token file
  * because only images with root credential files carry it. The `opencode`
  * kind of OpenCode 1.x (`opencode-token`, `opencode-listener` and
  * `/tmp/opencode-server-password`) was retired with 1.x.
@@ -341,7 +341,7 @@ const OPENCODE_LAUNCH_CAPABILITY: Record<OpenCodeServerKind, string> = {
 /**
  * Root's OpenCode password and, in the same root exec, a judgement of the
  * sockets listening on that server's port against the one the backend
- * recorded when it launched the server (`opencode-listener-identity.ts`).
+ * recorded when it launched the server (`opencode2/listener-identity.ts`).
  * Only a server started on an `opencode2-launch=1` image has a record; for
  * anything else the listener is `unrecorded` and the listing is skipped.
  */
@@ -377,7 +377,7 @@ export async function readContainerOpenCodeCredential(
 /**
  * Which socket listens on an OpenCode server's port now, against the record:
  * the re-check after a failed or unexpected answer
- * (`opencode-listener-recheck.ts`). Undefined when root could not be asked.
+ * (`opencode2/listener-recheck.ts`). Undefined when root could not be asked.
  */
 export async function recheckContainerOpenCodeListener(
   containerId: string,

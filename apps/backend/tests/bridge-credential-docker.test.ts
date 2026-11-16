@@ -46,7 +46,7 @@ import {
 import { CODEX_MAX_CONCURRENT_THREADS_ENV, OPENCODE2_SERVER_PORT } from "../src/core/constants";
 import { chooseBackendHostPorts } from "../src/core/container-host-ports";
 import type { CommandContext } from "../src/core/commands-context";
-import { startContainerOpenCode2Server } from "../src/core/opencode2-container-server";
+import { startContainerOpenCode2Server } from "../src/core/opencode2/container-server-lifecycle";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import { runCommand } from "../src/core/shell";

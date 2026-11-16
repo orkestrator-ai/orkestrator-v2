@@ -11,7 +11,7 @@ import {
   parseOpenCodeListeners,
   recordOpenCodeListenerScript,
   stopOpenCodeListenersScript,
-} from "./opencode-listener-identity.js";
+} from "./listener-identity.js";
 
 // These tests run real shells and socket processes; allow aggregate host load.
 setDefaultTimeout(30_000);

@@ -22,7 +22,7 @@ import {
 } from "@orkestrator/protocol/testing/artifact-tool-fixtures";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { nativeAgentSessionResumeIdentity } from "./models.js";
-import { normalizeOpenCodeEnvelope } from "./opencode-display-transcript.js";
+import { normalizeOpenCodeEnvelope } from "./opencode2/display-transcript.js";
 import { adaptAppServerItem } from "../../../../bridges/codex-bridge/src/app-server/item-adapter.js";
 import { itemToParts } from "../../../../bridges/codex-bridge/src/messages/normalization.js";
 import { projectionInternals } from "./native-agent-service-test-collaborators.js";

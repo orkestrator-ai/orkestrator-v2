@@ -21,9 +21,9 @@ import {
   OPENCODE2_LAUNCH_HOME,
   OPENCODE2_LAUNCH_PROJECT_CONFIG,
   OPENCODE2_LAUNCH_ROOT,
-} from "./agent-credential-files.js";
-import { OPENCODE2_SERVER_PORT, RETIRED_OPENCODE1_SERVER_PORT } from "./constants.js";
-import { OPENCODE2_CONTAINER_BINARY } from "./opencode-listener-identity.js";
+} from "../agent-credential-files.js";
+import { OPENCODE2_SERVER_PORT, RETIRED_OPENCODE1_SERVER_PORT } from "../constants.js";
+import { OPENCODE2_CONTAINER_BINARY } from "./listener-identity.js";
 import {
   OPENCODE_HOST_CONFIG_INPUT,
   OPENCODE2_LAUNCH_FINGERPRINT,
@@ -31,15 +31,15 @@ import {
   openCode2LaunchConfigScript,
   openCode2LaunchPlugins,
   openCode2LaunchPrepareScript,
-} from "./opencode2-container-launch.js";
+} from "./container-launch.js";
 import {
   OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT,
   OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT_FILE,
   OPENCODE2_GITHUB_ENV_PLUGIN_ID,
-} from "./opencode2/container-server.js";
-import { OPENCODE2_CREDENTIAL_PLUGIN_ID, OPENCODE2_FLAGS } from "./opencode2/server.js";
+} from "./container-server.js";
+import { OPENCODE2_CREDENTIAL_PLUGIN_ID, OPENCODE2_FLAGS } from "./server.js";
 
-const repository = path.resolve(import.meta.dir, "../../../..");
+const repository = path.resolve(import.meta.dir, "../../../../..");
 const launcherPath = path.join(repository, "docker/orkestrator-bridge-launch.sh");
 const launcher = readFileSync(launcherPath, "utf8");
 const dockerfile = readFileSync(path.join(repository, "docker/Dockerfile"), "utf8");

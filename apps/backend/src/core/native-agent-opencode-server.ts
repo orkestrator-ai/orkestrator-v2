@@ -5,8 +5,8 @@
  * describe, goal verifiers and suborks: `openCodeWorkflowDependencies`).
  *
  * Both reach the same server: the host one of a local environment
- * (`opencode2-host-server.ts`) or the in-container one
- * (`opencode2-container-server.ts`).
+ * (`opencode2/host-server.ts`) or the in-container one
+ * (`opencode2/container-server-lifecycle.ts`).
  */
 import {
   nativeAgentCapabilities,

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { startOpenCode2WithLauncher } from "../src/core/opencode2-container-launch";
+import { startOpenCode2WithLauncher } from "../src/core/opencode2/container-launch";
 import { createCommandFixtures } from "./command-fixtures";
 
 const { fs, withFakeDocker } = await createCommandFixtures();

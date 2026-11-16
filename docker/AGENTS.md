@@ -46,7 +46,7 @@ Agent CLIs, one per supported platform:
   root-owned at `/opt/opencode/bin/opencode2`; `OPENCODE2_CLI_PATH`
   (`/home/node/.opencode/bin/opencode2`) is a symlink to it. The container's
   server runs it through the launcher (`opencode2-launch=1`) on port 4102
-  (`apps/backend/src/core/opencode2-container-server.ts`), so it must stay
+  (`apps/backend/src/core/opencode2/container-server-lifecycle.ts`), so it must stay
   root-owned: a binary node could replace would run beside the password.
 - A terminal's `opencode` is `docker/opencode-cli.sh`, installed root-owned as
   `/opt/opencode/bin/opencode` and linked from node's `~/.opencode/bin`: it

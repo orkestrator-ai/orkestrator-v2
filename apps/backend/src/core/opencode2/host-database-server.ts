@@ -1,6 +1,6 @@
 /**
  * A 2.x server on the host OpenCode 2.x database, for work that has no
- * session: provider sign-in (`opencode-provider-login.ts`) and the host model
+ * session: provider sign-in (`provider-login.ts`) and the host model
  * catalogue (`host-model-catalog-refresh.ts`).
  *
  * Every host 2.x server shares one database under `<data>/opencode2/`
@@ -35,20 +35,16 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { mintBridgeToken } from "@orkestrator/protocol/node/bridge-credential";
-import { pushedLoginHostFile } from "./agent-accounts-containers.js";
-import { resolveOpenCode2Binary } from "./commands-agent-support.js";
-import type { CommandContext } from "./commands-context.js";
-import { allocateLocalPort } from "./commands-servers.js";
-import {
-  OpenCode2Client,
-  reconcileLegacyOpenCodeLoginsBestEffort,
-  openCode2RefreshLineageFile,
-  openCode2ServerKey,
-  openCode2HostLaunch,
-  waitForOpenCode2Ready,
-  writeOpenCode2HostConfig,
-} from "./opencode2/index.js";
-import { OPENCODE2_HOST_READY_TIMEOUT_MS } from "./opencode2-host-server.js";
+import { pushedLoginHostFile } from "../agent-accounts-containers.js";
+import { resolveOpenCode2Binary } from "../commands-agent-support.js";
+import type { CommandContext } from "../commands-context.js";
+import { allocateLocalPort } from "../commands-servers.js";
+import { OpenCode2Client } from "./client.js";
+import { reconcileLegacyOpenCodeLoginsBestEffort } from "./credential-upgrade.js";
+import { openCode2RefreshLineageFile } from "./credentials.js";
+import { openCode2ServerKey } from "./host-server-state.js";
+import { openCode2HostLaunch, waitForOpenCode2Ready, writeOpenCode2HostConfig } from "./server.js";
+import { OPENCODE2_HOST_READY_TIMEOUT_MS } from "./host-server.js";
 
 const log = createLogger("native-agent.opencode2");
 

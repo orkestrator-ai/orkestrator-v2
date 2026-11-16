@@ -1,13 +1,27 @@
 // The opencode2 domain's public surface: the only module other backend code
 // imports. Re-export by name (never `export *`) so the surface stays
-// reviewable. The `opencode2-*.ts` launch and server files beside this folder
-// are outside it and import it through this file like any other caller.
+// reviewable. The OpenCode launch, server, sign-in and stored-transcript
+// modules that sat beside this folder as `opencode-*.ts` and `opencode2-*.ts`
+// moved into it on 2026-11-16 (to-do 0012).
 //
-// One leaf module is a named exception in `.oxlintrc.json`, because routing
-// its importers through this file would close a runtime import cycle (this
-// file reaches `agent-accounts-containers.ts` through `host-launch.ts`):
-// `agent-accounts-containers.ts` and `portable-input-status.ts` import
-// `container-credentials.js` directly. It is still re-exported here.
+// Four modules are named exceptions in `.oxlintrc.json`:
+//
+// - `container-credentials.js`, because routing its importers through this
+//   file would close a runtime import cycle (this file reaches
+//   `agent-accounts-containers.ts` through `host-launch.ts`):
+//   `agent-accounts-containers.ts` and `portable-input-status.ts` import it
+//   directly. It is still re-exported here.
+// - `container-server-lifecycle.js`, `host-database-server.js` and
+//   `provider-login.js`, which reach the command layer (`commands-servers.ts`,
+//   the container lifecycle modules, `local-server-runtime.ts`). Re-exporting
+//   any of them here would put most of the backend behind this file and close
+//   a cycle for its other importers, so they are not re-exported:
+//   the composition root (`core/index.ts`) and `commands-registry-projects.ts` import
+//   `openCode2EnvironmentServer`, and `commands-registry-servers.ts` the
+//   container server start, stop and status, from
+//   `container-server-lifecycle.js`; `host-model-catalog-refresh.ts` imports
+//   `host-database-server.js`; `commands-registry-accounts.ts` imports
+//   `provider-login.js`.
 export { OpenCode2Client, OpenCode2RequestError } from "./client.js";
 export {
   SCRUB_OPENCODE2_CONTAINER_CREDENTIALS,
@@ -39,6 +53,10 @@ export {
   runningOpenCode2HostClient,
 } from "./credentials.js";
 export {
+  normalizeOpenCodeDisplayEntries,
+  normalizeOpenCodeDisplayEntry,
+} from "./display-transcript.js";
+export {
   OpenCodeEnvironmentProvider,
   type OpenCode2ServerConnection,
   type OpenCodeEnvironmentDependencies,
@@ -53,7 +71,16 @@ export {
   openCode2ServerKey,
   type OpenCode2HostServerRecord,
 } from "./host-server-state.js";
+export {
+  judgeOpenCodeListener,
+  listOpenCodeListenersScript,
+  openCodeListenerRecord,
+  parseOpenCodeListeners,
+  type OpenCodeListenerJudgement,
+  type OpenCodeServerKind,
+} from "./listener-identity.js";
 export { readOpenCode2ModelCatalogue } from "./models.js";
+export { OpenCodeProviderLoginSlot } from "./provider-login-slot.js";
 export {
   OPENCODE2_CREDENTIAL_PLUGIN_ID,
   OPENCODE2_DISABLE_FILEWATCHER,

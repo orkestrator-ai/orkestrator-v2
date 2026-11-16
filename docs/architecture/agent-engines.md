@@ -837,10 +837,10 @@ its SDK were retired on 2026-11-11: there is no 1.x server, no
   (`opencode2/user-config.ts`), the credential plugin that keeps the password
   out of the agent's tools, and explicit feature flags (`opencode2/server.ts`).
   Every host server shares that one database, so starts take turns
-  (`OpenCode2HostServerState.startGate`). `opencode2-host-server.ts` turns the
+  (`OpenCode2HostServerState.startGate`). `opencode2/host-server.ts` turns the
   running server into a connection for the provider.
 - *Containers:* the in-container server on port 4102
-  (`opencode2-container-server.ts`), started by the root-owned launcher on an
+  (`opencode2/container-server-lifecycle.ts`), started by the root-owned launcher on an
   `opencode2-launch=1` image. A container from an image without `opencode2`
   must be rebuilt. `start_opencode_server`, `stop_opencode_server` and
   `get_opencode_server_status` all reach it.
@@ -908,13 +908,13 @@ strict as an HTTP one:
   transcripts as every other platform (`opencode2/transcript.ts`).
   Build-pipeline and Multi Review transcripts that older versions persisted in
   OpenCode 1.x's `{ info, parts }` shape are still normalized for display on
-  the way out (`opencode-display-transcript.ts`).
+  the way out (`opencode2/display-transcript.ts`).
 
 Every OpenCode 2 session can be steered (`opencode2/steer.ts`); tab close stops
 owned work and releases the session but never deletes the conversation
 (`OpenCode2Provider.closeSession`). Sign-in writes credentials into the host
 database through `/api/integration` and `/api/credential`
-(`opencode-provider-login.ts`, `opencode2/credentials.ts`); the host
+(`opencode2/provider-login.ts`, `opencode2/credentials.ts`); the host
 `auth.json` is kept only as the copy containers are handed.
 
 ### Maintaining the OpenCode integration

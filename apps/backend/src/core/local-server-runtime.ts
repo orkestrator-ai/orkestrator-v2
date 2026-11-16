@@ -6,8 +6,7 @@ import { forgetBridgeAuthorityKey, retainHostBridgeAuthorityKey } from "./bridge
 import { CursorSdkLoginSlot } from "./cursor-sdk-login.js";
 import { GitHubCliLoginSlot } from "./github-cli-login.js";
 import { HostCatalogSeeds } from "./host-catalog-seeds.js";
-import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
-import { OpenCode2HostServerState } from "./opencode2/index.js";
+import { OpenCodeProviderLoginSlot, OpenCode2HostServerState } from "./opencode2/index.js";
 import { PiCatalogProbes, type PiCatalogProbesOptions } from "./pi-catalog-probes.js";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { bridgeRestarts, type BridgeRestartCounter } from "./bridge-restarts.js";
@@ -143,7 +142,7 @@ export class LocalServerRuntime {
   readonly gitHubCliLogin = new GitHubCliLoginSlot();
   /** The OpenCode provider sign-in, login change reservation and list flight. */
   readonly openCodeProviderLogin = new OpenCodeProviderLoginSlot();
-  /** Host OpenCode servers: password, directory and coordinator authority (`opencode2-host-server.ts`). */
+  /** Host OpenCode servers: password, directory and coordinator authority (`opencode2/host-server.ts`). */
   readonly openCode2 = new OpenCode2HostServerState();
 
   private readonly terminateTree: typeof terminateProcessTree;

@@ -33,7 +33,7 @@ export async function containerCredentialMode(
 /**
  * How the container's OpenCode (2.x) server starts: `opencode2-launcher` on an
  * image whose launcher also starts it (`opencode2-launch=1`,
- * `opencode2-container-launch.ts`), otherwise as the bridges' mode says, where
+ * `opencode2/container-launch.ts`), otherwise as the bridges' mode says, where
  * `launcher` and `verifier` both keep the password in root's file and the
  * server's environment alone. (`opencode-launch=1`, which started OpenCode
  * 1.x, is never asked for.)

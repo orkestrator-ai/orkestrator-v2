@@ -7,7 +7,7 @@ import {
   stripDisplayTailPayload,
   type NativeAgentDisplayTail,
 } from "./native-agent-display-tails.js";
-import { normalizeOpenCodeEnvelope } from "./opencode-display-transcript.js";
+import { normalizeOpenCodeEnvelope } from "./opencode2/display-transcript.js";
 
 describe("native agent display tails", () => {
   test("strips tool payloads, data URLs and approval state", () => {

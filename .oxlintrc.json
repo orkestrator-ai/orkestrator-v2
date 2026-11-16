@@ -397,7 +397,10 @@
                 "group": [
                   "**/opencode2/*",
                   "!**/opencode2/index.js",
-                  "!**/opencode2/container-credentials.js"
+                  "!**/opencode2/container-credentials.js",
+                  "!**/opencode2/container-server-lifecycle.js",
+                  "!**/opencode2/host-database-server.js",
+                  "!**/opencode2/provider-login.js"
                 ],
                 "message": "Import the opencode2 domain through opencode2/index.js."
               },

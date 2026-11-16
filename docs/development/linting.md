@@ -275,7 +275,11 @@ new.
     for example), or would pull in the graph that the leaf module exists to keep
     out (`plan-usage/cache.ts`, which the bridge provider imports without the
     plan reader's credential modules), name that file as an exception in the
-    `apps/backend/src/**` pattern and say so in the `index.ts` header. The same
+    `apps/backend/src/**` pattern and say so in the `index.ts` header. Where
+    re-exporting a module from `index.ts` would itself close a cycle for the
+    folder's other importers (`opencode2/container-server-lifecycle.ts`,
+    `host-database-server.ts` and `provider-login.ts`, which reach the command
+    layer), leave it out of `index.ts` and name it as an exception. The same
     goes for a domain's test support imported by a test-only entrypoint whose
     file name the test globs do not match (`previews/test-support.ts`, which
     the `preview-*-harness.ts` entrypoints import).

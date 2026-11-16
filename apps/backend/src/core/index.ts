@@ -224,9 +224,9 @@ import {
   nativeAgentSessionStorageKey,
   NativeAgentService,
 } from "./native-agent-service.js";
-import { openCode2EnvironmentServer } from "./opencode2-container-server.js";
-import { openCodeWorkflowDependencies } from "./native-agent-opencode-server.js";
+import { openCode2EnvironmentServer } from "./opencode2/container-server-lifecycle.js";
 import { openCode2WorkerMailbox } from "./opencode2/index.js";
+import { openCodeWorkflowDependencies } from "./native-agent-opencode-server.js";
 import { authenticatePipelineWorkerMailCapability } from "./pipeline-worker-identity.js";
 import {
   createSessionTitleService,
@@ -1089,7 +1089,7 @@ export class OrkestratorBackend {
     });
     this.coordinators.noticeRouter.setUsageLimitStops(this.usageLimitNotices);
     // The OpenCode server of a local or container environment; see
-    // opencode2-host-server.ts and opencode2-container-server.ts.
+    // opencode2/host-server.ts and opencode2/container-server-lifecycle.ts.
     const openCodeServer = (environmentId: string, options: { start: boolean }) =>
       openCode2EnvironmentServer(context, environmentId, options);
     // Workflows reach the same server, with a pipeline worker's own mailbox.

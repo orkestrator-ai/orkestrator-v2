@@ -10,7 +10,7 @@ import {
   committedTranscriptCursor,
   snapshotWithoutInlineTranscripts,
 } from "./build-pipeline-transcripts.js";
-import { normalizeOpenCodeDisplayEntry } from "./opencode-display-transcript.js";
+import { normalizeOpenCodeDisplayEntry } from "./opencode2/index.js";
 import { omitBuildPipelineDetail } from "@orkestrator/protocol/build-pipeline-detail";
 
 /**

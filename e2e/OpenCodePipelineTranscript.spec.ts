@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { normalizeOpenCodeDisplayEntries } from "../apps/backend/src/core/opencode-display-transcript";
+import { normalizeOpenCodeDisplayEntries } from "../apps/backend/src/core/opencode2/display-transcript";
 
 // Provider envelopes as persisted by build stages and Multi Review reviewers.
 const raw = [

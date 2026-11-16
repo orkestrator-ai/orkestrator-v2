@@ -4,6 +4,7 @@
     "mise run test",
     "mise run test:logged -- --name review-default-tests -- mise run test",
     "mise run test:slow",
+    "mise run test:logged -- --name slow-tests -- mise run test:slow",
     "mise run test:full",
     "mise run test:all",
     "mise run test:changed"
@@ -85,6 +86,13 @@
     },
     "mise run test:slow": {
       "resources": ["workspace:build-outputs"],
+      "onDemand": {
+        "when": ["scripts/test-tiers.ts", "scripts/test-all.ts"]
+      }
+    },
+    "mise run test:logged -- --name slow-tests -- mise run test:slow": {
+      "resources": ["workspace:build-outputs"],
+      "covers": ["mise run test:slow"],
       "onDemand": {
         "when": ["scripts/test-tiers.ts", "scripts/test-all.ts"]
       }

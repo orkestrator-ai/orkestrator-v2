@@ -336,3 +336,17 @@ Mobile and desktop `a live group crossing the fold threshold folds into its line
 Branch `legacy-retirement-8d61cbbc6765-r1` at `3bd72faa6`, base `a8b89f1541e7abb6af36d45121593ae14640a3ca`, Linux x86_64, Bun 1.4.4. The branch's only change under `apps/web/src/components/chat` is a comment in `NativeMessage.change-parts.tsx`; it does not change `ToolGroupFold.spec.ts`, its anchor probe or the component config. No assertion, timeout or skip changed.
 
 The same branch's repair rerun at `957d14c7c` (`mise run test:logged -- --name test-browser-rerun -- mise run test:browser`, 5 failed, 1,745 passed, 22.0 m) failed this case again on both projects; the complete owner then passed with `CoordinatorActions.spec.ts` and `TranscriptArrival.spec.ts` under one worker (254.7 s; see [0382](0382-component-browser-parallel-load.md)).
+
+## Worker-count measurement for to-do 8201, 2026-11-16
+
+On beelink (16 cores) at `a0920f1a7` (no web or e2e change), the whole
+component suite in the loopback namespace (`bun scripts/loopback-network.ts --
+bunx playwright test --config e2e/playwright.config.ts --workers N`) failed
+this case on both projects at 8 workers (host load median 64) and at 5
+workers (median 31), with fold gaps of 9 px mobile and 7 px desktop. The case
+alone (`e2e/ToolGroupFold.spec.ts:127 --workers 1`, load about 28) failed
+both projects again while the `reduce` variants passed (28.3 s). A later
+whole run at 4 workers (median load 22) passed it on both projects. So the
+suite's own worker count does not decide it: it failed alone with one worker
+at load 28 and passed with four at load 22, which points at what else the
+host is doing. No assertion, timeout or skip changed.

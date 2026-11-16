@@ -146,6 +146,46 @@ staged or combined diffs. New code/configuration edits,
 non-documentation resolutions, tooling-consumed documentation, and outstanding
 feature validation still follow the normal requirements.
 
+### Component suite workers
+
+The component suite (`e2e/playwright.config.ts`) starts a third of the
+host's cores as workers, at least one: 5 on a 16-core host, 4 on 12 cores, 2
+on 8. Review validation is the exception: it runs the scheduler's grant,
+capped at half the cores
+([Multi Review validation](#multi-review-validation)). To choose another count
+for one run, call Playwright directly with `--workers N`, for example
+`bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts --workers 8`.
+
+Half the cores, Playwright's own default, was the default until 2026-11-16.
+Each worker is a Chromium renderer plus its browser and GPU processes, and all
+of them share one Vite fixture server, so half the cores held a 12-core host
+near load 30 (to-do 8201, retired; the run is recorded in
+[agent-testing.md](agent-testing.md#loopback-namespace-qualification)). That
+run used the old 30 s test budget, and most of its 150 failures were
+timeouts. The suite now has a 120 s test budget
+([Controlled time](#controlled-time)). The measurements that set the default
+were taken on beelink (16 cores, 62 GB) at `a0920f1a7`. Each was one whole
+run of the component suite in the loopback namespace, sharing the host with
+other worktrees' builds. Host load includes the suite's own load. Suite CPU is
+the whole run's user and system time.
+
+| Workers | Wall time | Passed / failed / skipped | Suite CPU | Host load, median (p90) |
+| --- | --- | --- | --- | --- |
+| 8 (old default) | 35.8 min | 1,754 / 4 / 154 | not recorded | 64 (75) |
+| 8 (old default) | 26.5 min | 1,748 / 10 / 154 | 154 CPU-min, 5.8 cores | 40 (43) |
+| 5 (new default) | 29.1 min | 1,755 / 3 / 154 | 137 CPU-min, 4.7 cores | 31 (57) |
+| 4 (12-core default) | 22.8 min | 1,758 / 0 / 154 | 121 CPU-min, 5.3 cores | 22 (24) |
+
+Two of the failures in each of the first three runs were flake
+[1012](../tests/flaky-tests/web-ui/1012-live-tool-fold-threshold-gap.md),
+which also failed alone with one worker. Eight in the second 8-worker run were
+`browserContext.close` `ENOENT` errors. They were caused by a one-case rerun
+that shared the run's output directory and cleared it partway through. The
+remaining load failures were one or two assertion deadlines per run.
+Wall time followed what else the host was doing more than the worker count.
+The same work cost more CPU at more workers. A third of the cores kept
+coverage and kept the run time within the spread of half's runs.
+
 ### Public-site smoke tests
 
 `mise run test:browser` also runs `e2e/public-site/` against a fresh production
@@ -1959,8 +1999,8 @@ leaving the per-package `ORKESTRATOR_TEST_WORKERS` setting unchanged,
 and every validation command sees `ORKESTRATOR_REVIEW_VALIDATION=1`. The
 component browser suite (`e2e/playwright.config.ts`) runs the smaller of the
 grant and Playwright's own default of half the cores, so a busy host runs fewer
-browser workers instead of starving them, and an idle one runs as many as a
-person's run. Its profile asks for eight slots with a floor of four, because
+browser workers instead of starving them; a person's run, with no grant, starts
+a third of the cores ([Component suite workers](#component-suite-workers)). Its profile asks for eight slots with a floor of four, because
 measured CPU use undercounts a suite that mostly waits on pages. Under review
 validation that suite also retries a failed test once. A test that passes on
 its retry is listed as flaky in the check's output; record it in the flake

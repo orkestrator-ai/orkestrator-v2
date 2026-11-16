@@ -647,12 +647,12 @@ describe("outbox collection interleavings", () => {
     }
   }
 
-  test("unknown project entries and everything after them remain queued", async () => {
+  test("an entry for a project the command node does not have is dropped, and the rest apply (to-do 8111)", async () => {
     const f = await fleet();
     await f.sync.sync(LEAF_ID);
     const a = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "known", "");
-    await f.leaf.kanban.addKanbanTask(f.leafProject.id, "unknown", "");
-    await f.leaf.kanban.addKanbanTask(f.leafProject.id, "later", "");
+    const unknown = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "unknown", "");
+    const later = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "later", "");
     const invoke = f.link.invoke.bind(f.link);
     f.link.invoke = async <T>(name: string, args?: Record<string, unknown>): Promise<T> => {
       const result = await invoke<any>(name, args);
@@ -660,11 +660,14 @@ describe("outbox collection interleavings", () => {
         result.items[1].sourceProjectId = "removed-project";
       return result;
     };
-    expect((await f.sync.sync(LEAF_ID)).state).toBe("error");
+    expect(await f.sync.sync(LEAF_ID)).toMatchObject({ state: "in-sync", dropped: 1 });
     expect(await f.commandTicket(a.id)).not.toBeNull();
-    expect((await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toHaveLength(2);
+    expect(await f.commandTicket(unknown.id)).toBeNull();
+    expect(await f.commandTicket(later.id)).not.toBeNull();
+    expect((await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
+    const acks = f.requests.filter(({ command }) => command === "ack_ticket_sync_outbox");
+    expect(acks.at(-1)?.args.removedProjects).toEqual(["removed-project"]);
     f.link.invoke = invoke;
-    expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
   });
 
   test("oversized writes are refused atomically and later valid tickets sync", async () => {

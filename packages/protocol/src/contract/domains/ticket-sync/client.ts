@@ -14,6 +14,7 @@
  *   (`assertOnlyKeys`), so `collect_ticket_sync_outbox` goes without
  *   `features`, which came with image sync. Such a leaf queues no image
  *   change, so it loses nothing by not hearing the command node's features.
+ *   `ack_ticket_sync_outbox` goes without `removedProjects` the same way.
  *
  * `status` is the command node's own board read (`get_ticket_sync_status`,
  * the Kanban sync strip, plan item 7001's audit on 2026-11-07). It is not
@@ -104,6 +105,13 @@ function api(
  */
 const PRE_CONTRACT_COLLECT_KEYS = ["controllerId", "after"] as const;
 
+/**
+ * The keys `ack_ticket_sync_outbox` accepted before the contract; it goes
+ * without `removedProjects` (to-do 8111), so such a leaf keeps copies of a
+ * removed project syncing, and the command node keeps dropping their changes.
+ */
+const PRE_CONTRACT_ACK_KEYS = ["controllerId", "epoch", "upTo"] as const;
+
 /** `args` with only the keys a pre-contract handler accepted. */
 function onlyKeys<T extends object>(args: T, keys: readonly string[]): T {
   const kept: Record<string, unknown> = {};
@@ -124,6 +132,7 @@ function legacyApi(call: CommandCall, context: DomainAdapterContext): TicketSync
   return {
     ...legacy,
     collectOutbox: (args) => legacy.collectOutbox(onlyKeys(args, PRE_CONTRACT_COLLECT_KEYS)),
+    ackOutbox: (args) => legacy.ackOutbox(onlyKeys(args, PRE_CONTRACT_ACK_KEYS)),
   };
 }
 

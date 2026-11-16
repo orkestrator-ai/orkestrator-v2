@@ -34,6 +34,11 @@ import {
 } from "@orkestrator/protocol/ticket-labels";
 import { KanbanBoardStore, normalizeKanbanTask } from "./storage-kanban-board.js";
 import { forgetSyncProject } from "./storage-kanban-sync.js";
+import {
+  sweepRemovedProjectRows,
+  type LiveOwnerIds,
+  type RemovedProjectSweepResult,
+} from "./storage-kanban-removed-projects.js";
 
 export { normalizeKanbanTask } from "./storage-kanban-board.js";
 
@@ -690,7 +695,9 @@ export class KanbanRepository {
       // Also finishes what an earlier removal left journaled.
       return this.board.removal.replayImageDeletions(kept);
     });
-    const sidecarsLeft = await this.board.removal.removeDeliverySidecars(projectId);
+    const { failed: sidecarsLeft } = await this.board.removal.removeDeliverySidecars(
+      (owner) => owner === projectId,
+    );
     this.labelCatalogue.delete(projectId);
     const removeProjectRows = <T extends { projectId?: unknown }>(rows: T[]): number => {
       if (!Array.isArray(rows)) return 0;
@@ -722,6 +729,22 @@ export class KanbanRepository {
         `Could not delete ${imagesLeft} ticket image file(s) and ${sidecarsLeft} deleted-ticket record(s) of project ${projectId}; retry removing the project`,
       );
     }
+  }
+
+  /**
+   * Deletes the rows that projects removed before to-do 5820 left behind,
+   * and the completion comment records of pipelines that are gone (to-do
+   * 8111 task 1); see `sweepRemovedProjectRows`.
+   */
+  sweepRemovedProjectRows(
+    liveProjects: LiveOwnerIds,
+    livePipelines: LiveOwnerIds,
+  ): Promise<RemovedProjectSweepResult> {
+    return sweepRemovedProjectRows(
+      { context: this.context, files: this.files, board: this.board },
+      liveProjects,
+      livePipelines,
+    );
   }
 
   /**

@@ -372,22 +372,63 @@ export class KanbanSyncRepository {
     });
   }
 
-  /** Leaf: the command node applied everything up to `upTo` in this epoch. */
+  /**
+   * Leaf: the command node applied everything up to `upTo` in this epoch.
+   * `removedProjects` are its projects that were removed there, whose changes
+   * it dropped (to-do 8111 task 2): this leaf's copies of their tickets
+   * become its own, keeping what they say now, their links go, and any
+   * change for them still queued is dropped too, as when a command node
+   * detaches (`forgetTicketSyncController`), for those projects only.
+   */
   async ackTicketSyncOutbox(
     controllerId: string,
     epoch: string,
     upTo: number,
+    removedProjects: readonly string[] = [],
   ): Promise<{ remaining: number }> {
     return this.board.enqueue(async () => {
-      const { store } = await this.board.loadSyncStore();
+      const { store, fresh } = await this.board.loadSyncStore();
       const outbox = store.outbox[controllerId];
-      if (!outbox || outbox.epoch !== epoch) return { remaining: outbox?.items.length ?? 0 };
-      const remaining = outbox.items.filter((item) => item.seq > upTo);
-      if (remaining.length !== outbox.items.length) {
-        outbox.items = remaining;
-        await this.context.saveJson(this.files.kanbanSyncFile(), store);
+      let syncChanged = false;
+      if (outbox && outbox.epoch === epoch) {
+        const remaining = outbox.items.filter((item) => item.seq > upTo);
+        if (remaining.length !== outbox.items.length) {
+          outbox.items = remaining;
+          syncChanged = true;
+        }
       }
-      return { remaining: remaining.length };
+      const gone = new Set(removedProjects);
+      const tasks = gone.size && !fresh ? await this.board.loadTasks() : [];
+      const released = new Set<string>();
+      for (const task of tasks) {
+        const replica = task.sync?.replica;
+        if (replica?.controllerId !== controllerId || !gone.has(replica.sourceProjectId)) continue;
+        const { replica: _replica, work: _work, ...meta } = task.sync!;
+        task.sync = meta;
+        released.add(task.projectId);
+      }
+      if (gone.size && !fresh) {
+        for (const [key, link] of Object.entries(store.replicas)) {
+          if (link.controllerId !== controllerId || !gone.has(link.sourceProjectId)) continue;
+          delete store.replicas[key];
+          syncChanged = true;
+        }
+        if (outbox) {
+          const kept = outbox.items.filter((item) => !gone.has(item.sourceProjectId));
+          if (kept.length !== outbox.items.length) {
+            outbox.items = kept;
+            syncChanged = true;
+          }
+        }
+      }
+      if (released.size || syncChanged) {
+        await this.context.atomically(async () => {
+          if (released.size) await this.context.saveJson(this.files.kanbanFile(), tasks);
+          await this.context.saveJson(this.files.kanbanSyncFile(), store);
+        });
+        for (const projectId of released) this.context.changes.announce("kanban", projectId);
+      }
+      return { remaining: outbox?.items.length ?? 0 };
     });
   }
 

@@ -4,11 +4,11 @@ Checked against `main` at `2459b05c` (2026-10-15).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice.
+Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice; task 1 re-checked 2026-11-16 against `main` at `a0920f1a7` for the `opencode` slice.
 
 ### Tasks
 
-1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: partly done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), the `http-bridge` move is done (2026-11-06, the procedure proof), and the `web-annotations` and `control-mcp` moves are done (2026-11-11, one change each; see "Assumptions and decisions"); `keyed-record-format.ts` is placed in the shared kernel at the `core/` root (2026-11-13, see task 7); the `opencode` move is open.
+1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), the `http-bridge` move is done (2026-11-06, the procedure proof), and the `web-annotations` and `control-mcp` moves are done (2026-11-11, one change each; see "Assumptions and decisions"); `keyed-record-format.ts` is placed in the shared kernel at the `core/` root (2026-11-13, see task 7); and the `opencode` move is done (2026-11-16: the root `opencode-*` and `opencode2-*` files moved into `opencode2/`).
 2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: partly done: the `plan-usage` move is done (2026-11-13), the `features` move is done (2026-11-14) and the `previews` move is done (2026-11-16), one change each (see "Assumptions and decisions"); the other eight (`coordinator`, `agent-accounts`, `worktrees`, `git`, `workflows`, `review`, `build-pipeline`, `native-agent`) are open, one domain per change.
 3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
@@ -22,7 +22,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-
 
 **Context.** The plan moves low-dependency domains first to prove the codemod procedure. Only `design/` is done (#979, `0466ebd0`), with an `index.ts` and patterns in both `.oxlintrc.json` overrides (`apps/backend/src/**` at line 177, pattern at 188; `tests/unit/**` at 216, pattern at 223).
 
-**Investigation.** Nothing has moved since #979, and the root has grown fast: 521 source files and 446 tests (the file says 378 and 299). Wave 1 prefix counts today: `opencode-*` 41 source / 33 tests (was 29/22), `web-annotation-*` 29/25 (28/22), `http-bridge-*` 18/14 (13/11), `control-mcp-*` 20/9 (2/1). `mcp-management/` (29 source, 27 tests) and `public-api/` (42, 20) still have no `index.ts`. The codemod `scripts/move-backend-modules.ts` and its test `tests/unit/move-backend-modules.test.ts` still exist (last touched for Bun 1.4.4 in #1229). `mise run build:backend` and `mise run verify:packaged-backend` exist in `mise.toml`. Re-measured 2026-11-11 on `14df96544`: `opencode-*` 55 source / 53 tests, `control-mcp-*` 39/27, and `web-annotation-*` 29/27 before its move. `core/opencode2/` (36/43, #2009) now sits beside the `opencode-*` files, with four `opencode2-*.ts` files still at the root, so the `opencode` slice also has to decide where those four files go. Re-measured 2026-11-11 on `963ffa6ab`, after OpenCode 1.x was retired: `opencode-*` 7 source / 6 tests and `opencode2-*` 4/3, and `control-mcp-*` 40/29 before its move. Dropping the prefix would give `opencode2-container-server.ts` the name of the existing `opencode2/container-server.ts`, so the `opencode` slice needs a map file and a naming decision, not `--prefix`.
+**Investigation.** Nothing has moved since #979, and the root has grown fast: 521 source files and 446 tests (the file says 378 and 299). Wave 1 prefix counts today: `opencode-*` 41 source / 33 tests (was 29/22), `web-annotation-*` 29/25 (28/22), `http-bridge-*` 18/14 (13/11), `control-mcp-*` 20/9 (2/1). `mcp-management/` (29 source, 27 tests) and `public-api/` (42, 20) still have no `index.ts`. The codemod `scripts/move-backend-modules.ts` and its test `tests/unit/move-backend-modules.test.ts` still exist (last touched for Bun 1.4.4 in #1229). `mise run build:backend` and `mise run verify:packaged-backend` exist in `mise.toml`. Re-measured 2026-11-11 on `14df96544`: `opencode-*` 55 source / 53 tests, `control-mcp-*` 39/27, and `web-annotation-*` 29/27 before its move. `core/opencode2/` (36/43, #2009) now sits beside the `opencode-*` files, with four `opencode2-*.ts` files still at the root, so the `opencode` slice also has to decide where those four files go. Re-measured 2026-11-11 on `963ffa6ab`, after OpenCode 1.x was retired: `opencode-*` 7 source / 6 tests and `opencode2-*` 4/3, and `control-mcp-*` 40/29 before its move. Dropping the prefix would give `opencode2-container-server.ts` the name of the existing `opencode2/container-server.ts`, so the `opencode` slice needs a map file and a naming decision, not `--prefix`. Re-measured 2026-11-16 on `a0920f1a7` for that slice: `opencode-*` 7 source / 6 tests and `opencode2-*` 4/3, with 10 production importers outside them (all in `core/`) and no open pull request.
 
 **Decisions.**
 
@@ -299,6 +299,23 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `preview-baseline-harness.ts` import; their names fall outside the
   tests-off override's globs. No runtime cycle needed an exception. See
   "Assumptions and decisions".
+- Done (task 1's `opencode` slice, 2026-11-16, against `main` at
+  `a0920f1a7`): the seven `opencode-*` and four `opencode2-*` source files
+  and their nine tests are in the existing `core/opencode2/` folder without
+  the prefix (`opencode2/display-transcript.ts`,
+  `opencode2/listener-identity.ts`, `opencode2/listener-recheck.ts`,
+  `opencode2/package-cache.ts`, `opencode2/project-config.ts`,
+  `opencode2/provider-login-slot.ts`, `opencode2/provider-login.ts`,
+  `opencode2/container-launch.ts`, `opencode2/host-database-server.ts`,
+  `opencode2/host-server.ts`, and `opencode2-container-server.ts` as
+  `opencode2/container-server-lifecycle.ts`, because `container-server.ts`
+  was taken). `opencode2/index.ts` re-exports the nine new symbols that
+  five of the ten production importers outside the folder use. Three moved
+  modules are new named exceptions in the `apps/backend/src/**` pattern and
+  are not re-exported, because re-exporting any of them closes a runtime
+  cycle for the folder's other importers: `container-server-lifecycle.js`,
+  `host-database-server.js` and `provider-login.js`. Wave 1 is done. See
+  "Assumptions and decisions".
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -325,12 +342,13 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   2026-11-13 it holds 806 and 856, and after the `features` slice on
   2026-11-14 it holds 807 and 867, down from 812 and 871 just before it,
   and after the `previews` slice on 2026-11-16 it holds 813 and 875, down
-  from 821 and 887 just before it).
+  from 821 and 887 just before it, and after the `opencode` slice on
+  2026-11-16 it holds 811 and 876, down from 822 and 885 just before it).
 - Prefix counts at the root:
 
   | Domain | Prefixes | Source | Tests |
   | --- | --- | ---: | ---: |
-  | opencode | `opencode-*` | 29 | 22 |
+  | opencode | `opencode-*`, `opencode2-*` | done (11 / 9 moved into `opencode2/`, 2026-11-16) | |
   | web-annotations | `web-annotation-*` | done (29 / 27 moved, 2026-11-11) | |
   | http-bridge | `http-bridge-*` | done (20 / 20 moved, 2026-11-06) | |
   | control-mcp | `control-mcp-*` | done (40 / 29 moved, 2026-11-11) | |
@@ -389,10 +407,10 @@ file and a deep import is a lint error. The shared kernel stays at the root.
 Order: move the domains few others depend on first, so the procedure is proven
 before the busy ones move.
 
-1. **Wave 1 (leaves):** `opencode`.
-   (Done: an `index.ts` and both lint patterns for `mcp-management/` and
-   `public-api/`; the `http-bridge`, `web-annotations` and `control-mcp`
-   moves; `keyed-record-format.ts` placed in the shared kernel.)
+1. **Wave 1 (leaves):** done. (An `index.ts` and both lint patterns for
+   `mcp-management/` and `public-api/`; the `http-bridge`,
+   `web-annotations`, `control-mcp` and `opencode` moves;
+   `keyed-record-format.ts` placed in the shared kernel.)
 2. **Wave 2 (mid-tier):** `coordinator`,
    `agent-accounts`, `worktrees`, `git`, `workflows`, `review`,
    `build-pipeline`, `native-agent`. (Done: `plan-usage`, `features`,
@@ -465,9 +483,97 @@ Decisions taken while doing tasks 5 and 6 (2026-10-28), task 1's
 task 1's `web-annotations` slice with the codemod fix from todo 7490
 (2026-11-11), to-do 7800 and task 1's `control-mcp` slice (2026-11-11), and task 1's
 `keyed-record-format.ts` placement with task 2's `plan-usage` slice
-(2026-11-13), task 2's `features` slice (2026-11-14), and task 2's
-`previews` slice (2026-11-16). The other moves in waves 1 to 4 (tasks 1 to 4) were
-left open on purpose: they move many files that other work in flight touches.
+(2026-11-13), task 2's `features` slice (2026-11-14), task 2's
+`previews` slice (2026-11-16), and task 1's `opencode` slice (2026-11-16).
+The other moves in waves 2 to 4 (tasks 2 to 4) were left open on purpose:
+they move many files that other work in flight touches.
+
+### Task 1: `opencode` as the last wave 1 slice
+
+- Chosen: one domain, `opencode`, the only wave 1 move left and so the
+  highest-ranked open domain, against `main` at `a0920f1a7`. No pull request
+  was open. The ticket asked for the next domain the to-do ranks highest.
+- Folder: the existing `opencode2/`, not a new `opencode/`. Options: (a) move
+  the root files into `opencode2/`; (b) a new `opencode/` folder beside it;
+  (c) rename `opencode2/` to `opencode/` and move everything there. Chosen
+  (a): OpenCode 2 is the only OpenCode line since 1.x was retired, the root
+  files already imported `opencode2/index.js`, and a second folder would
+  split one provider across two surfaces. (c) would rename 100 more files and
+  every importer for a name only. Cons: `display-transcript.ts` normalizes
+  stored 1.x transcripts but now sits in the `opencode2/` folder; its header
+  says so.
+- File names: a `--map` file, because `opencode2-container-server.ts` would
+  otherwise take the name of the existing `opencode2/container-server.ts`
+  (the pure start script it drives). It became
+  `container-server-lifecycle.ts` (it starts, stops, ensures, peeks and
+  reports the in-container server). The others drop the `opencode-` or
+  `opencode2-` prefix (`opencode-provider-login.ts` → `provider-login.ts`,
+  `opencode2-host-server.ts` → `host-server.ts`, …), with their nine tests to
+  match. The codemod moved 20 files and rewrote 44.
+- Measured before the move: 10 production importers outside the eleven
+  files, all in `core/` (`build-pipeline-transcript-projection.ts`,
+  `commands-registry-accounts.ts`, `commands-registry-projects.ts`,
+  `commands-registry-servers.ts`, `container-bridge-credential.ts`,
+  `host-model-catalog-refresh.ts`, `index.ts`, `local-server-runtime.ts`,
+  `multi-review-reviewer-transcript.ts`, `native-agent-handoffs.ts`); four
+  co-located tests at the root, four `apps/backend/tests` files, two
+  `opencode2/*.live.test.ts` files, `e2e/OpenCodePipelineTranscript.spec.ts`
+  and `tests/unit/lib/opencode-pipeline-transcript.test.ts`; path strings in `scripts/test-tiers.ts`,
+  `tests/unit/runtime-env-wiring.test.ts`, `docker/AGENTS.md` and one
+  architecture doc. No `mock.module()` or `spyOn` targeted the files, no
+  worker or bundle entry point names them, and no `<revision>:<path>` string
+  named a moved file (the `git show 5f4e27b1c:…` paths name files removed
+  with 1.x).
+- Inside the folder: the moved files imported `opencode2/index.js`; the
+  codemod turned that into `./index.js`, and each now imports the module that
+  defines the symbol instead, so the folder does not import its own barrel.
+- `index.ts` gains nine symbols from three moved modules:
+  `normalizeOpenCodeDisplayEntries` and `normalizeOpenCodeDisplayEntry`; the
+  listener identity's `judgeOpenCodeListener`, `listOpenCodeListenersScript`,
+  `openCodeListenerRecord`, `parseOpenCodeListeners` and the types
+  `OpenCodeListenerJudgement` and `OpenCodeServerKind`; and
+  `OpenCodeProviderLoginSlot`. Five of the ten importers use it (the other
+  five import the exceptions below), and
+  `tests/unit/lib/opencode-pipeline-transcript.test.ts` too (the
+  `tests/unit/**` pattern allows only `index.js`).
+- Named exceptions: `container-server-lifecycle.js`,
+  `host-database-server.js` and `provider-login.js`, not re-exported. With
+  every importer on `index.ts`, `import/no-cycle` reported dozens of errors:
+  these modules reach `commands-servers.ts`, `local-server-runtime.ts` and
+  the container lifecycle modules, which themselves import
+  `opencode2/index.js`. Re-exporting any one of them from `index.ts`, with no
+  importer changed, reported 70 to 80 cycles (`host-server.js` too, which no
+  outside file imports); the light modules (`project-config.js`) reported
+  none. Options: (a) leave them out of `index.ts` and name them as
+  exceptions; (b) re-export them and turn the folder's other importers into
+  exceptions; (c) break the cycles by moving code. Chosen (a): (b) would
+  need most of the folder's existing importers as exceptions, and (c)
+  is outside the "pure moves" rule. This differs from the `public-api/` and
+  `web-annotations/` exceptions, which stay re-exported, because there the
+  cycle was closed only by the excepted importers. Cons: three modules are
+  part of the surface without being in `index.ts`; its header and
+  `linting.md` ("Module boundaries") name them.
+- Hand fixes after the codemod: one test read the repository root through
+  `import.meta.dir` (`container-launch.test.ts`, one more `..`); the
+  file-name list `agent-provider-boundaries.test.ts` reads by path drops
+  `opencode-display-transcript.ts`, which its `opencode2/` scan now covers;
+  bare names in source comments in and outside the folder, the root
+  `AGENTS.md` OpenCode row (its `opencode2-*.ts` glob no longer names any
+  root file), seven architecture docs, to-do 7545, the `opencode2/index.ts`
+  header and `linting.md`. Flake records keep the codemod's path rewrites, as
+  in the earlier slices. `apps/backend/tests/opencode2-container-server.test.ts`
+  and the `opencode2/opencode2-*.live.test.ts` files keep their names: they
+  are not prefix files at the `core/` root.
+- Lint patterns: the `opencode2/` patterns already existed (to-do 7800); the
+  `apps/backend/src/**` one gains the three exceptions, and the
+  `tests/unit/**` one is unchanged. Checked with probe files (deleted): deep
+  imports of `host-server.js` and `listener-identity.js` are reported under
+  `apps/backend/src/**`, the three exceptions and `index.js` are not, and a
+  deep import of `provider-login.js` is reported under `tests/unit/**`.
+- No manual checking is left: the move changes no behaviour, and what
+  remains (`mise run test`, `build:backend`, `verify:packaged-backend` and the
+  OpenCode live tests) is agent work for the validation stage, so nothing was
+  added to the manual-test checklist (7568).
 
 ### Task 2: `previews` as the third wave 2 slice
 

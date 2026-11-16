@@ -17,7 +17,7 @@
  *   `/opencode-config` and merged without plugins (`opencode2/user-config.ts`);
  *   `config/` (`XDG_CONFIG_HOME`) and `home/` (`OPENCODE_TEST_HOME`) are empty;
  *   `cache/` is the root-owned package cache, which root fills with the
- *   provider packages the user's configuration names (`opencode-package-cache.ts`);
+ *   provider packages the user's configuration names (`package-cache.ts`);
  * - the node login shell only prepares and records its environment;
  * - `orkestrator-bridge-launch opencode2` starts the root-owned
  *   `/opt/opencode/bin/opencode2` under `env -i` with project configuration
@@ -41,45 +41,46 @@ import {
   OPENCODE2_LAUNCH_CONFIG_HOME,
   OPENCODE2_LAUNCH_HOME,
   OPENCODE2_LAUNCH_ROOT,
-} from "./agent-credential-files.js";
-import { quoteShell } from "./commands-agent-support.js";
-import { dockerExec } from "./commands-container-exec.js";
-import { OPENCODE2_SERVER_PORT } from "./constants.js";
+} from "../agent-credential-files.js";
+import { quoteShell } from "../commands-agent-support.js";
+import { dockerExec } from "../commands-container-exec.js";
+import { OPENCODE2_SERVER_PORT } from "../constants.js";
 import {
   launchContainerScript,
   type ContainerScriptLaunch,
-} from "./container-bridge-credential.js";
-import { keepPreviousLogCommand } from "./container-log-bounds.js";
-import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
+} from "../container-bridge-credential.js";
+import { keepPreviousLogCommand } from "../container-log-bounds.js";
+import { CONTAINER_ROOT_USER_ARGS } from "../container-scripts.js";
 import {
   OPENCODE2_DB_PATH,
   OPENCODE2_LEGACY_DB_PATH,
   OPENCODE_DB_DIRECTORY,
-} from "./container-state-layout.js";
+} from "../container-state-layout.js";
 import {
   OPENCODE2_LISTENER_RECORD,
   recordOpenCodeListenerScript,
   stopOpenCodeListenersScript,
-} from "./opencode-listener-identity.js";
-import {
-  openCodePackageCacheScript,
-  OPENCODE_PACKAGE_CACHE_TIMEOUT_MS,
-} from "./opencode-package-cache.js";
-import { stageProjectOpenCodeConfig } from "./opencode-project-config.js";
+} from "./listener-identity.js";
+import { openCodePackageCacheScript, OPENCODE_PACKAGE_CACHE_TIMEOUT_MS } from "./package-cache.js";
+import { stageProjectOpenCodeConfig } from "./project-config.js";
 import {
   OPENCODE2_CONTAINER_LOG,
   OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT_FILE,
   OPENCODE2_CONTAINER_PROCESS_PATTERN,
   OPENCODE2_GITHUB_ENV_PLUGIN_ID,
   buildOpenCode2GitHubEnvironmentPluginSource,
+} from "./container-server.js";
+import {
   OPENCODE2_CREDENTIAL_PLUGIN_ID,
   OPENCODE2_DISABLE_FILEWATCHER,
   OPENCODE2_FLAGS,
   buildOpenCode2CredentialPluginSource,
+} from "./server.js";
+import {
   OPENCODE2_USER_CONFIG_MIRROR_FILE,
   buildOpenCode2UserConfigMergeCommand,
-} from "./opencode2/index.js";
-import { runCommand } from "./shell.js";
+} from "./user-config.js";
+import { runCommand } from "../shell.js";
 
 /**
  * The read-only mount of the user's host `~/.config/opencode`; root copies the

@@ -5,7 +5,7 @@
  * - **The 2.x database is the host's store.** Every host 2.x server shares
  *   one database under `<data>/opencode2/` (`openCode2HostPaths`). Settings →
  *   OpenCode signs providers in through a 2.x server's own integration routes
- *   (`opencode-provider-login.ts`), which write it; every host server reads
+ *   (`provider-login.ts`), which write it; every host server reads
  *   credentials from it per use, and 2.x refreshes OAuth logins in it.
  * - **`auth.json` is the container hand-off.** Containers are handed the
  *   host's logins access-only from OpenCode 1.x's `auth.json`

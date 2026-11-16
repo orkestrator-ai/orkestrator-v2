@@ -76,7 +76,10 @@ import { accountSwitchGrantState } from "./nodes/index.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { cachedPlanUsage, readProjectUsageLimits } from "./agent-usage-limits.js";
 import { openAgentSignInTerminal, readHostAgentSignIns } from "./agent-sign-ins.js";
-import { openCodeProviderLogin, openCodeProviderLoginProgress } from "./opencode-provider-login.js";
+import {
+  openCodeProviderLogin,
+  openCodeProviderLoginProgress,
+} from "./opencode2/provider-login.js";
 
 /**
  * `register(def, handler)` for this file's `async` handlers: an argument the

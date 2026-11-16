@@ -4246,7 +4246,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `opencode2-coordinator.live.test.ts`; the guard's source in
   `coordinator-plugin.test.ts`, the research tool ids in
   `research-tools.test.ts`, the rules and launch in `coordinator.test.ts` and
-  `opencode2-host-server.test.ts`
+  `opencode2/host-server.test.ts`
 - coordinator skills on Codex against the real pinned app-server with a
   loopback model (`RUN_LIVE_CODEX_APP_SERVER=1`): `live-coordinator-skills.test.ts`
   (codex-bridge); the extra roots, read grants and project-skill rule in

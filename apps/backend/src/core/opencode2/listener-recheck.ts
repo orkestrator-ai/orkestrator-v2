@@ -19,11 +19,8 @@
  * (docs/architecture/agent-approvals.md, "A replaced bridge is refused").
  */
 import { createLogger } from "@orkestrator/protocol/logger";
-import { ProviderUnavailableError } from "./agent-provider-contract.js";
-import type {
-  OpenCodeListenerJudgement,
-  OpenCodeServerKind,
-} from "./opencode-listener-identity.js";
+import { ProviderUnavailableError } from "../agent-provider-contract.js";
+import type { OpenCodeListenerJudgement, OpenCodeServerKind } from "./listener-identity.js";
 
 const log = createLogger("docker");
 

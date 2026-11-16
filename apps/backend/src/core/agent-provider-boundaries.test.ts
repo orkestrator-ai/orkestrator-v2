@@ -10,7 +10,6 @@ const PROVIDER_SOURCE_FILES = [
   "http-bridge/runtime-health.ts",
   "http-bridge/transport.ts",
   "native-agent-provider.ts",
-  "opencode-display-transcript.ts",
 ] as const;
 
 /** The neutral modules above plus every OpenCode 2.x provider module. */

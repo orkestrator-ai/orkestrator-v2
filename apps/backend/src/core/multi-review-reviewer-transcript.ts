@@ -26,7 +26,7 @@ import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revis
  *
  * Every read leaves here as display messages: raw OpenCode `{ info, parts }`
  * rows from snapshots and history pages are normalized by
- * the same normalizer the interactive tab uses (`opencode-display-transcript`),
+ * the same normalizer the interactive tab uses (`opencode2/display-transcript.ts`),
  * so the renderer carries no OpenCode normalizer of its own.
  *
  * Source tokens are opaque to the renderer and scoped to the reviewer's
@@ -59,7 +59,7 @@ import {
   MULTI_REVIEW_HISTORY_PAGE_MAX_MESSAGES,
   MULTI_REVIEW_HISTORY_PAGE_MAX_TARGET_BYTES,
 } from "@orkestrator/protocol/multi-review";
-import { normalizeOpenCodeDisplayEntries } from "./opencode-display-transcript.js";
+import { normalizeOpenCodeDisplayEntries } from "./opencode2/index.js";
 
 /** Messages returned to the reviewer tab at most. */
 export const MAX_REVIEWER_TRANSCRIPT_MESSAGES = 500;

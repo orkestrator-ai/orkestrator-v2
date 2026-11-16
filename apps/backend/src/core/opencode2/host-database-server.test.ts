@@ -4,14 +4,14 @@ import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { BackendRuntime } from "./backend-runtime.js";
-import type { CommandContext } from "./commands-context.js";
-import { withOpenCode2HostDatabaseServer } from "./opencode2-host-database-server.js";
-import { openCode2LegacyReconcileMarker } from "./opencode2/credential-upgrade.js";
-import { FakeOpenCode2Server } from "./opencode2/fake-server.test-support.js";
-import { openCode2ServerKey } from "./opencode2/host-server-state.js";
-import { openCode2HostPaths } from "./opencode2/server.js";
-import { StorageService } from "./storage.js";
+import { BackendRuntime } from "../backend-runtime.js";
+import type { CommandContext } from "../commands-context.js";
+import { withOpenCode2HostDatabaseServer } from "./host-database-server.js";
+import { openCode2LegacyReconcileMarker } from "./credential-upgrade.js";
+import { FakeOpenCode2Server } from "./fake-server.test-support.js";
+import { openCode2ServerKey } from "./host-server-state.js";
+import { openCode2HostPaths } from "./server.js";
+import { StorageService } from "../storage.js";
 
 type FakeChild = ChildProcessWithoutNullStreams & { exited: boolean };
 

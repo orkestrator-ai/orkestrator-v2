@@ -18,7 +18,7 @@
  * Every user of the host database runs it before its first request: the
  * environment server's start (`host-launch.ts`) and the private or reused
  * server that Settings sign-in and the host model catalogue use
- * (`opencode2-host-database-server.ts`), so a container-only user, who may
+ * (`host-database-server.ts`), so a container-only user, who may
  * never start a local environment, is reconciled too. A marker in the data
  * directory records that it ran; it runs again only if it failed, and
  * concurrent first users share one run. A database created by this start imported the file itself

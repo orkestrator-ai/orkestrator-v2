@@ -8,7 +8,7 @@ import path from "node:path";
 import {
   OPENCODE2_LAUNCH_PROJECT_CONFIG,
   OPENCODE2_LAUNCH_ROOT,
-} from "./agent-credential-files.js";
+} from "../agent-credential-files.js";
 import {
   OPENCODE_PROJECT_CONFIG_MAX_BYTES,
   OPENCODE_PROJECT_INSTRUCTION_MAX_BYTES,
@@ -19,7 +19,7 @@ import {
   readFilteredProjectOpenCodeConfig,
   writeProjectInstructionScript,
   writeProjectOpenCodeConfigScript,
-} from "./opencode-project-config.js";
+} from "./project-config.js";
 
 const parse = (text: string | undefined) =>
   text === undefined ? undefined : (JSON.parse(text) as Record<string, unknown>);

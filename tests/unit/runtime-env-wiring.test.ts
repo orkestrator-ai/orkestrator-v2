@@ -2633,10 +2633,10 @@ eval "$opencode_setup"
         : backend.slice(start, start + 1 + nextDeclaration);
     }
 
-    // OpenCode's container server (2.x) is started by `opencode2-container-server.ts`
+    // OpenCode's container server (2.x) is started by `opencode2/container-server-lifecycle.ts`
     // from one of two scripts: the launcher's preparation and the login-shell start.
     for (const file of [
-      "apps/backend/src/core/opencode2-container-launch.ts",
+      "apps/backend/src/core/opencode2/container-launch.ts",
       "apps/backend/src/core/opencode2/container-server.ts",
     ]) {
       const script = read(file);

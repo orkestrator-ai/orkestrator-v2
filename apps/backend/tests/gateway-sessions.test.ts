@@ -196,7 +196,7 @@ describe("gateway browser sessions", () => {
   for (const secure of [false, true]) {
     test(`refuses the durable token in a cookie and clears that cookie (${secure ? "HTTPS" : "HTTP"})`, async () => {
       const { info } = await startGateway();
-      const schemeHeaders = secure ? { "x-forwarded-proto": "https" } : {};
+      const schemeHeaders: Record<string, string> = secure ? { "x-forwarded-proto": "https" } : {};
       const legacy = `orkestrator_gateway_auth=${encodeURIComponent(info.token)}`;
 
       const api = await requestUrl(`${info.url}__orkestrator/status`, {

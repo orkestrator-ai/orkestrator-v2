@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { PREVIEW_SERVICES_CHANGED_EVENT } from "@orkestrator/protocol/preview-services";
 
-import { seedStore, seedUnreadableStore } from "./storage-test-support.js";
-import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
+import { seedStore, seedUnreadableStore } from "../storage-test-support.js";
+import { createPreviewHarness, type PreviewHarness } from "./test-support.js";
 
 describe("PreviewServiceRegistry", () => {
   let harness: PreviewHarness;

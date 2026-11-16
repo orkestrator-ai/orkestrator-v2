@@ -57,7 +57,7 @@ import { DEFAULT_CODEX_MAX_CONCURRENT_THREADS } from "@orkestrator/protocol/app-
  * The retired OpenCode 1.x server's container port. Nothing starts a server
  * there or publishes it any more; containers created before OpenCode 2.x
  * became the only OpenCode still publish it, so it stays out of preview
- * targets (`preview-target-resolver.ts`).
+ * targets (`previews/target-resolver.ts`).
  */
 export const RETIRED_OPENCODE1_SERVER_PORT = 4096;
 export const CLAUDE_BRIDGE_PORT = 4097;

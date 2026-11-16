@@ -6,12 +6,12 @@ import {
   LoopbackListenerOwnership,
   type ListenerOwnership,
   type ManagedProcessRoot,
-} from "./preview-listener-ownership.js";
-import { CommandFailedError } from "./shell.js";
-import { resolvePreviewTargetIntent } from "./preview-intent.js";
-import { spawnPty, type PtyProcess } from "./pty.js";
-import { TerminalRuntime } from "./terminal-runtime.js";
-import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
+} from "./listener-ownership.js";
+import { CommandFailedError } from "../shell.js";
+import { resolvePreviewTargetIntent } from "./intent.js";
+import { spawnPty, type PtyProcess } from "../pty.js";
+import { TerminalRuntime } from "../terminal-runtime.js";
+import { createPreviewHarness, type PreviewHarness } from "./test-support.js";
 
 /**
  * Local-environment discovery: seeded worktree services, managed-process

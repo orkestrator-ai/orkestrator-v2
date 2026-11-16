@@ -28,7 +28,7 @@ import {
 } from "../../../test-fixtures/preview-app/server.ts";
 import type { CommandContext, CommandHandler } from "./core/commands-context.js";
 import { registerPreviewCommands } from "./core/commands-registry-previews.js";
-import { createPreviewHarness, type PreviewHarness } from "./core/preview-test-support.js";
+import { createPreviewHarness, type PreviewHarness } from "./core/previews/test-support.js";
 import { OrkestratorGateway } from "./gateway.js";
 import { PreviewPublicationManager } from "./preview-publication.js";
 import { certificates, TEST_PREVIEW_DOMAIN } from "./preview-test-pki.js";

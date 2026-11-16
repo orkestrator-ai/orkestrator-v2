@@ -4,7 +4,7 @@
 - **Status:** open
 - **Observed:** 2026-10-27, todo 0223 branch validation
 - **Test:** `local preview service discovery on this host > two environments, a restart on the reused port, and an auto-incremented port`
-- **File:** `apps/backend/src/core/preview-local-discovery.test.ts:531`
+- **File:** `apps/backend/src/core/previews/local-discovery.test.ts:531`
 
 Failed twice in the backend workspace aggregate on the 0223 branch (a focused
 `bun test --cwd apps/backend src/core tests --parallel=6` run, then the second
@@ -16,7 +16,7 @@ The complete unchanged owner passed alone on the branch and on a detached
 worktree of its base `863b57821` (19 passed each):
 
 ```sh
-bun test --cwd apps/backend --preload ../../tests/setup-node.ts src/core/preview-local-discovery.test.ts
+bun test --cwd apps/backend --preload ../../tests/setup-node.ts src/core/previews/local-discovery.test.ts
 ```
 
 Host load during the aggregate is a hypothesis, not an established cause. No
@@ -34,7 +34,7 @@ The preceding fixture listener reported `EADDRINUSE` on `127.0.0.1:61856`.
 The complete unchanged owner passed alone (19 tests, exit 0, 5.5 s):
 
 ```sh
-mise run test:logged -- --name preview-discovery-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/preview-local-discovery.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name preview-discovery-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/previews/local-discovery.test.ts --parallel=1 --only-failures
 ```
 
 Aggregate evidence is under the host temporary directory in
@@ -66,4 +66,4 @@ in the failure message.
 
 ## Triage note (2026-11-15)
 
-Partly addressed; stays `open`. In `apps/backend/src/core/preview-local-discovery.test.ts` every poll deadline (2 s, 5 s, 10 s) is now a named 30 s `POLL_HANG_WATCHDOG_MS`, the explicit 20 s/30 s test budgets are removed (the 60 s default applies), and the fixture script retries an `EADDRINUSE` on an ephemeral (`port 0`) request instead of throwing (up to 100 attempts). The recorded `terminal exited 0` with an `EADDRINUSE` on 61856 is still unexplained (that path already retried on the next port), so the cause is not established. The owner passed under contention (`b-cont`, see 0340).
+Partly addressed; stays `open`. In `apps/backend/src/core/previews/local-discovery.test.ts` every poll deadline (2 s, 5 s, 10 s) is now a named 30 s `POLL_HANG_WATCHDOG_MS`, the explicit 20 s/30 s test budgets are removed (the 60 s default applies), and the fixture script retries an `EADDRINUSE` on an ephemeral (`port 0`) request instead of throwing (up to 100 attempts). The recorded `terminal exited 0` with an `EADDRINUSE` on 61856 is still unexplained (that path already retried on the next port), so the cause is not established. The owner passed under contention (`b-cont`, see 0340).

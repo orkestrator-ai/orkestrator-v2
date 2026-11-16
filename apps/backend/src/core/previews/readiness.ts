@@ -11,8 +11,8 @@ import {
   type PreviewServiceDefinition,
 } from "@orkestrator/protocol/preview-services";
 
-import { upstreamTrust } from "../preview-upstream.js";
-import type { PreviewReadinessPort, ResolvedPreviewTarget } from "./preview-service-registry.js";
+import { upstreamTrust } from "../../preview-upstream.js";
+import type { PreviewReadinessPort, ResolvedPreviewTarget } from "./service-registry.js";
 
 export interface PreviewReadinessOptions {
   concurrency?: number;

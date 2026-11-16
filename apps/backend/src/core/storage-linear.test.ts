@@ -296,17 +296,17 @@ describe("Linear merged-label records", () => {
     ).toBe(false);
   });
 
-  test("drops applied records first and refuses a new one only when every record is pending", async () => {
+  test("retains every pending obligation and evicts applied history first", async () => {
     const store = await storage();
     for (let n = 0; n < MAX_LINEAR_MERGED_LABELS; n += 1) {
       expect(store.linear.enqueueLinearMergedLabel(job(n))).toBe("queued");
     }
-    expect(store.linear.enqueueLinearMergedLabel(job(MAX_LINEAR_MERGED_LABELS))).toBe("full");
+    expect(store.linear.enqueueLinearMergedLabel(job(MAX_LINEAR_MERGED_LABELS))).toBe("queued");
     const first = (await store.linear.listLinearMergedLabels())[0]!;
     store.linear.settleLinearMergedLabel(first.key, "added");
-    expect(store.linear.enqueueLinearMergedLabel(job(MAX_LINEAR_MERGED_LABELS))).toBe("queued");
+    expect(store.linear.enqueueLinearMergedLabel(job(MAX_LINEAR_MERGED_LABELS + 1))).toBe("queued");
     const records = await store.linear.listLinearMergedLabels();
-    expect(records).toHaveLength(MAX_LINEAR_MERGED_LABELS);
+    expect(records).toHaveLength(MAX_LINEAR_MERGED_LABELS + 1);
     expect(records.some((record) => record.key === first.key)).toBe(false);
   });
 });

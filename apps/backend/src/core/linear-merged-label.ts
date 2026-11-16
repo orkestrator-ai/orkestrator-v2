@@ -14,13 +14,16 @@
  * Writers: the PR monitor's terminal follow-up (`pr-monitor-runtime.ts`), the
  * build finding its pull request already merged (`persistPullRequest`),
  * environment deletion when the environment recorded a merge
- * (`environment-delete.ts`), and the once-per-process sweep, which also
- * restarts the drain for records left pending by an earlier process.
+ * (`environment-delete.ts`), and the startup sweep, retried after incomplete
+ * reads, which restarts the drain for records an earlier process left pending.
  *
  * Only builds whose source is a Linear issue are queued; a Kanban or GitHub
  * build, and a pull request closed without merging, never reach Linear.
  */
-import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import {
+  pipelineReachedPullRequestStage,
+  type BuildPipeline,
+} from "@orkestrator/protocol/build-pipeline";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 import { addLinearIssueLabelByName, type LinearIssueLabelResult } from "./linear-issue-labels.js";
@@ -32,6 +35,8 @@ const log = createLogger("linear");
 
 /** The label a merged build's issue gets. */
 export const LINEAR_MERGED_LABEL = "merged";
+/** Overall deadline, including every response body and pagination request. */
+export const LINEAR_MERGED_LABEL_TIMEOUT_MS = 30_000;
 /** First retry after a failure; doubles per attempt. */
 export const LINEAR_MERGED_LABEL_RETRY_MS = 60_000;
 /** The longest wait between attempts. */
@@ -56,7 +61,12 @@ export interface LinearMergedLabelStorage {
 
 export type LinearMergedLabelsOptions = {
   /** Test seam: the Linear call. Defaults to the real GraphQL client. */
-  addLabel?: (apiKey: string, issueId: string, name: string) => Promise<LinearIssueLabelResult>;
+  addLabel?: (
+    apiKey: string,
+    issueId: string,
+    name: string,
+    signal?: AbortSignal,
+  ) => Promise<LinearIssueLabelResult>;
   now?: () => number;
   schedule?: (callback: () => void, delayMs: number) => unknown;
   cancel?: (timer: unknown) => void;
@@ -98,6 +108,8 @@ export class LinearMergedLabels {
   private draining: Promise<void> | null = null;
   private drainAgain = false;
   private swept = false;
+  private sweeping: Promise<void> | null = null;
+  private attempt: AbortController | null = null;
   private closed = false;
 
   constructor(options: LinearMergedLabelsOptions = {}) {
@@ -160,7 +172,10 @@ export class LinearMergedLabels {
   /** One pipeline's pull request merged (the build found it merged itself). Never throws. */
   recordPipelineMerge(
     storage: LinearMergedLabelStorage,
-    pipeline: Pick<BuildPipeline, "id" | "projectId" | "source">,
+    pipeline: Pick<
+      BuildPipeline,
+      "id" | "projectId" | "source" | "sessions" | "shippedPullRequestUrl"
+    >,
     prUrl: string,
   ): void {
     if (this.closed || !prUrl) return;
@@ -181,45 +196,64 @@ export class LinearMergedLabels {
   }
 
   /**
-   * Once per process: queues merges recorded on environments that still hold
-   * a Linear-sourced build (one the monitor applied before this feature, or a
-   * merge seen while the backend was down), and restarts the drain for records
+   * Once per successful sweep: queues merges recorded on environments that
+   * still hold a Linear build with matching Ship evidence (including a merge
+   * seen while the backend was down), and restarts the drain for records
    * an earlier process left pending. Never throws.
    */
   sweepOnce(storage: LinearMergedLabelStorage): void {
-    if (this.closed || this.swept) return;
+    if (this.closed || this.swept || this.sweeping) return;
     this.swept = true;
     this.bind(storage);
-    void (async () => {
+    this.sweeping = (async () => {
+      let failed = false;
       const environments = new Map<string, Environment | null>();
       for (const record of await storage.listAllBuildPipelines()) {
+        if (this.closed) return;
         if (!linearSourceOf(record) || !record.environmentId) continue;
-        if (!environments.has(record.environmentId)) {
-          environments.set(
-            record.environmentId,
-            await storage.getEnvironment(record.environmentId),
-          );
+        try {
+          if (!environments.has(record.environmentId)) {
+            environments.set(
+              record.environmentId,
+              await storage.getEnvironment(record.environmentId),
+            );
+          }
+          const environment = environments.get(record.environmentId);
+          if (environment?.prState !== "merged" || !environment.prUrl) continue;
+          this.enqueue(storage, [record], environment.prUrl);
+        } catch (error) {
+          failed = true;
+          log.warn("merged-label.record-failed", {
+            environmentId: record.environmentId,
+            error: formatLogError(error),
+          });
         }
-        const environment = environments.get(record.environmentId);
-        if (environment?.prState !== "merged" || !environment.prUrl) continue;
-        this.enqueue(storage, [record], environment.prUrl);
       }
+      if (failed) this.swept = false;
     })()
       .catch((error: unknown) => {
+        this.swept = false;
         log.warn("merged-label.record-failed", { error: formatLogError(error) });
       })
-      .finally(() => this.requestDrain());
+      .finally(() => {
+        this.sweeping = null;
+        this.requestDrain();
+      });
   }
 
   /** Stops the drain timer; later calls do nothing. */
   shutdown(): void {
     this.closed = true;
+    this.attempt?.abort(new Error("Merged label queue stopped"));
     this.clearTimer();
   }
 
   /** Resolves once the current drain (and any it queued) settles. Tests use it. */
   async idle(): Promise<void> {
-    while (this.draining) await this.draining;
+    while (this.sweeping || this.draining) {
+      if (this.sweeping) await this.sweeping;
+      if (this.draining) await this.draining;
+    }
   }
 
   private bind(storage: LinearMergedLabelStorage): void {
@@ -233,17 +267,21 @@ export class LinearMergedLabels {
   ): void {
     for (const record of records) {
       const source = linearSourceOf(record);
-      if (!source) continue;
+      const snapshot = record.snapshot as Partial<BuildPipeline> | undefined;
+      if (
+        !source ||
+        !Array.isArray(snapshot?.sessions) ||
+        !pipelineReachedPullRequestStage({ sessions: snapshot.sessions }) ||
+        snapshot.shippedPullRequestUrl !== prUrl
+      )
+        continue;
       const input: LinearMergedLabelInput = {
         ...source,
         pipelineId: record.id,
         projectId: record.projectId,
         prUrl,
       };
-      const result = storage.linear.enqueueLinearMergedLabel(input, new Date(this.now()));
-      if (result === "full") {
-        log.warn("merged-label.queue-full", { pipelineId: record.id });
-      }
+      storage.linear.enqueueLinearMergedLabel(input, new Date(this.now()));
     }
   }
 
@@ -258,6 +296,7 @@ export class LinearMergedLabels {
     this.draining = this.drain()
       .catch((error: unknown) => {
         log.warn("merged-label.record-failed", { error: formatLogError(error) });
+        this.armTimer(this.now() + LINEAR_MERGED_LABEL_RETRY_MS);
       })
       .finally(() => {
         this.draining = null;
@@ -293,7 +332,7 @@ export class LinearMergedLabels {
       }
       try {
         if (!apiKey) throw new Error("Linear is not connected on this machine");
-        const result = await this.addLabel(apiKey, record.issueId, LINEAR_MERGED_LABEL);
+        const result = await this.applyLabel(apiKey, record.issueId);
         storage.linear.settleLinearMergedLabel(record.key, result.outcome, new Date(this.now()));
         log.info("merged-label.applied", {
           pipelineId: record.pipelineId,
@@ -301,6 +340,7 @@ export class LinearMergedLabels {
           outcome: result.outcome,
         });
       } catch (error) {
+        if (this.closed) return;
         const attempts = record.attempts + 1;
         const delay = linearMergedLabelRetryDelay(attempts);
         const reason = sanitizeLinearError(error, apiKey);
@@ -320,6 +360,31 @@ export class LinearMergedLabels {
       }
     }
     if (Number.isFinite(nextDue)) this.armTimer(nextDue);
+  }
+
+  private async applyLabel(apiKey: string, issueId: string): Promise<LinearIssueLabelResult> {
+    const controller = new AbortController();
+    this.attempt = controller;
+    const timer = this.schedule(
+      () => controller.abort(new Error("Linear label attempt timed out")),
+      LINEAR_MERGED_LABEL_TIMEOUT_MS,
+    );
+    let onAbort!: () => void;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(controller.signal.reason);
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      // Race also bounds injected transports that do not implement cancellation.
+      return await Promise.race([
+        this.addLabel(apiKey, issueId, LINEAR_MERGED_LABEL, controller.signal),
+        aborted,
+      ]);
+    } finally {
+      this.cancel(timer);
+      controller.signal.removeEventListener("abort", onAbort);
+      this.attempt = null;
+    }
   }
 
   private armTimer(dueAt: number): void {

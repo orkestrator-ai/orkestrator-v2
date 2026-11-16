@@ -876,16 +876,21 @@ in `linear-issue-labels.ts`.
   Linear is not overwritten either.
 - **Only on a merge, only for Linear builds.** A Kanban or GitHub-issue build
   never reaches Linear, and neither does a pull request closed without
-  merging.
+  merging. A pipeline must have run a PR-opening Ship and persisted that exact
+  PR URL (`shippedPullRequestUrl`); a reused environment's previous PR is never
+  evidence for its new build. Older pipelines without this evidence are safely
+  skipped until their own Ship re-detects the PR.
 - **Who notices the merge.** Every merge writer only queues the label: the PR
   monitor's terminal follow-up for a confirmed merge
   (`PrMonitorRuntime.resumeTerminalEffects`), the build finding its pull
   request already merged (`persistPullRequest`, through the pipeline option
   `onPullRequestMerged`), environment deletion when the environment recorded a
   merge (`environment-delete.ts`, before the pipeline records go), and a sweep
-  once per backend process that queues merges recorded on environments that
+  at backend startup that queues merges recorded on environments that
   still hold a Linear build and restarts the drain for records an earlier
-  process left pending.
+  process left pending. Failed environment reads or enqueues do not skip the
+  remaining builds; an incomplete sweep is retried at the next monitor sync.
+  The backend's explicit merge command also queues before reconciliation.
 - **Linear failures never block.** Queueing is a local write
   (`linear-merged-labels`, one record per issue and pull request, owned by
   `BackendRuntime.linearMergedLabels`); nothing on the merge or deletion path
@@ -893,14 +898,18 @@ in `linear-issue-labels.ts`.
   gone, or no Linear connection on that machine) is logged as
   `[linear] merged-label.failed` with the reason and retried after a minute,
   doubling to at most an hour, until it lands; pending records survive a
-  restart and the environment's deletion. A landed label is logged as
+  restart and the environment's deletion. Each attempt has a cancellable
+  30-second overall deadline, including response bodies and pagination, so one
+  stalled job cannot hold the queue. Storage failures re-arm a one-minute
+  fallback retry even without a new merge event. A landed label is logged as
   `merged-label.applied` with how it landed (`added`, `created`,
   `already-present`).
 - **Once per pull request.** The record stays after the label lands, so the
   monitor, the build and the sweep reporting the same merge label the issue
-  once, and a label the user removes afterwards is not put back. At most 500
-  records are kept: applied ones go first, and a new merge is refused (and
-  logged as `merged-label.queue-full`) only when all 500 are still pending.
+  once while retained, and a label the user removes afterwards is not put back
+  on replay of a retained record. Applied history is pruned first above the
+  500-record target; unapplied durable obligations are always retained, including
+  when an environment is deleted during an extended Linear outage.
 - **Which machine.** The label is added by the machine where the build ran,
   with that machine's Linear key; the records do not sync. A build on a
   machine without a Linear connection keeps its label pending until that

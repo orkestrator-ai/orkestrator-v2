@@ -157,6 +157,20 @@ describe("LinearIssueBoard card labels", () => {
     expect(more?.getAttribute("title")).toBe("Design, merged");
   });
 
+  test("thirty labels have an accurate overflow count and all remaining names", () => {
+    const names = Array.from({ length: 30 }, (_, n) => `Label ${n + 1}`);
+    renderCards([
+      labelled(
+        "eng-30",
+        "Thirty labels",
+        names.map((name) => ({ name })),
+      ),
+    ]);
+    const more = cardOf("Thirty labels").querySelector("[data-testid='linear-card-labels-more']");
+    expect(more?.textContent).toBe("+26");
+    expect(more?.getAttribute("title")).toBe(names.slice(4).join(", "));
+  });
+
   test("a label without a usable colour gets the neutral dot, never an arbitrary style", () => {
     renderCards([
       labelled("eng-5", "Odd colours", [

@@ -87,10 +87,7 @@ export const MAX_LINEAR_REVOCATIONS = 50;
 export const LINEAR_REVOCATION_TTL_MS = 180 * 24 * 60 * 60 * 1_000;
 /** Issue creations remembered for retries; the oldest go first. */
 export const MAX_LINEAR_ISSUE_CREATES = 500;
-/**
- * Merged-label records kept: applied ones are dropped oldest first, and a new
- * merge is refused (and logged) only when every kept record is still pending.
- */
+/** Retained history target; applied records go first, pending obligations are never evicted. */
 export const MAX_LINEAR_MERGED_LABELS = 500;
 /** The longest stored failure reason. */
 const MAX_LINEAR_MERGED_LABEL_ERROR = 400;
@@ -292,13 +289,13 @@ export class LinearRepository {
   /**
    * Queues the `merged` label for an issue whose build's pull request merged.
    * `exists` when this issue and pull request were queued before (pending or
-   * applied), so replays never label twice; `full` when the store holds only
-   * pending records and has no room.
+   * applied), so replays never label twice. Pending obligations are never evicted;
+   * the history limit applies only to applied records.
    */
   enqueueLinearMergedLabel(
     input: LinearMergedLabelInput,
     now: Date = new Date(),
-  ): "queued" | "exists" | "full" {
+  ): "queued" | "exists" {
     const at = now.toISOString();
     const record = parseLinearMergedLabelRecord({
       ...input,
@@ -317,7 +314,7 @@ export class LinearRepository {
         const kept = records.filter((entry) => parseLinearMergedLabelRecord(entry) !== null);
         while (kept.length >= MAX_LINEAR_MERGED_LABELS) {
           const applied = kept.findIndex((entry) => isRecord(entry) && entry.status === "applied");
-          if (applied < 0) return "full";
+          if (applied < 0) break;
           kept.splice(applied, 1);
         }
         kept.push(record);
@@ -367,6 +364,15 @@ export class LinearRepository {
         const record = index >= 0 ? parseLinearMergedLabelRecord(records[index]) : null;
         if (!record || !change(record)) return false;
         records[index] = record;
+        // An outage may grow the pending backlog beyond the history target.
+        // Prune only completed obligations as it drains; never discard pending work.
+        while (records.length > MAX_LINEAR_MERGED_LABELS) {
+          const applied = records.findIndex(
+            (entry) => isRecord(entry) && entry.status === "applied",
+          );
+          if (applied < 0) break;
+          records.splice(applied, 1);
+        }
         return true;
       },
     );

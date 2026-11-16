@@ -303,6 +303,14 @@ export class PrMonitorRuntime {
       prState: "merged",
       hasMergeConflicts: false,
     };
+    // The explicit merge command must deliver the same durable label intent as polling.
+    if (this.options.mergeObserver && context.storage.linear) {
+      await this.options.mergeObserver.recordEnvironmentMergeById(
+        context.storage,
+        environment.id,
+        environment.prUrl,
+      );
+    }
     await this.service.reconcileTerminal(environmentToPrMonitorTarget(confirmedEnvironment), {
       url: environment.prUrl,
       state: "merged",

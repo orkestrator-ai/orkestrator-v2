@@ -51,7 +51,7 @@ run against a fake that mimics Linear's GraphQL answers
 not from a live call.
 
 **Context.** The PR monitor, the build itself, environment deletion and a
-once-per-process sweep queue the label; the drain retries a failure from one
+startup sweep (retrying incomplete scans) queue the label; the drain retries a failure from one
 minute, doubling to an hour, until it lands.
 
 **Investigation.** None live. If Linear rejects a query field, every attempt

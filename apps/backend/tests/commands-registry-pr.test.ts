@@ -1,3 +1,4 @@
+import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { decodeCommandArgs } from "@orkestrator/protocol/contract/command";
 import { generateReviewPackageCommand } from "@orkestrator/protocol/contract/domains/pull-requests";
@@ -689,7 +690,49 @@ exit 1
         worktreePath,
         prUrl: "https://github.com/acme/repo/pull/42",
       });
-      const { context } = createContext(environment);
+      const addLabel = mock(async () => ({ outcome: "added" as const, labelId: "merged" }));
+      const { context } = createContext(environment, {
+        runtimeOptions: { linearMergedLabels: { addLabel } },
+      });
+      const ledger: Array<{
+        key: string;
+        issueId: string;
+        status: string;
+        nextAttemptAt: string;
+        attempts: number;
+      }> = [];
+      context.storage.kanban.getLinearAuth = async () => ({ apiKey: "test-linear-key" }) as never;
+      Object.assign(context.storage.linear, {
+        listLinearMergedLabels: async () => ledger,
+        enqueueLinearMergedLabel: (input: { issueId: string }) => {
+          if (!ledger.length)
+            ledger.push({
+              ...input,
+              key: "merge",
+              status: "pending",
+              nextAttemptAt: new Date(0).toISOString(),
+              attempts: 0,
+            });
+          return "queued";
+        },
+        settleLinearMergedLabel: () => {
+          ledger[0]!.status = "applied";
+          return true;
+        },
+      });
+      context.storage.listBuildPipelinesForEnvironment = async () =>
+        [
+          {
+            id: "pipeline-linear",
+            projectId: environment.projectId,
+            environmentId: environment.id,
+            snapshot: {
+              source: { type: "linear", issueId: "issue-42" },
+              shippedPullRequestUrl: environment.prUrl,
+              sessions: [{ phase: "pr", label: "PR Session", status: "idle" }],
+            } as BuildPipeline,
+          },
+        ] as never;
       const commands = createCommandRegistry();
 
       await withFakeGh(
@@ -714,6 +757,14 @@ exit 1
             ),
           ).resolves.toEqual({ outcome: "merged", cleanupOutcome: "not-requested" });
 
+          await context.runtime.linearMergedLabels.idle();
+          expect(ledger[0]?.status).toBe("applied");
+          expect(addLabel).toHaveBeenCalledWith(
+            "test-linear-key",
+            "issue-42",
+            "merged",
+            expect.any(AbortSignal),
+          );
           const ghLog = await fs.readFile(logPath, "utf8");
           expect(ghLog).toContain(
             "api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash",

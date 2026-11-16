@@ -11,7 +11,13 @@
  * alone.
  */
 import type { LinearMergedLabelOutcome } from "./storage-linear.js";
-import { asString, isRecord, linearGraphql } from "./linear.js";
+import {
+  asString,
+  isRecord,
+  linearGraphql,
+  nextPageCursor,
+  completeLinearIssueLabels,
+} from "./linear.js";
 
 export type LinearIssueLabelResult = {
   outcome: LinearMergedLabelOutcome;
@@ -40,6 +46,7 @@ export async function addLinearIssueLabelByName(
   apiKey: string,
   issueId: string,
   name: string,
+  signal?: AbortSignal,
 ): Promise<LinearIssueLabelResult> {
   const issueData = await linearGraphql<{ issue?: unknown }>(
     apiKey,
@@ -49,12 +56,15 @@ export async function addLinearIssueLabelByName(
         team { id }
         labels(first: 100) {
           nodes { id name }
+          pageInfo { hasNextPage endCursor }
         }
       }
     }`,
     { id: issueId },
+    signal,
   );
-  const issue = isRecord(issueData.issue) ? issueData.issue : null;
+  const complete = await completeLinearIssueLabels(apiKey, issueData.issue, signal);
+  const issue = isRecord(complete) ? complete : null;
   if (!issue) throw new Error(`Linear issue not found: ${issueId}`);
   const present = labelNodes(issue.labels).find((label) => sameName(label.name, name));
   if (present) return { outcome: "already-present", labelId: present.id };
@@ -63,19 +73,36 @@ export async function addLinearIssueLabelByName(
   // Linear's id for the issue, in case `issueId` was its identifier (ENG-12).
   const targetId = asString(issue.id) || issueId;
 
-  const labelData = await linearGraphql<{ issueLabels?: unknown }>(
-    apiKey,
-    `query OrkestratorLinearLabelsByName($name: String!) {
-      issueLabels(first: 50, filter: { name: { eqIgnoreCase: $name } }) {
-        nodes { id name isGroup team { id } }
-      }
-    }`,
-    { name },
-  );
-  const candidates = labelNodes(labelData.issueLabels).filter(
-    (label) =>
-      !label.isGroup && sameName(label.name, name) && (!label.teamId || label.teamId === teamId),
-  );
+  const candidates: LabelNode[] = [];
+  const seen = new Set<string>();
+  let after: string | null = null;
+  do {
+    const labelData = await linearGraphql<{
+      issueLabels?: {
+        nodes?: unknown[];
+        pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+      };
+    }>(
+      apiKey,
+      `query OrkestratorLinearLabelsByName($name: String!, $after: String) {
+        issueLabels(first: 50, after: $after, filter: { name: { eqIgnoreCase: $name } }) {
+          nodes { id name isGroup team { id } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }`,
+      { name, after },
+      signal,
+    );
+    candidates.push(
+      ...labelNodes(labelData.issueLabels).filter(
+        (label) =>
+          !label.isGroup &&
+          sameName(label.name, name) &&
+          (!label.teamId || label.teamId === teamId),
+      ),
+    );
+    after = nextPageCursor(labelData.issueLabels?.pageInfo, seen, "matching labels");
+  } while (after);
   let labelId =
     candidates.find((label) => label.teamId === teamId)?.id ??
     candidates.find((label) => !label.teamId)?.id;
@@ -93,6 +120,7 @@ export async function addLinearIssueLabelByName(
         }
       }`,
       { name, teamId },
+      signal,
     );
     labelId = created.issueLabelCreate?.issueLabel?.id;
     if (!created.issueLabelCreate?.success || !labelId) {
@@ -109,6 +137,7 @@ export async function addLinearIssueLabelByName(
       }
     }`,
     { id: targetId, labelId },
+    signal,
   );
   if (!added.issueAddLabel?.success) throw new Error("Linear did not confirm the label was added");
   return { outcome, labelId };

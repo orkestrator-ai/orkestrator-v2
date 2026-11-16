@@ -84,7 +84,9 @@ export async function lifecycleMachine(
     storage,
     invoke,
     options,
-    save: async () => undefined,
+    save: async (pipeline: BuildPipeline) => {
+      await storage.saveBuildPipeline(pipeline.id, projectId, environmentId, 1, pipeline);
+    },
     provisioningPrompts: new Map(),
     lastProviderAgent: new Map(),
   } as unknown as BuildPipelineContext;

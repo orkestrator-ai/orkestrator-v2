@@ -18,7 +18,7 @@ export const LINEAR_LOG_AREAS = defineLogAreas({
       "merged-label.failed":
         "Adding the `merged` label to a merged build's Linear issue failed; the reason is logged and it is retried later.",
       "merged-label.queue-full":
-        "A merged build's Linear issue could not be queued for the `merged` label because every kept record is still pending.",
+        "Legacy queue-capacity warning, no longer emitted: pending merged-label obligations are retained.",
       "merged-label.record-failed":
         "A merged pull request's Linear-sourced builds could not be read or queued for the `merged` label.",
       "sync.failed": "A Linear board-link sync with a node failed; it is retried on the next pass.",

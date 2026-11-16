@@ -151,6 +151,7 @@ export async function linearGraphql<T>(
   apiKey: string,
   query: string,
   variables: Record<string, unknown> = {},
+  signal?: AbortSignal,
 ): Promise<T> {
   const token = apiKey.trim();
   if (!token) throw new Error("Linear API key is not configured");
@@ -159,6 +160,7 @@ export async function linearGraphql<T>(
   try {
     response = await fetch(LINEAR_GRAPHQL_URL, {
       method: "POST",
+      signal,
       headers: {
         "Content-Type": "application/json",
         Authorization: token,
@@ -376,6 +378,7 @@ export async function listLinearIssues(
             assignee { name }
             labels(first: ${ISSUE_LABEL_LIMIT}) {
               nodes { id name color }
+              pageInfo { hasNextPage endCursor }
             }
           }
           pageInfo {
@@ -389,7 +392,7 @@ export async function listLinearIssues(
 
     const nodes = Array.isArray(data.issues?.nodes) ? data.issues.nodes : [];
     for (const node of nodes) {
-      const issue = issueFromNode(node);
+      const issue = issueFromNode(await completeLinearIssueLabels(apiKey, node));
       if (issue) issues.push(issue);
     }
 
@@ -399,6 +402,41 @@ export async function listLinearIssues(
   }
 
   return issues.sort(compareLinearIssuePosition);
+}
+
+/** Complete a nested label connection before exposing counts or checking membership. */
+export async function completeLinearIssueLabels(
+  apiKey: string,
+  node: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  if (!isRecord(node) || !isRecord(node.labels)) return node;
+  type Connection = {
+    nodes?: unknown[];
+    pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+  };
+  let connection = node.labels as Connection;
+  const nodes = [...(connection.nodes ?? [])];
+  const seen = new Set<string>();
+  while (true) {
+    const after = nextPageCursor(connection.pageInfo, seen, "issue labels");
+    if (!after) break;
+    const page = await linearGraphql<{ issue?: { labels?: Connection } }>(
+      apiKey,
+      `query OrkestratorLinearIssueLabelPage($id: String!, $after: String!) {
+        issue(id: $id) { labels(first: 100, after: $after) {
+          nodes { id name color }
+          pageInfo { hasNextPage endCursor }
+        } }
+      }`,
+      { id: asString(node.id), after },
+      signal,
+    );
+    if (!page.issue?.labels) throw new Error("Linear issue label page was incomplete");
+    connection = page.issue.labels;
+    nodes.push(...(connection.nodes ?? []));
+  }
+  return { ...node, labels: { nodes } };
 }
 
 export async function getLinearIssue(apiKey: string, issueId: string): Promise<LinearIssueDetail> {
@@ -425,13 +463,14 @@ export async function getLinearIssue(apiKey: string, issueId: string): Promise<L
         cycle { name }
         labels(first: ${ISSUE_LABEL_LIMIT}) {
           nodes { id name color }
+          pageInfo { hasNextPage endCursor }
         }
       }
     }`,
     { id: issueId },
   );
 
-  const issue = detailFromNode(data.issue);
+  const issue = detailFromNode(await completeLinearIssueLabels(apiKey, data.issue));
   if (!issue) throw new Error(`Linear issue not found: ${issueId}`);
 
   // Comments are a secondary concern: a failure fetching them must not block the

@@ -581,3 +581,44 @@ describe("Linear backend API", () => {
     ).rejects.toThrow("Linear comments pagination did not return a cursor");
   });
 });
+
+test("completes nested label pages for both board and detail reads", async () => {
+  const labels = Array.from({ length: 30 }, (_, n) => ({
+    id: `label-${n}`,
+    name: `Label ${n + 1}`,
+    color: "#123456",
+  }));
+  const calls: string[] = [];
+  globalThis.fetch = mock(async (_url: unknown, init?: RequestInit) => {
+    const { query, variables } = JSON.parse(String(init?.body));
+    calls.push(query);
+    const issue = {
+      id: "issue",
+      identifier: "ENG-1",
+      title: "Thirty labels",
+      updatedAt: "2026-11-16T00:00:00Z",
+      labels: {
+        nodes: labels.slice(0, 25),
+        pageInfo: { hasNextPage: true, endCursor: "label-page-2" },
+      },
+    };
+    if (query.includes("OrkestratorLinearIssueLabelPage")) {
+      expect(variables).toEqual({ id: "issue", after: "label-page-2" });
+      return jsonResponse({
+        data: { issue: { labels: { nodes: labels.slice(25), pageInfo: { hasNextPage: false } } } },
+      });
+    }
+    if (query.includes("OrkestratorLinearIssueComments"))
+      return jsonResponse({ data: { issue: { comments: { nodes: [] } } } });
+    if (query.includes("OrkestratorLinearIssues("))
+      return jsonResponse({ data: { issues: { nodes: [issue] } } });
+    return jsonResponse({ data: { issue } });
+  }) as unknown as typeof fetch;
+  expect((await listLinearIssues("key"))[0]?.issueLabels).toEqual(labels);
+  const detail = await getLinearIssue("key", "issue");
+  expect(detail.issueLabels).toEqual(labels);
+  expect(detail.labels).toEqual(labels.map((label) => label.name));
+  expect(calls.filter((query) => query.includes("OrkestratorLinearIssueLabelPage"))).toHaveLength(
+    2,
+  );
+});

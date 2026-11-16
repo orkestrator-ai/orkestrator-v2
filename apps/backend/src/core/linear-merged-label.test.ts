@@ -10,6 +10,7 @@ import type { CommandContext } from "./commands-context.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import {
   LINEAR_MERGED_LABEL_MAX_RETRY_MS,
+  LINEAR_MERGED_LABEL_TIMEOUT_MS,
   LINEAR_MERGED_LABEL_RETRY_MS,
   LinearMergedLabels,
   linearMergedLabelRetryDelay,
@@ -48,6 +49,8 @@ type Request = { operation: string; variables: Record<string, unknown> };
  * `failNext` makes the next requests answer with a GraphQL error.
  */
 function fakeLinear(state: { issueLabels: string[]; labels: Label[] }) {
+  let failOperation: string | undefined;
+  let loseOperation: string | undefined;
   const requests: Request[] = [];
   let failures = 0;
   const failNext = (count: number) => {
@@ -72,6 +75,10 @@ function fakeLinear(state: { issueLabels: string[]; labels: Label[] }) {
       return reply({ errors: [{ message: "Linear is down" }] });
     }
     const label = (id: string) => state.labels.find((entry) => entry.id === id);
+    if (operation === failOperation) {
+      failOperation = undefined;
+      return reply({ errors: [{ message: "stage failed" }] });
+    }
     switch (operation) {
       case "OrkestratorLinearIssueLabels":
         return answer({
@@ -85,16 +92,17 @@ function fakeLinear(state: { issueLabels: string[]; labels: Label[] }) {
         });
       case "OrkestratorLinearLabelsByName": {
         const name = String(body.variables.name).toLowerCase();
+        const matches = state.labels.filter((entry) => entry.name.toLowerCase() === name);
+        const start = Number(body.variables.after ?? 0);
         return answer({
           issueLabels: {
-            nodes: state.labels
-              .filter((entry) => entry.name.toLowerCase() === name)
-              .map((entry) => ({
-                id: entry.id,
-                name: entry.name,
-                isGroup: entry.isGroup === true,
-                team: entry.teamId ? { id: entry.teamId } : null,
-              })),
+            pageInfo: { hasNextPage: matches.length > start + 50, endCursor: String(start + 50) },
+            nodes: matches.slice(start, start + 50).map((entry) => ({
+              id: entry.id,
+              name: entry.name,
+              isGroup: entry.isGroup === true,
+              team: entry.teamId ? { id: entry.teamId } : null,
+            })),
           },
         });
       }
@@ -105,11 +113,19 @@ function fakeLinear(state: { issueLabels: string[]; labels: Label[] }) {
           teamId: String(body.variables.teamId),
         };
         state.labels.push(created);
+        if (operation === loseOperation) {
+          loseOperation = undefined;
+          throw new Error("response lost");
+        }
         return answer({ issueLabelCreate: { success: true, issueLabel: { id: created.id } } });
       }
       case "OrkestratorLinearIssueAddLabel":
         expect(body.variables.id).toBe("issue-uuid-1");
         state.issueLabels.push(String(body.variables.labelId));
+        if (operation === loseOperation) {
+          loseOperation = undefined;
+          throw new Error("response lost");
+        }
         return answer({ issueAddLabel: { success: true } });
       default:
         throw new Error(`Unexpected Linear operation ${operation}`);
@@ -118,6 +134,12 @@ function fakeLinear(state: { issueLabels: string[]; labels: Label[] }) {
   return {
     requests,
     failNext,
+    failAt: (operation: string) => {
+      failOperation = operation;
+    },
+    loseAt: (operation: string) => {
+      loseOperation = operation;
+    },
     mutations: () => requests.filter((r) => /Create|Add/.test(r.operation)),
   };
 }
@@ -172,7 +194,11 @@ async function machine(source: BuildPipeline["source"], options: { connected?: b
       queue.recordPipelineMerge(storage, pipeline, prUrl);
     },
   });
-  const pipeline = life.pipeline("ENG-12", { source });
+  const pipeline = life.pipeline("ENG-12", {
+    source,
+    shippedPullRequestUrl: PR_URL,
+    sessions: [{ phase: "pr", label: "PR Session", status: "idle" } as never],
+  });
   await storage.saveBuildPipeline(pipeline.id, "project-1", "env-1", 1, pipeline);
   return { storage, queue, life, pipeline, time, merged };
 }
@@ -485,7 +511,17 @@ describe("Linear failures", () => {
       },
     } as unknown as Parameters<LinearMergedLabels["recordEnvironmentMerge"]>[0];
     await queue.recordEnvironmentMergeById(broken, "env-1", PR_URL);
-    queue.recordPipelineMerge(broken, { id: "p1", projectId: "project-1", source: LINEAR }, PR_URL);
+    queue.recordPipelineMerge(
+      broken,
+      {
+        id: "p1",
+        projectId: "project-1",
+        source: LINEAR,
+        shippedPullRequestUrl: PR_URL,
+        sessions: [{ phase: "pr" } as never],
+      },
+      PR_URL,
+    );
     await queue.idle();
     expect(records.filter((entry) => entry.event === "merged-label.record-failed")).toHaveLength(2);
   });
@@ -530,4 +566,179 @@ describe("Linear failures", () => {
     expect(linearMergedLabelRetryDelay(3)).toBe(4 * LINEAR_MERGED_LABEL_RETRY_MS);
     expect(linearMergedLabelRetryDelay(50)).toBe(LINEAR_MERGED_LABEL_MAX_RETRY_MS);
   });
+});
+
+describe("merged label recovery regressions", () => {
+  for (const kind of ["new", "in-progress", "commit-only", "different-pr"]) {
+    test(`does not attribute an older environment merge to a ${kind} build`, async () => {
+      const api = fakeLinear({ issueLabels: [], labels: [] });
+      const { storage, queue, pipeline } = await machine(LINEAR);
+      if (kind === "different-pr") pipeline.shippedPullRequestUrl = `${PR_URL}0`;
+      else {
+        delete pipeline.shippedPullRequestUrl;
+        pipeline.sessions = kind === "in-progress" ? [{ phase: "build" } as never] : [];
+        if (kind === "commit-only") pipeline.delivery = { policy: "commit-only" } as never;
+      }
+      await storage.saveBuildPipeline(pipeline.id, "project-1", "env-1", 1, pipeline);
+      await storage.updateEnvironment("env-1", { prState: "merged", prUrl: PR_URL });
+      queue.sweepOnce(storage);
+      await queue.idle();
+      await queue.recordEnvironmentMergeById(storage, "env-1", PR_URL);
+      queue.recordPipelineMerge(storage, pipeline, PR_URL);
+      await queue.idle();
+      expect(await storage.linear.listLinearMergedLabels()).toEqual([]);
+      expect(api.requests).toEqual([]);
+    });
+  }
+
+  for (const method of [
+    "listLinearMergedLabels",
+    "deferLinearMergedLabel",
+    "settleLinearMergedLabel",
+  ] as const) {
+    test(`recovers after ${method} fails once, with no new merge`, async () => {
+      const api = fakeLinear({ issueLabels: [], labels: [{ id: "merged", name: "merged" }] });
+      const { storage, queue, pipeline, time } = await machine(LINEAR);
+      const original = storage.linear[method].bind(storage.linear);
+      let failed = false;
+      // Keep the real persistence operation after the single injected storage fault.
+      const spy = mock((...args: unknown[]) => {
+        if (!failed) {
+          failed = true;
+          throw new Error("storage unavailable");
+        }
+        return (original as (...args: unknown[]) => unknown)(...args);
+      });
+      Object.defineProperty(storage.linear, method, { value: spy, configurable: true });
+      if (method === "deferLinearMergedLabel") api.failNext(1);
+      queue.recordPipelineMerge(storage, pipeline, PR_URL);
+      await queue.idle();
+      time.advance(LINEAR_MERGED_LABEL_RETRY_MS);
+      await queue.idle();
+      expect((await storage.linear.listLinearMergedLabels())[0]?.status).toBe("applied");
+      expect(time.pending()).toBe(0);
+    });
+  }
+
+  for (const bodyOnly of [false, true]) {
+    test(`a stalled ${bodyOnly ? "response body" : "request"} times out and the next issue progresses`, async () => {
+      const { storage, time } = await machine(LINEAR);
+      let signal: AbortSignal | undefined;
+      globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+        signal = init?.signal ?? undefined;
+        if (bodyOnly)
+          return { ok: true, status: 200, json: () => new Promise(() => {}) } as Response;
+        return await new Promise<Response>(() => {});
+      }) as typeof fetch;
+      const queue = new LinearMergedLabels({
+        now: time.now,
+        schedule: time.schedule,
+        cancel: time.cancel,
+      });
+      queues.push(queue);
+      for (const id of ["stalled", "later"])
+        storage.linear.enqueueLinearMergedLabel(
+          {
+            issueId: id,
+            pipelineId: id,
+            projectId: "project-1",
+            prUrl: PR_URL,
+          },
+          new Date(time.now()),
+        );
+      // The second job uses the same real client with a responsive fake after timeout.
+      queue.sweepOnce(storage);
+      await Bun.sleep(0);
+      expect(signal).toBeDefined();
+      fakeLinear({ issueLabels: [], labels: [{ id: "merged", name: "merged" }] });
+      time.advance(LINEAR_MERGED_LABEL_TIMEOUT_MS);
+      await queue.idle();
+      expect(signal?.aborted).toBe(true);
+      const records = await storage.linear.listLinearMergedLabels();
+      expect(records.find((r) => r.issueId === "stalled")).toMatchObject({
+        status: "pending",
+        attempts: 1,
+      });
+      expect(records.find((r) => r.issueId === "later")?.status).toBe("applied");
+      expect(time.pending()).toBe(1);
+      time.advance(LINEAR_MERGED_LABEL_RETRY_MS);
+      await queue.idle();
+      expect(
+        (await storage.linear.listLinearMergedLabels()).every((r) => r.status === "applied"),
+      ).toBe(true);
+    });
+  }
+
+  test("the startup sweep continues after a broken environment and retries it later", async () => {
+    const api = fakeLinear({ issueLabels: [], labels: [{ id: "merged", name: "merged" }] });
+    const { storage, queue, pipeline } = await machine(LINEAR);
+    await storage.updateEnvironment("env-1", { prState: "merged", prUrl: PR_URL });
+    const environment = (await storage.getEnvironment("env-1"))!;
+    await storage.addEnvironment({ ...environment, id: "broken-env" });
+    await storage.saveBuildPipeline("broken", "project-1", "broken-env", 1, {
+      ...pipeline,
+      id: "broken",
+      environmentId: "broken-env",
+    });
+    const records = await storage.listAllBuildPipelines();
+    storage.listAllBuildPipelines = async () => records.sort((a) => (a.id === "broken" ? -1 : 1));
+    const read = storage.getEnvironment.bind(storage);
+    storage.getEnvironment = async (id) => {
+      if (id === "broken-env") throw new Error("broken environment");
+      return read(id);
+    };
+    queue.sweepOnce(storage);
+    await queue.idle();
+    expect(api.mutations()).toHaveLength(1);
+    // A second scan is admitted because the first was incomplete.
+    const list = mock(storage.listAllBuildPipelines.bind(storage));
+    storage.listAllBuildPipelines = list;
+    queue.sweepOnce(storage);
+    await queue.idle();
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  test("finds a team label after fifty other-team matches", async () => {
+    const labels = Array.from({ length: 50 }, (_, n) => ({
+      id: `other-${n}`,
+      name: "merged",
+      teamId: `other-${n}`,
+    }));
+    const api = fakeLinear({
+      issueLabels: [],
+      labels: [...labels, { id: "ours", name: "Merged", teamId: "team-1" }],
+    });
+    const { storage, queue, pipeline } = await machine(LINEAR);
+    queue.recordPipelineMerge(storage, pipeline, PR_URL);
+    await queue.idle();
+    expect(
+      api.requests.filter((r) => r.operation === "OrkestratorLinearLabelsByName"),
+    ).toHaveLength(2);
+    expect(api.mutations()).toEqual([
+      {
+        operation: "OrkestratorLinearIssueAddLabel",
+        variables: { id: "issue-uuid-1", labelId: "ours" },
+      },
+    ]);
+  });
+
+  for (const stage of ["OrkestratorLinearLabelCreate", "OrkestratorLinearIssueAddLabel"]) {
+    for (const lost of [false, true]) {
+      test(`recovers when ${stage} ${lost ? "succeeds but loses its response" : "fails"}`, async () => {
+        const state = { issueLabels: [] as string[], labels: [] as Label[] };
+        const api = fakeLinear(state);
+        if (lost) api.loseAt(stage);
+        else api.failAt(stage);
+        const { storage, queue, pipeline, time } = await machine(LINEAR);
+        queue.recordPipelineMerge(storage, pipeline, PR_URL);
+        await queue.idle();
+        expect((await storage.linear.listLinearMergedLabels())[0]?.status).toBe("pending");
+        time.advance(LINEAR_MERGED_LABEL_RETRY_MS);
+        await queue.idle();
+        expect((await storage.linear.listLinearMergedLabels())[0]?.status).toBe("applied");
+        expect(state.labels).toHaveLength(1);
+        expect(state.issueLabels).toHaveLength(1);
+      });
+    }
+  }
 });

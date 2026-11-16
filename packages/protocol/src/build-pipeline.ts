@@ -1530,6 +1530,8 @@ export interface BuildPipeline {
   createdAt: string;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
+  /** PR observed by this pipeline's PR-opening Ship, never inherited from its environment. */
+  shippedPullRequestUrl?: string;
   source?: BuildPipelineSource;
   /** Optional feature-plan association maintained by the backend supervisor. */
   featurePlanId?: string;

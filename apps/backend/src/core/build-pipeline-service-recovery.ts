@@ -506,6 +506,10 @@ export class BuildPipelineRecovery {
     pipeline: BuildPipeline,
     detection: PullRequestDetection,
   ): Promise<void> {
+    if (pipelineReachedPullRequestStage(pipeline)) {
+      pipeline.shippedPullRequestUrl = detection.url;
+      await this.ctx.save(pipeline, pipeline.backendRevision);
+    }
     await this.ctx.storage.updateEnvironment(pipeline.environmentId, {
       prUrl: detection.url,
       prState: detection.state,

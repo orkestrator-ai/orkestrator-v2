@@ -1,6 +1,6 @@
 /**
  * A container Claude CLI turn that ends on an API error, in a real image
- * (to-do 1200).
+ * (#1612).
  *
  * The real Claude CLI runs inside a container of this checkout's image, with
  * the hooks the image's own entrypoint installs, against a fake Anthropic API

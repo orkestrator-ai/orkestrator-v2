@@ -1,6 +1,6 @@
 import { configureLogger } from "@orkestrator/protocol/logger";
 /**
- * Before-and-after workloads for the gateway frame costs in 1202 task 11
+ * Before-and-after workloads for the gateway frame costs in #1765
  * (GW-5, GW-6, GW-12, GW-14). Runs the real gateway in this process against a
  * fake backend:
  *

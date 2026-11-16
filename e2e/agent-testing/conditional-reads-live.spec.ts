@@ -27,7 +27,7 @@
  * `E10_SCENARIO` picks the scripted turn (default `baseline`):
  *
  * - `large-window`: 26 rounds of 30 KB each, measured once ten rounds have
- *   streamed, so the bridge's window sits near its 512 KiB bound (to-do 6680,
+ *   streamed, so the bridge's window sits near its 512 KiB bound (#2166,
  *   retired, task 1).
  * - `trimmed-head`: one response that streams 20 KB a second for 150 s,
  *   measured once it is past 600,000 characters, so the head row alone is over
@@ -83,6 +83,8 @@ type Answer = {
   command: string;
   transcript?: string;
   state?: string;
+  /** A discovery answer's status (`snapshot`, `unchanged`): to-do 8151 (retired). */
+  discovery?: string;
   bytes: number;
   ms: number;
 };
@@ -264,6 +266,7 @@ function recordAnswers(page: Page, viewer: string, answers: Answer[]): void {
       const text = await response.text().catch(() => "");
       let transcript: string | undefined;
       let state: string | undefined;
+      let discovery: string | undefined;
       try {
         const result = (JSON.parse(text) as { result?: Record<string, unknown> }).result ?? {};
         const read = (value: unknown) =>
@@ -275,6 +278,7 @@ function recordAnswers(page: Page, viewer: string, answers: Answer[]): void {
           state = read(result.state);
         } else if (command === "get_native_agent_transcript_update") transcript = read(result);
         else if (command === "get_native_agent_session_state_update") state = read(result);
+        else if (command === "get_native_agent_discovery_update") discovery = read(result);
       } catch {
         // Size alone still counts.
       }
@@ -285,6 +289,7 @@ function recordAnswers(page: Page, viewer: string, answers: Answer[]): void {
         command,
         transcript,
         state,
+        discovery,
         bytes: Buffer.byteLength(text),
         ms: Math.round(timing.responseEnd),
       });
@@ -303,6 +308,10 @@ function answersBetween(answers: Answer[], from: number, to: number) {
     key(`command:${answer.command}`);
     if (answer.transcript) key(`transcript:${answer.transcript}`);
     if (answer.state) key(`state:${answer.state}`);
+    if (answer.discovery) {
+      key(`discovery:${answer.discovery}`);
+      bucket.discoveryBytes = (bucket.discoveryBytes ?? 0) + answer.bytes;
+    }
     bucket.bytes = (bucket.bytes ?? 0) + answer.bytes;
   }
   for (const [viewer, values] of Object.entries(durations)) {

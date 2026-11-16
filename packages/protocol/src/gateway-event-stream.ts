@@ -45,7 +45,7 @@ export const GATEWAY_KEEPALIVE_EVENT = "gateway.keepalive";
  * on this stream at all, because the client reads them on their own filtered
  * stream. Clients still send it, but the gateway no longer reads it: a main
  * stream never carries relayed events (the old shared-name `legacy` delivery
- * was retired with legacy support on 2026-11-14, to-do 8108).
+ * was retired with legacy support on 2026-11-14, to-do 8108 (retired)).
  */
 export const GATEWAY_RELAYED_EVENTS_PARAM = "relayedEvents";
 export type GatewayRelayedEventsMode = "per-node";

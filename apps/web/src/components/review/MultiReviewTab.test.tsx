@@ -1638,7 +1638,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
   });
 
-  test("shows a reviewer that could not review as failed, with its reason (todo 7871)", async () => {
+  test("shows a reviewer that could not review as failed, with its reason (#2221)", async () => {
     const reason = "No shell command could run: bwrap could not create a namespace.";
     const ready = readyWorkflow();
     ready.reviewers[1] = {

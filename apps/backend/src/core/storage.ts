@@ -183,7 +183,7 @@ export class StorageService {
   readonly clientState: ClientStateStorage;
   readonly setupApprovals: SetupApprovalsStorage;
   readonly watchedPullRequests: WatchedPullRequestsStorage;
-  /** This machine's load history (`machine-load.ts`, to-do 8104). */
+  /** This machine's load history (`machine-load.ts`, #2287). */
   readonly machineLoadHistory: MachineLoadHistoryStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
@@ -266,7 +266,7 @@ export class StorageService {
 
   /**
    * Publish a provider-authoritative projection after its cache is committed.
-   * `cause` names the announcing code path (content-free; todo 0049 task 4).
+   * `cause` names the announcing code path (content-free; #1659).
    */
   announceNativeAgentSessionProjection(
     environmentId: string,

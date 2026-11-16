@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import process from "node:process";
 
 /**
- * Image and layer sizes for to-do 1202 task 14 (DK-7 to DK-9), on whatever
+ * Image and layer sizes for #1961 (DK-7 to DK-9), on whatever
  * Docker the host has.
  *
  *   bun scripts/docker-image-layers.ts report TAG [--du PATH]...

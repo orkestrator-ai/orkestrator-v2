@@ -8,7 +8,7 @@ import {
   type PreviewWebSocket,
 } from "@orkestrator/protocol/node/preview-websocket";
 
-import type { PreviewRuntime } from "./core/preview-runtime.js";
+import type { PreviewRuntime } from "./core/previews/index.js";
 import { PreviewAdmission } from "./preview-admission.js";
 import type { PreviewMetrics } from "./preview-metrics.js";
 import { acceptPreviewTunnelMux } from "./preview-tunnel-mux-server.js";

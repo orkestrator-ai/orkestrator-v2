@@ -162,7 +162,7 @@ export interface RecurringWorkDiagnostics {
   signals: { name: SignalSourceName; status: SignalHealthStatus }[];
   /**
    * Every native session invalidation the backend emitted, counted by its
-   * content-free cause and the platform it named (todo 0049 task 4): what
+   * content-free cause and the platform it named (#1659): what
    * keeps waking an idle view. Profile-wide, like `metrics`.
    */
   sessionInvalidations: NativeSessionInvalidationSnapshot;

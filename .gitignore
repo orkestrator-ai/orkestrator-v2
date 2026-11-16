@@ -103,7 +103,7 @@ temp/
 .orkestrator-linux-home/
 
 src-tauri
-
+output
 .playwright-cli/
 .playwright-mcp/
 /output/cli-scenarios/

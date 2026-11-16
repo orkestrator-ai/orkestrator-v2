@@ -89,7 +89,7 @@ function suite(
   test("the seeds exercise what the suite is named for", () => {
     if (results.length < SEEDS.length || SEEDS.length < 8) return;
     // A continuation journaled before its turn started was read at least once
-    // while status still described the restart it continues (0112).
+    // while status still described the restart it continues (#1288).
     expect(
       results.some((result) =>
         Object.values(result.ledgers).some((ledger) => ledger.lateStartReads > 0),

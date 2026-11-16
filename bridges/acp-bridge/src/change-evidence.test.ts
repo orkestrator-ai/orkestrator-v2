@@ -351,7 +351,7 @@ describe("ACP change evidence", () => {
     } finally {
       // Restoring queues a compaction rewrite of `entries.jsonl`; the harness
       // removes the directory after the test, so let the rewrite land first
-      // or it re-creates the directory (0247).
+      // or it re-creates the directory (#1339).
       await restored.flush();
       await persisted.flush();
     }

@@ -236,7 +236,7 @@ export function installLocalDesktopGateway(
   if (!host || targetWindow.orkestrator) return;
   const gateway = createBrowserGatewayApi({
     baseUrl: host.baseUrl,
-    // Not tied to the terminal WebSocket: to-do 1202 task 12 starts with SSE.
+    // Not tied to the terminal WebSocket: #1741 starts with SSE.
     terminalTransport: "http-sse",
     terminalEventSource: true,
     keepaliveOnPageHide: true,

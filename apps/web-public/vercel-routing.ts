@@ -14,7 +14,7 @@
  * that only the general rule matches. The repository has no path-to-regexp 6
  * to call, so this is the subset these rules use; whether a real deployment
  * applies them as matched here is the manual-test checklist's check (7568,
- * 4650 task 1).
+ * 4650 (retired) task 1).
  */
 
 export type VercelHeader = { key: string; value: string };

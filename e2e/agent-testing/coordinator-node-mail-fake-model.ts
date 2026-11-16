@@ -1,5 +1,5 @@
 /**
- * A loopback model for `coordinator-node-mail-fake.spec.ts` (to-do 2900), so
+ * A loopback model for `coordinator-node-mail-fake.spec.ts` (#2075), so
  * the Pi main coordinators of two `dev:test` profiles, one attached to the
  * other as its leaf, mail each other with no login and nothing billed. Run
  * with Bun (specs run under Node): `bun coordinator-node-mail-fake-model.ts`.

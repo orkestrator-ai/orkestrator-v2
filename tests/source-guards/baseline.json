@@ -149,10 +149,10 @@
     "tests/unit/protocol/parent-watchdog.test.ts": 8
   },
   "released-port-rebind": {
-    "apps/backend/src/core/preview-docker.test.ts": 2,
-    "apps/backend/src/core/preview-listener-ownership.test.ts": 2,
-    "apps/backend/src/core/preview-local-discovery.test.ts": 2,
-    "apps/backend/src/core/preview-target-resolver.test.ts": 1,
+    "apps/backend/src/core/previews/docker.test.ts": 2,
+    "apps/backend/src/core/previews/listener-ownership.test.ts": 2,
+    "apps/backend/src/core/previews/local-discovery.test.ts": 2,
+    "apps/backend/src/core/previews/target-resolver.test.ts": 1,
     "apps/backend/src/preview-relay-supervisor.test.ts": 1,
     "apps/backend/src/preview-vite.test.ts": 2,
     "apps/backend/tests/codex-subagent-stack.ts": 2,

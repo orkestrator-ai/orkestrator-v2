@@ -193,7 +193,7 @@ describe("change evidence spool", () => {
       expect(read.runtimeEpoch).not.toBe(first.runtimeEpoch);
     } finally {
       // Restoring queues a compaction rewrite of the entries file; let it land
-      // before the directory is removed, or it re-creates it (0247).
+      // before the directory is removed, or it re-creates it (#1339).
       await restarted.flush();
     }
   });

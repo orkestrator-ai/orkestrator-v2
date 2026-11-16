@@ -373,7 +373,7 @@ function ownerOf(storage: StorageService, key: string): string | null | undefine
   return (rawRow(storage, key) as { owner: string | null } | null)?.owner;
 }
 
-describe("the environment sweep reads only its environment's rows (todo 6120 task 6)", () => {
+describe("the environment sweep reads only its environment's rows (#2029)", () => {
   test("every write records the session's environment as the row's indexed owner", async () => {
     const storage = await service();
     const environment = await storage.addEnvironment(createEnvironment("project-1"));

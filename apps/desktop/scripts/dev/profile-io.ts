@@ -238,7 +238,7 @@ async function clearDirectory(
  * exist" until it restarts. Staged portable inputs are the only host binds,
  * and their key and revision directories get fresh names each time, so
  * keeping these three is what lets a removed profile name boot containers
- * again (todo 0200). `pruneProfiles` recognises what is left.
+ * again (#1415). `pruneProfiles` recognises what is left.
  */
 export async function removeProfileState(
   profile: RuntimeProfile,

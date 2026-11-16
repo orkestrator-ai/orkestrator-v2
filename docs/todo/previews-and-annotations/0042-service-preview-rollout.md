@@ -417,7 +417,7 @@ partitions, and the evidence log where run results are now recorded.
   (`apps/backend/src/core/storage-preview-services.ts`) sets
   `transport: true`, `relay: true` and `publication.enabled: false`. A backend
   with saved settings keeps them (D20).
-  `PreviewRuntime.effectiveSettings` (`core/preview-runtime.ts`) applies the
+  `PreviewRuntime.effectiveSettings` (`core/previews/runtime.ts`) applies the
   `ORKESTRATOR_PREVIEW_TRANSPORT` and `ORKESTRATOR_PREVIEW_RELAY` overrides.
   Since #969, settings, definitions and identity are the SQLite stores
   `preview-settings`, `preview-services` and `backend-identity`
@@ -817,11 +817,11 @@ This replaces the 2026-09-23 file lists as the current baseline.
   | protocol | `src/node/preview-websocket.test.ts` | 7 |
   | protocol | `src/preview-services.test.ts` | 21 |
   | backend | `src/core/commands-registry-previews.test.ts` | 6 |
-  | backend | `src/core/preview-access.test.ts` | 11 |
-  | backend | `src/core/preview-docker.test.ts` | 0, 1 skipped (1 on Docker) |
-  | backend | `src/core/preview-port-publication.test.ts` | 4 |
-  | backend | `src/core/preview-service-registry.test.ts` | 15 |
-  | backend | `src/core/preview-target-resolver.test.ts` | 18 |
+  | backend | `src/core/previews/access.test.ts` | 11 |
+  | backend | `src/core/previews/docker.test.ts` | 0, 1 skipped (1 on Docker) |
+  | backend | `src/core/previews/port-publication.test.ts` | 4 |
+  | backend | `src/core/previews/service-registry.test.ts` | 15 |
+  | backend | `src/core/previews/target-resolver.test.ts` | 18 |
   | backend | `src/preview-bench.test.ts` | 0, 1 skipped (1 with the bench flag) |
   | backend | `src/preview-publication.test.ts` | 12 |
   | backend | `src/preview-relay-supervisor.test.ts` | 14, 1 skipped (15 on Docker) |

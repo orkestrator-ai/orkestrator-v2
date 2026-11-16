@@ -1,6 +1,6 @@
 /**
  * The Auto-pipeline launch flow end to end on a real `dev:test --fixture`
- * profile with a scripted fake model (to-do 7547 task 4). Run it with
+ * profile with a scripted fake model (#2021). Run it with
  * `mise run test:agent:auto-pipeline`, which starts a disposable credential-free
  * profile that offers only Pi, runs this file and resets the profile.
  *

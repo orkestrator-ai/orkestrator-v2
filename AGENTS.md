@@ -2012,7 +2012,10 @@ Find references with `git grep -n '<old name>'` before committing.
 `CLAUDE.md` or README file, or a doc under `docs/architecture/` or
 `docs/development/`, links to a file or heading that does not exist, or when an
 `AGENTS.md`, `CLAUDE.md` or README names a repository Markdown file that does
-not exist.
+not exist. The guard stage's `retired-todo-citations` check fails when a code
+comment cites `to-do NNNN` for a to-do with no file, unless it is marked
+retired; repoint it to the pull request that did the work
+([linting.md](docs/development/linting.md#retired-to-do-citations)).
 
 ## Orkestrator
 

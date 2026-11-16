@@ -7,7 +7,7 @@ import {
   GatewayEventReplay,
 } from "./gateway-event-replay.js";
 import { TerminalWebSocketGateway } from "./terminal-websocket-server.js";
-import type { PreviewRuntime } from "./core/preview-runtime.js";
+import type { PreviewRuntime } from "./core/previews/index.js";
 import { PreviewMetrics } from "./preview-metrics.js";
 import { PreviewTunnelServer } from "./preview-tunnel-server.js";
 import type { GatewayAuth } from "./gateway-auth.js";

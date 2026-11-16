@@ -1,6 +1,6 @@
 /**
  * Real-Docker check of gateway reach on a rootful daemon whose host has no
- * firewall between Docker's bridges and its own addresses (to-do 5510
+ * firewall between Docker's bridges and its own addresses (#2036
  * task 3, retired 2026-11-11; results in docs/development/container-qualification.md).
  *
  * Host listeners, all on the machine running this test, which must be the

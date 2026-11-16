@@ -336,7 +336,7 @@ description = "Opt-in service preview checks on real Docker: same-port container
 run = """
 : "${ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE:?Set ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE to the image under test}"
 export ORKESTRATOR_TEST_DOCKER_RELAY_IMAGE="${ORKESTRATOR_TEST_DOCKER_RELAY_IMAGE:-$ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE}"
-bun test --cwd apps/backend ./src/core/preview-docker.test.ts ./src/preview-relay-supervisor.test.ts --parallel=1
+bun test --cwd apps/backend ./src/core/previews/docker.test.ts ./src/preview-relay-supervisor.test.ts --parallel=1
 """
 
 [tasks."test:preview:browser"]

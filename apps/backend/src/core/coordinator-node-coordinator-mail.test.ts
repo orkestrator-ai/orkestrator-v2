@@ -685,7 +685,7 @@ describe("command node coordinator ↔ leaf coordinator", () => {
   });
 
   test("a held answer stays held when the user replaces the command node's main", async () => {
-    // Found by the two-profile run (to-do 2900): closing the main and opening
+    // Found by the two-profile run (#2075): closing the main and opening
     // a new one released the budget-held answer, which woke the new main with
     // no prompt or Resume from the user.
     const world = await link({ budget: 3 });

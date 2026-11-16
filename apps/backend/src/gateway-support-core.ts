@@ -202,7 +202,7 @@ export interface OrkestratorGatewayOptions {
   >;
   proxyBodyIdleTimeoutMs?: number;
   /** Backend preview services; enables the desktop preview tunnel. */
-  previews?: import("./core/preview-runtime.js").PreviewRuntime;
+  previews?: import("./core/previews/index.js").PreviewRuntime;
   eventReplay?: {
     frameCapacity?: number;
     maxBytes?: number;

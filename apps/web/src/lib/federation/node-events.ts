@@ -19,7 +19,7 @@
  * Frames arrive under the watched node's own name, on a stream each transport
  * scopes to what is listened to: the gateway client's own, or the desktop main
  * process's relay. No backend sends the old shared name any more (retired with
- * legacy support on 2026-11-14, to-do 8108); the authoritative listener on it
+ * legacy support on 2026-11-14, to-do 8108 (retired)); the authoritative listener on it
  * (`ensureListening`) stays only as the command node's main-stream reconnect
  * hook, which resyncs every watch.
  */

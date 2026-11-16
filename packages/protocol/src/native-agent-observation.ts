@@ -18,7 +18,7 @@
  *
  * Every session invalidation also names why it was sent: `cause` on this
  * announcement and on a `native-agent-session` resource change, one entry of
- * {@link NATIVE_SESSION_INVALIDATION_CAUSES}. It is diagnostic only (todo 0049
+ * {@link NATIVE_SESSION_INVALIDATION_CAUSES}. It is diagnostic only (#1659
  * task 4): clients invalidate the same way whatever it says.
  */
 import type { AgentPlatform } from "./agent-platforms.js";

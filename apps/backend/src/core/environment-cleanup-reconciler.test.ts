@@ -316,7 +316,7 @@ describe("environment cleanup reconciler", () => {
   });
 
   test("an entry re-armed by an upgrade touches only what it names, not a namespace successor", async () => {
-    // Namespaces are per environment id today (to-do 0023, task 4). This pins
+    // Namespaces are per environment id today (#1540). This pins
     // what keeps a reused one safe: every step acts on an exact recorded name,
     // and a worktree path a live environment claims is left alone.
     const { context, storage, dataDir, worktreeDir } = await reconcileContext();

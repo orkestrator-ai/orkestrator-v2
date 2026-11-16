@@ -20,7 +20,7 @@ import type { CommandContext } from "../../backend/src/core/commands-context";
 import {
   createPreviewHarness,
   type PreviewHarness,
-} from "../../backend/src/core/preview-test-support";
+} from "../../backend/src/core/previews/test-support";
 import { PreviewMetrics } from "../../backend/src/preview-metrics";
 import { PreviewTunnelServer } from "../../backend/src/preview-tunnel-server";
 import { connectionPreviewBackend } from "../electron/preview-connection-backend";

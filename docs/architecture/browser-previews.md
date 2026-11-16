@@ -26,10 +26,10 @@ stays off until it is turned on.
 
 | Owner | Module | Responsibility |
 | --- | --- | --- |
-| Backend | `core/preview-service-registry.ts` | Definitions, generations, lifecycle revocation, events |
-| Backend | `core/preview-target-resolver.ts` | Verified Docker/worktree/backend-host targets |
-| Backend | `core/preview-readiness.ts` | TCP/TLS/HTTP readiness layers, bounded probing |
-| Backend | `core/preview-access.ts` | Scoped attachments, one-use grants, sessions, revocation |
+| Backend | `core/previews/service-registry.ts` | Definitions, generations, lifecycle revocation, events |
+| Backend | `core/previews/target-resolver.ts` | Verified Docker/worktree/backend-host targets |
+| Backend | `core/previews/readiness.ts` | TCP/TLS/HTTP readiness layers, bounded probing |
+| Backend | `core/previews/access.ts` | Scoped attachments, one-use grants, sessions, revocation |
 | Backend | `preview-tunnel-server.ts` | Desktop tunnel (`/__orkestrator/preview/tunnel`) |
 | Backend | `preview-tunnel-mux-server.ts` | Tunnel v2 sessions: many connections per socket |
 | Backend | `preview-publication.ts` | Private HTTPS origins, bootstrap host |
@@ -90,7 +90,7 @@ Every local environment of a project carries the same entry port (copied from
 the repository config at creation), and they all share the backend host's
 loopback, so an open port proves nothing about whose server it is. Loopback
 targets (`worktree`, `backend-host`) are resolved with a listener check
-(`preview-listener-ownership.ts`):
+(`core/previews/listener-ownership.ts`):
 
 1. `lsof -nP -a -i4TCP:<port> -sTCP:LISTEN -Fp` (or `-i6`) for the one port the
    definition names, never a range. Linux hosts without `lsof` use

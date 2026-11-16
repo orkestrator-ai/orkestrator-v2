@@ -273,6 +273,7 @@ import {
   reconcileInterruptedEnvironmentLifecycleTasks,
 } from "./environment-lifecycle-tasks.js";
 import { recoverInterruptedEnvironmentMoves } from "./environment-move.js";
+import { sweepRemovedProjectContentAtStartup } from "./removed-project-content-sweep.js";
 import { createBackendChangeTracking } from "./change-tracking/index.js";
 import {
   cancelScheduledEnvironmentCleanup,
@@ -2412,6 +2413,9 @@ export class OrkestratorBackend {
     // state and design canvases whose environment is gone. Background work: it never blocks the
     // gateway and never rejects.
     void runStartupEnvironmentCleanup(this.context);
+    // Rows that projects removed before removal deleted their content left
+    // behind (to-do 8111); background, never rejects.
+    void sweepRemovedProjectContentAtStartup(this.context.storage);
     const reconcileTabTeardowns = this.commands.get("reconcile_tab_teardowns");
     if (reconcileTabTeardowns) {
       await Promise.resolve(reconcileTabTeardowns({}, this.context)).catch((error: unknown) => {

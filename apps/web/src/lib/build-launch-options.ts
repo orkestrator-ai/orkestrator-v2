@@ -72,7 +72,7 @@ export function buildPipelineConfiguredDefaults(
  * The configured workflow as a launcher panel opens it.
  *
  * A configured row names only a model its action chose, so the stage can
- * resolve an inherited default when it starts (to-do 7546). A panel that
+ * resolve an inherited default when it starts (#2046). A panel that
  * resolves each row against the catalogue still has to open an unpinned row
  * on its platform's own saved model, as the build row does, rather than on the
  * catalogue's first entry; this fills that model in for display.

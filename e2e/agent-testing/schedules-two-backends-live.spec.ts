@@ -1,6 +1,6 @@
 /**
  * The Schedules notice with two real backends on one data directory, live
- * (to-do 5160 task 3). Opt-in (`ORKESTRATOR_AGENT_TEST_LIVE_TWO_BACKENDS=1`)
+ * (to-do 5160 (retired) task 3). Opt-in (`ORKESTRATOR_AGENT_TEST_LIVE_TWO_BACKENDS=1`)
  * against a running credential-free agent-test profile, which it leaves
  * needing a restart (its backend loses the writer lease for good):
  *

@@ -1,5 +1,5 @@
 /**
- * Pure helpers for `coordinator-slow-remote-live.spec.ts` (to-do 4720) and its
+ * Pure helpers for `coordinator-slow-remote-live.spec.ts` (#2050) and its
  * fake model: the delayed SSH shim each fixture checkout fetches through, the
  * shim's invocation record, the backend log lines the run checks, and which
  * model requests the fake parks. Nothing here runs at import time.

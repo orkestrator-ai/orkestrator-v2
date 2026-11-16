@@ -27,7 +27,7 @@ import {
 import {
   createPreviewHarness,
   type PreviewHarness,
-} from "../../backend/src/core/preview-test-support";
+} from "../../backend/src/core/previews/test-support";
 import { PreviewTunnelServer } from "../../backend/src/preview-tunnel-server";
 import { PreviewTunnelStream } from "../electron/preview-tunnel-client";
 import {

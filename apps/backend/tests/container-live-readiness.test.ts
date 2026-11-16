@@ -1118,7 +1118,7 @@ describe("C10 setup interrupted after a possible side effect", () => {
       ]);
       // Through the backend's start path: this full-mode runtime publishes
       // automatic ports, which a rootless daemon can hand out already taken
-      // on the host, and only that path retries the collision (0109 task 5).
+      // on the host, and only that path retries the collision (0109 (retired) task 5).
       await restartRuntime(containerId);
       await waitForContainerBoot(containerId);
       await Bun.sleep(10_000);

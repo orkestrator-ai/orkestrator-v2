@@ -32,6 +32,7 @@ import {
   shellDq,
 } from "./tmux-shared.js";
 import { TmuxBackend } from "./tmux-backend.js";
+import { claudeProjectSlug } from "./claude-project-slug.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 
@@ -944,8 +945,9 @@ export function failClosedHookResponse(kind: string, reason: string): unknown {
   };
 }
 
+/** The folder under `<claudeHome>/projects` holding `cwd`'s transcripts, as Claude names it. */
 export function encodeCwd(cwd: string): string {
-  return cwd.replace(/\/+$/, "").replaceAll("/", "-");
+  return claudeProjectSlug(cwd.replace(/\/+$/, ""));
 }
 
 export function localClaudeHome(): string {

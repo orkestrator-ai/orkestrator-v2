@@ -501,7 +501,7 @@ export class ProjectsRepository {
     this.repos.kanban.fenceProjectContent(projectId);
     try {
       // Its tickets, ticket images, labels, notes and feature plans go first
-      // (to-do 5820), so a failure keeps the project and a retry finishes them.
+      // (#2295), so a failure keeps the project and a retry finishes them.
       await this.repos.kanban.deleteProjectContent(projectId);
       // Its pipelines normally went with its environments, taking their
       // completion comment records with them; these are any still listed.

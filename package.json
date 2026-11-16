@@ -87,6 +87,7 @@
         "to": "claude-bridge",
         "filter": [
           "dist/**",
+          "!dist/node_modules/@anthropic-ai/claude-agent-sdk-*{,/**}",
           "package.json",
           "node_modules/**"
         ]

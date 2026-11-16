@@ -193,8 +193,9 @@ providers, and a cache measurement of real reviewer panels.
   `live` on the Claude or Codex CLI) is the operator entry point. The durable description is in
   [`review-preparation.md`](../../architecture/review-preparation.md#panel-value-measurements).
 - **Reviewer lenses (shipped 2026-10-29).** Built by graphs item 005
-  (`plans/graphs/005-reviewer-lenses.md`, decision D19 in
-  `plans/composable-graphs.md`), not gated on the measurements here. What
+  (`git show 2b876486b:plans/graphs/005-reviewer-lenses.md`, decision D19 in
+  `git show 2b876486b:plans/composable-graphs.md`; both plans were folded into
+  [graphs.md](../../architecture/graphs.md) by #1979), not gated on the measurements here. What
   shipped differs from the deferred idea below: a lens is free text
   (`lens: { label, instruction }` on a reviewer row; label at most 64
   characters, instruction at most 4 KiB), not a shared-protocol enum, and the

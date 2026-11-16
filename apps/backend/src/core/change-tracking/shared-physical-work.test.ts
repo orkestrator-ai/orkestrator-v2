@@ -36,7 +36,7 @@ test("shared watcher releases only the last listener and closes once", () => {
   expect(registry.activeWatchers()).toBe(0);
 });
 
-test("a missed change reaches the shared watcher and its miss every subscriber (to-do 8171)", () => {
+test("a missed change reaches the shared watcher and its miss every subscriber (#2305)", () => {
   let unannounced = 0;
   const misses: string[] = [];
   let physical!: WorktreeWatcherOptions;

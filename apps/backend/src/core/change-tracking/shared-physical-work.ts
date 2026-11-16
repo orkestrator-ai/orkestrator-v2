@@ -183,7 +183,7 @@ export class SharedWatcherRegistry {
         return !closed && (entry.watcher.qualified ?? true);
       },
       // One physical tree, one watcher: a miss any subscriber's scan found is
-      // the shared watcher's (to-do 8171).
+      // the shared watcher's (#2305).
       unannouncedChange: () => {
         if (!closed) entry.watcher.unannouncedChange?.();
       },

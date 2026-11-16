@@ -279,7 +279,7 @@ export function openCode2HistoryCursor(id: string, epoch?: string): string | und
  * that row and then the server's page strictly before it. Its first page holds
  * the window's rows again, which the reader deduplicates by id. It is what a
  * reader pages from when none of its kept rows can name a cursor: an inline
- * error row left after the bound dropped its response's main row (8110).
+ * error row left after the bound dropped its response's main row (#2285).
  *
  * It names a fixed row, not "the newest rows": appends do not move the epoch,
  * so a cursor meaning "the head" would name a different page as the session
@@ -447,7 +447,7 @@ export async function openCode2TranscriptSnapshot(
     ...(historyCursor ? { historyCursor } : {}),
     // Named for every kept row a page can end at, also when the window starts
     // at the first message: a reader whose byte bound drops leading rows still
-    // pages from the first one it kept (8110).
+    // pages from the first one it kept (#2285).
     ...(kept.length > 0
       ? { historyCursorBefore: cursorBefore(kept, keptGroups, historyEpoch) }
       : {}),

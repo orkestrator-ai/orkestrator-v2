@@ -1059,7 +1059,7 @@ export class CodexRuntimeSessions {
     // generation: the attachment fact Claude, Cursor and Pi report as
     // `summary.state`, beside (not instead of) the engine's own health. An
     // idle-detached, unmaterialized or restored-but-unresumed thread reads
-    // `detached`; the next prompt or tab read re-attaches it (todo 7380).
+    // `detached`; the next prompt or tab read re-attaches it (#2149).
     return { ...health, session: { state: threadId ? "attached" : "detached" } };
   }
 

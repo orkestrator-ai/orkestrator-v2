@@ -8,12 +8,12 @@ Preparation's `mise run test` at cd5b0142 reported:
 
 - `runCommand > preserves timeout and termination signal as structured failure metadata` (`apps/backend/tests/shell.test.ts`): expected SIGTERM, got null, 142.60 ms.
 - `Electron backend command registry > gives an image without the helper the token-bearing rewrite, idempotently` (`apps/backend/tests/commands-container-exec.test.ts`): exceeded 5000 ms, 5005.07 ms.
-- `LoopbackListenerOwnership on this host > attributes a real 127.0.0.1 listener and refuses another environment` (`apps/backend/src/core/preview-listener-ownership.test.ts`): expected true, got false, 5496.98 ms.
+- `LoopbackListenerOwnership on this host > attributes a real 127.0.0.1 listener and refuses another environment` (`apps/backend/src/core/previews/listener-ownership.test.ts`): expected true, got false, 5496.98 ms.
 
 The complete owners passed with one worker (each file isolated by Bun):
 
 ```sh
-mise run test:logged -- --name recorded-backend-failures -- bun --cwd=apps/backend test tests/shell.test.ts tests/claude-state-signal-integration.test.ts tests/commands-container-exec.test.ts src/core/preview-listener-ownership.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name recorded-backend-failures -- bun --cwd=apps/backend test tests/shell.test.ts tests/claude-state-signal-integration.test.ts tests/commands-container-exec.test.ts src/core/previews/listener-ownership.test.ts --parallel=1 --only-failures
 ```
 
 Result: pass, 6.1 seconds. The fourth file's recurrence is recorded in case 1102. Passing output was removed by the logged runner; it reported 1379 output bytes without test totals. The original aggregate has ten named failures plus between-test errors, with no reliable combined total. Original diagnostics are preserved at `.orkestrator/review-artifacts/review-validation-6e251f8d-c76b-469b-b389-d7b80e76ea49/validation-04.stdout.txt`. Worker counts were selected by the aggregate scheduler. No assertions, deadlines or skips changed. Load sensitivity is plausible, but no root cause is established.
@@ -87,7 +87,7 @@ No assertion, timeout, skip or implementation changed.
 
 At `b32cfe416` the complete owner failed alone:
 `mise run test:logged -- --name recorded-listeners-alone -- bun test --cwd
-apps/backend ./src/core/preview-listener-ownership.test.ts --parallel=1
+apps/backend ./src/core/previews/listener-ownership.test.ts --parallel=1
 --only-failures` (21 pass, two fail, 15.5 s). `attributes a real 127.0.0.1
 listener and refuses another environment` expected `none` for a free port and
 `same-port listeners on loopback and a different interface keep distinct
@@ -99,7 +99,7 @@ fails or times out.
 At `3bc01ae0b`, on 18 CPUs at load 36.9–41.4, the same owner passed alone
 three times in a row (9.2 s, 5.8 s, 6.7 s) with
 `mise run test:logged -- --name listeners-alone-N -- bun test --cwd apps/backend
-./src/core/preview-listener-ownership.test.ts --parallel=1`, and again in a
+./src/core/previews/listener-ownership.test.ts --parallel=1`, and again in a
 nine-owner run with the deletion and readiness owners (36.7 s).
 
 The branch does not change `preview-listener-ownership.ts` or its test. It does
@@ -157,7 +157,7 @@ real :: listener and refuses another environment` expected
 runner's own one-file rerun waited on host capacity and hit its 600 s budget
 with no verdict. The complete owner then passed alone in 1.1 s with
 `mise run test:logged -- --name preview-listener-ownership -- mise exec --
-bun --cwd=apps/backend test src/core/preview-listener-ownership.test.ts
+bun --cwd=apps/backend test src/core/previews/listener-ownership.test.ts
 --parallel=1 --only-failures`. Evidence: `orkestrator-test-run.vVypqX/`
 under the host temporary directory. No assertion, timeout, skip or
 implementation changed.

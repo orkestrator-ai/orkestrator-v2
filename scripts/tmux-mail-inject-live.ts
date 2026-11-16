@@ -14,7 +14,7 @@ import { checkoutEnv, withTerminationSignals } from "./recurring-live-ab";
 
 /**
  * Agent mail into a real claude-tmux tab on a loopback fake model: the live
- * evidence for BG-15 (to-do 1202 task 1, to-do 7211).
+ * evidence for BG-15 (#1652, #1961).
  *
  * It drives a running, credential-free `dev:test` profile through its
  * gateway. It starts a loopback Anthropic Messages endpoint

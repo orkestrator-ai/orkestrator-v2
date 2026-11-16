@@ -7,7 +7,7 @@ import {
 import {
   STATIC_HTML_FRAME_CHANNEL,
   STATIC_HTML_MAX_FIND_QUERY_CHARACTERS,
-  installStaticHtmlPresentationRuntime,
+  staticHtmlPresentationRuntimeSource,
 } from "@orkestrator/protocol/static-html-presentation";
 import {
   ACTIVITY_REPORT_HTML,
@@ -36,7 +36,7 @@ function renderDocument(html: string) {
     Object.defineProperty(window, "CSS", { value: { highlights: new Map() } });
   `);
   frame.eval(
-    `(${installStaticHtmlPresentationRuntime.toString()})(${JSON.stringify({
+    staticHtmlPresentationRuntimeSource({
       nonce: NONCE,
       maxHtmlBytes: STATIC_PRESENTATION_POLICY.maxDocumentBytes,
       maxElements: STATIC_PRESENTATION_POLICY.maxElements,
@@ -45,7 +45,7 @@ function renderDocument(html: string) {
       maxTextCharacters: STATIC_PRESENTATION_POLICY.maxSearchTextCharacters,
       textChunkCharacters: STATIC_PRESENTATION_POLICY.searchTextChunkCharacters,
       maxFindQueryCharacters: STATIC_HTML_MAX_FIND_QUERY_CHARACTERS,
-    })})`,
+    }),
   );
   const send = (message: Record<string, unknown>) =>
     frame.dispatchEvent(

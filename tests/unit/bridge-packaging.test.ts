@@ -90,6 +90,26 @@ describe("bridge packaging", () => {
     }
   });
 
+  test("the desktop app never packs the Claude Agent SDK's platform binary", () => {
+    // The vendor step leaves the SDK's platform packages out
+    // (bridges/claude-bridge/src/vendor.test.ts); this filter keeps a stale
+    // `dist/` from shipping one anyway. Each holds a ~320 MB Claude Code binary
+    // that no host path runs: the bridge always passes CLAUDE_CLI_PATH as
+    // `pathToClaudeCodeExecutable` (docs/development/upgrade-agents.md,
+    // "The SDK's own Claude binary is not vendored").
+    const manifest = JSON.parse(read("package.json")) as {
+      build?: { extraResources?: Array<{ from?: string; filter?: string[] }> };
+    };
+    const entry = manifest.build?.extraResources?.find(
+      (resource) => resource.from === "bridges/claude-bridge",
+    );
+    const filter = entry?.filter ?? [];
+    // Checked against a local `electron-builder --mac --dir` package on
+    // 2026-11-16: with a `dist/` still holding the platform package, the packed
+    // `claude-bridge` resource held only the main SDK package.
+    expect(filter).toContain("!dist/node_modules/@anthropic-ai/claude-agent-sdk-*{,/**}");
+  });
+
   test("every buildable bridge is built by `setup` and by the container image", () => {
     const dockerfile = read("docker/Dockerfile");
 

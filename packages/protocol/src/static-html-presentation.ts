@@ -5,7 +5,8 @@
  * versioned channel between it and the host card.
  *
  * The frame only ever displays the verified effective HTML the host hands it.
- * It sanitizes it again with the design runtime's static rules (scripts,
+ * It sanitizes it again with the sanitizer the design runtime verified it
+ * with (`createStaticHtmlSanitizer`, one implementation for both: scripts,
  * frames, event handlers and executable URLs removed; inline SVG and CSS
  * kept), applies the application theme, reports its content height, a few
  * interaction booleans and the document's bounded text for Find, and asks the
@@ -21,6 +22,7 @@
  */
 import { normalizeArtifactLink } from "./artifact-frame-channel.js";
 import { FRAME_CHANNEL_POLICY, STATIC_PRESENTATION_POLICY } from "./rich-content-policy.js";
+import { createStaticHtmlSanitizer } from "./static-html-sanitizer.js";
 
 export const STATIC_HTML_FRAME_CHANNEL = "orkestrator-static-html";
 export const STATIC_HTML_FRAME_PROTOCOL_VERSION = 1;
@@ -261,81 +263,30 @@ export function parseStaticHtmlFrameMessage(
  * serialized with `toString()` into the frame document, so it may not refer
  * to anything outside its own body (limits arrive as `config`).
  *
- * The sanitizer (`clean`, `elementCount`) is the design runtime's static rule
- * set, kept line-for-line equivalent to `installDesignRuntime` and pinned by
- * a parity test; see `docs/architecture/rich-transcripts.md` for why it is
- * not shared by reference.
+ * The sanitizer arrives as `createSanitizer`: the same
+ * `createStaticHtmlSanitizer` the design runtime verifies documents with,
+ * serialized beside this function by `staticHtmlPresentationRuntimeSource`.
  */
-export function installStaticHtmlPresentationRuntime(config: {
-  nonce: string | null;
-  maxHtmlBytes: number;
-  maxElements: number;
-  maxLinkCharacters: number;
-  maxReportedHeight: number;
-  maxTextCharacters: number;
-  textChunkCharacters: number;
-  maxFindQueryCharacters: number;
-}) {
+export function installStaticHtmlPresentationRuntime(
+  config: {
+    nonce: string | null;
+    maxHtmlBytes: number;
+    maxElements: number;
+    maxLinkCharacters: number;
+    maxReportedHeight: number;
+    maxTextCharacters: number;
+    textChunkCharacters: number;
+    maxFindQueryCharacters: number;
+  },
+  createSanitizer: typeof createStaticHtmlSanitizer,
+) {
   const CHANNEL = "orkestrator-static-html";
   const MOUNT_ID = /^[A-Za-z0-9_-]{16,64}$/;
   const fromHash = /^#([A-Za-z0-9_-]{16,64})$/.exec(window.location.hash)?.[1] ?? null;
   const nonce = config.nonce ?? fromHash;
   let generation: string | null = null;
 
-  const forbidden = "script,iframe,frame,object,embed,base,meta,link,portal,applet";
-  const externalUrl = /^\s*(?:https?:)?\/\//i;
-  const cssExternal = /url\(\s*['"]?\s*(?:https?:)?\/\//gi;
-  const cssImport = /@import\s/gi;
-  interface Counts {
-    scripts: number;
-    handlers: number;
-    externalReferences: number;
-    forbiddenElements: number;
-    executableUrls: number;
-  }
-  function countCss(text: string | null, counts: Counts) {
-    if (!text) return;
-    counts.externalReferences += (text.match(cssExternal) ?? []).length;
-    counts.externalReferences += (text.match(cssImport) ?? []).length;
-  }
-  function clean(doc: Document | DocumentFragment, counts: Counts) {
-    doc.querySelectorAll(forbidden).forEach((node) => {
-      if (node.tagName.toLowerCase() === "script") counts.scripts++;
-      else counts.forbiddenElements++;
-      node.remove();
-    });
-    for (const node of Array.from(doc.querySelectorAll("*"))) {
-      if (node.tagName.toLowerCase() === "style") countCss(node.textContent, counts);
-      for (const attr of Array.from(node.attributes)) {
-        const lower = attr.name.toLowerCase();
-        if (/^on/i.test(attr.name)) {
-          counts.handlers++;
-          node.removeAttribute(attr.name);
-        } else if (["srcdoc", "nonce", "http-equiv", "action", "formaction"].includes(lower)) {
-          counts.forbiddenElements++;
-          node.removeAttribute(attr.name);
-        } else if (["href", "src", "xlink:href", "srcset", "poster"].includes(lower)) {
-          if (/^(?:javascript|vbscript):/i.test(attr.value.trim())) {
-            counts.executableUrls++;
-            node.removeAttribute(attr.name);
-          } else if (externalUrl.test(attr.value) && lower !== "href") {
-            counts.externalReferences++;
-          }
-        } else if (lower === "style") {
-          countCss(attr.value, counts);
-        }
-      }
-      if (node instanceof HTMLTemplateElement) clean(node.content, counts);
-    }
-  }
-  function elementCount(root: Document | DocumentFragment): number {
-    let total = 0;
-    for (const node of Array.from(root.querySelectorAll("*"))) {
-      total++;
-      if (node instanceof HTMLTemplateElement) total += elementCount(node.content);
-    }
-    return total;
-  }
+  const { clean, elementCount, emptyCounts } = createSanitizer();
 
   const post = (message: Record<string, unknown>) => {
     try {
@@ -610,13 +561,7 @@ export function installStaticHtmlPresentationRuntime(config: {
     if (typeof html !== "string") return fail("invalid-render");
     if (new TextEncoder().encode(html).length > config.maxHtmlBytes) return fail("too-large");
     const doc = new DOMParser().parseFromString(html, "text/html");
-    clean(doc, {
-      scripts: 0,
-      handlers: 0,
-      externalReferences: 0,
-      forbiddenElements: 0,
-      executableUrls: 0,
-    });
+    clean(doc, emptyCounts());
     const total = elementCount(doc);
     if (total > config.maxElements) return fail("too-many-elements");
     document.documentElement.replaceChildren(
@@ -773,6 +718,17 @@ export function installStaticHtmlPresentationRuntime(config: {
   else start();
 }
 
+type StaticHtmlPresentationRuntimeConfig = Parameters<
+  typeof installStaticHtmlPresentationRuntime
+>[0];
+
+/** The runtime and its sanitizer as one self-contained script. */
+export function staticHtmlPresentationRuntimeSource(
+  config: StaticHtmlPresentationRuntimeConfig,
+): string {
+  return `(${installStaticHtmlPresentationRuntime.toString()})(${JSON.stringify(config)}, ${createStaticHtmlSanitizer.toString()});`;
+}
+
 function runtimeScript(nonce: string | null): string {
   const config = {
     nonce,
@@ -784,7 +740,7 @@ function runtimeScript(nonce: string | null): string {
     textChunkCharacters: STATIC_PRESENTATION_POLICY.searchTextChunkCharacters,
     maxFindQueryCharacters: STATIC_HTML_MAX_FIND_QUERY_CHARACTERS,
   };
-  return `(${installStaticHtmlPresentationRuntime.toString()})(${JSON.stringify(config)});`;
+  return staticHtmlPresentationRuntimeSource(config);
 }
 
 function frameDocument(scriptSource: string, scriptAttributes: string, script: string): string {

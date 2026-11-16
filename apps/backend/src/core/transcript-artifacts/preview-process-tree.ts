@@ -133,7 +133,7 @@ export interface TreeKillReport {
  * process group, so a worker killed while it is still launching the browser
  * (before the supervisor has learnt the browser's pid) orphans it outside
  * both the tree and the owned groups; it then keeps writing its profile into
- * the scratch after the scratch was removed (0247). Processes carrying the
+ * the scratch after the scratch was removed (#1339). Processes carrying the
  * marker, with their trees, are owned too. The supervisor must put the marker
  * on the worker's argv before it can fork: a pre-exec child inherits that argv,
  * then the browser carries the marker in its profile argument after exec.

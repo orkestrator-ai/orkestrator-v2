@@ -24,8 +24,8 @@ import { createInterface } from "node:readline";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 
 import { startPreviewFixture } from "../../../test-fixtures/preview-app/server.ts";
-import { defaultProbeFamily } from "./core/preview-target-resolver.js";
-import { createPreviewHarness } from "./core/preview-test-support.js";
+import { defaultProbeFamily } from "./core/previews/index.js";
+import { createPreviewHarness } from "./core/previews/test-support.js";
 import { OrkestratorGateway } from "./gateway.js";
 import { PreviewPublicationManager } from "./preview-publication.js";
 import { certificates, TEST_PREVIEW_DOMAIN } from "./preview-test-pki.js";

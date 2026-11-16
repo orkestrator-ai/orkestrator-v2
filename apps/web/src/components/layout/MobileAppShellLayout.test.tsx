@@ -287,7 +287,7 @@ describe("MobileAppShellLayout", () => {
   });
 
   // WebKit and iOS Safari never focus a tapped button, so no blur closes the
-  // tooltip there; the bubble has to close itself (todo 0202).
+  // tooltip there; the bubble has to close itself (#1322).
   test("closes the title tooltip from a touch or pen tap on the bubble", async () => {
     renderLayout();
     const titleButton = screen.getByRole("button", { name: "pgstack1 - feature-auth" });

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import {
   ANTHROPIC_REFUSAL,
   OPENAI_REFUSAL,
+  portArgument,
   refusalFor,
   serveRefusedLoginModel,
   type RefusedLoginModel,
@@ -103,4 +104,21 @@ test("a held request whose client goes away stops being held", async () => {
   expect(await pending).toBe("aborted");
   for (let i = 0; i < 100 && model.stats().held > 0; i += 1) await Bun.sleep(10);
   expect(model.stats().held).toBe(0);
+});
+
+test("reads --port, and takes an ephemeral port without it", () => {
+  expect(portArgument(["bun", "refused-login-model.ts"])).toBe(0);
+  expect(portArgument(["bun", "refused-login-model.ts", "--port", "47123"])).toBe(47_123);
+  expect(() => portArgument(["bun", "x", "--port"])).toThrow("--port must be a TCP port");
+  expect(() => portArgument(["bun", "x", "--port", "0"])).toThrow("--port must be a TCP port");
+  expect(() => portArgument(["bun", "x", "--port", "70000"])).toThrow("--port must be a TCP port");
+});
+
+test("listens on the port it is given", async () => {
+  const probe = await serveRefusedLoginModel();
+  const port = Number(new URL(probe.origin).port);
+  probe.stop();
+  model = await serveRefusedLoginModel({ port });
+  expect(model.origin).toBe(`http://127.0.0.1:${port}`);
+  expect((await fetch(`${model.origin}/__qa/stats`)).status).toBe(200);
 });

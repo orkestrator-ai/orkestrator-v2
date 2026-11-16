@@ -119,7 +119,7 @@ async function expectStableEnd(transcript: Locator, overview: Locator, overviewO
 
 // These transcripts use `activation: "latest"`, so showing the pane lands on the
 // newest message in every engine, and the overview around them stays put. WebKit
-// resets some hidden scrollers (0860); CI runs this in Chromium and WebKit.
+// resets some hidden scrollers (#1805); CI runs this in Chromium and WebKit.
 for (const view of VIEWS) {
   test(`${view.name} shows the newest message when its pane returns`, async ({ page }) => {
     await page.setViewportSize({ width: page.viewportSize()!.width, height: 700 });

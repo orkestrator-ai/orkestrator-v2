@@ -7,7 +7,6 @@
  * expensive paths it no longer takes: legacy full-transcript reads, joined
  * projection refreshes and interactive snapshots.
  */
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { describe, expect, mock, test } from "bun:test";
 import {
   bridgeTranscriptPage,
@@ -25,6 +24,7 @@ import { positionedCursorBefore } from "./http-bridge/transcript-v2.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { collaborators, projectionInternals } from "./native-agent-service-test-collaborators.js";
+import { DIRECT_PAGE_ROW_MAX_BYTES } from "./native-agent-projection-helpers.js";
 
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 
@@ -281,8 +281,6 @@ describe("summary transcripts", () => {
         if (update.status !== "snapshot") throw new Error("expected a snapshot");
         expect(update.value.historyPaging).toBe("direct");
         expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
-        const before =
-          compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0;
         let cursor = update.value.historyCursor;
         const seen: string[] = [];
         let pages = 0;
@@ -300,9 +298,6 @@ describe("summary transcripts", () => {
           if (!cursor) expect(page.complete).toBe(true);
         }
         expect(pages).toBe(3);
-        expect(compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0).toBe(
-          before,
-        );
         expect(seen).toEqual(history.messages.slice(0, 150).map((entry) => entry.id));
         // Give any stray background hydration a chance to have run.
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -356,8 +351,6 @@ describe("summary transcripts", () => {
         expect(ids[0]).not.toBe((sent.messages[0] as TestMessage).id);
         expect(update.value.historyPaging).toBe("direct");
         expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
-        const before =
-          compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0;
         let cursor = update.value.historyCursor;
         let pages = 0;
         while (cursor) {
@@ -376,9 +369,6 @@ describe("summary transcripts", () => {
         }
         // No gap and no repeat: the rows the bound dropped came back first.
         expect(ids).toEqual(history.messages.map((entry) => entry.id));
-        expect(compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0).toBe(
-          before,
-        );
         await new Promise((resolve) => setTimeout(resolve, 50));
         expect(legacyMessages).not.toHaveBeenCalled();
         expect(interactiveSnapshot).not.toHaveBeenCalled();
@@ -386,11 +376,10 @@ describe("summary transcripts", () => {
     );
   });
 
-  // The joined path older renderers and sources without direct pages still
-  // reach (0232 item 3): a renderer that holds no direct cursor mints one from
-  // the sync-v1 projection (`loadEarlierMessages` in `useNativeAgentSession.ts`),
-  // which only mints v1 cursors, even for a provider that pages directly.
-  test("a pageable provider's sync-v1 projection still mints a joined v1 cursor", async () => {
+  // Joined paging retired (0232 task 4): the sync-v1 projection names no
+  // history cursor, and a v1 cursor an older client still holds is refused
+  // without a projection refresh or a page read.
+  test("the sync-v1 projection mints no history cursor, and a v1 cursor is refused", async () => {
     const history = {
       messages: Array.from({ length: 250 }, (_, index) => message(`m${index}`)),
       epoch: 1,
@@ -406,7 +395,7 @@ describe("summary transcripts", () => {
       interactiveSnapshot,
     } as typeof summaryStub.provider;
     await withService(
-      { prefix: "orkestrator-summary-joined-", provider: async () => provider },
+      { prefix: "orkestrator-summary-sync-", provider: async () => provider },
       async ({ service }) => {
         await service.ensureSession(identity);
         const update = await service.getProjectionUpdate({
@@ -416,39 +405,22 @@ describe("summary transcripts", () => {
           forceSnapshot: true,
         });
         if (update.status !== "snapshot") throw new Error("expected a snapshot");
-        const cursor = update.historyCursor;
-        expect(cursor).toBeDefined();
-        expect(JSON.parse(Buffer.from(cursor!, "base64url").toString("utf8")).v).toBe(1);
-        // The joined refresh read the whole transcript to mint it.
-        expect(interactiveSnapshot).toHaveBeenCalledTimes(1);
-        const before =
-          compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0;
-        const page = await service.getMessagePage({
-          ...identity,
-          syncVersion: 1,
-          before: cursor!,
-          limit: 60,
-        });
-        expect(page.messages.length).toBeGreaterThan(0);
-        expect(compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count).toBe(
-          before + 1,
-        );
+        expect(update).not.toHaveProperty("historyCursor");
+        expect(update).not.toHaveProperty("historyEpoch");
+        expect(update).not.toHaveProperty("historyComplete");
+        const reads = interactiveSnapshot.mock.calls.length;
+        const joinedCursor = Buffer.from(
+          JSON.stringify({ v: 1, key: "k", session: "s", epoch: "e", before: "b" }),
+        ).toString("base64url");
+        await expect(
+          service.getMessagePage({ ...identity, syncVersion: 1, before: joinedCursor, limit: 60 }),
+        ).rejects.toThrow("Native agent history cursor expired");
+        expect(interactiveSnapshot.mock.calls.length).toBe(reads);
         expect(summaryStub.transcriptPage).not.toHaveBeenCalled();
       },
     );
   });
 
-  // The counter split (0232 item 3): a joined page is attributed to why the
-  // session's latest view carried no direct cursor, so each cause can be seen
-  // to go quiet on its own. Without a view (above) it stays the base counter.
-  const joinedCounts = () => {
-    const paths = compatibilityPathUsage.snapshot().paths;
-    return {
-      base: paths["history.joined-v1-page"]?.count ?? 0,
-      unpaged: paths["history.joined-v1-page.unpaged-source"]?.count ?? 0,
-      unnamed: paths["history.joined-v1-page.unnamed-cursor"]?.count ?? 0,
-    };
-  };
   const shortCalls = (index: number) =>
     Array.from({ length: 20 }, (_, call) => ({
       type: "tool-invocation",
@@ -458,28 +430,23 @@ describe("summary transcripts", () => {
       toolOutput: "ok",
       toolState: "completed",
     }));
-  for (const [name, count, rows, options, expected] of [
-    [
-      "a source without direct pages",
-      250,
-      (index: number) => message(`m${index}`),
-      { pages: false },
-      { base: 0, unpaged: 1, unnamed: 0 },
-    ],
+  // Every real provider pages and names a cursor for its views (8110). For one
+  // that could not, nothing older can be loaded: the view offers no cursor and
+  // the sync-v1 projection mints none to page through instead.
+  for (const [name, rows, options] of [
+    ["a source without direct pages", (index: number) => message(`m${index}`), { pages: false }],
     [
       "a pageable source whose bounded view can name no cursor",
-      250,
       (index: number) => ({
         ...message(`m${index}`, shortCalls(index)),
         content: "c".repeat(4_000),
       }),
       { nameCursors: false },
-      { base: 0, unpaged: 0, unnamed: 1 },
     ],
   ] as const) {
-    test(`a joined page after ${name} counts under its own cause`, async () => {
+    test(`a view of ${name} offers no history cursor`, async () => {
       const history = {
-        messages: Array.from({ length: count }, (_, index) => rows(index)),
+        messages: Array.from({ length: 250 }, (_, index) => rows(index)),
         epoch: 1,
         revision: 1,
       };
@@ -492,7 +459,7 @@ describe("summary transcripts", () => {
         })),
       } as typeof summaryStub.provider;
       await withService(
-        { prefix: "orkestrator-summary-joined-cause-", provider: async () => provider },
+        { prefix: "orkestrator-summary-no-cursor-", provider: async () => provider },
         async ({ service }) => {
           await service.ensureSession(identity);
           const view = await service.getTranscriptUpdate({
@@ -502,22 +469,10 @@ describe("summary transcripts", () => {
             forceSnapshot: true,
           });
           if (view.status !== "snapshot") throw new Error("expected a snapshot");
-          // Older history the view cannot page to directly.
-          expect(view.value.historyPaging).not.toBe("direct");
+          // Older history exists, and nothing names a way to it.
           expect(view.value.historyComplete).toBe(false);
-          if (count < liveWindow.messages) {
-            const sent = await provider.transcriptSnapshot!("provider-session", {
-              limit: liveWindow.messages,
-              targetBytes: liveWindow.targetBytes,
-            });
-            if ("unchanged" in sent) throw new Error("expected a snapshot");
-            expect(sent.historyStartIndex).toBe(0);
-            expect(sent.messages).toHaveLength(count);
-            expect(sent.historyCursor).toBeUndefined();
-            expect(view.value.messages.length).toBeLessThan(count);
-            expect((view.value.messages[0] as TestMessage).id).not.toBe(history.messages[0]!.id);
-          }
-          // What the renderer's `loadEarlierMessages` does without a direct cursor.
+          expect(view.value.historyCursor).toBeUndefined();
+          expect(view.value.historyPaging).toBeUndefined();
           const update = await service.getProjectionUpdate({
             ...identity,
             syncVersion: 1,
@@ -525,20 +480,7 @@ describe("summary transcripts", () => {
             forceSnapshot: true,
           });
           if (update.status !== "snapshot") throw new Error("expected a snapshot");
-          const before = joinedCounts();
-          const page = await service.getMessagePage({
-            ...identity,
-            syncVersion: 1,
-            before: update.historyCursor!,
-            limit: 60,
-          });
-          expect(page.messages.length).toBeGreaterThan(0);
-          const after = joinedCounts();
-          expect({
-            base: after.base - before.base,
-            unpaged: after.unpaged - before.unpaged,
-            unnamed: after.unnamed - before.unnamed,
-          }).toEqual(expected);
+          expect(update).not.toHaveProperty("historyCursor");
           expect(summaryStub.transcriptPage).not.toHaveBeenCalled();
         },
       );
@@ -546,7 +488,7 @@ describe("summary transcripts", () => {
   }
 
   // The three cases that used to reach joined paging with no direct cursor
-  // (8110): each now pages directly from the view, walking back to the first
+  // (#2285): each now pages directly from the view, walking back to the first
   // message with no gap, no repeat, no joined page and no whole read.
   const walkDirectly = async (
     service: {
@@ -560,7 +502,6 @@ describe("summary transcripts", () => {
       historyPaging?: string;
     }) => void,
   ) => {
-    const before = joinedCounts();
     const update = (await service.getTranscriptUpdate({
       ...identity,
       viewVersion: 1,
@@ -608,7 +549,6 @@ describe("summary transcripts", () => {
       expect(pages).toBeLessThan(40);
     }
     expect(ids).toEqual(history.messages.map((entry) => entry.id));
-    expect(joinedCounts()).toEqual(before);
   };
 
   test("a view at the first message whose projected rows exceed the byte bound pages directly (8110)", async () => {
@@ -735,84 +675,114 @@ describe("summary transcripts", () => {
     );
   });
 
-  for (const recovery of ["complete view", "direct cursor"] as const) {
-    test(`a later ${recovery} clears an earlier joined-page cause`, async () => {
-      const history = {
-        messages: Array.from({ length: 150 }, (_, index) => message(`m${index}`)),
-        epoch: 1,
-        revision: 1,
-      };
-      const bridge = { pages: false };
-      const { stub } = summaryProvider(history, bridge);
-      const provider = {
-        ...stub.provider,
-        interactiveSnapshot: mock(async () => ({
-          status: "idle" as const,
-          messages: history.messages,
-        })),
-      };
-      await withService(
-        { prefix: "orkestrator-summary-cleared-gap-", provider: async () => provider },
-        async ({ service }) => {
-          await service.ensureSession(identity);
-          const input = {
-            ...identity,
-            viewVersion: 1 as const,
-            liveWindow: { ...liveWindow, messages: 50 },
-            forceSnapshot: true,
-          };
-          const initial = await service.getTranscriptUpdate(input);
-          if (initial.status !== "snapshot") throw new Error("expected a snapshot");
-          expect(initial.value.historyComplete).toBe(false);
-          expect(initial.value.historyPaging).not.toBe("direct");
-          const key = nativeAgentSessionStorageKey(
-            identity.environmentId,
-            identity.agent,
-            identity.logicalSessionKey,
-          );
-          expect(projectionInternals(service).directHistoryGaps.get(key)).toBe("unpaged-source");
+  test("a page says when a row was trimmed, which `truncated` alone cannot", async () => {
+    const history = {
+      messages: Array.from({ length: 250 }, (_, index) => message(`m${index}`)),
+      epoch: 1,
+      revision: 1,
+    };
+    const { stub } = summaryProvider(history);
+    const pageRows = stub.provider.transcriptPage!.bind(stub.provider);
+    let trimNext = false;
+    const provider = {
+      ...stub.provider,
+      transcriptPage: async (...args: Parameters<typeof pageRows>) => {
+        const page = await pageRows(...args);
+        // A bridge page's own `truncated` reports a row it trimmed.
+        return page?.status === "page" && trimNext ? { ...page, truncated: true } : page;
+      },
+    } as typeof stub.provider;
+    await withService(
+      { prefix: "orkestrator-summary-trimmed-", provider: async () => provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        const first = await service.getMessagePage({
+          ...identity,
+          syncVersion: 1,
+          before: update.value.historyCursor!,
+          limit: 60,
+        });
+        // Older rows remain, so the page is `truncated`, but nothing was trimmed.
+        expect(first.nextCursor).toBeDefined();
+        expect(first.truncated).toBe(true);
+        expect(first.rowsTrimmed).toBeUndefined();
+        trimNext = true;
+        const second = await service.getMessagePage({
+          ...identity,
+          syncVersion: 1,
+          before: first.nextCursor!,
+          limit: 60,
+        });
+        expect(second.rowsTrimmed).toBe(true);
+      },
+    );
+  });
 
-          bridge.pages = recovery === "direct cursor";
-          if (recovery === "complete view") history.messages = history.messages.slice(0, 80);
-          history.revision += 1;
-          const recovered = await service.getTranscriptUpdate({
-            ...input,
-            liveWindow,
-          });
-          if (recovered.status !== "snapshot") throw new Error("expected a snapshot");
-          if (recovery === "complete view") expect(recovered.value.historyComplete).toBe(true);
-          else expect(recovered.value.historyPaging).toBe("direct");
-          expect(projectionInternals(service).directHistoryGaps.has(key)).toBe(false);
-
-          // New rows can arrive before a caller next uses joined paging; attribution
-          // still follows the most recent view, which cleared the old cause.
-          if (recovery === "complete view") {
-            history.messages.push(
-              ...Array.from({ length: 150 }, (_, index) => message(`new${index}`)),
-            );
-            history.revision += 1;
-          }
-          const joined = await service.getProjectionUpdate({
-            ...identity,
-            syncVersion: 1,
-            liveWindow,
-            forceSnapshot: true,
-          });
-          if (joined.status !== "snapshot") throw new Error("expected a snapshot");
-          expect(joined.historyCursor).toBeDefined();
-          const before = joinedCounts();
-          const page = await service.getMessagePage({
-            ...identity,
-            syncVersion: 1,
-            before: joined.historyCursor!,
-            limit: 60,
-          });
-          expect(page.messages.length).toBeGreaterThan(0);
-          expect(joinedCounts()).toEqual({ ...before, base: before.base + 1 });
+  test("backend row trimming remains explicit on fresh and cached direct pages", async () => {
+    const history = {
+      messages: Array.from({ length: 150 }, (_, index) => message(`m${index}`)),
+      epoch: 1,
+      revision: 1,
+    };
+    const { stub } = summaryProvider(history);
+    const raw = {
+      ...message("oversized"),
+      parts: [
+        {
+          // Non-image attachments stay inline rather than entering the image
+          // detail cache, and can exceed the direct page's per-row ceiling.
+          type: "file",
+          content: "enormous.pdf",
+          fileUrl: `data:application/pdf;base64,${"c".repeat(DIRECT_PAGE_ROW_MAX_BYTES)}`,
         },
-      );
-    });
-  }
+      ],
+    };
+    const transcriptPage = mock(async () => ({
+      status: "page" as const,
+      messages: [raw],
+      historyEpoch: "g1:1",
+      complete: true,
+      truncated: false,
+    }));
+    const provider = { ...stub.provider, transcriptPage };
+    await withService(
+      { prefix: "orkestrator-backend-trimmed-", provider: async () => provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        const input = {
+          ...identity,
+          syncVersion: 1 as const,
+          before: update.value.historyCursor!,
+          limit: 60,
+        };
+        const first = await service.getMessagePage(input);
+        expect(first).toMatchObject({ complete: true, truncated: true, rowsTrimmed: true });
+        expect(first.messages).toHaveLength(1);
+        expect(first.messages[0]).toMatchObject({ id: "oversized" });
+        expect(Buffer.byteLength(JSON.stringify(first.messages[0]))).toBeLessThanOrEqual(
+          DIRECT_PAGE_ROW_MAX_BYTES,
+        );
+        const cached = await service.getMessagePage(input);
+        expect(cached).toEqual(first);
+        expect(cached.rowsTrimmed).toBe(true);
+        expect(transcriptPage).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
 
   test("a direct cursor is refused for another session and after its epoch rotates", async () => {
     const history = {

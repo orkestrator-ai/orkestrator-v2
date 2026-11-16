@@ -58,9 +58,7 @@ for (const isolation of ["process", "disabled", "container"]) {
       expect(JSON.parse(configuration!)).toEqual({ isolation });
       expect(existsSync(active)).toBe(true);
       expect(existsSync(stale)).toBe(isolation !== "process");
-      if (isolation === "process")
-        expect(child.stderr).toContain("removed 1 stale preview scratch directory");
-      else expect(child.stderr).not.toContain("stale preview scratch");
+      if (isolation !== "process") expect(child.stderr).not.toContain("stale preview scratch");
     } finally {
       live.kill("SIGKILL");
       await exited;

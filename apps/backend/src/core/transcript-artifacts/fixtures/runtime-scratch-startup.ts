@@ -3,6 +3,7 @@ import { createTranscriptArtifactRuntime } from "../runtime.js";
 // A fresh backend process observes its own TMPDIR, with no module mocks or
 // changes to the parent test runner's scratch directory.
 const runtime = await createTranscriptArtifactRuntime({
+  scratchSearchRoots: () => [process.argv[3]!],
   dataDir: process.argv[3]!,
   env: {
     ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION: process.argv[2]!,

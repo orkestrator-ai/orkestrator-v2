@@ -207,13 +207,17 @@ export function previewScratchSearchRoots(
 export async function sweepStalePreviewScratch(
   options: {
     root?: string;
+    /** Recovery roots supplier; explicit root takes precedence. */
+    searchRoots?: () => string[];
     now?: number;
     maxAgeMs?: number;
     isProcessAlive?: (pid: number) => boolean;
     processStartIdentity?: (pid: number) => string | null;
   } = {},
 ): Promise<string[]> {
-  const roots = options.root ? [options.root] : previewScratchSearchRoots();
+  const roots = options.root
+    ? [options.root]
+    : (options.searchRoots ?? previewScratchSearchRoots)();
   const now = options.now ?? Date.now();
   const maxAgeMs = options.maxAgeMs ?? PREVIEW_SCRATCH_STALE_MS;
   const alive = options.isProcessAlive ?? isProcessAlive;

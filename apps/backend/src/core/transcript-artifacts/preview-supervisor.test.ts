@@ -97,6 +97,60 @@ test("scratch goes where Chromium's SingletonSocket path fits the platform's soc
   expect(previewScratchSearchRoots(runnerTmpdir, linux)).toEqual([runnerTmpdir, "/tmp"]);
 });
 
+test("no-root recovery sweeps every supplied default root past an unreadable root", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "ork-preview-multi-"));
+  try {
+    const roots = [path.join(root, "base"), path.join(root, "fallback")];
+    const stale = roots.map((parent, index) => {
+      const dir = path.join(parent, `${PREVIEW_SCRATCH_PREFIX}${4000001 + index}-aB3dE9`);
+      mkdirSync(dir, { recursive: true });
+      const old = new Date(Date.now() - PREVIEW_SCRATCH_STALE_MS - 60_000);
+      utimesSync(dir, old, old);
+      return dir;
+    });
+    // ENOTDIR is deterministic even when the tests run as root.
+    const unreadable = path.join(root, "not-a-directory");
+    writeFileSync(unreadable, "");
+    const removed = await sweepStalePreviewScratch({
+      searchRoots: () => [unreadable, ...roots],
+      isProcessAlive: () => false,
+    });
+    expect(removed.sort()).toEqual(stale.sort());
+    for (const dir of stale) expect(existsSync(dir)).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a worker without an explicit scratch root uses the short fallback under a deep TMPDIR", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "ork-preview-deep-default-"));
+  const previous = process.env.TMPDIR;
+  let worker: ReturnType<typeof superviseWorker> | undefined;
+  try {
+    process.env.TMPDIR = root;
+    const expected = previewScratchRoot();
+    expect(expected).not.toBe(root);
+    worker = superviseWorker(
+      { isolation: "process", command: process.execPath, args: FAKE_WORKER_ARGS },
+      { job: { kind: "mermaid", source: "split-utf8", theme: "light" } } as Parameters<
+        typeof superviseWorker
+      >[1],
+      { workerWallMs: 5000, readinessHardMs: 3000, mermaidRenderMs: 3000, cleanupGraceMs: 100 },
+    );
+    const scratch = worker.scratchDir()!;
+    expect(path.dirname(scratch)).toBe(expected);
+    expect((await worker.outcome).type).toBe("result");
+    expect((await worker.exited).verified).toBe(true);
+    expect(existsSync(scratch)).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previous;
+    worker?.cancel();
+    if (worker) await worker.exited;
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 10000);
+
 test("startup recovery removes only stale scratch of backends that have exited", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "ork-preview-scratch-sweep-"));
   try {

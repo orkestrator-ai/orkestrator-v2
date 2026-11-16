@@ -320,7 +320,7 @@ export function nativeAgentJobReceiptIsActive(
 ): boolean {
   const requestId = receipt.dispatchRequestId ?? receipt.requestId;
   if (
-    [...(queue?.messages ?? []), queue?.outstandingClaim?.message, queue?.inFlight?.message].some(
+    [...(queue?.messages ?? []), queue?.inFlight?.message].some(
       (message) =>
         message &&
         typeof message === "object" &&

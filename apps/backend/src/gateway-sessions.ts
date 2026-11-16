@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
+import type { IncomingMessage } from "node:http";
 import {
   AGENT_TEST_SESSION_IDLE_TTL_MS,
   AGENT_TEST_SESSION_MAX_LIFETIME_MS,
@@ -29,24 +29,39 @@ export interface BrowserSessionRecord {
  * on the same host (a container dev server on a published loopback port)
  * receives the cookie too. A leaked session expires, ends when the backend
  * restarts, and is revoked by token rotation and logout.
+ *
+ * Over HTTPS only the `__Host-` name counts. The plain name can be set by a
+ * sibling host of the same registrable domain or by a plain-HTTP page, so
+ * honouring it there would let either toss a browser onto a session it chose.
+ * Over plain HTTP the `__Host-` name still comes first: a proxy that sends no
+ * `X-Forwarded-Proto` makes later requests without an `Origin` look like HTTP
+ * to a browser that signed in over HTTPS.
  */
-export function getGatewayAuthCookie(headers: IncomingHttpHeaders): string | null {
-  return getCookie(headers, SECURE_AUTH_COOKIE) ?? getCookie(headers, AUTH_COOKIE);
+export function getGatewayAuthCookie(
+  request: Pick<IncomingMessage, "headers" | "socket">,
+): string | null {
+  const { headers } = request;
+  const hostPrefixed = getCookie(headers, SECURE_AUTH_COOKIE);
+  if (hostPrefixed !== null || requestIsHttps(request)) return hostPrefixed;
+  return getCookie(headers, AUTH_COOKIE);
 }
 
 /** The credential a request presents: its bearer header, else its gateway cookie. */
-export function gatewayRequestCredential(headers: IncomingHttpHeaders): string | null {
-  return getBearerToken(headers) ?? getGatewayAuthCookie(headers);
+export function gatewayRequestCredential(
+  request: Pick<IncomingMessage, "headers" | "socket">,
+): string | null {
+  return getBearerToken(request.headers) ?? getGatewayAuthCookie(request);
 }
 
 /**
  * Whether the browser reached this gateway over HTTPS. TLS is normally
  * terminated in front of it (Tailscale Serve), so the forwarded protocol and a
- * same-host `Origin` count too. A request can only claim this for its own
- * cookie: a false claim makes that browser drop a `Secure` cookie, nothing more.
+ * same-host `Origin` count too. A request can only claim this for itself: a
+ * false claim gets that browser a `__Host-` cookie it may drop and stops that
+ * request's plain-name cookie counting, nothing more.
  */
-export function requestIsHttps(request: IncomingMessage): boolean {
-  if ((request.socket as { encrypted?: boolean }).encrypted) return true;
+export function requestIsHttps(request: Pick<IncomingMessage, "headers" | "socket">): boolean {
+  if ((request.socket as { encrypted?: boolean } | undefined)?.encrypted) return true;
   const forwarded = headerValueToString(request.headers["x-forwarded-proto"]);
   if (forwarded?.split(",")[0]?.trim().toLowerCase() === "https") return true;
   const origin = headerValueToString(request.headers.origin);
@@ -62,25 +77,30 @@ export function requestIsHttps(request: IncomingMessage): boolean {
 /**
  * A browser-session cookie, deliberately without Max-Age: the server owns the
  * sliding idle window and its absolute cap, so a fixed client-side expiry
- * would only be able to disagree with it. `Secure` over HTTPS keeps it off
- * plain-HTTP services on the same host name.
+ * would only be able to disagree with it.
  *
- * The name stays `orkestrator_gateway_auth` even over HTTPS. The iOS app's
- * native sign-in looks the cookie up by that name, and its contract only
- * changes additively (`version-compatibility.md`). The gateway already reads
- * and strips the `__Host-` name, so switching to it later is issuing-side only.
+ * Over HTTPS it is `__Host-orkestrator_gateway_auth` with `Secure`, `Path=/`
+ * and no `Domain`, the attributes the prefix requires: no sibling host and no
+ * plain-HTTP page can set or overwrite it, and it stays off plain-HTTP
+ * services on the same host name. Over plain HTTP a `__Host-` cookie cannot
+ * be set at all, so the plain name is issued there.
  */
 export function gatewaySessionCookie(session: string, secure: boolean): string {
-  return `${AUTH_COOKIE}=${session}; HttpOnly; SameSite=Strict; Path=/${secure ? "; Secure" : ""}`;
+  return secure
+    ? `${SECURE_AUTH_COOKIE}=${session}; HttpOnly; SameSite=Strict; Path=/; Secure`
+    : `${AUTH_COOKIE}=${session}; HttpOnly; SameSite=Strict; Path=/`;
 }
 
-/** Expires every gateway cookie name the browser may still hold. */
-export function clearedGatewayCookies(secure: boolean): string[] {
+/**
+ * Expires both gateway cookie names, whichever scheme the request seems to
+ * use: HTTPS detection can miss a request a proxy forwarded without
+ * `X-Forwarded-Proto`, and logout must not leave the browser's cookie behind
+ * because of it. A browser ignores the `Secure` line on a plain-HTTP page.
+ */
+export function clearedGatewayCookies(): string[] {
   return [
+    `${SECURE_AUTH_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Secure; Max-Age=0`,
     `${AUTH_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`,
-    ...(secure
-      ? [`${SECURE_AUTH_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Secure; Max-Age=0`]
-      : []),
   ];
 }
 

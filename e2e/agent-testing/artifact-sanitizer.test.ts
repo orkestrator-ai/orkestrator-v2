@@ -35,6 +35,8 @@ describe("agent-test artifact sanitizer", () => {
         `authorization: Bearer ${secret}`,
         `cookie: orkestrator_gateway_auth=${session}; theme=dark`,
         JSON.stringify({ name: "orkestrator_gateway_auth", value: session }),
+        `cookie: __Host-orkestrator_gateway_auth=${session}`,
+        JSON.stringify({ name: "__Host-orkestrator_gateway_auth", value: session }),
       ].join("\n"),
     );
     const archive = path.join(root, "trace.zip");

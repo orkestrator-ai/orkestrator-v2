@@ -235,6 +235,23 @@ profiles the directory is never consulted.
 `e2e/agent-testing/environment-delete-retry.spec.ts` uses it to delete from
 the row's menu, see the failure across a reload and finish with **Retry**.
 
+The claude-tmux step (step 7, and the same teardown a local move runs before
+it relocates the worktree) reports itself incomplete when the environment
+list cannot be loaded, when restoring the workspace hooks fails, or when
+`killEnvironmentTmuxSessions` cannot prove a session gone; a move then
+refuses with `claude-tmux cleanup incomplete`, and each branch logs a `tmux
+cleanup.*` warning naming it. When tmux cannot reach its socket, a server may
+still be alive with the socket file deleted, so `confirmTmuxSessionGone`
+(`tmux-shared.ts`) takes a process census and treats a tmux process as a
+possible owner unless it is ruled out. On Linux, `tmux-socket-owner.ts` rules
+out a process that shares the backend's network namespace while
+`/proc/net/unix` does not list the socket path, one that sees a different
+directory where the socket lives (a container's own `/tmp`), and one that has
+exited; anything it cannot establish, and every host without `/proc`, stays
+conservative. Before that rule any other tmux server on the host (another
+worktree's private socket, a container's tmux) failed every local move while
+it ran (to-do 7020, retired 2026-11-16).
+
 `scheduleMergeCleanupRecovery`, called by the PR monitor on every poll, stands
 aside while a merge or delete in this process holds the environment: the owner
 records any failure itself. Those guards live in memory, so after a restart

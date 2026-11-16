@@ -263,12 +263,7 @@ export class PromptsRepository {
         "Agent mail",
       );
       const queue = this.repos.promptQueues.loadPromptQueue(queueKey);
-      if (
-        queue &&
-        (queue.outstandingClaim !== undefined ||
-          queue.inFlight !== undefined ||
-          queue.messages.length > 0)
-      ) {
+      if (queue && (queue.inFlight !== undefined || queue.messages.length > 0)) {
         return { empty: false };
       }
       return { empty: true, value: await operation() };
@@ -356,8 +351,7 @@ export class PromptsRepository {
         }
         if (
           previous &&
-          ((previous.outstandingClaim && previous.outstandingClaim.message.id === message.id) ||
-            (isRecord(previous.inFlight?.message) && previous.inFlight.message.id === message.id) ||
+          ((isRecord(previous.inFlight?.message) && previous.inFlight.message.id === message.id) ||
             previous.messages.some(
               (candidate) => isRecord(candidate) && candidate.id === message.id,
             ))
@@ -379,7 +373,7 @@ export class PromptsRepository {
    * Appends one backend-authored prompt exactly once per stable message id.
    *
    * Unlike {@link enqueuePromptQueueMessage}, presence is checked against every
-   * durable identity the native queue can hold — queued, held by a live legacy claim,
+   * durable identity the native queue can hold — queued,
    * reserved in flight, parked with a dispatch error — and against the native
    * session's consumed receipts (`dispatchedRequestIds` and an ambiguous
    * `pendingDispatch`). A lost response can therefore be retried with the same
@@ -424,11 +418,9 @@ export class PromptsRepository {
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
       }
-      const held = [
-        ...(previous?.messages ?? []),
-        previous?.outstandingClaim?.message,
-        previous?.inFlight?.message,
-      ].find((candidate) => isRecord(candidate) && candidate.id === messageId);
+      const held = [...(previous?.messages ?? []), previous?.inFlight?.message].find(
+        (candidate) => isRecord(candidate) && candidate.id === messageId,
+      );
       if (held !== undefined) {
         if (canonicalPromptQueueMessageFingerprint(held) !== expected) {
           throw promptQueueMessageConflict(messageId);
@@ -523,11 +515,7 @@ export class PromptsRepository {
           throw new Error("Job request ID conflict");
         return existing;
       }
-      const held = [
-        ...(previous?.messages ?? []),
-        previous?.outstandingClaim?.message,
-        previous?.inFlight?.message,
-      ];
+      const held = [...(previous?.messages ?? []), previous?.inFlight?.message];
       const session = await this.promptQueueNativeSession(queueKey, environmentId);
       const matchingHeld =
         message && held.find((entry) => isRecord(entry) && entry.text === message.text);
@@ -751,7 +739,7 @@ export class PromptsRepository {
         queueKey,
         (previous) => {
           if (!previous) return { result: null };
-          if (previous.outstandingClaim || previous.dispatchError) return { result: null };
+          if (previous.dispatchError) return { result: null };
           if (previous.inFlight) return { result: previous.inFlight };
           const message = previous.messages[0];
           if (!isRecord(message) || !isNonBlankString(message.id)) return { result: null };

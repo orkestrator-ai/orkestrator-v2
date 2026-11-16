@@ -201,7 +201,8 @@ export function isMissingTmuxSessionError(value: unknown): boolean {
  * path. A failed, empty or malformed census is not evidence of absence. On
  * Linux, `noProcessServesTmuxSocket` rules out tmux processes that provably
  * serve a different socket (another worktree's private server, a container's
- * tmux), which otherwise failed every local move while one ran (to-do 7020).
+ * tmux), which otherwise failed every local move while one ran (to-do 7020, retired;
+ * docs/architecture/environment-deletion.md).
  */
 export async function confirmTmuxSessionGone(
   value: unknown,

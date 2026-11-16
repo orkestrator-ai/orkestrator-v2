@@ -86,12 +86,7 @@ export async function deliverMissedSteer(
       // queued prompt the user sent first keeps its place; a turn that started
       // since the miss is not interrupted by this one.
       const queue = await host.storage.getPromptQueue(queueKey);
-      if (
-        queue &&
-        (queue.outstandingClaim !== undefined ||
-          queue.inFlight !== undefined ||
-          queue.messages.length > 0)
-      ) {
+      if (queue && (queue.inFlight !== undefined || queue.messages.length > 0)) {
         held = true;
         return { dispatch: false };
       }

@@ -122,10 +122,7 @@ export class NativeAgentMailInjection {
     if (composeDraftHoldsQueue(draft?.value)) return "draft";
     if (
       session?.pendingDispatch ||
-      (queue &&
-        (queue.outstandingClaim !== undefined ||
-          queue.inFlight !== undefined ||
-          queue.messages.length > 0))
+      (queue && (queue.inFlight !== undefined || queue.messages.length > 0))
     ) {
       return "working";
     }
@@ -226,12 +223,7 @@ export class NativeAgentMailInjection {
           }
           const queueKey = `${input.agent}\0${input.logicalSessionKey}`;
           const queue = await this.host.storage.getPromptQueue(queueKey);
-          if (
-            queue &&
-            (queue.outstandingClaim !== undefined ||
-              queue.inFlight !== undefined ||
-              queue.messages.length > 0)
-          ) {
+          if (queue && (queue.inFlight !== undefined || queue.messages.length > 0)) {
             heldReason = "queue";
             return { dispatch: false };
           }

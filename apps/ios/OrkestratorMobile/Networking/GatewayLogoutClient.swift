@@ -7,8 +7,9 @@ protocol GatewayLogoutSending: Sendable {
 }
 
 struct GatewayLogoutClient: GatewayLogoutSending, Sendable {
-    /// The names the gateway reads a session from (`getGatewayAuthCookie`).
-    static let sessionCookieNames = ["__Host-orkestrator_gateway_auth", "orkestrator_gateway_auth"]
+    /// The session cookie the gateway issues over HTTPS, the only scheme this app
+    /// connects with, and the only name it reads there (`getGatewayAuthCookie`).
+    static let sessionCookieName = "__Host-orkestrator_gateway_auth"
 
     private let session: URLSession
 

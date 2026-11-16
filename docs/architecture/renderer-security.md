@@ -89,7 +89,7 @@ matching), and the public-site browser suite serves the built client with
 those rules (`e2e/public-site/vercel-static-server.ts`):
 `static-html-frame.spec.ts` checks that a page under the strict policy renders
 a report in the frame. Whether a real Vercel deployment applies the rules
-that way is on the manual-test checklist (7568, 4650 task 1). A build whose host
+that way is on the manual-test checklist (7568, 4650 (retired) task 1). A build whose host
 policy cannot run the frame declares the view unavailable
 (`ORKESTRATOR_STATIC_HTML_PRESENTATION=unavailable`,
 `staticHtmlPresentationSupported`) and shows saved previews; no build does now.

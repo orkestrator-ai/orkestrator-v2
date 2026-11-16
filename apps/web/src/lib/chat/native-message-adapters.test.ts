@@ -78,6 +78,55 @@ describe("Claude activity in the shared native transcript", () => {
     },
   );
 
+  describe("a launch with no result once nothing can be running it (to-do 8303, retired)", () => {
+    test("is ended, not active, when the turn has settled and no task is live", () => {
+      const [decorated] = applyClaudeBackgroundTaskStates(
+        [agentLaunch("pending")],
+        {},
+        {
+          turnSettled: true,
+        },
+      );
+      expect(decorated?.parts[0]?.agentState).toBe("ended");
+    });
+
+    test("stays active while the turn could still be running it", () => {
+      const [decorated] = applyClaudeBackgroundTaskStates(
+        [agentLaunch("pending")],
+        {},
+        {
+          turnSettled: false,
+        },
+      );
+      expect(decorated?.parts[0]?.agentState).toBe("active");
+    });
+
+    test("stays active while a live background agent could be its parent", () => {
+      const [decorated] = applyClaudeBackgroundTaskStates(
+        [agentLaunch("pending")],
+        { worker: { id: "worker", toolUseId: "other-launch", status: "running" } },
+        { turnSettled: true },
+      );
+      expect(decorated?.parts[0]?.agentState).toBe("active");
+    });
+
+    test("does not relabel a launch that reported its result", () => {
+      for (const [toolState, expected] of [
+        ["success", "finished"],
+        ["failure", "failed"],
+      ] as const) {
+        const [decorated] = applyClaudeBackgroundTaskStates(
+          [agentLaunch(toolState)],
+          {},
+          {
+            turnSettled: true,
+          },
+        );
+        expect(decorated?.parts[0]?.agentState).toBe(expected);
+      }
+    });
+  });
+
   test("leaves a subagent launch a plain tool row without the Claude join", () => {
     // The shared normalizer refuses to read a child lifecycle out of a
     // task-shaped tool name: other providers use those names for foreground work.

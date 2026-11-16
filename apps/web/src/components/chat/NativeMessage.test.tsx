@@ -6180,6 +6180,27 @@ describe("NativeMessage agent status and grouping details", () => {
     expect(screen.getByText("Failed").className).toContain("border-failure/30");
   });
 
+  test("shows an ended agent as a neutral, settled card (to-do 8303, retired)", () => {
+    renderInAppCommandScope(
+      <NativeMessage
+        message={makeMessage([
+          makeAgentTaskGroupPart({
+            task: {
+              toolUseId: "fork-1",
+              agentState: "ended",
+              toolArgs: { description: "Fix flaky cases batch 1" },
+            },
+          }),
+        ])}
+      />,
+    );
+
+    const pill = screen.getByText("Ended");
+    expect(pill.className).toContain("text-muted-foreground");
+    expect(screen.queryByText("Active")).toBeNull();
+    expect(screen.queryByText("Waiting for activity.")).toBeNull();
+  });
+
   test("keeps successful terminal agents finished despite stale pending descendants", () => {
     renderInAppCommandScope(
       <NativeMessage

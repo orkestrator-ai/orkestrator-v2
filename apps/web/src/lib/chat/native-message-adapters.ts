@@ -1170,9 +1170,24 @@ export interface ClaudeBackgroundTaskState {
   endReason?: NativeBackgroundTask["endReason"];
 }
 
+export interface ClaudeBackgroundTaskStateOptions {
+  /**
+   * The session's turn has stopped (idle, or ended on an error), as its
+   * authoritative snapshot reports it. With no live task in the snapshot
+   * either, nothing in the session can still be running a subagent, so a
+   * launch with no result is `ended` rather than `active`: a stale copy of its
+   * row (a reload of a transcript whose result never landed) must not spin
+   * forever (agent-engines.md, "Sub-agent card states"). A live background task keeps the old reading, since
+   * the agent it runs may itself be waiting on a foreground child, which has
+   * no task of its own. Absent while the snapshot is unknown.
+   */
+  turnSettled?: boolean;
+}
+
 export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
   messages: TMessage[],
   backgroundTasks: Record<string, ClaudeBackgroundTaskState>,
+  options: ClaudeBackgroundTaskStateOptions = {},
 ): TMessage[] {
   const tasksById = new Map<string, ClaudeBackgroundTaskState>();
   const tasksByToolUseId = new Map<string, ClaudeBackgroundTaskState>();
@@ -1189,6 +1204,10 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
     tasksById.set(task.id, task);
     if (task.toolUseId) tasksByToolUseId.set(task.toolUseId, task);
   }
+  // Whether a launch with no result can still be running: see `turnSettled`.
+  const launchesCanRun =
+    !options.turnSettled ||
+    [...tasksById.values()].some((task) => isLiveBackgroundTask(task.status));
   const isCleanupLaunch = (part: NativeMessagePart, recoveredId: string | undefined): boolean =>
     (part.toolUseId !== undefined && cleanupToolUseIds.has(part.toolUseId)) ||
     (recoveredId !== undefined && cleanupTaskIds.has(recoveredId));
@@ -1278,14 +1297,18 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
          * result is the whole lifecycle. Stating it explicitly is what promotes
          * the row to the shared agent card: the grouper deliberately refuses to
          * infer a child from a task-shaped tool name alone, since other
-         * providers use those names for ordinary foreground work.
+         * providers use those names for ordinary foreground work. A launch
+         * still waiting on its result is only live while a turn could be
+         * running it.
          */
         agentState =
           part.toolState === "failure"
             ? "failed"
             : part.toolState === "success"
               ? "finished"
-              : "active";
+              : launchesCanRun
+                ? "active"
+                : "ended";
       }
 
       if (!isAgentTool && isBackgroundTaskLaunch(part, recoveredId)) {

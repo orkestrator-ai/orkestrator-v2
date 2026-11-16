@@ -45,12 +45,16 @@ import {
 } from "./NativeMessage.shared";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 
+const NEUTRAL_STATUS_PILL = "border-border/60 bg-muted/40 text-muted-foreground";
+
 function getSubagentStatusLabel(status: NativeAgentStatus): string {
   switch (status) {
     case "finished":
       return "Finished";
     case "failed":
       return "Failed";
+    case "ended":
+      return "Ended";
     default:
       return "Active";
   }
@@ -62,13 +66,15 @@ function getSubagentStatusClasses(status: NativeAgentStatus): string {
       return "border-success/30 bg-success/10 text-success";
     case "failed":
       return "border-failure/30 bg-failure/10 text-failure";
+    case "ended":
+      return NEUTRAL_STATUS_PILL;
     default:
       return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
   }
 }
 
 function isTerminalAgentStatus(status: NativeAgentStatus): boolean {
-  return status === "finished" || status === "failed";
+  return status !== "active";
 }
 
 interface SubagentPreview {
@@ -435,6 +441,7 @@ function AgentActivityIcon({
         status === "active" && "bg-cyan-400/10 text-cyan-300",
         status === "finished" && "bg-success/10 text-success",
         status === "failed" && "bg-failure/10 text-failure",
+        status === "ended" && "bg-muted/40 text-muted-foreground",
       )}
       aria-hidden="true"
     >
@@ -458,8 +465,6 @@ interface BackgroundTaskPresentation {
   status: NativeAgentStatus;
   pillClassName: string;
 }
-
-const NEUTRAL_STATUS_PILL = "border-border/60 bg-muted/40 text-muted-foreground";
 
 const BACKGROUND_TASK_PRESENTATION: Record<NativeBackgroundTaskStatus, BackgroundTaskPresentation> =
   {

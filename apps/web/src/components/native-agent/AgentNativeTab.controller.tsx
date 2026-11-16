@@ -801,6 +801,10 @@ export function SharedNativeAgentController({
     if (tasks.length === 0) return EMPTY_BACKGROUND_TASKS;
     return Object.fromEntries(tasks.map((task) => [task.id, task]));
   }, [platform, projection?.backgroundTasks]);
+  // Whether the snapshot says no turn is running. A Claude subagent launch
+  // with no result and no live task is then not running either
+  // (agent-engines.md, "Sub-agent card states").
+  const claudeTurnSettled = projection?.turn.phase === "idle" || projection?.turn.phase === "error";
   const decoratedMessages = useMemo(() => {
     // How the last turn ended (a provider error, a stop) arrives with session
     // state on the progressive path, beside the transcript rather than in it.
@@ -809,9 +813,17 @@ export function SharedNativeAgentController({
       projection?.terminalMessages,
     );
     return platform === "claude"
-      ? applyClaudeBackgroundTaskStates(source, claudeBackgroundTasksById)
+      ? applyClaudeBackgroundTaskStates(source, claudeBackgroundTasksById, {
+          turnSettled: claudeTurnSettled,
+        })
       : source;
-  }, [claudeBackgroundTasksById, platform, projection?.messages, projection?.terminalMessages]);
+  }, [
+    claudeBackgroundTasksById,
+    claudeTurnSettled,
+    platform,
+    projection?.messages,
+    projection?.terminalMessages,
+  ]);
   const normalizedMessages = useMemo(
     () =>
       normalizeNativeMessages(decoratedMessages).flatMap((message) => {

@@ -51,6 +51,41 @@ describe("pinNativeAgentParts", () => {
     expect(last?.id === "active-agents").toBe(expectPinned);
   });
 
+  test("does not pin a pending subagent launch nothing can still be running (to-do 8303, retired)", () => {
+    // A reload can hold a fork's launch with no result: the row's own copy is
+    // all that says "running". With the turn settled and no live task, nothing
+    // backs it, so it must not sit in the Agents panel with a ticking timer.
+    const launch = () => [
+      assistantMessage("assistant-launch", [
+        {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolUseId: "fork-1",
+          toolState: "pending",
+          toolArgs: { subagent_type: "fork", description: "Fix flaky cases batch 1" },
+        },
+      ]),
+      assistantMessage("assistant-later", [{ type: "text", content: "Reported back" }]),
+    ];
+
+    const settled = normalizeNativeMessages(
+      applyClaudeBackgroundTaskStates(launch(), {}, { turnSettled: true }),
+    );
+    expect(pinNativeAgentParts(settled).some((message) => message.id === "active-agents")).toBe(
+      false,
+    );
+    expect(snapshotNativeAgentActivity(settled)).toEqual([
+      expect.objectContaining({ status: "ended", kind: "subagent" }),
+    ]);
+
+    // While a turn is running the same row is a live foreground child.
+    const running = normalizeNativeMessages(
+      applyClaudeBackgroundTaskStates(launch(), {}, { turnSettled: false }),
+    );
+    expect(pinNativeAgentParts(running).at(-1)?.id).toBe("active-agents");
+  });
+
   test("moves active subagents to the bottom as temporary message rows", () => {
     const messages: NativeMessage[] = [
       assistantMessage("assistant-1", [

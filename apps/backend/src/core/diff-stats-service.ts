@@ -954,6 +954,51 @@ export class DiffStatsService {
     return this.entries.get(environmentId)?.watcher?.watching === true;
   }
 
+  /**
+   * Whether a tracked environment's cached file list is current: the signal a
+   * caller waits on instead of guessing when the watcher's last hint landed
+   * (flakes 2404 and 9854). Content-free: epochs and flags only.
+   *
+   * `current` means a {@link readFileList} arriving now would reuse the cached
+   * list without scanning, and would keep reusing it until the next hint,
+   * mutation or refresh: the list was scanned at the entry's current epoch,
+   * under the qualified watcher coverage the entry still has, and no scan is
+   * running or held back by the minimum gap. A list scanned before coverage
+   * was qualified is served only for `fileListMaxAgeMs` and is never
+   * `current`; a refresh once `watcherQualified` is true replaces it with one
+   * that is. `undefined` for an untracked or paused environment.
+   */
+  fileListCurrency(environmentId: string):
+    | {
+        scannedEpoch: number | null;
+        dirtyEpoch: number;
+        scanning: boolean;
+        scanHeldBack: boolean;
+        watcherQualified: boolean;
+        current: boolean;
+      }
+    | undefined {
+    const entry = this.entries.get(environmentId);
+    if (!entry?.active) return undefined;
+    const body = entry.fileList;
+    const watcherQualified = this.isQualified(entry);
+    const scanning = entry.inFlight !== undefined;
+    const scanHeldBack = entry.gapTimer !== undefined;
+    const covered =
+      body !== undefined &&
+      watcherQualified &&
+      body.qualified &&
+      body.watcherGeneration === entry.watcherGeneration;
+    return {
+      scannedEpoch: body?.epoch ?? null,
+      dirtyEpoch: entry.dirtyEpoch,
+      scanning,
+      scanHeldBack,
+      watcherQualified,
+      current: covered && body.epoch >= entry.dirtyEpoch && !scanning && !scanHeldBack,
+    };
+  }
+
   /** Content-free per-owner state for diagnostics and tests. */
   status(): {
     entries: number;

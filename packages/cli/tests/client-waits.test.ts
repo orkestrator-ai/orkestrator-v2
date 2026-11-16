@@ -568,6 +568,64 @@ describe("environment --wait through a lost submission response", () => {
     expect(submissions()).toBe(1);
   });
 
+  test("--wait says on stderr when it holds the receipt and starts observing", async () => {
+    const provisioning = startReceipt({ state: "running", stage: "setup", completedAt: undefined });
+    const box = await createSandbox({ virtualClock: true });
+    const gateway = await startFakeGateway((request) => {
+      const called = String(request.body.args.action);
+      if (called === "environment.start")
+        return envelope(publicSuccessEnvelope(called, { environmentId: "env" }, provisioning));
+      if (called === "run.get")
+        return envelope(publicSuccessEnvelope(called, null, startReceipt({})));
+      if (called === "environment.get")
+        return envelope(publicSuccessEnvelope(called, environmentSummary()));
+      return defaultResponder()(request);
+    });
+    cleanups.push(
+      () => box.cleanup(),
+      () => gateway.stop(),
+    );
+    const dataDir = await box.publishDescriptor(gateway);
+    await box.run(["connection", "add", "local", "--data-dir", dataDir, "--default", "--no-check"]);
+
+    const result = await box.run([...START, "--wait", "ready", "--timeout", "30s"]);
+    expect(result.code).toBe(0);
+    // stdout keeps exactly one envelope; the progress record is on stderr.
+    expect(result.out.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(result.out).receipt.state).toBe("succeeded");
+    expect(
+      result.err
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([{ type: "observing", action: "environment.start", operationId: OPERATION }]);
+
+    // Human output and a submission without --wait are unchanged.
+    const human = await box.run(["environment", "start", "env", "--wait", "ready"]);
+    expect(human.code).toBe(0);
+    expect(human.err).not.toContain("observing");
+    const unwaited = await box.run(["--json", "environment", "start", "env"]);
+    expect(unwaited.code).toBe(0);
+    expect(unwaited.err).toBe("");
+  });
+
+  test("a lost start response found by its key still says it is observing", async () => {
+    const provisioning = startReceipt({ state: "running", stage: "setup", completedAt: undefined });
+    const { box } = await lostEnvironmentMutation(
+      "environment.start",
+      [null, provisioning],
+      [provisioning, startReceipt({})],
+    );
+    const result = await box.run([...START, "--wait", "ready", "--timeout", "30s"]);
+    expect(result.code).toBe(0);
+    expect(
+      result.err
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([{ type: "observing", action: "environment.start", operationId: OPERATION }]);
+  });
+
   test("a recovered start that failed setup still reports the setup failure", async () => {
     const { box, submissions } = await lostEnvironmentMutation(
       "environment.start",

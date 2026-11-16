@@ -1943,6 +1943,24 @@ exit 0
           "diff stats to be announced",
         );
 
+        // The precondition is that the badge's file list is still current when
+        // the panel reads. A watcher hint can land during the badge's scan and
+        // make it stale, and the first scan may predate qualified coverage, so
+        // wait on the service's own currency signal rather than the clock
+        // (flakes 2404 and 9854).
+        const diffStats = context.runtime.diffStats.service;
+        await waitForCondition(
+          () => diffStats.fileListCurrency(environment.id)?.watcherQualified === true,
+          "the worktree watcher to qualify its coverage",
+        );
+        if (diffStats.fileListCurrency(environment.id)?.current !== true) {
+          diffStats.refresh(environment.id);
+        }
+        await waitForCondition(
+          () => diffStats.fileListCurrency(environment.id)?.current === true,
+          "the badge's file list to be current",
+        );
+
         await withGitSubcommandLog("status", async (logPath) => {
           const changes = (await commands.get("get_local_git_status")?.(
             { worktreePath: worktree, targetBranch: "main" },

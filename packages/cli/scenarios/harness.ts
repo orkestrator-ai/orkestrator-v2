@@ -10,6 +10,7 @@ import {
   type BackendInstanceDescriptor,
 } from "@orkestrator/protocol/backend-instance";
 import { isPublicActionResponse, type PublicEnvelope } from "@orkestrator/protocol/public-api";
+import { OBSERVING_RECORD_TYPE } from "../src/client/output.js";
 
 /**
  * Targeted CLI scenarios against a real, isolated backend.
@@ -322,6 +323,46 @@ export function expectThat(condition: unknown, message: string): asserts conditi
 }
 
 /**
+ * Reads a client's stderr to the end, calling `onObserving` once when its
+ * `observing` record (written by `submitForWait` once it holds the receipt)
+ * arrives. Keeps at most {@link MAX_CAPTURE_BYTES} of the tail, and scans each
+ * line only for the record's `type`, so a long diagnostic line costs one
+ * bounded parse attempt.
+ */
+export async function captureUntilObserving(
+  stream: ReadableStream<Uint8Array>,
+  onObserving: () => void,
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let captured = "";
+  let pending = "";
+  let observed = false;
+  for await (const chunk of stream) {
+    const text = decoder.decode(chunk, { stream: true });
+    captured = (captured + text).slice(-MAX_CAPTURE_BYTES);
+    if (observed) continue;
+    pending = (pending + text).slice(-MAX_CAPTURE_BYTES);
+    const lines = pending.split("\n");
+    pending = lines.pop() ?? "";
+    if (lines.some(isObservingRecord)) {
+      observed = true;
+      onObserving();
+    }
+  }
+  return (captured + decoder.decode()).slice(-MAX_CAPTURE_BYTES);
+}
+
+function isObservingRecord(line: string): boolean {
+  if (!line.startsWith("{")) return false;
+  try {
+    const parsed = JSON.parse(line) as { type?: unknown };
+    return parsed.type === OBSERVING_RECORD_TYPE;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Drives the packaged CLI. Every invocation gets the scenario's private
  * config directory, a deadline, and bounded capture; nothing is interpolated
  * into a shell.
@@ -340,7 +381,13 @@ export class CliDriver {
       expectCode?: number;
       stdin?: string;
       timeoutMs?: number;
-      signalAfterMs?: { signal: "SIGINT" | "SIGTERM"; afterMs: number };
+      /**
+       * Sends this signal once the client writes its `observing` record on
+       * stderr (`--json`/`--jsonl` with `--wait`), the point from which an
+       * interruption stops only observation. Never on a timer: a loaded host
+       * can take any time to answer the submission (flake 9869).
+       */
+      signalWhenObserving?: "SIGINT" | "SIGTERM";
     },
   ): Promise<CliResult> {
     const started = Date.now();
@@ -355,20 +402,21 @@ export class CliDriver {
       () => child.kill("SIGKILL"),
       options.timeoutMs ?? COMMAND_TIMEOUT_MS,
     );
-    const signalTimer = options.signalAfterMs
-      ? setTimeout(() => child.kill(options.signalAfterMs!.signal), options.signalAfterMs.afterMs)
-      : undefined;
     const bounded = async (stream: ReadableStream<Uint8Array>) => {
       const text = await new Response(stream).text();
       return text.length > MAX_CAPTURE_BYTES ? text.slice(-MAX_CAPTURE_BYTES) : text;
     };
+    const signal = options.signalWhenObserving;
     const [stdout, stderr, code] = await Promise.all([
       bounded(child.stdout),
-      bounded(child.stderr),
+      signal
+        ? captureUntilObserving(child.stderr, () => {
+            if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+          })
+        : bounded(child.stderr),
       child.exited,
     ]);
     clearTimeout(deadline);
-    if (signalTimer) clearTimeout(signalTimer);
     const result: CliResult = {
       argv,
       code,

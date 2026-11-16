@@ -37,6 +37,7 @@ import {
   stopStandaloneBackendLogging,
 } from "./standalone-logging.js";
 import { installBoundedConsole } from "./bounded-console.js";
+import { createBackendStartupProgress } from "./core/backend-startup-progress.js";
 import {
   addEventLoopStallContext,
   startEventLoopStallMonitor,
@@ -94,6 +95,10 @@ fixPath();
 const initialParentPid = process.ppid;
 const options = parseOptions(process.argv.slice(2));
 assertProxiedModeHost(options);
+// One JSON line per startup phase before the ready line, so a launcher can tell
+// a slow start from a stuck one (flake 0080). Phase names only.
+const startupProgress = createBackendStartupProgress((text) => process.stdout.write(text));
+startupProgress("process");
 // Establish persistence before any fallible startup await (including toolchain
 // lease inspection). Supervised backends still relay to their desktop owner.
 const standaloneLogging = installStandaloneBackendLogging(options);
@@ -103,11 +108,13 @@ loadAgentTestHostCursorApiKey({
   runtimeFlavor: options.runtimeFlavor,
   credentialSources: new Set(options.credentialSources),
 });
+startupProgress("toolchains");
 await leaseActivatedToolchainSet(options.dataDir, options.toolchainBinDir);
 // Before anything logs at a level the settings may turn off. The backend's log
 // policy service keeps this live from here on.
 applyLogDetail(readApplicationLogPolicy(options.dataDir).detail);
 log.info("starting", { version: APP_VERSION });
+startupProgress("host-environment");
 await logGatewayPortPolicy(options, process.env, liveInstanceIn);
 const sshAgentSocket = await configureSshAgentSocketEnvironment({
   dataDir: options.dataDir,
@@ -183,6 +190,7 @@ const backend = new OrkestratorBackend({
     standaloneLayoutForService ? readLauncherState(standaloneLayoutForService).rollback : null,
   emit: (event, payload) => gateway?.emit(event, payload),
   commandNode: options.commandNode,
+  onStartupPhase: startupProgress,
 });
 let instancePublication: ReturnType<typeof createInstanceDescriptorPublication> | null = null;
 
@@ -199,6 +207,7 @@ await lifetime.start(
       ],
     );
 
+    startupProgress("gateway");
     const { gatewayInfo, info } = yield* gatewayServicesStage(lifetime, {
       createGateway: () => {
         return (gateway = new OrkestratorGateway({
@@ -278,6 +287,7 @@ await lifetime.start(
 
     // Private preview origins are optional: a missing domain or certificate only
     // disables browser publication and never blocks the backend from serving.
+    startupProgress("preview-publication");
     const publication = backend.previews
       ? new PreviewPublicationManager({
           runtime: backend.previews,
@@ -326,6 +336,7 @@ await lifetime.start(
     });
     instancePublication = descriptor;
 
+    startupProgress("instance-descriptor");
     // Publish the installed-instance descriptor that operator clients resolve
     // (`orkestrator --connection …`). It is additive to the readiness line below
     // and carries no credential; a failure to write it never blocks serving.

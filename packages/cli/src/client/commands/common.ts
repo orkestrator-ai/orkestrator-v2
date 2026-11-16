@@ -6,6 +6,7 @@ import {
   terminalReceiptErrorCode,
 } from "@orkestrator/protocol/public-api-wait";
 import { CliError } from "../errors.js";
+import { writeObservingRecord } from "../output.js";
 import type { ClientSession } from "../session.js";
 import type { CommandContext, OptionSpec } from "../spec.js";
 import { observe, ObservationStopped, signalName, observationClock } from "../wait.js";
@@ -103,10 +104,9 @@ export async function submitForWait<T>(
   const deadline = now() + timeoutMs;
   const session = await context.session();
   try {
-    return {
-      session,
-      ...(await session.mutate<T>(action, input, stringOption(options, "request-id"))),
-    };
+    const outcome = await session.mutate<T>(action, input, stringOption(options, "request-id"));
+    announceObserving(context, action, outcome.receipt);
+    return { session, ...outcome };
   } catch (error) {
     const requestId = error instanceof CliError ? error.details?.requestId : undefined;
     const namespace = error instanceof CliError ? error.details?.namespace : undefined;
@@ -169,6 +169,7 @@ export async function submitForWait<T>(
       }
       throw failure;
     }
+    announceObserving(context, action, receipt);
     return {
       session,
       receipt,
@@ -177,6 +178,19 @@ export async function submitForWait<T>(
       warnings: [`The ${action} response was lost; found the operation by its request key`],
     };
   }
+}
+
+/**
+ * Says, on stderr in machine modes, that the client now holds the operation's
+ * receipt and is observing it, so a wrapper (or the CLI scenario `client-exit`)
+ * can interrupt observation without guessing when it began.
+ */
+function announceObserving(
+  context: CommandContext,
+  action: PublicActionName,
+  receipt: PublicReceipt | undefined,
+): void {
+  if (receipt) writeObservingRecord(context.io, context.global.output, action, receipt.operationId);
 }
 
 /** Read `run.get` for one operation; returns its receipt. */

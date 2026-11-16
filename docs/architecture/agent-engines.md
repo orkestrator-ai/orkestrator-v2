@@ -604,6 +604,42 @@ The file is read from its start only by the poll loop's tail, once per session i
 each backend process; that pass keeps the task list current and records each task
 call's snapshot, so a page from anywhere can stamp its lines without a replay.
 
+### Claude MCP tasks
+
+Since Claude Code 2.1.319 a call to an MCP tool that declares `taskSupport`
+in `tools/list` can run as an MCP task (gated by the CLI's
+`tengu_glowing_lark` flag; `CLAUDE_CODE_DISABLE_MCP_TASKS` turns it off). No
+MCP server Orkestrator ships declares it. Such a call is reported in two
+parts:
+
+- **The placeholder.** The call's `tool_result` is the CLI's own text,
+  "MCP tool "server - tool" started server-side task …, running in the
+  background as task k…" (or "… It was moved to the background as task k…"),
+  and a `task_started` frame of `task_type` `mcp_task` names the call. The
+  tool card shows that text as a successful result, and the background task
+  appears as a live task row until it ends.
+- **The real result.** When the task ends the CLI emits `task_notification`
+  (its `summary` is only the server's status line) and queues a
+  `<task-notification>` user turn whose `<result>` holds the tool's real
+  output. Unlike an agent's or a shell command's report, that turn carries a
+  `<task-id>` but no `<tool-use-id>`.
+
+The bridge folds the report onto the card all the same: `ToolTracker` keeps a
+task-id-to-call map, filled from each `task_started`/`task_notification`
+frame (live), each persisted task record (reload) and the placeholder itself
+(`claude-mcp-task-results.ts`, read only from an MCP tool's successful
+result), and a report without a `<tool-use-id>` is matched through it. The
+card then shows the real result, or a failure carrying the server's detail,
+and no separate status row; a report for a task no tracked call launched
+still becomes a status row. Before 2026-11-16 the card kept the placeholder
+as its final output and the real result was a row of its own (to-do 8150
+(retired)). Tests: `claude-mcp-task-results.test.ts`, synthetic frames written
+from the pinned CLI's builders. A live MCP task on a real Claude login is a
+checklist item in
+[7568](../todo/manual-test/7568-manual-test-checklist.md), under Agent engines and provider SDKs.
+Re-check the placeholder wording on every Claude bump
+([upgrade-agents.md](../development/upgrade-agents.md#how-to-upgrade-claude)).
+
 ## Codex
 
 **Bridge:** `bridges/codex-bridge/` · **Transport:** JSON-RPC over private stdio

@@ -18,6 +18,10 @@ import {
   type MeasuredWorkspaceChange,
 } from "@orkestrator/protocol/tool-diff";
 import { parseBase64ImageData } from "./image-attachment-data.js";
+import {
+  MAX_TRACKED_BACKGROUND_TASK_CALLS,
+  mcpTaskIdFromPlaceholder,
+} from "./claude-mcp-task-results.js";
 import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged } from "./transcript-revision.js";
 import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
@@ -34,6 +38,27 @@ import {
 
 export class ToolTracker {
   private tools = new Map<string, NormalizedPart>();
+  /** Background task id → the call that launched it; see `noteBackgroundTaskCall`. */
+  private backgroundTaskCalls = new Map<string, string>();
+
+  /**
+   * Remember which call launched a background task. A report that names only
+   * its task (an MCP task's, see `claude-mcp-task-results.ts`) is folded onto
+   * this call's row. A later run of the same task id replaces the entry.
+   */
+  noteBackgroundTaskCall(taskId: string, toolUseId: string): void {
+    this.backgroundTaskCalls.delete(taskId);
+    this.backgroundTaskCalls.set(taskId, toolUseId);
+    if (this.backgroundTaskCalls.size > MAX_TRACKED_BACKGROUND_TASK_CALLS) {
+      const oldest = this.backgroundTaskCalls.keys().next().value;
+      if (oldest !== undefined) this.backgroundTaskCalls.delete(oldest);
+    }
+  }
+
+  /** The call that launched a background task, when this tracker saw it. */
+  backgroundTaskCall(taskId: string): string | undefined {
+    return this.backgroundTaskCalls.get(taskId);
+  }
 
   /** Add or update a tool invocation */
   addTool(toolUseId: string, part: NormalizedPart, parentTaskUseId?: string): void {
@@ -611,19 +636,24 @@ export function taskNotificationNoticePart(
  *
  * The launching call settled long ago with a placeholder ("launched in the
  * background"), so the report replaces that output: it is the call's real
- * result. Returns `false` when there is no tracked call to attach it to, and
- * the caller shows the report as a row of its own instead.
+ * result. A report without a `<tool-use-id>` (an MCP task's) is matched to its
+ * call through the task id the tracker saw launched. Returns the call the
+ * report settled, or `undefined` when there is no tracked call to attach it
+ * to, and the caller shows the report as a row of its own instead.
  */
 function applyTaskNotificationToTool(
   report: TaskNotificationReport,
   toolTracker: ToolTracker | undefined,
   settledAt: string | undefined,
-): boolean {
-  if (!toolTracker || !report.toolUseId || !toolTracker.getTool(report.toolUseId)) return false;
+): string | undefined {
+  if (!toolTracker) return undefined;
+  const toolUseId =
+    report.toolUseId ?? (report.taskId ? toolTracker.backgroundTaskCall(report.taskId) : undefined);
+  if (!toolUseId || !toolTracker.getTool(toolUseId)) return undefined;
   const text = report.result ?? report.summary;
-  if (!text) return true;
+  if (!text) return toolUseId;
   const failed = report.status === "failed";
-  toolTracker.updateToolResult(report.toolUseId, {
+  toolTracker.updateToolResult(toolUseId, {
     ...applyToolResultBudget({
       output: failed ? undefined : text,
       error: failed ? text : undefined,
@@ -631,7 +661,7 @@ function applyTaskNotificationToTool(
     state: failed ? "failure" : "success",
     settledAt,
   });
-  return true;
+  return toolUseId;
 }
 
 /**
@@ -690,8 +720,9 @@ export function parseMessageContent(
   const unattachedTaskNotifications: TaskNotificationReport[] = [];
   const attachedTaskToolUseIds: string[] = [];
   const acceptTaskNotification = (report: TaskNotificationReport) => {
-    if (applyTaskNotificationToTool(report, toolTracker, recordTimestamp)) {
-      attachedTaskToolUseIds.push(report.toolUseId!);
+    const settled = applyTaskNotificationToTool(report, toolTracker, recordTimestamp);
+    if (settled) {
+      attachedTaskToolUseIds.push(settled);
     } else {
       unattachedTaskNotifications.push(report);
     }
@@ -891,6 +922,15 @@ export function parseMessageContent(
           // transcript row; that preserves the settle position on replay.
           settledAt: recordTimestamp,
         });
+
+        // An MCP call the CLI moved to the background answers with a
+        // placeholder; its real result arrives in a report that names only
+        // the task, so remember which call that task belongs to.
+        const mcpTaskId =
+          pendingTool?.isMcpTool && !block.is_error
+            ? mcpTaskIdFromPlaceholder(block.content)
+            : undefined;
+        if (mcpTaskId) toolTracker.noteBackgroundTaskCall(mcpTaskId, block.tool_use_id);
 
         // Check if this is a Task tool completing
         const tool = toolTracker.getTool(block.tool_use_id);
@@ -1777,6 +1817,9 @@ export function normalizePersistedSessionMessages(
     if (raw.type === "system") {
       const system = raw as unknown as Record<string, unknown>;
       const taskMessage = persistedBackgroundTaskMessage(raw);
+      if (taskMessage?.tool_use_id) {
+        toolTracker.noteBackgroundTaskCall(taskMessage.task_id, taskMessage.tool_use_id);
+      }
       if (taskMessage) {
         backgroundTasks = reducePersistedBackgroundTaskMessage(
           backgroundTasks,

@@ -829,6 +829,19 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    closes the first-tab gap described under Claude in
    [native-agent-commands.md](../architecture/native-agent-commands.md#provider-notes).
 
+   Re-check how the new CLI reports an MCP call it ran as an MCP task (see
+   [MCP tasks](../architecture/agent-engines.md#claude-mcp-tasks)). The bridge
+   recognises the placeholder `tool_result` by its opening words
+   (`MCP_TASK_PLACEHOLDER` in
+   `bridges/claude-bridge/src/services/claude-mcp-task-results.ts`, written
+   from 2.1.319's backgrounding text) and folds the later
+   `<task-notification>` onto the card through the task id. In the new
+   binary, find `buildMcpTaskNotification` and the text that says the call
+   "was moved to the background as task" or is "running in the background as
+   task". If the wording changed, update the pattern and the synthetic frames
+   in `claude-mcp-task-results.test.ts`; if the report gained a
+   `<tool-use-id>`, the task-id lookup becomes a fallback and can stay.
+
    Re-prove how a running CLI handles MCP updates. The bridge relies on
    `setMcpServers` unloading only servers an earlier call gave it, and on an
    unchanged restatement not reconnecting a server

@@ -80,6 +80,15 @@ function emitBackgroundTasks(turn: TurnState): void {
   });
 }
 
+/**
+ * Tell the turn's tool tracker which call launched a task. An MCP task's
+ * `<task-notification>` report carries no `<tool-use-id>`, so this is how its
+ * real result finds the card still showing the CLI's placeholder.
+ */
+function noteTaskCall(turn: TurnState, task: BackgroundTaskSnapshot): void {
+  if (task.toolUseId) turn.stream.toolTracker.noteBackgroundTaskCall(task.id, task.toolUseId);
+}
+
 /** What an edge says about its task beyond its lifecycle, validated as on replay. */
 function taskEdgeMetadata(message: SDKMessage): ReturnType<typeof taskMessageMetadata> {
   const parsed = persistedBackgroundTaskMessage({ message });
@@ -167,6 +176,7 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
     ...session.backgroundTasks,
     [task.id]: task,
   });
+  noteTaskCall(turn, task);
   if (LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) {
     turn.runtime?.tasks.live.add(task.id);
   } else {
@@ -280,6 +290,7 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
     ...session.backgroundTasks,
     [task.id]: task,
   });
+  noteTaskCall(turn, task);
   // A task that ended on its own while the bridge's stop was in flight: a
   // `TaskCompleted`/`SubagentStop` hook that came first saw the mark, skipped
   // the continuation wait and released the task, so the CLI that held the

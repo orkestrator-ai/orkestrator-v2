@@ -287,7 +287,7 @@ function childStartTime(child: ChildProcess): number {
  * the GPU process, the launch fails because the zygote is gone, and with
  * `--disable-gpu` there is no GPU mode left to fall back to, so it dies on
  * `LOG(FATAL) "GPU process isn't usable. Goodbye."` with SIGTRAP and a core
- * dump (to-dos 7552 and 7554). So SIGTERM goes to Electron's top process
+ * dump (#2080). So SIGTERM goes to Electron's top process
  * alone, which lets Chromium tear down its own children, and only SIGKILL,
  * which never dumps core, sweeps the group. Vite's group is plain processes.
  */

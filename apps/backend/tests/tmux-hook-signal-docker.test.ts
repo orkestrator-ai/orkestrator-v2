@@ -1,5 +1,5 @@
 /**
- * The claude-tmux hook doorbell in a real image (to-do 1202 task 8).
+ * The claude-tmux hook doorbell in a real image (#1667).
  *
  * Proves the container side end to end with no route from the container to
  * the host: the image declares `tmux-hook-signal=1`, the backend's install

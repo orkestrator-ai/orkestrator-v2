@@ -2,7 +2,7 @@
  * How many transcript bytes the backend reads from a provider for the reads
  * report 0110 (E9) is about: a prompt send, a turn-state read, and an evicted
  * summary-backed tool detail. (The `/messages` fallback this file also
- * measured retired on 2026-11-15, 0050 task 1.)
+ * measured retired on 2026-11-15, #2285.)
  *
  * The provider is a fake over an in-memory history of fixed-size rows, and
  * every byte is counted where it leaves the fake, as the JSON a bridge would

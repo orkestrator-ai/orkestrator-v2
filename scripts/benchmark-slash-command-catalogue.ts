@@ -1,5 +1,5 @@
 /**
- * Slash-command catalogue performance qualification (0015, "Performance").
+ * Slash-command catalogue performance qualification (#1184).
  *
  * Drives the real backend read path with synthetic inventories served by an
  * in-process fake bridge: `HttpBridgeCatalogAdapter` (bounded JSON read and

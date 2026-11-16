@@ -258,7 +258,15 @@ staged marker was probed and not built: it would retire the warm CLI on
 rewind and every reader would have to honour the marker across restarts
 (`bridges/claude-bridge/AGENTS.md`, "One CLI per session"). A resumed Claude
 session rehydrates its subagents' steps eagerly, bounded, once per session per
-bridge process (`session-manager-subagent-rehydration.ts`).
+bridge process (`session-manager-subagent-rehydration.ts`). A fork started from
+inside a subagent is read from its own prompt onwards: Claude Code (verified on
+2.1.319) writes the parent subagent's whole conversation into such a fork's
+transcript ahead of its prompt (from the root it writes only a reference), and
+the copy carries the parent's launch calls for the fork's siblings without
+their results. Read as the fork's output, each became a second launch card that
+read Active forever (to-do 8303, retired). Rehydration therefore drops every
+record up to the fork prompt (`<fork-boilerplate>`) and never re-adds a call
+the transcript already holds.
 
 ### Qualification of fork, rewind and titles
 
@@ -350,6 +358,22 @@ asks for nothing. Codex reports the resolved model, and OpenCode reports it on
 its `subtask` record or the `task` tool's metadata. Cursor and Grok report nothing
 for a child, so their cards show only a model the launch call named. A card with
 no reported model shows no row rather than a guess.
+
+## Sub-agent card states
+
+A sub-agent card is **Active**, **Finished**, **Failed** or **Ended**
+(`NativeAgentState`). A Claude launch takes its state from the bridge's
+background-task record when one matches its call (and then reads Starting,
+Running, Paused, Completed, Failed or Stopped), and otherwise from the launch
+call's own result. A launch with no result yet is Active only while its own
+turn is in progress (after the latest user row and no earlier than the snapshot's
+turn start), or while its linked parent agent task is live. Foreground parent
+launches are followed to their owning turn or task. An unrelated later turn or
+background task, including a shell task, cannot revive an older launch. Once
+nothing backs that launch, it reads **Ended**: neutral, not spinning, not pinned
+to the Agents panel, and not claimed or announced as finished, because its outcome is unknown
+(`applyClaudeBackgroundTaskStates`, to-do 8303, retired). This is a floor for
+a stale copy of a row, not the fix for one; the bridge settles the cause.
 
 ## What survives a restart
 

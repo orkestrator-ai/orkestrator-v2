@@ -229,14 +229,29 @@ backend serves in a `WKWebView`. What it guarantees, and must keep:
   refused, not queued, so a page cannot stack alerts. Cancel, no answer within
   60 seconds, a committed navigation, the web view's teardown and an alert
   that cannot be shown all refuse; nothing approves by default. `list`,
-  `probe`, `rename` and `set-inspectable` do not ask.
+  `probe`, `rename`, `open-editor`, `connect-in-editor` and `set-inspectable`
+  do not ask; the two editor actions leave the save to the user in the
+  native editor.
 - **Tokens for another server are typed natively.** The mobile sidebar's
   New connection calls the bridge's `addInNativeEditor` (action
   `open-editor`), which opens the app's own editor; the app saves and opens
-  the server itself, and the page sees no address or token. An older app has
-  no such action, and the sidebar then falls back to its own form, whose
-  `connect` still asks natively. The Settings → Machines forms still take a
-  token in the page on iOS (to-do 8000); each of their saves asks natively.
+  the server itself, and the page sees no address or token. The Settings →
+  Machines forms whose token is for this device alone (Add machine saved on
+  this device only over HTTPS, Save on this device, Add an HTTPS address and
+  the saved server's Replace token) call `connectInNativeEditor` (action
+  `connect-in-editor`) instead of showing a token field. It takes only an
+  address and a nickname, opens the editor with that address and an empty
+  token, names the server whose page asked, and saves without leaving the
+  current server (`ConnectionModel.requestConnectionInEditor`). It answers
+  the page once: with the saved list when the user saves, and with a refusal
+  when the editor is cancelled or swiped away, when it is already open (for
+  the user or another request), when a consent alert is up, or when the page
+  that asked commits a navigation or is torn down. A withdrawn request whose
+  check is still running closes when it finishes rather than staying open
+  as the user's own editor. Add machine registered with the command node
+  still takes the token in the page, because the command node keeps that
+  token. An older app has neither action: the sidebar and the forms then
+  fall back to their own fields, whose `connect` still asks natively.
 - **Privacy cover.** `PrivacyCover` (`RootView.swift`) covers the root view
   and the connection editor whenever `scenePhase` is not `.active`, so the
   app-switcher snapshot does not show the screen. Views WebKit presents itself

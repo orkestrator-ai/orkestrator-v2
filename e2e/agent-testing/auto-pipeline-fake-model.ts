@@ -1,5 +1,5 @@
 /**
- * A loopback model for `auto-pipeline-live.spec.ts` (to-do 7547 task 4), so
+ * A loopback model for `auto-pipeline-live.spec.ts` (#2021), so
  * the profile's real Pi bridge and Pi SDK sessions run every turn of the
  * Auto-pipeline flow with no login and nothing billed. Run with Bun (specs run
  * under Node): `bun auto-pipeline-fake-model.ts`. It prints its origin

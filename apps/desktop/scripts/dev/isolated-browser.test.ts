@@ -307,7 +307,7 @@ test("profile flags replace the credential-free Codex defaults they name", async
 
 test("a credential-free run reads nothing from the host installation unless asked", () => {
   // A ticket can forbid reading the production data directory; review
-  // preparation runs these suites with no extra flags (to-do 7835's pipeline).
+  // preparation runs these suites with no extra flags (#2191's pipeline).
   expect(isolatedProfileArguments(["--no-agent-credentials"])).toEqual([
     "--fixture",
     "--headless",
@@ -678,7 +678,7 @@ exit 0
     for (const start of starts) {
       expect(start.args).toContain("--fixture-environments");
       expect(start.args).toContain("local,container");
-      // Each shard profile takes its own port from the firewall range (to-do 7500).
+      // Each shard profile takes its own port from the firewall range (#2129).
       expect(start.args[start.args.indexOf("--agent-tools-port") + 1]).toBe("auto");
       expect(alive(start.pid)).toBe(false);
     }

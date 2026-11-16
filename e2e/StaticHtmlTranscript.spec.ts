@@ -313,7 +313,7 @@ test.describe("static documents in the virtualized transcript", () => {
   }, testInfo) => {
     // Find indexes all 3,000 messages of the fixture each time its bar opens.
     test.slow();
-    // Publications whose verification stored the document's text (5780 task 2).
+    // Publications whose verification stored the document's text (#2155).
     await open(page, "?storedText=1");
     const storedTextReads = () =>
       page.evaluate(() => window.__richPerf!.counters().storedTextReads);

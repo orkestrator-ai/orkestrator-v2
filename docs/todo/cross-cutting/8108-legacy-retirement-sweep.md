@@ -14,7 +14,7 @@ decision; nothing here has been built.
 ### Tasks
 
 1. **Inventory every remaining compatibility path and give each an owner**: list the register rows, usage counters and adapters still in the tree, and assign each to the to-do that already removes it or to task 5. Status: open.
-2. **Remove the container `kind: "legacy"` readiness path**: from 7571 task 9. Status: open.
+2. **Remove the container `kind: "legacy"` readiness path**: from 7571 (retired) task 9. Status: open.
 3. **Remove `ServiceBrowserTab` compatibility mode, the legacy loopback route and annotations on legacy URL tabs**: from 0042 task 8. Status: open.
 4. **Retire mixed-version qualification**: the workflow, the scenarios and the qualifiers that pair today's code with older releases. Status: open.
 5. **Remove the paths task 1 leaves unowned**: each with its tests and a Retired row. Status: open (depends on 1).
@@ -90,12 +90,12 @@ register and every counter name.
 no `/run/orkestrator` directory and no boot-status capability label as an
 image from before boot status, which only images built before v2.21.0 are.
 
-**Context.** [7571](7571-removal-candidates-needing-a-decision.md) task 9 left
+**Context.** 7571 (retired) task 9 left
 it for the container-lifecycle owner. The user decided on 2026-11-14 to remove
 it with its tests and add a Retired row. Current images no longer write the
-pre-boot-status marker files (7571 task 3).
+pre-boot-status marker files (7571 (retired) task 3).
 
-**Investigation.** None beyond 7571's. A container from such an image will be
+**Investigation.** None beyond 7571's (retired; `git show c1fcc573b:docs/todo/cross-cutting/7571-removal-candidates-needing-a-decision.md`). A container from such an image will be
 reported as never ready and must be rebuilt; say so in the readiness failure
 text.
 
@@ -207,7 +207,7 @@ date and "retired by the 2026-11-14 legacy-retirement decision".
 - **Decided by the user (maintainer) on 2026-11-14:** retire all legacy
   support now, everywhere in the repository; every machine and client is
   updated together. Waits on support-window dates or version floors no longer
-  block any to-do. The same answer covers 7571 task 9 (task 2 here), 0042
+  block any to-do. The same answer covers 7571 (retired) task 9 (task 2 here), 0042
   task 8 (task 3 here) and the mixed-version workflow and scenarios (task 4
   here).
 - **Not decided:** whether future changes still need older-version adapters.
@@ -227,7 +227,7 @@ date and "retired by the 2026-11-14 legacy-retirement decision".
 
 - [version-compatibility.md](../../architecture/version-compatibility.md): the
   register, its Retired table and the note on this sweep.
-- [7571](7571-removal-candidates-needing-a-decision.md) task 9 and
+- 7571 (retired 2026-11-16; `git show c1fcc573b:docs/todo/cross-cutting/7571-removal-candidates-needing-a-decision.md`) task 9 and
   [0042](../previews-and-annotations/0042-service-preview-rollout.md) task 8:
   the decisions behind tasks 2 and 3.
 - 8109 (retired 2026-11-15): the other removals the user decided on

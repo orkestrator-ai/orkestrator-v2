@@ -16,12 +16,12 @@
  *   backend skips the idle group's sweeps behind the bridge's observation
  *   stream, the bridge process is stopped and started again, then a turn is
  *   dispatched from outside the view. The group must be read again and the
- *   turn seen within the completion budget (todo 0049 task 1).
+ *   turn seen within the completion budget (#1934).
  * - `async-question`: Codex only. Once the view and its backend group have
  *   backed off, a turn dispatched from outside the view asks a question with
  *   `request_user_input_async`, which returns at once, and ends. The card must
  *   show within the completion budget, and its answer, sent from the card, must
- *   come back as a settled turn (todo 0049 task 3).
+ *   come back as a settled turn (#1960).
  * - `approval`: in the provider's "ask" approval mode a shell command parks
  *   an approval. The card must appear within the 2 s budget, survive a hidden
  *   period, and approving it must let the turn finish and settle.
@@ -71,17 +71,17 @@
  * The models answer the spec's own prompts only, the way a compliant model
  * would: each case, sub-agents and approvals included, gets the tool call it
  * asks for. Pi runs the same way against `idle-observation-fake-pi.ts`, added
- * to the profile's own Pi `models.json` (todo 0049 task 7); Pi needs no
+ * to the profile's own Pi `models.json` (#1960); Pi needs no
  * credential source. OpenCode reaches the same endpoint through a custom
  * provider merged into the profile's own global `opencode.json`
- * (`opencode-fake-provider.ts`, todo 0049 task 6), limited to that provider
+ * (`opencode-fake-provider.ts`, #2081), limited to that provider
  * so no turn or title request can reach a hosted model; it needs no
  * credential source either. OpenCode's `shell` can background a command, so
- * `background` exercises OpenCode too (todo 0049 task 8). OpenCode's server
+ * `background` exercises OpenCode too (#2149). OpenCode's server
  * mirrors the same profile configuration (todo 0008 (retired) task 7).
  *
  * `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude or OpenCode
- * in a new container environment (todo 0049 task 9, todo 0008 (retired) task 7) instead
+ * in a new container environment (#1934, todo 0008 (retired) task 7) instead
  * of a local one, from the profile's development image. With fake models the
  * scripted model is copied into the container and serves on its loopback,
  * because a host firewall may refuse the container's route to the host. For
@@ -221,7 +221,7 @@ const MODELS = new Map(
 const TURN_TIMEOUT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_IDLE_TURN_TIMEOUT_MS ?? "240000");
 /**
  * The detach case's idle wait. Unset, each provider waits its own idle window
- * plus 30 s: 630 s for the 10 min bridges, 35.5 min for Codex (todo 7380).
+ * plus 30 s: 630 s for the 10 min bridges, 35.5 min for Codex (#2149).
  */
 const DETACH_WAIT_OVERRIDE = process.env.ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS;
 const FAKE_MODELS = process.env.ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS === "1";
@@ -402,7 +402,7 @@ interface Client {
   /**
    * Slide the browser session's idle window, as an open renderer does. An
    * agent-test session lapses after 30 idle minutes, which a no-renderer
-   * wait (Codex's detach, 7380) outlasts. It reads no agent session.
+   * wait (Codex's detach, #2149) outlasts. It reads no agent session.
    */
   keepSignedIn: () => Promise<void>;
   readTimes: number[];
@@ -853,7 +853,7 @@ test.describe("live idle observation", () => {
          * hit, a group it reads as a miss. Profile-wide counters, so only an
          * otherwise idle profile isolates one provider.
          *
-         * And what told the view to read (0049 task 4): every session
+         * And what told the view to read (#1659): every session
          * invalidation the backend emits carries a content-free cause, and
          * the diagnostics count them per platform.
          */
@@ -1672,7 +1672,7 @@ test.describe("live idle observation", () => {
           });
           /*
            * Claude never puts a backgrounded command's stdout in a tool result
-           * (0049 task 2): the call's result says the command moved to the
+           * (#1934): the call's result says the command moved to the
            * background, and the finished task carries its output as a file.
            * Either proves the output reached the view; the text is never kept.
            */
@@ -2080,7 +2080,7 @@ test.describe("live idle observation", () => {
           }
           record.notes.push(`no-touch runtime before the wait: ${stateAtStart ?? "unknown"}`);
           // Codex's tab reads refresh its thread's idle clock by design, so an
-          // open tab keeps the thread attached: wait with no renderer (7380).
+          // open tab keeps the thread attached: wait with no renderer (#2149).
           const closesRenderer = detachWaitClosesRenderer(platform);
           if (closesRenderer) {
             await client.page.close();
@@ -2162,7 +2162,7 @@ test.describe("live idle observation", () => {
           // Claude reports whether its CLI is open (attached) or released by
           // the idle window (detached), as Cursor and Pi report their SDK
           // sessions and Codex reports whether its thread is loaded in the
-          // current app-server (todo 7380). Only OpenCode exposes no session
+          // current app-server (#2149). Only OpenCode exposes no session
           // detach state: its server lifetime is not a session observation.
           const reportsSessionDetach = detachedState === "attached" || detachedState === "detached";
           if (cadenceOnly || !reportsSessionDetach) {

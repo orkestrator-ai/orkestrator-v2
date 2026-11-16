@@ -14,7 +14,7 @@ import { terminalVisibleText } from "./terminal-visible-text";
 
 /**
  * Saving an environment-private MCP server leaves a running container terminal
- * alone (to-do 0040 task 1, the terminal half of review gap 9).
+ * alone (#2208, the terminal half of review gap 9).
  *
  * A container terminal runs a long command that prints a numbered line every
  * half second until the spec releases it. While it runs, the spec saves two

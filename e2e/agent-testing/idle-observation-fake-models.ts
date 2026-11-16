@@ -1,6 +1,6 @@
 /**
  * Wiring for `idle-observation-live.spec.ts`'s fake-model mode
- * (`ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1`, todo 0049): starts the scripted
+ * (`ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1`, #1659): starts the scripted
  * loopback models and points the profile's own isolated Claude settings or
  * Codex config at them, or installs the Claude model, or OpenCode's
  * chat-completions model (todo 0008 (retired) task 7), inside a container.

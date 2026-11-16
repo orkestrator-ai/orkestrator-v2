@@ -367,7 +367,7 @@ describe("authenticated transport", () => {
   });
 
   test("a transient prompt refusal keeps exit 1 and says it is retryable", async () => {
-    // 7260: a bridge's 503 before dispatch sent nothing, so a new key may succeed.
+    // #2060: a bridge's 503 before dispatch sent nothing, so a new key may succeed.
     const { box } = await fixture(
       defaultResponder({
         "session.prompt": publicErrorEnvelope("session.prompt", {

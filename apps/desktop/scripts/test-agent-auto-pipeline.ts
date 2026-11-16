@@ -7,7 +7,7 @@ import { SUPERVISED_FLAG, ownerAbortSignal, runUnderSupervisor } from "./dev/own
 /**
  * `mise run test:agent:auto-pipeline`
  *
- * The Auto-pipeline launch flow end to end (to-do 7547 task 4): one disposable
+ * The Auto-pipeline launch flow end to end (#2021): one disposable
  * `dev:test --fixture` profile with no agent credentials and only Pi enabled,
  * whose Pi is pointed at a loopback fake model by the spec. It runs
  * `auto-pipeline-live.spec.ts`, then the profile is stopped and reset. Nothing

@@ -1,7 +1,7 @@
 import { expect, test, type Browser } from "@playwright/test";
 import { confirmReleaseBranch, openBranchField } from "./agent-launch-branch";
 
-// Chrome's own datalist popup, driven from the keyboard (todo 1171). The popup
+// Chrome's own datalist popup, driven from the keyboard (#1530). The popup
 // is browser UI, so the default headless shell and a headed window both fail:
 // the shell has no autofill popup, and a headed window on a locked or unattended
 // macOS desktop never gets focus, so Chrome drops the popup (`kNoFrameHasFocus`).
@@ -22,7 +22,7 @@ test.skip(
   "Requires Chrome's native datalist and CDP",
 );
 
-// Chrome's `SuggestionHidingReason` values seen while diagnosing todo 1171.
+// Chrome's `SuggestionHidingReason` values seen while diagnosing #1530.
 const hidingReasons: Record<number, string> = {
   0: "kAcceptSuggestion",
   7: "kRendererEvent",

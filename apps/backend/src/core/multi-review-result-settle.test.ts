@@ -1,5 +1,5 @@
 /**
- * Todo 7557: a consolidated result sometimes waited a whole observation pass
+ * #2079: a consolidated result sometimes waited a whole observation pass
  * (3 s plus jitter) before the review reached `ready`.
  *
  * The model submits its result through a tool call inside its turn, so the
@@ -143,7 +143,7 @@ async function waitUntil(
   }
 }
 
-/** A validation run the test finishes by hand (todo 7564 task 3). */
+/** A validation run the test finishes by hand (#2131). */
 interface ValidationScript {
   run: ReviewValidationRun | null;
   done: boolean;
@@ -494,11 +494,11 @@ for (const interruption of ["blocked", "unreachable", "usage-pending"] as const)
 }
 
 /**
- * Todo 7564 task 3: a validation run is a detached worker in the environment
+ * #2131: a validation run is a detached worker in the environment
  * and nothing announces its end, so a run that took about a second reached
  * `reviewing` only at the next observation pass (3 s plus a spread).
  */
-describe("validation run fast window (todo 7564 task 3)", () => {
+describe("validation run fast window (#2131)", () => {
   async function preparing(time: ManualTime) {
     return setup(1, {
       mutate: (workflow) => {

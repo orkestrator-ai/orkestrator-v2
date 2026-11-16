@@ -2443,6 +2443,12 @@ token or session id) to
 Non-baseline scenarios add the whole turn's bridge totals and the exact
 head-row recovery reads (`/messages`); `trimmed-head` also captures the first
 viewer to `output/visual-previews/`. Stop and reset the profile afterwards.
+The renderer counts include each discovery answer's status
+(`discovery:snapshot`, `discovery:unchanged`) and their bytes
+(`discoveryBytes`). A discovery read comes about once per 30 s backstop, so
+the default windows can miss it: `E10_WINDOW_MS=40000` and
+`E10_IDLE_WINDOW_MS=120000` (with `E10_ROUNDS=26` so the turn outlasts both
+streaming windows) are what to-do 8151 measured with.
 The latest figures are in
 [native-transcripts.md](../architecture/native-transcripts.md#one-request-per-round).
 

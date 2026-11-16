@@ -38,6 +38,24 @@ handler owns SIGHUP, or the handler's `console.log` is lost when it re-raises
 the signal straight away. Treat it as a possible signal-forwarding race before
 raising any budget. No assertion, timeout or skip was changed.
 
+## Recurrence — 2026-11-15 (Environment Files review fix)
+
+- **Branch and base:** `environment-files-1d94a340e118-r1` at `df9bdce8b`,
+  base `f53768371`. The branch changes backend seed-file code,
+  `docker/workspace-setup.sh`, tests and docs; the loopback wrapper and its
+  test import none of them.
+- **Original command:** `mise run test:full` (default worker plan, 1,193.6 s
+  of test groups, other worktrees' suites holding host slots). Root and
+  agent-support: 5,467 pass, 1 skip, 1 fail (this case, 19.38 ms, output
+  `ready\n` without `forwarded`).
+- **Isolated rerun:** the runner's own alone rerun of
+  `tests/unit/loopback-network.test.ts` passed in 488 ms ("likely a load
+  flake").
+- **Evidence:** `orkestrator-test-run.vonYRa` under the host temporary
+  directory.
+- `mise run flaky:recurrence -- 9943 --base f53768371` answered open. No
+  assertion, timeout or skip changed.
+
 ## Resolution (2026-11-15)
 
 - **Root cause:** product race in `scripts/loopback-network.ts`. It spawned the command and only then installed its SIGINT/SIGTERM/SIGHUP forwarding handlers. The command can print `ready` before those handlers exist; a signal arriving in that window kills the wrapper with the default action and leaves the command running, never signalled (AGENTS.md invariant 16). The test also resolved on the wrapper's `exit`, which can precede the last stdout chunk.

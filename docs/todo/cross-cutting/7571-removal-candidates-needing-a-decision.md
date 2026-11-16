@@ -21,7 +21,7 @@ which carries each one's context, options and the agent work that follows
 the answer. Task 3 was done on 2026-11-14. The user answered every moved
 decision on 2026-11-14 (see Assumptions and decisions): the removals went to
 8109 (retired), the `envFilePatterns` copy to
-[8106](../containers-and-environments/8106-env-file-patterns-copy.md), the
+8106 (retired 2026-11-15; [Project seed files](../../architecture/container-lifecycle.md#project-seed-files)), the
 legacy readiness path to [8108](8108-legacy-retirement-sweep.md), and the
 Linear integration stays. On 2026-11-15 the 8109 removals were built and
 8109 was retired (it is in Git history at `a8b89f154`; the removals are
@@ -34,7 +34,7 @@ What is left here is agent work only: task 10.
 1. **Bridge full-payload SSE mode**: removed from the Claude and Codex bridges, with the replay ring only it kept. Status: done.
 2. **Claude bridge delete-tombstone machinery**: writer and reader removed; no tombstone was ever stored. Status: done.
 3. **Image readiness markers**: the image no longer writes or reads `/tmp/.environment-ready` and `/tmp/.entrypoint-complete`; it and its smoke and live checks use boot status, validated with an image build and the final-image smoke on a disposable daemon. Status: done.
-4. `envFilePatterns` setting (Settings offers it, but the backend never reads it): the user chose on 2026-11-14 to implement the copy, with a security review; the build is [8106](../containers-and-environments/8106-env-file-patterns-copy.md). Status: done here (moved to 8106).
+4. `envFilePatterns` setting (Settings offers it, but the backend never reads it): the user chose on 2026-11-14 to implement the copy, with a security review; the build is 8106 (retired 2026-11-15, once built; the behaviour and security review are in [Project seed files](../../architecture/container-lifecycle.md#project-seed-files)). Status: done here (moved to 8106).
 5. Interaction observer switches (`ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY` and `..._MONITOR_KILL_SWITCH`): the user chose on 2026-11-14 to remove the observe-only monitor, its adoption and both switches; the removal was 8109 (retired) task 1. Status: done (built under 8109 (retired), 2026-11-15).
 6. Artifact rollout flags (the four `ORKESTRATOR_RICH_MARKDOWN`/`ARTIFACT_*` flags): the user chose on 2026-11-14 to remove them and their gate checks; the removal was 8109 (retired) task 2. Status: done (built under 8109 (retired), 2026-11-15).
 7. Unmounted and uncalled surfaces (`NetworkWhitelistDialog.tsx`, `set_workflow_result_tools_rollout`, `graph_capability_ceiling_set`): the user chose on 2026-11-14 to delete all three, with no older-version adapter; the removal was 8109 (retired) task 3. Status: done (built under 8109 (retired), 2026-11-15).
@@ -331,7 +331,7 @@ change.
 - **Task 4 (`envFilePatterns`)**: implement the copy, so files matching the
   patterns are copied into containers, with a security review of copying
   arbitrary patterns. Built under
-  [8106](../containers-and-environments/8106-env-file-patterns-copy.md).
+  8106 (retired 2026-11-15; [Project seed files](../../architecture/container-lifecycle.md#project-seed-files)).
 - **Task 5 (interaction observer)**: remove the background observe-only
   interaction monitor, its adoption, and
   `ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY` and
@@ -434,6 +434,6 @@ not sweep them.
 - [7570](7570-compatibility-paths-waiting-on-the-floor.md): window-dated removals.
 - [8108](8108-legacy-retirement-sweep.md): the 2026-11-14 legacy-retirement sweep, including task 9's readiness path.
 - 8109 (retired 2026-11-15; `git show a8b89f154:docs/todo/cross-cutting/8109-decided-removal-candidates.md`): the removals the user decided on 2026-11-14 (tasks 5, 6, 7, 11 and 15), now in the Retired table of [version-compatibility.md](../../architecture/version-compatibility.md#retired).
-- [8106](../containers-and-environments/8106-env-file-patterns-copy.md): the `envFilePatterns` copy (task 4).
+- 8106 (retired 2026-11-15): the `envFilePatterns` copy (task 4), now described in [Project seed files](../../architecture/container-lifecycle.md#project-seed-files).
 - [version-compatibility.md](../../architecture/version-compatibility.md)
 - [Cross-cutting index](0000-index.md)

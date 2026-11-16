@@ -1155,7 +1155,11 @@ credential, login or provider: every turn goes to the fake model.
   Playwright clients from `scripts/recurring-live-ab-busy-clients.ts`, each
   signed in with its own `dev:login` link and showing `busy-ask`'s Pi tab),
   N rounds of: `--busy-burst-files` (default 200) files written into every
-  environment at once and removed; a turn in `busy-1` held at the model
+  environment at once and removed, the round waiting until the backend's diff
+  stats of every environment are back to what they read before the burst
+  (the `burst-clear-backend` row: without clients nothing else waited, and a
+  removal rescanned only together with the next burst read as unchanged;
+  to-do 8171, retired 2026-11-15); a turn in `busy-1` held at the model
   (`[hold:<id>]`) with a prompt queued behind it (`session prompt
   --enqueue`), with `--busy-turn-files` (default 0) files written into
   `busy-1` while that turn is held and removed when the round ends, so the

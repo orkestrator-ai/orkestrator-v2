@@ -17,7 +17,9 @@ test.skipIf(!image)(
       setup.indexOf("project_input() {"),
       setup.indexOf("# Run orkestrator-ai.json setup script"),
     );
-    expect(copyPhase).toContain('cp "$OPENCODE_PROJECT_JSON_INPUT" /workspace/opencode.json');
+    expect(copyPhase).toContain(
+      'copy_project_file_into_workspace "$OPENCODE_PROJECT_JSON_INPUT" opencode.json /workspace',
+    );
     const { stdout } = await runCommand("docker", [
       "create",
       "--network",

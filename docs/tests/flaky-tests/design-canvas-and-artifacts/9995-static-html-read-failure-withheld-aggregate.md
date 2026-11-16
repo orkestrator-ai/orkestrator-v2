@@ -71,6 +71,23 @@ merged `main`; the 9996 claim stays so the number is not reused.
   of the unchanged file: `PASSED ALONE (2.5s)`. Evidence:
   `orkestrator-test-run.2L8bxS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 
+- **2026-11-15**, base `f53768371` (origin/main merged into branch
+  `environment-files-1d94a340e118-r1` at `59bcba591`; the branch changes
+  backend seed-file code, `docker/workspace-setup.sh`, tests and docs,
+  nothing under `apps/web`). Same assertion at line 606, received `false`
+  (39.43 ms) right after the wait for "The document could not be loaded."
+  passed. Command: `mise run test:full` on Linux x86_64 with another
+  worktree holding host test capacity. Counts: web 15,014 passed, 10
+  skipped, 1 failed (this case); backend 22,109 passed, 308 skipped, 4
+  failed (unrelated: a seed regression fixed on the branch and three WebKit
+  engine files on a host missing `libicu74`/`libxml2`); desktop 2,437,
+  protocol 5,943, toolchain 135 and web-public 52 passed; root, bridge and
+  codex protocol lockfile groups passed. The aggregate runner's lone rerun
+  of the unchanged file: `PASSED ALONE (3.2s)`. `mise run flaky:recurrence
+  -- 9995` against this base: open, a recurrence. Evidence:
+  `orkestrator-test-run.hmAGNc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  under the host temporary directory.
+
 A hypothesis recorded with those observations, still unconfirmed: the error
 text and the search-withheld mark may be published in separate steps, so the
 assertion can run between them when a loaded host delays the second.

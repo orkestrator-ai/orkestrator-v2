@@ -174,6 +174,7 @@ export type DiffScanEvent =
 export interface DiffStatsWarning {
   event:
     | "scan.watcher-failed"
+    | "scan.watcher-missed-change"
     | "scan.failed"
     | "scan.target-missing"
     | "scan.freshness-read-failed"
@@ -1114,6 +1115,14 @@ export class DiffStatsService {
         this.restartTimer(entry);
         this.publishSnapshot(entry);
       },
+      onMissedChange: () => {
+        if (!current()) return;
+        this.warn(
+          "scan.watcher-missed-change",
+          entry.target.environmentId,
+          new Error("A safety scan found a change the diff watcher did not report"),
+        );
+      },
       onError: (error) => {
         if (entry.watcherGeneration !== generation) return;
         failedSynchronously = true;
@@ -1439,12 +1448,20 @@ export class DiffStatsService {
     if (previous?.semanticDigest !== semanticDigest) entry.fileListRevision += 1;
     // Both scans ran under the same qualified watcher and nothing dirtied the
     // entry in between (no hint, mutation or refresh advanced the epoch), yet
-    // the list moved: the watcher missed it. Local watchers ignore this.
+    // the list moved: the watcher missed it. Either kind of watcher stops
+    // claiming qualified coverage unless it turns out to have seen the change
+    // (to-do 8171 for local ones), and the entry polls meanwhile. A local
+    // watcher is also told about the changes those polls find first, which
+    // keeps one whose events arrive late distrusted; it ignores them when it
+    // is unqualified for another reason. The first poll after a demotion
+    // counts too: its previous scan is the qualified one that found the miss,
+    // and skipping it would extend the distrust one poll late.
+    const trustedBoth = attempt.qualified && previous?.qualified === true;
+    const pollingLocal = target.kind === "local" && !attempt.qualified;
     if (
       previous &&
       previous.semanticDigest !== semanticDigest &&
-      attempt.qualified &&
-      previous.qualified &&
+      (trustedBoth || pollingLocal) &&
       previous.watcherGeneration === attempt.watcherGeneration &&
       previous.epoch === attempt.epoch &&
       entry.dirtyEpoch === attempt.epoch &&

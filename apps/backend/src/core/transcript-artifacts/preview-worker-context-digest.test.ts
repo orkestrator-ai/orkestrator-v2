@@ -50,6 +50,9 @@ describe("what the worker bundle holds", () => {
     expect(build.success).toBe(true);
     const bundle = await build.outputs[0]!.text();
     expect(bundle).toContain("installDesignRuntime");
+    // The sanitizer is shared with the presentation runtime, but only the
+    // verifying side's use of it reaches the bundle.
+    expect(bundle).toContain("createStaticHtmlSanitizer");
     // The text Find searches before a document is shown is read at verification
     // with a copy of the frame's walk, not with the presentation runtime (#2155).
     expect(bundle).toContain("staticHtmlDocumentText");

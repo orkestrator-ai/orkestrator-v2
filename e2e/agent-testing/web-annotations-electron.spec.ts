@@ -3298,14 +3298,21 @@ test("capture pixels stay on the target at preview zoom 0.8, 1 and 1.5 and at DP
             const highlight = await colorBox(pending.imageDataUrl!, HIGHLIGHT_RGB, search);
             const marker = await colorBox(pending.imageDataUrl!, TINTED_MARKER_RGB, search);
             record(testInfo, `${label}-pixels`, JSON.stringify({ highlight, marker, expected }));
-            expectBoxNear(`${label} highlight`, highlight, expected, tolerance);
-            expectBoxNear(`${label} marker`, marker, scaled(target, scale, 2), tolerance);
-            if (zoom === 1) {
-              await testInfo.attach(`${label}.png`, {
+            const attachCapture = () =>
+              testInfo.attach(`${label}.png`, {
                 body: Buffer.from(pending.imageDataUrl!.split(",")[1]!, "base64"),
                 contentType: "image/png",
               });
+            try {
+              expectBoxNear(`${label} highlight`, highlight, expected, tolerance);
+              expectBoxNear(`${label} marker`, marker, scaled(target, scale, 2), tolerance);
+            } catch (error) {
+              // The image is the only evidence of what the stray pixels are,
+              // and CI keeps attachments only from the failing case.
+              await attachCapture();
+              throw error;
             }
+            if (zoom === 1) await attachCapture();
           } finally {
             await preview("discardPendingCapture", descriptor.captureId);
           }

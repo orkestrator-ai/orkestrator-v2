@@ -30,7 +30,7 @@ any row's status.
 | [Cross-cutting](cross-cutting/0000-index.md) | 5 | 21 | 0 | 0 | 26 | Work that spans the product: CI and test health, live provider and platform qualification, the compatibility paths the legacy-retirement sweep left to the contract tooling, dependency upgrades, and release-chain evidence. |
 | [Design canvas](design-canvas/0000-index.md) | 0 | 1 | 0 | 0 | 1 | The design canvas and its agent tools: the optimisations deferred until a measurement shows their cost. |
 | [MCP](mcp/0000-index.md) | 0 | 1 | 0 | 0 | 1 | MCP server management across providers and MCP delivery into environments. |
-| [Service previews and web annotations](previews-and-annotations/0000-index.md) | 2 | 3 | 0 | 0 | 5 | Service previews (desktop tunnel, private origins, relay, embedded and discovered services) and web-page annotations (qualification, known limitations, extensions). |
+| [Service previews and web annotations](previews-and-annotations/0000-index.md) | 1 | 4 | 0 | 0 | 5 | Service previews (desktop tunnel, private origins, relay, embedded and discovered services) and web-page annotations (qualification, known limitations, extensions). |
 | [Transcripts, observation and bandwidth](transcripts-and-observation/0000-index.md) | 2 | 5 | 0 | 0 | 7 | How sessions are read and kept fresh: rich transcripts, history efficiency, idle observation, recurring work, reconnects and remote bandwidth. |
 | [Manual test](manual-test/0000-index.md) | 0 | 0 | 1 | 0 | 1 | One checklist of everything that needs you: manual tests and live checks first, then decisions, approvals and outward actions, each naming its source to-do and task. |
-| **Total** | 15 | 65 | 1 | 0 | 81 | |
+| **Total** | 14 | 66 | 1 | 0 | 81 | |

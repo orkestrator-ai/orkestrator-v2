@@ -2271,7 +2271,7 @@ adoption now rejects a renderer write-back.
   [0046-embedded-service-previews.md](0046-embedded-service-previews.md),
   to-do 0045 (retired 2026-11-11; local discovery and ownership are in
   [browser-previews.md](../../architecture/browser-previews.md#local-environments)),
-  [0044-web-annotation-qualification.md](0044-web-annotation-qualification.md) (same
+  to-do 0044 (retired 2026-11-16; [web-page-annotations.md](../../architecture/web-page-annotations.md#qualification)) (same
   Electron harness; annotations run inside service tabs),
   to-do 5500 (retired 2026-11-10; [gateway security notes](../../architecture/remote-gateway.md#security-notes))
   (the gateway security spec's cases, run in the same Safari pass as task 3).

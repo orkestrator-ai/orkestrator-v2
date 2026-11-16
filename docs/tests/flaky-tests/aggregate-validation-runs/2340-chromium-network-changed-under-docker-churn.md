@@ -422,7 +422,7 @@ click rather than `goto` or `reload`. None of these failed in runs 3 to 7.
   (retired 2026-11-15; the rule is in
   [agent-testing.md](../../../development/agent-testing.md#electron-specs-and-their-display)).
 
-## 2026-11-06: the annotation Electron spec on beelink (to-do 0044 tasks 5 and 8)
+## 2026-11-06: the annotation Electron spec on beelink (to-do 0044 (retired) tasks 5 and 8)
 
 Branch `web-annotation-qualification-a80b5e3582bd-r1` from `main` at
 `c1724ab74`; Electron 45.0.0, Playwright 1.64.0, headless

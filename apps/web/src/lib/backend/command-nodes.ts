@@ -23,7 +23,7 @@ export function nodeErrorText(error: unknown): string {
  *
  * These always mean the command node, so the file has no `createXApi(client)`
  * factory (plan item 3002): no scope ever wired one in, and it was removed
- * (7571 task 14).
+ * (#2230).
  */
 const nodes = () => nodesApi(portalBackendClient);
 

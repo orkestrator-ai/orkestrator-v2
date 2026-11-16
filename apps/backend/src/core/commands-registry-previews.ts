@@ -26,8 +26,7 @@ import {
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
-import { resolvePreviewTargetIntent } from "./preview-intent.js";
-import type { PreviewRuntime } from "./preview-runtime.js";
+import { resolvePreviewTargetIntent, type PreviewRuntime } from "./previews/index.js";
 
 async function previews(context: CommandContext): Promise<PreviewRuntime> {
   const runtime = context.previews;

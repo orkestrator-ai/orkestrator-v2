@@ -1,6 +1,6 @@
 /**
  * The model connection a read-only turn keeps from the user's Claude settings
- * (to-do 7565).
+ * (#2133).
  *
  * A read-only turn (Multi Review's reviewers and consolidation, plan-mode
  * fan-out reviewers, every coordinator turn) loads no settings file

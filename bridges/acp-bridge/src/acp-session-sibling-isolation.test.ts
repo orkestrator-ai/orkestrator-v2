@@ -1,6 +1,6 @@
 /**
  * Two Grok sessions on one bridge keep separate children and separate tab
- * credentials across a rotation (to-do 0024 task 6).
+ * credentials across a rotation (#2204).
  *
  * The backend mints one Agent MCP token per tab and hands it to the bridge as
  * `agentMcp` on create, resume and attach. A rotated token must reload only the

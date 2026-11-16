@@ -1,6 +1,6 @@
 /**
  * ST-5: diff pages find rows by binary search with the old linear find's
- * results, and the whitespace-ignore view renders each file once. 4760: that
+ * results, and the whitespace-ignore view renders each file once. #1850: that
  * view renders the page in one call, so the page's batch budget applies.
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";

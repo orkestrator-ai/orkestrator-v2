@@ -446,6 +446,12 @@ shard 1's summary. Shard 1 has no pass or fail count. Its last test was not
 rerun alone, so this run neither shows it passing nor makes it a flake. The
 profiles were stopped and reset.
 
+**Since 2026-11-16.** To-do 8050 (retired) moved the drop into the bridge's
+own vendor step (`bridges/claude-bridge/scripts/vendor.ts`), which now copies
+only the main SDK package, so the desktop app leaves the binary out too. The
+builder's `rm -rf` is a no-op kept as a guard, and both checks above still
+hold. See [upgrade-agents.md](upgrade-agents.md#the-sdks-own-claude-binary-is-not-vendored).
+
 ## C22 on Docker Desktop and rootless Docker (2026-11-15)
 
 To-do 6103 (retired on 2026-11-15; in Git history at `git show

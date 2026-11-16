@@ -20,7 +20,7 @@ import type { TabInfo } from "../../apps/web/src/types/paneLayout";
 const ENVIRONMENT = "design-links-fixture";
 
 /**
- * Closed design links in each state the backend can report (to-do 0038):
+ * Closed design links in each state the backend can report (#2174):
  * one that can be resumed, one whose conversation the agent archived, and one
  * that never started. The backend's answers are fixed here; the spec reads the
  * resume requests the dialog sends from `window.__designLinkRequests`.

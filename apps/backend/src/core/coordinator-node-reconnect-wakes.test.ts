@@ -1,5 +1,5 @@
 /**
- * Wakes for a coordinator refused on a disconnected node (3800 task 8): the
+ * Wakes for a coordinator refused on a disconnected node (#2059): the
  * refusal records who tried, nothing is queued, and the reconnect tells each
  * conversation once. The coordinator side is the real mail world; the node
  * link is simulated.

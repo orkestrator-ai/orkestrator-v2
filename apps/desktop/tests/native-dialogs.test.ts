@@ -187,7 +187,7 @@ describe("native dialogs", () => {
 
   test("headless Ozone cancels Electron, error-box and uncaught-exception dialogs", async () => {
     // Electron's GTK message box fails a CHECK with no display and the process
-    // dies with SIGTRAP (to-do 7554): a headless profile must never open one.
+    // dies with SIGTRAP (#2080): a headless profile must never open one.
     const run = harness({ platform: "linux", noDisplay: true });
     run.dialogs.install();
     const window = fakeWindow("main");

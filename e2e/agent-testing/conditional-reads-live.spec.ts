@@ -27,7 +27,7 @@
  * `E10_SCENARIO` picks the scripted turn (default `baseline`):
  *
  * - `large-window`: 26 rounds of 30 KB each, measured once ten rounds have
- *   streamed, so the bridge's window sits near its 512 KiB bound (to-do 6680,
+ *   streamed, so the bridge's window sits near its 512 KiB bound (#2166,
  *   retired, task 1).
  * - `trimmed-head`: one response that streams 20 KB a second for 150 s,
  *   measured once it is past 600,000 characters, so the head row alone is over

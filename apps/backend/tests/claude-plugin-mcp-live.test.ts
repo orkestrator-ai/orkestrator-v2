@@ -11,7 +11,7 @@
  * resolves the plugin set exactly as a turn does and starts the CLI with it;
  * the editor's catalogue reads the same files. Installs are passed only when
  * Claude Code's own `enabledPlugins` enables their `<name>@<marketplace>` id
- * (todo 0151), so turning one off in Claude Code turns it off here too.
+ * (#1289), so turning one off in Claude Code turns it off here too.
  * Nothing reads or writes the operator's Claude configuration.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

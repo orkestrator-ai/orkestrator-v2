@@ -19,7 +19,7 @@ import type { PrMonitorTarget } from "./pr-monitor.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 
 /**
- * The batch reader behind to-do 1202 task 9 (BG-6): local open PRs of one
+ * The batch reader behind #1661 (BG-6): local open PRs of one
  * host and credential share one GraphQL query, and anything a batch cannot
  * answer falls back to the per-PR `gh pr view`. Driven by an injected runner
  * for the reader's rules and by a fake `gh` on PATH for the boundary; nothing

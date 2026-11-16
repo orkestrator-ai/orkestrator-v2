@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { PREVIEW_LIMITS, previewErrorFromUnknown } from "@orkestrator/protocol/preview-services";
 
-import { PreviewAccessService } from "./preview-access.js";
-import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
+import { PreviewAccessService } from "./access.js";
+import { createPreviewHarness, type PreviewHarness } from "./test-support.js";
 
 describe("PreviewAccessService", () => {
   let harness: PreviewHarness;

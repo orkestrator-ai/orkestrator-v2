@@ -447,7 +447,7 @@ test("a two-finger pinch zooms the stacked column on touch", async ({ page, brow
 });
 
 // Synthetic, so it pins the handler rather than proving a real trackpad or
-// iOS Safari (0029 task 5).
+// iOS Safari (#1457).
 test("a Safari gesture pinch zooms the graph and is kept from the page", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=8");
   const level = page.getByTestId("multi-review-zoom-level");

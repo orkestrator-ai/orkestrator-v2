@@ -18,15 +18,15 @@
  *   target, whose last row streams;
  * - `short-incomplete`: an incomplete 60-row window whose raw inline tool
  *   outputs bring it near the bridge's byte bound, so every changed read asks
- *   whether the preview already fills the window (to-do 6861);
+ *   whether the preview already fills the window (#2054);
  * - `short-incomplete-idle`: the same rows from a provider that answers with
  *   an interactive snapshot and a revision, polled while nothing changes, so
- *   every read reprojects the same revision (to-do 6861);
+ *   every read reprojects the same revision (#2054);
  * - `legacy`: `getProjection` on the near-full rows (part 0210's case),
  *   encoded with `JSON.stringify` as the gateway writes that command;
  * - `legacy-spliced`: the same read encoded the way the gateway writes a
  *   marked result, which it is since to-do 7755 (retired). The first splice
- *   measured slower (to-do 6860); the narrowed one measures faster (to-do
+ *   measured slower (#2054); the narrowed one measures faster (to-do
  *   7553, retired), so `legacy` is now the baseline it is compared against.
  *
  * Per read it reports CPU time (user + system, `process.cpuUsage`), wall time,

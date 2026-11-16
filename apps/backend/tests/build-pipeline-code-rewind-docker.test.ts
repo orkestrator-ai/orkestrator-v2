@@ -1,6 +1,6 @@
 /**
  * The build pipeline's "Rewind code to here" against a real container
- * environment (to-do 0405, task 7), and deleting a pipeline whose journaled
+ * environment (#1528), and deleting a pipeline whose journaled
  * reset can never finish there (task 9).
  *
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE=<image>

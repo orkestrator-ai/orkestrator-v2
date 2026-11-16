@@ -29,7 +29,7 @@ import { electronSpecEnvironment } from "./electron-spec-environment";
 
 /**
  * Electron main's CPU on each local window transport with no DevTools client
- * attached (to-do 5760). Opt in with `ORKESTRATOR_LOCAL_TRANSPORT_CPU=1`;
+ * attached (#1894). Opt in with `ORKESTRATOR_LOCAL_TRANSPORT_CPU=1`;
  * `ORKESTRATOR_LOCAL_TRANSPORT_CPU_RUNS` sets the runs per transport (default
  * three, alternating relay and gateway).
  *

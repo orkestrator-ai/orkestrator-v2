@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { PreviewListenerAttribution } from "@orkestrator/protocol/preview-services";
 
-import { CommandFailedError, runCommand } from "./shell.js";
+import { CommandFailedError, runCommand } from "../shell.js";
 
 /**
  * A process this backend started for an environment: a local terminal's shell

@@ -1,6 +1,6 @@
 /**
  * The script of the Auto-pipeline fake model (`auto-pipeline-fake-model.ts`,
- * to-do 7547 task 4): what a compliant model does with each request the
+ * #2021): what a compliant model does with each request the
  * Auto-pipeline flow sends, from the interactive source tab's first turn
  * through the tab's own drafting turn (the "To pipeline" request answered with
  * `convert_to_pipeline`), package preparation, review and Verify. Pure, so the
@@ -270,7 +270,7 @@ export function scriptedTurn(request: ScriptedRequest): ScriptedTurn {
 /**
  * A qualification tag: `QATAG` and eight upper-case hex digits. A spec puts
  * one in a prompt so the fake can count how many turns that prompt started
- * without keeping any prompt text (to-do 0050 task 3).
+ * without keeping any prompt text (#2086).
  */
 export const QA_TAG = /\bQATAG[0-9A-F]{8}\b/g;
 

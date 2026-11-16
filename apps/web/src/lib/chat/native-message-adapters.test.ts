@@ -101,13 +101,80 @@ describe("Claude activity in the shared native transcript", () => {
       expect(decorated?.parts[0]?.agentState).toBe("active");
     });
 
-    test("stays active while a live background agent could be its parent", () => {
+    test("stays active only while its linked background agent parent is live", () => {
+      const launch = agentLaunch("pending");
+      launch.parts[0]!.parentTaskUseId = "other-launch";
       const [decorated] = applyClaudeBackgroundTaskStates(
-        [agentLaunch("pending")],
+        [launch],
         { worker: { id: "worker", toolUseId: "other-launch", status: "running" } },
         { turnSettled: true },
       );
       expect(decorated?.parts[0]?.agentState).toBe("active");
+    });
+
+    test.each(["shell", "agent"] as const)(
+      "an unrelated live %s task cannot keep a launch active",
+      (kind) => {
+        const [decorated] = applyClaudeBackgroundTaskStates(
+          [agentLaunch("pending")],
+          { worker: { id: "worker", toolUseId: "unrelated", status: "running", kind } },
+          { turnSettled: true },
+        );
+        expect(decorated?.parts[0]?.agentState).toBe("ended");
+      },
+    );
+
+    test("uses the snapshot turn start when paging has removed the user boundary", () => {
+      const [decorated] = applyClaudeBackgroundTaskStates(
+        [agentLaunch("pending")],
+        {},
+        { turnSettled: false, turnStartedAt: Date.parse("2026-08-16T11:00:00.000Z") },
+      );
+      expect(decorated?.parts[0]?.agentState).toBe("ended");
+    });
+
+    test.each([
+      ["agent", "running", "active"],
+      ["agent", "paused", "active"],
+      ["agent", "pending", "active"],
+      ["agent", "completed", "ended"],
+      ["shell", "running", "ended"],
+    ] as const)("a linked %s parent that is %s leaves its child %s", (kind, status, expected) => {
+      const launch = agentLaunch("pending");
+      launch.parts[0]!.parentTaskUseId = "parent-call";
+      const [decorated] = applyClaudeBackgroundTaskStates(
+        [launch],
+        {
+          parent: { id: "parent", toolUseId: "parent-call", kind, status },
+        },
+        { turnSettled: true },
+      );
+      expect(decorated?.parts[0]?.agentState).toBe(expected);
+    });
+
+    test("a cyclic parent edge settles instead of walking forever", () => {
+      const launch = agentLaunch("pending");
+      launch.parts[0]!.parentTaskUseId = "agent-1";
+      const [decorated] = applyClaudeBackgroundTaskStates([launch], {}, { turnSettled: false });
+      expect(decorated?.parts[0]?.agentState).toBe("ended");
+    });
+
+    test("follows a foreground parent and stops at its result", () => {
+      for (const toolState of ["pending", "success", "failure"] as const) {
+        const parent = agentLaunch(toolState);
+        const child = agentLaunch("pending");
+        child.id = "nested";
+        child.parts[0]!.toolUseId = "nested-child";
+        child.parts[0]!.parentTaskUseId = "agent-1";
+        const decorated = applyClaudeBackgroundTaskStates(
+          [parent, child],
+          {},
+          { turnSettled: false },
+        );
+        expect(decorated[1]?.parts[0]?.agentState).toBe(
+          toolState === "pending" ? "active" : "ended",
+        );
+      }
     });
 
     test("does not relabel a launch that reported its result", () => {

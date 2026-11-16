@@ -805,6 +805,7 @@ export function SharedNativeAgentController({
   // with no result and no live task is then not running either
   // (agent-engines.md, "Sub-agent card states").
   const claudeTurnSettled = projection?.turn.phase === "idle" || projection?.turn.phase === "error";
+  const claudeTurnStartedAt = projection?.turn.startedAt;
   const decoratedMessages = useMemo(() => {
     // How the last turn ended (a provider error, a stop) arrives with session
     // state on the progressive path, beside the transcript rather than in it.
@@ -815,11 +816,13 @@ export function SharedNativeAgentController({
     return platform === "claude"
       ? applyClaudeBackgroundTaskStates(source, claudeBackgroundTasksById, {
           turnSettled: claudeTurnSettled,
+          turnStartedAt: claudeTurnStartedAt,
         })
       : source;
   }, [
     claudeBackgroundTasksById,
     claudeTurnSettled,
+    claudeTurnStartedAt,
     platform,
     projection?.messages,
     projection?.terminalMessages,

@@ -1173,15 +1173,13 @@ export interface ClaudeBackgroundTaskState {
 export interface ClaudeBackgroundTaskStateOptions {
   /**
    * The session's turn has stopped (idle, or ended on an error), as its
-   * authoritative snapshot reports it. With no live task in the snapshot
-   * either, nothing in the session can still be running a subagent, so a
-   * launch with no result is `ended` rather than `active`: a stale copy of its
-   * row (a reload of a transcript whose result never landed) must not spin
-   * forever (agent-engines.md, "Sub-agent card states"). A live background task keeps the old reading, since
-   * the agent it runs may itself be waiting on a foreground child, which has
-   * no task of its own. Absent while the snapshot is unknown.
+   * authoritative snapshot reports it. Only launches in that turn can use
+   * its liveness; older launches need a live, linked parent agent task.
+   * Absent while the snapshot is unknown.
    */
   turnSettled?: boolean;
+  /** Snapshot turn start; also identifies older rows in a paged transcript. */
+  turnStartedAt?: number;
 }
 
 export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
@@ -1204,10 +1202,51 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
     tasksById.set(task.id, task);
     if (task.toolUseId) tasksByToolUseId.set(task.toolUseId, task);
   }
-  // Whether a launch with no result can still be running: see `turnSettled`.
-  const launchesCanRun =
-    !options.turnSettled ||
-    [...tasksById.values()].some((task) => isLiveBackgroundTask(task.status));
+  const latestUserIndex = messages.findLastIndex((message) => message.role === "user");
+  const agentLaunches = new Map<
+    string,
+    { message: NativeMessage; index: number; part: NativeMessagePart }
+  >();
+  messages.forEach((message, index) => {
+    for (const part of message.parts) {
+      if (part.toolUseId && isTaskTool(part.toolName)) {
+        agentLaunches.set(part.toolUseId, { message, index, part });
+      }
+    }
+  });
+  const launchCanRun = (
+    message: NativeMessage,
+    messageIndex: number,
+    part: NativeMessagePart,
+  ): boolean => {
+    // A child of a background agent can outlive the foreground turn, but an
+    // unrelated task (especially a shell) says nothing about this launch.
+    // Follow foreground parents too. Bound the walk so corrupt/cyclic parent
+    // edges cannot hang the renderer.
+    for (let remaining = agentLaunches.size; part.parentTaskUseId; remaining -= 1) {
+      const parent = tasksByToolUseId.get(part.parentTaskUseId);
+      if (parent) return parent.kind !== "shell" && isLiveBackgroundTask(parent.status);
+      const launch = agentLaunches.get(part.parentTaskUseId);
+      if (
+        !launch ||
+        remaining === 0 ||
+        launch.part.toolState === "success" ||
+        launch.part.toolState === "failure" ||
+        (launch.part.agentState !== undefined && launch.part.agentState !== "active")
+      )
+        return false;
+      message = launch.message;
+      messageIndex = launch.index;
+      part = launch.part;
+    }
+    if (options.turnSettled || messageIndex < latestUserIndex) return false;
+    const launchedAt = Date.parse(part.createdAt ?? message.createdAt ?? "");
+    return (
+      options.turnStartedAt === undefined ||
+      !Number.isFinite(launchedAt) ||
+      launchedAt >= options.turnStartedAt
+    );
+  };
   const isCleanupLaunch = (part: NativeMessagePart, recoveredId: string | undefined): boolean =>
     (part.toolUseId !== undefined && cleanupToolUseIds.has(part.toolUseId)) ||
     (recoveredId !== undefined && cleanupTaskIds.has(recoveredId));
@@ -1266,7 +1305,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
   }
 
   let messagesChanged = false;
-  const nextMessages = messages.map((message) => {
+  const nextMessages = messages.map((message, messageIndex) => {
     let partsChanged = false;
     const parts = message.parts.map((part) => {
       if (part.type !== "tool-invocation") return part;
@@ -1306,7 +1345,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
             ? "failed"
             : part.toolState === "success"
               ? "finished"
-              : launchesCanRun
+              : launchCanRun(message, messageIndex, part)
                 ? "active"
                 : "ended";
       }

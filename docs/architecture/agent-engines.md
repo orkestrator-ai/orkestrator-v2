@@ -365,12 +365,13 @@ A sub-agent card is **Active**, **Finished**, **Failed** or **Ended**
 (`NativeAgentState`). A Claude launch takes its state from the bridge's
 background-task record when one matches its call (and then reads Starting,
 Running, Paused, Completed, Failed or Stopped), and otherwise from the launch
-call's own result. A launch with no result yet is Active only while something
-could still be running it: a turn in progress, or a live task in the snapshot
-(a background agent may be waiting on a foreground child of its own, which has
-no task record). Once the session's turn is idle or ended on an error and no
-task is live, it reads **Ended**: neutral, not spinning, not pinned to the
-Agents panel, and not claimed as finished, because its outcome is unknown
+call's own result. A launch with no result yet is Active only while its own
+turn is in progress (after the latest user row and no earlier than the snapshot's
+turn start), or while its linked parent agent task is live. Foreground parent
+launches are followed to their owning turn or task. An unrelated later turn or
+background task, including a shell task, cannot revive an older launch. Once
+nothing backs that launch, it reads **Ended**: neutral, not spinning, not pinned
+to the Agents panel, and not claimed or announced as finished, because its outcome is unknown
 (`applyClaudeBackgroundTaskStates`, to-do 8303, retired). This is a floor for
 a stale copy of a row, not the fix for one; the bridge settles the cause.
 

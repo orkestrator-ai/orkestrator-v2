@@ -79,11 +79,36 @@ describe("pinNativeAgentParts", () => {
       expect.objectContaining({ status: "ended", kind: "subagent" }),
     ]);
 
-    // While a turn is running the same row is a live foreground child.
-    const running = normalizeNativeMessages(
-      applyClaudeBackgroundTaskStates(launch(), {}, { turnSettled: false }),
-    );
-    expect(pinNativeAgentParts(running).at(-1)?.id).toBe("active-agents");
+    // Always recompute from the same raw launch, just as remount/reload does.
+    // A new turn and an unrelated task must never revive the historical child.
+    const history = launch();
+    const nextUser: NativeMessage = {
+      id: "next-prompt",
+      createdAt: "2026-08-16T11:00:00.000Z",
+      role: "user",
+      content: "Continue",
+      parts: [{ type: "text", content: "Continue" }],
+    };
+    for (const turnSettled of [false, true]) {
+      const later = normalizeNativeMessages(
+        applyClaudeBackgroundTaskStates(
+          [...history, nextUser],
+          {
+            worker: {
+              id: "unrelated",
+              toolUseId: "unrelated-launch",
+              status: "running",
+              kind: "agent",
+            },
+          },
+          { turnSettled },
+        ),
+      );
+      expect(snapshotNativeAgentActivity(later).map((entry) => entry.status)).toEqual(["ended"]);
+      expect(pinNativeAgentParts(later).some((message) => message.id === "active-agents")).toBe(
+        false,
+      );
+    }
   });
 
   test("moves active subagents to the bottom as temporary message rows", () => {

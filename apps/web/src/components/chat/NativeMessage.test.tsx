@@ -6197,8 +6197,8 @@ describe("NativeMessage agent status and grouping details", () => {
 
     const pill = screen.getByText("Ended");
     expect(pill.className).toContain("text-muted-foreground");
-    expect(screen.queryByText("Active")).toBeNull();
-    expect(screen.queryByText("Waiting for activity.")).toBeNull();
+    expect(screen.queryByText("Active") === null).toBe(true);
+    expect(screen.queryByText("Waiting for activity.") === null).toBe(true);
   });
 
   test("keeps successful terminal agents finished despite stale pending descendants", () => {

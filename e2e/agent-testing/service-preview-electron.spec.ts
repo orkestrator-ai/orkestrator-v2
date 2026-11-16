@@ -1031,8 +1031,10 @@ test("a crashed service renderer reports the failure and recovers on reload", as
   await s().window.getByRole("button", { name: "Reload preview" }).first().click();
   await expect.poll(() => onServiceContents<boolean>("a", "isCrashed")).toBe(false);
   await waitForService("a", "/app/next");
-  const [view] = await viewsOn(origin("a"));
-  expect(view?.visible).toBe(true);
+  // Through `expectVisibility`, as every other visibility read here: a startup
+  // dialog can open after the reload and correctly hides the view, and only a
+  // locator assertion lets its dismiss handler run (flake 9811).
+  await expectVisibility("a", [true]);
 });
 
 test("a path typed into the address bar loads instead of bouncing back to the page being left", async () => {
@@ -1977,14 +1979,42 @@ test("at a 519 px pane the address takes its own full-width row in service and U
       const [width, height] = window.getMinimumSize();
       window.setSize(width!, height!);
     });
+    // The new size has reached the renderer: at 100 % zoom its viewport is
+    // the window's content width.
+    await expect
+      .poll(
+        async () =>
+          (await page.evaluate(() => window.innerWidth)) ===
+          (await host.evaluate((window) => window.getContentBounds().width)),
+        { timeout: 20_000, message: "the renderer never laid out the minimum window" },
+      )
+      .toBe(true);
     await expect.poll(paneWidth, { timeout: 20_000 }).toBeGreaterThan(0);
     // At 100 % zoom one DIP is one CSS pixel, so widening the window by the
     // shortfall lands the pane on 519 px whatever the sidebar takes.
     const shortfall = Math.round(NARROW_PANE_WIDTH - (await paneWidth()));
-    record(testInfo, "toolbar-window-adjust", JSON.stringify({ shortfall }));
+    // What the pane is measured against, so a failure says which part of the
+    // window took the width (flake 9812).
+    const geometry = {
+      shortfall,
+      window: await host.evaluate((window) => ({
+        size: window.getSize(),
+        minimum: window.getMinimumSize(),
+        content: window.getContentBounds().width,
+        maximized: window.isMaximized(),
+        zoom: window.webContents.getZoomFactor(),
+      })),
+      renderer: await page.evaluate(() => ({
+        innerWidth: window.innerWidth,
+        panels: Array.from(document.querySelectorAll("[data-panel]"), (panel) =>
+          Math.round(panel.getBoundingClientRect().width),
+        ),
+      })),
+    };
+    record(testInfo, "toolbar-window-adjust", JSON.stringify(geometry));
     expect(
       shortfall,
-      "the minimum window already gives a pane wider than 519 px",
+      `the minimum window already gives a pane wider than 519 px: ${JSON.stringify(geometry)}`,
     ).toBeGreaterThanOrEqual(0);
     if (shortfall > 0) {
       await host.evaluate((window, shortfall) => {

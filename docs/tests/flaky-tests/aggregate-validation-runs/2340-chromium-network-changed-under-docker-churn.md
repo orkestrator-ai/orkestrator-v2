@@ -146,7 +146,9 @@ pipelines' Docker work.
   `e2e/agent-testing/`. The two remaining failures were native-view
   assertions (`web-annotations-electron.spec.ts`, open case 1400, and
   `service-preview-electron.spec.ts` "a crashed service renderer reports the
-  failure and recovers on reload") and are not attributed to this case.
+  failure and recovers on reload", since recorded as case
+  [9811](../previews-annotations-and-gateway/9811-crashed-service-renderer-view-hidden-after-reload.md))
+  and are not attributed to this case.
 - `ip monitor link address route` for 30 s in the same session showed a
   Docker veth created and removed at interface index 7009; the journal held
   1,886 veth and bridge lines between 03:40 and 04:05 UTC, the window of the

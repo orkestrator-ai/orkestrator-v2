@@ -34,6 +34,7 @@ export async function lifecycleMachine(
   storage: StorageService,
   environmentId: string,
   projectId: string,
+  options: Partial<BuildPipelineContext["options"]> = {},
 ): Promise<LifecycleMachine> {
   if (!(await storage.getEnvironment(environmentId))) {
     await storage.addEnvironment({
@@ -82,7 +83,10 @@ export async function lifecycleMachine(
   const ctx = {
     storage,
     invoke,
-    save: async () => undefined,
+    options,
+    save: async (pipeline: BuildPipeline) => {
+      await storage.saveBuildPipeline(pipeline.id, projectId, environmentId, 1, pipeline);
+    },
     provisioningPrompts: new Map(),
     lastProviderAgent: new Map(),
   } as unknown as BuildPipelineContext;

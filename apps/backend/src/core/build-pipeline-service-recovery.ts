@@ -506,6 +506,10 @@ export class BuildPipelineRecovery {
     pipeline: BuildPipeline,
     detection: PullRequestDetection,
   ): Promise<void> {
+    if (pipelineReachedPullRequestStage(pipeline)) {
+      pipeline.shippedPullRequestUrl = detection.url;
+      await this.ctx.save(pipeline, pipeline.backendRevision);
+    }
     await this.ctx.storage.updateEnvironment(pipeline.environmentId, {
       prUrl: detection.url,
       prState: detection.state,
@@ -522,7 +526,11 @@ export class BuildPipelineRecovery {
       pipeline,
       detection.state === "open" ? update : { ...update, status: undefined },
     );
-    if (detection.state === "merged") await this.closeTicketForMerge(pipeline, detection.url);
+    if (detection.state === "merged") {
+      await this.closeTicketForMerge(pipeline, detection.url);
+      // A Linear-sourced build's issue gets its `merged` label; queued only.
+      this.ctx.options?.onPullRequestMerged?.(pipeline, detection.url);
+    }
     // Closed without merging, found by the build itself (a conflict
     // resolution's re-detection): the same return the PR monitor applies,
     // decided once per pull request, so the monitor seeing the closed link

@@ -1,3 +1,4 @@
+import { LinearBoardLabelsFixture } from "./LinearBoardLabelsFixture";
 import { EndedAgentFixture } from "./EndedAgentFixture";
 import { SessionHistoryControlsFixture } from "./SessionHistoryControlsFixture";
 import {
@@ -2200,6 +2201,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/multi-review-flow") return <MultiReviewFlowFixture />;
   if (window.location.pathname === "/pipeline-flow") return <PipelineFlowFixture />;
   if (window.location.pathname === "/delivery-policy") return <DeliveryPolicyFixture />;
+  if (window.location.pathname === "/linear-board-labels") return <LinearBoardLabelsFixture />;
   if (window.location.pathname === "/ticket-view") return <TicketViewFixture />;
   if (window.location.pathname === "/agent-launch") return <AgentLaunchDialogFixture />;
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;

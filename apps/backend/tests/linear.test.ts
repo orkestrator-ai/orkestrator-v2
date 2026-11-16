@@ -214,6 +214,48 @@ describe("Linear backend API", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  test("reads each listed issue's labels with their Linear colours", async () => {
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { query: string };
+      expect(request.query).toContain("nodes { id name color }");
+      const node = (id: string, labels: unknown) => ({
+        id,
+        identifier: id.toUpperCase(),
+        title: id,
+        sortOrder: id === "eng-1" ? 1 : 2,
+        updatedAt: "2026-11-16T00:00:00.000Z",
+        state: { name: "Todo", type: "unstarted", position: 1 },
+        labels,
+      });
+      return jsonResponse({
+        data: {
+          issues: {
+            nodes: [
+              node("eng-1", {
+                nodes: [
+                  { id: "l-bug", name: "Bug", color: "#eb5757" },
+                  { id: "l-odd", name: "Odd", color: "not-a-colour" },
+                  { id: "l-empty", name: "" },
+                ],
+              }),
+              node("eng-2", { nodes: [] }),
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      });
+    }) as unknown as typeof fetch;
+
+    const issues = await listLinearIssues("lin_api_secret");
+    expect(issues.map((issue) => issue.issueLabels)).toEqual([
+      [
+        { id: "l-bug", name: "Bug", color: "#eb5757" },
+        { id: "l-odd", name: "Odd" },
+      ],
+      [],
+    ]);
+  });
+
   test("maps Linear issue details, labels, and comments", async () => {
     globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body)) as { query: string };
@@ -271,7 +313,9 @@ describe("Linear backend API", () => {
             creator: { name: "Grace" },
             project: { name: "Integrations" },
             cycle: { name: "Cycle 1" },
-            labels: { nodes: [{ name: "linear" }, { name: "pipeline" }] },
+            labels: {
+              nodes: [{ id: "l-1", name: "linear", color: "#4ea7fc" }, { name: "pipeline" }],
+            },
           },
         },
       });
@@ -289,6 +333,7 @@ describe("Linear backend API", () => {
       projectName: "Integrations",
       cycleName: "Cycle 1",
       labels: ["linear", "pipeline"],
+      issueLabels: [{ id: "l-1", name: "linear", color: "#4ea7fc" }, { name: "pipeline" }],
       comments: [
         { id: "comment-1", body: "First comment", authorName: "Grace" },
         { id: "comment-2", body: "Second comment", authorName: "Ada" },
@@ -535,4 +580,45 @@ describe("Linear backend API", () => {
       }),
     ).rejects.toThrow("Linear comments pagination did not return a cursor");
   });
+});
+
+test("completes nested label pages for both board and detail reads", async () => {
+  const labels = Array.from({ length: 30 }, (_, n) => ({
+    id: `label-${n}`,
+    name: `Label ${n + 1}`,
+    color: "#123456",
+  }));
+  const calls: string[] = [];
+  globalThis.fetch = mock(async (_url: unknown, init?: RequestInit) => {
+    const { query, variables } = JSON.parse(String(init?.body));
+    calls.push(query);
+    const issue = {
+      id: "issue",
+      identifier: "ENG-1",
+      title: "Thirty labels",
+      updatedAt: "2026-11-16T00:00:00Z",
+      labels: {
+        nodes: labels.slice(0, 25),
+        pageInfo: { hasNextPage: true, endCursor: "label-page-2" },
+      },
+    };
+    if (query.includes("OrkestratorLinearIssueLabelPage")) {
+      expect(variables).toEqual({ id: "issue", after: "label-page-2" });
+      return jsonResponse({
+        data: { issue: { labels: { nodes: labels.slice(25), pageInfo: { hasNextPage: false } } } },
+      });
+    }
+    if (query.includes("OrkestratorLinearIssueComments"))
+      return jsonResponse({ data: { issue: { comments: { nodes: [] } } } });
+    if (query.includes("OrkestratorLinearIssues("))
+      return jsonResponse({ data: { issues: { nodes: [issue] } } });
+    return jsonResponse({ data: { issue } });
+  }) as unknown as typeof fetch;
+  expect((await listLinearIssues("key"))[0]?.issueLabels).toEqual(labels);
+  const detail = await getLinearIssue("key", "issue");
+  expect(detail.issueLabels).toEqual(labels);
+  expect(detail.labels).toEqual(labels.map((label) => label.name));
+  expect(calls.filter((query) => query.includes("OrkestratorLinearIssueLabelPage"))).toHaveLength(
+    2,
+  );
 });

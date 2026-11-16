@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { BackendRuntime } from "./backend-runtime.js";
+import { BackendRuntime, type BackendRuntimeOptions } from "./backend-runtime.js";
 import { BUILD_ENVIRONMENT_DELETED_COMMENT } from "./build-pipeline-kanban-environment-deleted.js";
 import { lifecycleMachine, PR_URL } from "./build-pipeline-kanban-transitions-test-support.js";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
@@ -28,7 +28,9 @@ async function withEnvironmentBuild(
     remove: () => Promise<void>;
     life: Awaited<ReturnType<typeof lifecycleMachine>>;
     pipeline: ReturnType<Awaited<ReturnType<typeof lifecycleMachine>>["pipeline"]>;
+    runtime: BackendRuntime;
   }) => Promise<void>,
+  runtimeOptions: Omit<BackendRuntimeOptions, "emit"> = {},
 ): Promise<void> {
   const dataDir = await fs.realpath(
     await fs.mkdtemp(path.join(tmpdir(), "orkestrator-delete-tickets-")),
@@ -62,7 +64,7 @@ async function withEnvironmentBuild(
     toolchainBinDir: "",
     worktreeDir: path.join(dataDir, "workspaces"),
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-    runtime: new BackendRuntime({ emit: () => undefined }),
+    runtime: new BackendRuntime({ ...runtimeOptions, emit: () => undefined }),
     emit: () => undefined,
   } as CommandContext;
   const remove = async () => {
@@ -71,7 +73,7 @@ async function withEnvironmentBuild(
     await command({ environmentId: "e1" }, context);
   };
   try {
-    await run({ storage, taskId, remove, life, pipeline });
+    await run({ storage, taskId, remove, life, pipeline, runtime: context.runtime });
   } finally {
     context.runtime.shutdown();
     await context.runtime.diffStats.settled();
@@ -108,5 +110,111 @@ describe("delete_environment", () => {
       });
       expect(await storage.getBuildPipeline(pipeline.id)).toBeNull();
     });
+  });
+
+  test("queues a merged Linear build's label and deletes even while Linear fails", async () => {
+    const addLabel = mock(async () => {
+      throw new Error("Linear is down");
+    });
+    await withEnvironmentBuild(
+      async ({ storage, remove, life, runtime }) => {
+        await storage.kanban.saveLinearAuth("lin_api_test_key");
+        const linear = life.pipeline("ENG-7", {
+          id: "pipeline-linear",
+          source: { type: "linear", issueId: "issue-7", issueIdentifier: "ENG-7" },
+        } as never);
+        await life.prDetected(linear, "open");
+        await storage.saveBuildPipeline(linear.id, "p1", "e1", 1, linear);
+        await storage.updateEnvironment("e1", { prUrl: PR_URL, prState: "merged" });
+
+        await remove();
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(await storage.getBuildPipeline(linear.id)).toBeNull();
+
+        await runtime.linearMergedLabels.idle();
+        expect(addLabel).toHaveBeenCalledWith(
+          "lin_api_test_key",
+          "issue-7",
+          "merged",
+          expect.any(AbortSignal),
+        );
+        // Only the Linear-sourced build is queued; the Kanban one is not.
+        const records = await storage.linear.listLinearMergedLabels();
+        expect(records).toHaveLength(1);
+        expect(records[0]).toMatchObject({
+          pipelineId: "pipeline-linear",
+          status: "pending",
+          lastError: "Linear is down",
+        });
+      },
+      { linearMergedLabels: { addLabel } },
+    );
+  });
+  test("deletion retains the 501st pending merge and delivers it after Linear recovers", async () => {
+    let available = false;
+    const addLabel = mock(async () => {
+      if (!available) throw new Error("Linear offline");
+      return { outcome: "added" as const, labelId: "merged" };
+    });
+    let now = Date.now();
+    await withEnvironmentBuild(
+      async ({ storage, remove, life, runtime }) => {
+        await storage.kanban.saveLinearAuth("lin_api_test_key");
+        for (let n = 0; n < 500; n++)
+          storage.linear.enqueueLinearMergedLabel(
+            {
+              issueId: `pending-${n}`,
+              pipelineId: `pending-${n}`,
+              projectId: "p1",
+              prUrl: PR_URL,
+            },
+            new Date(now),
+          );
+        const pipeline = life.pipeline("ENG-501", {
+          source: { type: "linear", issueId: "issue-501" },
+        } as never);
+        await life.prDetected(pipeline, "open");
+        await storage.updateEnvironment("e1", { prState: "merged" });
+        await remove();
+        await runtime.linearMergedLabels.idle();
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(
+          (await storage.linear.listLinearMergedLabels()).filter((r) => r.status === "pending"),
+        ).toHaveLength(501);
+        available = true;
+        now += 60_000;
+        runtime.linearMergedLabels.requestDrain();
+        await runtime.linearMergedLabels.idle();
+        expect(
+          (await storage.linear.listLinearMergedLabels()).find((r) => r.issueId === "issue-501")
+            ?.status,
+        ).toBe("applied");
+        expect(addLabel.mock.calls.length).toBe(1002);
+      },
+      { linearMergedLabels: { addLabel, now: () => now } },
+    );
+  });
+
+  test("deleting a reused environment does not label its new, unfinished or commit-only builds", async () => {
+    const addLabel = mock(async () => ({ outcome: "added" as const, labelId: "merged" }));
+    await withEnvironmentBuild(
+      async ({ storage, remove, life, runtime }) => {
+        await storage.kanban.saveLinearAuth("lin_api_test_key");
+        for (const phase of ["initializing", "building", "complete"] as const) {
+          const pipeline = life.pipeline(phase, {
+            phase,
+            source: { type: "linear", issueId: phase },
+            ...(phase === "complete" ? { delivery: { policy: "commit-only" } } : {}),
+          } as never);
+          await storage.saveBuildPipeline(pipeline.id, "p1", "e1", 1, pipeline);
+        }
+        await storage.updateEnvironment("e1", { prUrl: PR_URL, prState: "merged" });
+        await remove();
+        await runtime.linearMergedLabels.idle();
+        expect(await storage.linear.listLinearMergedLabels()).toEqual([]);
+        expect(addLabel).not.toHaveBeenCalled();
+      },
+      { linearMergedLabels: { addLabel } },
+    );
   });
 });

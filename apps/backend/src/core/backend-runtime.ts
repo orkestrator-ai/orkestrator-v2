@@ -22,6 +22,7 @@ import { EnvironmentOperations } from "./environment-operations.js";
 import { FeatureBuildTasks } from "./features/index.js";
 import { GitHubCliSelection } from "./github-cli-binary.js";
 import { IntegrationLocks } from "./integration-locks.js";
+import { LinearMergedLabels, type LinearMergedLabelsOptions } from "./linear-merged-label.js";
 import { LocalServerRuntime, type LocalServerRuntimeOptions } from "./local-server-runtime.js";
 import { PrMonitorRuntime, type PrMonitorRuntimeOptions } from "./pr-monitor-runtime.js";
 import { PublicApiReconciliations } from "./public-api/index.js";
@@ -52,6 +53,8 @@ export type BackendRuntimeOptions = {
   containerLogs?: ContainerLogServiceOptions;
   /** The backend passes the `check_docker` probe; fixtures leave it out. */
   dockerAvailability?: DockerAvailabilityCacheOptions;
+  /** Test seams: the Linear call and the retry clock of the merged-label queue. */
+  linearMergedLabels?: LinearMergedLabelsOptions;
 };
 
 /**
@@ -93,6 +96,8 @@ export class BackendRuntime {
   readonly dockerCleanupGrants = new DockerCleanupGrants();
   /** GitHub and Linear write serialisation. */
   readonly integrationLocks = new IntegrationLocks();
+  /** The `merged` label owed to Linear issues whose build's pull request merged, and its retries. */
+  readonly linearMergedLabels: LinearMergedLabels;
   /** Feature-build ticket resolutions and title refinements in flight. */
   readonly featureBuilds = new FeatureBuildTasks();
   /** Public API operation reconciliations in flight. */
@@ -124,7 +129,12 @@ export class BackendRuntime {
     this.localServers = new LocalServerRuntime(options.localServers);
     this.environments = new EnvironmentOperations();
     this.dockerAvailability = new DockerAvailabilityCache(options.dockerAvailability);
-    this.prMonitor = new PrMonitorRuntime({ ...options.prMonitor, gitHubCli: this.gitHubCli });
+    this.linearMergedLabels = new LinearMergedLabels(options.linearMergedLabels);
+    this.prMonitor = new PrMonitorRuntime({
+      ...options.prMonitor,
+      gitHubCli: this.gitHubCli,
+      mergeObserver: this.linearMergedLabels,
+    });
     this.tmux = new TmuxRuntime(options.tmux);
     this.accounts = new AgentAccountsRuntime(options.accounts);
     this.containerOom = new ContainerOomEvents(
@@ -168,6 +178,7 @@ export class BackendRuntime {
     this.changeTracking?.shutdown();
     this.terminals.shutdown();
     this.prMonitor.shutdown();
+    this.linearMergedLabels.shutdown();
     this.tmux.shutdown();
     this.containerOom.stop();
     this.containerLogs.shutdown();

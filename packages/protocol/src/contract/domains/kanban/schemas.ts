@@ -238,6 +238,13 @@ export const LinearConnectionStatusSchema = openRecord({
   connectedAt: optionalString,
 }).annotate({ identifier: "LinearConnectionStatus" });
 
+/** A label on a Linear issue, with Linear's colour. */
+const LinearIssueLabelSchema = openRecord({
+  id: optionalString,
+  name: Schema.String,
+  color: optionalString,
+}).annotate({ identifier: "LinearIssueLabel" });
+
 const linearIssueFields = {
   id: Schema.String,
   identifier: Schema.optional(Schema.String),
@@ -255,6 +262,8 @@ const linearIssueFields = {
   teamName: optionalString,
   assigneeName: optionalString,
   priorityLabel: optionalString,
+  /** The issue's labels with their colours, for the board's cards. */
+  issueLabels: Schema.optional(mutableArray(LinearIssueLabelSchema)),
 };
 
 /** `LinearIssueListItem`. */

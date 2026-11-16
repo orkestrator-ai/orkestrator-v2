@@ -23,7 +23,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import type { LinearIssueListItem } from "@/types/linear";
+import type { LinearIssueLabel, LinearIssueListItem } from "@/types/linear";
 import type { LinearLane } from "./linear-issue-order";
 
 /** A lane's dot and a card's edge, by Linear's state type (the Kanban board's colours). */
@@ -97,6 +97,60 @@ export function LinearLanesMenu({
 
 const LANE_DROP_PREFIX = "linear-lane:";
 
+/** Labels a card names before folding the rest into "+N" (the Kanban card's limit is 3). */
+const CARD_LABEL_LIMIT = 4;
+
+const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+
+/** A label's Linear colour, or none when it is missing or not a hex colour. */
+function labelColor(label: LinearIssueLabel): string | undefined {
+  return label.color && HEX_COLOR.test(label.color) ? label.color : undefined;
+}
+
+/**
+ * An issue's labels on its card: a dot in each label's Linear colour beside
+ * its name, as Linear shows them. The drag preview renders the same row, so
+ * it keeps the card's height.
+ */
+function LinearCardLabels({ labels }: { labels: readonly LinearIssueLabel[] }) {
+  if (labels.length === 0) return null;
+  const shown = labels.slice(0, CARD_LABEL_LIMIT);
+  const rest = labels.slice(CARD_LABEL_LIMIT);
+  return (
+    <div data-testid="linear-card-labels" className="mt-2 flex flex-wrap items-center gap-1">
+      {shown.map((label, index) => {
+        const color = labelColor(label);
+        return (
+          <span
+            key={label.id ?? `${label.name}:${index}`}
+            data-testid="linear-card-label"
+            data-label-color={color}
+            title={label.name}
+            className="inline-flex max-w-[9rem] items-center gap-1 rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium leading-none text-foreground/90"
+          >
+            <span
+              aria-hidden="true"
+              data-testid="linear-card-label-dot"
+              className={cn("h-1.5 w-1.5 shrink-0 rounded-full", !color && "bg-muted-foreground")}
+              style={color ? { backgroundColor: color } : undefined}
+            />
+            <span className="truncate">{label.name}</span>
+          </span>
+        );
+      })}
+      {rest.length > 0 && (
+        <span
+          data-testid="linear-card-labels-more"
+          className="px-0.5 text-[10px] text-muted-foreground"
+          title={rest.map((label) => label.name).join(", ")}
+        >
+          +{rest.length}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function LinearCardContent({
   issue,
   type,
@@ -124,6 +178,7 @@ function LinearCardContent({
         )}
       </div>
       <h4 className="mt-1 line-clamp-2 text-sm font-medium text-foreground">{issue.title}</h4>
+      <LinearCardLabels labels={issue.issueLabels ?? []} />
       {details.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
           {details.map((detail) => (

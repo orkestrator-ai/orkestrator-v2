@@ -33,6 +33,7 @@ import { runCommand } from "./shell.js";
 import { ProjectCheckoutMergeFollower } from "./project-checkout-merge-follow.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import type { LinearMergedLabels } from "./linear-merged-label.js";
 
 const log = createLogger("pull-request");
 
@@ -65,6 +66,12 @@ export type PrMonitorRuntimeOptions = {
   checkoutFollower?: ProjectCheckoutMergeFollower;
   /** The backend's `gh`, set by `BackendRuntime`; absent, `gh` comes from PATH. */
   gitHubCli?: GitHubCliSelection;
+  /**
+   * Told of every merge the monitor confirms, and swept once per process, so
+   * a Linear-sourced build's issue gets its `merged` label
+   * (`linear-merged-label.ts`). Set by `BackendRuntime`.
+   */
+  mergeObserver?: Pick<LinearMergedLabels, "recordEnvironmentMergeById" | "sweepOnce">;
 };
 
 /**
@@ -169,6 +176,7 @@ export class PrMonitorRuntime {
     if (this.closedService) return;
     this.bind(context);
     this.closeRecordedMergesOnce(context.storage);
+    this.sweepRecordedMergesOnce(context.storage);
     const generation = this.syncGeneration;
     const queued = this.queuedSync;
     if (queued && queued.generation === generation) return queued.promise;
@@ -230,6 +238,19 @@ export class PrMonitorRuntime {
       });
   }
 
+  /**
+   * Once per process, hands the merge observer the stored merges it may have
+   * missed (`LinearMergedLabels.sweepOnce`). Embedded command adapters that
+   * implement only the environment subset are skipped.
+   */
+  private sweepRecordedMergesOnce(storage: StorageService): void {
+    const observer = this.options.mergeObserver;
+    if (!observer || typeof storage.listAllBuildPipelines !== "function" || !storage.linear) {
+      return;
+    }
+    observer.sweepOnce(storage);
+  }
+
   /** Discards any sync still loading storage; call before untracking or pausing. */
   invalidatePendingSync(): void {
     this.syncGeneration += 1;
@@ -282,6 +303,14 @@ export class PrMonitorRuntime {
       prState: "merged",
       hasMergeConflicts: false,
     };
+    // The explicit merge command must deliver the same durable label intent as polling.
+    if (this.options.mergeObserver && context.storage.linear) {
+      await this.options.mergeObserver.recordEnvironmentMergeById(
+        context.storage,
+        environment.id,
+        environment.prUrl,
+      );
+    }
     await this.service.reconcileTerminal(environmentToPrMonitorTarget(confirmedEnvironment), {
       url: environment.prUrl,
       state: "merged",
@@ -335,6 +364,10 @@ export class PrMonitorRuntime {
   ): void {
     if (this.closedService || observation.state !== "merged" || !this.context) return;
     const context = this.context;
+    const observer = this.options.mergeObserver;
+    if (observer && context.storage.linear) {
+      void observer.recordEnvironmentMergeById(context.storage, environmentId, observation.url);
+    }
     void Promise.resolve()
       .then(() => context.storage.getEnvironment(environmentId))
       .then((environment) => {

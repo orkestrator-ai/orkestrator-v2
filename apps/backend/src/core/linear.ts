@@ -25,6 +25,16 @@ export type LinearConnectionStatus = {
   connectedAt?: string;
 };
 
+/** A label on an issue, with Linear's colour (`#rrggbb`) for the board's chips. */
+export type LinearIssueLabel = {
+  id?: string;
+  name: string;
+  color?: string;
+};
+
+/** Labels a list or detail read asks Linear for per issue. */
+const ISSUE_LABEL_LIMIT = 25;
+
 export type LinearIssueListItem = {
   id: string;
   identifier: string;
@@ -42,6 +52,8 @@ export type LinearIssueListItem = {
   teamName?: string;
   assigneeName?: string;
   priorityLabel?: string;
+  /** The issue's labels with their colours, in Linear's order; absent from an older backend. */
+  issueLabels?: LinearIssueLabel[];
 };
 
 export type LinearIssueComment = {
@@ -139,6 +151,7 @@ export async function linearGraphql<T>(
   apiKey: string,
   query: string,
   variables: Record<string, unknown> = {},
+  signal?: AbortSignal,
 ): Promise<T> {
   const token = apiKey.trim();
   if (!token) throw new Error("Linear API key is not configured");
@@ -147,6 +160,7 @@ export async function linearGraphql<T>(
   try {
     response = await fetch(LINEAR_GRAPHQL_URL, {
       method: "POST",
+      signal,
       headers: {
         "Content-Type": "application/json",
         Authorization: token,
@@ -188,6 +202,28 @@ function readViewer(value: unknown): LinearViewer | undefined {
   return { id, name, email: optionalString(value.email) };
 }
 
+const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+
+/** An issue's `labels { nodes { id name color } }`, or undefined when the read did not ask. */
+export function issueLabelsFromNode(value: unknown): LinearIssueLabel[] | undefined {
+  if (!isRecord(value) || !isRecord(value.labels)) return undefined;
+  const nodes = Array.isArray(value.labels.nodes) ? value.labels.nodes : [];
+  return nodes.flatMap((node) => {
+    if (!isRecord(node)) return [];
+    const name = optionalString(node.name);
+    if (!name) return [];
+    const id = optionalString(node.id);
+    const color = optionalString(node.color);
+    return [
+      {
+        ...(id ? { id } : {}),
+        name,
+        ...(color && HEX_COLOR.test(color) ? { color } : {}),
+      },
+    ];
+  });
+}
+
 export function issueFromNode(value: unknown): LinearIssueListItem | null {
   if (!isRecord(value)) return null;
 
@@ -200,6 +236,7 @@ export function issueFromNode(value: unknown): LinearIssueListItem | null {
   const title = asString(value.title);
   const updatedAt = asString(value.updatedAt);
   if (!id || !identifier || !title || !updatedAt) return null;
+  const issueLabels = issueLabelsFromNode(value);
 
   return {
     id,
@@ -218,6 +255,7 @@ export function issueFromNode(value: unknown): LinearIssueListItem | null {
     teamName: optionalString(team.name),
     assigneeName: optionalString(assignee.name),
     priorityLabel: optionalString(value.priorityLabel),
+    ...(issueLabels ? { issueLabels } : {}),
   };
 }
 
@@ -338,6 +376,10 @@ export async function listLinearIssues(
             state { name type position }
             team { key name }
             assignee { name }
+            labels(first: ${ISSUE_LABEL_LIMIT}) {
+              nodes { id name color }
+              pageInfo { hasNextPage endCursor }
+            }
           }
           pageInfo {
             hasNextPage
@@ -350,7 +392,7 @@ export async function listLinearIssues(
 
     const nodes = Array.isArray(data.issues?.nodes) ? data.issues.nodes : [];
     for (const node of nodes) {
-      const issue = issueFromNode(node);
+      const issue = issueFromNode(await completeLinearIssueLabels(apiKey, node));
       if (issue) issues.push(issue);
     }
 
@@ -360,6 +402,41 @@ export async function listLinearIssues(
   }
 
   return issues.sort(compareLinearIssuePosition);
+}
+
+/** Complete a nested label connection before exposing counts or checking membership. */
+export async function completeLinearIssueLabels(
+  apiKey: string,
+  node: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  if (!isRecord(node) || !isRecord(node.labels)) return node;
+  type Connection = {
+    nodes?: unknown[];
+    pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+  };
+  let connection = node.labels as Connection;
+  const nodes = [...(connection.nodes ?? [])];
+  const seen = new Set<string>();
+  while (true) {
+    const after = nextPageCursor(connection.pageInfo, seen, "issue labels");
+    if (!after) break;
+    const page = await linearGraphql<{ issue?: { labels?: Connection } }>(
+      apiKey,
+      `query OrkestratorLinearIssueLabelPage($id: String!, $after: String!) {
+        issue(id: $id) { labels(first: 100, after: $after) {
+          nodes { id name color }
+          pageInfo { hasNextPage endCursor }
+        } }
+      }`,
+      { id: asString(node.id), after },
+      signal,
+    );
+    if (!page.issue?.labels) throw new Error("Linear issue label page was incomplete");
+    connection = page.issue.labels;
+    nodes.push(...(connection.nodes ?? []));
+  }
+  return { ...node, labels: { nodes } };
 }
 
 export async function getLinearIssue(apiKey: string, issueId: string): Promise<LinearIssueDetail> {
@@ -384,15 +461,16 @@ export async function getLinearIssue(apiKey: string, issueId: string): Promise<L
         creator { name }
         project { name }
         cycle { name }
-        labels(first: 25) {
-          nodes { name }
+        labels(first: ${ISSUE_LABEL_LIMIT}) {
+          nodes { id name color }
+          pageInfo { hasNextPage endCursor }
         }
       }
     }`,
     { id: issueId },
   );
 
-  const issue = detailFromNode(data.issue);
+  const issue = detailFromNode(await completeLinearIssueLabels(apiKey, data.issue));
   if (!issue) throw new Error(`Linear issue not found: ${issueId}`);
 
   // Comments are a secondary concern: a failure fetching them must not block the

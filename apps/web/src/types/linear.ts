@@ -59,6 +59,13 @@ export interface LinearNodeConnection {
   readAt?: string;
 }
 
+/** A label on a Linear issue, with Linear's colour (`#rrggbb`) when it has one. */
+export interface LinearIssueLabel {
+  id?: string;
+  name: string;
+  color?: string;
+}
+
 export interface LinearIssueListItem {
   id: string;
   identifier: string;
@@ -76,6 +83,8 @@ export interface LinearIssueListItem {
   teamName?: string;
   assigneeName?: string;
   priorityLabel?: string;
+  /** The issue's labels with their colours, in Linear's order; absent from an older backend. */
+  issueLabels?: LinearIssueLabel[];
 }
 
 export interface LinearIssueComment {

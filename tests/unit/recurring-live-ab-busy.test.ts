@@ -64,6 +64,13 @@ type Scenario = {
   turnFilesMaskBurst?: boolean;
   /** The removal is rescanned, but only once time passes (a poll's sleep). */
   lateTurnRemovalRescan?: boolean;
+  /**
+   * The burst's removal is rescanned only once time passes, or with
+   * `burstRemovalMasksBurst` never on its own: the next burst, as many files
+   * again, is then seen together with it and moves no numbers (to-do 8171).
+   */
+  lateBurstRemovalRescan?: boolean;
+  burstRemovalMasksBurst?: boolean;
 };
 
 /**
@@ -93,6 +100,8 @@ function busyHarness(scenario: Scenario = {}) {
   const files = new Map<string, number>();
   /** The held turn's files are removed on disk but not yet rescanned. */
   let unscannedTurnRemoval = false;
+  // Files of a burst removal the backend has not rescanned yet.
+  let unscannedBurstRemoval = 0;
   let mails = 0;
   let reviewReads = 0;
   let commits = 0;
@@ -435,11 +444,16 @@ function busyHarness(scenario: Scenario = {}) {
       for (const entry of environments) {
         const previous = files.get(entry.id) ?? 0;
         // One scan sees the removal and the burst together.
-        const next = entry.id === "env-busy-1" && unscannedTurnRemoval ? count : previous + count;
+        const base =
+          entry.id === "env-busy-1" && unscannedTurnRemoval
+            ? 0
+            : Math.max(0, previous - unscannedBurstRemoval);
+        const next = base + count;
         files.set(entry.id, next);
         if (next !== previous) changed += 1;
       }
       unscannedTurnRemoval = false;
+      unscannedBurstRemoval = 0;
     },
     removeBurst: (worktrees, relative) => {
       if (relative.startsWith("busy-turn/")) {
@@ -448,6 +462,11 @@ function busyHarness(scenario: Scenario = {}) {
         if (scenario.turnFilesMaskBurst || scenario.lateTurnRemovalRescan)
           unscannedTurnRemoval = true;
         else files.delete("env-busy-1");
+        return;
+      }
+      if (scenario.lateBurstRemovalRescan || scenario.burstRemovalMasksBurst) {
+        unscannedBurstRemoval = burst;
+        burst = 0;
         return;
       }
       for (const entry of environments) {
@@ -475,6 +494,14 @@ function busyHarness(scenario: Scenario = {}) {
       if (scenario.lateTurnRemovalRescan && unscannedTurnRemoval) {
         unscannedTurnRemoval = false;
         files.delete("env-busy-1");
+      }
+      if (scenario.lateBurstRemovalRescan && unscannedBurstRemoval > 0) {
+        for (const entry of environments) {
+          const left = (files.get(entry.id) ?? 0) - unscannedBurstRemoval;
+          if (left > 0) files.set(entry.id, left);
+          else files.delete(entry.id);
+        }
+        unscannedBurstRemoval = 0;
       }
     },
   };
@@ -672,6 +699,37 @@ describe("busy phase", () => {
     expect(result.timeouts).toEqual({});
     expect(result.samples["turn-clear-backend"]).toHaveLength(3);
     expect(result.burstRescans.map((entry) => entry.changed)).toEqual([4, 4, 4]);
+  });
+
+  test("waits for every environment's burst removal to be rescanned before the round goes on (to-do 8171)", async () => {
+    const h = busyHarness({ lateBurstRemovalRescan: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0], busyRounds: 3 }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.timeouts).toEqual({});
+    expect(result.samples["burst-clear-backend"]).toHaveLength(3);
+    expect(result.burstRescans.map((entry) => entry.changed)).toEqual([4, 4, 4]);
+  });
+
+  test("a burst removal the backend never rescans fails its own row", async () => {
+    const h = busyHarness({ burstRemovalMasksBurst: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0], busyRounds: 2 }),
+      undefined,
+      h.runtime,
+    );
+    // Each wait compares with the stats read before its own burst; the second
+    // round's were already stale, so only the first removal is held against it.
+    expect(result.timeouts["burst-clear-backend"]).toBe(1);
+    expect(busyFailed(result)).toBe(true);
+    // The second burst landed on the unscanned removal and moved nothing.
+    expect(result.burstRescans.map((entry) => entry.timedOut)).toEqual([false, true]);
   });
 
   test("a removal the backend never rescans fails its own row and names the masked burst", async () => {

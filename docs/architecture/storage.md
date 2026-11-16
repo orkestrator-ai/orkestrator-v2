@@ -810,8 +810,10 @@ filesystem. Its full record of tasks 1 to 4 (runs, samplers, the A/B arms):
   same volume, `proc_pid_rusage` disk bytes and a `sample` of the backend
   can. The busy driver's rounds took 1.6 to 2.5 minutes on mini against
   about 22 s on beelink2, mostly burst rescans running out at 60 s
-  ([8171](../todo/cross-cutting/8171-macos-burst-rescans-time-out.md)), so
-  its change-tracking ledger did less work there than on btrfs.
+  because mini's saturated `fseventsd` delivered events late and sparsely,
+  20 to 59 s late when at all (to-do 8171, retired
+  2026-11-15; see [Lost events on macOS](git-scan-caches.md#lost-events-on-macos)),
+  so its change-tracking ledger did less work there than on btrfs.
 
 ## Provider secrets at rest
 

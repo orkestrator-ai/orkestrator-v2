@@ -577,6 +577,13 @@ None of them breaks a build when it changes, so check them on a bump:
   on by default, Windows Claude coordinators may now get the sandbox
   (`unavailable` already asks for it); the tier stays `provider-configured`
   until the Windows live run on the manual-test checklist passes.
+- **Claude (read boundary):** run
+  `bridges/claude-bridge/src/conformance-coordinator-read-boundary-live.test.ts`
+  on macOS and on Linux with bubblewrap (it runs the pinned CLI against a
+  scripted model, no provider turn). If an allowed path is now refused, or the
+  CLI writes a conversation file somewhere new under the data directory, extend
+  the boundary's allowances and the fixture together
+  ([coordinator.md](../architecture/coordinator.md#provider-qualification)).
 - **Codex (D9):** if `live-network-lock.test.ts` fails, or a coordinator's
   first turn is refused by `assertHostedNetworkLock`, fix the lock first, then
   decide whether a `NativeAgentReadiness` state is now worth adding.

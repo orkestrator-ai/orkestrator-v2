@@ -1077,8 +1077,11 @@ What each enforced platform actually does:
   worker's ordinary turns read the directory anyway on a host environment, so
   bounding only its review turns would risk failing reviews without closing the
   gap. The scripted run does not cover skills or a large tool result written by
-  a real MCP call; the qualification file is re-run on each CLI bump
-  ([upgrade-agents.md](../development/upgrade-agents.md)).
+  a real MCP call: that live check is on the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+  (6080 (retired), Needs verification), and the qualification file is re-run on
+  each CLI bump
+  ([upgrade-agents.md](../development/upgrade-agents.md#re-check-coordinator-tier-decisions)).
 - **Pi** blocks every tool outside its read-only set in its own `tool_call`
   gate, which runs in the bridge process and cannot be switched off by the
   workspace. The same gate refuses a coordinator's `read`, `grep`, `find` and

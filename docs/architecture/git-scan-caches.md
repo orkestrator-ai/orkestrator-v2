@@ -91,6 +91,38 @@ ask Git again, because those files are not watched in a linked worktree. The nex
 index or `.gitignore` change does, and until then a safety scan still reports the
 right list. Events are hints either way.
 
+### The establishing hint and the second scan of a track
+
+Tracking a local environment starts its watcher and its first scan together,
+and the first plan's hint with unknown paths usually lands while that scan is
+still running, so every track scans twice. That hint is kept, and it still
+invalidates the first scan (to-do 8112, retired 2026-11-16):
+
+- **It reports a real gap.** Watching begins with the root watch, but on Linux
+  that sees only the root's direct children until the plan attaches the rest,
+  and on macOS the root watch exists only once the helper establishes it. The
+  first scan starts before either. A write below a subdirectory after the scan
+  read that path and before its watch existed reaches no watch, and this hint
+  is its only report. On Linux nothing else sends a hint without paths at
+  startup: later ones need a directory to appear, a subtree to be put back or
+  an earlier missed change.
+- **The second scan is not wasted.** The first scan starts before coverage is
+  qualified, so its list is served only for `fileListMaxAgeMs` and never
+  becomes `current` (`fileListCurrency`); it also cannot be the qualified
+  baseline the safety scan compares against to spot a missed change. The
+  rerun the hint queues is the entry's first scan under qualified coverage.
+- **Ignoring it would save nothing measurable.** Only a scan that started
+  after the plan attached its watches could safely ignore the hint, and the
+  track scan never does; one that starts in the 400 ms settle window (an
+  explicit refresh) is rare.
+
+Delaying the first scan until coverage is qualified would save the scan, but
+the badge would then wait for the plan's Git reads and any large-tree
+measurement. `worktree-watcher-split.test.ts` ("the first plan reports the
+interval before its subdirectory watches existed") and
+`diff-stats-service.test.ts` ("the establishing watcher's hint during the
+track scan buys the first qualified list") pin this behaviour.
+
 ### A directory the backend may not read
 
 Bun's recursive watch on Linux walks its tree on the event loop. When it meets a

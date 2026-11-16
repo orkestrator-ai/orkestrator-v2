@@ -290,7 +290,7 @@ describe("evidence ingestion to projections", () => {
     expect(await h.service.pullEvidence(source)).toBe(0);
   });
 
-  test("a steady-state pull reads once and does not repeat an accepted acknowledgment (todo 7567 task 3)", async () => {
+  test("a steady-state pull reads once and does not repeat an accepted acknowledgment (#2131)", async () => {
     const { h, spool, recorder } = setup();
     const base = spoolSource(spool);
     const calls = { read: 0, ack: 0 };
@@ -359,7 +359,7 @@ describe("evidence ingestion to projections", () => {
     expect(calls).toEqual({ read: settled.read + 1, ack: settled.ack });
   });
 
-  test("a pull the activity sweep starts is charged to change-evidence-pull (todo 7567 task 3)", async () => {
+  test("a pull the activity sweep starts is charged to change-evidence-pull (#2131)", async () => {
     const { h, spool } = setup();
     const base = spoolSource(spool);
     // Each call stands for the bridge request `bridgeFetch` charges.

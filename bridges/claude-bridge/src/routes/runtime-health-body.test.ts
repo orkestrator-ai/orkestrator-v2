@@ -64,7 +64,7 @@ describe("sessionRuntimeHealthBody", () => {
   });
 
   /*
-   * 0049 task 10: the full idle-detach wait observes `detached` before the
+   * #1934: the full idle-detach wait observes `detached` before the
    * follow-up turn and `attached` after it through this no-touch read.
    */
   test("reports whether the session's Claude CLI is open, as attached or detached", () => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs apps/backend/tests/codex-managed-network-card-live.test.ts (to-do 0723
+# Runs apps/backend/tests/codex-managed-network-card-live.test.ts (#2244
 # task 7): the Codex managed-network approval card through the real bridge,
 # the backend's card mapping and the permission-rule enforcer.
 #

@@ -1,6 +1,6 @@
 /**
  * The Codex managed-network approval card, end to end on a managed host
- * (to-do 0723 task 7).
+ * (#2244).
  *
  * Codex asks about a host only when the administrator's
  * `/etc/codex/requirements.toml` turns its network proxy on, a file no test

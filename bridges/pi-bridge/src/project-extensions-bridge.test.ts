@@ -1,5 +1,5 @@
 /**
- * A planted repository extension against the real bridge (to-do 7251).
+ * A planted repository extension against the real bridge (#2022).
  *
  * The bridge's HTTP server, its session creation and attach, and Pi's SDK
  * are all real; the workspace is a temporary checkout carrying a `.pi/`

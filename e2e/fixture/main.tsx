@@ -1,3 +1,4 @@
+import { EndedAgentFixture } from "./EndedAgentFixture";
 import { SessionHistoryControlsFixture } from "./SessionHistoryControlsFixture";
 import {
   QueuedAttachmentTranscript,
@@ -2284,6 +2285,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;
   if (window.location.pathname === "/agent-usage") return <AgentUsageFixture />;
   if (window.location.pathname === "/subork-group") return <SuborkGroupFixture />;
+  if (window.location.pathname === "/ended-agent") return <EndedAgentFixture />;
   if (window.location.pathname === "/background-task-outcome")
     return <BackgroundTaskOutcomeFixture />;
   if (window.location.pathname === "/codex-subagent-cards") return <CodexSubagentCardsFixture />;

@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { installDesignRuntime } from "./design-runtime.js";
+import { designRuntimeSource } from "./design-runtime.js";
 import { FRAME_CHANNEL_POLICY, STATIC_PRESENTATION_POLICY } from "./rich-content-policy.js";
 import { staticHtmlDocumentText } from "./static-html-document-text.js";
 import {
   STATIC_HTML_FRAME_CHANNEL,
   STATIC_HTML_MAX_FIND_QUERY_CHARACTERS,
-  installStaticHtmlPresentationRuntime,
+  staticHtmlPresentationRuntimeSource,
 } from "./static-html-presentation.js";
 import {
   ACTIVITY_REPORT_HTML,
@@ -31,7 +31,7 @@ const MAX = STATIC_PRESENTATION_POLICY.maxSearchTextCharacters;
 /** What the design runtime stores as `effective-html` for an authored document. */
 function effectiveHtml(html: string): string {
   const design = new Window();
-  design.eval(`(${installDesignRuntime.toString()})()`);
+  design.eval(designRuntimeSource());
   const run = (design as unknown as { orkDesign: (operation: unknown) => unknown }).orkDesign;
   run({ op: "render", html });
   return run({ op: "serialize" }) as string;
@@ -52,7 +52,7 @@ function framed(html: string): string {
     "window.__posted = []; window.parent = { postMessage: (message) => window.__posted.push(message) };",
   );
   frame.eval(
-    `(${installStaticHtmlPresentationRuntime.toString()})(${JSON.stringify({
+    staticHtmlPresentationRuntimeSource({
       nonce: NONCE,
       maxHtmlBytes: STATIC_PRESENTATION_POLICY.maxDocumentBytes,
       maxElements: STATIC_PRESENTATION_POLICY.maxElements,
@@ -61,7 +61,7 @@ function framed(html: string): string {
       maxTextCharacters: MAX,
       textChunkCharacters: STATIC_PRESENTATION_POLICY.searchTextChunkCharacters,
       maxFindQueryCharacters: STATIC_HTML_MAX_FIND_QUERY_CHARACTERS,
-    })})`,
+    }),
   );
   frame.dispatchEvent(
     new frame.MessageEvent("message", {

@@ -494,7 +494,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
   /**
    * Observes the activation at the run's next pass and, while it still
    * reports running, follows it at the settle cadence for one observation
-   * interval: the turn that submitted the result ends silently (todo 7564).
+   * interval: the turn that submitted the result ends silently (#2131).
    */
   private noteAcceptedResult(runId: string, activationKey: string): void {
     const memory = this.memory(runId);

@@ -10,7 +10,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Window } from "happy-dom";
-import { installDesignRuntime } from "@orkestrator/protocol/design-runtime";
+import { designRuntimeSource } from "@orkestrator/protocol/design-runtime";
 import {
   DESIGN_EVENT,
   type DesignChange,
@@ -77,7 +77,7 @@ type RuntimeWindow = Window & { orkDesign: (operation: DesignOperation) => unkno
 async function runInRuntime(job: DesignRenderJob): Promise<unknown> {
   const window = new Window({ width: job.frame.width, height: job.frame.height }) as RuntimeWindow;
   try {
-    window.eval(`(${installDesignRuntime.toString()})()`);
+    window.eval(designRuntimeSource());
     const run = (operation: DesignOperation) => {
       try {
         return window.orkDesign(operation);

@@ -3,7 +3,7 @@
  * stream did, under the live item's id. The first replay after live streaming
  * renames every row (`replayedRowId`); a tab that kept the reader's opened
  * tool group and place by call id keeps them only if the calls are not
- * renamed too (todo 0050, task 5).
+ * renamed too (#1941).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";

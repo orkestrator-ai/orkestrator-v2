@@ -140,7 +140,7 @@ missing from parsed records. These classifications alone do not establish cause.
 | `Electron backend command registry > GitHub credential helper > takes a token out of an origin left by an earlier clone` | backend/tests/commands-container-exec.test.ts | 5,005.96 ms timeout; child status null | same owner |
 | `bounded in-container boot wait > a pending shell probe is clipped to the remaining overall deadline` | backend/tests/container-readiness.test.ts | 2,102.05 ms against a 1,500 ms assertion | passed, 3.8 s |
 | `bounded in-container boot wait > renews an expired shell wait window and accepts readiness in the next exec` | backend/tests/container-readiness.test.ts | container-exited error, 2,179.83 ms | same owner |
-| `LoopbackListenerOwnership on this host > attributes a real :: listener and refuses another environment` | backend/src/core/preview-listener-ownership.test.ts | unattributed instead of this-environment, 1,161.74 ms | passed, 1.2 s |
+| `LoopbackListenerOwnership on this host > attributes a real :: listener and refuses another environment` | backend/src/core/previews/listener-ownership.test.ts | unattributed instead of this-environment, 1,161.74 ms | passed, 1.2 s |
 | `real backend runner seals hashed evidence and refuses a moved head or replaced log` | backend/src/core/review-validation-service.test.ts | empty output instead of evidence, 2,547.90 ms | passed, 2.3 s |
 | `goalWorkspaceFingerprint > changes with a new file, an edit and a commit, and not otherwise` | backend/src/core/native-agent-goal-check.test.ts | 5,000.98 ms timeout | passed, 0.9 s |
 | `no backend file imports zod` | backend/src/core/no-zod.test.ts | 12,686.14 ms against a 5,000 ms deadline | passed, 0.3 s |

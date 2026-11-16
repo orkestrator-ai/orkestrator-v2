@@ -7,7 +7,7 @@ import {
   GatewayEventReplay,
 } from "./gateway-event-replay.js";
 import { TerminalWebSocketGateway } from "./terminal-websocket-server.js";
-import type { LegacyLoopbackPortAccess, PreviewRuntime } from "./core/preview-runtime.js";
+import type { LegacyLoopbackPortAccess, PreviewRuntime } from "./core/previews/index.js";
 import { PreviewAdmission } from "./preview-admission.js";
 import { PreviewMetrics } from "./preview-metrics.js";
 import { PreviewTunnelServer } from "./preview-tunnel-server.js";

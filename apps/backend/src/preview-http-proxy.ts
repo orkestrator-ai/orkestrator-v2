@@ -15,11 +15,13 @@ import {
   type PreviewServiceDefinition,
 } from "@orkestrator/protocol/preview-services";
 
-import type { AuthenticatedPreviewAccess } from "./core/preview-access.js";
-import type { PreviewRuntime } from "./core/preview-runtime.js";
+import type {
+  AuthenticatedPreviewAccess,
+  PreviewRuntime,
+  ResolvedPreviewTarget,
+} from "./core/previews/index.js";
 import { PreviewAdmission } from "./preview-admission.js";
 import type { PreviewMetrics } from "./preview-metrics.js";
-import type { ResolvedPreviewTarget } from "./core/preview-service-registry.js";
 import { connectPreviewUpstream, type PreviewUpstreamOptions } from "./preview-upstream.js";
 import {
   DEFAULT_PREVIEW_UPSTREAM_POOL_LIMITS,

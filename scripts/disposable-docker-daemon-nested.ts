@@ -6,7 +6,7 @@ import process from "node:process";
 import type { InstanceRecord, InstanceSettings } from "./disposable-docker-daemon";
 
 /**
- * The nested rootful mode of the disposable Docker daemon (to-do 4730 task 1):
+ * The nested rootful mode of the disposable Docker daemon (#2028):
  * a privileged `docker:dind` container on an outer daemon (normally the host's
  * own), with its own data volume, a socket in the instance's private runtime
  * directory and a supervisor loop that starts `dockerd` again whenever it

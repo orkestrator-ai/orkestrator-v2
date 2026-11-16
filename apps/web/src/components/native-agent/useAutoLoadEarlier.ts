@@ -12,10 +12,11 @@ let automaticPagingDisabled = false;
 /**
  * Turns automatic paging off for this page load. For fixtures that exercise
  * the "Load earlier messages" button itself, which automatic paging would
- * otherwise use up before the test clicks it.
+ * otherwise use up before the test clicks it. A unit test that shares the
+ * module with others passes `false` when it is done.
  */
-export function disableAutoLoadEarlier(): void {
-  automaticPagingDisabled = true;
+export function disableAutoLoadEarlier(disabled = true): void {
+  automaticPagingDisabled = disabled;
 }
 
 /** Automatic pages that may be requested from one head before paging stops. */

@@ -5,7 +5,7 @@ import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics";
 import { SCENARIOS, measureTmuxExecs } from "../scripts/tmux-exec-count";
 
 /**
- * The exec budget of one tab's poll loop (to-do 1202 task 8), measured by the
+ * The exec budget of one tab's poll loop (#1667), measured by the
  * same harness the before-and-after numbers come from. Over 120 simulated
  * seconds; the first two are the fast ticks after start.
  */
@@ -54,7 +54,7 @@ describe("tmux poll exec budget", () => {
     expect(counts.total).toBeLessThanOrEqual(seconds + 8);
   });
 
-  test("every exec of the loop is charged to its tmux-tab-loop tick (todo 7567)", async () => {
+  test("every exec of the loop is charged to its tmux-tab-loop tick (#2131)", async () => {
     for (const scenario of SCENARIOS) {
       const metrics = new RecurringWorkMetrics({ enabled: true });
       const counts = await measureTmuxExecs(
@@ -78,7 +78,7 @@ describe("tmux poll exec budget", () => {
     }
   });
 
-  test("a tick is changed only when it finds transcript lines or hook files (todo 7567)", async () => {
+  test("a tick is changed only when it finds transcript lines or hook files (#2131)", async () => {
     const outcomes = async (scenario: (typeof SCENARIOS)[number], hookFileAtSeconds?: number) => {
       const metrics = new RecurringWorkMetrics({ enabled: true });
       const counts = await measureTmuxExecs(

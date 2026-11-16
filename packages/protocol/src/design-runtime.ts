@@ -13,13 +13,21 @@ import type {
   DesignStyleResult,
   DesignValidationReport,
 } from "./design-canvas.js";
+import {
+  createStaticHtmlSanitizer,
+  type StaticHtmlSanitizerCounts,
+} from "./static-html-sanitizer.js";
 
 /**
  * Self-contained: serialized into an opaque sandbox and the backend renderer.
  * One sanitizer and one DOM budget serve both, so a frame the backend accepts
- * renders the same way in every client.
+ * renders the same way in every client. The sanitizer arrives as an argument
+ * (`createStaticHtmlSanitizer`, shared with the transcript's static document
+ * presentation runtime) because a serialized function has no module scope;
+ * evaluate the runtime through `designRuntimeSource` or `designBootstrap`.
  */
 export function installDesignRuntime(
+  createSanitizer: typeof createStaticHtmlSanitizer,
   matchesShortcut?: typeof matchAppShortcut,
   shortcuts?: readonly AppShortcut[],
   claimsShortcut?: typeof appClaimsShortcut,
@@ -27,68 +35,8 @@ export function installDesignRuntime(
 ) {
   const MAX_HTML_BYTES = 256 * 1024;
   const MAX_ELEMENTS = 5000;
-  const forbidden = "script,iframe,frame,object,embed,base,meta,link,portal,applet";
-  const externalUrl = /^\s*(?:https?:)?\/\//i;
-  const cssExternal = /url\(\s*['"]?\s*(?:https?:)?\/\//gi;
-  const cssImport = /@import\s/gi;
+  const { clean, elementCount, emptyCounts } = createSanitizer();
   let mode: "inspect" | "preview" = "inspect";
-  interface Counts {
-    scripts: number;
-    handlers: number;
-    externalReferences: number;
-    forbiddenElements: number;
-    executableUrls: number;
-  }
-  const emptyCounts = (): Counts => ({
-    scripts: 0,
-    handlers: 0,
-    externalReferences: 0,
-    forbiddenElements: 0,
-    executableUrls: 0,
-  });
-  function countCss(text: string | null, counts: Counts) {
-    if (!text) return;
-    counts.externalReferences += (text.match(cssExternal) ?? []).length;
-    counts.externalReferences += (text.match(cssImport) ?? []).length;
-  }
-  function clean(doc: Document | DocumentFragment, counts: Counts) {
-    doc.querySelectorAll(forbidden).forEach((node) => {
-      if (node.tagName.toLowerCase() === "script") counts.scripts++;
-      else counts.forbiddenElements++;
-      node.remove();
-    });
-    for (const node of Array.from(doc.querySelectorAll("*"))) {
-      if (node.tagName.toLowerCase() === "style") countCss(node.textContent, counts);
-      for (const attr of Array.from(node.attributes)) {
-        const lower = attr.name.toLowerCase();
-        if (/^on/i.test(attr.name)) {
-          counts.handlers++;
-          node.removeAttribute(attr.name);
-        } else if (["srcdoc", "nonce", "http-equiv", "action", "formaction"].includes(lower)) {
-          counts.forbiddenElements++;
-          node.removeAttribute(attr.name);
-        } else if (["href", "src", "xlink:href", "srcset", "poster"].includes(lower)) {
-          if (/^(?:javascript|vbscript):/i.test(attr.value.trim())) {
-            counts.executableUrls++;
-            node.removeAttribute(attr.name);
-          } else if (externalUrl.test(attr.value) && lower !== "href") {
-            counts.externalReferences++;
-          }
-        } else if (lower === "style") {
-          countCss(attr.value, counts);
-        }
-      }
-      if (node instanceof HTMLTemplateElement) clean(node.content, counts);
-    }
-  }
-  function elementCount(root: Document | DocumentFragment): number {
-    let total = 0;
-    for (const node of Array.from(root.querySelectorAll("*"))) {
-      total++;
-      if (node instanceof HTMLTemplateElement) total += elementCount(node.content);
-    }
-    return total;
-  }
   function depthOf(root: Element | null): number {
     if (!root) return 0;
     let deepest = 0;
@@ -103,7 +51,7 @@ export function installDesignRuntime(
   function byteLength(value: string) {
     return new TextEncoder().encode(value).length;
   }
-  function parse(html: string, counts: Counts = emptyCounts()) {
+  function parse(html: string, counts: StaticHtmlSanitizerCounts = emptyCounts()) {
     if (typeof html !== "string") throw new Error("Invalid HTML");
     if (byteLength(html) > MAX_HTML_BYTES) throw new Error("HTML exceeds 256 KiB");
     const doc = new DOMParser().parseFromString(html, "text/html");
@@ -574,7 +522,16 @@ function designDocument(scriptSource: string, scriptAttributes: string, script: 
 }
 
 function designRuntimeScript(): string {
-  return `(${installDesignRuntime.toString()})(${matchAppShortcut.toString()}, ${JSON.stringify(APP_SHORTCUTS)}, ${appClaimsShortcut.toString()}, ${shortcutFocus.toString()});`;
+  return `(${installDesignRuntime.toString()})(${createStaticHtmlSanitizer.toString()}, ${matchAppShortcut.toString()}, ${JSON.stringify(APP_SHORTCUTS)}, ${appClaimsShortcut.toString()}, ${shortcutFocus.toString()});`;
+}
+
+/**
+ * The runtime with its sanitizer and without app shortcut routing, as a script
+ * for a page that only renders, validates or edits documents (tests and
+ * in-process renderers). Frames use `designBootstrap`.
+ */
+export function designRuntimeSource(): string {
+  return `(${installDesignRuntime.toString()})(${createStaticHtmlSanitizer.toString()});`;
 }
 
 /** Only our nonce-bearing bootstrap executes. Authored code has no nonce. */

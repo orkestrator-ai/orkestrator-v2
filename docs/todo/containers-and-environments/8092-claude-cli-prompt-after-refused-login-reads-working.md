@@ -28,10 +28,10 @@ hooks the image installs (`docker/entrypoint.sh`: `UserPromptSubmit`, `Stop`,
 `StopFailure`) and `orkestrator-state-signal`; the backend reads the state
 file with the poll in `apps/backend/src/core/tmux-poll.ts`
 (`ClaudeStatePollManager`) and has no ceiling on how long `working` may last.
-The host `claude-tmux` path reads the same hooks (`tmux-hooks.ts`) and is
-probably affected the same way; not observed.
+The host `claude-tmux` path reads the same hooks (`tmux-hooks.ts`); it did
+not show the gap on 2026-11-16 (see Investigation).
 
-**Investigation.** Seen on beelink on 2026-11-14 (to-do 5160 task 4) with
+**Investigation.** Seen on beelink on 2026-11-14 (to-do 5160 (retired) task 4) with
 `container-claude-terminal-signal.spec.ts` and
 `ORKESTRATOR_AGENT_TEST_CLAUDE_TERMINAL_FAILED_TURN=1`, on a
 `--no-agent-credentials` profile on a `docker:disposable --host-loopback`
@@ -49,6 +49,22 @@ A probe with `claude -p` in the same container showed the state file at
 (179 s). Whether a real Anthropic key refusal behaves the same was not
 checked (it needs a real request to Anthropic).
 
+Not seen in a host `claude-tmux` tab on arktech-mini on 2026-11-16 (to-do
+5160 (retired) task 7, `failed-turn-bell-tmux-live.spec.ts`, pinned CLI from
+the profile's toolchain). There the model was `refused-login-model.ts`,
+whose 401 carries `x-should-retry: false`, so the CLI made one request, fired
+`StopFailure` at once and showed "Not logged in · Please run /login" in its
+transcript. The next prompt still went to the model (10 to 36 s later on
+that loaded host, in all three runs watched for 120 s), failed the same way,
+fired `StopFailure` and rang `agent_failed`; the tab settled idle. Two
+earlier runs watched for only 30 s ended with the tab busy, but the CLI on
+that host took up to 47 s to send any prompt, so they show a slow CLI, not
+the gap. The difference from the container run is the retries: the
+container fake sends no `x-should-retry` header, so the CLI retried ten
+times before giving up. Whether the locally answered prompt follows only
+exhausted retries is untested; running the container case against a model
+that marks its 401 not retryable would tell.
+
 **Decisions.**
 
 - **How to settle a prompt the CLI refuses without a hook?**
@@ -64,5 +80,5 @@ checked (it needs a real request to Anthropic).
 
 ## Related
 
-- [5160](../cross-cutting/5160-silent-failures-live-evidence.md) task 4, where this was found.
+- 5160 (retired) task 4, where this was found, and task 7, the host `claude-tmux` check above; both specs are described in [agent-testing.md](../../development/agent-testing.md#failed-turn-bell-refused-login-model).
 - [0020](0020-container-state-observation.md), the container Claude state signal.

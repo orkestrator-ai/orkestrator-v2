@@ -26,7 +26,7 @@ import {
 } from "./container-scripts.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { PtyExitEvent, PtyProcess } from "./pty.js";
-import { createPreviewHarness } from "./preview-test-support.js";
+import { createPreviewHarness } from "./previews/test-support.js";
 import {
   createSetupCompletionTracker,
   isRetiredSetupTerminal,

@@ -79,7 +79,7 @@ test("a headless profile's Electron has no display and the app is served to a br
     expect.arrayContaining([...HEADLESS_ELECTRON_SWITCHES]),
   );
   // An agent-test Electron on Linux writes no core dumps, so a crash cannot
-  // leave a gigabyte file in the checkout (to-do 7554), unless the launcher
+  // leave a gigabyte file in the checkout (#2080), unless the launcher
   // was asked to keep them.
   if (!processes[0]!.environment.includes("ORKESTRATOR_AGENT_TEST_CORE_DUMPS=1")) {
     for (const { pid } of processes) {

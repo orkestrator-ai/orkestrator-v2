@@ -1,6 +1,6 @@
 /**
  * A static verification reads the document's text for Find in the real
- * worker, with real Chromium, from the effective HTML it stores (to-do 5780).
+ * worker, with real Chromium, from the effective HTML it stores (#2155).
  * Browser cases skip with a warning when no Chromium executable resolves.
  *
  * The container case runs the same verification in the prepared worker image
@@ -8,7 +8,7 @@
  * to-do 7670 (retired)). It skips with a warning unless Docker answers and the
  * image `ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE` (default the worker's own tag)
  * exists and its bundled worker reads search text; build it with
- * docker/artifact-preview-worker/build.sh. An image prepared before to-do 5780
+ * docker/artifact-preview-worker/build.sh. An image prepared before #2155
  * carries the same tag without that step, so the case probes the bundle, as
  * preview-print.test.ts probes for pdf.js, rather than trusting the tag.
  */

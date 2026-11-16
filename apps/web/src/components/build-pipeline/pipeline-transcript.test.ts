@@ -462,6 +462,29 @@ quoted context
     ]);
   });
 
+  test("preserves the neutral ended state from a stored transcript", () => {
+    const rows = toPipelineTranscriptRows(
+      [
+        {
+          id: "ended-agent",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "subagent",
+              content: "reviewer",
+              subagentId: "orphan",
+              agentState: "ended",
+            },
+          ],
+        },
+      ],
+      "codex",
+      FALLBACK,
+    );
+    expect(rows[0]?.parts[0]?.agentState).toBe("ended");
+  });
+
   test("rebuilds a subagent's own actions rather than trusting them", () => {
     const transcript = toPipelineTranscript(
       [

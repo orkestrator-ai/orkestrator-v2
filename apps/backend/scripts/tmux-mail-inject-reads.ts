@@ -6,7 +6,7 @@ import { StorageService } from "../src/core/storage.js";
 
 /**
  * Counts what delivering one agent-mail message to an idle claude-tmux tab
- * costs the backend (to-do 1202 task 8, report finding BG-15):
+ * costs the backend (#1667, report finding BG-15):
  *
  *   mise exec -- bun apps/backend/scripts/tmux-mail-inject-reads.ts [--deliveries 2000] [--json]
  *

@@ -200,3 +200,29 @@ Its aggregate evidence is the workspace log in the same `0s0ejx` directory.
 The CLI process reader and test are outside this branch's diff. This is another
 intermittent owner in this aggregate observation, with no confirmed cause;
 no timeout, skip or assertion changed.
+
+Final runtime result: exit 1 in 1,019.7 s. Web passed 14,952 tests (ten skipped,
+zero failed); backend passed 18,577 (206 skipped, one failed). The backend
+failure was `LoopbackListenerOwnership on this host > attributes a real
+127.0.0.1 listener and refuses another environment` at
+`apps/backend/src/core/preview-listener-ownership.test.ts:452`: expected
+`other-environment`, received `unchecked` (3,019.68 ms). A manual complete-owner
+rerun with one worker also failed, this time on the `::` variant with the same
+unchecked attribution (22 passed, one failed, 9.71 s):
+`mise run test:logged -- --name fix-listener-owner -- bun test --cwd
+apps/backend ./src/core/preview-listener-ownership.test.ts --parallel=1 --only-failures`.
+That manual failure is preserved in `orkestrator-test-run.f80QKM` under the
+same host temporary root.
+
+The aggregate runner then retried every failed owner by itself. The listener
+owner passed in 4.0 s; CLI passed in 1.1 s; activity sweep passed in 939 ms.
+Installer-plan still failed in 5.3 s. These retries establish intermittence for
+the listener, CLI and activity-sweep owners, without establishing a cause.
+The listener test and implementation are unchanged on this branch.
+The CLI package used two isolated workers in the original workspace run.
+
+All group evidence is now compressed under `orkestrator-test-run.0s0ejx`:
+`workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`,
+`root-and-agent-support-tests.log.gz`, and each `rerun-*.log.gz`.
+The outer command's failure log is
+`orkestrator-test-run.v2cwL4/fix-default-runtime.log.gz`.

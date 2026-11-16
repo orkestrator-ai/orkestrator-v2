@@ -252,3 +252,15 @@ Passing raw output was deleted, so counts are not inferred. Aggregate evidence:
 `output/playwright/test-results/PaneBreakpoint-split-panes-c1009-shell-appendChild-fallback--mobile-chromium/trace.zip`.
 No pane source, assertion, timeout or skip changed. The pass establishes
 intermittence, not the cause or a repair.
+
+The full component command ultimately ended at the logged runner's absolute
+30-minute deadline: `summary.json` reports `elapsedMs: 1801031`,
+`timeoutReason: "absolute"`, `outputLimitExceeded: false`, and
+`infrastructureError: false`. The last announced case was 1,638 of 1,908;
+active tests were interrupted, and no complete pass/fail/skip totals were
+printed. The deadline is not treated as an environmental excuse or as evidence
+of a branch defect; aggregate completion remains unverified. The new fork-card
+browser owner passed separately at both viewports, as did the public-site
+suite, which the interrupted aggregate did not reach. The preserved aggregate
+log is now `orkestrator-test-run.Ni6dzT/browser.log.gz` under the temporary root
+above, alongside its `summary.json`.

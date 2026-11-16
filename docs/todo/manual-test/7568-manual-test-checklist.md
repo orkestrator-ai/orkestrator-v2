@@ -31,7 +31,7 @@ been removed, and 8110 (retired) task 1's real-provider paging check came in.
 
 ### Tasks
 
-1. **Manual tests and live checks** (342 items): run each check under
+1. **Manual tests and live checks** (343 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (24 items): make each call
@@ -145,6 +145,10 @@ parent of the commit that deleted it (`git log -1 --diff-filter=D -- docs/todo/c
 and the behaviour is in
 [Choosing a machine](../../architecture/coordinator.md#choosing-a-machine).
 
+7767 was retired on 2026-11-16, once its last agent task (the two-machine walk-through, run with Linear faked) was done and its live check moved here; it is in Git
+history at the parent of the commit that deleted it (`git log -1 --diff-filter=D -- docs/todo/cross-cutting/7767-linear-boards-per-project-and-coordinator-tools.md`),
+and the behaviour is in [Linear](../../architecture/tickets.md#linear).
+
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.
 Where an agent part of the same task remains, the source to-do keeps it,
@@ -186,12 +190,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 0 |
 | Containers and environments | 31 | 6 |
 | Coordinator and Multi Review | 86 | 3 |
-| Cross-cutting | 92 | 8 |
+| Cross-cutting | 93 | 8 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 16 | 1 |
 | Transcripts, observation and bandwidth | 27 | 2 |
-| **Total** | 342 | 24 |
+| **Total** | 343 | 24 |
 
 ## Outstanding work
 
@@ -698,6 +702,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 
 - [ ] **8109 (retired) task 5: run the container app-wiring spec on its new pipeline seed.** (Background: the `import_legacy_build_pipelines` Retired row in [version-compatibility.md](../../architecture/version-compatibility.md#retired); the to-do is in Git history at `a8b89f154`.) The spec's "a pipeline naming the run opens in the container's Build tab" step now stores its finished pipeline through `seedBuildPipeline` (`e2e/agent-testing/backend-store.ts`) instead of the removed command. The building session could not reach a Docker daemon, so the spec was not run. On a host with Docker, start a credential-free profile with a container fixture (`mise run dev:test --profile seed-8109 --fixture --fixture-environments local,container --no-agent-credentials --no-host-seed --headless`), wait for `dev:status --json` to report `ready`, then run `ORKESTRATOR_AGENT_TEST_PROFILE=seed-8109 mise run test:logged -- --name app-wiring -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts container-app-wiring.spec.ts`, and stop and reset the profile afterwards (`dev:stop`, `dev:reset`). Expected: every test in the file passes; the seeded pipeline lists, and its Build tab shows the validation run's two commands. Record: the commit, the pass and fail counts and any failing step's message, as a reply to the coordinator. A failure goes to a new to-do for an agent.
 - [ ] **8171 (retired) task 1: burst rescans on arktech-mini once `fseventsd` delivers again.** (Background: [Lost events on macOS](../../architecture/git-scan-caches.md#lost-events-on-macos), "A watcher that missed a change"; the to-do is in Git history.) On 2026-11-15 arktech-mini's `fseventsd` was at 100% CPU after 10 days of uptime and delivered events late and sparsely: a single `fs.watch` saw nothing within 20 s, and the watcher benchmark got a hint for 3 of 30 writes and 11 of 30 removals within 60 s, each 20 to 59 s late. So the fix was measured only on a saturated host; a healthy one is still unmeasured. Restarting `fseventsd` needs a reboot or root, which is yours to do. After the next reboot of arktech-mini, (1) check a watch gets events again: `mkdir -p ~/w8171 && bun -e 'require("fs").watch(process.env.HOME+"/w8171",()=>{console.log("event");process.exit(0)}); setTimeout(()=>require("fs").writeFileSync(process.env.HOME+"/w8171/x","x"),500)'` prints `event` within a few seconds; (2) from a worktree on a current build, run the busy driver as in [the testing guide](../../development/testing-guide.md#live-idle-ab) with `--busy-rounds 5 --busy-clients 0 --busy-environments 10 --busy-burst-files 2500 --busy-turn-files 2500 --fixture-environments local --agent-platforms pi --freshness-probes 0`; (3) in that profile's backend log, count `scan.watcher-missed-change` lines; (4) from a worktree, run `mise run test:logged -- --name watcher-real -- bun test --cwd apps/backend tests/worktree-watcher-real.test.ts` (about 15 minutes). Expected: no `burst-backend` timeout, rescans in a few seconds, no or very few `scan.watcher-missed-change` lines (each one makes that environment poll every 15 s for at least 5 min), and the real-watch file passing. Record: uptime, `fseventsd` CPU, the `burst-backend` and `burst-clear-backend` rows, the line count and the real-watch file's pass/fail counts, as a reply to the coordinator; an agent adds them to the "A watcher that missed a change" paragraph and to flake [9821](../../tests/flaky-tests/environments-and-containers/9821-worktree-watcher-real-in-process-watch-saturated-fseventsd.md) (its next step). This also unblocks [7551](../cross-cutting/7551-macos-watch-churn-loses-events.md) task 3.
+- [ ] **7767 (retired) task 10: Linear on two linked machines with a throwaway Linear key.** (Background: [Linear](../../architecture/tickets.md#linear); the to-do is in Git history at the parent of the commit that deleted it (`git log -1 --diff-filter=D -- docs/todo/cross-cutting/7767-linear-boards-per-project-and-coordinator-tools.md`).) On 2026-11-16 agents ran these steps with two real storage services, the real command handlers and the command node's real sync over an in-process link, with Linear faked (`apps/backend/tests/linear-two-machines.test.ts`). No run has used two real backends or a real Linear key, and agents may not use yours. Make a personal API key in a throwaway Linear workspace with one team and one Linear project (not your real workspace: step 5 writes to it). Start two disposable profiles, `mise run dev:test --profile linear-cmd --fixture --no-agent-credentials` and `mise run dev:test --profile linear-leaf --fixture --no-agent-credentials`, each in its own terminal, and in each add a project for the same repository (two clones of one small repository with the same `origin`). (1) On the leaf, open that project's Linear tab, connect with the key and link the board (the team and its Linear project). (2) Attach the leaf to the command profile (Settings → Machines) and wait up to a minute for a sync pass. (3) In the command profile, the same repository's project's Linear tab shows the same board, and a notice that Linear is connected on the leaf with a Use it here button. (4) Click Use it here: the command profile connects as the same Linear user and lists only that board's issues. (5) Move an issue between lanes there and check the leaf's Linear tab shows the move after a refresh. (6) Disconnect in the command profile, wait up to a minute, and check the leaf's Linear tab asks for a key again while its board link is kept; connect the leaf again and check it stays connected after the next pass. Then `dev:stop` and `dev:reset` both profiles and revoke the throwaway key in Linear. Keep the key and gateway tokens out of screenshots and notes. Record: the date, the commit and pass or fail per step, as a reply to the coordinator. A failure is agent work for a new to-do.
 
 #### Design canvas
 

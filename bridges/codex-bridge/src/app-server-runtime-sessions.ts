@@ -29,7 +29,8 @@ import {
   type AppServerEngine,
 } from "./engine/app-server-engine.js";
 
-import type { EngineThread, EngineUsageSnapshot } from "./engine/types.js";
+import type { EngineThread, EngineTurnConfig, EngineUsageSnapshot } from "./engine/types.js";
+import { codexManagedReportedPolicy } from "./codex-managed-requirements.js";
 import {
   liveCodexPolicy,
   phaseToExternalStatus,
@@ -1059,7 +1060,7 @@ export class CodexRuntimeSessions {
     // generation: the attachment fact Claude, Cursor and Pi report as
     // `summary.state`, beside (not instead of) the engine's own health. An
     // idle-detached, unmaterialized or restored-but-unresumed thread reads
-    // `detached`; the next prompt or tab read re-attaches it (todo 7380).
+    // `detached`; the next prompt or tab read re-attaches it (#2149).
     return { ...health, session: { state: threadId ? "attached" : "detached" } };
   }
 
@@ -1527,7 +1528,7 @@ export class CodexRuntimeSessions {
     return {
       // Keeps the pre-migration contract; `phase` carries the new detail.
       status: phaseToExternalStatus(phase),
-      ...(session.config.policy ? { policy: session.config.policy } : {}),
+      ...this.reportedPolicyField(session.config),
       phase,
       // A title read back from the first prompt is a resume-list label, not a
       // title: leaving it out lets the backend name the session.
@@ -1857,6 +1858,21 @@ export class CodexRuntimeSessions {
     }
   }
 
+  /**
+   * The policy the session applies on this host, which an administrator's
+   * Codex requirements can narrow (`codexManagedReportedPolicy`, 8085 (retired)).
+   * Display only: widening checks keep comparing the policy the session holds.
+   */
+  private reportedPolicyField(config: EngineTurnConfig): {
+    policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
+  } {
+    const policy = codexManagedReportedPolicy(
+      config,
+      this.ctx.options.engine.managedRequirements(),
+    );
+    return policy ? { policy } : {};
+  }
+
   async getConfig(sessionId: string): Promise<{
     model?: string;
     modelReasoningEffort?: string;
@@ -1875,7 +1891,7 @@ export class CodexRuntimeSessions {
         : {}),
       mode: session.config.mode,
       fastMode: session.config.serviceTier === "fast",
-      ...(session.config.policy ? { policy: session.config.policy } : {}),
+      ...this.reportedPolicyField(session.config),
       durable: await this.isSessionConfigPersisted(session),
     };
   }

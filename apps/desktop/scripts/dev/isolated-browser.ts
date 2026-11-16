@@ -115,7 +115,7 @@ const PROFILE_OPTIONS = new Set([
  * A credential-free run also gets `--no-host-seed`, so it reads nothing from
  * the production data directory or the host's agent homes: it downloads its
  * toolchains and starts with no cached model metadata. Review preparation runs
- * these suites for tickets that forbid reading those directories (to-do 7835's
+ * these suites for tickets that forbid reading those directories (#2191's
  * pipeline did, and its seeded run broke that rule). The profile records the
  * choice, so a suite that restarts it keeps it. `--host-seed` keeps the
  * faster local copy; a run that names credential sources or
@@ -177,7 +177,7 @@ const IMAGE_QUALIFICATION_TIMEOUT_MS = 420_000;
  * after another against a profile nothing else touches. Within one profile
  * the specs share that fixture and must stay serial.
  *
- * The split balances measured run time on the Linux host. To-do 7569
+ * The split balances measured run time on the Linux host. #2189
  * (retired) took the fixed waits out of the Files panel, annotation evidence
  * and coordinator view specs (2026-11-11: shard 1 395 s, shard 2 240 s before
  * this split), so the rebuild cycle, draft attachments, design export and root
@@ -238,7 +238,7 @@ export function dockerFixtureShards(
 /**
  * A Docker run's profile arguments. Its containers must reach the profile's
  * agent tools port, so unless the caller chose one, each profile takes a free
- * port from the documented range (`--agent-tools-port auto`, to-do 7500): one
+ * port from the documented range (`--agent-tools-port auto`, #2129): one
  * host firewall rule then admits every concurrent run on the host, with no
  * coordination between the agents that started them.
  */

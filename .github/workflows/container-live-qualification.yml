@@ -232,7 +232,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-telemetry-hosts.test.ts --parallel=1
 
-      # Host loopback refused on a default rootless daemon (to-do 4730 task 2).
+      # Host loopback refused on a default rootless daemon (#1926).
       # It skips on these rootful runners: it needs a rootless daemon declared
       # with ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=disabled, which
       # `mise run docker:disposable -- start` prints for a manual run.
@@ -263,7 +263,7 @@ jobs:
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-rebuild-faults.test.ts --parallel=1
 
       # The build pipeline's "Rewind code to here" through `docker exec`,
-      # on fake providers (to-do 0405, task 7).
+      # on fake providers (#1528).
       - name: Live build pipeline code rewind
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/build-pipeline-code-rewind-docker.test.ts --parallel=1
@@ -278,7 +278,7 @@ jobs:
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/claude-state-signal-docker.test.ts --parallel=1
 
       # The image's real Claude CLI against a fake API on the container's
-      # loopback: StopFailure stops a refused turn reading working (to-do 1200).
+      # loopback: StopFailure stops a refused turn reading working (#1612).
       - name: Live Claude terminal failed turn
         if: ${{ !cancelled() }}
         env:
@@ -287,7 +287,7 @@ jobs:
 
       # The claude-tmux hook doorbell: the image's install probe and hook ring
       # to a fake doorbell on the container's loopback, and a real tab loop's
-      # idle exec count (to-do 1202, task 8).
+      # idle exec count (#1667).
       - name: Live tmux hook doorbell
         if: ${{ !cancelled() }}
         env:

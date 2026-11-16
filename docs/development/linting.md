@@ -44,7 +44,8 @@ output — one push reports both.
 The repository-wide guards that need no build run in one fast stage,
 `mise run guards` (`scripts/guards.ts`; testing guide, "Guards"): the source
 guards below, the DOM absence scan, inheritance chains, test suite ownership,
-the raw-console directive scan, and the flaky-test index, to-do index and
+the raw-console directive scan, the [retired to-do citation](#retired-to-do-citations)
+scan, and the flaky-test index, to-do index and
 number-claim checks (`tests/unit/flaky-tests-index.test.ts`,
 `tests/unit/todo-index.test.ts`, `tests/unit/number-claims.test.ts`). `mise run
 test` runs that stage first, so review preparation hears about a broken guard
@@ -212,6 +213,31 @@ only what lint cannot see, a directive disabling `no-restricted-globals`
 application tree.
 Adding to the list needs the same case as these.
 
+## Retired to-do citations
+
+A to-do file is deleted when its last task is done
+([Maintaining the folders](../README.md#maintaining-the-folders)), so a code
+comment that still cites `to-do NNNN` sends the reader to nothing. The guard
+stage's `retired-todo-citations` check (`tests/source-guards/retired-todo-citations.ts`,
+fixtures in `tests/unit/retired-todo-citations.test.ts`) scans TypeScript,
+JavaScript, Swift, shell (including Zsh), YAML, TOML, Perl, Python, CSS, HTML,
+SVG and Dockerfiles outside `docs/` and `plans/`, excluding generated code,
+fixtures and build output listed in the module. It refuses a
+`to-do NNNN`, `todo NNNN` or `to-dos NNNN` citation (any case) whose number has
+no file under `docs/todo/`, unless the word `retired` sits right beside it.
+Deleted files still listed by Git do not count as live to-dos. In plural lists
+such as `to-dos 1234, 2345 and 3456`, each number is checked; commas, `and` and
+`or` separate numbers, and a nearby retirement marker applies to the whole list.
+When a change retires a to-do, repoint its citations in the same change: name
+the pull request that did the work (`#2149`; `git log -S '<citation>'` over the
+source trees finds the commit that wrote it), or mark it
+`to-do NNNN (retired)` when no pull request fits, such as when only a docs
+change ever cited it. Numbers that are data rather than citations (a fixture's
+sample text) go in the module's `DATA_FILES` list with their reason. The check
+reads only the `to-do` forms: a bare `(NNNN)` or `NNNN task N` cannot be told
+apart from a flaky-test case or a report part number, so those are repointed by
+hand.
+
 ## Module boundaries
 
 Three rules outside `correctness` are errors because they hold an
@@ -241,15 +267,18 @@ new.
     `nodes/`, `change-tracking/`, `transcript-artifacts/`, `scheduled-jobs/`,
     `mcp-management/`, `public-api/`, `http-bridge/`, `web-annotations/`,
     `permission-rules/`, `self-improvement/`, `opencode2/`, `control-mcp/`,
-    `plan-usage/`, `features/`) are reached only through their `index.ts`, which re-exports
-    by name (never `export *`). A new domain folder starts with an `index.ts`
+    `plan-usage/`, `features/`, `previews/`) are reached only through their
+    `index.ts`, which re-exports by name (never `export *`). A new domain folder starts with an `index.ts`
     and a pattern in both the `apps/backend/src/**` and the `tests/unit/**`
     overrides. Where routing a leaf module through `index.ts` would close a
     runtime import cycle (the storage layer importing a domain's store layout,
     for example), or would pull in the graph that the leaf module exists to keep
     out (`plan-usage/cache.ts`, which the bridge provider imports without the
     plan reader's credential modules), name that file as an exception in the
-    `apps/backend/src/**` pattern and say so in the `index.ts` header.
+    `apps/backend/src/**` pattern and say so in the `index.ts` header. The same
+    goes for a domain's test support imported by a test-only entrypoint whose
+    file name the test globs do not match (`previews/test-support.ts`, which
+    the `preview-*-harness.ts` entrypoints import).
 
   Test files, harnesses and fixtures are exempt from this rule (see the test
   globs in `.oxlintrc.json`).

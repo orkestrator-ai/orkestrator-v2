@@ -1,6 +1,6 @@
 /**
  * Which settled watcher hints cannot move a provisional capture's tree
- * (todo 7840). A test run or a build writes only Git-ignored output
+ * (#2185). A test run or a build writes only Git-ignored output
  * (`dist/`, `coverage/`, `node_modules/.cache/`); a capture after it costs a
  * full warm pass and a snapshot row and always finds the tree it already
  * published.

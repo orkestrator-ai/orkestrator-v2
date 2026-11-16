@@ -1,6 +1,6 @@
 /**
  * A slow remote must not stop a coordinator message from fast-forwarding the
- * checkout to the upstream it has already fetched (to-do 4720), on a real
+ * checkout to the upstream it has already fetched (#2050), on a real
  * `dev:test --fixture` profile. Run it with
  * `mise run test:agent:coordinator-slow-remote`, which starts a disposable
  * credential-free profile that offers only Pi, runs this file and resets the

@@ -130,7 +130,7 @@ dockerTest(
       await until(() => states.at(-1) === "waiting" && probes.length === 1);
 
       // A turn that ends on an API error runs StopFailure instead of Stop: it
-      // stops reading working and rings agent_failed (to-do 1200).
+      // stops reading working and rings agent_failed (#1612).
       await hook("UserPromptSubmit");
       await until(() => states.at(-1) === "working");
       await storage.updateEnvironment(environment.id, { hasUnreadWork: false });

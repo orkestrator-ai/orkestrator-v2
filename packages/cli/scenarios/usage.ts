@@ -20,7 +20,7 @@ import type { IsolatedBackend } from "./harness.js";
  * Limits: it counts only what each provider reported and the backend has
  * observed. The backend records a turn's usage on every projection and
  * session-state read and when it first records how the turn ended, so a
- * `session start --wait` turn with no later prompt is counted too (to-do 7815,
+ * `session start --wait` turn with no later prompt is counted too (#2170,
  * retired). Codex and Grok report tokens without a price, so their tokens land
  * in `unpricedTokens` and `costUsd` stays 0.
  */

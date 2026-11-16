@@ -130,6 +130,15 @@ writers on one `.jsonl`. When touching the prompt path:
   unloaded: a PreToolUse hook refuses its tools and the revision names it in
   `staleServers`. Re-prove the CLI behaviour with
   `mise run verify:claude:mcp-live` on every Claude bump.
+- **A join refuses a required server that is not connected.** The injected
+  Orkestrator servers must be `connected` before a prompt is written into a
+  running CLI; a new CLI's first turn is not held for them. A server the CLI
+  reports `failed` or `needs-auth` is not reconnected, so that 409 names the
+  address it could not reach and the agent tools reachability notice, never a
+  bare "retry" (`requiredServerRefusal`); it never repeats the CLI's own error
+  text or anything in the URL beyond scheme, host and path. The backend
+  preflights container Multi Review turns so a review fails up front instead
+  ([container-lifecycle.md](../../docs/architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)).
 
 ## The policy caps the permission mode
 
@@ -182,6 +191,16 @@ directly on a bare session; extend it with any new row rule. When touching it:
 - **Turn flags belong on `TurnState`.** The plan-mode re-prompt flags
   (`planApprovedThisTurn` and the two pending prompts) live on the turn, where
   the code that reads them is, not on the stream.
+
+A reload puts each subagent's steps back from its own transcript
+(`session-manager-subagent-rehydration.ts`). **Not every record in a subagent
+file is that subagent's.** A fork started from inside a subagent carries a copy
+of the parent subagent's whole conversation ahead of its prompt
+(`<fork-boilerplate>`), sibling launch calls included and without their
+results; read as the fork's own, each became a second launch card that never
+settled. Only what follows the fork prompt is the fork's, and a call the
+transcript already holds is never added again. A new CLI record shape that
+copies history needs the same treatment.
 
 ## Session catalogue and transport
 

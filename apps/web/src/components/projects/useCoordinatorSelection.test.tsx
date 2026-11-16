@@ -1,5 +1,5 @@
 /**
- * The panel's tab groups across a failed first read (to-do 5000): a read that
+ * The panel's tab groups across a failed first read (#2152): a read that
  * fails must never let the panel's default single group replace the groups
  * the backend holds, now or on the next visit.
  */

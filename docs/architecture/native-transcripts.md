@@ -88,27 +88,23 @@ target is sent whole up to `BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES` (4 MiB),
 because the next cursor starts before a row, never inside it. Bridge cursors
 are at most `BRIDGE_PAGE_CURSOR_MAX_LENGTH` (1,024) characters.
 
-The backend has two cursor namespaces that never mix
-(`native-agent-direct-history.ts`):
-
-- **v2 direct.** A backend cursor wraps the provider's cursor with digests of
-  the logical session and provider session and the provider's history epoch.
-  It must fit `DIRECT_HISTORY_CURSOR_MAX_LENGTH` (1,024); a cursor that would
-  not round-trip is not minted, and that page is served the joined way. A
-  cursor presented for another session or tab is `invalid`; the provider
-  rejects a stale epoch itself. Pages are cached in `DirectHistoryPageCache`,
-  dropped when the session's epoch changes: `NATIVE_DIRECT_PAGE_CACHE_MAX_ENTRIES`
-  (64) and `NATIVE_DIRECT_PAGE_CACHE_MAX_BYTES` (16 MiB) in total,
-  `NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_ENTRIES` (16) and
-  `NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_BYTES` (8 MiB) per session, with a
-  `NATIVE_DIRECT_PAGE_CACHE_TTL_MS` (5 min) backstop for a provider that edits
-  history without rotating its epoch (`native-agent-service-shared.ts`).
-- **v1 joined (`sync-v1`).** A cursor names a message id in the backend's own
-  joined projection, which is refreshed and fingerprinted before a page is
-  served. Every bundled bridge and OpenCode serve direct pages, so this path
-  serves only a source without them and renderers that mint a cursor where a
-  view has none. It is a retained compatibility path; see the end of this
-  document.
+The backend has one cursor namespace, direct (v2,
+`native-agent-direct-history.ts`). A backend cursor wraps the provider's
+cursor with digests of the logical session and provider session and the
+provider's history epoch. It must fit `DIRECT_HISTORY_CURSOR_MAX_LENGTH`
+(1,024); a provider cursor too long to wrap travels as a backend-held handle
+(below). A cursor presented for another session or tab is `invalid`, and so
+is any other cursor, including a v1 cursor of the retired joined paging
+(0232 task 4, 2026-11-16): `getMessagePage` answers it as expired without
+reading anything. The provider rejects a stale epoch itself. Pages are cached
+in `DirectHistoryPageCache`, dropped when the session's epoch changes:
+`NATIVE_DIRECT_PAGE_CACHE_MAX_ENTRIES` (64) and
+`NATIVE_DIRECT_PAGE_CACHE_MAX_BYTES` (16 MiB) in total,
+`NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_ENTRIES` (16) and
+`NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_BYTES` (8 MiB) per session, with a
+`NATIVE_DIRECT_PAGE_CACHE_TTL_MS` (5 min) backstop for a provider that edits
+history without rotating its epoch (`native-agent-service-shared.ts`). The
+sync-v1 projection names no history cursor.
 
 A progressive view carries a direct cursor (`historyPaging: "direct"`)
 whenever its provider pages and it has older history to load. The
@@ -124,20 +120,30 @@ that starts a message. When no kept row can name one (an OpenCode view left
 with only an error row), the view pages from the window's end
 (`historyCursorAtEnd`). Rows between the view's start and that position come
 back on the first page too, and the renderer drops them by id. A provider
-cursor too long to wrap travels as a backend-held handle (to-do 8110, retired 2026-11-15). Byte bounding happens to ordinary
+cursor too long to wrap travels as a short handle the backend holds
+(`DirectHistoryCursorHandles`, bounded by count and bytes; to-do 8110,
+retired 2026-11-15). A handle evicted or lost to a backend restart reads as
+an expired cursor, and the renderer re-reads the view, which names a new one.
+A kept view and a cached page mint their handle again each time they are
+served, so neither hands out one the store has since evicted. The
+end-of-window cursor names the window's newest row, inclusively (OpenCode's
+`openCode2CursorThrough`), never "the newest rows": appends do not move the
+epoch, and a page cached under a cursor is immutable within one. Byte bounding happens to ordinary
 sessions: a tool call's detail reference is larger than a short output the
 bridge summary kept inline, so a window of edits and short commands is
 larger once projected than the bridge measured it. Before 0232 such a view
 had no cursor, and **Load earlier messages** minted a joined one, a whole
-transcript read (the `o` efficiency workload measures both).
+transcript read (the `o` efficiency workload measures both). Joined paging
+was removed on 2026-11-16 (0232 task 4): a view whose provider has no page
+surface names no cursor, so it has nothing older to load, and the renderer
+offers no control for it (a click that finds no cursor retires the control).
 
 **Automatic paging.** The native tab pages without a click
 (`useAutoLoadEarlier`): once when it opens on a transcript with earlier
 history, so it shows the live window plus one page (up to 200 rows and
 1 MiB), and again whenever the transcript's head comes within 800 px of the
-viewport. It pages only from a direct cursor
-(`canLoadEarlierAutomatically`), so a joined mint or joined page, each a
-whole-transcript read, still needs the button. A background poll that lands
+viewport. It pages from the cursor the tab holds
+(`canLoadEarlierAutomatically`), which is always a direct one. A background poll that lands
 while a page is in flight does not retire it: the page merges into the live
 tail current when it lands, and is dropped only when a mutation, a later page,
 a read that replaced its cursor (a rotated history, a collapse to the live
@@ -151,10 +157,9 @@ keeps collapsing back to its live tail cannot load and lose the same page over
 and over.
 
 If an OpenCode view retains only a failed message's inline error row after
-dropping its oversized main row, no kept row can name a whole-message cursor.
-That view uses joined `sync-v1` paging instead; naming a cursor before the
-failed message would strand its main row. A provider cursor too long to wrap
-also requires joined paging.
+dropping its oversized main row, no kept row can name a whole-message cursor,
+and naming one before the failed message would strand its main row. That view
+pages from the window's end instead (above).
 
 ## Changed rows outside the live window
 
@@ -404,10 +409,30 @@ again; with no read at all nothing would ever refresh, so nothing would ever be
 announced. Coalescing a burst of session changes keeps a cause that names
 discovery (`coalesceChanges`, `resource-sync.ts`).
 
-A renewal announces only when the value changed as a view would show it
-(`storeProgressiveDiscovery`), so a stored value must not move when nothing
-did. Two normalisations keep it still: the runtime section's drift counter is
-left out of the comparison (`discoveryAnnouncementKey`), and each MCP server's
+A backstop read that finds a section expired answers `unchanged` when nothing
+changed (todo 8151). The expired section is still served with its stored
+availability (`ready`) while its renewal runs. The view and its token reflect
+the renewed value and failure status; a changed value or a new failure is
+announced. `stale` means a renewal failed and the value shown is the one before it. A provider runs at
+most two section jobs at a time; a section the limit refuses is started when
+one of them finishes (`deferredDiscoveryRenewals`), not left for the view's
+next read. The command catalogue's `fetchedAt` is left out of the discovery
+view, because it moves on every renewal and no view shows it. Before this,
+each backstop became a `stale` view, a 2 s follow-up and a second follow-up
+for the refused sections, all three whole bodies (about 32 KB each for a
+Claude tab). On the loopback model a 120 s idle window went from 4 whole
+views (96,676 B) to 5 `unchanged` answers (2,385 B); the attribution and
+both measurements are in to-do 8151 (retired 2026-11-16:
+`git show eb32124cc:docs/todo/transcripts-and-observation/8151-discovery-reads-during-a-quiet-turn.md`).
+
+A renewal announces when the value changed as a view would show it or when
+it first becomes stale after a rejection or the 2 s deadline
+(`storeProgressiveDiscovery`). Readers then use their 2 s settling follow-up;
+repeated failures and recovery with the same retained value stay silent.
+Invalidation removes queued renewals as well as cached sections, including
+queued-only sessions when their environment is deleted. A stored value must
+not move when nothing did. Two normalisations keep it still: the runtime
+section's drift counter is left out of the comparison (`discoveryAnnouncementKey`), and each MCP server's
 tool names are stored in one fixed order (`orderMcpServerTools`), because
 Codex app-server reports them as a map whose order changes between reads; the
 Codex bridge also sorts them before its cut. Before that, an idle Codex view
@@ -538,47 +563,19 @@ These are ceilings, not targets to raise.
 | Backend history page | 100 messages and 512 KiB by default, at most 200 and 1 MiB | `NATIVE_HISTORY_PAGE_*` (`native-agent-service-shared.ts`) |
 | Display tails | 512 KiB each, 128 sessions, 64 MiB | `NATIVE_DISPLAY_TAIL_MAX_*` (`native-agent-display-tails.ts`) |
 
-## Retained compatibility paths
+## Retired compatibility paths
 
-One path remains, in the register of
-[version-compatibility.md](version-compatibility.md#register) with its
-removal condition, which is met (checked 2026-11-15).
-
-- **Joined `sync-v1` history paging.** `getMessagePage` serves a v1 cursor by
-  refreshing the sync-v1 projection, which reads the whole transcript, and
-  paging the backend's own joined copy. Every renderer reaches it the same
-  way: when the progressive view carries no direct cursor, **Load earlier
-  messages** mints one from the sync-v1 projection, which only mints v1
-  cursors. A view whose provider pages carries a direct cursor whenever it has
-  older history to load, and every renderer adopts it:
-  - from the first row the view kept (`historyCursorBefore`, 0232), also when
-    the provider's window starts at the first message and sent no cursor of
-    its own (a bridge position is named from the snapshot's generation and
-    content epoch with `bridgeTranscriptPageCursorFor`; OpenCode names the row
-    the same way it names any other);
-  - when no kept row can name one, because only an OpenCode inline error row
-    remains after its response's main row was byte-omitted, from the window's
-    end (`historyCursorAtEnd`): the first page holds the window's rows again,
-    which the renderer drops by id, and the dropped main row with them. The
-    cursor names the window's newest row, inclusively (OpenCode's
-    `openCode2CursorThrough`), never "the newest rows": appends do not move
-    the epoch, and a page cached under a cursor is immutable within one;
-  - for a provider cursor too long to wrap in the page command's 1,024
-    characters, through a short handle the backend holds
-    (`DirectHistoryCursorHandles` in `native-agent-direct-history.ts`, bounded
-    by count and bytes). A handle evicted or lost to a backend restart reads as
-    an expired cursor, and the renderer re-reads the view, which names a new
-    one. A kept view and a cached page keep the provider cursor their handle
-    holds and mint it again each time they are served, so neither hands out a
-    handle the store has since evicted.
-
-  So the joined path now serves only a source without direct pages. Each
-  joined page is counted by why the session's latest view had no direct
-  cursor: `history.joined-v1-page.unpaged-source`,
-  `history.joined-v1-page.unnamed-cursor`, or `history.joined-v1-page` when
-  it had one or none was read.
-  [0232](../todo/transcripts-and-observation/0232-direct-history-cursor-minting.md)
-  task 4 owns removing it.
+None remains. Joined `sync-v1` history paging retired on 2026-11-16 (to-do
+0232 (retired) task 4; the to-do as it stood before:
+`git show c1fcc573b:docs/todo/transcripts-and-observation/0232-direct-history-cursor-minting.md`).
+It served a v1 cursor by refreshing the sync-v1
+projection, a whole transcript read, and paging the backend's own joined copy
+(`projectionHistory`); the renderer minted such a cursor from the sync-v1
+projection whenever its view carried no direct cursor. Every view whose
+provider pages now names a direct cursor (above), so the joined path, its v1
+cursor namespace, the renderer's mint and the `history.joined-v1-page*`
+counters were removed, with no adapter for an older peer
+([version-compatibility.md](version-compatibility.md#retired)).
 
 The `/messages` fallback of progressive reads retired on 2026-11-15
 (to-do 0050 task 1; the to-do retired the same day: `git show a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`). Every bridge serves `/transcript`, and the Claude summary route loads

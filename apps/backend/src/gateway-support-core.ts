@@ -206,7 +206,7 @@ export interface OrkestratorGatewayOptions {
   /** Legacy browser-preview connect+headers deadline (default 30 s). */
   browserPreviewHeadersTimeoutMs?: number;
   /** Backend preview services; enables the desktop preview tunnel. */
-  previews?: import("./core/preview-runtime.js").PreviewRuntime;
+  previews?: import("./core/previews/index.js").PreviewRuntime;
   /**
    * Which backend-host ports the legacy `browser/loopback/<port>/` route may
    * open for the environment the request names (its
@@ -217,7 +217,7 @@ export interface OrkestratorGatewayOptions {
   legacyPreviewPortAccess?: (
     port: number,
     environmentId: string | null,
-  ) => Promise<import("./core/preview-runtime.js").LegacyLoopbackPortAccess>;
+  ) => Promise<import("./core/previews/index.js").LegacyLoopbackPortAccess>;
   eventReplay?: {
     frameCapacity?: number;
     maxBytes?: number;

@@ -4,7 +4,7 @@ import type { GatewayAuth } from "./gateway-auth.js";
 import type { GatewayContext } from "./gateway-context.js";
 import type { GatewayEvents } from "./gateway-events.js";
 import type { GatewayProxy } from "./gateway-proxy.js";
-import type { LegacyLoopbackPortAccess } from "./core/preview-runtime.js";
+import type { LegacyLoopbackPortAccess } from "./core/previews/index.js";
 import {
   BROWSER_PREVIEW_ENVIRONMENT_HEADER,
   browserPreviewEnvironmentId,

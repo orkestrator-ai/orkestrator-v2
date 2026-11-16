@@ -326,7 +326,7 @@ test("container: badge, Changes row, All files entry and explicit refresh", asyn
             ? "container Changes after Refresh"
             : "container All files after Refresh",
           BUDGET.explicitActionMs,
-          // Changes may wait behind a scan (7201), but this harness does not
+          // Changes may wait behind a scan (#2052), but this harness does not
           // measure overlap/duration. Mark it unverified, never self-allow it.
           tab === "changes",
         ).samples.push(

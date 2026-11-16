@@ -325,7 +325,7 @@ export async function withTemporaryClaudeHome<T>(
  * A preference write resolves its path when it is queued, and a turn queues
  * some without waiting (the turn-in-flight mark), so one can still be running
  * against `directory` when the test's body returns. Removing the directory
- * first lets that write re-create it under `TMPDIR` (0247). Wait for every
+ * first lets that write re-create it under `TMPDIR` (#1339). Wait for every
  * queued Claude-home write before the removal.
  */
 export async function releaseTemporaryClaudeHome(directory: string): Promise<void> {

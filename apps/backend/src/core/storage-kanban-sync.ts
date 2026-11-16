@@ -645,7 +645,7 @@ function pruneTombstones(store: KanbanSyncStore): void {
 
 /**
  * Forgets one of this node's projects after the project was removed here
- * (to-do 5820): its replica links (so a re-added copy of the repository can
+ * (#2295): its replica links (so a re-added copy of the repository can
  * pair with the command node again), its tombstones and pruned cursor, each
  * leaf's pairing with it, and its conflicts, which quote ticket text. Nothing
  * is queued and no tombstone is written: removing a project on one machine

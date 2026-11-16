@@ -31,7 +31,7 @@ import { createEnvironment } from "./storage-shared-core.js";
 import type { StorageService } from "./storage.js";
 
 /**
- * Two backends in one process do not share the module state todo 1070 moved
+ * Two backends in one process do not share the module state #1525 moved
  * onto their runtimes (docs/architecture/backend-runtime.md). The cases for
  * the state moved earlier are in `backend-runtime.test.ts`.
  */
@@ -110,7 +110,7 @@ function receiptContext(runtime: BackendRuntime): CommandContext {
   };
 }
 
-describe("two BackendRuntimes in one process (todo 1070)", () => {
+describe("two BackendRuntimes in one process (#1525)", () => {
   test("project-home ensures are joined within one backend only", async () => {
     const first = createRuntime();
     const second = createRuntime();

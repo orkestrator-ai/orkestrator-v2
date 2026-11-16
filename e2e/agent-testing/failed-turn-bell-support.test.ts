@@ -1,12 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import {
   bellCases,
+  bellEnvironment,
   bellPlatforms,
+  bellSelection,
   bridgeProcess,
   descendantsOf,
   expectedUnread,
   loggedBridgePid,
+  onboardedClaudeState,
   parseProcessRows,
+  refusedLoginTmuxSettings,
+  removeEnvironments,
 } from "./failed-turn-bell-support";
 
 const ROOT = "/work/orkestrator";
@@ -29,6 +34,30 @@ describe("failed-turn bell selection", () => {
     expect(bellCases("")).toEqual(["refused", "stop", "bridge-kill", "restart"]);
     expect(bellCases("restart, refused")).toEqual(["refused", "restart"]);
     expect(bellPlatforms("pi")).toEqual(["pi"]);
+  });
+
+  test("a container run defaults to Claude's restart case and refuses what it cannot run", () => {
+    expect(bellEnvironment(undefined)).toBe("local");
+    expect(bellEnvironment(" container ")).toBe("container");
+    expect(() => bellEnvironment("remote")).toThrow("unknown bell environment: remote");
+    expect(bellSelection("local", undefined, undefined)).toEqual({
+      platforms: ["claude", "codex", "pi", "opencode"],
+      cases: ["refused", "stop", "bridge-kill", "restart"],
+    });
+    expect(bellSelection("container", undefined, "")).toEqual({
+      platforms: ["claude"],
+      cases: ["restart"],
+    });
+    expect(bellSelection("container", "claude", "restart,refused,stop")).toEqual({
+      platforms: ["claude"],
+      cases: ["refused", "stop", "restart"],
+    });
+    expect(() => bellSelection("container", "codex", undefined)).toThrow(
+      "a container bell run cannot cover: codex",
+    );
+    expect(() => bellSelection("container", undefined, "bridge-kill")).toThrow(
+      "a container bell run cannot run: bridge-kill",
+    );
   });
 
   test("refuses a name it does not know", () => {
@@ -89,5 +118,100 @@ describe("finding a platform's bridge under the profile's backend", () => {
     expect(loggedBridgePid(log, "codex", "env-a")).toBe(301);
     expect(loggedBridgePid(log, "pi", "env-a")).toBeUndefined();
     expect(loggedBridgePid(log, "claude", "env")).toBeUndefined();
+  });
+});
+
+describe("claude-tmux refused-login fixture files", () => {
+  test("settings point at the model with a token, drop an API key and keep other keys", () => {
+    const settings = refusedLoginTmuxSettings(
+      {
+        hooks: { Stop: [{ hooks: [] }] },
+        env: { ANTHROPIC_API_KEY: "fixture-only-not-a-key", KEEP: "1" },
+      },
+      "http://127.0.0.1:4321",
+    );
+    expect(settings.hooks).toEqual({ Stop: [{ hooks: [] }] });
+    expect(settings.env).toEqual({
+      KEEP: "1",
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:4321",
+      ANTHROPIC_AUTH_TOKEN: "fixture-only-not-a-key",
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+      DISABLE_AUTOUPDATER: "1",
+    });
+    expect(settings.skipDangerousModePermissionPrompt).toBe(true);
+    expect(refusedLoginTmuxSettings("not an object", "http://x").env).toMatchObject({
+      ANTHROPIC_BASE_URL: "http://x",
+    });
+  });
+
+  test("state answers the first-run screens for the worktree and keeps other projects", () => {
+    const state = onboardedClaudeState(
+      { userID: "u", projects: { "/other": { a: 1 }, "/w": { allowedTools: [] } } },
+      "/w",
+    );
+    expect(state).toEqual({
+      userID: "u",
+      hasCompletedOnboarding: true,
+      bypassPermissionsModeAccepted: true,
+      projects: { "/other": { a: 1 }, "/w": { allowedTools: [], hasTrustDialogAccepted: true } },
+    });
+    expect(onboardedClaudeState(null, "/w").projects).toEqual({
+      "/w": { hasTrustDialogAccepted: true },
+    });
+  });
+});
+
+describe("removing a run's environments", () => {
+  const busy = new Error(
+    "container-lifecycle: Another Orkestrator backend is managing this data directory's containers.",
+  );
+  const noSleep = async () => {};
+
+  test("retries a delete the writer lease refuses until it succeeds", async () => {
+    const calls: string[] = [];
+    let refusals = 2;
+    const failures = await removeEnvironments(
+      async (command, args) => {
+        calls.push(`${command}:${String(args.environmentId)}`);
+        if (command === "delete_environment" && args.environmentId === "ctr" && refusals > 0) {
+          refusals -= 1;
+          throw busy;
+        }
+      },
+      ["park", "ctr"],
+      { sleep: noSleep },
+    );
+    expect(failures).toEqual([]);
+    expect(calls.filter((call) => call === "delete_environment:ctr")).toHaveLength(3);
+    expect(calls[0]).toBe("stop_environment:park");
+  });
+
+  test("reports what it could not delete instead of throwing", async () => {
+    const failures = await removeEnvironments(
+      async (command, args) => {
+        if (command !== "delete_environment") return;
+        if (args.environmentId === "busy") throw busy;
+        if (args.environmentId === "broken") throw new Error("no such environment");
+      },
+      ["busy", "broken", "fine"],
+      { sleep: noSleep, timeoutMs: 10_000, retryMs: 5_000 },
+    );
+    expect(failures.map((failure) => failure.environmentId)).toEqual(["busy", "broken"]);
+    expect(failures[1]!.error).toBe("no such environment");
+  });
+
+  test("a failed stop does not prevent the delete", async () => {
+    const deleted: string[] = [];
+    const failures = await removeEnvironments(
+      async (command, args) => {
+        if (command === "stop_environment") throw new Error("already stopped");
+        deleted.push(String(args.environmentId));
+      },
+      ["a"],
+      { sleep: noSleep },
+    );
+    expect(failures).toEqual([]);
+    expect(deleted).toEqual(["a"]);
   });
 });

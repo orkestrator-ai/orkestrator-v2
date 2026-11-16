@@ -45,7 +45,7 @@ export interface CoordinatorNodeReconnectContext {
 
 /**
  * Wakes for coordinators whose call on a node was refused because the node
- * was not connected (3800 task 8).
+ * was not connected (#2059).
  *
  * Launches, builds and reviews on a disconnected node are refused, never
  * queued: a queued launch would start from a stale base, and an outcome lost

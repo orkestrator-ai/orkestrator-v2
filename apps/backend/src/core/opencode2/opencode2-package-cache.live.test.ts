@@ -31,7 +31,7 @@ import { mintOpenCode2InputId } from "./steer.js";
 
 /**
  * Root's 2.x package cache against the real pinned binary, outside a
- * container (7550 task 2). The root config script and the root cache script
+ * container (#2091). The root config script and the root cache script
  * run as they do in a container (paths moved into a temporary directory,
  * ownership aside); `bun add` is a stand-in that copies a local fake provider
  * package, so no registry is reached, while `bun -e` is the real Bun. The

@@ -3,7 +3,7 @@ import path from "node:path";
 import { enterPrivateTestTmpdir } from "../../tests/private-tmpdir";
 
 // Workers inherit a private TMPDIR, so the browser profiles of a worker that is
-// killed land where a later run can remove them (0248, 0830). Workers load this
+// killed land where a later run can remove them (#1425, #1463). Workers load this
 // file too and reuse the runner's directory.
 //
 // The profile under test was started outside this run and keeps the shared
@@ -71,6 +71,7 @@ export default defineConfig({
     "codex-typed-prompts-live.spec.ts",
     "codex-refused-login-live.spec.ts",
     "failed-turn-bell-live.spec.ts",
+    "failed-turn-bell-tmux-live.spec.ts",
     "schedules-two-backends-live.spec.ts",
     "codex-saved-rules-live.spec.ts",
     "bug-report-live.spec.ts",

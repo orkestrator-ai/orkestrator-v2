@@ -222,6 +222,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "interaction.present-failed": "Presenting an interaction threw; it is cancelled.",
       "interaction.resolved-callback-failed": "An interaction resolved callback threw.",
       "journal.persist-failed": "Saving the dispatch journal failed.",
+      "managed-requirements.unreadable":
+        "configRequirements/read failed, so sessions keep the sandbox they asked for on this generation.",
       "message.publish-failed": "Publishing a message update failed.",
       "models.cache-persist-failed": "Saving the model cache failed.",
       "models.debug-read-failed": "`codex debug models` failed; another source is used.",

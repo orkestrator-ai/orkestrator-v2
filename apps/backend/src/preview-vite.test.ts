@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect as tlsConnect } from "node:tls";
 
-import { createPreviewHarness, type PreviewHarness } from "./core/preview-test-support.js";
+import { createPreviewHarness, type PreviewHarness } from "./core/previews/test-support.js";
 import { PreviewPublicationManager } from "./preview-publication.js";
 import { certificates, TEST_PREVIEW_DOMAIN } from "./preview-test-pki.js";
 

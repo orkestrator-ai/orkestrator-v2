@@ -33,7 +33,7 @@
  * A value that is dropped is removed with its key (or its array slot), never
  * replaced, so the server sees exactly what the project wrote minus those.
  * MCP servers, permission rules and the rest remain the agent's to change, as
- * they were before 7252: they shape what the server does, not what runs inside
+ * they were before #2038: they shape what the server does, not what runs inside
  * it. The project's `.opencode/` directories are not read.
  */
 import path from "node:path";

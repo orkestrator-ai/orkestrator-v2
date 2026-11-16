@@ -888,6 +888,9 @@ and the first scheduled run is 7568 (0031 task 8).
 
 ## Replaces
 
+Every file below was deleted when this to-do replaced it (#991); read one
+with `git show cd67b7ad9:<path>`.
+
 - `docs/2026-10-14/03-startup-claude-login-dialog.md` (left-open items: `PATH`
   fallback in agent-test, the `~/.claude` config-dir default)
 - `docs/2026-10-14/04-opencode-fork-loses-model.md` (live check)

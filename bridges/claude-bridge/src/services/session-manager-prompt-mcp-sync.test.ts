@@ -8,6 +8,7 @@ import {
   createStaleMcpServerHook,
   type McpSyncRuntime,
   reportedStaleServers,
+  requiredServerRefusal,
   staleMcpServerFor,
   syncClaudeRuntimeMcp,
 } from "./session-manager-prompt-mcp-sync.js";
@@ -244,6 +245,78 @@ describe("syncing a running CLI's MCP servers", () => {
     ).rejects.toMatchObject({ code: "conflict" });
     expect(runtime.mcpServers).toBe("");
     expect(runtime.mcp.declared).toEqual(new Set(["alpha"]));
+  });
+});
+
+describe("refusing a turn over a required server", () => {
+  const agentTools: SdkMcpServersConfig[string] = {
+    type: "http",
+    url: "http://host.docker.internal:31500/mcp",
+    headers: { Authorization: "Bearer agent-tools-token" },
+  };
+  const launch = { orkestrator: agentTools };
+  const required = () => ({ ...target(launch, "launch"), required: ["orkestrator"] });
+
+  test("a server that failed to connect names its address and the notice, not a bare retry", async () => {
+    const cli = fakeCli(launch);
+    cli.statusReads.mockResolvedValue([
+      {
+        name: "orkestrator",
+        status: "failed",
+        error: "connect ETIMEDOUT with Bearer agent-tools-token",
+      },
+    ]);
+    const runtime = runtimeFor(cli.control, launch);
+    const refusal = await syncClaudeRuntimeMcp(runtime, required()).then(
+      () => undefined,
+      (error: unknown) => error as Error & { code?: string },
+    );
+    expect(refusal?.code).toBe("conflict");
+    expect(refusal?.message).toBe(
+      "Claude required MCP server \"orkestrator\" could not connect to http://host.docker.internal:31500/mcp, so the prompt was not sent. This agent cannot reach Orkestrator's agent tools server; Orkestrator's agent tools reachability notice names the fix. Retry once the server is reachable.",
+    );
+    // Neither the bearer nor the CLI's own error text reaches the message.
+    expect(refusal?.message).not.toContain("agent-tools-token");
+    expect(refusal?.message).not.toContain("ETIMEDOUT");
+    expect(runtime.mcpServers).toBe("");
+  });
+
+  test("a server that needs authentication is refused the same way", () => {
+    expect(
+      requiredServerRefusal(
+        "orkestrator",
+        { name: "orkestrator", status: "needs-auth" },
+        agentTools,
+      ),
+    ).toContain("could not connect to http://host.docker.internal:31500/mcp");
+  });
+
+  test("a credential in the address is never repeated", () => {
+    const message = requiredServerRefusal(
+      "orkestrator",
+      { name: "orkestrator", status: "failed" },
+      { type: "http", url: "http://user:secret@127.0.0.1:4000/mcp?token=secret" },
+    );
+    expect(message).toContain("could not connect to http://127.0.0.1:4000/mcp,");
+    expect(message).not.toContain("secret");
+  });
+
+  test("a server still connecting, or one the CLI does not list, keeps the retry advice", async () => {
+    expect(
+      requiredServerRefusal("orkestrator", { name: "orkestrator", status: "pending" }, agentTools),
+    ).toBe('Claude required MCP server "orkestrator" is still connecting; retry the prompt');
+    const cli = fakeCli(launch);
+    cli.statusReads.mockResolvedValue([]);
+    await expect(syncClaudeRuntimeMcp(runtimeFor(cli.control, launch), required())).rejects.toThrow(
+      'Claude required MCP server "orkestrator" is not connected; retry the prompt',
+    );
+  });
+
+  test("a connected required server lets the turn join", async () => {
+    const cli = fakeCli(launch);
+    const runtime = runtimeFor(cli.control, launch);
+    await syncClaudeRuntimeMcp(runtime, required());
+    expect(runtime.mcpServers).toBe("launch");
   });
 });
 

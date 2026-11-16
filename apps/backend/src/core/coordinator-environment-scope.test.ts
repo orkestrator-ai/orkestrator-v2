@@ -638,7 +638,7 @@ test("mail and tools to an environment on another node are refused the same way"
   expect(routed).not.toContain("dispatch_native_agent_intent");
 });
 
-test("each refusal is counted by surface, node and tool, and no id is kept (6080 task 6)", async () => {
+test("each refusal is counted by surface, node and tool, and no id is kept (6080 (retired) task 6)", async () => {
   coordinatorEnvironmentRefusals.reset();
   refused(await tool("send_message", message(handMade)));
   // A reply to the hand-made environment's own mail is refused too, and counted apart.
@@ -678,7 +678,7 @@ test("each refusal is counted by surface, node and tool, and no id is kept (6080
   }
 });
 
-test("node replies, review addressing and workflow controls are each counted under their own surface (6080 task 6)", async () => {
+test("node replies, review addressing and workflow controls are each counted under their own surface (6080 (retired) task 6)", async () => {
   coordinatorEnvironmentRefusals.reset();
   // A reply to another node's environment: send_coordinator_node_mail with a parent.
   refused(

@@ -321,7 +321,7 @@ for (const view of ["native", "reviewer"] as const) {
 }
 
 /**
- * The live shape of a long tool-only conversation (todo 0090): the 100-row
+ * The live shape of a long tool-only conversation (#1243): the 100-row
  * window is one folded group of 100 calls and the answer. History merges
  * into that group, so a page adds no display row (only the prompt, once it
  * arrives), and the folded line keeps the newest call's part id throughout.

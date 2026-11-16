@@ -563,7 +563,7 @@ describe("send_coordinator_node_mail", () => {
     });
   });
 
-  test("a turn the user did not start is framed on a leaf that can say so", async () => {
+  test("a turn the user did not start is framed on the leaf", async () => {
     const answers = {
       deliver_node_mail: { messageId: "m1", toTabId: "startup-agent", placement: "pending-inject" },
     };
@@ -578,17 +578,18 @@ describe("send_coordinator_node_mail", () => {
     const delivered = (context: Awaited<ReturnType<typeof setup>>) =>
       context.routed.find((entry) => entry.command === "deliver_node_mail")!.args;
 
-    const capable = await setup({
+    const contract = await setup({
       answers,
-      capabilities: { "node-attachment": 1, "node-mail-turn-origin": 1 },
+      capabilities: { "node-attachment": 1 },
+      domains: { "node-mail": { min: 1, max: 1 } },
     });
-    await send(capable, "from-mail");
-    expect(delivered(capable).turnOrigin).toBe("mail");
+    await send(contract, "from-mail");
+    expect(delivered(contract).turnOrigin).toBe("mail");
 
-    // An older leaf refuses an unknown key, so it is never sent one.
-    const older = await setup({ answers });
-    await send(older, "older");
-    expect(delivered(older)).not.toHaveProperty("turnOrigin");
+    // The still-supported version-0 adapter omits the key for strict old leaves.
+    const precontract = await setup({ answers });
+    await send(precontract, "precontract");
+    expect(delivered(precontract)).not.toHaveProperty("turnOrigin");
   });
 
   test("without deliverNow a capable leaf is not asked to steer, and drops any outcome", async () => {
@@ -703,8 +704,6 @@ describe("node-mail domain client (plan item 1010)", () => {
     });
     await send(context, "legacy-1");
     expect(delivery(context).args).toMatchObject({ steer: true });
-    // No `node-mail-turn-origin`: the key such a leaf would refuse is left out.
-    expect(delivery(context).args).not.toHaveProperty("turnOrigin");
     expect(delivery(context)).not.toHaveProperty("envelope");
     expect(legacyCount()).toBeGreaterThan(before);
   });

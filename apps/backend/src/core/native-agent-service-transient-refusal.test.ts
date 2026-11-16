@@ -2,7 +2,7 @@
  * A prompt the provider refused because it was temporarily unavailable (a
  * bridge's 503 before dispatch, an unreachable bridge) sent nothing and parks
  * nothing, so its rejection says `transient`: the same prompt under a new
- * request id may succeed (7260). Refusals that will not change on their own,
+ * request id may succeed (#2060). Refusals that will not change on their own,
  * ambiguous dispatches and recovery retries that keep their parked record
  * never carry it, because a new id there either fails the same way or could
  * run the prompt twice.

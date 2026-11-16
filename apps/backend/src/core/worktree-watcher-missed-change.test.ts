@@ -120,6 +120,28 @@ test("a missed change no event explains withdraws coverage until the watcher del
   await until(() => context.hints.length === 2);
 });
 
+// Distrust starts only from an owner's report. A watcher nobody reports a miss
+// to (every test in worktree-watcher-real.test.ts) keeps the coverage it had
+// before to-do 8171 however late, sparse or absent its events are.
+test("without a reported miss, late or absent events never withdraw coverage", async () => {
+  const context = mainCheckout();
+  await until(() => context.watcher.qualified === true);
+  expect(context.coverageChanges()).toBe(1);
+
+  // Silence for longer than the distrust window, then one late event.
+  context.advance(10 * 60_000);
+  expect(context.watcher.qualified).toBe(true);
+  context.emit("src/late.ts");
+  await until(() => context.hints.length === 1);
+  context.advance(10 * 60_000);
+  expect(context.watcher.qualified).toBe(true);
+
+  expect(grace!.pendingCount()).toBe(0);
+  expect(context.misses()).toBe(0);
+  expect(context.coverageChanges()).toBe(1);
+  expect(context.hints.map((hint) => hint.paths)).toEqual([["src/late.ts"]]);
+});
+
 test("a poll that finds a change before any event restarts the distrust", async () => {
   const context = mainCheckout();
   await until(() => context.watcher.qualified === true);

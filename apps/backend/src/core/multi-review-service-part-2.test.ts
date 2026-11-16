@@ -3006,70 +3006,78 @@ test("MultiReviewService fails a container stage at once when its agent tools ar
   const unreachable =
     "Orkestrator did not start the stage: the container can't reach the agent tools server.";
   const preflights: Array<{ environmentId: string; stage: string }> = [];
-  for (const packageFlow of [false, true]) {
+  // Structured output needs no result tool, but a container's Claude bridge
+  // refuses every turn after the first while its required Orkestrator MCP
+  // server is not connected (to-do 8172), so both transports are refused up
+  // front with the preflight's explanation.
+  for (const toolMode of [true, false]) {
+    for (const packageFlow of [false, true]) {
+      const provider = new Provider(false);
+      preflights.length = 0;
+      await withService(
+        `env-unreachable-tools-${toolMode ? "tool" : "structured"}-${packageFlow ? "package" : "legacy"}`,
+        provider,
+        async ({ service, start, snapshot }) => {
+          const started = await start();
+          await waitUntil(async () => {
+            await service.advanceNow(started.id);
+            const current = await snapshot(started.id);
+            return (
+              current?.phase === "failed" ||
+              current?.reviewers.some((reviewer) => reviewer.status === "failed") === true
+            );
+          });
+          const current = (await snapshot(started.id))!;
+          const failure =
+            current.error ?? current.reviewers.find((reviewer) => reviewer.error)?.error;
+          expect(failure).toContain(unreachable);
+          // Nothing was dispatched to an agent that could never report back.
+          expect(provider.sends.size).toBe(0);
+          expect(preflights[0]?.stage).toBe(
+            packageFlow ? "Multi Review preparation step" : "Multi Review reviewer",
+          );
+        },
+        {
+          toolMode,
+          packageFlow,
+          environmentType: "containerized",
+          serviceOptions: {
+            assertAgentToolsReachable: async (environmentId, stage) => {
+              preflights.push({ environmentId, stage });
+              throw new Error(unreachable);
+            },
+          },
+        },
+      );
+    }
+  }
+});
+
+test("MultiReviewService skips the agent tools preflight for local worktrees", async () => {
+  for (const toolMode of [true, false]) {
     const provider = new Provider(false);
-    preflights.length = 0;
+    let preflights = 0;
     await withService(
-      `env-unreachable-tools-${packageFlow ? "package" : "legacy"}`,
+      `env-local-tools-${toolMode ? "tool" : "structured"}`,
       provider,
       async ({ service, start, snapshot }) => {
         const started = await start();
         await waitUntil(async () => {
           await service.advanceNow(started.id);
-          const current = await snapshot(started.id);
-          return (
-            current?.phase === "failed" ||
-            current?.reviewers.some((reviewer) => reviewer.status === "failed") === true
-          );
+          return Boolean((await snapshot(started.id))?.reviewers[0]?.requestId);
         });
-        const current = (await snapshot(started.id))!;
-        const failure =
-          current.error ?? current.reviewers.find((reviewer) => reviewer.error)?.error;
-        expect(failure).toContain(unreachable);
-        // Nothing was dispatched to an agent that could never report back.
-        expect(provider.sends.size).toBe(0);
-        expect(preflights[0]?.stage).toBe(
-          packageFlow ? "Multi Review preparation step" : "Multi Review reviewer",
-        );
+        expect(preflights).toBe(0);
       },
       {
-        toolMode: true,
-        packageFlow,
-        environmentType: "containerized",
+        toolMode,
         serviceOptions: {
-          assertAgentToolsReachable: async (environmentId, stage) => {
-            preflights.push({ environmentId, stage });
-            throw new Error(unreachable);
+          assertAgentToolsReachable: async () => {
+            preflights += 1;
           },
         },
       },
     );
   }
-});
-
-test("MultiReviewService skips the agent tools preflight for local worktrees", async () => {
-  const provider = new Provider(false);
-  let preflights = 0;
-  await withService(
-    "env-local-tools",
-    provider,
-    async ({ service, start, snapshot }) => {
-      const started = await start();
-      await waitUntil(async () => {
-        await service.advanceNow(started.id);
-        return Boolean((await snapshot(started.id))?.reviewers[0]?.requestId);
-      });
-      expect(preflights).toBe(0);
-    },
-    {
-      toolMode: true,
-      serviceOptions: {
-        assertAgentToolsReachable: async () => {
-          preflights += 1;
-        },
-      },
-    },
-  );
 });
 
 test("MultiReviewService keeps environment activity working until its agents settle", async () => {

@@ -39,7 +39,7 @@ describe("agent provider module boundaries", () => {
   test("keeps OpenCode implementation details out of the pipeline adapter", async () => {
     const pipelineAdapter = await source("build-pipeline-provider.ts");
 
-    expect(pipelineAdapter).not.toMatch(/@opencode-ai|\.\/opencode-|OpenCodeProvider/);
+    expect(pipelineAdapter).not.toMatch(/@opencode-ai|\.\/opencode(?:-|2\/)|OpenCodeProvider/);
     expect(pipelineAdapter).not.toContain("interactiveSnapshot");
     expect(pipelineAdapter).not.toContain("modelCatalog");
   });
@@ -47,14 +47,22 @@ describe("agent provider module boundaries", () => {
   test("keeps OpenCode wiring and policy out of the shared native-agent service", async () => {
     // OpenCode-specific construction lives behind `createNativeAgentProvider`
     // and its policy behind `native-agent-platform-policy.ts`; the shared
-    // service neither imports OpenCode modules nor branches on the platform.
+    // service only imports the connection type, never OpenCode runtime modules,
+    // and does not branch on the platform.
     const files = (await readdir(import.meta.dir)).filter(
       (file) => /^native-agent-service-.*\.ts$/.test(file) && !file.endsWith(".test.ts"),
     );
     expect(files.length).toBeGreaterThan(0);
     for (const filename of files) {
       const contents = await source(filename);
-      expect(contents, filename).not.toMatch(/from "\.\/opencode-/);
+      const runtimeContents =
+        filename === "native-agent-service-shared.ts"
+          ? contents.replace(
+              'import type { OpenCode2ServerConnection } from "./opencode2/index.js";',
+              "",
+            )
+          : contents;
+      expect(runtimeContents, filename).not.toMatch(/from ["']\.\/opencode(?:-|2\/)/);
       expect(contents, filename).not.toMatch(/[!=]==\s*"opencode"/);
     }
   });

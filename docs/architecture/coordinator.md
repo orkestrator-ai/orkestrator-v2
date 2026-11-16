@@ -2367,9 +2367,11 @@ to specific input, so tracking provenance per message would only look more
 precise. One limit: a message the user approved
 (`send_approved_project_home_message`) is not marked, since they read it. Mail
 to another node's worker carries the mark too on the version-1 `node-mail`
-contract. The still-present version-0 adapter omits `turnOrigin` because strict
-pre-contract leaves reject it; those leaves retain their original framing until
-the adapter retires under to-do 8108. No hello capability gates the mark.
+contract. The still-present version-0 adapter forwards `turnOrigin` only when
+the leaf advertises the legacy `node-mail-turn-origin` capability (including
+v2.36.5-beta and v2.36.6-beta). It omits the key for strict older leaves such as
+v2.36.1, which reject it. This legacy capability read retires with adapter 0 under
+to-do 8108; current hellos no longer advertise it.
 
 `coordinatorCallTurnOrigin` (`@orkestrator/protocol/coordinator`) is the one
 rule every path reads: only a turn the user started is unmarked, and an unknown

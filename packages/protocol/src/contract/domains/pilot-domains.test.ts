@@ -322,6 +322,25 @@ describe("node-mail client", () => {
     ]);
   });
 
+  it("version 0 preserves origin for capable pre-contract beta leaves", async () => {
+    // v2.36.5-beta and v2.36.6-beta have this capability but no domain range.
+    const node = fakeNode(undefined, ["node-mail-turn-origin"]);
+    const client = createDomainClient(nodeMailClient, node.options);
+    expect(client.version()).toBe(0);
+    const plain = Object.freeze({
+      controllerId: "bk_cmd",
+      requestId: "r1",
+      toEnvironmentId: "env-1",
+      body: "Stop.",
+      turnOrigin: "mail",
+    });
+    await client.api().deliver(plain);
+    expect(node.sent).toEqual([{ command: "deliver_node_mail", args: plain, envelope: undefined }]);
+    expect(node.sent[0]!.args).toHaveProperty("turnOrigin", "mail");
+    expect(plain.turnOrigin).toBe("mail");
+    expect(node.usage).toEqual([["node-mail", 0]]);
+  });
+
   it("version 0 delivers mail to a strict stable leaf without origin support", async () => {
     const node = fakeNode(undefined, []);
     const call = node.options.call;

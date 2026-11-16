@@ -247,8 +247,10 @@ observation carried a content revision; a view of an older bridge keeps the
 baseline. A view's own reads must not invalidate it: a discovery-section
 renewal (every 30 s) and an expired model-catalogue refresh announce a
 `native-agent-session` change only when what a view shows changed (not for a
-retained value that only went stale, and not for the runtime drift counter),
-since any such hint re-reads the view and restarts its backoff.
+successful renewal with the same retained value, and not for the runtime drift
+counter), since any such hint re-reads the view and restarts its backoff. A failed or
+timed-out renewal becoming stale does announce, so readers learn the failure
+promptly and use their 2 s settling follow-up.
 
 Every session invalidation names why it was sent: `cause` on the activity
 announcement and on a `native-agent-session` resource change, one entry of

@@ -44,6 +44,7 @@ function quietClaude() {
       source: "builtin" as const,
     })),
     runtime: "ready",
+    runtimeFails: false,
   };
   const stub = createProviderStub("claude", {
     sessionStateSnapshot: async () => ({ status: "running" as const }),
@@ -53,11 +54,10 @@ function quietClaude() {
     state: "working",
     contentRevision: "process-1:1:0",
   }));
-  const runtimeHealth = mock(async () => ({
-    summary: { state: state.runtime },
-    notices: [],
-    authoritative: true,
-  }));
+  const runtimeHealth = mock(async () => {
+    if (state.runtimeFails) throw new Error("Runtime discovery failed");
+    return { summary: { state: state.runtime }, notices: [], authoritative: true };
+  });
   const mcpServers = mock(async () => [
     {
       id: "orkestrator",
@@ -81,6 +81,7 @@ type Tally = {
   snapshotBytes: number;
   unchangedBytes: number;
   triggers: string[];
+  runtimeAvailability: string[];
 };
 
 /**
@@ -102,6 +103,7 @@ async function quietWindow(
     snapshotBytes: 0,
     unchangedBytes: 0,
     triggers: [],
+    runtimeAvailability: [],
   };
   const end = elapsedNow() + durationMs;
   while (elapsedNow() < end) {
@@ -130,6 +132,7 @@ async function quietWindow(
       tally.snapshots += 1;
       tally.snapshotBytes += Buffer.byteLength(JSON.stringify(answer));
       tally.triggers.push(trigger);
+      tally.runtimeAvailability.push(answer.value.sections.runtime?.availability ?? "absent");
       view.followUpMs = followUpMs(answer.value);
     } else {
       tally.unchanged += 1;
@@ -227,6 +230,27 @@ describe("discovery reads during a quiet turn (todo 8151)", () => {
       expect(announcements).toEqual(["discovery-renewal"]);
       expect(tally.snapshots).toBe(1);
       expect(tally.triggers).toEqual(["invalidation"]);
+    });
+  }, 30_000);
+  test("a rejected retained-value renewal announces stale and follows up until recovery", async () => {
+    await withQuietClaude(async ({ window, state, announcements, service }) => {
+      const tally = await window(60_000, (elapsed) => {
+        if (elapsed === 25_000) state.runtimeFails = true;
+        if (elapsed === 45_000) state.runtimeFails = false;
+      });
+      // One failure wakeup delivers stale. Repeated failures stay quiet; the
+      // renderer-style 2 s follow-up delivers ready when the same value recovers.
+      expect(announcements).toEqual(["discovery-renewal"]);
+      expect(tally.snapshots).toBe(2);
+      expect(tally.triggers).toEqual(["invalidation", "follow-up"]);
+      expect(tally.runtimeAvailability).toEqual(["stale", "ready"]);
+      const update = await service.getDiscoveryUpdate({
+        ...IDENTITY,
+        viewVersion: 1,
+        sections: ["runtime"],
+      });
+      if (update.status !== "snapshot") throw new Error("Expected runtime snapshot");
+      expect(update.value.sections.runtime?.availability).toBe("ready");
     });
   }, 30_000);
 });

@@ -2129,7 +2129,7 @@ describe("native agent progressive remainder", () => {
   });
 
   test.each([false, true])(
-    "announces discovery timeout semantics once (unless a value is retained) and announces recovery (cached: %s)",
+    "announces discovery timeout semantics once and announces changed recovery (cached: %s)",
     async (cached) => {
       let now = 1_000;
       let held = false;
@@ -2199,16 +2199,13 @@ describe("native agent progressive remainder", () => {
             expect(first?.value).toEqual(
               cached ? { summary: health.summary, notices: [] } : undefined,
             );
-            // A retained value that only went stale shows the same content, so
-            // it is stored for the next read but not announced (0049 item 5).
-            expect(announced).toHaveBeenCalledTimes(cached ? 0 : 1);
-            expect(renewals()).toEqual(
-              cached
-                ? {}
-                : {
-                    cursor: { runtime: { count: 1, changed: { initial: 1 } } },
-                  },
-            );
+            // A failed renewal must wake retained-value readers as well.
+            expect(announced).toHaveBeenCalledTimes(1);
+            expect(renewals()).toEqual({
+              cursor: {
+                runtime: { count: 1, changed: cached ? { availability: 1 } : { initial: 1 } },
+              },
+            });
 
             // Finish the timed-out read with the same error, then expire its
             // fallback so a second actual read reaches the deadline too.
@@ -2221,14 +2218,12 @@ describe("native agent progressive remainder", () => {
             await fireDeadline();
             const repeated = await section();
             expect(repeated).toEqual(first);
-            expect(renewals()).toEqual(
-              cached
-                ? {}
-                : {
-                    cursor: { runtime: { count: 1, changed: { initial: 1 } } },
-                  },
-            );
-            expect(announced).toHaveBeenCalledTimes(cached ? 0 : 1);
+            expect(renewals()).toEqual({
+              cursor: {
+                runtime: { count: 1, changed: cached ? { availability: 1 } : { initial: 1 } },
+              },
+            });
+            expect(announced).toHaveBeenCalledTimes(1);
 
             // A late successful result changes availability and contents and
             // must wake readers even after its own deadline has fired.
@@ -2238,11 +2233,11 @@ describe("native agent progressive remainder", () => {
             expect(recovered?.value?.summary.state).toBe("detached");
             expect(recovered?.revision).toBe((first?.revision ?? 0) + 1);
             expect(recovered?.error).toBeUndefined();
-            expect(announced).toHaveBeenCalledTimes(cached ? 1 : 2);
+            expect(announced).toHaveBeenCalledTimes(2);
             expect(renewals()).toEqual({
               cursor: {
                 runtime: cached
-                  ? { count: 1, changed: { "summary.state": 1 } }
+                  ? { count: 2, changed: { availability: 1, "summary.state": 1 } }
                   : { count: 2, changed: { initial: 1, availability: 1 } },
               },
             });

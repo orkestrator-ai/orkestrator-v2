@@ -406,9 +406,9 @@ discovery (`coalesceChanges`, `resource-sync.ts`).
 
 A backstop read that finds a section expired answers `unchanged` when nothing
 changed (todo 8151). The expired section is still served with its stored
-availability (`ready`) while its renewal runs, so the view and its token move
-only when the renewed value does, and that change is announced. `stale` means
-a renewal failed and the value shown is the one before it. A provider runs at
+availability (`ready`) while its renewal runs. The view and its token reflect
+the renewed value and failure status; a changed value or a new failure is
+announced. `stale` means a renewal failed and the value shown is the one before it. A provider runs at
 most two section jobs at a time; a section the limit refuses is started when
 one of them finishes (`deferredDiscoveryRenewals`), not left for the view's
 next read. The command catalogue's `fetchedAt` is left out of the discovery
@@ -420,10 +420,14 @@ views (96,676 B) to 5 `unchanged` answers (2,385 B); the attribution and
 both measurements are in to-do 8151 (retired 2026-11-16:
 `git show eb32124cc:docs/todo/transcripts-and-observation/8151-discovery-reads-during-a-quiet-turn.md`).
 
-A renewal announces only when the value changed as a view would show it
-(`storeProgressiveDiscovery`), so a stored value must not move when nothing
-did. Two normalisations keep it still: the runtime section's drift counter is
-left out of the comparison (`discoveryAnnouncementKey`), and each MCP server's
+A renewal announces when the value changed as a view would show it or when
+it first becomes stale after a rejection or the 2 s deadline
+(`storeProgressiveDiscovery`). Readers then use their 2 s settling follow-up;
+repeated failures and recovery with the same retained value stay silent.
+Invalidation removes queued renewals as well as cached sections, including
+queued-only sessions when their environment is deleted. A stored value must
+not move when nothing did. Two normalisations keep it still: the runtime
+section's drift counter is left out of the comparison (`discoveryAnnouncementKey`), and each MCP server's
 tool names are stored in one fixed order (`orderMcpServerTools`), because
 Codex app-server reports them as a map whose order changes between reads; the
 Codex bridge also sorts them before its cut. Before that, an idle Codex view

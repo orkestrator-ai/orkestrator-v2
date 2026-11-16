@@ -212,10 +212,10 @@ export class GatewayContext {
           : this.credentials.requestCredentialMatches(request),
       credentialExpiresAt: (request, suppliedToken) =>
         this.credentials.gatewayCredentialExpiresAt(
-          suppliedToken ?? gatewayRequestCredential(request.headers),
+          suppliedToken ?? gatewayRequestCredential(request),
         ),
       onCredentialRevoked: (request, suppliedToken, close) => {
-        const credential = suppliedToken ?? gatewayRequestCredential(request.headers);
+        const credential = suppliedToken ?? gatewayRequestCredential(request);
         return credential ? this.onCredentialRevoked(credential, close) : () => {};
       },
       originAllowed: (request) =>

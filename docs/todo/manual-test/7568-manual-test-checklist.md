@@ -82,7 +82,8 @@ task 2, and the CLI's copy went to to-do 8250.
 
 ### Tasks
 
-1. **Manual tests and live checks** (355 items): run each check under
+1. **Manual tests and live checks** (357 items): run each check under
+
 
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
@@ -206,6 +207,10 @@ and the behaviour is in
 history at the parent of the commit that deleted it (`git log -1 --diff-filter=D -- docs/todo/cross-cutting/7767-linear-boards-per-project-and-coordinator-tools.md`),
 and the behaviour is in [Linear](../../architecture/tickets.md#linear).
 
+2960 was retired on 2026-11-16, once the gateway issued the `__Host-` cookie
+over HTTPS; it is in Git history at `c1fcc573b`, and the behaviour is in
+[remote gateway, security notes](../../architecture/remote-gateway.md#security-notes).
+
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.
 Where an agent part of the same task remains, the source to-do keeps it,
@@ -247,12 +252,13 @@ agent can apply it.
 | CLI and slash commands | 6 | 0 |
 | Containers and environments | 33 | 6 |
 | Coordinator and Multi Review | 87 | 3 |
-| Cross-cutting | 96 | 9 |
+| Cross-cutting | 98 | 9 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 18 | 1 |
 | Transcripts, observation and bandwidth | 30 | 2 |
-| **Total** | 355 | 25 |
+| **Total** | 357 | 25 |
+
 
 
 ## Outstanding work
@@ -693,6 +699,8 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **5601 (retired) task 4: Password AutoFill on the token field.** On an iPhone, enter a gateway token in the native connection editor's token field (`ConnectionEditorView.swift`, `.textContentType(.password)`) and save. Record: whether iOS offers to save it as a password (with the device's AutoFill settings), in a reply to the coordinator. If it does, the fix is to remove that content type: ask the coordinator to open an agent to-do.
 - [ ] **5601 (retired) task 5: inspect a signed release archive.** With the signing identity, on the next iOS release archive run `codesign -d --entitlements -` on the app and read its `Info.plist`. Expect `get-task-allow` false, no entitlement added at signing, no URL types and `NSAllowsArbitraryLoads` false. Record: the entitlements output and any difference, in a reply to the coordinator.
 - [ ] **5601 (retired) task 6: privacy cover on a device.** On an iPhone with a signed development build, open a remote page with visible content; then open a file picker and a link preview in turn, leaving the app each time and looking at the app switcher; return and confirm the page and session are unchanged. Record: whether any snapshot showed content (page, file picker, link preview), in a reply to the coordinator. If WebKit's own views show through, the recommended fix (move the cover to its own window at alert level) is agent work: ask the coordinator to open a to-do.
+- [ ] **2960 (retired) task 1: the iOS tests for the `__Host-` gateway cookie on macOS.** (Background: [remote gateway, security notes](../../architecture/remote-gateway.md#security-notes).) The change that made the gateway issue `__Host-orkestrator_gateway_auth` over HTTPS also made the iOS app accept and log out only that name (`RemoteWebView.Coordinator.loginCookie`, `GatewayLogoutClient.sessionCookieName`) and updated `OrkestratorMobileTests.swift` and `SessionEndTests.swift`; it was written on Linux, where no Swift toolchain exists, so none of it was compiled. On a Mac, run the OrkestratorMobile unit tests (the Xcode scheme, or the stand-in build used for 2960 task 2 on 2026-11-05). Expect them to pass, including a login response carrying only the plain name being refused as "did not create a secure web session". Record: the command, the pass and fail counts and any failure, in a reply to the coordinator; a failure is agent work for a new to-do.
+- [ ] **2960 (retired) task 1: the `__Host-` gateway cookie through Tailscale Serve, in a browser and on an iPhone.** (Background: [remote gateway, security notes](../../architecture/remote-gateway.md#security-notes).) Serve an isolated `dev:test` profile (never a production instance) through Tailscale Serve. In Safari and in Chrome, sign in with the login form: the browser's storage view should show `__Host-orkestrator_gateway_auth` (`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, no `Domain`) and no `orkestrator_gateway_auth`; reload, open a terminal and watch an agent tab update, then log out and confirm the cookie is gone and the old value gets the login page. On an iPhone with a development build of the same commit, connect to the profile (sign-in should succeed), then forget the server and confirm its session stops working. Keep the gateway token out of screenshots and notes. Record: browsers and versions, iOS version and build, and each step's result, in a reply to the coordinator.
 - [ ] **2190 (retired) task 3: the shared sidebar on RKMBP through the command node.** (Background: [one presentation for both paths](../../architecture/federation.md#one-presentation-for-both-paths); on one host, two paired profiles showed a remote row's activity about 0.5 s behind the leaf's own record, 2026-11-13.) On the user's command node, viewing RKMBP's environments, check the merged PR icon, agent-mail badges, project home indicator, activity bar and the shared delete confirmation against RKMBP's own window, and that a row's working and idle states follow RKMBP's own row within a few seconds while an agent runs there. Record: any difference and the delay seen, as a reply to the coordinator.
 - [ ] **2190 (retired) task 3: Docker stopped on a real leaf.** With two real machines paired (command node and leaf), stop Docker on the leaf and confirm the command node's rows for it disable Fork container, Start/Stop and Restart within about 90 seconds (the leaf's 30 s cache plus the command node's 60 s reconcile), then re-enable after Docker returns. Record: the times observed, as a reply to the coordinator.
 - [ ] **0325 (retired) task 5 (Wayland rows): packaged Linux shortcuts under Wayland.** On a spare Linux machine or VM with a Wayland desktop (not someone's live session), `mise run package:linux`, then run the matrix in [keyboard-shortcuts.md, Packaged native qualification](../../architecture/keyboard-shortcuts.md#packaged-native-qualification) (⌘⇧/ / Ctrl+Shift+/ on each surface, View › Keyboard Shortcuts…, preview dismissal, Monaco Ctrl+Shift+K, the Linux menu-bar row, Ctrl+K) by hand. X11 passed every row on 2026-10-31 and 2026-11-11; Wayland is what is owed. Record per row: OS and compositor, packaged commit, keyboard layout, surface, the separate-press result and the resumed-typing result, in that section of keyboard-shortcuts.md.

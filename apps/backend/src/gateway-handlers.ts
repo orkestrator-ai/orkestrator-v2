@@ -374,7 +374,7 @@ export class GatewayHandlers {
 
     let closed = false;
     let credentialExpiryTimer: ReturnType<typeof setTimeout> | null = null;
-    const credential = gatewayRequestCredential(request.headers);
+    const credential = gatewayRequestCredential(request);
     let unsubscribeRevocation = () => {};
     const close = () => {
       unsubscribeRevocation();

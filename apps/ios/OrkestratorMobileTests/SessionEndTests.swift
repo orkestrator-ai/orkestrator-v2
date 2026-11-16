@@ -107,7 +107,7 @@ final class SessionLoginProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
     func respond(value: String = "test-session") {
         let response = HTTPURLResponse(url: request.url!, statusCode: 303, httpVersion: nil, headerFields: [
-            "Set-Cookie": "orkestrator_gateway_auth=\(value); Path=/; HttpOnly; Secure",
+            "Set-Cookie": "__Host-orkestrator_gateway_auth=\(value); Path=/; HttpOnly; Secure",
         ])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocolDidFinishLoading(self)
@@ -126,7 +126,7 @@ final class SessionEndTests: XCTestCase {
     }
 
     private func webCookie(
-        name: String = "orkestrator_gateway_auth",
+        name: String = GatewayLogoutClient.sessionCookieName,
         value: String = "session-value",
         domain: String
     ) throws -> HTTPCookie {
@@ -135,6 +135,7 @@ final class SessionEndTests: XCTestCase {
             .value: value,
             .domain: domain,
             .path: "/",
+            .secure: "TRUE",
         ]))
     }
 
@@ -160,7 +161,7 @@ final class SessionEndTests: XCTestCase {
         coordinator.javaScriptEvaluator = { _ in nil }
         let cookieStore = configuration.websiteDataStore.httpCookieStore
         for cookie in cookies {
-            if recordIssuers, GatewayLogoutClient.sessionCookieNames.contains(cookie.name),
+            if recordIssuers, cookie.name == GatewayLogoutClient.sessionCookieName,
                let owner = store.vault.connections.first(where: { Self.matches(cookie, $0) }) {
                 coordinator.beginAuthenticationState(for: owner)
                 await coordinator.installLoginCookie(cookie, for: owner, in: webView)
@@ -530,10 +531,11 @@ final class SessionEndTests: XCTestCase {
 final class GatewayLogoutClientTests: XCTestCase {
     private func sessionCookie(host: String = "127.0.0.1") throws -> HTTPCookie {
         try XCTUnwrap(HTTPCookie(properties: [
-            .name: "orkestrator_gateway_auth",
+            .name: GatewayLogoutClient.sessionCookieName,
             .value: "session-value",
             .domain: host,
             .path: "/",
+            .secure: "TRUE",
         ]))
     }
 
@@ -556,7 +558,7 @@ final class GatewayLogoutClientTests: XCTestCase {
         XCTAssertEqual(gateway.requests.count, 1, "The redirect to the login page must not be followed")
         let request = try XCTUnwrap(gateway.requests.first)
         XCTAssertTrue(request.hasPrefix("POST /__orkestrator/logout HTTP/1.1\r\n"), request)
-        XCTAssertTrue(request.lowercased().contains("cookie: orkestrator_gateway_auth=session-value\r\n"))
+        XCTAssertTrue(request.lowercased().contains("cookie: __host-orkestrator_gateway_auth=session-value\r\n"))
     }
 
     func testAServerErrorIsAbsorbed() async throws {
@@ -644,6 +646,6 @@ final class GatewayLogoutClientTests: XCTestCase {
         let remaining = await configuration.websiteDataStore.httpCookieStore.allCookies()
         XCTAssertTrue(remaining.isEmpty)
         let request = try XCTUnwrap(gateway.requests.first)
-        XCTAssertTrue(request.lowercased().contains("cookie: orkestrator_gateway_auth=session-value\r\n"))
+        XCTAssertTrue(request.lowercased().contains("cookie: __host-orkestrator_gateway_auth=session-value\r\n"))
     }
 }

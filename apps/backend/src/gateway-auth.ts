@@ -57,6 +57,8 @@ import {
   responseCompressionContexts,
   jsonResponse,
   getBearerToken,
+  getCookie,
+  AUTH_COOKIE,
   tokenMatches,
   readJsonBody,
   readLoginToken,
@@ -115,7 +117,7 @@ export class GatewayAuth {
   requestCredentialMatches(request: IncomingMessage): boolean {
     const bearer = getBearerToken(request.headers);
     if (bearer) return this.gatewayCredentialMatches(bearer, request);
-    return this.cookieCredentialMatches(getGatewayAuthCookie(request.headers));
+    return this.cookieCredentialMatches(getGatewayAuthCookie(request));
   }
 
   private cookieCredentialMatches(candidate: string | null): boolean {
@@ -126,7 +128,7 @@ export class GatewayAuth {
 
   /** The request is authenticated by a client grant (a leaf workspace), not the gateway token. */
   private authenticatedByGrant(request: IncomingMessage): boolean {
-    const credential = gatewayRequestCredential(request.headers);
+    const credential = gatewayRequestCredential(request);
     return Boolean(credential && this.grantExpiresAt(credential) !== null);
   }
 
@@ -331,11 +333,11 @@ export class GatewayAuth {
     }
 
     if (url.pathname === `${API_PREFIX}/logout`) {
-      const session = getGatewayAuthCookie(request.headers);
+      const session = getGatewayAuthCookie(request);
       if (session) this.ctx.browserSessions.revoke(session);
       response.writeHead(303, {
         location: `${API_PREFIX}/login`,
-        "set-cookie": clearedGatewayCookies(requestIsHttps(request)),
+        "set-cookie": clearedGatewayCookies(),
         "cache-control": "no-store",
       });
       response.end();
@@ -503,9 +505,10 @@ export class GatewayAuth {
       );
       return;
     }
-    const staleCookie = getGatewayAuthCookie(request.headers);
+    // Cleanup must inspect the old name even when HTTPS refuses it as a credential.
+    const staleCookie = getCookie(request.headers, AUTH_COOKIE) ?? getGatewayAuthCookie(request);
     if (staleCookie && this.durableCredentialOutcome(staleCookie, request) === "match") {
-      response.setHeader("set-cookie", clearedGatewayCookies(requestIsHttps(request)));
+      response.setHeader("set-cookie", clearedGatewayCookies());
     }
     if (wantsHtml(request) && request.method === "GET") {
       const notice = staleCookie
@@ -813,7 +816,7 @@ export class GatewayAuth {
    * an unattended tab still lapses. A bearer client has no session here.
    */
   handleBrowserSession(request: IncomingMessage, response: ServerResponse): void {
-    const session = getBearerToken(request.headers) ? null : getGatewayAuthCookie(request.headers);
+    const session = getBearerToken(request.headers) ? null : getGatewayAuthCookie(request);
     if (!session || !this.ctx.browserSessions.has(session)) {
       jsonResponse(response, 404, { error: "Not found" });
       return;

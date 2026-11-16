@@ -391,8 +391,9 @@ a tab does (`forwardExternally` in `preview-transport-manager.ts`).
 
 Never open a remote dev server on the gateway's own host name (for example
 `http://<machine>.<tailnet>.ts.net:3000`). Cookies ignore ports, so the page
-would receive `orkestrator_gateway_auth`; the gateway path proxy and the
-forward both keep it away from the application.
+would receive the gateway cookie (`__Host-orkestrator_gateway_auth` over
+HTTPS, `orkestrator_gateway_auth` over plain HTTP); the gateway path proxy and
+the forward both keep it away from the application.
 
 ### Private HTTPS origins
 
@@ -447,7 +448,7 @@ no-referrer form POST from a pre-opened top-level window, so it never reaches a
 URL, history entry or `Referer`. Paths under `/__orkestrator_preview/` are never
 forwarded upstream.
 
-The reserved cookies (the preview cookie and `orkestrator_gateway_auth`) are
+The reserved cookies (the preview cookie and both gateway cookie names) are
 removed from requests before they reach the application, and upstream
 `Set-Cookie` fields using a reserved name are dropped. Upstream `Domain`
 attributes are removed, so application cookies become host-only rather than

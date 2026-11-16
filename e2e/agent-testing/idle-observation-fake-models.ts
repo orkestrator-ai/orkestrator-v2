@@ -75,7 +75,7 @@ export function fakeModelSettingsFile(platform: FakeModelPlatform, dataDir: stri
   return path.join(home, platform === "claude" ? "settings.json" : "config.toml");
 }
 /** The port `installFakeClaudeApiFixture` serves on inside a container. */
-const CONTAINER_FAKE_PORT = 47_123;
+export const CONTAINER_FAKE_PORT = 47_123;
 
 /** Spawn a fake under the host's Bun and read the address it prints. */
 export async function startModel(
@@ -403,26 +403,24 @@ function docker(args: string[], input?: string): string {
  * Serve the scripted Claude model on a container's loopback and merge its
  * address into the container user's Claude settings, as
  * `container-claude-terminal-signal.spec.ts` does for its fixture.
+ *
+ * `options.source` replaces the scripted model with another self-contained
+ * script that takes `--port` (`failed-turn-bell-live.spec.ts` passes
+ * `refused-login-model.ts`), and `options.readyPath` is then a `GET` route on
+ * it that answers 200 once it listens.
  */
-export async function installContainerFakeClaude(containerId: string): Promise<FakeModelHandle> {
+export async function installContainerFakeClaude(
+  containerId: string,
+  options: { source?: string; serverArgs?: string[]; readyPath?: string } = {},
+): Promise<FakeModelHandle> {
+  const base = `http://127.0.0.1:${CONTAINER_FAKE_PORT}`;
+  const probe = options.readyPath
+    ? [`${base}${options.readyPath}`]
+    : ["-X", "POST", "-d", "{}", `${base}/v1/messages/count_tokens`];
   const ready = () =>
-    spawnSync(
-      "docker",
-      [
-        "exec",
-        containerId,
-        "curl",
-        "-fsS",
-        "-o",
-        "/dev/null",
-        "-X",
-        "POST",
-        "-d",
-        "{}",
-        `http://127.0.0.1:${CONTAINER_FAKE_PORT}/v1/messages/count_tokens`,
-      ],
-      { timeout: 5_000 },
-    ).status === 0;
+    spawnSync("docker", ["exec", containerId, "curl", "-fsS", "-o", "/dev/null", ...probe], {
+      timeout: 5_000,
+    }).status === 0;
   const undo = await installFakeClaudeApiFixture({
     asNode: (script, input) =>
       docker(["exec", "-i", "--user", "node", containerId, "sh", "-c", script], input),
@@ -438,7 +436,8 @@ export async function installContainerFakeClaude(containerId: string): Promise<F
         },
       );
     },
-    source: readFileSync(FAKE_CLAUDE, "utf8"),
+    source: options.source ?? readFileSync(FAKE_CLAUDE, "utf8"),
+    ...(options.serverArgs ? { serverArgs: options.serverArgs } : {}),
     waitUntilReady: async () => {
       for (const deadline = Date.now() + 15_000; Date.now() < deadline;) {
         if (ready()) return;

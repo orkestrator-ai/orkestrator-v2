@@ -32,6 +32,7 @@ import {
 } from "../src/core/tmux";
 
 import { BackendRuntime } from "../src/core/backend-runtime";
+import { claudeProjectSlug } from "../src/core/claude-project-slug";
 import { registrarFrom } from "../src/core/commands-registry-contracts";
 import type { CommandContext } from "../src/core/commands";
 import type { Environment } from "../src/core/models";
@@ -80,8 +81,9 @@ export function createEnvironment(worktreePath: string, environmentId: string): 
   };
 }
 
+/** Claude Code's own folder name, independent of the backend's `encodeCwd`. */
 export function encodeCwd(cwd: string): string {
-  return cwd.replace(/\/+$/, "").replaceAll("/", "-");
+  return claudeProjectSlug(cwd);
 }
 
 export async function withFakeTmuxRuntime(
@@ -94,10 +96,12 @@ export async function withFakeTmuxRuntime(
     /** `${RUNTIME_ROOT_PREFIX}/<environment id>` — where the backend keeps hook state. */
     runtimeRoot: string;
   }) => Promise<void>,
+  /** `worktreeName` lets a test give the worktree a path Claude rewrites (a space, a dot). */
+  options: { worktreeName?: string } = {},
 ): Promise<void> {
   const root = await createTempDir(RUNTIME_TEMP_PREFIX);
   const binDir = path.join(root, "bin");
-  const worktree = path.join(root, "worktree");
+  const worktree = path.join(root, options.worktreeName ?? "worktree");
   const home = path.join(root, "home");
   const log = path.join(root, "tmux.log");
   const alive = path.join(root, "tmux-alive");

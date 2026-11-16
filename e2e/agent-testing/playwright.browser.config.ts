@@ -71,6 +71,7 @@ export default defineConfig({
     "codex-typed-prompts-live.spec.ts",
     "codex-refused-login-live.spec.ts",
     "failed-turn-bell-live.spec.ts",
+    "failed-turn-bell-tmux-live.spec.ts",
     "schedules-two-backends-live.spec.ts",
     "codex-saved-rules-live.spec.ts",
     "bug-report-live.spec.ts",

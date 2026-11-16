@@ -783,6 +783,57 @@ describe("Electron tmux hooks and transcripts", () => {
     });
   });
 
+  test("reads the transcript of a worktree whose path Claude rewrites (a space, a dot)", async () => {
+    // On macOS every local worktree sits under `Application Support`. Claude
+    // names the folder with each non-alphanumeric character as `-`; a slug
+    // that replaced only `/` looked in a folder that never exists, so the tab
+    // showed no transcript and no error (to-do 5160 (retired) task 7, 2026-11-16).
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(
+      async ({ worktree, home, environment }) => {
+        const context = {
+          storage: {
+            getEnvironment: async () => environment,
+          },
+          emit: () => undefined,
+          appRoot: "",
+          resourceRoot: "",
+        };
+        const status = (await invoke(
+          handlers,
+          "claude_tmux_start",
+          { tabId: "tab-space", environmentId: environment.id },
+          context,
+        )) as { session_id: string; running: boolean };
+        expect(status.running).toBe(true);
+
+        // The harness's `encodeCwd` is Claude's own rule, not the backend's.
+        expect(encodeCwd(worktree).endsWith("-Application-Support-work-tree")).toBe(true);
+        const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
+        await fs.mkdir(transcriptDir, { recursive: true });
+        await fs.writeFile(
+          path.join(transcriptDir, `${status.session_id}.jsonl`),
+          `${JSON.stringify({ type: "user", message: { role: "user", content: "Hello" } })}\n`,
+        );
+        await expect(
+          invoke(handlers, "claude_tmux_transcript", {
+            tabId: "tab-space",
+            environmentId: environment.id,
+          }),
+        ).resolves.toEqual([{ type: "user", message: { role: "user", content: "Hello" } }]);
+
+        await invoke(
+          handlers,
+          "claude_tmux_stop",
+          { tabId: "tab-space", environmentId: environment.id },
+          context,
+        );
+      },
+      { worktreeName: "Application Support/work.tree" },
+    );
+  });
+
   test("does not bind a fresh tab to another active tab's transcript fallback", async () => {
     const handlers = createHandlers();
 

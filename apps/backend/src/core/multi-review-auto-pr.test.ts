@@ -1,7 +1,11 @@
 import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
 import { describe, expect, test } from "bun:test";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
-import { queueAutoPr, supersedePendingAutoPr } from "./multi-review-auto-pr.js";
+import {
+  launchResolveConflictsAgent,
+  queueAutoPr,
+  supersedePendingAutoPr,
+} from "./multi-review-auto-pr.js";
 
 function workflow(fields: Partial<MultiReviewWorkflow>): MultiReviewWorkflow {
   return { id: "workflow-1", ...fields } as unknown as MultiReviewWorkflow;
@@ -84,3 +88,37 @@ describe("supersedePendingAutoPr", () => {
     expect(launched.autoPrLaunch?.state).toBe("launched");
   });
 });
+
+for (const queued of [false, true]) {
+  test(`coordinator Resolve keeps the reused tab receipt (queued=${queued})`, async () => {
+    const calls: unknown[] = [];
+    const result = await launchResolveConflictsAgent(
+      async (command, args) => {
+        calls.push({ command, args });
+        return {
+          status: "accepted",
+          tabId: "existing-resolve",
+          reused: true,
+          queued,
+          completionActionArmed: true,
+        };
+      },
+      {
+        getEnvironment: async () => ({ id: "env-1", projectId: "project-1" }) as never,
+        loadConfig: async () => ({ global: { enabledAgentPlatforms: ["codex"] } }) as never,
+      },
+      { environmentId: "env-1", targetBranch: "main", requestId: "resolve-1" },
+    );
+    expect(calls).toEqual([
+      expect.objectContaining({
+        command: "launch_native_agent_job",
+        args: expect.objectContaining({
+          tabReuse: "any-agent",
+          activateTab: false,
+          requestId: "resolve-1",
+        }),
+      }),
+    ]);
+    expect(result).toEqual({ kind: "launched", tabId: "existing-resolve", refreshArmed: true });
+  });
+}

@@ -35,14 +35,24 @@ const log = createLogger("pull-request");
  * A Resolve, automatic or pressed by hand, holds the armed re-check token
  * while it works. Once every Resolve tab has settled, a conflict reading that
  * started at least 30 seconds later (`PR_AUTO_MERGE_RESOLVE_SETTLE_MS`)
- * consumes the token and sends the Resolve prompt again, up to three
- * attempts. Exhaustion turns integration off and stores an actionable error.
+ * consumes the token and sends the Resolve prompt again. This keeps going
+ * until the pull request merges: only an attempt that left the pull request's
+ * head where it was counts toward the limit of three. A Resolve that moved the
+ * head resets the no-progress count. Three attempts without progress, or ten
+ * consecutive episodes still reporting conflicts, turn integration off and
+ * store an actionable error.
+ *
+ * A merge GitHub refuses because a branch moved under it ("Base branch was
+ * modified") is a race, not a failure: it is retried from the next reading,
+ * which also notices any conflict the new base brought, without an error.
  *
  * There is one Resolve tab per environment. A later conflict episode sends
  * the prompt again to the open Resolve tab (manual or automatic) through the
  * job tab reuse path (`native-agent-job-tab-reuse.ts`): a settled tab runs it
- * now, a busy one queues it until its current work ends. A new tab opens only
- * when no Resolve tab is open or the open one cannot take a prompt.
+ * now, a busy one queues it until its current work ends. With no Resolve tab
+ * open, the conversation a build pipeline's Resolve Conflicts step had is
+ * reopened as the Resolve tab (`native-agent-job-pipeline-resolve.ts`). A new
+ * tab opens only when neither exists or the open one cannot take a prompt.
  */
 
 /**
@@ -72,6 +82,21 @@ export type PrAutoMergeDecision =
       kind: "wait";
       reason: PrNotReadyReason | "disabled" | "busy" | "resolve-pending";
     };
+
+/** A full commit SHA, as the PR monitor reports a head. */
+function isCommitSha(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{40}$/i.test(value);
+}
+
+/**
+ * GitHub refused the merge because the base or head branch moved between the
+ * reading and the merge (HTTP 405). Nothing is wrong with the pull request;
+ * the next reading decides again.
+ */
+export function isMergeBranchRace(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(?:base|head) branch was modified\b/i.test(message);
+}
 
 export interface PrAutoMergePolicy {
   /** Wait for checks GitHub does not require to pass. On by default. */
@@ -112,9 +137,7 @@ export function decideAutoMerge(
     requireChecks: policy.requireChecks !== false,
   });
   if (readiness.ready)
-    return monitor?.headSha && /^[a-f0-9]{40}$/i.test(monitor.headSha)
-      ? { kind: "merge" }
-      : { kind: "wait", reason: "stale" };
+    return isCommitSha(monitor?.headSha) ? { kind: "merge" } : { kind: "wait", reason: "stale" };
   if (readiness.reason !== "conflicts") return { kind: "wait", reason: readiness.reason };
   // Only an explicit conflict reading arms the Resolve token below; a `dirty`
   // merge state alone would launch Resolve again on every attempt.
@@ -296,6 +319,13 @@ export class PrAutoMergeController {
       this.holdAttempt(environmentId, key, false);
     } catch (error) {
       if (this.closed) return;
+      if (decision.kind === "merge" && isMergeBranchRace(error)) {
+        // Not a failure to show or back off from: hold for the next reading,
+        // which merges, or finds the conflicts the new base brought.
+        this.holdAttempt(environmentId, key, false);
+        this.warn("auto-merge.merge-failed", environmentId, error);
+        return;
+      }
       await this.recordError(environment, error instanceof Error ? error.message : String(error));
       this.holdAttempt(environmentId, key, true);
       this.warn(
@@ -314,6 +344,13 @@ export class PrAutoMergeController {
    * consumes the token, counts the attempt, and re-evaluates at once, which
    * sends the Resolve prompt again to the open Resolve tab. The settle window
    * gives GitHub time to recompute mergeability after the Resolve's push.
+   *
+   * The attempt counts toward the limit only when the pull request's head is
+   * still the one recorded when the episode started: a moved head means the
+   * Resolve pushed. Head movement alone does not prove conflicts were fixed,
+   * so ten consecutive conflicting episodes stop even a pushing Resolve. With
+   * no recorded head (a manual Resolve that finished before it was seen working, or a reading
+   * without a head) the attempt counts, as it always did.
    */
   private async followResolve(
     environment: Environment,
@@ -335,7 +372,15 @@ export class PrAutoMergeController {
       current.prRecheckAfterAgentCompletionArmedAt ===
         environment.prRecheckAfterAgentCompletionArmedAt &&
       current.autoMergeResolveCompletedAt === environment.autoMergeResolveCompletedAt &&
+      current.autoMergeResolveHeadSha === environment.autoMergeResolveHeadSha &&
+      (current.autoMergeResolveEpisodes ?? 0) === (environment.autoMergeResolveEpisodes ?? 0) &&
       (current.autoMergeResolveAttempts ?? 0) === (environment.autoMergeResolveAttempts ?? 0);
+    // A Resolve still working has not pushed yet, so the head now is the one
+    // its progress is measured from. An automatic launch records it at launch.
+    const startHead =
+      settled !== true && !environment.autoMergeResolveHeadSha && isCommitSha(reading?.headSha)
+        ? { autoMergeResolveHeadSha: reading.headSha }
+        : {};
     if (!Number.isFinite(completedAt)) {
       if (settled === true) {
         await this.options.storage.updateEnvironment(
@@ -343,6 +388,8 @@ export class PrAutoMergeController {
           { autoMergeResolveCompletedAt: new Date().toISOString() },
           unchanged,
         );
+      } else if (Object.keys(startHead).length > 0) {
+        await this.options.storage.updateEnvironment(environmentId, startHead, unchanged);
       }
       return;
     }
@@ -351,26 +398,38 @@ export class PrAutoMergeController {
       // sent to the tab): the settle window restarts when it ends.
       await this.options.storage.updateEnvironment(
         environmentId,
-        { autoMergeResolveCompletedAt: undefined },
+        { autoMergeResolveCompletedAt: undefined, ...startHead },
         unchanged,
       );
       return;
     }
     const checkedAt = Date.parse(reading?.lastSuccessfulCheckStartedAt ?? "");
     if (!(checkedAt >= completedAt + PR_AUTO_MERGE_RESOLVE_SETTLE_MS)) return;
-    const attempts = (environment.autoMergeResolveAttempts ?? 0) + 1;
+    const startedAt = environment.autoMergeResolveHeadSha;
+    const progressed =
+      isCommitSha(startedAt) && isCommitSha(reading?.headSha) && reading.headSha !== startedAt;
+    const episodes = (environment.autoMergeResolveEpisodes ?? 0) + 1;
+    const attempts = progressed ? 0 : (environment.autoMergeResolveAttempts ?? 0) + 1;
     await this.options.storage.updateEnvironment(
       environmentId,
       {
-        ...(attempts >= PR_AUTO_MERGE_RESOLVE_MAX_ATTEMPTS
+        ...(episodes >= 10
           ? {
               autoMerge: false,
               autoMergeError:
-                "Resolve still reports conflicts after three attempts. Inspect the Resolve tab, then turn auto-merge on again to retry.",
+                "Resolve still reports conflicts after ten episodes. Inspect the Resolve tab, then turn auto-merge on again to retry.",
             }
-          : {}),
+          : attempts >= PR_AUTO_MERGE_RESOLVE_MAX_ATTEMPTS
+            ? {
+                autoMerge: false,
+                autoMergeError:
+                  "Resolve still reports conflicts after three attempts that did not change the pull request. Inspect the Resolve tab, then turn auto-merge on again to retry.",
+              }
+            : {}),
         autoMergeResolveAttempts: attempts,
+        autoMergeResolveEpisodes: episodes,
         autoMergeResolveCompletedAt: undefined,
+        autoMergeResolveHeadSha: undefined,
         prRecheckAfterAgentCompletionArmedAt: undefined,
       },
       unchanged,
@@ -455,6 +514,8 @@ export class PrAutoMergeController {
     );
     const repository = await this.options.storage.getRepositoryConfig(environment.projectId);
     if (!(await this.authorized(environment, "resolve"))) return false;
+    // Read before the launch: by the time it returns, the Resolve may have pushed.
+    const headSha = this.options.monitorState(environment.id)?.headSha;
     const targetBranch = environment.prBaseBranch || repository.prBaseBranch?.trim() || "main";
     const result = await this.options.invoke<{ status?: unknown; error?: unknown }>(
       "launch_native_agent_job",
@@ -486,7 +547,31 @@ export class PrAutoMergeController {
           : "The conflict-resolution agent rejected the prompt",
       );
     }
+    await this.recordResolveStart(environment, headSha);
     return true;
+  }
+
+  /**
+   * The head this Resolve episode starts from, which `followResolve` measures
+   * its progress against. Written only while the launch's token is armed and
+   * no head is recorded yet, so it never replaces the head of a Resolve
+   * already running.
+   */
+  private async recordResolveStart(
+    environment: Environment,
+    headSha: string | null | undefined,
+  ): Promise<void> {
+    if (!isCommitSha(headSha)) return;
+    await this.options.storage.updateEnvironment(
+      environment.id,
+      { autoMergeResolveHeadSha: headSha },
+      (current) =>
+        current.autoMerge === true &&
+        current.prUrl === environment.prUrl &&
+        current.autoMergeEnabledAt === environment.autoMergeEnabledAt &&
+        !!current.prRecheckAfterAgentCompletionArmedAt &&
+        !current.autoMergeResolveHeadSha,
+    );
   }
 
   /** Holds this attempt off until a timer re-evaluates, backing off on failure. */

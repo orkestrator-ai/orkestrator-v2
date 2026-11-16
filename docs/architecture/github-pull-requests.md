@@ -189,8 +189,22 @@ session and the queue:
   identical prompt still waits. A draft in that tab's composer holds the queue, as
   it does for any queued prompt.
 - `NativeAgentService.promptReadiness` answers `unavailable` for a missing
-  session, a tab being closed, a parked dispatch or queue, and a failed provider
-  session. All of them open a new tab.
+  session, a tab being closed, a parked dispatch or queue, and a provider session
+  that is gone. A failed session with an ordinary backlog is also unavailable,
+  because its queue cannot recover a terminal provider error. An empty failed
+  session takes the next prompt directly, as it would from the composer.
+  Unavailable existing tabs or provider refusals normally open a new tab.
+- With no Resolve tab open, a build pipeline's own Resolve Conflicts session is
+  reopened as the Resolve tab before anything else
+  (`native-agent-job-pipeline-resolve.ts`): the newest `resolve-conflicts`
+  session of a `complete` or `failed` pipeline in the environment, not one still
+  running, on an enabled agent the launch may reuse. Its provider session is
+  adopted under a new tab with the completion action, so the prompt continues
+  that conversation instead of starting another. A session the provider no
+  longer has, or an adoption failure, leaves the launch to open a new tab.
+  If adoption succeeded but the resend is unavailable or rejected, the launch
+  reports rejection and keeps that tab for inspection and retry; it does not
+  open a duplicate beside it.
 - A plain press (`any-agent`) keeps the tab's own agent and model. The dialog
   (`same-agent`) only reuses a tab on the agent it chose, and sends its model,
   reasoning and speed with the prompt, as the composer's picker does. A different
@@ -206,8 +220,10 @@ before it already cleared the conflicts. That disarms the refresh, and only the
 regular PR poll sees the extra turn, which is fine because there is no stale
 conflict state left to clear.
 
-`pr.resolve` and `resolve_conflicts` do not pass `tabReuse`: their receipt names a
-new tab and a run, so they always open one. They still record the marker, so the
+`pr.resolve` and the Control MCP's `resolve_conflicts` do not pass `tabReuse`:
+their receipt names a new tab and a run, so they always open one. Auto-merge and
+a coordinator's `resolve_conflicts` for a worker (`launchResolveConflictsAgent`)
+do pass it, so they reuse the open Resolve tab like the button. They still record the marker, so the
 button can reuse a tab they opened. Tabs opened before the marker existed have
 none, so the next press opens one more tab and reuses that from then on.
 
@@ -419,9 +435,21 @@ to a minute for the next throttled read. `decideAutoMerge` uses
   to recompute mergeability after the push) consumes the token and sends the
   Resolve prompt again at once, to the open Resolve tab. A Resolve tab that is
   working again clears the completion time, so the window restarts when it
-  ends. Three completed attempts with conflicts turn auto-merge off and record an
-  actionable error (shown beside the auto-merge toggle). Re-enabling resets
-  the attempt budget.
+  ends. This continues until the PR merges. An attempt counts toward the limit
+  only when it left the PR's head where it was: each episode records the head
+  it starts from (`autoMergeResolveHeadSha`, written at an automatic launch, or
+  while a manual Resolve is first seen working), and a Resolve that moved it
+  pushed a commit, so the no-progress count starts over. Head movement does not
+  prove conflicts were fixed: a separate durable counter stops after ten
+  consecutive episodes that still report conflicts, even when every episode
+  pushes. A conflict-free reading or re-enabling auto-merge resets both counters. Three attempts that did not change the PR turn
+  auto-merge off and record an actionable error (shown beside the auto-merge
+  toggle). Re-enabling resets the attempt budget.
+- **Merge refused because a branch moved** ("Base branch was modified",
+  HTTP 405): a race between the reading and the merge, not a failure. No error
+  is recorded and the retry delay does not grow: the merge is tried again after
+  the base delay (`PR_AUTO_MERGE_RETRY_BASE_MS`), and a reading that finds
+  conflicts the new base brought launches Resolve at once.
 - **Anything else** (stale, mergeability unknown, draft, blocked, behind,
   no merge permission, and checks pending or failing when checks are
   required): it waits for the next reading.

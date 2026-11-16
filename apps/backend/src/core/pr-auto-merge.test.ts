@@ -150,6 +150,7 @@ function harness(
   const timers: Array<{ callback: () => void; delayMs: number; cancelled: boolean }> = [];
   let failNext: Error | null = null;
   let nextStatus: string | null = null;
+  let onInvoke: ((command: string) => void) | null = null;
   let requireChecks: boolean | undefined;
   const warnings: string[] = [];
   const storage = {
@@ -177,6 +178,7 @@ function harness(
     storage,
     invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
       invocations.push({ command, args });
+      onInvoke?.(command);
       if (failNext) {
         const error = failNext;
         failNext = null;
@@ -229,6 +231,10 @@ function harness(
     },
     failNextInvoke(error: Error) {
       failNext = error;
+    },
+    /** Runs inside each command, as a launch that arms the re-check token does. */
+    onInvoke(callback: (command: string) => void) {
+      onInvoke = callback;
     },
     async announce() {
       const state = monitorState!;
@@ -891,3 +897,138 @@ test("a failing consumption write counts nothing and sends nothing", async () =>
   expect(h.invocations).toHaveLength(1);
   h.controller.dispose();
 });
+
+const HEAD_BEFORE = "b".repeat(40);
+const HEAD_AFTER = "a".repeat(40);
+
+test("a Resolve that moved the head does not count, so new conflicts are resolved again", async () => {
+  const completed = isoAgo(PR_AUTO_MERGE_RESOLVE_SETTLE_MS + 10_000);
+  // Two attempts already counted; this one pushed (the head moved) but the
+  // base moved again, so GitHub still reports conflicts.
+  const h = harness(
+    resolvingEnvironment({
+      autoMergeResolveCompletedAt: completed,
+      autoMergeResolveAttempts: 2,
+      autoMergeResolveHeadSha: HEAD_BEFORE,
+    }),
+  );
+  h.setMonitor(monitor(h.stored, { headSha: HEAD_AFTER }));
+  await h.controller.evaluate("env-1");
+  await flush();
+  expect(h.stored.autoMerge).toBe(true);
+  expect(h.stored.autoMergeError ?? null).toBeNull();
+  expect(h.stored.autoMergeResolveAttempts).toBe(0);
+  expect(h.stored.autoMergeResolveHeadSha).toBeUndefined();
+  expect(h.invocations).toHaveLength(1);
+  expect(h.invocations[0]).toMatchObject({
+    command: "launch_native_agent_job",
+    args: { tabReuse: "any-agent", completionAction: "refresh-pr-after-agent-completion" },
+  });
+  h.controller.dispose();
+});
+
+test("a Resolve that left the head where it was still counts toward the limit", async () => {
+  const completed = isoAgo(PR_AUTO_MERGE_RESOLVE_SETTLE_MS + 10_000);
+  const h = harness(
+    resolvingEnvironment({
+      autoMergeResolveCompletedAt: completed,
+      autoMergeResolveAttempts: 2,
+      autoMergeResolveHeadSha: HEAD_AFTER,
+    }),
+  );
+  await h.controller.evaluate("env-1");
+  await flush();
+  expect(h.stored.autoMerge).toBe(false);
+  expect(h.stored.autoMergeError).toContain("did not change the pull request");
+  expect(h.invocations).toHaveLength(0);
+  h.controller.dispose();
+});
+
+test("an automatic Resolve records the head it starts from", async () => {
+  const h = harness(environment({ hasMergeConflicts: true, prMergeability: "dirty" }));
+  h.setMonitor(monitor(h.stored, { headSha: HEAD_BEFORE }));
+  // The launch arms the re-check token, as `launch_native_agent_job` does.
+  h.onInvoke((command) => {
+    if (command === "launch_native_agent_job")
+      void h.storage.updateEnvironment("env-1", {
+        prRecheckAfterAgentCompletionArmedAt: new Date().toISOString(),
+      });
+  });
+  await h.controller.evaluate("env-1");
+  expect(h.invocations.map((invocation) => invocation.command)).toEqual([
+    "launch_native_agent_job",
+  ]);
+  expect(h.stored.autoMergeResolveHeadSha).toBe(HEAD_BEFORE);
+  h.controller.dispose();
+});
+
+test("a Resolve started by hand records the head while it is still working", async () => {
+  let settled = false;
+  const h = harness(resolvingEnvironment(), false, () => settled);
+  h.setMonitor(monitor(h.stored, { headSha: HEAD_BEFORE }));
+  await h.controller.evaluate("env-1");
+  expect(h.stored.autoMergeResolveHeadSha).toBe(HEAD_BEFORE);
+  // A later head (the Resolve's own push) never replaces the starting one.
+  h.setMonitor(monitor(h.stored, { headSha: HEAD_AFTER }));
+  await h.controller.evaluate("env-1");
+  expect(h.stored.autoMergeResolveHeadSha).toBe(HEAD_BEFORE);
+  settled = true;
+  await h.controller.evaluate("env-1");
+  expect(h.stored.autoMergeResolveCompletedAt).toBeDefined();
+  expect(h.stored.autoMergeResolveHeadSha).toBe(HEAD_BEFORE);
+  h.controller.dispose();
+});
+
+test("a merge refused because the base moved is retried without an error, and its conflicts resolved at once", async () => {
+  const h = harness(environment());
+  h.failNextInvoke(
+    new Error("gh: Base branch was modified. Review and try the merge again. (HTTP 405)"),
+  );
+  await h.controller.evaluate("env-1");
+  expect(h.invocations.map((invocation) => invocation.command)).toEqual(["merge_environment_pr"]);
+  expect(h.stored.autoMergeError ?? null).toBeNull();
+  expect(h.warnings).toEqual(["auto-merge.merge-failed"]);
+  expect(h.timers.at(-1)?.delayMs).toBe(PR_AUTO_MERGE_RETRY_BASE_MS);
+
+  // The moved base brought conflicts: Resolve is not held back by the merge's hold.
+  h.set({ ...h.stored, hasMergeConflicts: true, prMergeability: "dirty" });
+  await h.controller.evaluate("env-1");
+  expect(h.invocations.map((invocation) => invocation.command)).toEqual([
+    "merge_environment_pr",
+    "launch_native_agent_job",
+  ]);
+  h.controller.dispose();
+});
+
+// Progress cannot prove that a Resolve fixed the conflicts.
+test("pushing Resolves stop at the durable consecutive-episode ceiling", async () => {
+  const h = harness(resolvingEnvironment());
+  for (let episode = 1; episode <= 10; episode++) {
+    h.set({
+      ...h.stored,
+      prRecheckAfterAgentCompletionArmedAt: new Date().toISOString(),
+      autoMergeResolveCompletedAt: isoAgo(PR_AUTO_MERGE_RESOLVE_SETTLE_MS + 10_000),
+      autoMergeResolveHeadSha: HEAD_BEFORE,
+    });
+    h.setMonitor(monitor(h.stored, { headSha: HEAD_AFTER }));
+    await h.controller.evaluate("env-1");
+    await flush();
+    expect(h.stored.autoMergeResolveAttempts).toBe(0);
+    expect(h.stored.autoMergeResolveEpisodes).toBe(episode);
+    expect(h.stored.autoMerge).toBe(episode < 10);
+  }
+  expect(h.stored.autoMergeError).toContain("ten episodes");
+  expect(h.invocations).toHaveLength(9);
+  h.controller.dispose();
+});
+
+for (const previousError of [null, "Earlier merge failure"]) {
+  test(`head-branch merge race preserves the existing error: ${previousError}`, async () => {
+    const h = harness(environment({ autoMergeError: previousError }));
+    h.failNextInvoke(new Error("Head branch was modified. Review and try the merge again."));
+    await h.controller.evaluate("env-1");
+    expect(h.stored.autoMergeError ?? null).toBe(previousError);
+    expect(h.timers.at(-1)?.delayMs).toBe(PR_AUTO_MERGE_RETRY_BASE_MS);
+    h.controller.dispose();
+  });
+}

@@ -2015,8 +2015,33 @@ describe("NativeAgentService", () => {
       });
     });
 
-    test("a failed session, a missing one or a parked queue is unavailable", async () => {
+    test("a failed session with ordinary queued work is unavailable for reuse", async () => {
+      await withSession("error", async ({ storage, service }) => {
+        const queueKey = `codex\u0000${input.logicalSessionKey}`;
+        await storage.savePromptQueue(queueKey, "env-1", [
+          { id: "row-1", requestId: "request-1", text: "Earlier prompt" },
+        ]);
+        expect(await service.promptReadiness(input)).toBe("unavailable");
+        expect((await storage.getPromptQueue(queueKey))?.dispatchError).toBeUndefined();
+        for (let attempt = 0; attempt < 5; attempt++) {
+          await captureWarnings(() => queueInternals(service).drainPromptQueues());
+          queueInternals(service).queueRetryAt.delete(queueKey);
+        }
+        expect((await storage.getPromptQueue(queueKey))?.dispatchError?.message).toContain(
+          "queued prompt was not sent",
+        );
+        expect(await service.promptReadiness(input)).toBe("unavailable");
+      });
+    });
+
+    test("a session whose last turn failed takes the next prompt", async () => {
       await withSession("error", async ({ service }) => {
+        expect(await service.promptReadiness(input)).toBe("idle");
+      });
+    });
+
+    test("a missing provider session, a missing mapping or a parked queue is unavailable", async () => {
+      await withSession("missing", async ({ service }) => {
         expect(await service.promptReadiness(input)).toBe("unavailable");
       });
       await withSession("idle", async ({ service }) => {

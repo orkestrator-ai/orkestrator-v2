@@ -13,6 +13,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
       "handoff.consume-failed": "A delivered handoff could not be marked consumed.",
       "job.pr-refresh-rollback-failed": "Rolling back a pull request refresh for a job failed.",
       "job.resend-queue-failed": "A resend could not be queued for a job.",
+      "job.pipeline-resolve-adoption-failed":
+        "A build pipeline's conflict-resolution session could not be opened as the Resolve tab; a new tab is used.",
       "interaction.requests-dropped": "Interaction requests that could not be mapped were dropped.",
       "human-prompt.listener-failed": "A human prompt listener threw; the others still run.",
       "question.attention-record-failed":

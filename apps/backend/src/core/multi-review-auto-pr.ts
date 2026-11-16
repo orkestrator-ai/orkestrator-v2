@@ -156,7 +156,8 @@ export type ResolveConflictsLaunchOutcome =
  * prompt, `Resolve` tab title and `resolve` action default, launched through
  * the durable native-agent job with the button's completion action, so the
  * PR monitor rechecks the pull request when the agent finishes. The request
- * id is stable, so a retry after a lost acknowledgement joins the same job.
+ * id is stable, so a retry after a lost acknowledgement joins the same job,
+ * and the prompt goes to the environment's open Resolve tab when it has one.
  */
 export async function launchResolveConflictsAgent(
   invoke: CommandInvoker,
@@ -181,6 +182,10 @@ export async function launchResolveConflictsAgent(
       title: RESOLVE_CONFLICTS_TAB_TITLE,
       conversationMode: "build",
       completionAction: "refresh-pr-after-agent-completion",
+      // One Resolve tab per environment, as the button and auto-merge keep:
+      // a later conflict goes to the open Resolve tab (or the pipeline's
+      // Resolve session, reopened as one) instead of adding another.
+      tabReuse: "any-agent",
       // A coordinator's launch never takes the user's focus.
       activateTab: false,
       ...(action.model ? { modelId: action.model } : {}),

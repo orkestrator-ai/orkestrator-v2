@@ -345,9 +345,70 @@ test("manual Resolve does not inherit a completed automatic Resolve identity", a
       hasMergeConflicts: true,
       autoMergeResolveRequestId: "old",
       autoMergeResolveCompletedAt: new Date().toISOString(),
+      autoMergeResolveHeadSha: "a".repeat(40),
     });
     await storage.armPrRecheckAfterAgentCompletion(env.id);
     expect((await storage.getEnvironment(env.id))?.autoMergeResolveRequestId).toBeUndefined();
     expect((await storage.getEnvironment(env.id))?.autoMergeResolveCompletedAt).toBeUndefined();
+    expect((await storage.getEnvironment(env.id))?.autoMergeResolveHeadSha).toBeUndefined();
+  });
+});
+
+test("the head a Resolve started from is kept until conflicts clear or auto-merge is restated", async () => {
+  await withStorage(async (storage) => {
+    const env = await storage.addEnvironment({
+      ...createEnvironment("project"),
+      prUrl: "https://github.com/o/r/pull/1",
+      prState: "open",
+      hasMergeConflicts: true,
+    });
+    const head = "b".repeat(40);
+    const read = async () => (await storage.getEnvironment(env.id))?.autoMergeResolveHeadSha;
+    await storage.updateEnvironment(env.id, { autoMerge: true });
+    await storage.updateEnvironment(env.id, { autoMergeResolveHeadSha: head });
+    expect(await read()).toBe(head);
+    await storage.updateEnvironment(env.id, { autoMergeResolveHeadSha: 7 as never });
+    expect(await read()).toBe(head);
+
+    await storage.updateEnvironment(env.id, { hasMergeConflicts: false });
+    expect(await read()).toBeUndefined();
+
+    await storage.updateEnvironment(env.id, {
+      hasMergeConflicts: true,
+      autoMergeResolveHeadSha: head,
+    });
+    expect(await read()).toBe(head);
+    await storage.updateEnvironment(env.id, { autoMerge: true });
+    expect(await read()).toBeUndefined();
+  });
+});
+
+test("the consecutive Resolve episode budget persists and resets only on recovery or restating auto-merge", async () => {
+  await withStorage(async (storage) => {
+    const env = await storage.addEnvironment({
+      ...createEnvironment("project"),
+      prUrl: "https://github.com/o/r/pull/1",
+      prState: "open",
+      hasMergeConflicts: true,
+    });
+    const read = async () => (await storage.getEnvironment(env.id))?.autoMergeResolveEpisodes;
+    await storage.updateEnvironment(env.id, { autoMerge: true });
+    await storage.updateEnvironment(env.id, { autoMergeResolveEpisodes: 9 });
+    expect(await read()).toBe(9);
+    await storage.armPrRecheckAfterAgentCompletion(env.id);
+    expect(await read()).toBe(9);
+    for (const invalid of [-1, 11, 1.5, NaN]) {
+      await storage.updateEnvironment(env.id, { autoMergeResolveEpisodes: invalid });
+      expect(await read()).toBe(9);
+    }
+    await storage.updateEnvironment(env.id, { hasMergeConflicts: false });
+    expect(await read()).toBe(0);
+    await storage.updateEnvironment(env.id, {
+      hasMergeConflicts: true,
+      autoMergeResolveEpisodes: 5,
+    });
+    expect(await read()).toBe(5);
+    await storage.updateEnvironment(env.id, { autoMerge: true });
+    expect(await read()).toBe(0);
   });
 });

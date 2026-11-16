@@ -1539,24 +1539,33 @@ describe("limit resets", () => {
     expect(snapshot.resets).toBeUndefined();
   });
 
-  test("Claude: the read asks for resets, and falls back to the plain endpoint if refused", async () => {
-    const urls: string[] = [];
-    const fetchImpl = (async (input: string | URL | Request) => {
-      urls.push(String(input));
-      return String(input).includes("cedar_ember")
-        ? new Response(null, { status: 400 })
-        : jsonResponse({ five_hour: { utilization: 5 } });
-    }) as unknown as typeof fetch;
-    const reader = createPlanUsageReader({
-      fetchImpl,
-      now: () => NOW,
-      credentials: { claude: async () => "oauth-token" },
+  for (const status of [400, 404, 422]) {
+    test(`Claude: a ${status} resets refusal preserves the User-Agent on the plain fallback`, async () => {
+      const seen: Array<{ url: string; userAgent: string | null }> = [];
+      const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+        seen.push({
+          url: String(input),
+          userAgent: new Headers(init?.headers).get("User-Agent"),
+        });
+        return String(input).includes("cedar_ember")
+          ? new Response(null, { status })
+          : jsonResponse({ five_hour: { utilization: 5 } });
+      }) as unknown as typeof fetch;
+      const reader = createPlanUsageReader({
+        fetchImpl,
+        now: () => NOW,
+        credentials: { claude: async () => "oauth-token" },
+      });
+      const snapshot = await reader(contextWithGlobal(), "claude");
+      const userAgent = `claude-cli/${PINNED_TOOL_VERSIONS.claude} (external, cli)`;
+      expect(seen).toEqual([
+        { url: `${CLAUDE_USAGE_URL}?cedar_ember=1`, userAgent },
+        { url: CLAUDE_USAGE_URL, userAgent },
+      ]);
+      expect(snapshot.status).toBe("ok");
+      expect(snapshot.resets).toBeUndefined();
     });
-    const snapshot = await reader(contextWithGlobal(), "claude");
-    expect(urls).toEqual([`${CLAUDE_USAGE_URL}?cedar_ember=1`, CLAUDE_USAGE_URL]);
-    expect(snapshot.status).toBe("ok");
-    expect(snapshot.resets).toBeUndefined();
-  });
+  }
 
   test("Claude: a reading carries the account's resets", async () => {
     const reader = createPlanUsageReader({

@@ -415,7 +415,10 @@ next read. The command catalogue's `fetchedAt` is left out of the discovery
 view, because it moves on every renewal and no view shows it. Before this,
 each backstop became a `stale` view, a 2 s follow-up and a second follow-up
 for the refused sections, all three whole bodies (about 32 KB each for a
-Claude tab).
+Claude tab). On the loopback model a 120 s idle window went from 4 whole
+views (96,676 B) to 5 `unchanged` answers (2,385 B); the attribution and
+both measurements are in to-do 8151 (retired 2026-11-16:
+`git show eb32124cc:docs/todo/transcripts-and-observation/8151-discovery-reads-during-a-quiet-turn.md`).
 
 A renewal announces only when the value changed as a view would show it
 (`storeProgressiveDiscovery`), so a stored value must not move when nothing

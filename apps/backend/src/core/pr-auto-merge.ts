@@ -38,9 +38,9 @@ const log = createLogger("pull-request");
  * consumes the token and sends the Resolve prompt again. This keeps going
  * until the pull request merges: only an attempt that left the pull request's
  * head where it was counts toward the limit of three. A Resolve that moved the
- * head pushed its merge, so conflicts found after it are new ones from a base
- * that moved again, and the count starts over. Three attempts without progress
- * turn integration off and store an actionable error.
+ * head resets the no-progress count. Three attempts without progress, or ten
+ * consecutive episodes still reporting conflicts, turn integration off and
+ * store an actionable error.
  *
  * A merge GitHub refuses because a branch moved under it ("Base branch was
  * modified") is a race, not a failure: it is retried from the next reading,
@@ -347,8 +347,9 @@ export class PrAutoMergeController {
    *
    * The attempt counts toward the limit only when the pull request's head is
    * still the one recorded when the episode started: a moved head means the
-   * Resolve pushed, and the conflict is a new one. With no recorded head (a
-   * manual Resolve that finished before it was seen working, or a reading
+   * Resolve pushed. Head movement alone does not prove conflicts were fixed,
+   * so ten consecutive conflicting episodes stop even a pushing Resolve. With
+   * no recorded head (a manual Resolve that finished before it was seen working, or a reading
    * without a head) the attempt counts, as it always did.
    */
   private async followResolve(
@@ -372,6 +373,7 @@ export class PrAutoMergeController {
         environment.prRecheckAfterAgentCompletionArmedAt &&
       current.autoMergeResolveCompletedAt === environment.autoMergeResolveCompletedAt &&
       current.autoMergeResolveHeadSha === environment.autoMergeResolveHeadSha &&
+      (current.autoMergeResolveEpisodes ?? 0) === (environment.autoMergeResolveEpisodes ?? 0) &&
       (current.autoMergeResolveAttempts ?? 0) === (environment.autoMergeResolveAttempts ?? 0);
     // A Resolve still working has not pushed yet, so the head now is the one
     // its progress is measured from. An automatic launch records it at launch.
@@ -406,18 +408,26 @@ export class PrAutoMergeController {
     const startedAt = environment.autoMergeResolveHeadSha;
     const progressed =
       isCommitSha(startedAt) && isCommitSha(reading?.headSha) && reading.headSha !== startedAt;
+    const episodes = (environment.autoMergeResolveEpisodes ?? 0) + 1;
     const attempts = progressed ? 0 : (environment.autoMergeResolveAttempts ?? 0) + 1;
     await this.options.storage.updateEnvironment(
       environmentId,
       {
-        ...(attempts >= PR_AUTO_MERGE_RESOLVE_MAX_ATTEMPTS
+        ...(episodes >= 10
           ? {
               autoMerge: false,
               autoMergeError:
-                "Resolve still reports conflicts after three attempts that did not change the pull request. Inspect the Resolve tab, then turn auto-merge on again to retry.",
+                "Resolve still reports conflicts after ten episodes. Inspect the Resolve tab, then turn auto-merge on again to retry.",
             }
-          : {}),
+          : attempts >= PR_AUTO_MERGE_RESOLVE_MAX_ATTEMPTS
+            ? {
+                autoMerge: false,
+                autoMergeError:
+                  "Resolve still reports conflicts after three attempts that did not change the pull request. Inspect the Resolve tab, then turn auto-merge on again to retry.",
+              }
+            : {}),
         autoMergeResolveAttempts: attempts,
+        autoMergeResolveEpisodes: episodes,
         autoMergeResolveCompletedAt: undefined,
         autoMergeResolveHeadSha: undefined,
         prRecheckAfterAgentCompletionArmedAt: undefined,

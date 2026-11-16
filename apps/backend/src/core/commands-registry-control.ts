@@ -307,12 +307,13 @@ async function launchNativeAgentJobInternal(
       await rollBackCompletionAction();
       return { status: "skipped" };
     }
+    let adoptedResolveTab: string | null = null;
     if (tabReuse && completionAction) {
       // A Resolve with no Resolve tab open first reopens the conversation a
       // build pipeline's own Resolve Conflicts step had, so the resend below
       // continues that session instead of starting another.
       if (completionAction === "refresh-pr-after-agent-completion") {
-        await adoptPipelineResolveSessionIntoTab(context, {
+        adoptedResolveTab = await adoptPipelineResolveSessionIntoTab(context, {
           environmentId,
           agent,
           enabledAgents: enabled,
@@ -350,6 +351,15 @@ async function launchNativeAgentJobInternal(
         }
         return { jobId, environmentId, ...resent, ...completionActionResult };
       }
+    }
+    if (adoptedResolveTab) {
+      await rollBackCompletionAction();
+      return {
+        status: "rejected",
+        tabId: adoptedResolveTab,
+        error:
+          "The adopted Resolve conversation cannot take a prompt. Inspect the Resolve tab and retry.",
+      };
     }
     // A renderer chooses the id up front so the tab it shows at once is this
     // tab. Control MCP callers keep the id derived from their retry key.

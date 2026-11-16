@@ -999,3 +999,36 @@ test("a merge refused because the base moved is retried without an error, and it
   ]);
   h.controller.dispose();
 });
+
+// Progress cannot prove that a Resolve fixed the conflicts.
+test("pushing Resolves stop at the durable consecutive-episode ceiling", async () => {
+  const h = harness(resolvingEnvironment());
+  for (let episode = 1; episode <= 10; episode++) {
+    h.set({
+      ...h.stored,
+      prRecheckAfterAgentCompletionArmedAt: new Date().toISOString(),
+      autoMergeResolveCompletedAt: isoAgo(PR_AUTO_MERGE_RESOLVE_SETTLE_MS + 10_000),
+      autoMergeResolveHeadSha: HEAD_BEFORE,
+    });
+    h.setMonitor(monitor(h.stored, { headSha: HEAD_AFTER }));
+    await h.controller.evaluate("env-1");
+    await flush();
+    expect(h.stored.autoMergeResolveAttempts).toBe(0);
+    expect(h.stored.autoMergeResolveEpisodes).toBe(episode);
+    expect(h.stored.autoMerge).toBe(episode < 10);
+  }
+  expect(h.stored.autoMergeError).toContain("ten episodes");
+  expect(h.invocations).toHaveLength(9);
+  h.controller.dispose();
+});
+
+for (const previousError of [null, "Earlier merge failure"]) {
+  test(`head-branch merge race preserves the existing error: ${previousError}`, async () => {
+    const h = harness(environment({ autoMergeError: previousError }));
+    h.failNextInvoke(new Error("Head branch was modified. Review and try the merge again."));
+    await h.controller.evaluate("env-1");
+    expect(h.stored.autoMergeError ?? null).toBe(previousError);
+    expect(h.timers.at(-1)?.delayMs).toBe(PR_AUTO_MERGE_RETRY_BASE_MS);
+    h.controller.dispose();
+  });
+}

@@ -190,9 +190,10 @@ session and the queue:
   it does for any queued prompt.
 - `NativeAgentService.promptReadiness` answers `unavailable` for a missing
   session, a tab being closed, a parked dispatch or queue, and a provider session
-  that is gone. All of them open a new tab. A session whose last turn failed is
-  not one of them: it takes the next prompt, as it would from the composer, and
-  only a provider refusal of that prompt opens a new tab.
+  that is gone. A failed session with an ordinary backlog is also unavailable,
+  because its queue cannot recover a terminal provider error. An empty failed
+  session takes the next prompt directly, as it would from the composer.
+  Unavailable existing tabs or provider refusals normally open a new tab.
 - With no Resolve tab open, a build pipeline's own Resolve Conflicts session is
   reopened as the Resolve tab before anything else
   (`native-agent-job-pipeline-resolve.ts`): the newest `resolve-conflicts`
@@ -200,7 +201,10 @@ session and the queue:
   running, on an enabled agent the launch may reuse. Its provider session is
   adopted under a new tab with the completion action, so the prompt continues
   that conversation instead of starting another. A session the provider no
-  longer has, or any other failure, leaves the launch to open a new tab.
+  longer has, or an adoption failure, leaves the launch to open a new tab.
+  If adoption succeeded but the resend is unavailable or rejected, the launch
+  reports rejection and keeps that tab for inspection and retry; it does not
+  open a duplicate beside it.
 - A plain press (`any-agent`) keeps the tab's own agent and model. The dialog
   (`same-agent`) only reuses a tab on the agent it chose, and sends its model,
   reasoning and speed with the prompt, as the composer's picker does. A different
@@ -435,8 +439,10 @@ to a minute for the next throttled read. `decideAutoMerge` uses
   only when it left the PR's head where it was: each episode records the head
   it starts from (`autoMergeResolveHeadSha`, written at an automatic launch, or
   while a manual Resolve is first seen working), and a Resolve that moved it
-  pushed its merge, so the conflicts after it come from a base that moved again
-  and the count starts over. Three attempts that did not change the PR turn
+  pushed a commit, so the no-progress count starts over. Head movement does not
+  prove conflicts were fixed: a separate durable counter stops after ten
+  consecutive episodes that still report conflicts, even when every episode
+  pushes. A conflict-free reading or re-enabling auto-merge resets both counters. Three attempts that did not change the PR turn
   auto-merge off and record an actionable error (shown beside the auto-merge
   toggle). Re-enabling resets the attempt budget.
 - **Merge refused because a branch moved** ("Base branch was modified",

@@ -382,3 +382,33 @@ test("the head a Resolve started from is kept until conflicts clear or auto-merg
     expect(await read()).toBeUndefined();
   });
 });
+
+test("the consecutive Resolve episode budget persists and resets only on recovery or restating auto-merge", async () => {
+  await withStorage(async (storage) => {
+    const env = await storage.addEnvironment({
+      ...createEnvironment("project"),
+      prUrl: "https://github.com/o/r/pull/1",
+      prState: "open",
+      hasMergeConflicts: true,
+    });
+    const read = async () => (await storage.getEnvironment(env.id))?.autoMergeResolveEpisodes;
+    await storage.updateEnvironment(env.id, { autoMerge: true });
+    await storage.updateEnvironment(env.id, { autoMergeResolveEpisodes: 9 });
+    expect(await read()).toBe(9);
+    await storage.armPrRecheckAfterAgentCompletion(env.id);
+    expect(await read()).toBe(9);
+    for (const invalid of [-1, 11, 1.5, NaN]) {
+      await storage.updateEnvironment(env.id, { autoMergeResolveEpisodes: invalid });
+      expect(await read()).toBe(9);
+    }
+    await storage.updateEnvironment(env.id, { hasMergeConflicts: false });
+    expect(await read()).toBe(0);
+    await storage.updateEnvironment(env.id, {
+      hasMergeConflicts: true,
+      autoMergeResolveEpisodes: 5,
+    });
+    expect(await read()).toBe(5);
+    await storage.updateEnvironment(env.id, { autoMerge: true });
+    expect(await read()).toBe(0);
+  });
+});

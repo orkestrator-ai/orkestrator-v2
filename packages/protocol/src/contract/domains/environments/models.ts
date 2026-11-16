@@ -377,6 +377,7 @@ export const clientEnvironmentFields = {
    */
   autoMergeResolveHeadSha: optionalString,
   autoMergeResolveAttempts: optionalNumber,
+  autoMergeResolveEpisodes: optionalNumber,
   createdAt: Schema.String,
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt: optionalString,

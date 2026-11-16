@@ -261,12 +261,14 @@ export class NativeAgentPromptDispatch {
       if (status === "running" || status === "blocked") return "busy";
       if (status !== "idle" && status !== "error") return "unavailable";
       // Sending past a backlog would overtake prompts the user queued first.
-      return queue &&
+      const hasBacklog =
+        queue &&
         (queue.outstandingClaim !== undefined ||
           queue.inFlight !== undefined ||
-          queue.messages.length > 0)
-        ? "busy"
-        : "idle";
+          queue.messages.length > 0);
+      // Ordinary queued prompts cannot recover a failed provider turn.
+      if (status === "error" && hasBacklog) return "unavailable";
+      return hasBacklog ? "busy" : "idle";
     } catch {
       return "unavailable";
     }

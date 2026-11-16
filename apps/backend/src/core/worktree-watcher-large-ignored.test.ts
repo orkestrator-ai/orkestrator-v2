@@ -180,10 +180,9 @@ test("a tree left out while the watcher is distrusted keeps coverage withdrawn w
     // settle timer, so this callback is the completion signal.
     await until(() => settled() > 0);
 
-    // The owner's scan found a change no event announced: distrusted. While a
-    // burst is still settling the watcher forgives the report without arming
-    // its grace, so report again until the grace is armed (a repeat while it
-    // is armed is ignored) rather than sleeping past the settle.
+    // The owner's scan found a change no event announced: distrusted.
+    // Report it until the grace timer is armed, proving the watcher held it
+    // against delivery rather than forgiving it during a settling burst.
     await until(() => {
       watcher.unannouncedChange?.();
       return grace.pendingCount() === 1;

@@ -6,7 +6,7 @@ import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js"
  * A prompt a bridge refused as temporarily unavailable, before anything was
  * sent, fails as `operation-failed` (exit 1) with `retryable: true`, so a
  * script can tell "send it again under a new key" from a refusal that will
- * never work (7260). The same key still replays the failure.
+ * never work (#2060). The same key still replays the failure.
  */
 
 afterEach(cleanupSessionHarnesses);

@@ -43,7 +43,11 @@ struct ConnectionEditorView: View {
             }
         }
         .onAppear {
-            if model.draftAddress.isEmpty { focusedField = .address }
+            if model.draftAddress.isEmpty {
+                focusedField = .address
+            } else if model.editorRequest != nil {
+                focusedField = .token
+            }
         }
     }
 
@@ -83,6 +87,10 @@ struct ConnectionEditorView: View {
     private var credentialCard: some View {
         VStack(alignment: .leading, spacing: 20) {
             routeIndicator
+
+            if let request = model.editorRequest {
+                requestNotice(request)
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Label("Remote machine", systemImage: "desktopcomputer")
@@ -130,7 +138,7 @@ struct ConnectionEditorView: View {
                     } else {
                         Image(systemName: "arrow.up.right")
                     }
-                    Text(model.isConnecting ? "Checking private route…" : "Connect securely")
+                    Text(Self.submitTitle(isConnecting: model.isConnecting, request: model.editorRequest))
                         .fontWeight(.bold)
                     Spacer()
                     if !model.isConnecting { Image(systemName: "arrow.right") }
@@ -169,6 +177,39 @@ struct ConnectionEditorView: View {
         }
         .font(.system(.caption2, design: .monospaced, weight: .medium))
         .foregroundStyle(Color(white: 0.64))
+    }
+
+    /// A page asked for this save. Says who asked and that the current server
+    /// stays open, because the address may have come from that page.
+    private func requestNotice(_ request: ConnectionModel.EditorRequest) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(Self.requestTitle(request), systemImage: "arrow.down.left.circle")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.white)
+            Text(Self.requestDetail(request))
+                .font(.footnote)
+                .foregroundStyle(Color(white: 0.68))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    static func requestTitle(_ request: ConnectionModel.EditorRequest) -> String {
+        request.requestedBy.isEmpty ? "Requested by the page you are viewing" : "Requested by \(request.requestedBy)"
+    }
+
+    static func requestDetail(_ request: ConnectionModel.EditorRequest) -> String {
+        var detail = "Check the address before you enter its token. The token is checked with that address and saved on this device; the page does not see it, and the server you are viewing stays open."
+        if let nickname = request.nickname { detail += " Saved as “\(nickname)”." }
+        return detail
+    }
+
+    static func submitTitle(isConnecting: Bool, request: ConnectionModel.EditorRequest?) -> String {
+        if isConnecting { return "Checking private route…" }
+        return request == nil ? "Connect securely" : "Save securely"
     }
 
     private var securityNote: some View {

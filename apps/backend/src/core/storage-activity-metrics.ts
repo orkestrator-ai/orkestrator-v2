@@ -10,9 +10,9 @@ import type { StorageDatabaseName } from "./storage-slow-operations.js";
 /**
  * Bounded, content-free counts of the commits and reads every connection in
  * this process made, per database file. They are what a busy session is
- * measured with before SQLite's durability or cache settings change
- * (to-dos 5180 and 5181): how many commits sync the WAL each minute, and how
- * long the reads take.
+ * measured with before SQLite's durability or cache settings change (added
+ * by #2122; to-do 5181 uses them for the cache sizes): how many commits sync
+ * the WAL each minute, and how long the reads take.
  *
  * `instrumentSqliteConnection` (`storage-slow-operations.ts`) classifies and
  * times each call; this only adds the result to fixed-size histograms. A read

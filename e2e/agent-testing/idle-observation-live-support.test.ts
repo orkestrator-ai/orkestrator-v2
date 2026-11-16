@@ -27,7 +27,7 @@ import {
 } from "./idle-observation-live-support";
 
 describe("idle observation live support", () => {
-  test("the detach wait follows each provider's idle window (todo 7380)", () => {
+  test("the detach wait follows each provider's idle window (#2149)", () => {
     expect(detachWaitMs("claude", undefined)).toBe(630_000);
     expect(detachWaitMs("pi", "")).toBe(630_000);
     // Codex: 30 min without a touch, found by a 5 min sweep.

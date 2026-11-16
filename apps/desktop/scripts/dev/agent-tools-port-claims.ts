@@ -8,7 +8,7 @@ import { AGENT_TEST_AGENT_TOOLS_PORT_RANGE } from "../../electron/runtime-profil
 import { assertAgentToolsPortFree, processMatches } from "./profile-io.js";
 
 /**
- * Host-wide claims on agent-test agent tools ports (to-do 7500).
+ * Host-wide claims on agent-test agent tools ports (#2129).
  *
  * A launcher checks its port long before its backend binds it: Electron and
  * the bridges compile in between, often for a minute. A bind check alone

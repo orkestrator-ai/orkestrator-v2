@@ -1,6 +1,6 @@
 /**
  * Evidence that an installed standalone release came from its published
- * lockfile, for `scripts/qualify-standalone-service.ts` (to-do 5022 task 2,
+ * lockfile, for `scripts/qualify-standalone-service.ts` (#2245,
  * retired 2026-11-14; the run is in docs/architecture/host-updates.md).
  *
  * `installRelease` (`packages/protocol/src/node/standalone-service.ts`) copies

@@ -4,7 +4,7 @@ import type { RecurringWorkMetrics } from "../src/core/recurring-work-metrics.js
 
 /**
  * Counts the `docker exec`s one claude-tmux tab's poll loop costs, by kind,
- * over simulated time against a fake container (to-do 1202 task 8):
+ * over simulated time against a fake container (#1667):
  *
  *   mise exec -- bun apps/backend/scripts/tmux-exec-count.ts [--src <apps/backend/src>]
  *     [--seconds 60] [--json]
@@ -57,7 +57,7 @@ export type ExecCounts = Record<ExecKind, number> & { total: number };
 /**
  * A recurring-work recorder (`RecurringWorkMetrics`). When given, the session
  * reports its ticks into it (`observe`), and every fake exec is charged as the
- * `docker exec` the real capture boundary would charge (`work`, todo 7567).
+ * `docker exec` the real capture boundary would charge (`work`, #2131).
  * Both members are required: the session calls `observe` on every tick.
  */
 export type ExecMetrics = Pick<RecurringWorkMetrics, "observe" | "work">;

@@ -8,7 +8,7 @@ import {
 import { DEFAULT_PR_MONITOR_POLICY } from "../src/core/pr-monitor-policy";
 
 /**
- * Quiet-PR backoff (to-do 1202 task 9, BG-6): an open PR whose reading has
+ * Quiet-PR backoff (#1661, BG-6): an open PR whose reading has
  * not moved for `quietAfterMs`, with no pending checks and no auto-merge, is
  * polled at the quiet cadence; any activity or wake returns it to 20 s.
  */

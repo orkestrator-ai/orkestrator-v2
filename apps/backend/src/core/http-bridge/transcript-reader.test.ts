@@ -40,7 +40,7 @@ function legacyBridge(history: unknown[], honoursLimit: boolean) {
 const options = { limit: 10, targetBytes: 64 * 1024 };
 
 describe("a /transcript 404", () => {
-  test("is a missing session and never falls back to /messages (0050 task 1)", async () => {
+  test("is a missing session and never falls back to /messages (#2285)", async () => {
     const { reader, queries } = legacyBridge(rows(40), true);
     const snapshot = await reader.snapshot("session-1", options);
     expect(queries).toEqual([]);

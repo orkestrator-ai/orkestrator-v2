@@ -13,6 +13,7 @@ import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-
 import { nativeAsyncQuestionRequestId } from "@orkestrator/protocol/native-agent";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as scrollState from "@/hooks/useVirtuosoScrollState";
+import { disableAutoLoadEarlier } from "./useAutoLoadEarlier";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
@@ -3555,6 +3556,9 @@ describe("AgentNativeTab", () => {
           ...originalHook(options),
           scrollToIndex,
         }));
+        // The view names a direct cursor, so the tab would page on its own as
+        // it opens; this test is about the clicked page.
+        disableAutoLoadEarlier();
         try {
           const row = (id: string): NativeMessage => ({
             id,
@@ -3585,6 +3589,7 @@ describe("AgentNativeTab", () => {
           fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
           await waitFor(() => expect(scrollToIndex).toHaveBeenCalledWith(merged ? 0 : 1));
         } finally {
+          disableAutoLoadEarlier(false);
           spy.mockRestore();
         }
       });
@@ -3766,7 +3771,7 @@ describe("AgentNativeTab", () => {
       expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
-    test("retires the load-earlier control after the joined snapshot restores no messages", async () => {
+    test("offers no load-earlier control for a byte-capped window no cursor names", async () => {
       seedProjection({
         messageWindow: {
           limit: 100,
@@ -3779,22 +3784,15 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId="tab-byte-no-progress" data={identity("cursor")} isActive />,
       );
 
-      // No cursor names the omitted rows, so the click mints one through the
-      // joined snapshot, which has none either.
-      fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
-      await waitFor(() =>
-        expect(sessionBackend.api.getNativeAgentProjectionUpdate).toHaveBeenCalledWith(
-          expect.objectContaining({ syncVersion: 1, forceSnapshot: true }),
-        ),
-      );
-      await waitFor(() =>
-        expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true),
-      );
+      // Without a cursor nothing older can be loaded (0232 task 4), so the
+      // notice explains the cut and no control offers a page.
       expect(
-        screen.getByText(
+        await screen.findByText(
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ),
       ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+      expect(sessionBackend.api.getNativeAgentProjectionUpdate).not.toHaveBeenCalled();
     });
 
     test.each(["removal", "refresh"] as const)(

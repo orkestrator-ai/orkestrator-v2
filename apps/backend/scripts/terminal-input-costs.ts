@@ -1,6 +1,6 @@
 import { configureLogger } from "@orkestrator/protocol/logger";
 /**
- * Before-and-after workloads for GW-16 (1202 task 11). Runs the real gateway and
+ * Before-and-after workloads for GW-16 (#1765). Runs the real gateway and
  * the renderer's real terminal client in this process against a fake backend:
  *
  *   mise exec -- bun apps/backend/scripts/terminal-input-costs.ts \

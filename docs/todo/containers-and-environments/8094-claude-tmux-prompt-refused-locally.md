@@ -53,5 +53,5 @@ claude-tmux tab of an isolated `dev:test` profile with no billed request.
 
 ## Related
 
-- [5160](../cross-cutting/5160-silent-failures-live-evidence.md) task 4, where the container case was found.
+- 5160 (retired) task 4 ([failed-turn bell](../../development/agent-testing.md#failed-turn-bell-refused-login-model)), where the container case was found.
 - [0020](0020-container-state-observation.md), the container Claude state signal.

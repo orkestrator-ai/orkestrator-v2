@@ -150,7 +150,7 @@ export async function resolveSelection(
 
 /**
  * Map a dispatch outcome onto the operation. `transient` is the dispatch's own
- * marker for a temporary refusal with nothing sent (7260): the failure stays
+ * marker for a temporary refusal with nothing sent (#2060): the failure stays
  * `operation-failed` (exit 1), and `retryable: true` tells a script that the
  * same prompt under a new request key may succeed. The same key replays this
  * failure, as every key does.

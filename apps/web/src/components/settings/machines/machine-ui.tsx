@@ -1,8 +1,10 @@
 import { useState, type ReactNode } from "react";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, KeyRound } from "lucide-react";
+import type { ConnectionList } from "@orkestrator/protocol/connections";
 import { Input } from "@/components/ui/input";
 import { machineDotClass, machineOutlineClass } from "@/lib/federation/machine-colors";
 import { cn } from "@/lib/utils";
+import type { ConnectionsApi } from "./useMachines";
 
 /**
  * The machine's colour, filled while it is connected and as an outline
@@ -139,5 +141,39 @@ export function MachineSection({
       </div>
       {children}
     </section>
+  );
+}
+
+/** Saves a server through the iOS app's own editor; see `nativeTokenEntry`. */
+export type NativeTokenEntry = (input: {
+  address?: string;
+  nickname?: string;
+}) => Promise<ConnectionList>;
+
+/**
+ * The iOS app's own server editor, for a form whose token belongs to another
+ * machine: the user types it natively, so the page of the server the app is
+ * showing never sees it (docs/architecture/renderer-security.md, iOS app).
+ * Null on the desktop, in a browser and in iOS apps that predate it, which
+ * keep the form's own token field.
+ */
+export function nativeTokenEntry(api: ConnectionsApi | null): NativeTokenEntry | null {
+  const save = api?.connectInNativeEditor;
+  return save ? (input) => save.call(api, input) : null;
+}
+
+/** Stands in for a token field when the iOS app takes the token itself. */
+export function NativeTokenNote({ children }: { children?: ReactNode }) {
+  return (
+    <p
+      className="flex items-start gap-2 rounded-md border border-zinc-800 bg-zinc-900/50 px-3 py-2 text-xs leading-relaxed text-zinc-400"
+      data-testid="native-token-note"
+    >
+      <KeyRound className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-500" aria-hidden="true" />
+      <span>
+        {children ??
+          "You enter the gateway token in the app’s own editor next, so this page never sees it."}
+      </span>
+    </p>
   );
 }

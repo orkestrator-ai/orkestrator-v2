@@ -570,7 +570,7 @@ export function installProductionApplicationLogging(options: {
 
   // The next event-loop turn, not a timer, so a lone line waits for nothing but
   // an append already in flight. A blocked main thread delays it regardless
-  // (to-do 0880), and a longer delay would only widen that window.
+  // (#1732), and a longer delay would only widen that window.
   const scheduleBatch = () => {
     if (batchScheduled) return;
     batchScheduled = true;

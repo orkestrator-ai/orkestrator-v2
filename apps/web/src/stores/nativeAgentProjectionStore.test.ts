@@ -142,9 +142,9 @@ describe("native agent projection history cache", () => {
   });
 
   test("retains a progressive entry that carries no token or paging epoch", () => {
-    // A live tail read through the progressive transcript has neither: both are
-    // minted by the sync-v1 surfaces, which such a session never touches. The
-    // entry still has to survive so a remount can inherit its retained pages.
+    // A live tail read through the progressive transcript before any page has
+    // neither. The entry still has to survive so a remount can inherit its
+    // retained pages.
     const live = projection("session-a-live", [{ id: "session-a-live-message" }]);
     appCommandStore(nativeAgentProjectionStore)
       .getState()
@@ -153,7 +153,6 @@ describe("native agent projection history cache", () => {
         projection("session-a-materialized", [{ id: "history-message" }, ...live.messages]),
         {
           liveProjection: live,
-          historyBootstrap: true,
           historyComplete: false,
           historyMessages: [{ id: "history-message" }],
           historyBytes: 8,
@@ -165,7 +164,6 @@ describe("native agent projection history cache", () => {
       .syncCaches.get("session-a");
     expect(cached?.token).toBeUndefined();
     expect(cached?.historyEpoch).toBeUndefined();
-    expect(cached?.historyBootstrap).toBe(true);
     expect(cached?.historyMessages).toEqual([{ id: "history-message" }]);
   });
 

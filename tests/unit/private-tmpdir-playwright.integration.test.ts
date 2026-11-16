@@ -137,7 +137,7 @@ describe.skipIf(!CHROMIUM)("Playwright private TMPDIR wiring", () => {
   for (const config of [
     "e2e/playwright.config.ts",
     "e2e/public-site/playwright.config.ts",
-    // The real-stack and preview suites (0830); the Claude warm and
+    // The real-stack and preview suites (#1463); the Claude warm and
     // paused-interactions configs spread the browser one.
     "e2e/agent-testing/playwright.browser.config.ts",
     "e2e/agent-testing/playwright.coordinator.config.ts",
@@ -149,7 +149,7 @@ describe.skipIf(!CHROMIUM)("Playwright private TMPDIR wiring", () => {
       test(`${config}: runner and worker share a directory that is ${outlives ? "retained for a live browser" : "removed on exit"}`, async () => {
         // In the parent TMPDIR, not this process's private one: the runner's
         // private directory nests inside `root`, and Chrome's SingletonSocket
-        // inside that, which passed Linux's 108-byte socket limit (0830).
+        // inside that, which passed Linux's 108-byte socket limit (#1463).
         const parent = process.env[PARENT_TMPDIR_ENV] || tmpdir();
         const root = mkdtempSync(path.join(parent, "ork-pw-tmp-test-"));
         roots.push(root);

@@ -70,7 +70,7 @@ const ARTIFACT_HOST_ID = "native-shortcuts-host";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
-/** One row of the qualification matrix, as recorded in to-do 0325. */
+/** One row of the qualification matrix, as recorded in #2143. */
 type Row = { surface: string; check: string; result: "pass"; resumed: string };
 
 /** XTEST input to whichever window has X focus; the test keeps that ours. */

@@ -382,7 +382,7 @@ export type RegistryWriter = Pick<
  * holder that crashed stops refreshing its lease and the lease goes stale
  * after `staleMs`; once it wins, it is that lease. Without this, a backend
  * restarted within `staleMs` of a crash read "another backend" and refused
- * every container change for its whole life (to-do 5160, seen 2026-11-14).
+ * every container change for its whole life (to-do 5160 (retired), seen 2026-11-14).
  *
  * A live holder is never displaced, sleep included. The lease file's age is
  * wall-clock time, which keeps running while the host sleeps and the

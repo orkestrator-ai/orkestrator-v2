@@ -44,6 +44,8 @@ mock.module("@/lib/backend", () => ({
 
 const { KanbanTaskDialog } = await import("@/components/kanban/KanbanTaskDialog");
 const { kanbanStore } = await import("@/stores/kanbanStore");
+const { configStore } = await import("@/stores/configStore");
+const initialConfig = appCommandStore(configStore).getState().config;
 const { projectStore } = await import("@/stores/projectStore");
 
 const initialKanbanState = appCommandStore(kanbanStore).getState();
@@ -112,8 +114,52 @@ const builderChoice = {
   name: "Builder",
 };
 
+test.each(["restricted", "full"] as const)(
+  "Kanban opens and submits its saved %s network choice",
+  async (mode) => {
+    appCommandStore(configStore).setState({
+      config: {
+        ...initialConfig,
+        repositories: {
+          ...initialConfig.repositories,
+          "project-1": {
+            defaultBranch: "main",
+            prBaseBranch: "main",
+            lastBuildNetworkAccessMode: mode,
+          },
+        },
+      },
+    });
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Build…" }));
+    fireEvent.click(
+      within(screen.getByRole("radiogroup", { name: "Where it runs" })).getByRole("radio", {
+        name: /^Container/,
+      }),
+    );
+    const network = screen.getByRole("radiogroup", { name: "Network access" });
+    expect(
+      (
+        within(network).getByRole("radio", {
+          name: mode === "restricted" ? /Restricted/ : /Full access/,
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Start build" }));
+    await waitFor(() =>
+      expect(startBuildMock).toHaveBeenCalledWith(
+        expect.anything(),
+        "containerized",
+        expect.anything(),
+        expect.objectContaining({ networkAccessMode: mode }),
+      ),
+    );
+  },
+);
+
 beforeEach(() => {
   cleanup();
+  appCommandStore(configStore).setState({ config: initialConfig });
   startBuildMock.mockClear();
   startBuildMock.mockResolvedValue("pipeline-1");
   addTaskMock.mockClear();
@@ -121,7 +167,9 @@ beforeEach(() => {
   routed.mockImplementation((async (_nodeId: unknown, command: string) =>
     command === "check_docker"
       ? { available: true }
-      : undefined) as unknown as typeof portalStore.invokeOnNode);
+      : command === "get_config"
+        ? { repositories: {} }
+        : undefined) as unknown as typeof portalStore.invokeOnNode);
   portalStore.store.setState({ nodes: [BUILDER] });
   appCommandStore(projectStore).setState({
     projects: [

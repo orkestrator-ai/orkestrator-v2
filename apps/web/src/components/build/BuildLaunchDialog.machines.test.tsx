@@ -1,6 +1,11 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import * as realPreference from "./useBuildNetworkPreference";
+const realPreferenceSnapshot = { ...realPreference };
+mock.module("./useBuildNetworkPreference", () => ({
+  useBuildNetworkPreference: () => ({ mode: "full", pending: false, error: false }),
+}));
 import * as realDialog from "@/components/ui/dialog";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 
@@ -78,6 +83,7 @@ beforeEach(() => {
   dockerAsks.length = 0;
 });
 afterAll(() => {
+  mock.module("./useBuildNetworkPreference", () => realPreferenceSnapshot);
   mock.module("@/components/ui/dialog", () => realDialogSnapshot);
 });
 

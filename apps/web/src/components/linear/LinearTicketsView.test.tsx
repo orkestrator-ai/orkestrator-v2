@@ -926,13 +926,23 @@ describe("LinearTicketsView", () => {
       environments: [],
     } as unknown as NodeSummary;
     const initialPortal = portalStore.store.getState();
+    let remoteRows: ReturnType<typeof buildPipelineFixture>[] = [];
     const routed = spyOn(portalStore, "invokeOnNode").mockImplementation((async (
       _nodeId: unknown,
       command: string,
     ) =>
       command === "check_docker"
         ? { available: true }
-        : undefined) as unknown as typeof portalStore.invokeOnNode);
+        : command === "get_config"
+          ? { repositories: { "builder-web": { lastBuildNetworkAccessMode: "restricted" } } }
+          : command === "list_build_pipelines"
+            ? remoteRows.map((snapshot) => ({
+                id: snapshot.id,
+                projectId: snapshot.projectId,
+                snapshot,
+                revision: 1,
+              }))
+            : undefined) as unknown as typeof portalStore.invokeOnNode);
     try {
       portalStore.store.setState({ nodes: [builder] });
       appCommandStore(projectStore).setState({
@@ -950,6 +960,11 @@ describe("LinearTicketsView", () => {
       renderLinearTicketsView();
       fireEvent.click(await screen.findByText("Add Linear integration"));
       await screen.findByText("Build Linear support");
+      await waitFor(() =>
+        expect(
+          (screen.getByRole("button", { name: /^build/i }) as HTMLButtonElement).disabled,
+        ).toBe(false),
+      );
       fireEvent.click(screen.getByRole("button", { name: /^build/i }));
 
       const machines = await screen.findByRole("radiogroup", { name: "Machine" });
@@ -960,6 +975,27 @@ describe("LinearTicketsView", () => {
         }) as HTMLInputElement;
       await waitFor(() => expect(container().disabled).toBe(false));
       fireEvent.click(container());
+      await waitFor(() =>
+        expect(
+          (screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement).disabled,
+        ).toBe(false),
+      );
+      startBuildFromLinearIssueMock.mockImplementationOnce(async () => {
+        remoteRows = [
+          buildPipelineFixture({
+            id: "remote-build",
+            projectId: "builder-web",
+            environmentId: "remote-env",
+            phase: "building",
+            source: {
+              type: "linear",
+              issueId: issueDetail.id,
+              issueIdentifier: issueDetail.identifier,
+            },
+          }),
+        ];
+        return undefined;
+      });
       fireEvent.click(screen.getByRole("button", { name: "Start build" }));
 
       await waitFor(() => {
@@ -968,7 +1004,7 @@ describe("LinearTicketsView", () => {
           "project-1",
           "containerized",
           expect.objectContaining({
-            networkAccessMode: "full",
+            networkAccessMode: "restricted",
             machine: {
               machine: "node-builder",
               nodeId: "node-builder",
@@ -978,6 +1014,21 @@ describe("LinearTicketsView", () => {
           }),
         );
       });
+      await screen.findByRole("button", { name: /View Build.*building/ });
+      expect((screen.getByRole("button", { name: /^build/i }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^build/i }));
+      expect(startBuildFromLinearIssueMock).toHaveBeenCalledTimes(1);
+      // A fresh mount recovers the remote build from its backend, without a local insertion.
+      cleanup();
+      renderLinearTicketsView();
+      fireEvent.click(await screen.findByText("Add Linear integration"));
+      await screen.findByRole("button", { name: /View Build.*building/ });
+      expect((screen.getByRole("button", { name: /^build/i }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+      expect(appCommandStore(buildPipelineStore).getState().pipelines.size).toBe(0);
     } finally {
       routed.mockRestore();
       portalStore.store.setState(initialPortal, true);

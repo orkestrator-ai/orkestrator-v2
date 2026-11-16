@@ -44,12 +44,16 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { BuildLaunchDialog, type BuildLaunchSelection } from "@/components/build/BuildLaunchDialog";
+import { useLinearBuildPipelines, type LocatedBuildPipeline } from "./useLinearBuildPipelines";
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { machineBackendClient, scopeBackendClient } from "@/lib/backend/client";
+import { createBuildPipelinesApi } from "@/lib/backend/build-pipelines";
 import { useBuildLaunchMachines } from "@/components/build/build-machines";
 import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
-import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
   buildPipelineStore,
   useBuildPipelineStore,
@@ -131,9 +135,9 @@ function readAfter(seen: string | undefined, answered: string | undefined): bool
 }
 
 function getIssuePipeline(
-  pipelines: Map<string, BuildPipeline>,
+  pipelines: Map<string, LocatedBuildPipeline>,
   issueId: string,
-): BuildPipeline | undefined {
+): LocatedBuildPipeline | undefined {
   const matches = Array.from(pipelines.values()).filter(
     (pipeline) => pipeline.source?.type === "linear" && pipeline.source.issueId === issueId,
   );
@@ -260,13 +264,26 @@ export function LinearTicketsViewContent({
     commentBodyRef.current = commentBody;
   }, [selectedIssueId, commentBody]);
 
-  const pipelines = useBuildPipelineStore((state) => state.pipelines);
-  const pipelineStore = useNodeScope().store(buildPipelineStore);
+  const ownPipelines = useBuildPipelineStore((state) => state.pipelines);
+  const { scope, windowScope } = useScopesWithCommandFallback();
+  const pipelineStore = scope.store(buildPipelineStore);
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
   // Every connected machine holding a project for this repository can run the build.
   const buildMachines = useBuildLaunchMachines(projectId);
+  const remoteBuilds = useLinearBuildPipelines(ownPipelines, buildMachines);
+  const pipelines = remoteBuilds.pipelines;
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
-  const { startBuildFromLinearIssue, navigateToPipeline } = buildPipeline;
+  const { startBuildFromLinearIssue } = buildPipeline;
+  const navigateToPipeline = async (pipeline: LocatedBuildPipeline) => {
+    if (!pipeline.buildMachine) return buildPipeline.navigateToPipeline(pipeline);
+    const target = pipeline.buildMachine;
+    return openMachineWorkspace({
+      connectionId: target.nodeId ?? windowScope.commandScope().nodeId,
+      projectId: target.projectId,
+      ...(pipeline.environmentId ? { environmentId: pipeline.environmentId } : {}),
+      title: pipeline.taskTitle,
+    });
+  };
   const { catalog: launchCatalog, defaults: launchDefaults } = useBuildLaunchOptions(
     projectId,
     selectedIssueId !== null,
@@ -555,19 +572,21 @@ export function LinearTicketsViewContent({
 
   const handleStartBuild = async (selection: BuildLaunchSelection) => {
     if (!detail) return;
-    // A build can be admitted by another tab while this launcher is open. Read
-    // the authoritative store again at confirmation time so a stale render can
-    // never submit configuration that the backend will discard in favour of the
-    // already-active admission.
-    const activePipeline = getIssuePipeline(pipelineStore.getState().pipelines, detail.id);
-    if (activePipeline && isActivePipeline(activePipeline)) {
-      setBuildDialogOpen(false);
-      await navigateToPipeline(activePipeline);
-      return;
-    }
+    if (isBuildStarting) return;
     setBuildDialogOpen(false);
     setIsBuildStarting(true);
     try {
+      // Recheck every owner before admission: polling and stale renders alone
+      // cannot guard a launch while another machine is already building it.
+      const remote = await remoteBuilds.refresh();
+      const activePipeline = getIssuePipeline(
+        new Map([...pipelineStore.getState().pipelines, ...remote]),
+        detail.id,
+      );
+      if (activePipeline && isActivePipeline(activePipeline)) {
+        await navigateToPipeline(activePipeline);
+        return;
+      }
       await startBuildFromLinearIssue(detail, projectId, selection.environmentType, {
         steps: selection.steps,
         reviewers: selection.reviewers,
@@ -576,6 +595,11 @@ export function LinearTicketsViewContent({
         deliveryPolicy: selection.deliveryPolicy,
         networkAccessMode: selection.networkAccessMode,
         machine: selection.machine,
+      });
+      await remoteBuilds.refresh();
+    } catch (error) {
+      toast.error("Could not check build status on every machine", {
+        description: error instanceof Error ? error.message : String(error),
       });
     } finally {
       setIsBuildStarting(false);
@@ -662,7 +686,7 @@ export function LinearTicketsViewContent({
               ref={buildLaunchTriggerRef}
               variant="outline"
               size="sm"
-              disabled={!detail || isBuildStarting || hasActiveBuild}
+              disabled={!detail || isBuildStarting || hasActiveBuild || remoteBuilds.unavailable}
               onClick={() => setBuildDialogOpen(true)}
             >
               {isBuildStarting ? (
@@ -672,7 +696,12 @@ export function LinearTicketsViewContent({
               )}
               Build…
             </Button>
-            {selectedPipeline?.environmentId && (
+            {remoteBuilds.unavailable && (
+              <span role="status" className="text-xs text-muted-foreground">
+                Waiting for build status from all machines
+              </span>
+            )}
+            {selectedPipeline && (
               <Button
                 variant="outline"
                 size="sm"
@@ -863,11 +892,21 @@ export function LinearTicketsViewContent({
                               if (retryingCompletionComment) return;
                               setRetryingCompletionComment(true);
                               try {
-                                replacePipeline(
-                                  await nodeBackend.retryBuildPipelineCompletionComment(
-                                    selectedPipeline.id,
-                                  ),
-                                );
+                                if (selectedPipeline.buildMachine) {
+                                  await createBuildPipelinesApi(
+                                    machineBackendClient(
+                                      scopeBackendClient(scope),
+                                      selectedPipeline.buildMachine.machine,
+                                    ),
+                                  ).retryBuildPipelineCompletionComment(selectedPipeline.id);
+                                  await remoteBuilds.refresh();
+                                } else {
+                                  replacePipeline(
+                                    await nodeBackend.retryBuildPipelineCompletionComment(
+                                      selectedPipeline.id,
+                                    ),
+                                  );
+                                }
                               } catch (error) {
                                 toast.error("Failed to retry Linear completion comment", {
                                   description:

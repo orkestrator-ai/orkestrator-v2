@@ -5,11 +5,16 @@ import path from "node:path";
 import {
   AGENT_HANDOFF_VERSION,
   createAgentHandoffSnapshot,
+  prependAgentHandoffHistory,
   sanitizeAgentHandoffMessage,
   textCarriesAgentHandoff,
   type AgentHandoffSnapshot,
 } from "@orkestrator/protocol/agent-handoff";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import {
+  USER_COMMAND_CONTEXT_CLOSE_TAG,
+  USER_COMMAND_CONTEXT_OPEN_TAG,
+} from "@orkestrator/protocol/user-commands";
 import {
   AGENT_HANDOFF_PENDING_COMMAND_MESSAGE,
   AGENT_HANDOFF_PENDING_GOAL_MESSAGE,
@@ -191,14 +196,20 @@ describe("handoff delivery at dispatch", () => {
     });
   });
 
-  test("a prompt that already holds the carrier (an older renderer) is not prefixed again", async () => {
+  test("a prompt that already holds the carrier behind a user-command block gets no second one", async () => {
     await withDestination({}, async ({ service, storage, send }) => {
-      const carried = `${handoffSnapshot().bootstrapPrompt}\n\nCarry on`;
-      await service.dispatchIntent(dispatch("first", carried));
-      expect(promptOf(send.mock.calls[0])).toBe(carried);
+      const carried = prependAgentHandoffHistory(handoffSnapshot().bootstrapPrompt, "Carry on");
+      // Dispatch keeps a leading user-command block in front of the text, so
+      // the carrier is no longer at the start of the prompt.
+      const block = `${USER_COMMAND_CONTEXT_OPEN_TAG}\n{"command":"ls"}\n${USER_COMMAND_CONTEXT_CLOSE_TAG}\n\n`;
+      await service.dispatchIntent(dispatch("first", `${block}${carried}`));
+      const sent = promptOf(send.mock.calls[0]);
+      expect(sent).toBe(`${block}${carried}`);
+      expect(sent.split('<orkestrator-handoff format="json-v2">').length - 1).toBe(1);
       expect((await storage.getNativeAgentSession(SESSION_KEY))?.deliveredAgentHandoffIds).toEqual([
         "handoff-1",
       ]);
+      expect(await consumedHandoff(storage)).toBe("handoff-1");
     });
   });
 

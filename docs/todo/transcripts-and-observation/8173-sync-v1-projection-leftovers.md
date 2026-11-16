@@ -44,8 +44,8 @@ web wrapper, tests, the real-stack specs `cold-restart-live.spec.ts`,
 it to read the turn phase or the live tail, which `get_native_agent_session_state_update`
 and `get_native_agent_transcript_update` also answer), the efficiency
 workloads (`scripts/efficiency/workloads-projection.ts`, which measure older
-baselines too) and `scripts/qualify-slash-mixed-versions.ts`, which 8108 task 4
-retires.
+baselines too). The mixed-version slash qualifier that also called it
+was retired by 8108 (retired) task 4.
 
 **Decisions.**
 
@@ -147,5 +147,5 @@ named "a page says when a row was trimmed, which truncated alone cannot".
 ## Related
 
 - 0232 (retired 2026-11-16): removed joined paging, which this follows up.
-- [8108](../cross-cutting/8108-legacy-retirement-sweep.md): the legacy-retirement sweep; task 4 retires the mixed-version qualifiers.
+- 8108 (retired): the legacy-retirement sweep; task 4 retired the mixed-version qualifiers.
 - [native-transcripts.md](../../architecture/native-transcripts.md#history-pages-and-cursors).

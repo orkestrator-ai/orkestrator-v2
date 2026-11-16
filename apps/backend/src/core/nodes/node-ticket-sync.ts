@@ -28,7 +28,7 @@ const log = createLogger("nodes");
 /**
  * The command node's side of Kanban sync (docs/architecture/tickets.md, "Sync
  * across machines"). For each leaf that has a copy of one of this node's
- * repositories, and advertises `ticket-sync`:
+ * repositories:
  *
  * 1. Up: collect the changes the leaf queued for this node, apply them to the
  *    board in order and exactly once, and only then acknowledge them.
@@ -41,32 +41,25 @@ const log = createLogger("nodes");
  * It runs on every (re)connect and stream resync, when the leaf announces
  * queued changes, and shortly after any change to a synced board here. A
  * failure leaves everything where it was (the leaf's outbox, the leaf's
- * cursor) for the next run; nothing is dropped. An older leaf is reported as
- * needing an update and left as it is.
+ * cursor) for the next run; nothing is dropped. A leaf whose `ticket-sync`
+ * range shares no version with this node's is reported as needing an update
+ * and left as it is.
  *
- * The leaf is called through the `ticket-sync` domain client (plan item
- * 1010): a leaf that advertises the domain syncs; a pre-contract leaf syncs
- * when its hello names the `ticket-sync` capability, as before.
+ * The leaf is called through the `ticket-sync` domain client (plan item 1010).
  */
 
 export interface TicketSyncLink extends EnvelopeLink {
   readonly connected: boolean;
 }
 
-/** The leaf's ticket-sync API, or `null` when it cannot sync with this node. */
+/** The leaf's ticket-sync API, or `null` when its `ticket-sync` range shares no version with this node's. */
 function ticketSyncApi(link: EnvelopeLink): TicketSyncApi | null {
   try {
-    const api = linkDomainApi(link, ticketSyncClient);
-    return api.syncs ? api : null;
+    return linkDomainApi(link, ticketSyncClient);
   } catch {
-    // No version in common (`unsupported-version`): reported like an older leaf.
+    // No version in common (`unsupported-version`).
     return null;
   }
-}
-
-/** Whether the leaf behind `link` syncs tickets with this node (connected or not). */
-export function leafSyncsTickets(link: EnvelopeLink): boolean {
-  return ticketSyncApi(link) !== null;
 }
 
 export interface TicketSyncNode {
@@ -89,6 +82,13 @@ export interface NodeTicketSyncDeps {
   nodes(): Promise<TicketSyncNode[]>;
   /** This node's projects. */
   localProjects(): Promise<Array<{ id: string; gitUrl?: string | null }>>;
+  /**
+   * This node's project ids, read strictly (`loadProjectIdsForCleanup`): it
+   * throws when the projects store is missing or unreadable, so a damaged
+   * store never reads as "every project was removed" and drops a leaf's
+   * changes.
+   */
+  storedProjectIds(): Promise<Set<string>>;
   ticketSync: Pick<
     TicketSyncStorage,
     | "ticketSyncChangesSince"
@@ -117,6 +117,8 @@ export interface NodeTicketSyncResult {
   sent: number;
   /** Images delivered to the leaf. */
   images?: number;
+  /** Leaf changes dropped because their project was removed here (#2328). */
+  dropped?: number;
   /** Nothing was paired yet: the node's projects are still being read; retried shortly. */
   waiting?: boolean;
 }
@@ -209,7 +211,7 @@ export class NodeTicketSync {
       };
       for (let pass = 0; pass < 10; pass += 1) {
         this.again.delete(nodeId);
-        const result = await this.syncOnce(nodeId).catch((error: unknown) => {
+        const result: NodeTicketSyncResult = await this.syncOnce(nodeId).catch((error: unknown) => {
           log.warn("ticket-sync.failed", { error: formatLogError(error, { message: false }) });
           return {
             nodeId,
@@ -220,11 +222,13 @@ export class NodeTicketSync {
             sent: 0,
           };
         });
+        const dropped = (total.dropped ?? 0) + (result.dropped ?? 0);
         total = {
           ...result,
           applied: total.applied + result.applied,
           conflicts: total.conflicts + result.conflicts,
           sent: total.sent + result.sent,
+          ...(dropped ? { dropped } : {}),
         };
         if (
           !this.again.has(nodeId) ||
@@ -358,6 +362,7 @@ export class NodeTicketSync {
     let applied = 0;
     let conflicts = 0;
     let sent = 0;
+    let dropped = 0;
 
     // Up first, so the leaf's queued changes are decided before it is sent the board.
     let after = 0;
@@ -385,32 +390,94 @@ export class NodeTicketSync {
           message: `${node.displayName} sent a ticket change this machine cannot read. Update this machine to sync tickets with it.`,
         };
       }
-      // A change for a project that no longer exists here has nowhere to go.
-      const firstUnknown = items.findIndex((item) => !localIds.has(item.sourceProjectId));
-      const known = firstUnknown < 0 ? items : items.slice(0, firstUnknown);
-      if (known.length !== items.length) log.warn("ticket-sync.unknown-project");
+      // A change for a project removed here has nowhere to go (#2328).
+      // Project ids are never reused, so a project the strict read
+      // does not hold is gone for good: its changes are dropped and
+      // acknowledged in their place, so they no longer hold back the leaf's
+      // other projects, and the leaf is told to keep its copies as its own.
+      // A store that cannot be read decides nothing: the changes from the
+      // first unknown one on stay queued.
+      let removed = new Set<string>();
+      let unreadable = false;
+      const unknown = new Set(
+        items.map((item) => item.sourceProjectId).filter((id) => !localIds.has(id)),
+      );
+      if (unknown.size) {
+        try {
+          const stored = await this.deps.storedProjectIds();
+          removed = new Set([...unknown].filter((id) => !stored.has(id)));
+        } catch {
+          unreadable = true;
+        }
+      }
+      const firstUndecided = unreadable
+        ? items.findIndex((item) => unknown.has(item.sourceProjectId))
+        : -1;
+      const decided = firstUndecided < 0 ? items : items.slice(0, firstUndecided);
       const result = await this.deps.ticketSync.applyTicketSyncOps({
         nodeId,
         nodeName: node.displayName,
         epoch: batch.epoch,
-        items: known,
+        items: decided.filter((item) => !removed.has(item.sourceProjectId)),
       });
       applied += result.applied;
       conflicts += result.conflicts.length;
-      const upTo = known.at(-1)?.seq;
-      if (upTo !== undefined) {
-        await sync.ackOutbox({ controllerId, epoch: batch.epoch, upTo });
-        after = upTo;
+      // Acknowledge in order, only as far as every change is settled: applied
+      // (or applied before) or dropped. One for a project being removed here
+      // is not applied yet and stays queued with everything after it.
+      let upTo: number | undefined;
+      let held = false;
+      const gone = new Set<string>();
+      let droppedPrefix = 0;
+      for (const item of decided) {
+        const drop = removed.has(item.sourceProjectId);
+        if (!drop && item.seq > result.appliedSeq) {
+          held = true;
+          break;
+        }
+        if (drop) {
+          gone.add(item.sourceProjectId);
+          droppedPrefix += 1;
+        }
+        upTo = item.seq;
       }
-      if (firstUnknown >= 0)
+      if (upTo !== undefined) {
+        const acknowledgement = await sync.ackOutbox({
+          controllerId,
+          epoch: batch.epoch,
+          upTo,
+          ...(gone.size ? { removedProjects: [...gone] } : {}),
+        });
+        after = upTo;
+        // Count the prefix we discarded even if the leaf has already trimmed it;
+        // the leaf also knows about discarded changes beyond this batch.
+        const droppedHere = Math.max(droppedPrefix, acknowledgement.dropped);
+        dropped += droppedHere;
+        if (droppedHere) log.warn("ticket-sync.removed-project-dropped", { dropped: droppedHere });
+      }
+      if (unreadable) {
+        log.warn("ticket-sync.unknown-project");
         return {
           ...empty,
           applied,
           conflicts,
+          ...(dropped ? { dropped } : {}),
           state: "error",
           message:
-            "Ticket changes for an unknown project remain queued on the leaf. Restore the project to resume sync.",
+            "This machine's project list could not be read, so ticket changes from that machine stay queued there; it is retried.",
         };
+      }
+      if (held) {
+        return {
+          ...empty,
+          applied,
+          conflicts,
+          ...(dropped ? { dropped } : {}),
+          state: "error",
+          message:
+            "Ticket changes for a project being removed on this machine stay queued until the removal finishes; it is retried.",
+        };
+      }
       if (!batch.more) break;
     }
 
@@ -461,7 +528,15 @@ export class NodeTicketSync {
       const answer = await sync.putImage({ controllerId, imageId, ...(data ? { data } : {}) });
       if (answer?.stored) images += 1;
     }
-    return { nodeId, state: "in-sync", applied, conflicts, sent, ...(images ? { images } : {}) };
+    return {
+      nodeId,
+      state: "in-sync",
+      applied,
+      conflicts,
+      sent,
+      ...(images ? { images } : {}),
+      ...(dropped ? { dropped } : {}),
+    };
   }
 
   /**

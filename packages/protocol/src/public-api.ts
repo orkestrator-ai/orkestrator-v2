@@ -1598,8 +1598,8 @@ export interface PublicActionRequest {
   /**
    * Run on this node (a `nodeId` from `node.list`), routed by the command
    * node the caller is connected to; `all` for an aggregate read. Omitted:
-   * the connected node. Send it only to a backend whose capabilities set
-   * `features.nodeRouting`; an older one ignores it.
+   * the connected node. Every backend that advertises `features.nodeRouting`
+   * routes it.
    */
   node?: string;
 }

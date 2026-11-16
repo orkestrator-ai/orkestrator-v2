@@ -119,17 +119,6 @@ function install() {
         } as T;
       }
       if (command === "list_node_outcomes") return [...outcomes] as T;
-      if (command === "invoke_on_node" && args?.command === "arrange_projects") {
-        // The owner applies the arrangement and publishes it at once.
-        const arrangement = args.args as { projectIds: string[] };
-        state.setState((current) => ({ arrangements: [...current.arrangements, args.args] }));
-        node.projects = node.projects.map((project) => ({
-          ...project,
-          order: arrangement.projectIds.indexOf(project.ref.projectId),
-        }));
-        void portalStore.refresh();
-        return { outcome: "ok", result: {} } as T;
-      }
       if (command === "invoke_on_node" && args?.command === "arrange_projects_by_intent") {
         // The owner resolves the gesture against its own order and publishes it.
         const ordered = [...node.projects]

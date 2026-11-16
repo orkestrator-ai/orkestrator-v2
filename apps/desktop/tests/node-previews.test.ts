@@ -14,7 +14,6 @@ import { DesktopNodeIpc } from "../electron/node-ipc";
 import {
   NodePreviewRuntimes,
   nodePreviewPartitionKey,
-  nodePreviewUrl,
   routeBrowserPreviews,
   type NodePreviewRuntime,
 } from "../electron/node-previews";
@@ -57,9 +56,9 @@ function fakeController(label: string) {
       calls.push(["setVisible", tabId, visible]);
       return tabs.has(tabId) ? state(tabId) : null;
     },
-    navigate: async (tabId: string, url: string) => {
+    goBack: (tabId: string) => {
       known(tabId);
-      calls.push(["navigate", tabId, url]);
+      calls.push(["goBack", tabId]);
       return state(tabId);
     },
     reload: (tabId: string) => {
@@ -357,40 +356,19 @@ function harness() {
   };
 }
 
+const SERVICE = {
+  backendInstanceId: "bk_backend_1",
+  environmentId: "env-1",
+  serviceId: "svc_aaaaaaaa",
+  path: "/",
+};
+
 const attachInput = (tabId: string, nodeId?: string): BrowserPreviewAttachInput => ({
   tabId,
-  url: "http://localhost:5173/",
-  environmentId: "env-1",
+  service: SERVICE,
   bounds: BOUNDS,
   visible: true,
   ...(nodeId ? { nodeId } : {}),
-});
-
-describe("nodePreviewUrl (4006 Finding 1)", () => {
-  const leaf = "https://leaf.example:34221";
-  test("a loopback address loads through the node's own gateway", () => {
-    expect(nodePreviewUrl(leaf, "http://localhost:5173/app?x=1#h")).toBe(
-      `${leaf}/__orkestrator/browser/loopback/5173/app?x=1#h`,
-    );
-    expect(nodePreviewUrl(`${leaf}/`, "http://127.0.0.1/")).toBe(
-      `${leaf}/__orkestrator/browser/loopback/80/`,
-    );
-  });
-  test("another node's gateway preview path moves onto this node's gateway", () => {
-    expect(
-      nodePreviewUrl(leaf, "https://cmd.example/__orkestrator/browser/loopback/3000/x?y=2"),
-    ).toBe(`${leaf}/__orkestrator/browser/loopback/3000/x?y=2`);
-    expect(nodePreviewUrl(leaf, "https://cmd.example/__orkestrator/browser/loopback/3000")).toBe(
-      `${leaf}/__orkestrator/browser/loopback/3000/`,
-    );
-  });
-  test("anything else is left for the manager's own checks", () => {
-    expect(nodePreviewUrl(leaf, "https://example.com/")).toBe("https://example.com/");
-    expect(nodePreviewUrl(leaf, "not a url")).toBe("not a url");
-  });
-  test("a scope with no route refuses rather than load this computer's page", () => {
-    expect(() => nodePreviewUrl(null, "http://localhost:3000/")).toThrow("reconnecting");
-  });
 });
 
 describe("preview runtimes per node scope", () => {
@@ -417,8 +395,7 @@ describe("preview runtimes per node scope", () => {
         "attach",
         {
           tabId: "tab-leaf",
-          url: "http://localhost:5173/",
-          environmentId: "env-1",
+          service: SERVICE,
           bounds: BOUNDS,
           visible: true,
         },
@@ -429,11 +406,11 @@ describe("preview runtimes per node scope", () => {
     // Later calls for the tab resolve through it, not through the renderer.
     const moved = { x: 0, y: 40, width: 1024, height: 700 };
     await w.api.browserPreview.setBounds("tab-leaf", moved);
-    await w.api.browserPreview.navigate("tab-leaf", "http://localhost:5173/next");
+    await w.api.browserPreview.goBack("tab-leaf");
     await w.api.browserPreview.capture.getCaptureStatus("tab-leaf");
     expect(runtime.controller.calls.slice(1)).toEqual([
       ["setBounds", "tab-leaf", moved],
-      ["navigate", "tab-leaf", "http://localhost:5173/next"],
+      ["goBack", "tab-leaf"],
       ["getCaptureStatus", "tab-leaf"],
     ]);
     expect(w.context.browserPreviewManager.calls).toEqual([["destroy", "tab-leaf"]]);

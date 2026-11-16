@@ -584,9 +584,9 @@ export interface PersistedSession {
   promptJournalComplete?: true;
   steerJournal?: SteerJournalEntry[];
   /**
-   * `overflow` is the legacy boolean form, still written beside
-   * `overflowBefore` so an older bridge that reads only the boolean stays
-   * conservative.
+   * `overflow` is the boolean form an earlier bridge wrote instead of
+   * `overflowBefore`. It is read on load (`restoreSteerJournal`) and never
+   * written.
    */
   steerFence?: { runs: string[]; overflowBefore?: number; overflow?: boolean };
   composer?: NativeAgentComposerState;

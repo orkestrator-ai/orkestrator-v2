@@ -3,9 +3,7 @@ import path from "node:path";
 import {
   activeDynamicCompressionCount,
   allocateBufferedProxySource,
-  browserPreviewDecodeSnapshot,
   canAppendToProxySourceBuffer,
-  canBufferBodyChunk,
   canStartDynamicCompression,
   canTransformProxyRepresentation,
   COMPRESSION_MIN_BYTES,
@@ -13,8 +11,6 @@ import {
   dynamicProxyCompressionBufferSnapshot,
   isCompressibleContentType,
   isDynamicCompressionSizeEligible,
-  MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES,
-  MAX_BUFFERED_BODY_CHUNKS,
   GatewayMetricsStore,
   MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
   MAX_CONCURRENT_STREAMING_COMPRESSIONS,
@@ -22,10 +18,8 @@ import {
   MAX_DYNAMIC_PROXY_BUFFERED_SOURCE_BYTES,
   OrkestratorGateway,
   parseStrictContentLengthHeader,
-  type PreparedBody,
   releaseReservationOnResponseSettled,
   responseStatusCanHaveBody,
-  settleRewrittenProxyBodyResponse,
   shouldAbandonBufferedProxyBody,
   startProxiedEventStreamGzip,
 } from "../src/gateway";
@@ -35,7 +29,6 @@ import {
   createServer,
   request as httpRequest,
   type IncomingHttpHeaders,
-  type OutgoingHttpHeaders,
   type ServerResponse,
 } from "node:http";
 import { PassThrough } from "node:stream";
@@ -104,22 +97,6 @@ describe("remote gateway", () => {
     expect(isDynamicCompressionSizeEligible(-1)).toBe(false);
     expect(isDynamicCompressionSizeEligible(Number.NaN)).toBe(false);
     expect(canStartDynamicCompression(-1)).toBe(false);
-
-    expect(canBufferBodyChunk(0, 0, 1, 1)).toBe(true);
-    expect(canBufferBodyChunk(1, 1, 1, 1)).toBe(false);
-    expect(canBufferBodyChunk(0, MAX_BUFFERED_BODY_CHUNKS - 1, 1, 1)).toBe(true);
-    expect(canBufferBodyChunk(0, MAX_BUFFERED_BODY_CHUNKS, 1, 1)).toBe(false);
-    expect(canBufferBodyChunk(0, 0, 0, 0)).toBe(true);
-    expect(canBufferBodyChunk(-1, 0, 1, 1)).toBe(false);
-    expect(canBufferBodyChunk(0, -1, 1, 1)).toBe(false);
-    expect(canBufferBodyChunk(0, 0, -1, 1)).toBe(false);
-    expect(canBufferBodyChunk(0, 0, 1, -1)).toBe(false);
-    expect(canBufferBodyChunk(Number.NaN, 0, 1, 1)).toBe(false);
-    expect(canBufferBodyChunk(0, Number.NaN, 1, 1)).toBe(false);
-    expect(canBufferBodyChunk(0, 0, Number.NaN, 1)).toBe(false);
-    expect(canBufferBodyChunk(0, 0, 1, Number.NaN)).toBe(false);
-    expect(canBufferBodyChunk(0.5, 0, 1, 1)).toBe(false);
-    expect(canBufferBodyChunk(0, 0, 1, Number.MAX_SAFE_INTEGER + 1)).toBe(false);
 
     expect(responseStatusCanHaveBody("GET", 200)).toBe(true);
     expect(responseStatusCanHaveBody("HEAD", 200)).toBe(false);
@@ -226,119 +203,6 @@ describe("remote gateway", () => {
     expect(shouldAbandonBufferedProxyBody(false, true, false)).toBe(true);
     expect(shouldAbandonBufferedProxyBody(false, false, true)).toBe(true);
     expect(shouldAbandonBufferedProxyBody(true, true, true)).toBe(true);
-  });
-
-  test("fails rewritten proxy responses when asynchronous body preparation rejects", async () => {
-    const writeHead = mock((_statusCode: number, _headers?: OutgoingHttpHeaders) => undefined);
-    const end = mock((_chunk?: Buffer) => undefined);
-    const finish = mock(() => undefined);
-    const fail = mock((_error: Error) => undefined);
-    const response = {
-      destroyed: false,
-      writeHead,
-      end,
-    } as unknown as ServerResponse;
-
-    settleRewrittenProxyBodyResponse(
-      response,
-      200,
-      { "content-type": "text/html" },
-      Promise.reject("preview preparation failed"),
-      () => false,
-      finish,
-      fail,
-    );
-    await waitUntil(
-      () => fail.mock.calls.length === 1,
-      "Rejected preview preparation did not fail",
-    );
-
-    expect(fail.mock.calls[0]?.[0]).toEqual(new Error("preview preparation failed"));
-    expect(writeHead).not.toHaveBeenCalled();
-    expect(end).not.toHaveBeenCalled();
-    expect(finish).not.toHaveBeenCalled();
-  });
-
-  test("settles a rewritten proxy body with its own length, vary, and encoding", async () => {
-    const settle = async (prepared: PreparedBody, headers: OutgoingHttpHeaders) => {
-      const writeHead = mock((_statusCode: number, _headers?: OutgoingHttpHeaders) => undefined);
-      const end = mock((_chunk?: Buffer) => undefined);
-      const finish = mock(() => undefined);
-      const fail = mock((_error: Error) => undefined);
-      const response = { destroyed: false, writeHead, end } as unknown as ServerResponse;
-      settleRewrittenProxyBodyResponse(
-        response,
-        200,
-        headers,
-        Promise.resolve(prepared),
-        () => false,
-        finish,
-        fail,
-      );
-      await waitUntil(() => finish.mock.calls.length === 1, "Preview body never settled");
-      return { writeHead, end, headers, fail, finish };
-    };
-
-    const compressed = await settle(
-      { body: Buffer.from("gzipped-preview"), encoding: "gzip", variesByEncoding: true },
-      { "content-type": "text/html" },
-    );
-    expect(compressed.headers["content-length"]).toBe("gzipped-preview".length);
-    expect(compressed.headers["content-encoding"]).toBe("gzip");
-    expect(compressed.headers.vary).toBe("Accept-Encoding");
-    expect(compressed.writeHead.mock.calls[0]).toEqual([200, compressed.headers]);
-    expect(compressed.end.mock.calls[0]?.[0]).toEqual(Buffer.from("gzipped-preview"));
-    expect(compressed.fail).not.toHaveBeenCalled();
-
-    // Identity must strip an inherited upstream encoding rather than leave the
-    // body mislabelled as still compressed.
-    const identity = await settle(
-      { body: Buffer.from("plain"), encoding: "identity", variesByEncoding: false },
-      { "content-type": "text/html", "content-encoding": "br" },
-    );
-    expect(identity.headers["content-encoding"]).toBeUndefined();
-    expect("content-encoding" in identity.headers).toBe(false);
-    expect(identity.headers["content-length"]).toBe(5);
-    expect(identity.headers.vary).toBeUndefined();
-  });
-
-  test("discards a rewritten proxy body when the response already settled or died", async () => {
-    for (const scenario of ["settled", "destroyed"] as const) {
-      const writeHead = mock((_statusCode: number, _headers?: OutgoingHttpHeaders) => undefined);
-      const end = mock((_chunk?: Buffer) => undefined);
-      const finish = mock(() => undefined);
-      const fail = mock((_error: Error) => undefined);
-      const response = {
-        destroyed: scenario === "destroyed",
-        writeHead,
-        end,
-      } as unknown as ServerResponse;
-      let settledPreparation = false;
-
-      settleRewrittenProxyBodyResponse(
-        response,
-        200,
-        { "content-type": "text/html" },
-        Promise.resolve<PreparedBody>({
-          body: Buffer.from("late"),
-          encoding: "identity",
-          variesByEncoding: false,
-        }).finally(() => {
-          settledPreparation = true;
-        }),
-        () => scenario === "settled",
-        finish,
-        fail,
-      );
-      await waitUntil(() => settledPreparation, "Preview preparation never settled");
-      // One extra turn so a stray write would have landed before we assert.
-      await Promise.resolve();
-
-      expect(writeHead).not.toHaveBeenCalled();
-      expect(end).not.toHaveBeenCalled();
-      expect(finish).not.toHaveBeenCalled();
-      expect(fail).not.toHaveBeenCalled();
-    }
   });
 
   test("allows configured public client origins without proxying browser traffic", async () => {
@@ -1093,253 +957,7 @@ describe("remote gateway", () => {
     }
   });
 
-  test("rejects preview text whose rewritten form exceeds the output limit", async () => {
-    let source = "";
-    const target = createServer((_request, response) => {
-      response.writeHead(200, {
-        "content-type": "text/html; charset=utf-8",
-        "content-length": Buffer.byteLength(source),
-      });
-      response.end(source);
-    });
-    auxiliaryServers.push(target);
-    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
-    const address = target.address();
-    if (!address || typeof address !== "object") throw new Error("Target server did not bind");
-    const unit = '<img src="/a">';
-    source = unit.repeat(Math.floor((3 * 1024 * 1024) / Buffer.byteLength(unit)));
-    expect(Buffer.byteLength(source)).toBeLessThan(8 * 1024 * 1024);
-
-    const { info } = await startGateway({ compression: "body" });
-    const result = await requestUrl(
-      `${info.url}__orkestrator/browser/loopback/${address.port}/large.html`,
-      {
-        headers: {
-          authorization: `Bearer ${info.token}`,
-          origin: "null",
-          "accept-encoding": "gzip",
-        },
-      },
-    );
-    expect(result.status).toBe(502);
-    expect(result.body).toContain("exceeded 8388608 rewritten bytes");
-    // Even the rejected-at-rewrite path must hand its decoded bytes back.
-    await waitUntil(
-      () => browserPreviewDecodeSnapshot().activeBytes === 0,
-      "Rejected preview rewrite did not release its decoded bytes",
-    );
-  });
-
-  test("returns decoded preview bytes to the shared budget on success and failure", async () => {
-    const html = '<a href="/page">link</a>'.repeat(64);
-    const target = createServer((request, response) => {
-      if (request.url === "/abort.html") {
-        response.writeHead(200, {
-          "content-type": "text/html; charset=utf-8",
-          "content-length": Buffer.byteLength(html) * 2,
-        });
-        response.write(html);
-        setTimeout(() => response.socket?.destroy(), 10);
-        return;
-      }
-      response.writeHead(200, {
-        "content-type": "text/html; charset=utf-8",
-        "content-length": Buffer.byteLength(html),
-      });
-      response.end(html);
-    });
-    auxiliaryServers.push(target);
-    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
-    const address = target.address();
-    if (!address || typeof address !== "object") throw new Error("Target server did not bind");
-    const { info } = await startGateway({ compression: "body" });
-    const headers = {
-      authorization: `Bearer ${info.token}`,
-      origin: "null",
-      "accept-encoding": "gzip",
-    };
-    const endpoint = (path: string) =>
-      `${info.url}__orkestrator/browser/loopback/${address.port}${path}`;
-
-    expect(browserPreviewDecodeSnapshot()).toEqual({ activeBytes: 0 });
-    // The aggregate ceiling has to leave room for real preview traffic; a single
-    // per-request limit's worth must be a small fraction of it.
-    expect(MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES).toBeGreaterThan(8 * 1024 * 1024);
-
-    const rewritten = await requestUrl(endpoint("/ok.html"), { headers });
-    expect(rewritten.status).toBe(200);
-    expect(decodeResponseBody(rewritten)).toContain(
-      `/__orkestrator/browser/loopback/${address.port}/page`,
-    );
-    await waitUntil(
-      () => browserPreviewDecodeSnapshot().activeBytes === 0,
-      "Successful preview did not release its decoded bytes",
-    );
-
-    const aborted = await requestUrl(endpoint("/abort.html"), { headers });
-    expect(aborted.status).toBe(502);
-    await waitUntil(
-      () => browserPreviewDecodeSnapshot().activeBytes === 0,
-      "Aborted preview did not release its decoded bytes",
-    );
-
-    // A budget that never returned bytes would eventually refuse everything, so
-    // prove the path still works after both a success and a failure.
-    const afterRecovery = await requestUrl(endpoint("/again.html"), { headers });
-    expect(afterRecovery.status).toBe(200);
-    expect(browserPreviewDecodeSnapshot()).toEqual({ activeBytes: 0 });
-  });
-
-  test("answers null-origin browser preview preflights without credentials and forwards non-simple requests", async () => {
-    const received = mock(
-      (_method?: string, _url?: string, _header?: string | string[], _body?: string) => undefined,
-    );
-    const target = createServer((request, response) => {
-      const chunks: Buffer[] = [];
-      request.on("data", (chunk) =>
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)),
-      );
-      request.on("end", () => {
-        received(
-          request.method,
-          request.url,
-          request.headers["x-preview-test"],
-          Buffer.concat(chunks).toString("utf8"),
-        );
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end('{"ok":true}');
-      });
-    });
-    auxiliaryServers.push(target);
-    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
-    const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object")
-      throw new Error("Target server did not bind");
-
-    const { info } = await startGateway();
-    const targetUrl = `${info.url}__orkestrator/browser/loopback/${targetAddress.port}/api`;
-    const preflight = await requestUrl(targetUrl, {
-      method: "OPTIONS",
-      headers: {
-        origin: "null",
-        "access-control-request-method": "POST",
-        "access-control-request-headers": "content-type, x-preview-test",
-      },
-    });
-    expect(preflight.status).toBe(204);
-    // Every sandboxed document shares the null origin, so it never gets a
-    // credentialed grant (security report M2).
-    expect(preflight.headers["access-control-allow-origin"]).toBe("*");
-    expect(preflight.headers["access-control-allow-credentials"]).toBeUndefined();
-    expect(preflight.headers["access-control-allow-headers"]).toBe("content-type, x-preview-test");
-    expect(received).not.toHaveBeenCalled();
-
-    const proxied = await requestUrl(targetUrl, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${info.token}`,
-        origin: "null",
-        "content-type": "application/json",
-        "x-preview-test": "forwarded",
-      },
-      body: '{"message":"hello"}',
-    });
-    expect(proxied.status).toBe(200);
-    expect(proxied.json()).toEqual({ ok: true });
-    expect(proxied.headers["access-control-allow-origin"]).toBe("*");
-    expect(proxied.headers["access-control-allow-credentials"]).toBeUndefined();
-    expect(received).toHaveBeenCalledWith("POST", "/api", "forwarded", '{"message":"hello"}');
-  });
-
-  test("aborts oversized streaming preview bodies without waiting for upstream completion", async () => {
-    const target = createServer((_request, response) => {
-      response.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
-      const chunk = Buffer.alloc(1024 * 1024, 97);
-      for (let index = 0; index < 9; index += 1) response.write(chunk);
-    });
-    auxiliaryServers.push(target);
-    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
-    const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object")
-      throw new Error("Target server did not bind");
-
-    const { info } = await startGateway();
-    const result = await requestUrl(
-      `${info.url}__orkestrator/browser/loopback/${targetAddress.port}/large.js`,
-      {
-        headers: { authorization: `Bearer ${info.token}`, origin: "null" },
-      },
-    );
-    expect(result.status).toBe(502);
-    expect(result.body).toContain("exceeded 8388608");
-  });
-
-  test("rejects preview text with an unsupported content encoding", async () => {
-    const target = createServer((_request, response) => {
-      response.writeHead(200, {
-        "content-type": "text/html; charset=utf-8",
-        "content-encoding": "zstd",
-      });
-      response.end("opaque");
-    });
-    auxiliaryServers.push(target);
-    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
-    const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object")
-      throw new Error("Target server did not bind");
-
-    const { info } = await startGateway();
-    const result = await requestUrl(
-      `${info.url}__orkestrator/browser/loopback/${targetAddress.port}/`,
-      {
-        headers: { authorization: `Bearer ${info.token}`, origin: "null" },
-      },
-    );
-    expect(result.status).toBe(502);
-    expect(result.body).toContain("unsupported content encoding");
-  });
-
-  test("redirects preview-referred root requests back into their namespace", async () => {
-    const { info } = await startGateway();
-    const referer = `${info.url}__orkestrator/browser/loopback/3000/app`;
-
-    const redirect = await requestUrl(`${info.url}api/status?probe=1`, {
-      headers: { referer, origin: "null" },
-    });
-    expect(redirect.status).toBe(307);
-    expect(redirect.headers.location).toBe(
-      "/__orkestrator/browser/loopback/3000/api/status?probe=1",
-    );
-    expect(redirect.headers["access-control-allow-origin"]).toBe("*");
-    expect(redirect.headers["access-control-allow-credentials"]).toBeUndefined();
-    expect(redirect.headers["cache-control"]).toBe("no-store");
-
-    const preflight = await requestUrl(`${info.url}api/status`, {
-      method: "OPTIONS",
-      headers: {
-        referer,
-        origin: "null",
-        "access-control-request-method": "POST",
-        "access-control-request-headers": "content-type",
-      },
-    });
-    expect(preflight.status).toBe(204);
-    expect(preflight.headers["access-control-allow-origin"]).toBe("*");
-    expect(preflight.headers["access-control-allow-credentials"]).toBeUndefined();
-    expect(preflight.headers["access-control-allow-headers"]).toBe("content-type");
-
-    const unrelatedReferer = await requestUrl(`${info.url}api/status`, {
-      headers: { referer: `${info.url}some/other/page` },
-    });
-    expect(unrelatedReferer.status).toBe(401);
-
-    const malformedReferer = await requestUrl(`${info.url}api/status`, {
-      headers: { referer: "not a url" },
-    });
-    expect(malformedReferer.status).toBe(401);
-  });
-
-  test("cancels the upstream request when the preview client disconnects", async () => {
+  test("cancels the upstream request when the proxy client disconnects", async () => {
     // Abruptly dropping an in-process connection to a Bun HTTP server wedges
     // the bun:test runner even after the scenario completes, so the whole
     // disconnect scenario runs in a subprocess and reports over stdout.
@@ -1375,7 +993,6 @@ describe("remote gateway", () => {
         port: 0,
         env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
         allowNonTailscaleBind: true,
-        legacyPreviewPortAccess: async (port) => (port === targetPort ? "allowed" : "unknown"),
       });
       const info = await gateway.start();
       if (!info) throw new Error("Gateway did not start");
@@ -1383,7 +1000,7 @@ describe("remote gateway", () => {
 
       const socket = connect({ host: gatewayUrl.hostname, port: Number(gatewayUrl.port) }, () => {
         socket.write([
-          "GET /__orkestrator/browser/loopback/" + targetPort + "/stream HTTP/1.1",
+          "GET /__orkestrator/proxy/loopback/" + targetPort + "/stream HTTP/1.1",
           "Host: " + gatewayUrl.host,
           "Authorization: Bearer " + info.token,
           "",

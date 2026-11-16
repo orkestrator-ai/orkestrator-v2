@@ -9,6 +9,7 @@ import type { KanbanStatus, KanbanTask } from "../../apps/web/src/stores/kanbanS
 import { usePrMonitorStore } from "../../apps/web/src/stores/prMonitorStore";
 import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 import { buildPipelineFixture } from "../../apps/web/src/test/build-pipeline-fixture";
+import { kanbanTask } from "../../apps/web/src/test/kanban-task";
 
 const ENVIRONMENT_ID = "ticket-view-environment";
 const PIPELINE_ID = "ticket-view-pipeline";
@@ -41,7 +42,7 @@ const notes: BuildPipelineKeyInformation = {
 };
 
 function ticket(status: KanbanStatus): KanbanTask {
-  return {
+  return kanbanTask({
     id: "ticket-view-task",
     projectId: "project-1",
     title: "Tickets: reliable Backlog → In progress → Review → Done for pipeline builds",
@@ -80,7 +81,7 @@ function ticket(status: KanbanStatus): KanbanTask {
     buildPipelineId: PIPELINE_ID,
     prUrl: PR_URL,
     prState: "open",
-  };
+  });
 }
 
 /**

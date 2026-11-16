@@ -1,7 +1,7 @@
 # Electron backend command registry > backend-owned diff statistics > serves the Files panel from the scan the badge already ran
 
 - **ID:** 2404
-- **Status:** open
+- **Status:** resolved
 - **Test:** `Electron backend command registry > backend-owned diff statistics > serves the Files panel from the scan the badge already ran`
 - **File:** `apps/backend/tests/commands-integration.test.ts`
 
@@ -62,4 +62,13 @@ as a recurrence.
 - **Cause (observed with temporary instrumentation, since removed):** a watcher hint with no paths arrives while the badge's first scan is still running (about 2 s before it settles under contention). The hint advances the entry's `dirtyEpoch` from 1 to 2, so the published file list (epoch 1) is already stale, and the Files panel read correctly scans again. At the read the watcher was qualified, nothing was in flight, and the read came 70–500 ms after the announcement, so the 3 s unwatched age bound (`DIFF_CACHE_MAX_AGE_MS`) is not the cause. Freezing the clock at the read did not help, which confirms that.
 - **Disposition:** open. The product behaviour looks correct (a hint during a scan invalidates it); the test's precondition, that nothing dirtied the entry after the badge scan, depends on when the watcher establishes. A deterministic test needs a public signal that the entry's file list is current (for example, wait for the hint-driven rescan to settle) and none is exposed today. Whether the establishing watcher should hint at all when the scan started after it began watching is a product question left open.
 
-- **Follow-up (2026-11-15):** the product signal this test needs is to-do [8302](../../../todo/cross-cutting/8302-signals-for-deterministic-flake-fixes.md).
+- **Follow-up (2026-11-15):** the product signal this test needs is to-do 8302 (retired 2026-11-16; the signals are described in the [testing guide](../../../development/testing-guide.md#controlled-time)).
+
+## Resolution (2026-11-16)
+
+- **Observed on:** Linux, base `c1fcc573b`, branch `20261116-015626-a440226a702f`.
+- **Root cause:** the test read the Files panel as soon as the badge's first scan was announced, but a watcher hint can land during that scan (making its file list stale) and the first scan can start before the watcher's coverage is qualified (so its list is only served for the 3 s unwatched age). Either way the panel's read correctly scanned again. The product behaviour is unchanged; the test's precondition was a guess about watcher timing.
+- **Fix:** `DiffStatsService.fileListCurrency(environmentId)` (content-free: scanned epoch, dirty epoch, scanning, held back by the minimum gap, watcher qualified, `current`) says whether a read arriving now would reuse the cached list. The test waits for the watcher to qualify, refreshes once if the list is not yet current (so the badge's scan runs under that coverage), waits for `current`, then reads. Unit test: `apps/backend/tests/diff-stats-service.test.ts` › `reports when the cached file list is current`.
+- **Reproduced:** yes — under `bun scripts/test-under-contention.ts --burners 12 -- bun test --cwd=apps/backend <HEAD copy of the owner> -t "serves the Files panel from the scan the badge already ran" --rerun-each=10` the unchanged test failed 8 of 10 (the recorded `git status` in the subcommand log). With 6 burners on this run it passed 10 of 10, so the 2026-11-15 6-burner result depends on host load.
+- **Stress:** the changed test passed 10 of 10 under the same 12-burner command (45 s) and 10 of 10 under 6 burners (`mise run test:logged -- --name repro-2404 -- bun scripts/test-under-contention.ts --burners 6 -- bun test --cwd=apps/backend ./tests/commands-integration.test.ts -t "serves the Files panel from the scan the badge already ran" --rerun-each=10`).
+- **Left open (product question, not this flake):** whether a newly established watcher should send its no-path hint when the scan it would invalidate started after watching began. The test no longer depends on the answer; to-do [8112](../../../todo/transcripts-and-observation/8112-establishing-watcher-hint-rescans.md) holds the question.

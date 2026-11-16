@@ -39,7 +39,6 @@ import {
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { mailAutoSwitchNotice } from "./agent-accounts-auto-switch-notices.js";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { NodeCoordinatorNotices, OutboxItem } from "./nodes/index.js";
 import type { StorageService } from "./storage.js";
 
@@ -119,13 +118,9 @@ export class CoordinatorNoticeRouter {
 
   /** The one routing decision. A null project is a machine-wide notice. */
   async route(projectId: string | null): Promise<CoordinatorNoticeRoute> {
-    const route: CoordinatorNoticeRoute = this.outbox
+    return this.outbox
       ? await this.outbox.routeNotice(projectId)
       : { kind: "local", reason: "standalone" };
-    if (route.kind === "local" && route.reason === "older-command-node") {
-      compatibilityPathUsage.record("coordinator-notices.older-command-node");
-    }
-    return route;
   }
 
   /** Queue for the command node. False when its outbox is full: the notice stays on this node. */

@@ -141,7 +141,7 @@ const writeInteractiveTerminalMock = mock(async (_terminalSessionId: string, _da
 const resizeInteractiveTerminalMock = mock(async () => {});
 const detachInteractiveTerminalMock = mock(async () => {});
 const renewInteractiveTerminalMock = mock(
-  async (_terminalSessionId: string): Promise<"renewed" | "lapsed" | "unsupported"> => "renewed",
+  async (_terminalSessionId: string): Promise<"renewed" | "lapsed"> => "renewed",
 );
 const handleTerminalPasteMock = mock(async (_options: TerminalPasteOptions) => {});
 
@@ -1051,7 +1051,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     });
 
     test("never overlaps renewals while one is still in flight", async () => {
-      const pending = deferred<"renewed" | "lapsed" | "unsupported">();
+      const pending = deferred<"renewed" | "lapsed">();
       renewInteractiveTerminalMock.mockImplementationOnce(() => pending.promise);
       renderInAppCommandScope(
         <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
@@ -1070,20 +1070,6 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
       await tick();
       await waitFor(() => expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(2));
       expect(liveRenewIntervals()).toHaveLength(1);
-    });
-
-    test("clears its interval when the backend predates leases", async () => {
-      renewInteractiveTerminalMock.mockResolvedValue("unsupported");
-      renderInAppCommandScope(
-        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
-      );
-      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
-
-      await tick();
-      await waitFor(() => expect(liveRenewIntervals()).toHaveLength(0));
-      await tick();
-      expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(1);
-      expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(1);
     });
 
     test("lease recovery leaves keyboard focus where the user put it", async () => {
@@ -1227,21 +1213,6 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
       await waitFor(() => expect(renewInteractiveTerminalMock).toHaveBeenLastCalledWith("pty-2"));
       unmount();
       expect(detachInteractiveTerminalMock).toHaveBeenCalledWith("pty-2");
-    });
-
-    test("stops renewing against a backend that predates leases", async () => {
-      renewInteractiveTerminalMock.mockResolvedValue("unsupported");
-      renderInAppCommandScope(
-        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
-      );
-      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
-
-      becomeVisible();
-      await waitFor(() => expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(1));
-      becomeVisible();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(1);
-      expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(1);
     });
 
     test("keeps the terminal when a renewal fails transiently", async () => {

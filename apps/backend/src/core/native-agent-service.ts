@@ -2274,8 +2274,7 @@ export class NativeAgentService {
         this.promptQueues.hasPendingSessionMutation(key) ||
         session.pendingDispatch ||
         session.pendingSteer ||
-        (!input.ignoreQueuedPrompts &&
-          (queue?.messages.length || queue?.inFlight || queue?.outstandingClaim))
+        (!input.ignoreQueuedPrompts && (queue?.messages.length || queue?.inFlight))
       ) {
         return { outcome: "pending" as const };
       }

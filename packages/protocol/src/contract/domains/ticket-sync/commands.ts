@@ -106,8 +106,15 @@ export const ackTicketSyncOutboxCommand = defineCommand({
     controllerId: optionalUnknown,
     epoch: optionalUnknown,
     upTo: optionalUnknown,
+    // The command node's projects this acknowledgement dropped changes for
+    // because they were removed there (#2328): the leaf keeps its
+    // copies of them as its own, as when a command node detaches.
+    removedProjects: optionalUnknown,
   }),
-  result: Schema.Struct({ remaining: optionalSequence }),
+  result: Schema.Struct({
+    remaining: optionalSequence,
+    dropped: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  }),
   critical: [],
 });
 

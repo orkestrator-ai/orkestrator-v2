@@ -538,18 +538,11 @@ failed runtimes off the page stay actionable. `omittedStates` carries no
 `cancelReason`, so the page always lists a superseded runtime when the
 operation has one.
 
-**Bridges that do not report.** Claude, Cursor, Pi and ACP bridges put
+**Reads without evidence.** Claude, Cursor, Pi and ACP bridges put
 `mcpConfigReporting: 1` in every `/session/:id/runtime-health` body,
-including an unknown session's, and have since v2.21.0, the support floor. A
-body without that marker, or a 404/405 from the route, is `unsupported`; any
-other failed read says nothing about the bridge. Such a bridge (only an
-unpublished build) cannot prove an apply, so the runtime says so instead of
-waiting silently: it becomes `restart-required` with "does not report which
-MCP configuration it loaded … Stop and start the environment". Polling
-continues inside the evidence window, so a restarted, current bridge still
-proves it. Until 2026-11-10 an older bridge's `mcpConfig` without the marker
-also counted as a report, and Claude stayed `pending-next-turn`
-([version compatibility](version-compatibility.md#retired)).
+including an unknown session's. A body without evidence, or any failed read
+(a 404/405 included), is no evidence: the runtime keeps its planned state and
+polling continues inside the evidence window.
 
 **Pi and Cursor bridges** fingerprint the MCP files each live generation was
 built from. At the next turn start (never mid-turn; running, compacting or
@@ -895,7 +888,7 @@ worktrees; nothing reads or writes the operator's configuration):
 | Editors | `json-edit.test.ts`, `toml-edit.test.ts` — comments, CRLF, multi-line strings, inline/dotted refusal |
 | Files | `source-store.test.ts` — conflicts, modes, symlinks, locks, stale-lock takeover |
 | Service | `service.test.ts`, `service-providers.test.ts`, `service-pi.test.ts`, `pi-mcp-parity.test.ts`, `service-grok.test.ts`, `service-sources.test.ts`, `service-transport-fields.test.ts`, `service-rename.test.ts`, `service-limits.test.ts`, `service-rollout.test.ts`, `service-apply.test.ts`, `service-apply-scope.test.ts`, `operations-store.test.ts`, `providers.test.ts`, `references.test.ts` — add/update/rename/remove for all six providers in user and project scope, custom homes, two worktrees, shadowing and fallback, Pi skip/collision rules, Grok compat/trust, secret absence (including `operations.json` and logs), idempotency, recovery, limits, rollout gate, Codex queue, supersession, coordinator and deleted-environment runtimes, container catalog |
-| Evidence | `service-evidence.test.ts` (per-provider applied/not-applied rules, bounds, idleness, digest privacy), `service-generations.test.ts` (generation labels, newer runs, reads straddling a replacement, no carry-over on re-apply, Codex reload), `service-older-bridges.test.ts` (older-bridge outcomes and recovery), `service-external-edits.test.ts` (superseded and merged edits, refused re-apply, Codex reload refused, the slow watch for unpolled runtimes), `service-apply-scope.test.ts` (fan-out paging, more environments than the page, the tracked cap), `http-bridge/mcp-config-evidence.test.ts` (bridge shapes, the reporting marker, renderer summary excludes digests), `native-agent-service-provider.test.ts` (no bridge start) |
+| Evidence | `service-evidence.test.ts` (per-provider applied/not-applied rules, bounds, idleness, digest privacy), `service-generations.test.ts` (generation labels, newer runs, reads straddling a replacement, no carry-over on re-apply, Codex reload), `service-external-edits.test.ts` (superseded and merged edits, refused re-apply, Codex reload refused, the slow watch for unpolled runtimes), `service-apply-scope.test.ts` (fan-out paging, more environments than the page, the tracked cap), `http-bridge/mcp-config-evidence.test.ts` (bridge shapes, reads without evidence, renderer summary excludes digests), `native-agent-service-provider.test.ts` (no bridge start) |
 | Commands | `commands-registry-mcp.test.ts` (correlation ids, rollout commands, reload probe), `http-bridge/mcp-reload.test.ts`, `storage-config-mcp-rollout.test.ts`, `apps/backend/tests/gateway-base.test.ts` (body cap) |
 | Bridges | Pi `mcp.test.ts`, `mcp-config.test.ts`, `mcp-config-upstream.test.ts`, `mcp-lifecycle.test.ts`, `agent-session.test.ts`, `http.test.ts`; Cursor `agent-session.test.ts`, `agent-session-mcp-reattach.test.ts`, `http.test.ts`, `persistence.test.ts`; Claude `mcp-config-scope.test.ts`, `session-manager-prompt-mcp.test.ts`, `runtime-health-body.test.ts`; ACP `acp-mcp-inventory.test.ts`; Codex `mcp-reload-route.test.ts`, `process-supervisor.test.ts` |
 | Apply (2026-10-25) | `service-apply.test.ts` (OpenCode idle-gated rebuild, its listing check, user files and containers kept on restart; Codex turn evidence, the open dispatch excluded, not-running, the evidence window), `commands-registry-mcp.test.ts` (OpenCode reload probe re-posts `orkestrator`), `opencode-capabilities.test.ts` (sign-in guidance, error redaction; retired with 1.x), `http-bridge/mcp-inventory.test.ts` (relay redaction), `apps/backend/tests/opencode-mcp-reload-live.test.ts` (OpenCode 1.19.4, credential-free; retired with 1.x: `git show 5f4e27b1c:apps/backend/tests/opencode-mcp-reload-live.test.ts`). OpenCode 2's reload and MCP rows: `opencode2/environment-provider.test.ts`, `opencode2-mcp.live.test.ts`, `opencode2-user-config.live.test.ts` |

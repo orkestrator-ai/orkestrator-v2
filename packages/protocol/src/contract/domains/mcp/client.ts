@@ -9,8 +9,7 @@
  * - Version 0 (a pre-contract node) is today's untyped call, answered as sent
  *   (`legacyCommandApi`). No MCP command was ever capability-gated: a node
  *   that predates MCP management answers `unknown-command`, which the
- *   settings page reads (`isUnknownMcpManagementCommandError`) as "this
- *   backend does not support it", at every version.
+ *   settings page shows as an ordinary error, at every version.
  *
  * Retirement: adapter 0 goes when the support floor passes the first Stable
  * release that advertises the `mcp` domain.

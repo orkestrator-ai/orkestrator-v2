@@ -294,15 +294,6 @@ export class TmuxSession {
     return found;
   }
 
-  /** The whole transcript, for a renderer that predates paging. */
-  async transcriptLines(): Promise<unknown[]> {
-    const transcriptPath = await this.discoverTranscriptPath();
-    if (!transcriptPath) return [];
-    const { lines, permissionMode } = await this.transcript.readWhole(transcriptPath);
-    if (permissionMode) this.permissionMode = permissionMode;
-    return lines;
-  }
-
   /** A bounded page of the transcript: its tail, or what comes before `before`. */
   async transcriptPage(context: CommandContext, before?: string): Promise<TmuxTranscriptPage> {
     const transcriptPath = await this.discoverTranscriptPath();

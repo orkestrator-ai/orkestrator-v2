@@ -1,4 +1,9 @@
 import { backfillLegacyTestResults } from "@orkestrator/protocol/structured-review";
+import {
+  isTicketKind,
+  isTicketSections,
+  normalizeTicketContent,
+} from "@orkestrator/protocol/ticket-sections";
 import { createHash } from "node:crypto";
 import type { StorageMigration } from "./storage-database.js";
 import {
@@ -21,9 +26,9 @@ import {
  * Readers that default or normalize values current writers may still omit
  * (environment setup phase, agent settings, mail defaults) stay where they are.
  *
- * The exception is a shape an older backend sharing the same schema version
- * can still write: its upgrade lives here too but runs on every load
- * ({@link restoreLegacyPromptQueueClaims}).
+ * The exception is the legacy prompt-queue claim: no current writer produces
+ * one, but its restore runs on every queue load rather than once
+ * ({@link restoreLegacyPromptQueueClaims}), so it needs no schema bump.
  */
 
 /** Same fingerprint the prompt queue records for a failed dispatch. */
@@ -131,32 +136,24 @@ export function upgradePromptQueueRecords(stored: unknown): unknown {
 }
 
 /**
- * Older backends sharing this schema can still write exclusive claims. Preserve
- * a live lease verbatim so its holder can settle it, including after unrelated
- * queue writes. On expiry (or malformed lease metadata), restore the message
- * to the head, replacing a queued copy of its id. Reads never persist changes.
- * A corrupt message id gets a deterministic recovery id so it remains both
- * deliverable and stable across reads before the next write.
+ * Backends before v2.30.0-beta could move a queue's head into an exclusive
+ * `outstandingClaim` lease. No current writer produces one and nothing reads a
+ * claim as a lease any more (to-do 0078 (retired), 2026-11-16), but a claim may
+ * still be on disk, and record upgrades are permanent. Every stored claim's
+ * message returns to the head, replacing a queued copy of its id, and the
+ * claim field is dropped, whatever its lease metadata says. Reads never
+ * persist changes; the next queue mutation writes the normalized shape. A
+ * corrupt message id gets a deterministic recovery id so it stays deliverable
+ * and stable across reads before that write. A claim without a message record
+ * is dropped without losing the queue tail.
  */
 export function restoreLegacyPromptQueueClaims(stored: unknown): unknown {
   if (!isRecord(stored)) return stored;
-  const now = Date.now();
   let upgraded: Record<string, unknown> | null = null;
   for (const [key, queue] of Object.entries(stored)) {
     if (!isRecord(queue) || !Object.hasOwn(queue, "outstandingClaim")) continue;
     const { outstandingClaim: claim, ...rest } = queue;
     const message = isRecord(claim) ? claim.message : undefined;
-    if (
-      isRecord(claim) &&
-      isRecord(message) &&
-      isNonBlankString(claim.token) &&
-      typeof claim.claimedAt === "string" &&
-      Number.isFinite(Date.parse(claim.claimedAt)) &&
-      typeof claim.expiresAt === "string" &&
-      Date.parse(claim.expiresAt) > now
-    ) {
-      continue;
-    }
     const messages = rest.messages;
     upgraded ??= { ...stored };
     const restored = isRecord(message)
@@ -253,6 +250,50 @@ export const buildPipelineReviewReportUpgradeMigration: StorageMigration = {
     if (!current) return;
     const next = upgradeBuildPipelineRecords(current.value);
     if (next !== current.value) database.writeStoreInTransaction("build-pipelines", next);
+  },
+};
+
+/**
+ * Kanban rows written before ticket sections (v2.21.0 to v2.34.1, #1388), with
+ * their kind and sections derived from the text exactly as a read derived
+ * them: the text is kept as written, and a legacy `- [x]` becomes a manual
+ * pass dated at the ticket's creation. Rows that already have sections are
+ * left alone, and so is a row whose text fields are not strings, which no
+ * writer produced and which would otherwise lose its text.
+ */
+export function upgradeKanbanTaskRecords(stored: unknown): unknown {
+  if (!Array.isArray(stored)) return stored;
+  let changed = false;
+  const upgraded = stored.map((row: unknown) => {
+    if (!isRecord(row) || isTicketSections(row.sections)) return row;
+    const { description, acceptanceCriteria, createdAt } = row;
+    if (description !== undefined && typeof description !== "string") return row;
+    if (acceptanceCriteria !== undefined && typeof acceptanceCriteria !== "string") return row;
+    changed = true;
+    const content = normalizeTicketContent(
+      {
+        ...(isTicketKind(row.kind) ? { kind: row.kind } : {}),
+        description: description ?? "",
+        acceptanceCriteria: acceptanceCriteria ?? "",
+      },
+      typeof createdAt === "string" ? { now: createdAt } : {},
+    );
+    return { ...row, ...content };
+  });
+  return changed ? upgraded : stored;
+}
+
+export const KANBAN_TICKET_SECTIONS_UPGRADE_VERSION = 10;
+
+export const kanbanTicketSectionsUpgradeMigration: StorageMigration = {
+  version: KANBAN_TICKET_SECTIONS_UPGRADE_VERSION,
+  name: "derive-kanban-ticket-sections",
+  up({ database }) {
+    const current = database.readStoreValueInTransaction("kanban");
+    // Absent or unreadable: nothing an older build wrote is left to upgrade.
+    if (!current) return;
+    const next = upgradeKanbanTaskRecords(current.value);
+    if (next !== current.value) database.writeStoreInTransaction("kanban", next);
   },
 };
 

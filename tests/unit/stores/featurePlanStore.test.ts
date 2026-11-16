@@ -626,57 +626,6 @@ describe("featurePlanStore", () => {
     expect(appCommandStore(featurePlanStore).getState().features).toEqual([existing]);
   });
 
-  test("claimFeatureBuild installs the backend's atomic reservation result", async () => {
-    const existing = makeFeature({ id: "existing", status: "stories" });
-    backing = [existing];
-    appCommandStore(featurePlanStore).setState({ features: [existing] });
-
-    const result = await appCommandStore(featurePlanStore)
-      .getState()
-      .claimFeatureBuild("existing", "task-1");
-
-    expect(result?.claimed).toBe(true);
-    expect(mockClaimFeaturePlanBuild).toHaveBeenCalledWith("existing", "task-1");
-    expect(appCommandStore(featurePlanStore).getState().features[0]).toMatchObject({
-      id: "existing",
-      status: "building",
-      buildTaskId: "task-1",
-    });
-  });
-
-  test("claimFeatureBuild installs an authoritative losing reservation", async () => {
-    const projected = makeFeature({ id: "existing", status: "stories" });
-    backing = [
-      makeFeature({
-        id: "existing",
-        status: "building",
-        buildTaskId: "task-winner",
-      }),
-    ];
-    appCommandStore(featurePlanStore).setState({ features: [projected] });
-
-    const result = await appCommandStore(featurePlanStore)
-      .getState()
-      .claimFeatureBuild("existing", "task-loser");
-
-    expect(result?.claimed).toBe(false);
-    expect(appCommandStore(featurePlanStore).getState().features[0]).toMatchObject({
-      status: "building",
-      buildTaskId: "task-winner",
-    });
-  });
-
-  test("claimFeatureBuild returns undefined and preserves state when the backend rejects", async () => {
-    const existing = makeFeature({ id: "existing", status: "stories" });
-    appCommandStore(featurePlanStore).setState({ features: [existing] });
-    mockClaimFeaturePlanBuild.mockRejectedValueOnce(new Error("claim unavailable"));
-
-    expect(
-      await appCommandStore(featurePlanStore).getState().claimFeatureBuild("existing", "task-1"),
-    ).toBeUndefined();
-    expect(appCommandStore(featurePlanStore).getState().features).toEqual([existing]);
-  });
-
   test("appendMessage adds the message to the stored feature", async () => {
     const created = await appCommandStore(featurePlanStore).getState().createFeature("project-1");
 

@@ -5,7 +5,7 @@
  * longer than 200 characters is cut there and given the path's hash. A slug
  * that only replaced `/` missed every worktree whose path has a space, a dot
  * or an underscore, which on macOS is every one under `Application Support`
- * (to-do 5160 task 7).
+ * (#2317).
  */
 
 const CLAUDE_SLUG_MAX = 200;

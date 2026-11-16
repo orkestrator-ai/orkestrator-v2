@@ -2,16 +2,11 @@
  * `HttpBridgeProvider.closeSession` and the shared bridge close contract
  * (`closeBridgeSessionRetaining`): `POST /session/:id/close` is the ordinary,
  * non-destructive close. Only a 2xx that affirms `closed: true` confirms it;
- * 503 pending and anything unaffirmed keep the caller's intent; a bridge
- * that predates the route gets the restart notice and never a DELETE.
+ * 503 pending, a 404/405 and anything unaffirmed keep the caller's intent,
+ * and nothing ever falls back to DELETE.
  */
 import { describe, expect, test } from "bun:test";
-import { tabTeardownFailureKind } from "@orkestrator/protocol/tab-teardown";
-import {
-  BridgeClosePendingError,
-  BridgeCloseUnsupportedError,
-  closeBridgeSessionRetaining,
-} from "../bridge-session-close.js";
+import { BridgeClosePendingError, closeBridgeSessionRetaining } from "../bridge-session-close.js";
 import { cursorConnection, httpProvider } from "../agent-provider-test-support.js";
 
 describe("HTTP bridge provider close", () => {
@@ -30,30 +25,27 @@ describe("HTTP bridge provider close", () => {
     );
   });
 
-  test("never falls back to a destructive DELETE when a Claude bridge predates close", async () => {
+  test("never falls back to a destructive DELETE when the close route answers 404 or 405", async () => {
     for (const status of [404, 405]) {
-      const legacy = httpProvider(() => new Response(null, { status }));
-      const failure = await legacy.provider.closeSession!("claude-session").catch(
+      const provider = httpProvider(() => new Response(null, { status }));
+      const failure = await provider.provider.closeSession!("claude-session").catch(
         (error: unknown) => error,
       );
-      expect(failure).toBeInstanceOf(BridgeCloseUnsupportedError);
-      expect(String((failure as Error).message)).toContain("predates non-destructive tab close");
-      // The renderer recognises this failure and shows the restart notice.
-      expect(tabTeardownFailureKind(failure)).toBe("bridge-upgrade-required");
-      expect(legacy.requests.map((request) => request.init.method)).toEqual(["POST"]);
+      expect(failure).toBeInstanceOf(BridgeClosePendingError);
+      expect(String((failure as Error).message)).toContain(`HTTP ${status}`);
+      expect(provider.requests.map((request) => request.init.method)).toEqual(["POST"]);
     }
   });
 
-  test("a 404 or 405 from the close route is the restart notice on every platform", async () => {
+  test("a 404 or 405 from the close route is not a close on any platform", async () => {
     for (const agent of ["claude", "codex", "cursor", "grok", "pi"] as const) {
       for (const status of [404, 405]) {
         const sent: string[] = [];
-        const failure = await closeBridgeSessionRetaining(agent, "old-session", async (method) => {
+        const failure = await closeBridgeSessionRetaining(agent, "some-session", async (method) => {
           sent.push(method);
           return new Response("Not Found", { status });
         }).catch((error: unknown) => error);
-        expect(failure).toBeInstanceOf(BridgeCloseUnsupportedError);
-        expect(tabTeardownFailureKind(failure)).toBe("bridge-upgrade-required");
+        expect(failure).toBeInstanceOf(BridgeClosePendingError);
         expect(sent).toEqual(["POST"]);
       }
     }

@@ -19,8 +19,8 @@ do pass or fail.
 ## What the run covers
 
 1. A decoy on the client machine that no request ever reaches.
-2. Real-latency baselines for the direct, legacy, desktop tunnel and private
-   origin routes.
+2. Real-latency baselines for the direct, desktop tunnel and private origin
+   routes.
 3. A throttled link: backend queues stay bounded, memory does not grow.
 4. Network loss and reconnect.
 5. Publication reached from the second machine (only when testing it).
@@ -55,8 +55,7 @@ are counted and left out of the percentiles.
 | Route | Path from C | Connect time ends at | Skipped or unreachable when |
 | --- | --- | --- | --- |
 | `direct` | Plain HTTP to the service's host port at the backend URL's address | TCP connect | The service binds loopback on B (expected: `unreachable`); the backend URL is loopback (`--direct auto` never sends to C's own loopback); relay or HTTPS service |
-| `legacy` | `/__orkestrator/browser/loopback/<host port>/` on the gateway with the bearer token | TCP (or TLS) connect to the gateway | No host port, HTTPS service |
-| `desktop-tunnel` | One `desktop-tunnel` attachment (`create_preview_attachment`), then Electron's `openPreviewTunnel` per sample, sending what the Electron ingress sends | `OPEN_OK` (WebSocket handshake, HELLO, OPEN and the backend's upstream connect) | B's capabilities say the tunnel is off (the reason is copied) |
+| `desktop-tunnel` | One `desktop-tunnel` attachment (`create_preview_attachment`), then Electron's `PreviewTunnelConnector` on a fresh tunnel session per sample, sending what the Electron ingress sends | `OPEN_OK` (WebSocket handshake, HELLO, OPEN and the backend's upstream connect) | B's capabilities say the tunnel is off (the reason is copied) |
 | `private-origin` | `create_preview_handoff_url`, the one-use session code exchanged for the session cookie, then TLS GETs to the service host | TLS handshake (fresh, no resumption) | Publication is not enabled on B (the reason is copied) |
 
 The JSON also has one-off setup times (`setupMs`: attachment issuance,
@@ -130,8 +129,8 @@ bun scripts/preview-latency-baseline.ts decoy --port 5173
 ```
 
 Keep it running for the whole run, through every section below. Nothing may
-connect: not the service tab, not compatibility mode (turn **Issue new preview
-access** off for B, reopen the tab, then turn it back on), not **Open in
+connect: not the service tab, not the tab with access off (turn **Issue new
+preview access** off for B, reopen the tab, then turn it back on), not **Open in
 browser**, not the baseline tool. Remote previews block requests
 to C's loopback and private addresses other than their own ingress, and the
 baseline tool's `--direct auto` targets B's address, never C's. On Ctrl-C it
@@ -172,8 +171,8 @@ Point the baseline and the other subcommands at `http://127.0.0.1:44190`, and
 add the same address as a machine in C's window (with the same token) for the
 in-app checks. Electron treats it as a remote connection: the remote guards
 follow the connection, not its address. This works only while B serves plain
-HTTP, and it shapes only traffic sent to it: the control API, events, the
-legacy route and the tunnel. To shape a private origin too, run a second
+HTTP, and it shapes only traffic sent to it: the control API, events and the
+tunnel. To shape a private origin too, run a second
 throttle with `--listen <publication port> --target $B_IP:<publication port>`
 and pass `--publication-address 127.0.0.1`. Through the throttle, connect
 times measure the local accept; read first-byte times. It adds no loss or
@@ -236,7 +235,6 @@ Then observe:
 | `http.first_byte_ms` | Histogram | Private-origin proxy: from the upstream connect to the upstream response head |
 | `tunnel.sockets`, `tunnel.active`, `tunnel.queued_bytes` | Gauges | Open tunnel WebSockets, admitted tunnels, aggregate queued bytes toward clients |
 | `publication.sockets`, `publication.http_active`, `publication.upgrades_active` | Gauges | Private-origin listener |
-| `legacy.http_active` | Gauge | Legacy route requests in flight |
 | `relay.processes`, `relay.channels` | Gauges | Container relay |
 | `tunnel.open`, `tunnel.failed{…}`, `http.failed{…}`, … | Counters | Totals since the backend started, labelled by failure category |
 | `desktop.connect_ms` | Histogram | Reported by desktop windows using this backend: tunnel WebSocket connect through `OPEN_OK`, per new upstream connection |

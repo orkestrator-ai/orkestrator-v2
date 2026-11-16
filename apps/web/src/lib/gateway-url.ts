@@ -73,10 +73,10 @@ export function resolveNodeLoopbackBaseUrl(nodeBaseUrl: string, baseUrl: string)
 }
 
 /**
- * Browser previews load in a sandboxed (opaque-origin) iframe, so the gateway
- * auth cookie is never sent and a bearer token cannot be attached to document
- * loads. Only the Electron desktop app injects gateway credentials at the
- * network layer, so previews through a remote gateway are desktop-only.
+ * Whether this client can show an in-app service preview without private
+ * publication: the desktop app (its tunnel carries the service) or a local,
+ * gateway-less renderer. A web client through a remote gateway needs the
+ * backend to publish a private origin instead.
  */
 export function isGatewayBrowserPreviewSupported(): boolean {
   if (typeof window === "undefined") return true;
@@ -164,26 +164,4 @@ export function backendOnThisDevice(node?: DeviceCheckNode): boolean {
  */
 export function isBackendOnAnotherDevice(node?: DeviceCheckNode): boolean {
   return !backendOnThisDevice(node);
-}
-
-/** Resolve a loopback page through the gateway's browser-preview namespace. */
-export function resolveGatewayBrowserPreviewUrl(baseUrl: string): string {
-  if (typeof window === "undefined" || !window.orkestratorGateway?.enabled) return baseUrl;
-  return resolveNodeBrowserPreviewUrl(getGatewayBaseUrl(), baseUrl);
-}
-
-/** `resolveGatewayBrowserPreviewUrl` for one node: a loopback page through that node's preview namespace. */
-export function resolveNodeBrowserPreviewUrl(nodeBaseUrl: string, baseUrl: string): string {
-  try {
-    const url = new URL(baseUrl);
-    if (!isLoopbackHost(url.hostname) || url.protocol !== "http:") return baseUrl;
-    const port = url.port || "80";
-    const targetPath = `${url.pathname}${url.search}${url.hash}`;
-    return resolveNodeGatewayUrl(
-      nodeBaseUrl,
-      `/__orkestrator/browser/loopback/${port}${targetPath}`,
-    );
-  } catch {
-    return baseUrl;
-  }
 }

@@ -203,11 +203,6 @@ run = "bun scripts/generate-contract-adapters.ts"
 description = "Check the domain client adapter list for drift from the domain client definitions"
 run = "bun scripts/generate-contract-adapters.ts --check"
 
-[tasks."qualify:mixed-versions"]
-description = "Run this checkout against a published release (default: the support floor) in both node topologies, every domain scenario module (scheduled weekly in CI)"
-raw_args = true
-run = "bun scripts/qualify-contract-mixed-versions.ts"
-
 [tasks."qa:remote-goal-hold"]
 description = "Two backends of this checkout: a remote worker between goal iterations must not wake its coordinator until the goal ends (scheduled weekly in CI)"
 raw_args = true

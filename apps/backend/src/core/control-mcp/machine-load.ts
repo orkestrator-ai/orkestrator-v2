@@ -4,9 +4,7 @@ import {
   type MachineLoadView,
   type MachineUnavailableReason,
 } from "@orkestrator/protocol/machine-load";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { runWithTimeout, WorkTimeoutError } from "../abortable-timing.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import type { ControlMcpInvoker } from "../control-shared-actions.js";
 
 /**
@@ -65,13 +63,6 @@ export async function readNodeMachineLoad(
         return unavailable(
           "timeout",
           `${node.name} did not report its load within ${timeoutMs} ms.`,
-        );
-      }
-      if (incompatibility(error, MACHINE_LOAD_COMMAND)?.code === "unknown-command") {
-        compatibilityPathUsage.record("machine-load.older-node");
-        return unavailable(
-          "older-version",
-          `${node.name} runs an older Orkestrator that does not report its load; update it to see this.`,
         );
       }
       // The link dropped after the summaries were read.

@@ -167,8 +167,8 @@ describe("pins across document changes", () => {
 describe("Show on page", () => {
   test("navigates to the stored hash route, waits, resolves, and scrolls the target into view", async () => {
     const harness = createHarness();
-    const gateway = "https://gateway.example.invalid/__orkestrator/browser/loopback/3000";
-    const contents = await harness.attach(`${gateway}/app#/home`);
+    const ingress = "http://127.0.0.1:49152";
+    const contents = await harness.attach(`${ingress}/app#/home`);
     contents.pinsResponse = (queries) => matched(queries[0]!.annotationId);
     const result = await harness.manager.showOnPage({
       tabId: "browser-1",
@@ -180,7 +180,7 @@ describe("Show on page", () => {
       "matched|stable-id": 1,
     });
     expect(result.resolution).toMatchObject({ state: "matched", rect: { x: 1, y: 2 } });
-    expect(contents.loadURL.mock.calls.at(-1)![0]).toBe(`${gateway}/app#/settings`);
+    expect(contents.loadURL.mock.calls.at(-1)![0]).toBe(`${ingress}/app#/settings`);
     expect(contents.pinsConfig).toMatchObject({
       focusedAnnotationId: "annotation-1",
       scrollIntoView: true,

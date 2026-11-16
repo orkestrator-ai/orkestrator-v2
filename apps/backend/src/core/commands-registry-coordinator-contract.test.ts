@@ -47,7 +47,7 @@ test("coordinator and project Git handlers receive every key they read", async (
     keepConversationErrors: true,
     unknownKey: 1,
   });
-  expect(ensure.mock.calls[0]).toEqual(["p1", { clearConversationErrors: false }] as never);
+  expect(ensure.mock.calls[0]).toEqual(["p1"] as never);
 
   await run("create_coordinator_conversation", {
     projectId: "p1",

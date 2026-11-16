@@ -23,6 +23,8 @@ const task = {
   title: "Ticket",
   description: "",
   acceptanceCriteria: "",
+  kind: "feature" as const,
+  sections: {},
   status: "backlog" as const,
   comments: [],
   images: [],

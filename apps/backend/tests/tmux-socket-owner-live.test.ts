@@ -1,5 +1,5 @@
 /**
- * Real tmux servers against the unreachable-socket census (to-do 7020 task 1).
+ * Real tmux servers against the unreachable-socket census (to-do 7020 task 1, retired).
  *
  * A local environment move failed with `claude-tmux cleanup incomplete`
  * whenever no tmux server listened on the backend's socket and any other tmux

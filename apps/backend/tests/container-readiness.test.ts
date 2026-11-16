@@ -82,7 +82,7 @@ describe("boot status probe", () => {
     ).toMatchObject({
       failureCode: null,
     });
-    expect(parseBootProbe("ORKESTRATOR_NO_BOOT_DIR\n1\n")).toEqual({ kind: "legacy" });
+    expect(parseBootProbe("ORKESTRATOR_NO_BOOT_DIR\n1\n")).toEqual({ kind: "no-boot-status" });
     expect(parseBootProbe("\n1\n")).toEqual({ kind: "pending" });
     expect(parseBootProbe("unexpected\n1\n")).toEqual({ kind: "pending" });
   });
@@ -323,14 +323,19 @@ exit 0
     );
   });
 
-  test("a legacy image bypasses readiness, while an unanswered probe remains gated", async () => {
+  test("an image without boot status is not ready and names the rebuild, and an unanswered probe remains gated", async () => {
     await withDockerScript(
       `#!/bin/sh
 [ "$1" = "exec" ] && printf 'ORKESTRATOR_NO_BOOT_DIR\\n1\\n'
 exit 0
 `,
       async () => {
-        expect(await ensureCurrentBootReady("container-1")).toBeNull();
+        const failure = await ensureCurrentBootReady("container-1").catch(
+          (error: unknown) => error,
+        );
+        expect(failure).toBeInstanceOf(ContainerInitializationError);
+        expect((failure as ContainerInitializationError).failureCode).toBe("boot-status-missing");
+        expect(String((failure as Error).message)).toContain("Rebuild the container");
       },
     );
     await withDockerScript(

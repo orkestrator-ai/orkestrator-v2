@@ -2,13 +2,13 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { startPreviewHarnessClient, type PreviewHarnessClient } from "./harness-client";
 
 /**
- * Vite fixture page loads through both preview routes, with the upstream
+ * Vite fixture page loads through the private origin, with the upstream
  * connections the application accepted and how many responses were
  * revalidated (304). Chromium only: it clears the HTTP cache through CDP.
  *
  * Needs `ORKESTRATOR_TEST_PREVIEW_VITE_DIR` (see test-fixtures/preview-vite).
  * `ORKESTRATOR_TEST_PREVIEW_VITE_PAGE` picks the page (default `/`), and
- * `ORKESTRATOR_TEST_PREVIEW_LOAD_SAMPLES` the samples per route (default 3), and
+ * `ORKESTRATOR_TEST_PREVIEW_LOAD_SAMPLES` the samples (default 3), and
  * `ORKESTRATOR_TEST_PREVIEW_POOL_OFF=1` turns upstream connection reuse off.
  * Prints one `[preview-page-load]` JSON line; numbers are medians.
  */
@@ -31,20 +31,10 @@ test.afterAll(async () => {
 interface Phase {
   ms: number;
   requests: number;
-  /** 304s the browser reported (a sandboxed frame reports some as cache hits). */
+  /** 304s the browser reported. */
   revalidated: number;
-  /** 304s answered by the gateway on the legacy route, counted at its recorder. */
-  gateway304: number;
   bytes: number;
   upstreamConnections: number;
-}
-
-async function gateway304s(): Promise<number> {
-  const { requests } = await client.next<{ requests: Array<{ status: number | null }> }>(
-    "gateway-requests",
-    "gateway-requests",
-  );
-  return requests.filter((request) => request.status === 304).length;
 }
 
 async function connections(): Promise<number> {
@@ -65,7 +55,6 @@ async function measure(page: Page, navigate: () => Promise<unknown>): Promise<Ph
   };
   page.on("requestfinished", onFinished);
   const before = await connections();
-  const before304 = await gateway304s();
   const started = performance.now();
   await navigate();
   const ms = performance.now() - started;
@@ -77,7 +66,6 @@ async function measure(page: Page, navigate: () => Promise<unknown>): Promise<Ph
     ms: Math.round(ms),
     requests: results.length,
     revalidated: results.filter((result) => result.status === 304).length,
-    gateway304: (await gateway304s()) - before304,
     bytes: results.reduce((total, result) => total + result.bytes, 0),
     upstreamConnections: (await connections()) - before,
   };
@@ -98,7 +86,6 @@ function median(phases: Phase[]): Phase {
     ms: pick("ms"),
     requests: pick("requests"),
     revalidated: pick("revalidated"),
-    gateway304: pick("gateway304"),
     bytes: pick("bytes"),
     upstreamConnections: pick("upstreamConnections"),
   };
@@ -135,7 +122,7 @@ async function route(
   };
 }
 
-test("Vite page loads through the private origin and the legacy route", async () => {
+test("Vite page loads through the private origin", async () => {
   test.setTimeout(240_000);
   let origin = "";
   const privateOrigin = await route(
@@ -145,32 +132,15 @@ test("Vite page loads through the private origin and the legacy route", async ()
     (page) => page.goto(`${origin}${pagePath}`, { waitUntil: "load" }),
   );
 
-  // The legacy route serves the sandboxed (`Origin: null`) frame the app embeds.
-  const { token } = await client.next<{ token: string }>("gateway-token", "gateway-token");
-  const gateway = client.ready.gateway;
-  const legacyUrl = `${gateway}/__orkestrator/browser/loopback/${client.ready.loopbackPorts.vite}${pagePath}`;
-  const frame = (page: Page) =>
-    page.setContent(`<iframe sandbox="allow-scripts" src="${legacyUrl}"></iframe>`, {
-      waitUntil: "load",
-    });
-  const legacy = await route(async (context, page) => {
-    // Electron attaches the gateway bearer to the preview frame's requests.
-    await context.setExtraHTTPHeaders({ authorization: `Bearer ${token}` });
-    await frame(page);
-    await expect(page.frames()[1]!.locator("#app")).not.toHaveText("loading");
-  }, frame);
-
   const result = {
     page: pagePath,
     samples,
     pool: process.env.ORKESTRATOR_TEST_PREVIEW_POOL_OFF === "1" ? "off" : "on",
     privateOrigin,
-    legacy,
   };
   console.log(`[preview-page-load] ${JSON.stringify(result)}`);
   test.info().annotations.push({ type: "preview-page-load", description: JSON.stringify(result) });
 
   // Every page load reached the application's module graph.
   expect(privateOrigin.first.requests).toBeGreaterThan(2);
-  expect(legacy.first.requests).toBeGreaterThan(2);
 });

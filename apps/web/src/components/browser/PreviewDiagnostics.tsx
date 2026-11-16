@@ -28,7 +28,7 @@ export interface PreviewDiagnosticsProps {
   diagnosis: ServiceDiagnosis | null;
   service: PreviewServiceSnapshot | null;
   transport: BrowserPreviewTransportState | null;
-  mode: "desktop-tunnel" | "compatibility" | "top-level" | "unsupported";
+  mode: "desktop-tunnel" | "top-level" | "unsupported";
   onAction: (action: DiagnosisAction) => void;
   busy?: boolean;
 }
@@ -65,7 +65,7 @@ export function PreviewDiagnostics({
     refocusToggle.current = toggleRef.current === document.activeElement;
     setExpanded(next);
   };
-  if (!diagnosis && !expanded && mode !== "compatibility") {
+  if (!diagnosis && !expanded) {
     return service ? (
       <button
         ref={toggleRef}
@@ -94,14 +94,9 @@ export function PreviewDiagnostics({
     >
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <Icon className="h-3.5 w-3.5 shrink-0" />
-        <span className="font-medium">
-          {diagnosis?.title ?? (mode === "compatibility" ? "Compatibility mode" : "Route details")}
-        </span>
+        <span className="font-medium">{diagnosis?.title ?? "Route details"}</span>
         <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
-          {diagnosis?.detail ??
-            (mode === "compatibility"
-              ? "This backend uses the legacy path preview: HMR and application WebSockets may not work remotely, and cookies are shared across services."
-              : "")}
+          {diagnosis?.detail ?? ""}
         </span>
         {diagnosis?.actions.map((action) => (
           <Button

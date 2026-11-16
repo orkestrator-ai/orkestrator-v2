@@ -85,18 +85,33 @@ function localBackendHarness(initial?: StoredDesktopConnections) {
   };
 }
 
-/** Backends that predate the hello handshake answer it with their renderer's 404. */
-function isLegacyHelloRequest(input: unknown): boolean {
+function isHelloRequest(input: unknown): boolean {
   return new URL(String(input)).pathname === "/__orkestrator/hello";
 }
 
-function legacyHelloResponse(): Response {
-  return new Response("Not found", { status: 404 });
+/** A client endpoint's hello, one installation per host name. */
+function helloResponse(input: unknown): Response {
+  const host = new URL(String(input)).hostname;
+  return Response.json({
+    schemaVersion: 1,
+    installationId: `bk_${host}`,
+    generation: "generation-A",
+    appVersion: "2.40.0",
+    clientApi: { minVersion: 1, maxVersion: 1 },
+    capabilities: {},
+    endpointRole: "client",
+    profile: {
+      revision: 1,
+      displayName: host,
+      colorToken: "blue",
+      updatedAt: "2026-10-25T00:00:00Z",
+    },
+  });
 }
 
 function installHealthyRemoteFetch(): void {
   globalThis.fetch = mock(async (input, init) => {
-    if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+    if (isHelloRequest(input)) return helloResponse(input);
     if (new URL(String(input)).pathname === "/__orkestrator/events") {
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
@@ -136,7 +151,7 @@ describe("Electron connection manager", () => {
     });
     const requests: Array<{ hostname: string; authorization: string | null }> = [];
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+      if (isHelloRequest(input)) return helloResponse(input);
       const url = new URL(String(input));
       requests.push({
         hostname: url.hostname,
@@ -206,7 +221,6 @@ describe("Electron connection manager", () => {
     const storage = secureStorage(false);
     const statusRequests: Array<{ authorization: string | null; aborted: boolean }> = [];
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
       if (new URL(String(input)).pathname === "/__orkestrator/events") {
         return new Promise<Response>((_resolve, reject) =>
           init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
@@ -214,10 +228,12 @@ describe("Electron connection manager", () => {
           }),
         );
       }
+      // The hello is the authenticated check, on connect and on each probe.
       statusRequests.push({
         authorization: new Headers(init?.headers).get("authorization"),
         aborted: init?.signal?.aborted ?? false,
       });
+      if (isHelloRequest(input)) return helloResponse(input);
       return new Response(JSON.stringify({ ok: true }));
     }) as unknown as typeof fetch;
     const manager = new ConnectionManager({
@@ -372,7 +388,7 @@ describe("Electron connection manager", () => {
     const local = localBackendHarness();
     const remoteRequests: Array<{ url: string; method: string; authorization: string | null }> = [];
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+      if (isHelloRequest(input)) return helloResponse(input);
       const url = String(input);
       remoteRequests.push({
         url,
@@ -497,7 +513,7 @@ describe("Electron connection manager", () => {
   test("requires HTTPS and keeps session-only tokens available until restart", async () => {
     const local = localBackendHarness();
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+      if (isHelloRequest(input)) return helloResponse(input);
       if (new URL(String(input)).pathname === "/__orkestrator/events") {
         return new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
@@ -954,7 +970,7 @@ describe("Electron connection manager", () => {
     });
     const eventSignals: AbortSignal[] = [];
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+      if (isHelloRequest(input)) return helloResponse(input);
       if (new URL(String(input)).pathname === "/__orkestrator/events") {
         if (init?.signal) eventSignals.push(init.signal);
         return new Promise<Response>((_resolve, reject) => {
@@ -1013,7 +1029,7 @@ describe("Electron connection manager", () => {
   test("does not persist credentials with Linux plaintext fallback storage", async () => {
     const local = localBackendHarness();
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+      if (isHelloRequest(input)) return helloResponse(input);
       if (new URL(String(input)).pathname === "/__orkestrator/events") {
         return new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
@@ -1163,7 +1179,7 @@ describe("Electron connection manager", () => {
     });
     let resolveRotation: ((response: Response) => void) | undefined;
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+      if (isHelloRequest(input)) return helloResponse(input);
       const url = String(input);
       if (new URL(url).pathname === "/__orkestrator/events") {
         return new Promise<Response>((_resolve, reject) =>
@@ -1214,7 +1230,6 @@ describe("Electron connection manager", () => {
     let resolveFirst: ((response: Response) => void) | undefined;
     let resolveSecond: ((response: Response) => void) | undefined;
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
       const url = new URL(String(input));
       if (url.pathname === "/__orkestrator/events") {
         return new Promise<Response>((_resolve, reject) =>
@@ -1223,6 +1238,8 @@ describe("Electron connection manager", () => {
           }),
         );
       }
+      if (!isHelloRequest(input)) return new Response(JSON.stringify({ ok: true }));
+      // Each connection check (the hello) is held until the test releases it.
       statusRequests.push(url.origin);
       return new Promise<Response>((resolve) => {
         if (url.hostname === "a.example") resolveFirst = resolve;
@@ -1240,7 +1257,7 @@ describe("Electron connection manager", () => {
       address: "https://a.example",
       token: "gateway-token-server-a",
     });
-    while (!resolveFirst) await Promise.resolve();
+    while (!resolveFirst) await new Promise((resolve) => setTimeout(resolve, 1));
     const second = manager.connect({
       address: "https://b.example",
       token: "gateway-token-server-b",
@@ -1248,10 +1265,10 @@ describe("Electron connection manager", () => {
     await Promise.resolve();
     expect(statusRequests).toEqual(["https://a.example"]);
 
-    resolveFirst(new Response(JSON.stringify({ ok: true })));
-    while (!resolveSecond) await Promise.resolve();
+    resolveFirst(helloResponse("https://a.example"));
+    while (!resolveSecond) await new Promise((resolve) => setTimeout(resolve, 1));
     expect(statusRequests).toEqual(["https://a.example", "https://b.example"]);
-    resolveSecond(new Response(JSON.stringify({ ok: true })));
+    resolveSecond(helloResponse("https://b.example"));
     await Promise.all([first, second]);
 
     expect(
@@ -1270,7 +1287,7 @@ describe("Electron connection manager", () => {
   test("keeps a rotated remote token session-only when saving the credential fails", async () => {
     const local = localBackendHarness();
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+      if (isHelloRequest(input)) return helloResponse(input);
       const url = String(input);
       if (new URL(url).pathname === "/__orkestrator/events") {
         return new Promise<Response>((_resolve, reject) =>
@@ -1314,7 +1331,7 @@ describe("Electron connection manager", () => {
     const local = localBackendHarness();
     const onEvent = mock((_event: string, _payload: unknown) => undefined);
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+      if (isHelloRequest(input)) return helloResponse(input);
       if (new URL(String(input)).pathname !== "/__orkestrator/events")
         return new Response(JSON.stringify({ ok: true }));
       const stream = new ReadableStream<Uint8Array>({
@@ -1357,7 +1374,7 @@ describe("Electron connection manager", () => {
     const local = localBackendHarness();
     const filters: Array<string | null> = [];
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+      if (isHelloRequest(input)) return helloResponse(input);
       const url = new URL(String(input));
       if (url.pathname !== "/__orkestrator/events") {
         return new Response(JSON.stringify({ ok: true }));
@@ -1429,7 +1446,7 @@ describe("Electron connection manager", () => {
     const cursors: Array<string | null> = [];
     let first!: ReadableStreamDefaultController<Uint8Array>;
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+      if (isHelloRequest(input)) return helloResponse(input);
       const url = new URL(String(input));
       if (url.pathname !== "/__orkestrator/events")
         return new Response(JSON.stringify({ ok: true }));
@@ -1510,7 +1527,7 @@ describe("Electron connection manager", () => {
     const local = localBackendHarness();
     const eventSignals: AbortSignal[] = [];
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+      if (isHelloRequest(input)) return helloResponse(input);
       const url = new URL(String(input));
       if (url.pathname === "/__orkestrator/events") {
         eventSignals.push(init?.signal as AbortSignal);
@@ -1581,7 +1598,7 @@ describe("Electron connection manager", () => {
     const eventSignals = new Map<string, AbortSignal>();
     const requests: Array<{ hostname: string; authorization: string | null }> = [];
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+      if (isHelloRequest(input)) return helloResponse(input);
       const url = new URL(String(input));
       const authorization = new Headers(init?.headers).get("authorization");
       if (url.pathname === "/__orkestrator/events") {
@@ -1659,7 +1676,6 @@ describe("Electron connection manager", () => {
     let resolveStatus: ((response: Response) => void) | undefined;
     const eventSignals: AbortSignal[] = [];
     globalThis.fetch = mock(async (input, init) => {
-      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
       const url = new URL(String(input));
       if (url.pathname === "/__orkestrator/events") {
         eventSignals.push(init?.signal as AbortSignal);
@@ -1669,9 +1685,13 @@ describe("Electron connection manager", () => {
           });
         });
       }
-      return new Promise<Response>((resolve) => {
-        resolveStatus = resolve;
-      });
+      // The connection check (the hello) is held until the window is released.
+      if (isHelloRequest(input)) {
+        return new Promise<Response>((resolve) => {
+          resolveStatus = resolve;
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }));
     }) as unknown as typeof fetch;
     const manager = new ConnectionManager({
       localBackend: local.backend,
@@ -1685,9 +1705,9 @@ describe("Electron connection manager", () => {
       { address: "https://desk.example", token },
       "closing-window",
     );
-    while (!resolveStatus) await Promise.resolve();
+    while (!resolveStatus) await new Promise((resolve) => setTimeout(resolve, 1));
     manager.release("closing-window");
-    resolveStatus(new Response(JSON.stringify({ ok: true })));
+    resolveStatus(helloResponse("https://desk.example"));
 
     await expect(connection).rejects.toThrow("window is no longer available");
     expect(() => manager.getList("closing-window")).toThrow("window is no longer available");
@@ -1740,7 +1760,7 @@ describe("Electron connection manager", () => {
       async () => new Response("not-json", { status: 200 }),
     ) as unknown as typeof fetch;
     await expect(manager.connect({ address: "https://example.com", token })).rejects.toThrow(
-      "HTTP 200",
+      "did not answer the hello handshake",
     );
     globalThis.fetch = mock(async () => {
       throw new TypeError("offline");

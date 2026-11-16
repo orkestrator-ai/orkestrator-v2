@@ -1,5 +1,6 @@
 import { connectCoordinatorNodeWakes } from "./coordinator-node-reconnect-wakes.js";
 import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
+import type { BackendStartupProgress } from "./backend-startup-progress.js";
 import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
@@ -53,7 +54,6 @@ import {
   coordinatorNodeContext,
   createNodeSshFactory,
   errorCode,
-  leafTakesCoordinatorNotices,
   NodeCoordination,
   NodeCoordinatorRemote,
   NodePortal,
@@ -63,10 +63,8 @@ import {
 } from "./nodes/index.js";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
-import { legacyAutoSwitchEvent } from "@orkestrator/protocol/agent-account-auto-switch";
 import { AGENT_ACCOUNT_PLATFORMS } from "@orkestrator/protocol/agent-accounts";
 import {
-  agentAccountAutoSwitchedEvent,
   agentAccountsChangedEvent,
   controlMcpStateChangedEvent,
   nativeAgentAsyncQuestionEvent,
@@ -99,10 +97,6 @@ import {
 import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
 import { CoordinatorUsageLimitNotices } from "./coordinator-usage-limit-notices.js";
 import { COORDINATOR_STATUS_COALESCE_MS } from "./coordinator-status-wakes.js";
-import {
-  bridgeRemoteAutoSwitchNotices,
-  mailAutoSwitchNotice,
-} from "./agent-accounts-auto-switch-notices.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { multiReviewNativeAddressFindingsOptions } from "./multi-review-native-address-findings.js";
 import { checkDockerAvailability } from "./commands-registry-docker.js";
@@ -128,6 +122,7 @@ import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
 import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { backendClaudeStateSignal, backendTmuxHookSignal } from "./claude-state-signal.js";
+import { backendClaudeStateSettler } from "./claude-terminal-settle.js";
 import { ContainerLifecycleReactor } from "./container-lifecycle-events.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
@@ -272,6 +267,7 @@ import {
   reconcileInterruptedEnvironmentLifecycleTasks,
 } from "./environment-lifecycle-tasks.js";
 import { recoverInterruptedEnvironmentMoves } from "./environment-move.js";
+import { sweepRemovedProjectContentAtStartup } from "./removed-project-content-sweep.js";
 import { createBackendChangeTracking } from "./change-tracking/index.js";
 import {
   cancelScheduledEnvironmentCleanup,
@@ -380,6 +376,8 @@ export class OrkestratorBackend {
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private readonly workflowResults: WorkflowResultService;
   private readonly agentToolsPort: number | undefined;
+  /** Reports startup phases (`backend-startup-progress.ts`); a no-op unless the caller passes one. */
+  private readonly startupProgress: BackendStartupProgress;
   /** Remote-initiated updates of this host; see host-maintenance.ts. */
   readonly hostMaintenance: HostMaintenanceService;
   /** Persists compatibility-path usage; see compatibility-path-usage.ts. */
@@ -489,6 +487,8 @@ export class OrkestratorBackend {
     credentialSources?: import("@orkestrator/protocol/agent-platforms").AgentPlatform[];
     /** Exact agent tools port (`--agent-tools-port`); a busy one fails startup. */
     agentToolsPort?: number;
+    /** Told as `init()` reaches each startup phase (see `backend-startup-progress.ts`). */
+    onStartupPhase?: BackendStartupProgress;
     /**
      * The event transport (the gateway's fan-out). Read at emit time; the
      * backend wraps it in its typed, checked `BackendEmit`.
@@ -583,6 +583,7 @@ export class OrkestratorBackend {
     compatibilityPathUsage.attach(this.compatibilityPathSink);
     this.workflowResults = new WorkflowResultService(options.dataDir);
     this.agentToolsPort = options.agentToolsPort;
+    this.startupProgress = options.onStartupPhase ?? (() => undefined);
     this.hostMaintenance = new HostMaintenanceService({
       dataDir: options.dataDir,
       updater: options.hostUpdater ?? "none",
@@ -727,7 +728,10 @@ export class OrkestratorBackend {
           : { dockerAvailability: { probe: () => checkDockerAvailability() } }),
         tmux: {
           localClaudeConfigDirectory: tmuxLocalClaudeConfigDirectory,
-          claudeStatePolls: { signal: backendClaudeStateSignal() },
+          claudeStatePolls: {
+            signal: backendClaudeStateSignal(),
+            settle: backendClaudeStateSettler(),
+          },
           hookSignal: backendTmuxHookSignal(),
         },
         // Read at call time: the keeper and the Codex refresher exist only
@@ -1001,17 +1005,6 @@ export class OrkestratorBackend {
     this.nodeCoordination.setCoordinatorNotices(this.coordinators.noticeRouter.fromLeaf);
     // Coordinators refused this node while it was down hear that it is back.
     connectCoordinatorNodeWakes(this.nodeCoordination, this.coordinators);
-    bridgeRemoteAutoSwitchNotices({
-      onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
-      nodeName: async (nodeId) =>
-        (await this.nodePortal.summaries([nodeId])).nodes[0]?.view.displayName ?? nodeId,
-      mail: (event, machineName) => mailAutoSwitchNotice(storage, event, machineName),
-      // The same answer the mail collector acts on (the node-mail client, plan item 1010).
-      sendsThroughOutbox: (nodeId) => {
-        const link = isBackendId(nodeId) ? this.nodes.link(nodeId) : null;
-        return link ? leafTakesCoordinatorNotices(link) : false;
-      },
-    });
     bridgeRemoteCoordinatorEvents({
       onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
       settleRemoteWorker: (nodeId, environmentId) =>
@@ -1068,9 +1061,6 @@ export class OrkestratorBackend {
       bridgeBusy: (environmentId, platform) =>
         this.nativeAgents.hasObservedLiveWork(environmentId, platform),
       notify: async ({ quietProjectId, ...notice }) => {
-        // An older command node hears through its event stream; a newer one
-        // ignores that and takes this machine's notice from its outbox.
-        emit(agentAccountAutoSwitchedEvent, legacyAutoSwitchEvent(notice));
         await this.coordinators.noticeRouter.deliverAutoSwitch(notice, "this machine", {
           coalesceMs: COORDINATOR_STATUS_COALESCE_MS,
           ...(quietProjectId ? { quietProjectId } : {}),
@@ -2133,7 +2123,9 @@ export class OrkestratorBackend {
   }
 
   async init(): Promise<void> {
+    this.startupProgress("storage");
     await this.context.storage.init();
+    this.startupProgress("services");
     // After `init`, which applies the upgrade from the single logging switch.
     this.startLogPolicy();
     try {
@@ -2222,6 +2214,7 @@ export class OrkestratorBackend {
     // this start), runs the writer-only startup work then instead of never,
     // with the won lease, and only once it settles do schedules fire and
     // container mutations get admitted. Either way the work runs once.
+    this.startupProgress("recovery");
     const writerStartup = registryWriterStartup({
       runWriterStartupWork: (writer) => this.runWriterStartupWork(writer),
       announceSchedulerStatus: () => this.context.storage.announceSchedulerStatus(),
@@ -2249,6 +2242,7 @@ export class OrkestratorBackend {
     this.removeContainerLifecycleListener = this.runtime.onContainerLifecycle(
       (containerId, action) => lifecycleReactor.handle(containerId, action),
     );
+    this.startupProgress("agent-tools");
     await this.agentTools.start(this.agentToolsPort);
     this.reserveOwnedPreviewPorts();
     // No renderer can be alive yet, so every persisted `frontend` activity
@@ -2369,6 +2363,7 @@ export class OrkestratorBackend {
         );
       },
     };
+    this.startupProgress("orphan-reaping");
     await this.reapPidServers({ storage: reaperStorage }).catch((error) => {
       log.warn("startup.step-failed", {
         step: "orphaned-local-servers",
@@ -2408,6 +2403,10 @@ export class OrkestratorBackend {
     // state and design canvases whose environment is gone. Background work: it never blocks the
     // gateway and never rejects.
     void runStartupEnvironmentCleanup(this.context);
+    this.startupProgress("durable-work");
+    // Rows that projects removed before removal deleted their content left
+    // behind (#2328); background, never rejects.
+    void sweepRemovedProjectContentAtStartup(this.context.storage);
     const reconcileTabTeardowns = this.commands.get("reconcile_tab_teardowns");
     if (reconcileTabTeardowns) {
       await Promise.resolve(reconcileTabTeardowns({}, this.context)).catch((error: unknown) => {
@@ -2480,6 +2479,7 @@ export class OrkestratorBackend {
         error: formatLogError(error),
       });
     });
+    this.startupProgress("agents");
     const reconcilePendingEnvironmentRenames = this.commands.get(
       "reconcile_pending_environment_renames",
     );
@@ -3065,7 +3065,6 @@ export class OrkestratorBackend {
       relayTarget: (nodeId) => this.nodePortal.relayTarget(nodeId),
       relayWorkspaceOpen: (workspaceId, nodeId) =>
         this.nodePortal.workspaceOpenFor(workspaceId, nodeId),
-      isRelayedNodeWatched: (nodeId) => this.nodePortal.events.isWatched(nodeId),
     };
   }
 

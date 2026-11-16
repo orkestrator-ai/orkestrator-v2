@@ -20,6 +20,7 @@ import {
 } from "./support/client-harness.js";
 
 import { runClient } from "../src/client/main.js";
+import { writeObservingRecord } from "../src/client/output.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -27,6 +28,20 @@ afterEach(async () => {
 });
 
 const OPERATION = "op-1790000000000-0a1b2c3d-000000000000000001";
+
+test("observing records use stderr in jsonl mode and stay silent in id mode", () => {
+  const jsonl = captureIo({});
+  writeObservingRecord(jsonl, "jsonl", "environment.start", OPERATION);
+  expect(jsonl.out).toEqual([]);
+  expect(jsonl.err).toEqual([
+    `${JSON.stringify({ type: "observing", action: "environment.start", operationId: OPERATION })}\n`,
+  ]);
+
+  const id = captureIo({});
+  writeObservingRecord(id, "id", "environment.start", OPERATION);
+  expect(id.out).toEqual([]);
+  expect(id.err).toEqual([]);
+});
 
 function receipt(overrides: Partial<PublicReceipt>): PublicReceipt {
   return {
@@ -568,6 +583,76 @@ describe("environment --wait through a lost submission response", () => {
     expect(submissions()).toBe(1);
   });
 
+  test("--wait says on stderr when it holds the receipt and starts observing", async () => {
+    const provisioning = startReceipt({ state: "running", stage: "setup", completedAt: undefined });
+    const box = await createSandbox({ virtualClock: true });
+    const gateway = await startFakeGateway((request) => {
+      const called = String(request.body.args.action);
+      if (called === "environment.start")
+        return envelope(publicSuccessEnvelope(called, { environmentId: "env" }, provisioning));
+      if (called === "run.get")
+        return envelope(publicSuccessEnvelope(called, null, startReceipt({})));
+      if (called === "environment.get")
+        return envelope(publicSuccessEnvelope(called, environmentSummary()));
+      return defaultResponder()(request);
+    });
+    cleanups.push(
+      () => box.cleanup(),
+      () => gateway.stop(),
+    );
+    const dataDir = await box.publishDescriptor(gateway);
+    await box.run(["connection", "add", "local", "--data-dir", dataDir, "--default", "--no-check"]);
+
+    const result = await box.run([...START, "--wait", "ready", "--timeout", "30s"]);
+    expect(result.code).toBe(0);
+    // stdout keeps exactly one envelope; the progress record is on stderr.
+    expect(result.out.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(result.out).receipt.state).toBe("succeeded");
+    expect(
+      result.err
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([{ type: "observing", action: "environment.start", operationId: OPERATION }]);
+
+    const id = await box.run([
+      "--output",
+      "id",
+      ...START.slice(1),
+      "--wait",
+      "ready",
+      "--timeout",
+      "30s",
+    ]);
+    expect(id.code).toBe(0);
+    expect(id.err).toBe("");
+
+    // Human output and a submission without --wait are unchanged.
+    const human = await box.run(["environment", "start", "env", "--wait", "ready"]);
+    expect(human.code).toBe(0);
+    expect(human.err).not.toContain("observing");
+    const unwaited = await box.run(["--json", "environment", "start", "env"]);
+    expect(unwaited.code).toBe(0);
+    expect(unwaited.err).toBe("");
+  });
+
+  test("a lost start response found by its key still says it is observing", async () => {
+    const provisioning = startReceipt({ state: "running", stage: "setup", completedAt: undefined });
+    const { box } = await lostEnvironmentMutation(
+      "environment.start",
+      [null, provisioning],
+      [provisioning, startReceipt({})],
+    );
+    const result = await box.run([...START, "--wait", "ready", "--timeout", "30s"]);
+    expect(result.code).toBe(0);
+    expect(
+      result.err
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([{ type: "observing", action: "environment.start", operationId: OPERATION }]);
+  });
+
   test("a recovered start that failed setup still reports the setup failure", async () => {
     const { box, submissions } = await lostEnvironmentMutation(
       "environment.start",
@@ -867,11 +952,12 @@ describe("transcript following", () => {
     expect(messages).toEqual(["a", "b", "c", "x", "y"]);
     expect(records.some((record) => record.type === "gap")).toBe(true);
     expect(records.at(-1)).toMatchObject({ ok: true, action: "session.transcript" });
-    // This backend does not advertise knownToken: it would refuse the input.
-    expect(sentTokens(gateway).every((token) => token === undefined)).toBe(true);
+    // A backend that answers a full page for a held token is still read correctly.
+    expect(sentTokens(gateway)[0]).toBeUndefined();
+    expect(sentTokens(gateway).slice(1)).toContain("t1");
   });
 
-  test("sends the held token where advertised and keeps the page on unchanged", async () => {
+  test("sends the held token and keeps the page on unchanged", async () => {
     const answers = [
       page(["a", "b"], "t1"),
       { sessionId: "ses_eA", status: "unchanged", token: "t1" },
@@ -879,8 +965,6 @@ describe("transcript following", () => {
       { sessionId: "ses_eA", status: "unchanged", token: "t2" },
     ];
     const { box, gateway } = await fixture([], {
-      capabilities: () =>
-        capabilities({ features: { ...capabilities().features, transcriptKnownToken: true } }),
       "session.transcript": (call) => answers[Math.min(call - 1, answers.length - 1)],
     });
     const result = await box.run([...FOLLOW, "2s"]);
@@ -890,97 +974,57 @@ describe("transcript following", () => {
     expect(tokens.length).toBeGreaterThanOrEqual(4);
     expect(tokens.slice(0, 4)).toEqual([undefined, "t1", "t1", "t2"]);
     expect(tokens.slice(4).every((token) => token === "t2")).toBe(true);
-    // Capabilities are read once for the whole follow, not per poll.
-    expect(
-      gateway.requests.filter((request) => request.body.args.action === "capabilities"),
-    ).toHaveLength(1);
   });
 
-  test.each([true, false])(
-    "--node follow uses the leaf's knownToken capability (%s), not the hub's",
-    async (leafSupportsToken) => {
-      const leaf = "bk_leaf";
-      const box = await createSandbox({ virtualClock: true });
-      cleanups.push(() => box.cleanup());
-      let polls = 0;
-      const gateway = await startFakeGateway((request) => {
-        const { action, node, input } = request.body.args;
-        if (action === "capabilities") {
-          const own = capabilities();
-          return envelope(
-            publicSuccessEnvelope("capabilities", {
-              ...own,
-              features: {
-                ...own.features,
-                nodeRouting: true,
-                // Deliberately disagree so using the hub's flag fails either case.
-                ...(node === leaf
-                  ? leafSupportsToken && { transcriptKnownToken: true }
-                  : { transcriptKnownToken: !leafSupportsToken }),
-              },
-            }),
-          );
-        }
-        if (action === "session.transcript" && node === leaf) {
-          polls += 1;
-          const token = polls < 3 ? "t1" : "t2";
-          const knownToken = (input as { knownToken?: string }).knownToken;
-          if (!leafSupportsToken && knownToken !== undefined) {
-            return envelope(
-              publicErrorEnvelope("session.transcript", {
-                code: "invalid-input",
-                message: "This leaf does not accept knownToken",
-              }),
-            );
-          }
-          return envelope({
-            ...publicSuccessEnvelope(
-              "session.transcript",
-              leafSupportsToken && knownToken === token
-                ? { sessionId: "ses_eA", status: "unchanged", token }
-                : page(polls < 3 ? ["a", "b"] : ["a", "b", "c"], token),
-            ),
-            node: { nodeId: leaf, name: "Studio" },
-          });
-        }
-        return defaultResponder()(request);
-      });
-      cleanups.push(() => gateway.stop());
-      const dataDir = await box.publishDescriptor(gateway);
-      const added = await box.run([
-        "connection",
-        "add",
-        "local",
-        "--data-dir",
-        dataDir,
-        "--default",
-        "--no-check",
-      ]);
-      expect(added.code).toBe(0);
-      gateway.requests.length = 0;
+  test("--node follow sends the held token to the leaf", async () => {
+    const leaf = "bk_leaf";
+    const box = await createSandbox({ virtualClock: true });
+    cleanups.push(() => box.cleanup());
+    let polls = 0;
+    const gateway = await startFakeGateway((request) => {
+      const { action, node, input } = request.body.args;
+      if (action === "session.transcript" && node === leaf) {
+        polls += 1;
+        const token = polls < 3 ? "t1" : "t2";
+        const knownToken = (input as { knownToken?: string }).knownToken;
+        return envelope({
+          ...publicSuccessEnvelope(
+            "session.transcript",
+            knownToken === token
+              ? { sessionId: "ses_eA", status: "unchanged", token }
+              : page(polls < 3 ? ["a", "b"] : ["a", "b", "c"], token),
+          ),
+          node: { nodeId: leaf, name: "Studio" },
+        });
+      }
+      return defaultResponder()(request);
+    });
+    cleanups.push(() => gateway.stop());
+    const dataDir = await box.publishDescriptor(gateway);
+    const added = await box.run([
+      "connection",
+      "add",
+      "local",
+      "--data-dir",
+      dataDir,
+      "--default",
+      "--no-check",
+    ]);
+    expect(added.code).toBe(0);
+    gateway.requests.length = 0;
 
-      const result = await box.run(["--node", leaf, ...FOLLOW, "2s"]);
-      expect(result.code).toBe(0);
-      expect(followed(result.out)).toEqual(["a", "b", "c"]);
-      expect(
-        gateway.requests
-          .filter((request) => request.body.args.action === "capabilities")
-          .map((request) => request.body.args.node),
-      ).toEqual([undefined, leaf]);
-      const transcriptRequests = gateway.requests.filter(
-        (request) => request.body.args.action === "session.transcript",
-      );
-      expect(transcriptRequests.length).toBeGreaterThanOrEqual(4);
-      expect(transcriptRequests.every((request) => request.body.args.node === leaf)).toBe(true);
-      const tokens = sentTokens(gateway);
-      expect(tokens.slice(0, 4)).toEqual(
-        leafSupportsToken ? [undefined, "t1", "t1", "t2"] : Array(4).fill(undefined),
-      );
-      expect(
-        tokens.slice(4).every((token) => token === (leafSupportsToken ? "t2" : undefined)),
-      ).toBe(true);
-    },
-  );
+    const result = await box.run(["--node", leaf, ...FOLLOW, "2s"]);
+    expect(result.code).toBe(0);
+    expect(followed(result.out)).toEqual(["a", "b", "c"]);
+    const transcriptRequests = gateway.requests.filter(
+      (request) => request.body.args.action === "session.transcript",
+    );
+    expect(transcriptRequests.length).toBeGreaterThanOrEqual(4);
+    expect(transcriptRequests.every((request) => request.body.args.node === leaf)).toBe(true);
+    const tokens = sentTokens(gateway);
+    expect(tokens.slice(0, 4)).toEqual([undefined, "t1", "t1", "t2"]);
+    expect(tokens.slice(4).every((token) => token === "t2")).toBe(true);
+  });
   /*
    * The trigger measurement for an event-stream follow (public-cli.md,
    * "Following without an event stream"). A scripted busy session: one 1 KiB

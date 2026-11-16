@@ -77,33 +77,6 @@ export class ClientSession {
     return this.options.node;
   }
 
-  private routingChecked: Promise<void> | null = null;
-
-  /**
-   * A backend that predates node routing ignores `request.node` and would
-   * run the action on itself, so the connected node must advertise it
-   * before anything is sent with a node.
-   */
-  private ensureNodeRouting(): Promise<void> {
-    this.routingChecked ??= (async () => {
-      const response = await this.call("capabilities", {}, undefined, false, undefined, false);
-      if (!response.ok) throw envelopeError(response);
-      if (!isPublicCapabilities(response.result)) {
-        throw new CliError("response-invalid", "The backend returned invalid capabilities");
-      }
-      if (response.result.features.nodeRouting !== true) {
-        throw new CliError(
-          "backend-incompatible",
-          "The connected backend cannot run actions on other nodes; upgrade it to use --node",
-        );
-      }
-    })().catch((error: unknown) => {
-      this.routingChecked = null;
-      throw error;
-    });
-    return this.routingChecked;
-  }
-
   capabilities(): Promise<PublicCapabilities> {
     this.capabilitiesPromise ??= this.loadCapabilities().catch((error: unknown) => {
       this.capabilitiesPromise = null;
@@ -258,13 +231,11 @@ export class ClientSession {
     request: { requestId: string; namespace: string } | undefined,
     mutation: boolean,
     timeoutMs?: number,
-    routed = true,
   ): Promise<PublicActionResponse> {
     const node =
-      routed && this.options.node && !PUBLIC_LOCAL_ONLY_ACTIONS.includes(action)
+      this.options.node && !PUBLIC_LOCAL_ONLY_ACTIONS.includes(action)
         ? this.options.node
         : undefined;
-    if (node) await this.ensureNodeRouting();
     const body: PublicActionRequest = {
       schemaVersion: PUBLIC_API_SCHEMA_VERSION,
       action,

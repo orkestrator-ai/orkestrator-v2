@@ -34,6 +34,11 @@ import {
 } from "@orkestrator/protocol/ticket-labels";
 import { KanbanBoardStore, normalizeKanbanTask } from "./storage-kanban-board.js";
 import { forgetSyncProject } from "./storage-kanban-sync.js";
+import {
+  KanbanRemovedProjectStore,
+  type LiveOwnerIds,
+  type RemovedProjectSweepResult,
+} from "./storage-kanban-removed-projects.js";
 
 export { normalizeKanbanTask } from "./storage-kanban-board.js";
 
@@ -126,6 +131,7 @@ export type KanbanDeliveryPolicyListener = (
 
 export class KanbanRepository {
   private deliveryPolicyListener?: KanbanDeliveryPolicyListener;
+  private readonly removedProjects: KanbanRemovedProjectStore;
   private readonly labelCatalogue: KanbanLabelCatalogueStore;
 
   constructor(
@@ -133,6 +139,7 @@ export class KanbanRepository {
     private readonly files: StorageFiles,
     private readonly board: KanbanBoardStore,
   ) {
+    this.removedProjects = new KanbanRemovedProjectStore(context, files, board);
     this.labelCatalogue = new KanbanLabelCatalogueStore(context, files, board.removal);
   }
 
@@ -690,7 +697,9 @@ export class KanbanRepository {
       // Also finishes what an earlier removal left journaled.
       return this.board.removal.replayImageDeletions(kept);
     });
-    const sidecarsLeft = await this.board.removal.removeDeliverySidecars(projectId);
+    const { failed: sidecarsLeft } = await this.board.removal.removeDeliverySidecars(
+      (owner) => owner === projectId,
+    );
     this.labelCatalogue.delete(projectId);
     const removeProjectRows = <T extends { projectId?: unknown }>(rows: T[]): number => {
       if (!Array.isArray(rows)) return 0;
@@ -722,6 +731,17 @@ export class KanbanRepository {
         `Could not delete ${imagesLeft} ticket image file(s) and ${sidecarsLeft} deleted-ticket record(s) of project ${projectId}; retry removing the project`,
       );
     }
+  }
+
+  /**
+   * Deletes the rows that projects removed before #2295 left behind,
+   * and the completion comment records of pipelines that are gone (#2328); see `sweepRemovedProjectRows`.
+   */
+  sweepRemovedProjectRows(
+    liveProjects: LiveOwnerIds,
+    livePipelines: LiveOwnerIds,
+  ): Promise<RemovedProjectSweepResult> {
+    return this.removedProjects.sweepRemovedProjectRows(liveProjects, livePipelines);
   }
 
   /**

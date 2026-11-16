@@ -13,8 +13,8 @@
  *    source lives in (`user` or `project`), and says when that configuration
  *    was read (Claude: the query start; Cursor/Pi: the generation build; Grok:
  *    the child's MCP listing). `absent`, `excluded` or a missing field is not
- *    evidence, so an older bridge — or a session whose policy excludes the
- *    file — simply stays where planning left it.
+ *    evidence, so a session whose policy excludes the file simply stays
+ *    where planning left it.
  * 2. That read happened at or after the moment the save began writing.
  * 3. The digest equals the digest of the bytes the save wrote, **or** it
  *    equals the digest of the file as it is now and the saved change is still
@@ -37,13 +37,6 @@
  * read during which the generation changed is not attributed to either one and
  * is retried. `applied` is stamped with the generation that proved it, and
  * says so when that is a newer run than the one apply planned against.
- *
- * A bridge that answers without the MCP configuration report is older than
- * it: it cannot prove an apply, and Cursor and Pi bridges that old do not
- * reload between turns either. The runtime says so (`restart-required`, or a
- * Claude `pending-next-turn` not confirmed until the bridge reports a query)
- * instead of waiting silently, and polling continues so a restarted bridge can
- * still prove it.
  *
  * Each pass also re-reads the source of every operation it polled and applies
  * the external-edit rule in `external-edits.ts`; `external-edit-watch.ts`
@@ -93,8 +86,6 @@ export type RuntimeEvidenceRead =
   | { state: "evidence"; evidence: RuntimeConfigEvidence }
   /** The bridge reports, but has nothing loaded yet; or the read failed. */
   | { state: "none" }
-  /** The bridge is older than the MCP configuration report. */
-  | { state: "unsupported" }
   /** No bridge is running; nothing was started to find out. */
   | { state: "not-running" };
 
@@ -230,19 +221,6 @@ export function appliedReason(provider: AgentPlatform): string {
 /** `applied` proven by a newer run than the one apply was planned against. */
 export const NEWER_RUN_REASON =
   "A newer run of this session, started after apply was planned, loaded the saved configuration.";
-
-/**
- * What a runtime is told when its bridge does not report which MCP
- * configuration it loaded. Every published bridge that loads from these files
- * reports it, so only an unpublished build lands here; it may not reload MCP
- * servers between turns, so a restart is the one step that loads the change.
- * The runtime is still polled, and a restarted bridge proves it.
- */
-export const UNREPORTED_BRIDGE_OUTCOME: { state: McpApplyState; reason: string } = {
-  state: "restart-required",
-  reason:
-    "This bridge does not report which MCP configuration it loaded. Stop and start the environment to load the change.",
-};
 
 /**
  * Stops waiting for `promise` after `ms`. Only for the reload mutations, whose
@@ -393,9 +371,7 @@ export class EvidenceScheduler {
     // A runtime replaced while its bridge was read cannot be told apart from
     // its replacement: such an answer is dropped and the runtime read again.
     let after: RuntimeGenerations | undefined;
-    if (
-      answers.some(({ answer }) => answer.state === "evidence" || answer.state === "unsupported")
-    ) {
+    if (answers.some(({ answer }) => answer.state === "evidence")) {
       after = await this.deps.generations().catch(() => undefined);
     }
     const currents = new Map<StoredOperation, Promise<CurrentSourceState | undefined>>();
@@ -414,7 +390,7 @@ export class EvidenceScheduler {
       else delete runtime.generation;
     };
     for (const { candidate, answer, generation } of answers) {
-      if (answer.state !== "evidence" && answer.state !== "unsupported") continue;
+      if (answer.state !== "evidence") continue;
       const { stored, record, runtime } = candidate;
       const agent = record.agent as AgentPlatform;
       if (!after) continue;
@@ -423,17 +399,6 @@ export class EvidenceScheduler {
         .catch(() => undefined);
       if (settled !== generation) {
         this.nextCheck.delete(candidate.key);
-        continue;
-      }
-      if (answer.state === "unsupported") {
-        const older = UNREPORTED_BRIDGE_OUTCOME;
-        if (stored.snapshot.apply.runtimes !== candidate.runtimes) continue;
-        if (!awaitsEvidenceIn(agent, runtime.state)) continue;
-        if (runtime.state === older.state && runtime.reason === older.reason) continue;
-        runtime.state = older.state;
-        runtime.reason = older.reason;
-        stamp(runtime, generation);
-        changed.add(stored);
         continue;
       }
       // Only Grok's bridge reports process-level loads, and only Grok's are.

@@ -13,19 +13,24 @@ const packageRoot = path.resolve(import.meta.dir, "..");
 const temporaryDirectories: string[] = [];
 const processes: Bun.Subprocess[] = [];
 
-// Hang watchdogs, not performance bounds. The test waits on two real signals
-// (the backend's readiness line, then its exit) and decides on those alone; a
-// starved host only delays them. Each deadline just turns a child that never
-// signals into a report of its stderr instead of an anonymous hang, so each
-// sits well above how long a one-core, six-burner host takes to boot it
-// (`mise run test:contention`, tens of seconds), and the test budget covers
-// both of them plus setup.
-const READY_TIMEOUT_MS = 90_000;
+// Hang watchdogs, not performance bounds. The test waits on real signals (the
+// backend's startup phase lines, its readiness line, then its exit) and
+// decides on those alone; a starved host only delays them. Startup fails only
+// when no new phase arrives for STARTUP_STALL_MS, so a slow boot that keeps
+// progressing passes and a stuck one fails naming the phase it stopped in
+// (flake 0080). The bound is per phase, well above what one phase
+// takes on a one-core, six-burner host (`mise run test:contention`). The test
+// budget is only a last resort for a boot that keeps progressing forever.
+const STARTUP_STALL_MS = 90_000;
 const EXIT_TIMEOUT_MS = 60_000;
+/** Recent stdout lines kept for a failure report: bounded in count and size. */
+const STDOUT_TAIL_LINES = 20;
+const STDOUT_TAIL_LINE_CHARS = 500;
 
-setDefaultTimeout(180_000);
+setDefaultTimeout(600_000);
 
-type ReadyMessage = { type?: string; authFile?: string };
+type StartupMessage = { type?: string; authFile?: string; phase?: string };
+type ReadyMessage = StartupMessage;
 
 /** Waits for exit, escalating to SIGKILL so a wedged child cannot hang the run. */
 async function stopPackagedBackend(child: Bun.Subprocess): Promise<number> {
@@ -40,7 +45,7 @@ async function stopPackagedBackend(child: Bun.Subprocess): Promise<number> {
 
 async function startPackagedBackend(
   environmentOverrides: Record<string, string> = {},
-): Promise<{ child: Bun.Subprocess; dataDir: string; ready: ReadyMessage }> {
+): Promise<{ child: Bun.Subprocess; dataDir: string; ready: ReadyMessage; phases: string[] }> {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-cli-test-"));
   temporaryDirectories.push(dataDir);
   const child = Bun.spawn(
@@ -68,8 +73,23 @@ async function startPackagedBackend(
 
   // Killing the child is what unblocks the loop. A backend that starts and then
   // stalls without writing or exiting leaves `reader.read()` pending forever, so
-  // a deadline re-checked between reads would never be evaluated again.
-  const expiry = setTimeout(() => child.kill("SIGTERM"), READY_TIMEOUT_MS);
+  // a deadline re-checked between reads would never be evaluated again. Each
+  // new phase re-arms the watchdog; nothing else does.
+  const started = Date.now();
+  let stalled = false;
+  let lastPhase = "none (no startup line yet)";
+  let lastPhaseAt = started;
+  const phases: string[] = [];
+  const stdoutTail: string[] = [];
+  let expiry: ReturnType<typeof setTimeout> | undefined;
+  const armWatchdog = () => {
+    clearTimeout(expiry);
+    expiry = setTimeout(() => {
+      stalled = true;
+      child.kill("SIGTERM");
+    }, STARTUP_STALL_MS);
+  };
+  armWatchdog();
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
   let pending = "";
@@ -82,11 +102,24 @@ async function startPackagedBackend(
       const lines = pending.split("\n");
       pending = lines.pop() ?? "";
       for (const line of lines) {
+        stdoutTail.push(line.slice(0, STDOUT_TAIL_LINE_CHARS));
+        if (stdoutTail.length > STDOUT_TAIL_LINES) stdoutTail.shift();
+        let message: StartupMessage;
         try {
-          const message = JSON.parse(line) as ReadyMessage;
-          if (message.type === "orkestrator-backend-ready") ready = message;
+          message = JSON.parse(line) as StartupMessage;
         } catch {
           // Human-readable startup logs precede the readiness contract.
+          continue;
+        }
+        if (message.type === "orkestrator-backend-ready") ready = message;
+        else if (
+          message.type === "orkestrator-backend-startup" &&
+          typeof message.phase === "string"
+        ) {
+          lastPhaseAt = Date.now();
+          lastPhase = message.phase;
+          phases.push(`${message.phase}@${lastPhaseAt - started}ms`);
+          armWatchdog();
         }
       }
     }
@@ -97,11 +130,19 @@ async function startPackagedBackend(
 
   if (!ready) {
     await stopPackagedBackend(child);
+    const reason = stalled
+      ? `no new startup phase for ${STARTUP_STALL_MS}ms after "${lastPhase}"`
+      : `stdout closed after "${lastPhase}" (${Date.now() - lastPhaseAt}ms later)`;
     throw new Error(
-      `Packaged backend did not become ready: ${await new Response(child.stderr).text()}`,
+      [
+        `Packaged backend did not become ready: ${reason}`,
+        `phases: ${phases.join(", ") || "none"}`,
+        `last stdout lines:\n${stdoutTail.join("\n")}`,
+        `stderr:\n${await new Response(child.stderr).text()}`,
+      ].join("\n"),
     );
   }
-  return { child, dataDir, ready };
+  return { child, dataDir, ready, phases };
 }
 
 afterAll(async () => {
@@ -117,8 +158,26 @@ describe("orkestrator CLI package", () => {
     // consults the packaged resources root only outside development, and the package
     // has no `bridges/` directory to fall back to, so development is the boot that
     // can break. (Under `bun test` the default case inherits NODE_ENV=test anyway.)
-    const { child, dataDir, ready } = await startPackagedBackend({ NODE_ENV: "development" });
+    const { child, dataDir, ready, phases } = await startPackagedBackend({
+      NODE_ENV: "development",
+    });
     expect(ready.authFile).toBe(path.join(dataDir, "gateway-auth.json"));
+    // Every phase was reported, in order, before the ready line.
+    expect(phases.map((phase) => phase.split("@")[0])).toEqual([
+      "process",
+      "toolchains",
+      "host-environment",
+      "storage",
+      "services",
+      "recovery",
+      "agent-tools",
+      "orphan-reaping",
+      "durable-work",
+      "agents",
+      "gateway",
+      "preview-publication",
+      "instance-descriptor",
+    ]);
     await expect(stopPackagedBackend(child)).resolves.toBe(0);
   });
 });

@@ -74,7 +74,7 @@ describe("startDomainAdapterUsageUpload", () => {
     expect(timer.pending.size).toBe(0);
   });
 
-  test("puts counts back and backs off on failure, and stops for an older backend", async () => {
+  test("puts counts back and backs off on failure, an unknown command included", async () => {
     const ring = new DomainAdapterUsageRing();
     const timer = fakeTimer();
     const failures = [
@@ -93,9 +93,9 @@ describe("startDomainAdapterUsageUpload", () => {
     expect([...timer.pending.values()][0]!.delayMs).toBe(1_500);
     await timer.fire();
     expect(send).toHaveBeenCalledTimes(2);
-    ring.record("node-mail", 0);
-    expect(timer.pending.size).toBe(0);
-    expect(ring.takeUnsent()).toEqual([{ domain: "node-mail", version: 0, count: 2 }]);
+    // Still retrying, at the maximum interval.
+    expect([...timer.pending.values()][0]!.delayMs).toBe(1_500);
+    expect(ring.takeUnsent()).toEqual([{ domain: "node-mail", version: 0, count: 1 }]);
   });
 
   test("stopping clears the timer", () => {

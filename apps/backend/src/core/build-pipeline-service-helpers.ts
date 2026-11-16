@@ -479,7 +479,7 @@ export function executionModeOverrideForPhase(
 
 /**
  * @param options.addressFindingsResult The Address session submits a typed fix result
- *   (`addressReportKind`); an older Address session ends with prose instead.
+ *   (`addressReportKind`); an older Address session has no result slot.
  */
 export function resumePromptFor(
   phase: ResumableBuildPhase,

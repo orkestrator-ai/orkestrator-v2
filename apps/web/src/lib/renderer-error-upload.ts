@@ -1,11 +1,9 @@
 import {
-  RECORD_RENDERER_ERRORS_COMMAND,
   parseRendererErrorEntry,
   RENDERER_ERROR_RING_SIZE,
   type RecordRendererErrorsResult,
   type RendererErrorEntry,
 } from "@orkestrator/protocol/renderer-errors";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { RendererErrorRing } from "./renderer-error-ring";
 
 /** How often new counts go to the backend, and the longest a failing backend waits. */
@@ -32,8 +30,8 @@ const browserTimer: UploadTimer = {
  * by ten seconds, except a best-effort pagehide flush. Pending metadata is
  * journaled in per-window session storage until acknowledged (an ambiguous
  * delivery may be counted again after reload). A failed send puts
- * the counts back and waits longer each time, up to five minutes; a backend
- * that predates the command stops the upload for this load. A desktop
+ * the counts back and waits longer each time, up to five minutes, whatever the
+ * failure. A desktop
  * window's own renderer and a browser tab start this (`renderer-diagnostics.ts`).
  */
 export function startRendererErrorUpload({
@@ -102,11 +100,8 @@ export function startRendererErrorUpload({
       try {
         await send(batch);
         delay = intervalMs;
-      } catch (error) {
+      } catch {
         ring.restore(batch);
-        if (incompatibility(error, RECORD_RENDERER_ERRORS_COMMAND)?.code === "unknown-command") {
-          stopped = true;
-        }
         delay = Math.min(delay * 2, maxIntervalMs);
       }
     }

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+/** Also matches the `__Host-` name the gateway issues over HTTPS. */
 const GATEWAY_COOKIE = "orkestrator_gateway_auth";
 export const MAX_SANITIZABLE_FILE_BYTES = 64 * 1024 * 1024;
 export const MAX_ARTIFACT_TREE_BYTES = 256 * 1024 * 1024;
@@ -33,7 +34,10 @@ function redactText(value: string, secrets: readonly string[]): string {
     "$1[REDACTED]",
   );
   redacted = redacted.replace(
-    new RegExp(`("name"\\s*:\\s*"${GATEWAY_COOKIE}"[^}]*?"value"\\s*:\\s*")[^"]*`, "gi"),
+    new RegExp(
+      `("name"\\s*:\\s*"(?:__Host-)?${GATEWAY_COOKIE}"[^}]*?"value"\\s*:\\s*")[^"]*`,
+      "gi",
+    ),
     "$1[REDACTED]",
   );
   return redacted;

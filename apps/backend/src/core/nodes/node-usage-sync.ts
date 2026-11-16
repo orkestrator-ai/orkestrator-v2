@@ -9,11 +9,7 @@ import {
   type SharedUsageReading,
   type UsageIdentity,
 } from "@orkestrator/protocol/agent-account-shared-usage";
-import {
-  accountsClient,
-  collectSharedUsageReadingsCommand,
-} from "@orkestrator/protocol/contract/domains/accounts";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { accountsClient } from "@orkestrator/protocol/contract/domains/accounts";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 import { linkDomainApi, type EnvelopeLink } from "./node-domain-clients.js";
@@ -67,8 +63,8 @@ export interface NodeUsageSyncDeps {
 export interface NodeUsageSyncPass {
   /** Readings newly kept centrally. */
   stored: number;
-  /** Per node: readings sent, or why it took no part. */
-  nodes: Array<{ nodeId: string; sent: number; state: "synced" | "unsupported" | "failed" }>;
+  /** Per node: readings sent, or that it failed. */
+  nodes: Array<{ nodeId: string; sent: number; state: "synced" | "failed" }>;
 }
 
 /** A node's answer to a collect, once parsed. */
@@ -152,10 +148,7 @@ export class NodeUsageSync {
     return run;
   }
 
-  private async collect(
-    controllerId: string,
-    nodeId: string,
-  ): Promise<NodeHoldings | "unsupported" | "failed"> {
+  private async collect(controllerId: string, nodeId: string): Promise<NodeHoldings | "failed"> {
     const link = this.deps.link(nodeId);
     if (!link?.connected) return "failed";
     let answer: { identities?: readonly unknown[]; readings?: readonly unknown[] };
@@ -164,8 +157,6 @@ export class NodeUsageSync {
         controllerId,
       });
     } catch (error) {
-      // An older node lacks the command: it simply takes no part.
-      if (incompatibility(error, collectSharedUsageReadingsCommand.name)) return "unsupported";
       log.warn("usage-sync.failed", { error: formatLogError(error, { message: false }) });
       return "failed";
     }

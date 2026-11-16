@@ -248,6 +248,7 @@ export function registerTicketSyncCommands(register: CommandRegistrar): void {
       controllerId,
       nonBlank(args.epoch, "epoch"),
       sequence(args.upTo, "upTo"),
+      idList(args.removedProjects, "removedProjects", TICKET_SYNC_LIMITS.maxCollectItems),
     );
   });
 

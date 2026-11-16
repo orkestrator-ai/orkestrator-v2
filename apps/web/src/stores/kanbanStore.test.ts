@@ -53,6 +53,8 @@ function task(overrides: Partial<KanbanTask> = {}): KanbanTask {
     title: "Task",
     description: "",
     acceptanceCriteria: "",
+    kind: "feature",
+    sections: {},
     status: "in-progress",
     comments: [],
     images: [],

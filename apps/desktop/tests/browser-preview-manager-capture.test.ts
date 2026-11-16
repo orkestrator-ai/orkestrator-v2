@@ -73,7 +73,7 @@ describe("BrowserPreviewManager trusted capture", () => {
     expect(JSON.stringify(capture)).not.toContain("Ignore the user");
     expect(JSON.stringify(capture)).not.toContain("synthetic-token-value");
     expect(capture.page).toEqual({
-      service: { kind: "port", port: 5173 },
+      service: { kind: "service", serviceId: "service-web" },
       route: "/settings?tab=profile",
       displayUrl: "http://localhost:5173/settings?tab=profile",
       title: "Settings",
@@ -572,18 +572,15 @@ describe("BrowserPreviewManager trusted capture", () => {
     );
   });
 
-  test("derives gateway and service page identity from the actual view URL", async () => {
+  test("derives service page identity from the actual view URL", async () => {
     const { browserPreviewPageIdentity } = await import("../electron/browser-preview-capture");
     expect(
-      browserPreviewPageIdentity(
-        "https://gateway.example.invalid/__orkestrator/browser/loopback/3000/app/items?id=7&session=synthetic#/tab?code=abc",
-        "Items",
-      ).page,
+      browserPreviewPageIdentity("http://127.0.0.1:49152/unmapped", "Gone", () => null).page,
     ).toEqual({
-      service: { kind: "port", port: 3000 },
-      route: "/app/items?id=7#/tab",
-      displayUrl: "http://localhost:3000/app/items?id=7#/tab",
-      title: "Items",
+      service: { kind: "unknown" },
+      route: "/",
+      displayUrl: "",
+      title: "Gone",
       requiresNavigation: true,
     });
     expect(

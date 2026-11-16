@@ -715,7 +715,11 @@ export function usageLimitResendPrompt(): string {
  */
 export type UsageLimitStopVerdict = "stop" | "wait" | "resend";
 
-/** Sent by a leaf to the command node's backend when its active account moved by itself. */
+/**
+ * The name of the event a leaf once sent its command node when its active
+ * account moved by itself. Nothing emits it now: the leaf's notice goes through
+ * its outbox. The name stays for the registered `accounts` event.
+ */
 export const AGENT_ACCOUNT_AUTO_SWITCHED_EVENT = "node-agent-account-auto-switched";
 
 export interface AgentAccountAutoSwitchedEvent {
@@ -724,13 +728,6 @@ export interface AgentAccountAutoSwitchedEvent {
   to: string;
   reason: AutoSwitchReason;
   at: string;
-}
-
-/** Older event-stream consumers predate five-hour reasons; outbox/state keep the detail. */
-export function legacyAutoSwitchEvent(
-  notice: AgentAccountAutoSwitchedEvent,
-): AgentAccountAutoSwitchedEvent {
-  return notice.reason === "five-hour" ? { ...notice, reason: "limit" } : notice;
 }
 
 export function isAgentAccountAutoSwitchedEvent(

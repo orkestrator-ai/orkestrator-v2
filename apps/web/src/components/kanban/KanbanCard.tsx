@@ -12,7 +12,6 @@ import {
   SquareArrowOutUpRight,
 } from "lucide-react";
 import { acceptanceCriteriaTally } from "@orkestrator/protocol/ticket-sections";
-import { ticketContentOf } from "@/components/tickets/ticket-content";
 import type { KanbanStatus, KanbanTask } from "@/stores/kanbanStore";
 import {
   isActiveBuildPhase,
@@ -224,7 +223,7 @@ export function KanbanCard({
   const isActivelyBuilding = buildPhase ? isActiveBuildPhase(buildPhase) : false;
   const commentCount = task.comments.length;
   const labels = task.labels ?? [];
-  const { sections } = ticketContentOf(task);
+  const { sections } = task;
   // The first prose section, not the description mirror, which for a
   // structured ticket starts with section headings.
   const blurb = sections.summary ?? sections.problem ?? sections.context ?? "";

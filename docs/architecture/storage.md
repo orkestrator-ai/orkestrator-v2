@@ -65,7 +65,7 @@ the change journal.
 | `ReviewsRepository` | `storage-reviews.ts` | Looped and Multi Review workflows |
 | `NativeAgentSessionsRepository` | `storage-native.ts` | Native agent sessions: records and their lease, owners, controls and resume identity, the interaction journal, display tails, turn outcomes and interrupts |
 | `NativeAgentDeliveries` | `storage-native-deliveries.ts` | The dispatch and steer journals on a session record, and a queued steer's reservation and settlement in the prompt queue |
-| `PromptQueueStore` | `storage-prompt-queue-store.ts` | The prompt-queue lease, row reads and row writes, and recovery of claims older backends left |
+| `PromptQueueStore` | `storage-prompt-queue-store.ts` | The prompt-queue lease, row reads and row writes, and the restore of claims older backends left on disk |
 | `PromptsRepository` | `storage-prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
 | `BuildPipelinesRepository` | `storage-build-pipelines.ts` | Build pipelines and their transcripts |
 | `DraftsRepository` | `storage-drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
@@ -128,8 +128,13 @@ journal, both in `storage-kanban-project-removal.ts`; what that means for sync
 is in [tickets.md](tickets.md#sync-across-machines)), deleting a pipeline
 deletes its Linear and GitHub completion comment records before its row
 (`deleteCompletionCommentsForPipelines`, which project removal also calls for
-any pipeline still listed for the project), session removal deletes the
-session buffer, public
+any pipeline still listed for the project), the startup removed-project sweep
+deletes the rows that projects removed before that change left behind, and
+the completion comment records of pipelines that are gone, deciding each one
+from a strict read of the projects and pipelines stores
+(`ProjectsRepository.sweepRemovedProjectContent`, `sweepRemovedProjectRows` in
+`storage-kanban-removed-projects.ts`; from to-do 8111, retired 2026-11-16),
+session removal deletes the session buffer, public
 operations write projects and environments under those stores' leases
 (`this.repos.projects.enqueueEnvironmentMutation`). A lease
 wrapper (`enqueueEnvironmentMutation`, `enqueueConfigMutation`, …) lives in
@@ -320,7 +325,7 @@ from that.
   is taken before it, never under it. Inside it a mutation is one
   `updateSensitiveStoreRow` that decodes and writes only its queue, so a queue
   holding attachments (up to 32 MiB) costs only its own mutations. A row gets the
-  claim recovery and validation a load applies, and an unreadable or invalid row
+  legacy-claim restore and validation a load applies, and an unreadable or invalid row
   reads as absent, so that queue's next write replaces it; another queue's row is
   never read or rewritten, so a record this build cannot read survives. Only
   what walks the store still decodes every row: the listings behind the drain
@@ -915,15 +920,18 @@ that default or normalize values current writers may still omit (environment
 setup phase, agent settings, mail defaults) stay where they are. Only shapes
 no current writer can produce belong in an upgrade migration.
 
-One upgrade cannot run once: a backend up to v2.29.0-beta can write a
-prompt-queue claim (`outstandingClaim`), and one that opened the database before
-version 5 keeps writing until it stops, because the version is checked only at
-open. So `restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
-read of a prompt queue, one row or the whole list: live leases retain exclusion
-and survive queue writes until settlement or expiry. Expired or malformed
-leases restore their message to the head, and the next write of that queue
-persists that; until then every read recovers it again. Malformed message ids
-receive a stable recovery id.
+One upgrade runs on every read instead of once: backends up to v2.29.0-beta
+could write a prompt-queue claim (`outstandingClaim`), an exclusive lease on the
+queue's head. No current writer produces one, and since 2026-11-16 nothing reads
+a claim as a lease (the user's legacy-retirement decision of 2026-11-14 took
+every claim-writing backend out of use), but a claim may still be stored. So
+`restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
+read of a prompt queue, one row or the whole list, and returns every stored
+claim's message to the head, replacing a queued copy of its id, whatever its
+lease says; a claim with no message record is dropped. The next write of that
+queue persists the normalized shape; until then every read restores it again.
+Malformed message ids receive a stable recovery id. It stays a load pass rather
+than a numbered migration, so it needs no schema bump.
 
 Version 4 (`change-tracking/ledger-schema.ts`) adds the change-tracking
 ledger: the first engine with its own indexed tables (worktrees, evidence,
@@ -1021,6 +1029,15 @@ whose records cannot be keyed, is left as it was, and the reader still refuses
 admissions on it. Retirement still deletes a namespace whole under the same
 lock; `storage-writer-guards.test.ts` allows that deletion beside the leased
 row writes and nothing else.
+
+Version 10 (`derive-kanban-ticket-sections`, `storage-record-upgrades.ts`)
+gives every Kanban row written before ticket sections (v2.21.0 to v2.34.1) its
+kind and sections, derived from its text exactly as a read used to derive them
+on every load; the text is kept as written and a legacy `- [x]` becomes a
+manual pass dated at the ticket's creation. A row whose text fields are not
+strings is left verbatim. Reads keep only the `sectionsBasis` check
+(`normalizeKanbanTask`): when a writer changes a text mirror without the
+sections, they are rebuilt from the text ([tickets.md](tickets.md#mirrors-and-migration)).
 
 Every startup also extracts identities from stray `looped-reviews.json` files
 and their retained `legacy-json/` copies, including backups and interrupted

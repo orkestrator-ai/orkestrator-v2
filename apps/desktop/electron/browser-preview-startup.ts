@@ -8,14 +8,10 @@ import {
   BrowserPreviewManager,
   type BrowserPreviewManagerOptions,
 } from "./browser-preview-manager.js";
-import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.js";
 
-const BROWSER_PREVIEW_PARTITION = "persist:orkestrator-browser-previews";
 const CLIPBOARD_WRITE_PERMISSION = "clipboard-sanitized-write";
 
 export interface InitializeBrowserPreviewsOptions {
-  fromPartition: (partition: string) => Session;
-  partition?: string;
   WebContentsViewCtor: BrowserPreviewManagerOptions["WebContentsViewCtor"];
   menu: BrowserPreviewManagerOptions["menu"];
   getWindow: () => BrowserWindow | null;
@@ -25,23 +21,15 @@ export interface InitializeBrowserPreviewsOptions {
   writeClipboardText: (text: string) => void;
   focusAddressBar: (tabId: string) => void;
   requestPreviewShortcut: (tabId: string, shortcut: AppShortcutId) => void;
-  getAuthorization: (url: string) => string | null;
   transport?: BrowserPreviewManagerOptions["transport"];
   openServiceExternally?: BrowserPreviewManagerOptions["openServiceExternally"];
   captureStore?: BrowserPreviewManagerOptions["captureStore"];
   emitCaptureEvent?: BrowserPreviewManagerOptions["emitCaptureEvent"];
   nativeImage?: BrowserPreviewManagerOptions["nativeImage"];
-  resolveAddress?: BrowserPreviewManagerOptions["resolveAddress"];
-  /**
-   * The `Origin` the views' authorized gateway requests present (see
-   * `installRemoteGatewayRequestAuth`); the desktop's default when absent.
-   */
-  requestOrigin?: (url: string) => string | null | undefined;
 }
 
 export interface BrowserPreviewRuntime {
   manager: BrowserPreviewManager;
-  browserSession: Session;
 }
 
 /**
@@ -88,9 +76,12 @@ export function createBrowserPreviewAddressFocusHandler({
   };
 }
 
+/**
+ * A window runtime's preview manager. Every view is a service preview on its
+ * service's own partition (`configurePreviewServiceSession`); no view loads
+ * the gateway or uses a shared partition.
+ */
 export function initializeBrowserPreviews({
-  fromPartition,
-  partition = BROWSER_PREVIEW_PARTITION,
   WebContentsViewCtor,
   menu,
   getWindow,
@@ -100,19 +91,14 @@ export function initializeBrowserPreviews({
   writeClipboardText,
   focusAddressBar,
   requestPreviewShortcut,
-  getAuthorization,
   transport,
   openServiceExternally,
   captureStore,
   emitCaptureEvent,
   nativeImage,
-  resolveAddress,
-  requestOrigin,
 }: InitializeBrowserPreviewsOptions): BrowserPreviewRuntime {
-  const browserSession = fromPartition(partition);
   const manager = new BrowserPreviewManager({
     WebContentsViewCtor,
-    browserSession,
     menu,
     getWindow,
     emitState,
@@ -126,25 +112,8 @@ export function initializeBrowserPreviews({
     ...(captureStore ? { captureStore } : {}),
     ...(emitCaptureEvent ? { emitCaptureEvent } : {}),
     ...(nativeImage ? { nativeImage } : {}),
-    ...(resolveAddress ? { resolveAddress } : {}),
   });
-  browserSession.setPermissionCheckHandler(() => false);
-  browserSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
-    callback(
-      permission === CLIPBOARD_WRITE_PERMISSION &&
-        details.isMainFrame &&
-        manager.consumeClipboardWriteUserActivation(webContents, details.requestingUrl),
-    );
-  });
-  installRemoteGatewayRequestAuth(browserSession.webRequest, getAuthorization, {
-    browserPreviewOnly: true,
-    previewViewUrl: (webContentsId) =>
-      webContentsId === undefined ? undefined : manager.requestedUrlForWebContents(webContentsId),
-    previewViewEnvironment: (webContentsId) =>
-      webContentsId === undefined ? null : manager.environmentForWebContents(webContentsId),
-    ...(requestOrigin ? { requestOrigin } : {}),
-  });
-  return { manager, browserSession };
+  return { manager };
 }
 
 export interface BrowserPreviewWindowCleanupOptions {

@@ -6,7 +6,6 @@ import { commandBackendClient, type BackendClient } from "@/lib/backend/client";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import { claudeTmux } from "@/lib/node-scope/domains/claude-tmux";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import type { TmuxAgentObservation } from "@orkestrator/protocol/tmux-observation";
 
@@ -416,25 +415,15 @@ export function createClaudeTmuxClient(client: BackendClient, events: TmuxEventS
 
   /**
    * Renews the terminal's lease. `lapsed`: the backend no longer holds it, so
-   * the caller attaches a new one. `unsupported`: a backend that predates
-   * leases, which never detaches on its own, so the caller stops renewing.
+   * the caller attaches a new one.
    */
   async function renewInteractiveTerminal(
     terminalSessionId: string,
   ): Promise<InteractiveTerminalRenewal> {
-    try {
-      const { renewed } = await tmux().claude_tmux_renew_interactive_terminal({
-        terminalSessionId,
-      });
-      return renewed ? "renewed" : "lapsed";
-    } catch (error) {
-      if (
-        incompatibility(error, "claude_tmux_renew_interactive_terminal")?.code === "unknown-command"
-      ) {
-        return "unsupported";
-      }
-      throw error;
-    }
+    const { renewed } = await tmux().claude_tmux_renew_interactive_terminal({
+      terminalSessionId,
+    });
+    return renewed ? "renewed" : "lapsed";
   }
 
   /**
@@ -547,7 +536,7 @@ export function createClaudeTmuxClient(client: BackendClient, events: TmuxEventS
 export type ClaudeTmuxClient = ReturnType<typeof createClaudeTmuxClient>;
 
 /** What a lease renewal found (`renewInteractiveTerminal`). */
-export type InteractiveTerminalRenewal = "renewed" | "lapsed" | "unsupported";
+export type InteractiveTerminalRenewal = "renewed" | "lapsed";
 
 // ── Event subscription ───────────────────────────────────────────────────────
 

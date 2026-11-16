@@ -2,7 +2,6 @@ import {
   AGENT_MAIL_MAX_BODY_BYTES,
   type AgentMailAttachment,
 } from "@orkestrator/protocol/agent-mail";
-import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
 import { sendCoordinatorCommandNodeMailCommand } from "@orkestrator/protocol/contract/domains/node-mail";
 import {
   COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
@@ -14,7 +13,6 @@ import type { CommandContext } from "./commands-context.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import type { CoordinatorNodeTarget } from "./commands-registry-coordinator-nodes.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { coordinatorCaller } from "./coordinator-action-scope.js";
 import { attachmentReferences, readCallerAttachments } from "./coordinator-mail-attachments.js";
 import type { MailAttachmentBatch } from "./mail-attachments.js";
@@ -44,16 +42,6 @@ function nonBlank(value: unknown, name: string): string {
   return value;
 }
 
-/**
- * Counted: a pre-contract leaf that predates `node-coordinator-mail`
- * (version-compatibility.md, Register). A leaf with the `node-mail` domain
- * always takes the address (the node-mail client's version 1).
- */
-function olderNodeRefusal(nodeName: string): string {
-  compatibilityPathUsage.record("node-coordinator-mail.older-node");
-  return `${nodeName} runs an older Orkestrator whose coordinator cannot take mail from this one; update that machine, then retry. Its workers can still be messaged by environment id.`;
-}
-
 /** The command node's coordinator mails a leaf's main coordinator for this project. */
 export async function sendToNodeCoordinator(
   target: CoordinatorNodeTarget,
@@ -66,14 +54,11 @@ export async function sendToNodeCoordinator(
     nodeParent?: { id: string; threadId: string; hopCount: number };
     /** Already in that node's spool, for its `deliver_node_mail` to place. */
     attachments?: MailAttachmentBatch;
-    /** Left out by the node-mail client for a pre-contract leaf without `node-mail-turn-origin`. */
+    /** The coordinator's turn was not started by the user. */
     turnOrigin?: "mail";
   },
 ): Promise<JsonRecord> {
   const mail = target.nodeMail(`mail:${input.coordinatorId}:${input.requestId}`);
-  if (!mail.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)) {
-    throw new Error(olderNodeRefusal(target.nodeName));
-  }
   const delivered = await mail.deliver({
     controllerId: target.selfId,
     ...input.mailbox,
@@ -119,15 +104,7 @@ export async function sendToNodeCoordinator(
 export async function nodeCoordinatorMailbox(target: CoordinatorNodeTarget): Promise<JsonRecord> {
   const node = { nodeId: target.nodeId, node: target.nodeName, projectId: target.projectId };
   const workers = `Workers on ${target.nodeName} are reached by environment id from list_environments with nodeId "${target.nodeId}".`;
-  const mail = target.nodeMail();
-  if (!mail.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)) {
-    return {
-      ...node,
-      coordinator: { reachable: false, reason: olderNodeRefusal(target.nodeName) },
-      workers,
-    };
-  }
-  const answer = await mail.projectCoordinator({ projectId: target.projectId });
+  const answer = await target.nodeMail().projectCoordinator({ projectId: target.projectId });
   if (!answer?.hasCoordinator) {
     return {
       ...node,
@@ -249,7 +226,7 @@ export function registerCoordinatorCommandNodeMail(register: CommandRegistrar): 
         ...(images.length ? { attachments: images.map((file) => file.name) } : {}),
         placement: "node-outbox",
         coordinator: `command node ${name}`,
-        deliveryHint: `queued for the coordinator on ${name}; delivered when it collects its mail with coordinator-mail support. Older command nodes leave it queued until updated.`,
+        deliveryHint: `queued for the coordinator on ${name}; delivered when it collects its mail.`,
         coordinatorDelegationOpened: false,
       };
     },

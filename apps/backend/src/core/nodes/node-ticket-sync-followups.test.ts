@@ -499,6 +499,8 @@ describe("image metadata remains readable by peers", () => {
   });
 });
 
+// An unknown project is an error only while this machine's projects store
+// cannot be read; a project it confirms removed is dropped (#2328).
 for (const failure of ["unknown-project", "unreadable"] as const) {
   test(`image wants survive ${failure} outbox errors and complete after recovery`, async () => {
     const f = await fleet();
@@ -506,6 +508,12 @@ for (const failure of ["unknown-project", "unreadable"] as const) {
     const image = await attachImage(f.command, task.id);
     await f.sync.sync(LEAF_ID);
     await f.leaf.kanban.updateKanbanTask(task.id, { title: "Leaf edit" });
+    const strict = f.command.loadProjectIdsForCleanup.bind(f.command);
+    if (failure === "unknown-project") {
+      f.command.loadProjectIdsForCleanup = async () => {
+        throw new Error("Project store is missing or invalid; cleanup refused");
+      };
+    }
     const invoke = f.link.invoke.bind(f.link);
     f.link.invoke = async <T>(name: string, args?: Record<string, unknown>): Promise<T> => {
       const result = await invoke<any>(name, args);
@@ -524,6 +532,7 @@ for (const failure of ["unknown-project", "unreadable"] as const) {
     expect(f.leafImages.wanted(COMMAND_ID)).toEqual([image.id]);
     expect(f.received).not.toContain("put_ticket_image");
     f.link.invoke = invoke;
+    f.command.loadProjectIdsForCleanup = strict;
     expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
     expect(await outcome).toBe("delivered");
     expect(f.leafImages.wanted(COMMAND_ID)).toEqual([]);

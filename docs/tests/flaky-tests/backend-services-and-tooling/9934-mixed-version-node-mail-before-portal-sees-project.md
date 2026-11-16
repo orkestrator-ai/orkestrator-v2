@@ -8,6 +8,11 @@ Scenario: `node-mail` (`scripts/mixed-version/scenarios/node-mail.ts`) of the
 mixed-version qualification, topology `current-command` (this checkout as
 command node, the published release as its leaf).
 
+The scenario, its fixtures, the runner (`mise run qualify:mixed-versions`)
+and `.github/workflows/mixed-version-qualification.yml` were retired
+2026-11-14 (8108); read them with `git show a8b89f154:<path>`. The record
+below quotes them as they were.
+
 ## Observation
 
 | Run | Event | Head | Release | Result |

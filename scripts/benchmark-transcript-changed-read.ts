@@ -753,7 +753,6 @@ async function gatewayTimings(result: unknown): Promise<{ stringifyUs: number; s
     port: 0,
     env: { ORKESTRATOR_GATEWAY_TOKEN: token },
     allowNonTailscaleBind: true,
-    legacyPreviewPortAccess: async () => "allowed" as const,
   });
   const agent = new Agent({ keepAlive: true, maxSockets: 1 });
   try {

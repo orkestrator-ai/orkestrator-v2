@@ -67,11 +67,12 @@ mock.module("@/components/ui/context-menu", () => ({
 
 import { KanbanCard } from "@/components/kanban/KanbanCard";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
+import { kanbanTask } from "../../../apps/web/src/test/kanban-task";
 
 const DndContext = realDndCoreSnapshot.DndContext;
 
 function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
-  return {
+  return kanbanTask({
     id: "task-1",
     projectId: "project-1",
     title: "Stuck build task",
@@ -83,7 +84,7 @@ function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
     createdAt: "2026-01-01T00:00:00.000Z",
     order: 0,
     ...overrides,
-  };
+  });
 }
 
 function renderCard(task: KanbanTask, props: Partial<ComponentProps<typeof KanbanCard>> = {}) {

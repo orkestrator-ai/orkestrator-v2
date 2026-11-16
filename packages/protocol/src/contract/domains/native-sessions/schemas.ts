@@ -198,15 +198,6 @@ export type NativeAgentJobReceipt = Mutable<typeof NativeAgentJobReceiptSchema.T
 export const PromptQueueSchema = openRecord({
   /** Bounded job request bindings, published before dispatch and kept after queue settlement. */
   jobReceipts: Schema.optional(mutableArray(NativeAgentJobReceiptSchema)),
-  /** Only older backends write this lease; retain exclusion until settlement or expiry. */
-  outstandingClaim: Schema.optional(
-    openRecord({
-      token: Schema.String,
-      message: Schema.Record(Schema.String, Schema.Unknown),
-      claimedAt: Schema.String,
-      expiresAt: Schema.String,
-    }),
-  ),
   queueKey: Schema.String,
   environmentId: Schema.String,
   messages: mutableArray(Schema.Unknown),
@@ -605,6 +596,7 @@ export const DispatchOutcomeSchema = openRecord({
   outcome: Schema.String,
   requestId: optionalString,
   error: optionalString,
+  /** No longer set (every bridge confirms compaction instructions); kept so the registered result schema is unchanged. */
   instructionsIgnored: optionalBoolean,
   requestIdRetired: optionalBoolean,
   /** A temporary refusal with nothing sent: a new request id may succeed. */
@@ -617,6 +609,7 @@ export const DispatchOutcomeSchema = openRecord({
 /** `NativeAgentSessionActionOutcome` (native-agent.ts), including a verified steer refusal. */
 export const SessionActionOutcomeSchema = openRecord({
   outcome: Schema.String,
+  /** No longer set (every bridge confirms compaction instructions); kept so the registered result schema is unchanged. */
   instructionsIgnored: optionalBoolean,
   shareUrl: optionalString,
   preview: Schema.optional(Schema.Unknown),

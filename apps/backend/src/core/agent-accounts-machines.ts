@@ -8,12 +8,10 @@ import {
   type MachineAgentAccountsResult,
   type PreferredAgentIdentities,
 } from "@orkestrator/protocol/agent-accounts";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 
 import { runWithTimeout, WorkTimeoutError } from "./abortable-timing.js";
 import type { CommandContext } from "./commands-context.js";
 import { listAgentAccounts } from "./agent-accounts.js";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { readHostAgentSignIns } from "./agent-sign-ins.js";
 import { NodeUnavailableError } from "./nodes/index.js";
 
@@ -80,7 +78,7 @@ export async function listMachineAgentAccounts(
           ...(view.colorToken ? { colorToken: view.colorToken } : {}),
           self: false,
         };
-        // A machine that predates the sign-in read still lists its accounts.
+        // A failed sign-in read leaves the sign-ins out; the accounts are still listed.
         const signIns = routedWithTimeout(
           (signal) =>
             portal.invokeOnNode(
@@ -90,12 +88,7 @@ export async function listMachineAgentAccounts(
           timeoutMs,
         ).then(
           (routed) => (routed.outcome === "ok" ? parseHostAgentSignIns(routed.result) : undefined),
-          (error: unknown) => {
-            if (incompatibility(error, "read_host_agent_sign_ins")?.code === "unknown-command") {
-              compatibilityPathUsage.record("host-agent-sign-ins.older-node");
-            }
-            return undefined;
-          },
+          () => undefined,
         );
         try {
           const routed = await routedWithTimeout(

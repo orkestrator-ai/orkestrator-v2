@@ -137,8 +137,8 @@ function createChangeSubscriptions(nodeScope: NodeScope): ChangeSubscriptions {
         store.getState().markDeleted(resourceKey);
       }
     } catch {
-      // An older backend without change tracking, or a transient failure: the
-      // components fall back to their legacy presentation.
+      // A failed read leaves no projection: the components show the
+      // transcript row's own presentation until the next read.
     } finally {
       if (reading.get(resourceKey) === epoch) reading.delete(resourceKey);
     }
@@ -277,7 +277,8 @@ function createChangeSubscriptions(nodeScope: NodeScope): ChangeSubscriptions {
             }
           })
           .catch(() => {
-            // Older backend: rows keep their legacy presentation.
+            // A failed read: rows keep the transcript's presentation, and a
+            // later request asks again.
             for (const callId of slice) {
               requestedTools.delete(
                 toolPresentationKey(

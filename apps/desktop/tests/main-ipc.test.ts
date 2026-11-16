@@ -159,7 +159,6 @@ function createHarness(
     attach: mock(async () => browserPreviewState),
     setBounds: mock(() => browserPreviewState),
     setVisible: mock(() => browserPreviewState),
-    navigate: mock(async () => browserPreviewState),
     goBack: mock(() => browserPreviewState),
     goForward: mock(() => browserPreviewState),
     reload: mock(() => browserPreviewState),
@@ -492,19 +491,20 @@ describe("main IPC registration", () => {
     const harness = createHarness();
     const bounds = { x: 10, y: 20, width: 640, height: 480 };
 
+    const service = {
+      backendInstanceId: "bk_backend_1",
+      environmentId: "env-1",
+      serviceId: "svc_aaaaaaaa",
+      path: "/",
+    };
     await harness.invoke("orkestrator:browser-preview:attach", {
       tabId: "browser-1",
-      url: "http://localhost:3000/",
+      service,
       bounds,
       visible: true,
     });
     await harness.invoke("orkestrator:browser-preview:set-bounds", "browser-1", bounds);
     await harness.invoke("orkestrator:browser-preview:set-visible", "browser-1", false);
-    await harness.invoke(
-      "orkestrator:browser-preview:navigate",
-      "browser-1",
-      "http://localhost:4000/",
-    );
     await harness.invoke("orkestrator:browser-preview:go-back", "browser-1");
     await harness.invoke("orkestrator:browser-preview:go-forward", "browser-1");
     await harness.invoke("orkestrator:browser-preview:reload", "browser-1");
@@ -513,16 +513,12 @@ describe("main IPC registration", () => {
 
     expect(harness.browserPreviews.attach).toHaveBeenCalledWith({
       tabId: "browser-1",
-      url: "http://localhost:3000/",
+      service,
       bounds,
       visible: true,
     });
     expect(harness.browserPreviews.setBounds).toHaveBeenCalledWith("browser-1", bounds);
     expect(harness.browserPreviews.setVisible).toHaveBeenCalledWith("browser-1", false);
-    expect(harness.browserPreviews.navigate).toHaveBeenCalledWith(
-      "browser-1",
-      "http://localhost:4000/",
-    );
     expect(harness.browserPreviews.goBack).toHaveBeenCalledWith("browser-1");
     expect(harness.browserPreviews.goForward).toHaveBeenCalledWith("browser-1");
     expect(harness.browserPreviews.reload).toHaveBeenCalledWith("browser-1");
@@ -534,40 +530,6 @@ describe("main IPC registration", () => {
     await expect(
       harness.invoke("orkestrator:browser-preview:set-bounds", "browser-1", { x: 0 }),
     ).rejects.toThrow("finite browser preview bounds");
-  });
-
-  test("passes a legacy preview's environment and drops a malformed one (M2)", async () => {
-    const harness = createHarness();
-    const bounds = { x: 0, y: 0, width: 10, height: 10 };
-    await harness.invoke("orkestrator:browser-preview:attach", {
-      tabId: "browser-1",
-      url: "http://localhost:3000/",
-      environmentId: "env-1",
-      bounds,
-      visible: true,
-    });
-    expect(harness.browserPreviews.attach).toHaveBeenLastCalledWith({
-      tabId: "browser-1",
-      url: "http://localhost:3000/",
-      environmentId: "env-1",
-      bounds,
-      visible: true,
-    });
-    for (const environmentId of ["", "env 1", "a,b", "x".repeat(201), 42, null]) {
-      await harness.invoke("orkestrator:browser-preview:attach", {
-        tabId: "browser-1",
-        url: "http://localhost:3000/",
-        environmentId,
-        bounds,
-        visible: true,
-      });
-      expect(harness.browserPreviews.attach).toHaveBeenLastCalledWith({
-        tabId: "browser-1",
-        url: "http://localhost:3000/",
-        bounds,
-        visible: true,
-      });
-    }
   });
 
   test("validates browser preview IPC boundary values", async () => {
@@ -611,22 +573,31 @@ describe("main IPC registration", () => {
         harness.invoke("orkestrator:browser-preview:set-visible", "browser-1", visible),
       ).rejects.toThrow("Expected browser preview visibility");
     }
-    for (const url of ["", null, 42]) {
-      await expect(
-        harness.invoke("orkestrator:browser-preview:navigate", "browser-1", url),
-      ).rejects.toThrow("Expected a browser preview URL");
-    }
     await expect(harness.invoke("orkestrator:browser-preview:attach", null)).rejects.toThrow(
       "Expected browser preview attachment details",
     );
     await expect(
       harness.invoke("orkestrator:browser-preview:attach", {
         tabId: "browser-1",
-        url: "http://localhost:3000/",
+        service: {
+          backendInstanceId: "bk_backend_1",
+          environmentId: "env-1",
+          serviceId: "svc_aaaaaaaa",
+          path: "/",
+        },
         bounds: { x: 0, y: 0, width: 1, height: 1 },
         visible: "true",
       }),
-    ).rejects.toThrow("Expected a browser preview URL and visibility");
+    ).rejects.toThrow("Expected a browser preview service and visibility");
+    // Every preview is a service preview: an attach naming only a URL is refused.
+    await expect(
+      harness.invoke("orkestrator:browser-preview:attach", {
+        tabId: "browser-1",
+        url: "http://localhost:3000/",
+        bounds: { x: 0, y: 0, width: 1, height: 1 },
+        visible: true,
+      }),
+    ).rejects.toThrow("Expected a browser preview service reference");
   });
 
   test("passes a service attach's navigation basis through and drops a malformed one", async () => {
@@ -663,41 +634,6 @@ describe("main IPC registration", () => {
       expect(harness.browserPreviews.attach).toHaveBeenLastCalledWith({
         tabId: "browser-1",
         service,
-        bounds,
-        visible: true,
-      });
-    }
-  });
-
-  test("passes a URL attach's navigation basis through and drops a malformed one", async () => {
-    const harness = createHarness();
-    const bounds = { x: 0, y: 0, width: 640, height: 480 };
-    const url = "http://localhost:3000/next";
-    await harness.invoke("orkestrator:browser-preview:attach", {
-      tabId: "browser-1",
-      url,
-      navigationBasis: 0,
-      bounds,
-      visible: true,
-    });
-    expect(harness.browserPreviews.attach).toHaveBeenLastCalledWith({
-      tabId: "browser-1",
-      url,
-      navigationBasis: 0,
-      bounds,
-      visible: true,
-    });
-    for (const navigationBasis of [-1, 1.5, "4", null, undefined]) {
-      await harness.invoke("orkestrator:browser-preview:attach", {
-        tabId: "browser-1",
-        url,
-        navigationBasis,
-        bounds,
-        visible: true,
-      });
-      expect(harness.browserPreviews.attach).toHaveBeenLastCalledWith({
-        tabId: "browser-1",
-        url,
         bounds,
         visible: true,
       });

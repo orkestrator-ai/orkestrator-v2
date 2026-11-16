@@ -5,15 +5,12 @@ import {
   TERMINAL_BINARY_FRAME_TYPE,
   TERMINAL_WEBSOCKET_CLOSE,
   TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES,
-  TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS,
-  TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
   TERMINAL_WEBSOCKET_SUBPROTOCOL,
   type TerminalWebSocketServerControlFrame,
 } from "@orkestrator/protocol/terminal-websocket";
 import type { WebSocket } from "ws";
 
 import { TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS_PER_SESSION } from "../src/terminal-websocket-server";
-import { compatibilityPathUsage } from "../src/core/compatibility-path-usage";
 import {
   nextTerminalControl,
   nextTurn,
@@ -108,7 +105,7 @@ const inputResult = (channelId: number, throughOperationId: number) => ({
 });
 
 describe("terminal WebSocket cumulative input results", () => {
-  const options = { protocols: TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS };
+  const options = { protocols: TERMINAL_WEBSOCKET_SUBPROTOCOL };
 
   test("input that completes together is answered by one frame, and runs in order", async () => {
     const { backend, writes, open } = gatedBackend();
@@ -393,96 +390,20 @@ describe("terminal WebSocket cumulative input results", () => {
 });
 
 describe("terminal WebSocket subprotocol negotiation", () => {
-  const perInputCount = () =>
-    compatibilityPathUsage.snapshot().paths["terminal-websocket.per-input-results"]?.count ?? 0;
-
-  test("unauthenticated v1 sockets are counted only after valid authentication", async () => {
+  test("the subprotocol is selected", async () => {
     const { info } = await startGateway();
-    const before = perInputCount();
-    const { socket, inbox } = await openTerminalSocket(info, { authenticate: false });
-    expect(perInputCount()).toBe(before);
-    socket.send(JSON.stringify({ type: "authenticate", version: 1, token: info.token }));
-    await nextTerminalControl(inbox, "ready");
-    expect(perInputCount()).toBe(before + 1);
+    const { socket } = await openTerminalSocket(info);
+    expect(socket.protocol).toBe(TERMINAL_WEBSOCKET_SUBPROTOCOL);
     socket.terminate();
   });
 
-  test("header-authenticated v1 sockets are counted", async () => {
+  test("a header-authenticated socket gets ready", async () => {
     const { info } = await startGateway();
-    const before = perInputCount();
     const { socket, inbox } = await openTerminalSocket(info, {
       authenticate: false,
       headers: { authorization: `Bearer ${info.token}`, origin: new URL(info.url).origin },
     });
     await nextTerminalControl(inbox, "ready");
-    expect(perInputCount()).toBe(before + 1);
-    socket.terminate();
-  });
-
-  test("a client that offers both gets input results and takes no older path", async () => {
-    const { info } = await startGateway();
-    const before = perInputCount();
-    const { socket } = await openTerminalSocket(info, {
-      protocols: TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS,
-    });
-    expect(socket.protocol).toBe(TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL);
-    expect(perInputCount()).toBe(before);
-    socket.terminate();
-  });
-
-  test("the input-results subprotocol alone is accepted", async () => {
-    const { info } = await startGateway();
-    const { socket } = await openTerminalSocket(info, {
-      protocols: TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
-    });
-    expect(socket.protocol).toBe(TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL);
-    socket.terminate();
-  });
-
-  test("an older client that offers only v1 keeps one result per input, in order", async () => {
-    const { backend, writes, open } = gatedBackend();
-    const { info } = await startGateway({ backend });
-    const before = perInputCount();
-    const { socket, inbox } = await openTerminalSocket(info);
-    expect(socket.protocol).toBe(TERMINAL_WEBSOCKET_SUBPROTOCOL);
-    expect(perInputCount()).toBe(before + 1);
-    const channel = await subscribe(socket, inbox, "session", 1);
-
-    sendInput(socket, channel, 1, "a");
-    sendInput(socket, channel, 2, "refused");
-    sendInput(socket, channel, 3, "b");
-    await serverCaughtUp(socket, inbox, 1);
-    open();
-
-    const frames = await readResults(
-      inbox,
-      (frame) => frame.type === "operation-result" && frame.operationId === 3,
-    );
-    expect(frames).toEqual([
-      {
-        type: "operation-result",
-        channelId: channel,
-        operationId: 1,
-        operation: "input",
-        ok: true,
-      },
-      {
-        type: "operation-result",
-        channelId: channel,
-        operationId: 2,
-        operation: "input",
-        ok: false,
-        message: "Terminal session is not running",
-      },
-      {
-        type: "operation-result",
-        channelId: channel,
-        operationId: 3,
-        operation: "input",
-        ok: true,
-      },
-    ] as typeof frames);
-    await waitUntil(() => writes.length === 3, "Writes did not all run");
     socket.terminate();
   });
 });

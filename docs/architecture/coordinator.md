@@ -85,8 +85,8 @@ main with the default agent, and open delegations move to it.
 
 **No failure is workspace-wide any more.** A new backend never writes
 `lifecycleState: "error"`. The value stays readable for a record an older
-backend stored, which `ensure` recovers when the panel opens, and for a client
-connected to such a backend, which keeps its toolbar banner
+backend stored, which `ensure` recovers when the panel opens; until then the
+panel shows its toolbar banner, whose Retry runs `ensure`
 ([version-compatibility.md](version-compatibility.md#register)). A missing
 checkout or a disabled Control MCP is reported as itself, not as a failed start.
 
@@ -94,8 +94,8 @@ The pane shows the failure above its transcript, naming the conversation, with
 **Retry**, **Close conversation** and **Copy error**. Retry
 (`retry_coordinator_conversation`) only clears the error: the pane then
 connects, and connecting is what starts the bridge. A second failure records
-itself again. Opening the panel does not clear the error, so a reload cannot
-hide it.
+itself again. Opening the panel (`ensure_project_coordinator`) never clears the
+error, so a reload cannot hide it.
 
 ### Reading while paused, after a failed start, or with its platform unavailable
 
@@ -111,7 +111,8 @@ an already cached provider for activity; an existing running or blocked turn
 stays visible and Stop remains available. Stop uses only that cached provider
 while held, so it can interrupt existing work without starting a bridge. No
 cached provider means saved idle state. Held reads do not expose interactions
-or composer controls. Enter in the composer
+or composer controls. The pane's notice for the hold stands in for the saved
+view's own error, but a read that fails is shown as a failure. Enter in the composer
 says why nothing was sent and keeps the draft. Resume or Retry connects the
 same pane without a remount.
 
@@ -383,11 +384,14 @@ notice reaches exactly one coordinator:
 | --- | --- |
 | A leaf, and its command node has the repository | The command node's main coordinator for that repository, not the leaf's |
 | A leaf, and its command node has no copy of the repository | The leaf's own main coordinator |
-| A leaf whose command node is too old to take it | The leaf's own main coordinator |
 | A standalone machine, or the command node itself | That machine's main coordinator |
 
 With two command nodes attached, it goes to the one with the repository that last
-mailed this project's coordinator, else the most recent.
+mailed this project's coordinator, else the most recent. A command node says which
+repositories it has on each `collect_node_outbox`; until its first collect none
+are known, so a repository's notices stay with the leaf's coordinator while a
+machine-wide one is queued for it. Every command node is assumed to take notices
+(legacy support was retired on 2026-11-14, to-do 8108).
 
 **Replies are not notices.** A delegating coordinator still gets its own worker's
 close notice, and the status wakes of a delegated worker (`association.kind` is
@@ -558,18 +562,11 @@ repository exchange ordinary node mail
   and the replacement are qualified between two `dev:test` profiles with a
   loopback model by `mise run test:agent:coordinator:node-mail-fake`
   ([agent-testing.md](../development/agent-testing.md#coordinator-node-mail-between-two-profiles-fake-model)).
-- **Older nodes.** A leaf whose hello lacks `node-coordinator-mail` is sent
-  nothing; the call is refused with "update that machine", and
-  `list_mailboxes` with its `nodeId` reports it unreachable for the same
-  reason. A leaf coordinator's mail to a command node that predates
-  `node-coordinator-mail` (one whose `collect_node_outbox` does not send
-  `coordinatorMail`) is held in the leaf's outbox, not delivered: such a node
-  would take it as a worker's report from a runtime id it has no environment
-  for, outside the pair budget. `send_coordinator_command_node_mail` still
-  answers `placement: "node-outbox"`, and its `deliveryHint` says older command
-  nodes keep it queued; the command node collects it once updated. Each
-  collect that holds one counts `node-coordinator-mail.older-command-node`
-  ([register](version-compatibility.md#register)).
+- **Every node takes it.** Both ends assume the other speaks
+  coordinator-to-coordinator mail (legacy support was retired on 2026-11-14,
+  to-do 8108): the command node sends to any leaf, and a leaf offers its
+  coordinator's mail on every collect. A node that does not know the command
+  fails the call like any other error.
 
 ### Choosing a machine
 
@@ -649,23 +646,12 @@ on `self` and on each node:
 - **Machines that cannot answer.** One node never fails or holds up the call:
   each is asked in parallel through `invoke_on_node` with a 2 s limit, and its
   `machine` is otherwise `{ "status": "unavailable", "reason", "detail" }` with
-  no figures. Reasons: `offline` (not connected, so not asked), `timeout`,
-  `older-version` (it answered `Unknown backend command: get_machine_load`,
-  matched by `isUnknownCommandError` in
-  `packages/protocol/src/unknown-command.ts`) and `error`.
+  no figures. Reasons: `offline` (not connected, so not asked), `timeout`
+  and `error` (any other failure, an unknown command included; the
+  `older-version` reason was retired with legacy support on 2026-11-14,
+  to-do 8108).
   Last-known figures are never shown. `detail` is fixed wording, so a node's
   error text does not reach the coordinator.
-  The mixed-version runner's `nodes` module runs this `list_nodes` against a
-  real leaf of any published release
-  (`mise run qualify:mixed-versions -- --old-version <version> --topology current-command --scenarios nodes`):
-  a leaf from before `get_machine_load` reads as `older-version`, and each
-  node's `buildCommit` matches its hello. Run on 2026-11-13 on one Linux host
-  (to-do 1030 (retired) tasks 2 and 7): leaves of this checkout, 2.36.1 and
-  2.36.4-beta reported their load, a 2.34.4-beta leaf read as
-  `older-version`, a source build and 2.36.1 reported `buildCommit: null`,
-  and 2.36.4-beta reported the commit its tag points to. The `older-version`
-  branch retires with its [register](version-compatibility.md#register) row
-  (`machine-load.older-node`).
 - **Who sees it.** Read-only, for main coordinators and side agents
   (`list_nodes` is under `discovery`). The answer is parsed down to the fields
   above; no hostname, account, path or process detail crosses. The operator
@@ -706,9 +692,8 @@ with that `nodeId`.
 `start_build_pipeline` with a `nodeId` and a ticket of this board syncs the
 leaf first (refusing if that does not finish) and starts the build there
 under the same id; the ticket then shows where its build runs (`runsOn` in
-ticket reads, a machine chip on the board). An older leaf cannot build a
-ticket of this board: the refusal says to update it or to create a ticket
-there. Ticket summaries carry `runsOn` for work on another machine.
+ticket reads, a machine chip on the board). Ticket summaries carry `runsOn`
+for work on another machine.
 
 **Offline.** Ticket changes for a disconnected leaf wait on this board and
 reach it in order on reconnect. Launches, builds, Multi Reviews and the other
@@ -1073,9 +1058,15 @@ What each enforced platform actually does:
   a scripted model (`conformance-coordinator-read-boundary-live.test.ts`). Under
   bubblewrap a denied path reads as missing (`No such file or directory`): the
   directory is masked, with the allowances bound back in. A read-only review turn
-  in a worker bridge gets no boundary, by decision
-  ([6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)
-  task 4).
+  in a worker bridge gets no boundary, by decision (6080 (retired) task 4): that
+  worker's ordinary turns read the directory anyway on a host environment, so
+  bounding only its review turns would risk failing reviews without closing the
+  gap. The scripted run does not cover skills or a large tool result written by
+  a real MCP call: that live check is on the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+  (6080 (retired), Needs verification), and the qualification file is re-run on
+  each CLI bump
+  ([upgrade-agents.md](../development/upgrade-agents.md#re-check-coordinator-tier-decisions)).
 - **Pi** blocks every tool outside its read-only set in its own `tool_call`
   gate, which runs in the bridge process and cannot be switched off by the
   workspace. The same gate refuses a coordinator's `read`, `grep`, `find` and
@@ -2237,9 +2228,10 @@ refused (`tool`, `mail`, `mail-reply`, `node-mail`, `node-mail-reply`,
 Control MCP tool, by the tool's name. No id or input is kept, and the counts
 start from zero with each backend. They exist to show whether the default is
 too strict, in particular whether replies to an environment's own mail are
-most of the refusals (to-do
-[6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)
-task 6).
+most of the refusals (to-do 6080 (retired) task 6). Reading them, and
+choosing whether replies get an exception, is an item in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md); an
+agent builds the exception only if that is the choice.
 
 The answer comes from `coordinatorCreatedEnvironment`
 (`coordinator-environment-scope.ts`), and it is per coordinator, not per
@@ -2357,9 +2349,14 @@ The mark is coarse by design, the same line as the account-switch grant: it also
 marks a delegation that merely happened during such a turn, and a later user turn
 clears it even if the content carried over. An agent's reasoning cannot be traced
 to specific input, so tracking provenance per message would only look more
-precise. Two limits: a message the user approved
-(`send_approved_project_home_message`) is not marked, since they read it; and a
-leaf without `node-mail-turn-origin` frames mail as it always did.
+precise. One limit: a message the user approved
+(`send_approved_project_home_message`) is not marked, since they read it. Mail
+to another node's worker carries the mark too on the version-1 `node-mail`
+contract. The still-present version-0 adapter forwards `turnOrigin` only when
+the leaf advertises the legacy `node-mail-turn-origin` capability (including
+v2.36.5-beta and v2.36.6-beta). It omits the key for strict older leaves such as
+v2.36.1, which reject it. This legacy capability read retires with adapter 0 under
+to-do 8108; current hellos no longer advertise it.
 
 `coordinatorCallTurnOrigin` (`@orkestrator/protocol/coordinator`) is the one
 rule every path reads: only a turn the user started is unmarked, and an unknown
@@ -2367,9 +2364,9 @@ origin counts as mail.
 
 ### Delegated prompts from a turn the user did not start
 
-The same mark reaches prompts, which are not mail
-([6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)
-task 5):
+The same mark reaches prompts, which are not mail (to-do 6080 (retired)
+task 5). Whether a real worker reads the note is a live run in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md):
 
 - A launch's delegation frame (`launch_environment`, `launch_job`,
   `fork_worker`, and a launch or fork on another node) ends with
@@ -3800,9 +3797,8 @@ scanned per measurement, 50 commits (at most 200), diffs of 20 files (at most
 which renders one file's whole diff up to the total budget. A stopped
 container worker answers what change tracking last measured, with its commits
 unavailable and each diff `null` with the reason; a measurement still being taken says `pending`. Without `diffScope`
-the diff is base to working tree, as before, so older callers are unchanged; an
-older node that ignores `diffScope` answers with that diff and the result says
-`diffScopeUnsupported`. With `nodeId` the node owning the worker reads it
+the diff is base to working tree, as before, so older callers are unchanged.
+With `nodeId` the node owning the worker reads it
 (`get_controller_worker_changes`) and applies its own bounds.
 
 **Forking a worker.** `fork_worker` runs what the sidebar's Fork runs
@@ -3960,7 +3956,7 @@ holds while that node's `get_agent_registry` entry says `goal.running`
 (`NodeCoordinatorRemote.workerState`), and the first read after the goal stops
 closes the delegation. An older node sends no `goal`, which reads as not
 running. `mise run qa:remote-goal-hold` (`scripts/qa-remote-goal-hold.ts`,
-weekly in `.github/workflows/mixed-version-qualification.yml`) checks this over
+weekly in `.github/workflows/remote-goal-hold.yml`) checks this over
 a real node link with a leaf whose goal is held by its running check, and no
 agent turn. `tests/unit/qa-remote-goal-hold.test.ts` runs the same seeded goal
 through the leaf's registry, `NodeCoordinatorRemote` and the coordinator in
@@ -4334,9 +4330,10 @@ Admission reuse preserves the original identity. A new-environment coordinator
 launch refuses an admission belonging to another caller and grants no workflow
 or environment authority. Completion and delayed provisioning repair require
 that identity to match the reservation; requesting a new environment alone is
-not evidence of creation. Leaves must advertise `node-coordinator-build-origin` before a new-environment
-start is sent. Missing capability refuses before launch; missing or mismatched
-identity in a response also fails closed.
+not evidence of creation. Every leaf is assumed to attest admission identity
+(the capability check before launch was retired with legacy support on
+2026-11-14, to-do 8108); missing or mismatched identity in a response fails
+closed.
 
 Background workflow reconciliation also records late creation or settles missing
 and terminal pipelines, even after a status notice was delivered. Remote

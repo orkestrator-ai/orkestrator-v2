@@ -132,7 +132,7 @@ evidence. This file only points at it.
 
   No workflow runs a live provider, Docker Desktop, iOS or Electron on
   macOS. `mixed-version-qualification.yml` retires with the
-  legacy-retirement sweep ([8108](8108-legacy-retirement-sweep.md) task 4).
+  legacy-retirement sweep (8108 (retired) task 4).
 - Almost all recorded evidence is from Linux amd64 with Docker Engine 29.7.2,
   taken before the SQLite storage migration (#969) and the October agent
   upgrades (#964).

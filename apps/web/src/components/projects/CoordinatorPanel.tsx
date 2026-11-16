@@ -465,8 +465,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
               }}
             />
           ) : null}
-          {/* Only from a backend that predates per-conversation startup errors,
-        or a record one stored (version-compatibility.md). */}
+          {/* Only from a workspace record an older backend stored, until
+        `ensure` (Retry) recovers it (version-compatibility.md). */}
           {snapshot.workspace.lifecycleState === "error" ? (
             <CoordinatorBanner
               tone="error"

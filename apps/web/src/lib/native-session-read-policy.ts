@@ -102,7 +102,7 @@ export const DISCOVERY_BACKSTOP_MS = 30_000;
  * A section still loading (the backend settles those within 2 s), or `stale`:
  * a failed renewal kept its last value, or the provider called its catalogue
  * stale. An expired section that is renewing is served `ready`, so a
- * backstop read does not start this follow-up (todo 8151).
+ * backstop read does not start this follow-up (#2314).
  */
 const DISCOVERY_SETTLING_READ_MS = 2_000;
 /** A section with no value: the backend retries one 5 s after it failed. */

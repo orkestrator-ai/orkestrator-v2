@@ -8,8 +8,7 @@
  * - Version 0 (a pre-contract node) is today's untyped call, answered as sent
  *   (`legacyCommandApi`). No Kanban, feature-plan or Linear command was ever
  *   capability-gated, so there is nothing to fold into version 1; what an
- *   older node lacks it answers with `unknown-command` (the feature-plan build
- *   fallback reads that, `feature-plan-build-compat.ts`).
+ *   older node lacks it answers with `unknown-command`.
  *
  * Kanban ticket ids are the same on every node, so a caller keeps results
  * under the node it asked (one client per node scope).

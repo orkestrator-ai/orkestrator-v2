@@ -50,7 +50,7 @@ export interface MachineLoadReport {
 }
 
 /** Why no figures are shown for a machine. Never stale figures in their place. */
-export type MachineUnavailableReason = "offline" | "timeout" | "older-version" | "error";
+export type MachineUnavailableReason = "offline" | "timeout" | "error";
 
 export type MachineLoadView =
   | ({ status: "ok" } & MachineLoadReport)

@@ -25,79 +25,10 @@ import {
  * each path's owner and removal condition.
  */
 export const COMPATIBILITY_PATH_IDS = [
-  /** A leaf cannot attest a coordinator build admission before launch. */
-  "coordinator-build.origin-upgrade-required",
   /** A container bridge's token was read from its `node`-readable `/tmp` file. */
   "bridge-credential.token-file",
-  /** A session-route 404 was rejected as an outdated bridge, without reading a legacy route. */
-  "slash-catalogue.outdated-bridge",
-  /** A bridge without `POST /session/:id/close` got the restart notice. */
-  "bridge-close.upgrade-required",
-  /** A renderer that predates paged tmux transcripts read a whole transcript. */
-  "tmux-transcript.whole-read",
-  /** A request used the legacy `/__orkestrator/browser/loopback/<port>/` preview route. */
-  "preview.legacy-loopback-route",
-  /** A desktop opened a v1 preview tunnel socket: it predates tunnel v2. */
-  "preview.tunnel-v1",
-  /**
-   * Verify read an Address session's last assistant text because the session
-   * has no typed `fix-result` marker: it started before the typed handoff.
-   */
-  "build-pipeline.address-text-report",
-  /** `list_nodes` asked a node for its load and the node does not have the command yet. */
-  "machine-load.older-node",
   /** An older renderer built a "Continue in…" handoff itself (`save_agent_handoff`). */
   "agent-handoff.renderer-saved",
-  /** A prompt reached dispatch already holding its handoff: an older renderer prepended it. */
-  "agent-handoff.renderer-carried",
-  /**
-   * A command node's coordinator asked to mail, or asked about, a leaf's
-   * coordinator and the leaf does not advertise `node-coordinator-mail`.
-   */
-  "node-coordinator-mail.older-node",
-  /**
-   * A command node collected a leaf's outbox without `coordinatorMail` (it
-   * predates `node-coordinator-mail`) while the leaf's coordinator had mail
-   * queued for it: the mail stays held on the leaf until that node is updated.
-   */
-  "node-coordinator-mail.older-command-node",
-  /**
-   * A leaf kept a coordinator notice on its own coordinator because the command
-   * node attached to it has not said it takes `coordinator-notices`.
-   */
-  "coordinator-notices.older-command-node",
-  /**
-   * A command node mailed its coordinators about a leaf's automatic switch from
-   * the leaf's event, because the leaf does not advertise `coordinator-notices`.
-   */
-  "coordinator-notices.older-leaf",
-  /**
-   * A renderer that predates per-conversation startup errors opened the panel,
-   * which is how it recovers: `ensure_project_coordinator` cleared them.
-   */
-  "coordinator-ensure.conversation-errors-cleared",
-  /**
-   * A coordinator's mail with images was refused: the node does not advertise
-   * `node-mail-attachments`.
-   */
-  "node-mail-attachments.older-node",
-  /**
-   * A command node has no coordinator for an agent's mail and the leaf does not
-   * advertise `node-mail-return`, so the mail stays in its outbox.
-   */
-  "node-mail-return.older-leaf",
-  /**
-   * A command node's coordinator used ticket tools or a build with a `nodeId`
-   * on a leaf that does not advertise `ticket-sync`.
-   */
-  "ticket-sync.older-node",
-  /** A terminal WebSocket client offered no input-results subprotocol: a frame per input. */
-  "terminal-websocket.per-input-results",
-  /**
-   * `/compact` sent instructions and the bridge compacted without confirming
-   * them: it predates compaction instructions and ignored the body.
-   */
-  "compact.instructions-ignored",
   /**
    * A Claude or Codex turn outcome was recorded as a usage limit from its error
    * text alone: the bridge sent no `errorCode` (it predates the code, or the
@@ -129,16 +60,6 @@ export const COMPATIBILITY_PATH_IDS = [
    */
   "retired-command.start-coordinator-node-multi-review",
   /**
-   * A stream that did not say how it wants relayed node events got one under the
-   * old shared name: a renderer or desktop from before per-node names.
-   */
-  "relayed-node-event.legacy-stream",
-  /**
-   * A stream that asked for the old shared name got a relayed event under it: a
-   * desktop's main process from before it took per-node relayed events.
-   */
-  "relayed-node-event.legacy-desktop-stream",
-  /**
    * A retired per-provider CLI check (`check_opencode_cli`, `check_codex_cli`,
    * `check_cursor_cli`, `check_grok_cli`, `check_pi_cli`) was called: no
    * renderer in the support window asks them (plan item 7009).
@@ -148,42 +69,15 @@ export const COMPATIBILITY_PATH_IDS = [
   "retired-command.cleanup-stale-local-servers",
   /**
    * `read_file_at_branch` or `read_local_file_at_branch` was called: only the
-   * diff viewer of v2.21.0 to v2.23.0 asks them (to-do 7570).
+   * diff viewer of v2.21.0 to v2.23.0 asks them (to-do 8304).
    */
   "retired-command.read-file-at-branch",
   /**
    * `get_coordinator_upstream_auto_merge` or `set_coordinator_upstream_auto_merge`
    * was called: a renderer from before v2.36.0 asked about the retired
-   * "always merge" setting (to-do 7570).
+   * "always merge" setting (to-do 8304).
    */
   "retired-command.coordinator-upstream-auto-merge",
-  /**
-   * A bridge's event stream did not confirm `"observe":true`, so the session
-   * observer closed it: the bridge predates observation mode (to-do 7570).
-   */
-  "bridge-observation.full-stream",
-  /** A bridge answered 404 or 405 on `/session/:id/human-prompts`: it predates the route. */
-  "bridge-human-prompts.missing-route",
-  /**
-   * A node answered `read_host_agent_sign_ins` as an unknown command, so the
-   * accounts overview listed its accounts without sign-ins (to-do 7570).
-   */
-  "host-agent-sign-ins.older-node",
-  /**
-   * A node answered `get_controller_worker_changes` without honouring
-   * `diffScope`, so the answer carries `diffScopeUnsupported` (to-do 7570).
-   */
-  "worker-changes.diff-scope-older-node",
-  /**
-   * A node listed its agent accounts with no automatic-switch state, so a
-   * coordinator's re-enable had no pin to end there (to-do 7570).
-   */
-  "auto-switch.older-node",
-  /**
-   * A stored Kanban row had no `kind` or `sections`, so its content was derived
-   * from its text on read: a release before v2.34.2-beta wrote it (to-do 7570).
-   */
-  "kanban.legacy-row-derived",
 ] as const;
 
 /**

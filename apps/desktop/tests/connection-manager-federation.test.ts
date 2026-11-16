@@ -393,13 +393,14 @@ describe("identity and routes", () => {
     connections.dispose();
   });
 
-  test("an older backend without hello stays provisional and is never merged", async () => {
+  test("a backend without hello fails to connect like any other failed check", async () => {
     installGateways({ "https://old.example": {} });
     const connections = manager(new MemoryStore(catalogue([])));
     await connections.initialize();
-    await connections.connect({ address: "https://old.example", token });
-    expect(connections.getList().connections[1]).toMatchObject({ identity: "provisional" });
-    expect(connections.getList().connections[1]?.backendId).toBeUndefined();
+    await expect(connections.connect({ address: "https://old.example", token })).rejects.toThrow(
+      "Backend check failed with HTTP 404.",
+    );
+    expect(connections.getList().connections).toHaveLength(1);
     connections.dispose();
   });
 

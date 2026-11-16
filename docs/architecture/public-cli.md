@@ -177,9 +177,28 @@ once after a 401 for reads only (token rotation) — never for a mutation.
 | Mode | stdout | stderr |
 | --- | --- | --- |
 | human (default) | Free-form text; may change between releases | Diagnostics, receipt hints |
-| `--json` | Exactly one envelope, success or failure | Nothing on success |
+| `--json` | Exactly one envelope, success or failure | Nothing on success, except the `--wait` progress record below |
 | `--output id` | Only the documented ID(s); nothing on failure | The error |
-| `--jsonl` | One record per line while following, then the final envelope | — |
+| `--jsonl` | One record per line while following, then the final envelope | The `--wait` progress record below |
+
+A mutation run with `--wait` in `--json` or `--jsonl` mode writes one JSON
+line on **stderr** once the backend has answered its submission (or a lost
+response was found by its request key) and the client holds the operation's
+receipt:
+
+```json
+{"type":"observing","action":"environment.start","operationId":"op-…"}
+```
+
+From that line on, SIGINT or SIGTERM stops only observation, and the
+`observation-interrupted` envelope carries the receipt; before it the client
+has no receipt to print. A wrapper that wants to interrupt a wait, or show
+"waiting for ready", watches stderr for it instead of guessing when
+observation began (the CLI scenario `client-exit` does exactly that). It
+names the action and operation only, never input, prompts or results; stdout
+is unchanged, and human and `--output id` modes do not write it
+(`writeObservingRecord` in `packages/cli/src/client/output.ts`, written by
+`submitForWait`).
 
 The envelope (`PublicSuccessEnvelope` / `PublicErrorEnvelope`):
 `{schemaVersion: 1, action, ok, connection, backend, result | error, receipt?, warnings?}`.
@@ -364,9 +383,8 @@ exactly as if the CLI were connected to the leaf. `run get --node …` and
 command node (so the identity check holds) and `node` names the leaf that
 answered.
 
-- **Before anything is routed** the CLI checks that the connected backend
-  advertises `features.nodeRouting`; an older backend would ignore `node` and
-  run the action on itself, so the CLI refuses with `backend-incompatible`.
+- **The CLI sends `node` without a capability probe.** Every backend in the
+  window routes it (`features.nodeRouting` is still advertised).
 - **`--node all`** runs `project list`, `environment list` or `attention` on
   this node and every node it controls. Every item carries `nodeId` and
   `nodeName`, `nodes` reports each node (its total, its `nextCursor` or
@@ -809,11 +827,10 @@ window revision. While the same newest page still has that token the action answ
 `{sessionId, status: "unchanged", token}` with no messages; otherwise it
 returns the page as usual, so a stale or unknown token costs nothing but the
 page. The window is still read fresh, and `knownToken` with `before` is
-`invalid-input` (older pages carry no token). A backend that accepts it
-advertises `features.transcriptKnownToken`; an older backend refuses unknown
-input, so `--follow` sends `knownToken` only when the answering backend (the
-`--node` leaf, when routed) advertises it, and otherwise skips a repeated page
-by comparing tokens itself.
+`invalid-input` (older pages carry no token). Every backend accepts it and
+advertises `features.transcriptKnownToken`; `--follow` always sends
+`knownToken` once it holds a token, and still skips a repeated page by
+comparing tokens itself.
 
 ### Changes
 

@@ -126,9 +126,8 @@ than GET gets `405`. The response (`parseBackendHello`) contains:
 - `capabilities`: name to version, at most 64 entries
   (`BACKEND_CAPABILITIES`). The backend sends `backend-profile` and
   `summary-reads`, `loopback-client-gateway` while that listener is serving,
-  and, in node mode, the ten node capabilities (`node-attachment`,
-  `public-action-relay`, `node-mail-steer`, `node-mail-turn-origin`,
-  `node-coordinator-mail`, `node-coordinator-build-origin`,
+  and, in node mode, the nine node capabilities (`node-attachment`,
+  `public-action-relay`, `node-mail-steer`, `node-coordinator-mail`, `node-coordinator-build-origin`,
   `coordinator-notices`, `node-mail-attachments`, `node-mail-return`,
   `ticket-sync`). Only backend-to-backend code (a command node about its
   leaves) acts on them; the desktop only lists their names in its connection
@@ -163,17 +162,15 @@ handshake before a route is used:
 
 - Redirects are refused. A 3xx response is a `protocol` error, so a token
   never follows a redirect.
-- Any other answer means an older backend: a `404`, a body over 64 KiB, or a
-  200 that does not parse as a hello. The client then calls the authenticated
-  `/__orkestrator/status`.
-  If that succeeds, the outcome is `legacy`: the identity stays provisional,
-  routes are never merged and fallback is off.
+- Any other answer fails the check as a `protocol` error, like any other
+  failed connection: a non-200 status, a body over 64 KiB, or a 200 that does
+  not parse as a hello. There is no fallback to `/__orkestrator/status`.
 - A `401` maps to `authentication-required`, an incompatible API range to
   `incompatible`, and a timeout or network failure to retryable
   `timeout`/`unreachable`.
 - SSH routes also require a real hello whose `endpointRole` is `client`
-  (`assertSshOutcome`). A legacy backend gives `legacy-backend`. A control
-  listener gives `control-endpoint`, and that route is quarantined.
+  (`assertSshOutcome`). A control listener gives `control-endpoint`, and that
+  route is quarantined.
 
 ## Machine profile
 
@@ -295,8 +292,7 @@ backend. It stays readable and writable while Local is stopped or crashed.
    order, minus quarantined routes. The current route is tried first on a
    reconnect.
 2. Each candidate opens its transport. SSH acquires a tunnel lease. Then the
-   hello runs. A route is usable only after an authenticated hello, or a
-   legacy status check for HTTPS.
+   hello runs. A route is usable only after an authenticated hello.
 3. A hello whose `installationId` differs from `verifiedInstallationId` is
    `identity-mismatch`. That is a trust failure: the route is quarantined with
    a reason (`blockedRoutes`) and selection stops. A fallback route that
@@ -740,8 +736,7 @@ omarchy-hp from mbp3 were slow, warm opens fast):
   no download, no Pi probe), bounded at 2 s, then renders. The seed (`seed:
   true`, which can start a bridge and CLI per enabled platform with no cached
   list) runs after the render, once that read settles or reaches the timeout,
-  and updates the model stores when it answers. An older backend treats `seed: false` as an
-  omitted `seed`.
+  and updates the model stores when it answers.
 - **A failing seed is not retried every boot.** A failed or empty host
   catalogue download cools down for 15 minutes
   (`HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS`, `host-catalog-seeds.ts`; it was
@@ -760,8 +755,8 @@ omarchy-hp from mbp3 were slow, warm opens fast):
   reads them with one `list_environment_hydration` call per 100
   environments, instead of two requests per environment; each environment and
   list still fails on its own. A failed batch falls back to individual list reads
-  for its chunk, isolating transport or validation failures. Against an older
-  backend the batcher falls back to the per-environment reads after one "unknown command". A 10-project,
+  for its chunk, isolating transport or validation failures; the next batch tries
+  the batched read again. A 10-project,
   120-environment boot restores with 10 requests instead of 240
   (`boot-hydration.test.ts`). The manifest resync's own per-environment reads
   (`store-resource-sync.ts`) are bounded but not batched.
@@ -1208,9 +1203,6 @@ Plan items that are not implemented, or only partly, as of this change.
   Grants live only in the page's memory, so a reload opens new ones; a hosted
   page whose gateway needs a bearer (`apps/web-public`) cannot close its
   grants on `pagehide`, and they expire on their 15-minute TTL.
-- **Desktop leaf previews.** A relayed leaf's address-bar preview is not
-  supported (its base has a path prefix that main's gateway-preview checks
-  refuse), as with the realms before.
 - **Mobile**: the iOS app shows other nodes in its one `WKWebView`, as a
   browser does. There is no mobile SSH.
 - **SSH**: macOS and Linux desktop only; Windows is not qualified; no SSH in
@@ -1303,7 +1295,7 @@ with it. The command-node equivalents are in the requirement matrix of
 | WB-02 | `apps/desktop/tests/connection-manager-federation.test.ts` (client without SSH) |
 | MG-01 | `packages/protocol/src/device-catalogue.test.ts`, `apps/desktop/tests/connection-manager-federation.test.ts`, `apps/web/src/lib/desktop-storage-key.test.ts` |
 | MG-02, MG-04 | `apps/desktop/tests/connection-manager-federation.test.ts` |
-| MG-03 | `apps/desktop/tests/connection-manager-federation.test.ts` (older backend stays provisional; no profile polling) |
+| MG-03 | `apps/desktop/tests/connection-manager-federation.test.ts` (a backend without hello fails to connect; no profile polling) |
 | PF-01, PF-02, PF-03 | `apps/web/src/lib/federation/federation-runtime.test.ts`, `scripts/benchmark-federation.ts` |
 
 Exercised live against two isolated standalone backends in a real browser

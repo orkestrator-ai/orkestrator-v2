@@ -48,6 +48,8 @@ const CONNECTED: TransportConnectivity = { disconnected: false, since: null };
 interface NodeConnectivity {
   readonly disconnectedSince: Map<TransportConnectivitySource, number>;
   snapshot: TransportConnectivity;
+  /** Called each time this node goes from disconnected to connected. */
+  readonly reconnectListeners: Set<() => void>;
 }
 
 /** Window-level: the clock, and the aggregate's listeners and last snapshot. */
@@ -59,12 +61,14 @@ const nodeConnectivity = defineScopedStore<NodeConnectivity>("transport-connecti
   const state: NodeConnectivity = {
     disconnectedSince: new Map(),
     snapshot: CONNECTED,
+    reconnectListeners: new Set(),
   };
   // A closing node no longer counts towards the window's outage.
   scope.onDispose("transport-connectivity", () => {
     const wasDisconnected = state.snapshot.disconnected;
     state.disconnectedSince.clear();
     state.snapshot = CONNECTED;
+    state.reconnectListeners.clear();
     if (wasDisconnected) notifyWindow();
   });
   return () => state;
@@ -108,6 +112,30 @@ function recompute(scope: NodeScope, state: NodeConnectivity): void {
     readCoordinatorFor(scope).setDisconnected(next.disconnected);
   }
   notifyWindow();
+  if (previous.disconnected && !next.disconnected) {
+    for (const listener of Array.from(state.reconnectListeners)) {
+      try {
+        listener();
+      } catch {
+        // One listener's fault must not keep the others from hearing it.
+      }
+    }
+  }
+}
+
+/**
+ * Calls `listener` each time `scope`'s node goes from disconnected to
+ * connected. Per node, so a reconnect is heard even while another node keeps
+ * the window aggregate disconnected. Returns the stop; disposing the scope
+ * also drops it.
+ */
+export function onNodeReconnected(scope: NodeScope, listener: () => void): () => void {
+  if (scope.disposed) return () => undefined;
+  const { reconnectListeners } = connectivityOf(scope);
+  reconnectListeners.add(listener);
+  return () => {
+    reconnectListeners.delete(listener);
+  };
 }
 
 /**

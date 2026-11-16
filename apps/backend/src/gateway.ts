@@ -71,7 +71,6 @@ export class OrkestratorGateway {
       handleMetrics: (...args) => this.handlers.handleMetrics(...args),
       handleClientMetrics: (...args) => this.handlers.handleClientMetrics(...args),
       handleLoopbackProxy: (...args) => this.handlers.handleLoopbackProxy(...args),
-      handleBrowserLoopbackProxy: (...args) => this.handlers.handleBrowserLoopbackProxy(...args),
     };
     this.auth = new GatewayAuth(this.context, this.lifecycle, routes, this.proxy);
     this.handlers = new GatewayHandlers(this.context, this.events, this.auth, this.proxy);

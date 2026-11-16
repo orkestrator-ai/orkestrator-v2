@@ -17,7 +17,6 @@ import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { coordinatorNodeTarget, withRetryAdvice } from "./commands-registry-coordinator-nodes.js";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { coordinatorCaller } from "./coordinator-action-scope.js";
 import { diffBaseGitForEnvironment, type DiffBaseGit } from "./diff-base-override.js";
 import { isImmutableCommitRef } from "./commands-files.js";
@@ -682,32 +681,6 @@ export async function readWorkerChanges(
   };
 }
 
-/** An older node parses no `diffScope` and answers with the combined diff only. */
-export function olderNodeIgnoredDiffScope(
-  options: WorkerChangesOptions,
-  answer: JsonRecord,
-): boolean {
-  if (options.diffScope === "sinceBase" || !options.includeDiff || options.maxDiffFiles === 0)
-    return false;
-  return !("committedDiffs" in answer) && !("uncommittedDiffs" in answer);
-}
-
-/**
- * What a command node adds to a remote answer that ignored `diffScope`, and
- * counts it: the node predates v2.35.0-beta (to-do 7570 task 2).
- */
-export function olderNodeDiffScopeNote(
-  options: WorkerChangesOptions,
-  answer: JsonRecord,
-): { diffScopeUnsupported?: string } {
-  if (!olderNodeIgnoredDiffScope(options, answer)) return {};
-  compatibilityPathUsage.record("worker-changes.diff-scope-older-node");
-  return {
-    diffScopeUnsupported:
-      "That node's backend predates diffScope, so this answer has only the combined sinceBase diff; sinceBase files marked uncommitted: true also have uncommitted changes.",
-  };
-}
-
 function gitFor(environment: Environment): DiffBaseGit | null {
   try {
     return diffBaseGitForEnvironment(environment);
@@ -752,11 +725,7 @@ export function registerCoordinatorWorkerChanges(
           ),
         }),
       );
-      return {
-        ...answer,
-        ...olderNodeDiffScopeNote(options, answer),
-        nodeId: remote.nodeId,
-      };
+      return { ...answer, nodeId: remote.nodeId };
     }
     const environment = await requireProjectWorker(context, caller.projectId, environmentId);
     return readWorkerChanges(runner(context), environment, options, gitFor(environment));

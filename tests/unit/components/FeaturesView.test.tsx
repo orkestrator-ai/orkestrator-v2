@@ -14,6 +14,7 @@ import {
   stripStoryRefinementStateBlocks,
 } from "@/lib/feature-planner";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
+import { kanbanTask } from "@/test/kanban-task";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
@@ -37,9 +38,9 @@ const realBackendSnapshot = { ...realBackend };
 const defaultConfigSnapshot = structuredClone(appCommandStore(configStore).getState().config);
 
 const startBuildMock = mock(async () => undefined);
-// Most Build tests below drive the renderer sequence an older backend needs.
+// Each Build test stubs the backend's one-request launch it needs.
 const unknownFeaturePlanBuild = async (_input: unknown): Promise<unknown> => {
-  throw new Error("Unknown backend command: start_feature_plan_build");
+  throw new Error("start_feature_plan_build was not stubbed by this test");
 };
 const startFeaturePlanBuildMock = mock(unknownFeaturePlanBuild);
 const addTaskMock = mock(
@@ -68,15 +69,6 @@ const appendStoryMessageMock = mock(
 );
 const updateFeatureMock = mock(
   async (_id: string, _updates: Partial<FeaturePlan>) => undefined as FeaturePlan | undefined,
-);
-const claimFeatureBuildMock = mock(
-  async (_id: string, _taskId: string) =>
-    undefined as
-      | {
-          claimed: boolean;
-          feature: FeaturePlan;
-        }
-      | undefined,
 );
 const deleteTaskMock = mock(async (_taskId: string) => undefined);
 const loadFeaturesMock = mock(async () => true);
@@ -303,7 +295,7 @@ function featureWithStories(overrides: Partial<FeaturePlan> = {}): FeaturePlan {
 }
 
 function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
-  return {
+  return kanbanTask({
     id: "task-1",
     projectId: "project-1",
     title: "Task",
@@ -315,7 +307,7 @@ function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
     createdAt: NOW,
     order: 0,
     ...overrides,
-  };
+  });
 }
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
@@ -475,7 +467,6 @@ function seedStores(featureOrFeatures: FeaturePlan | FeaturePlan[]) {
     loadFeatures: loadFeaturesMock as unknown as FeaturePlanState["loadFeatures"],
     createFeature: createFeatureMock as unknown as FeaturePlanState["createFeature"],
     updateFeature: updateFeatureMock as unknown as FeaturePlanState["updateFeature"],
-    claimFeatureBuild: claimFeatureBuildMock as unknown as FeaturePlanState["claimFeatureBuild"],
     appendMessage: appendMessageMock as unknown as FeaturePlanState["appendMessage"],
     appendStoryMessage: appendStoryMessageMock as unknown as FeaturePlanState["appendStoryMessage"],
     startPlanning: startPlanningMock as unknown as FeaturePlanState["startPlanning"],
@@ -488,43 +479,6 @@ function seedStores(featureOrFeatures: FeaturePlan | FeaturePlan[]) {
     deleteTask: deleteTaskMock as unknown as KanbanState["deleteTask"],
     updateTask: updateTaskMock as unknown as KanbanState["updateTask"],
   });
-}
-
-function seedPipeline({
-  taskId = "task-1",
-  environmentId,
-  failed = false,
-}: { taskId?: string; environmentId?: string; failed?: boolean } = {}): string {
-  const id = `pipeline-${taskId}`;
-  appCommandStore(buildPipelineStore)
-    .getState()
-    .replacePipeline({
-      id,
-      taskId,
-      projectId: "project-1",
-      environmentId: environmentId ?? "",
-      environmentType: "containerized",
-      agentType: "codex",
-      phase: failed ? "failed" : "building",
-      sessions: [],
-      currentSessionIndex: -1,
-      iteration: 0,
-      maxIterations: 3,
-      createdAt: NOW,
-      taskTitle: "Task",
-      taskSnapshot: {
-        title: "Task",
-        description: "",
-        acceptanceCriteria: "",
-        comments: [],
-        images: [],
-      },
-      source: { type: "kanban", taskId },
-      ...(failed ? { error: "failed to start environment" } : {}),
-      backendRevision: 1,
-      controller: "backend",
-    });
-  return id;
 }
 
 /**
@@ -599,14 +553,6 @@ beforeEach(() => {
   updateFeatureMock.mockImplementation(async (featureId, updates) =>
     updateFeatureInStore(featureId, updates),
   );
-  claimFeatureBuildMock.mockClear();
-  claimFeatureBuildMock.mockImplementation(async (featureId, taskId) => {
-    const feature = await updateFeatureInStore(featureId, {
-      status: "building",
-      buildTaskId: taskId,
-    });
-    return feature ? { claimed: true, feature } : undefined;
-  });
   deleteTaskMock.mockClear();
   deleteTaskMock.mockImplementation(async () => undefined);
   loadFeaturesMock.mockReset();
@@ -1762,9 +1708,8 @@ describe("FeaturesView build action", () => {
           appCommandStore(buildPipelineStore).getState().pipelines.get("pipeline-backend"),
         ).toBeTruthy(),
       );
-      // Nothing of the renderer sequence runs: no ticket, claim, start or link.
+      // The renderer creates no ticket and starts or links nothing itself.
       expect(addTaskMock).not.toHaveBeenCalled();
-      expect(claimFeatureBuildMock).not.toHaveBeenCalled();
       expect(startBuildMock).not.toHaveBeenCalled();
       expect(updateFeatureMock).not.toHaveBeenCalled();
     });
@@ -1835,7 +1780,6 @@ describe("FeaturesView build action", () => {
       expect(startFeaturePlanBuildMock).toHaveBeenCalledWith({ featureId: "feature-1" }),
     );
     expect(addTaskMock).not.toHaveBeenCalled();
-    expect(claimFeatureBuildMock).not.toHaveBeenCalled();
   });
 
   test("keeps Build disabled while a plan is building without a claimed ticket", () => {
@@ -1865,26 +1809,6 @@ describe("FeaturesView build action", () => {
     fireEvent.click(build);
     expect(addTaskMock).not.toHaveBeenCalled();
     expect(startBuildMock).not.toHaveBeenCalled();
-  });
-
-  test("deletes the losing task when another client owns the feature reservation", async () => {
-    const winner = featureWithStories({
-      status: "building",
-      buildTaskId: "task-winner",
-    });
-    claimFeatureBuildMock.mockResolvedValueOnce({
-      claimed: false,
-      feature: winner,
-    });
-    seedStores(featureWithStories());
-
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-
-    await waitFor(() => expect(claimFeatureBuildMock).toHaveBeenCalledWith("feature-1", "task-1"));
-    expect(deleteTaskMock).toHaveBeenCalledWith("task-1");
-    expect(startBuildMock).not.toHaveBeenCalled();
-    expect(mockToastError).toHaveBeenCalledWith("This feature already has an active build");
   });
 
   test("blocks Build while any project planning turn is active", async () => {
@@ -1934,304 +1858,24 @@ describe("FeaturesView build action", () => {
     expect(screen.queryByRole("button", { name: "Build" }) === null).toBe(true);
   });
 
-  test("clicking Build creates a Kanban task and starts the build pipeline", async () => {
-    seedStores(featureWithStories({ codexEnvironmentId: "env-feature" }));
-    const pipelineId = seedPipeline({ taskId: "task-1", environmentId: "env-feature" });
-
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-
-    await waitFor(() => {
-      expect(addTaskMock).toHaveBeenCalledWith("project-1", expect.any(String), expect.any(String));
-    });
-    await waitFor(() => {
-      expect(startBuildMock).toHaveBeenCalledTimes(1);
-    });
-    expect(startBuildMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "task-1" }),
-      "containerized",
-      "codex",
-      expect.objectContaining({
-        existingEnvironmentId: "env-feature",
-        featurePlanId: "feature-1",
-      }),
-    );
-    await waitFor(() => {
-      expect(updateFeatureMock).toHaveBeenCalledWith(
-        "feature-1",
-        expect.objectContaining({
-          status: "building",
-          buildTaskId: "task-1",
-          buildPipelineId: pipelineId,
-          codexEnvironmentId: "env-feature",
-        }),
-      );
-    });
-  });
-
-  test("does not mark the feature as building when the build pipeline fails to start", async () => {
-    seedStores(featureWithStories({ codexEnvironmentId: "env-feature" }));
-    seedPipeline({ taskId: "task-1", environmentId: "env-feature", failed: true });
-
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-
-    await waitFor(() => {
-      expect(startBuildMock).toHaveBeenCalledTimes(1);
-    });
-    // The pre-launch reservation is durable, but a failed launch must restore
-    // the original feature state.
-    await waitFor(() => {
-      expect(appCommandStore(featurePlanStore).getState().features[0]?.status).toBe("stories");
-    });
-    expect(updateFeatureMock.mock.calls.at(-1)?.[1]).toMatchObject({
-      status: "stories",
-      buildTaskId: undefined,
-      buildPipelineId: undefined,
-    });
-  });
-
-  test("formats every story into the created Kanban task", async () => {
-    seedStores(
-      featureWithStories({
-        title: " Saved views ",
-        summary: "Users can save filters.",
-        stories: [
-          makeStory({
-            id: "save",
-            title: "Save a view",
-            description: "Persist the current filters.",
-            acceptanceCriteria: ["Can name it", "Can reopen it"],
-          }),
-          makeStory({
-            id: "delete",
-            title: "Delete a view",
-            description: "Remove an obsolete view.",
-            acceptanceCriteria: ["Asks for confirmation"],
-          }),
-        ],
-      }),
-    );
-    seedPipeline({ environmentId: "env-build" });
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-
-    await waitFor(() => expect(addTaskMock).toHaveBeenCalledTimes(1));
-    const [projectId, title, description] = addTaskMock.mock.calls[0]!;
-    expect(projectId).toBe("project-1");
-    expect(title).toBe("Saved views");
-    expect(description).toContain("Feature summary:\nUsers can save filters.");
-    expect(description).toContain("### 1. Save a view\nPersist the current filters.");
-    expect(description).toContain("- Can name it\n- Can reopen it");
-    expect(description).toContain("### 2. Delete a view\nRemove an obsolete view.");
-    expect(description).toContain("- Asks for confirmation");
-  });
-
-  test("reports a missing task id and does not start a build", async () => {
-    addTaskMock.mockImplementationOnce(async () => null as unknown as string);
-    seedStores(featureWithStories());
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("Failed to start the build pipeline", {
-        description: "Failed to create the Kanban task for the build pipeline",
-      }),
-    );
-    expect(startBuildMock).not.toHaveBeenCalled();
-  });
-
-  test("reports task persistence rejection and re-enables Build", async () => {
-    addTaskMock.mockImplementationOnce(async () => {
-      throw new Error("task persistence failed");
-    });
-    seedStores(featureWithStories());
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("Failed to start the build pipeline", {
-        description: "task persistence failed",
-      }),
-    );
-    expect(screen.getByRole("button", { name: "Build" }).hasAttribute("disabled")).toBe(false);
-    expect(startBuildMock).not.toHaveBeenCalled();
-  });
-
-  test("reports when the created task is absent from the store", async () => {
-    seedStores(featureWithStories());
-    appCommandStore(kanbanStore).setState({ tasks: [] });
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("Failed to start the build pipeline", {
-        description: "Created build task was not found in the Kanban store",
-      }),
-    );
-    expect(deleteTaskMock).toHaveBeenCalledWith("task-1");
-    expect(startBuildMock).not.toHaveBeenCalled();
-  });
-
-  test("reports startBuild rejection without changing feature state", async () => {
-    startBuildMock.mockImplementationOnce(async () => {
-      throw new Error("build launch failed");
-    });
-    seedStores(featureWithStories());
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("Failed to start the build pipeline", {
-        description: "build launch failed",
-      }),
-    );
-    expect(appCommandStore(featurePlanStore).getState().features[0]?.status).toBe("stories");
-    expect(updateFeatureMock.mock.calls.at(-1)?.[1]).toMatchObject({
-      status: "stories",
-    });
-  });
-
-  test("leaves the feature unchanged when startBuild creates no pipeline", async () => {
-    seedStores(featureWithStories());
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-
-    await waitFor(() => expect(startBuildMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => {
-      expect(appCommandStore(featurePlanStore).getState().features[0]?.status).toBe("stories");
-    });
-    expect(updateFeatureMock.mock.calls.at(-1)?.[1]).toMatchObject({
-      status: "stories",
-    });
-  });
-
-  test("omits the environment update when the pipeline has no environment id", async () => {
-    seedStores(featureWithStories({ codexEnvironmentId: undefined }));
-    const pipelineId = seedPipeline();
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-
-    await waitFor(() =>
-      expect(updateFeatureMock).toHaveBeenCalledWith(
-        "feature-1",
-        expect.objectContaining({
-          status: "building",
-          buildPipelineId: pipelineId,
-        }),
-      ),
-    );
-    const buildingUpdate = updateFeatureMock.mock.calls.find(
-      ([, updates]) => updates.status === "building",
-    )?.[1];
-    expect(buildingUpdate).not.toHaveProperty("codexEnvironmentId");
-  });
-
-  test("uses the local environment preference for local projects", async () => {
-    seedStores(featureWithStories({ codexEnvironmentId: undefined }));
-    appCommandStore(projectStore).setState((state) => ({
-      projects: state.projects.map((project) => ({ ...project, localPath: "/repo" })),
-    }));
-    seedPipeline();
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-
-    await waitFor(() =>
-      expect(startBuildMock).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "task-1" }),
-        "local",
-        "codex",
-        expect.objectContaining({
-          existingEnvironmentId: undefined,
-          featurePlanId: "feature-1",
-        }),
-      ),
-    );
-  });
-
-  test("uses the configured environment type before the project-path fallback", async () => {
-    seedStores(featureWithStories({ codexEnvironmentId: undefined }));
-    appCommandStore(projectStore).setState((state) => ({
-      projects: state.projects.map((project) => ({ ...project, localPath: "/repo" })),
-    }));
-    appCommandStore(configStore).setState((state) => ({
-      config: {
-        ...state.config,
-        repositories: {
-          ...state.config.repositories,
-          "project-1": {
-            ...(state.config.repositories["project-1"] ?? {
-              defaultBranch: "main",
-              prBaseBranch: "main",
-            }),
-            lastEnvironmentType: "containerized",
-          },
-        },
-      },
-    }));
-    seedPipeline();
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-
-    await waitFor(() =>
-      expect(startBuildMock).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "task-1" }),
-        "containerized",
-        "codex",
-        expect.objectContaining({
-          existingEnvironmentId: undefined,
-          featurePlanId: "feature-1",
-        }),
-      ),
-    );
-  });
-
-  test("suppresses a second build click while task creation is pending", async () => {
-    let resolveTask!: (taskId: string) => void;
-    addTaskMock.mockImplementationOnce(
+  test("suppresses a second build click while the backend launch is pending", async () => {
+    let finish!: () => void;
+    startFeaturePlanBuildMock.mockImplementationOnce(
       () =>
-        new Promise((resolve) => {
-          resolveTask = resolve;
+        new Promise((_resolve, reject) => {
+          finish = () => reject(new Error("environment failed"));
         }),
     );
     seedStores(featureWithStories());
-    seedPipeline();
     renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     const build = screen.getByRole("button", { name: "Build" });
     fireEvent.click(build);
     await waitFor(() => expect(build.hasAttribute("disabled")).toBe(true));
     fireEvent.click(build);
-    expect(addTaskMock).toHaveBeenCalledTimes(1);
+    expect(startFeaturePlanBuildMock).toHaveBeenCalledTimes(1);
 
-    await act(async () => resolveTask("task-1"));
-    await waitFor(() => expect(startBuildMock).toHaveBeenCalledTimes(1));
-  });
-
-  test("reports feature-state persistence failure after a healthy pipeline", async () => {
-    seedStores(featureWithStories());
-    seedPipeline();
-    updateFeatureMock.mockImplementationOnce(async () => undefined);
-    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("Failed to start the build pipeline", {
-        description: "Failed to save the build pipeline state for this feature",
-      }),
-    );
-    expect(screen.getByRole("button", { name: "Build" }).hasAttribute("disabled")).toBe(false);
+    await act(async () => finish());
+    await waitFor(() => expect(build.hasAttribute("disabled")).toBe(false));
   });
 });

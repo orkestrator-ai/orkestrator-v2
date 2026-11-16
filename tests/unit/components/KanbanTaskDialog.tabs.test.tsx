@@ -31,6 +31,7 @@ const setEnvironmentAutoMergeMock = mock(
 
 import * as realUseBuildPipeline from "@/hooks/useBuildPipeline";
 import * as realBackend from "@/lib/backend";
+import { kanbanTask } from "../../../apps/web/src/test/kanban-task";
 const realUseBuildPipelineSnapshot = { ...realUseBuildPipeline };
 const realBackendSnapshot = { ...realBackend };
 
@@ -60,7 +61,7 @@ const initialKanbanState = appCommandStore(kanbanStore).getState();
 const PR_URL = "https://github.com/o/r/pull/42";
 
 function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
-  return {
+  return kanbanTask({
     id: "task-1",
     projectId: "project-1",
     title: "Tabbed ticket",
@@ -72,7 +73,7 @@ function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
     comments: [{ id: "c1", text: "🔨 Build started", createdAt: "2026-01-01T00:00:00.000Z" }],
     images: [],
     ...overrides,
-  } as KanbanTask;
+  } as KanbanTask);
 }
 
 /** A finished build of task-1 with Notes, in env-1. */

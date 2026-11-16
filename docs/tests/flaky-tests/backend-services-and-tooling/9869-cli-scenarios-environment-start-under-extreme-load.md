@@ -1,7 +1,7 @@
 # CLI `client-exit` fails around `environment start` at extreme host load
 
 - **ID:** 9869
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-22
 - **File:** `packages/cli/scenarios/cases.ts` (`setup-failure`, `client-exit`), driven by `packages/cli/scripts/run-scenarios.ts`.
 - **Test:** `client-exit` (local only). Only this isolated-passing case is registered as a flake.
@@ -45,4 +45,12 @@
 - **Cause (from the code):** `client-exit` sends SIGINT 2.5 s after spawning `environment start --wait ready` (`signalAfterMs` in `packages/cli/scenarios/harness.ts`). If the client has not yet received the submission response, it cannot print a receipt, so the scenario races host speed.
 - **Not changed:** a deterministic fix needs a signal that the client is observing, such as a stderr progress line or a readiness hook in the CLI. Waiting for admission through `run get --request-id` still leaves the response in flight. That is a CLI output change, and the scenario suite was not run here (heavy live suite, loaded host). Still open.
 
-- **Follow-up (2026-11-15):** the product signal this test needs is to-do [8302](../../../todo/cross-cutting/8302-signals-for-deterministic-flake-fixes.md).
+- **Follow-up (2026-11-15):** the product signal this test needs is to-do 8302 (retired 2026-11-16; the signals are described in the [testing guide](../../../development/testing-guide.md#controlled-time)).
+
+## Resolution (2026-11-16)
+
+- **Observed on:** Linux, base `c1fcc573b`, branch `20261116-015626-a440226a702f`.
+- **Root cause:** as the 2026-11-15 triage found, the scenario sent SIGINT 2.5 s after spawning the client, before a loaded host had answered the submission, so the client had no receipt to print.
+- **Fix:** a `--wait` mutation in `--json`/`--jsonl` mode now writes one stderr record, `{"type":"observing","action":...,"operationId":...}`, once it holds the submission's receipt (`submitForWait` in `packages/cli/src/client/commands/common.ts`, `writeObservingRecord` in `output.ts`; documented in [public-cli.md](../../../architecture/public-cli.md#output-and-exit-codes)). The harness option `signalWhenObserving` (`packages/cli/scenarios/harness.ts`) sends the signal when that record arrives, and `client-exit` uses it instead of the fixed delay. stdout's single envelope is unchanged. Tests: `packages/cli/tests/client-waits.test.ts` (normal and lost-response paths, human mode unchanged) and `packages/cli/tests/scenario-harness.test.ts`.
+- **Reproduced:** no — the old timer was replaced rather than re-run under load. The race is removed by construction: the signal can no longer arrive before the receipt.
+- **Stress:** `mise run test:logged -- --name cli-client-exit -- mise run test:cli:scenarios --scenario client-exit` passed (14.3 s), and `bun scripts/test-under-contention.ts --burners 6 -- bun packages/cli/scripts/run-scenarios.ts --scenario client-exit` passed 3 of 3 (about 27 s each).

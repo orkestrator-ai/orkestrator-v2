@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { GATEWAY_CURSOR_EVENT, readSseStream } from "@orkestrator/protocol/gateway-event-stream";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import {
@@ -9,9 +9,8 @@ import {
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 import { RelayedEventStream } from "@orkestrator/protocol/relayed-event-stream";
 
-import { compatibilityPathUsage } from "../src/core/compatibility-path-usage";
 import { OrkestratorGateway } from "../src/gateway";
-import { parseGatewayCursor, type GatewayEventReplay } from "../src/gateway-event-replay";
+import type { GatewayEventReplay } from "../src/gateway-event-replay";
 import {
   eventClients,
   eventFrames,
@@ -26,8 +25,6 @@ const LEAF = "bk_leaf" as BackendId;
 const OTHER = "bk_other" as BackendId;
 const LEAF_EVENT = relayedNodeEventName(LEAF);
 const OTHER_EVENT = relayedNodeEventName(OTHER);
-/** What every renderer before per-node names sends. */
-const OLDER_RENDERER = "?excludeEvents=terminal-output-";
 const NEWER_RENDERER = "?excludeEvents=terminal-output-&relayedEvents=per-node";
 
 function relayedEvent(nodeId: BackendId, id: string): RelayedNodeEvent {
@@ -45,16 +42,6 @@ function rings(gateway: OrkestratorGateway) {
   };
 }
 
-function legacyUses(): number {
-  return compatibilityPathUsage.snapshot().paths["relayed-node-event.legacy-stream"]?.count ?? 0;
-}
-
-function legacyDesktopUses(): number {
-  return (
-    compatibilityPathUsage.snapshot().paths["relayed-node-event.legacy-desktop-stream"]?.count ?? 0
-  );
-}
-
 async function closeAndWait(
   gateway: OrkestratorGateway,
   stream: Awaited<ReturnType<typeof openEventStream>>,
@@ -64,107 +51,38 @@ async function closeAndWait(
   await waitUntil(() => eventClients(gateway).size === 0, "Stream did not close");
 }
 
-describe("a client on an older version", () => {
-  test("still receives relayed events under the old name, with no id of their own", async () => {
-    const { gateway, info } = await startGateway();
-    const older = await openEventStream(gateway, info, OLDER_RENDERER);
-    const uses = legacyUses();
-
-    emitRelayed(gateway, LEAF, "one");
-    gateway.emit(LEAF_EVENT, { nodeId: LEAF, kind: "resync" });
-    await waitUntil(
-      () => eventFrames(older.received(), RELAYED_NODE_EVENT).length === 2,
-      "The older client never received its relayed frames",
-    );
-
-    const frames = eventFrames(older.received(), RELAYED_NODE_EVENT);
-    expect(JSON.parse(frames[0]!.replace(/^data: /, ""))).toEqual({
-      event: RELAYED_NODE_EVENT,
-      payload: relayedEvent(LEAF, "one"),
+describe("a main stream", () => {
+  for (const query of [
+    "?excludeEvents=terminal-output-",
+    "?relayedEvents=legacy",
+    "?relayedEvents=bogus",
+  ]) {
+    test(`carries no relayed events, whatever it asks for (${query})`, async () => {
+      const { gateway, info } = await startGateway();
+      const main = await openEventStream(gateway, info, query);
+      emitRelayed(gateway, LEAF, "one");
+      gateway.emit(LEAF_EVENT, { nodeId: LEAF, kind: "resync" });
+      gateway.emit("environment-renamed", { id: "after" });
+      await waitUntil(() => main.received().includes('"id":"after"'), "Main stream stalled");
+      expect(main.received()).not.toContain(RELAYED_NODE_EVENT);
+      expect(main.received()).not.toContain(LEAF_EVENT);
+      main.close();
     });
-    expect(JSON.parse(frames[1]!.replace(/^data: /, ""))).toEqual({
-      event: RELAYED_NODE_EVENT,
-      payload: { nodeId: LEAF, kind: "resync" },
-    });
-    expect(frames.every((frame) => frameId(frame) === null)).toBe(true);
-    expect(older.received()).not.toContain(LEAF_EVENT);
-    expect(legacyUses()).toBe(uses + 2);
-    older.close();
-  });
+  }
 
-  test("a reconnect is told to re-read the node it may have missed events from", async () => {
+  test("a reconnect replays its own window and is sent no relayed resync", async () => {
     const { gateway, info } = await startGateway();
     gateway.emit("environment-renamed", { id: "before" });
-    emitRelayed(gateway, OTHER, "long-ago");
-    gateway.emit("environment-renamed", { id: "later" });
-    const older = await openEventStream(gateway, info, OLDER_RENDERER);
     const cursor = rings(gateway).eventReplay.latestCursor;
-    await closeAndWait(gateway, older);
-
     emitRelayed(gateway, LEAF, "missed");
     gateway.emit("environment-renamed", { id: "replayed" });
-
-    const resumed = await openEventStream(
-      gateway,
-      info,
-      `${OLDER_RENDERER}&since=${encodeURIComponent(cursor)}`,
-    );
-    await waitUntil(
-      () => eventFrames(resumed.received(), RELAYED_NODE_EVENT).length > 0,
-      "A reconnecting older client was not told to re-read the node",
-    );
-    expect(eventFrames(resumed.received(), "environment-renamed")).toHaveLength(1);
+    const resumed = await openEventStream(gateway, info, `?since=${encodeURIComponent(cursor)}`);
+    await waitUntil(() => resumed.received().includes('"id":"replayed"'), "No replay");
     expect(eventFrames(resumed.received(), "gateway.connected")[0]).toContain(
       '"status":"replayed"',
     );
-    const frames = eventFrames(resumed.received(), RELAYED_NODE_EVENT).map(
-      (frame) => JSON.parse(frame.replace(/^data: /, "")).payload,
-    );
-    // Not the node whose last event predates this client's cursor.
-    expect(frames).toEqual([{ nodeId: LEAF, kind: "resync" }]);
+    expect(resumed.received()).not.toContain('"kind":"resync"');
     resumed.close();
-  });
-
-  test("a relayed event arriving during its handshake is written once the replay drains", () => {
-    const gateway = new OrkestratorGateway({
-      backend: { invoke: mock(async () => null) },
-      dataDir: "/tmp",
-      rendererRoot: "/tmp",
-    });
-    const writes: string[] = [];
-    const client = {
-      writableLength: 0,
-      write: mock((chunk: string | Buffer) => {
-        writes.push(String(chunk));
-        return true;
-      }),
-      destroy: mock(() => undefined),
-    };
-    const state = {
-      prefixes: null,
-      includedPrefixes: null,
-      excludedPrefixes: ["terminal-output-"],
-      desyncedSessions: new Set<string>(),
-      handshake: { events: [], bytes: 0 } as { events: unknown[]; bytes: number } | null,
-      tracksReplayCursor: true,
-    };
-    const internals = gateway as unknown as {
-      clients: Map<object, typeof state>;
-      initializeEventReplay(client: object, state: object, cursor: unknown): void;
-    };
-    internals.clients.set(client, state);
-
-    emitRelayed(gateway, LEAF, "during");
-    expect(writes).toEqual([]);
-    expect(state.handshake?.events).toHaveLength(1);
-
-    internals.initializeEventReplay(client, state, parseGatewayCursor(null));
-    expect(state.handshake).toBeNull();
-    const received = writes.join("");
-    expect(eventFrames(received, RELAYED_NODE_EVENT)).toHaveLength(1);
-    expect(received.indexOf("gateway.connected")).toBeLessThan(received.indexOf("during"));
-    rings(gateway).relayedEventReplay.releaseRetained();
-    rings(gateway).eventReplay.releaseRetained();
   });
 
   test("a stream that names no relayed events on its filter gets none", async () => {
@@ -175,7 +93,6 @@ describe("a client on an older version", () => {
       info,
       "?excludeEvents=terminal-output-&includeEvents=terminal-output-one",
     );
-    const uses = legacyUses();
 
     emitRelayed(gateway, LEAF, "one");
     gateway.emit("menu-zoom", "in");
@@ -183,25 +100,8 @@ describe("a client on an older version", () => {
 
     expect(scoped.received()).not.toContain(RELAYED_NODE_EVENT);
     expect(terminal.received()).not.toContain(RELAYED_NODE_EVENT);
-    expect(legacyUses()).toBe(uses);
     scoped.close();
     terminal.close();
-  });
-
-  test("an older desktop's explicit legacy stream gets the frames, on a counter of its own", async () => {
-    const { gateway, info } = await startGateway();
-    const main = await openEventStream(gateway, info, "?relayedEvents=legacy");
-    const uses = legacyUses();
-    const desktopUses = legacyDesktopUses();
-
-    emitRelayed(gateway, LEAF, "one");
-    await waitUntil(
-      () => eventFrames(main.received(), RELAYED_NODE_EVENT).length === 1,
-      "The desktop's main stream never received the frame",
-    );
-    expect(legacyUses()).toBe(uses);
-    expect(legacyDesktopUses()).toBe(desktopUses + 1);
-    main.close();
   });
 });
 
@@ -214,8 +114,6 @@ describe("per-node relayed streams", () => {
       info,
       `?includeEvents=${encodeURIComponent(LEAF_EVENT)}`,
     );
-    const uses = legacyUses();
-
     emitRelayed(gateway, LEAF, "mine");
     emitRelayed(gateway, OTHER, "not-mine");
     gateway.emit("environment-renamed", { id: "authoritative" });
@@ -229,7 +127,6 @@ describe("per-node relayed streams", () => {
     expect(main.received()).not.toContain(RELAYED_NODE_EVENT);
     expect(relayed.received()).not.toContain(OTHER_EVENT);
     expect(relayed.received()).not.toContain("environment-renamed");
-    expect(legacyUses()).toBe(uses);
     main.close();
     relayed.close();
   });
@@ -450,71 +347,7 @@ describe("the renderer's relayed stream against a real gateway", () => {
   });
 });
 
-describe("legacy recovery boundaries", () => {
-  for (const mode of ["", "&relayedEvents=legacy"]) {
-    test(`recovery precedes cursor advancement and caught-up recovery works ${mode}`, async () => {
-      const { gateway, info } = await startGateway();
-      gateway.emit("environment-renamed", { id: "before" });
-      const cursor = rings(gateway).eventReplay.latestCursor;
-      emitRelayed(gateway, LEAF, "missed");
-      gateway.emit("environment-renamed", { id: "after" });
-      const resumed = await openEventStream(gateway, info, `?since=${cursor}${mode}`);
-      await waitUntil(() => resumed.received().includes('"id":"after"'), "No replay");
-      expect(resumed.received().indexOf('"kind":"resync"')).toBeLessThan(
-        resumed.received().indexOf('"id":"after"'),
-      );
-      await closeAndWait(gateway, resumed);
-      // Dropping before the resync cannot advance past the original connected id.
-      const retry = await openEventStream(gateway, info, `?since=${cursor}${mode}`);
-      await waitUntil(() => retry.received().includes('"kind":"resync"'), "Lost recovery on retry");
-      await closeAndWait(gateway, retry);
-      const caughtUp = rings(gateway).eventReplay.latestCursor;
-      emitRelayed(gateway, LEAF, "also-missed");
-      const quiet = await openEventStream(gateway, info, `?since=${caughtUp}${mode}`);
-      await waitUntil(() => quiet.received().includes('"kind":"resync"'), "No caught-up recovery");
-      quiet.close();
-    });
-  }
-
-  test("metadata overflow explicitly reconciles a still-valid main cursor", async () => {
-    const { gateway, info } = await startGateway();
-    const cursor = rings(gateway).eventReplay.latestCursor;
-    for (let i = 0; i < 257; i++) emitRelayed(gateway, `bk_node${i}` as BackendId, "missed");
-    const resumed = await openEventStream(gateway, info, `?since=${cursor}`);
-    await waitUntil(
-      () => resumed.received().includes("gateway.reconcile-required"),
-      "Overflow was invisible",
-    );
-    resumed.close();
-  });
-
-  test("unwatched nodes do not receive recovery hints", async () => {
-    let watched = true;
-    const { gateway, info } = await startGateway({
-      nodeHooks: {
-        isPortalOriginAllowed: () => false,
-        noteControllerContact: () => undefined,
-        isRelayedNodeWatched: () => watched,
-      },
-    });
-    const cursor = rings(gateway).eventReplay.latestCursor;
-    emitRelayed(gateway, LEAF, "missed");
-    watched = false;
-    const resumed = await openEventStream(gateway, info, `?since=${cursor}`);
-    expect(resumed.received()).not.toContain('"kind":"resync"');
-    resumed.close();
-  });
-
-  test("explicit invalid modes retain legacy delivery without omission accounting", async () => {
-    const { gateway, info } = await startGateway();
-    const stream = await openEventStream(gateway, info, "?relayedEvents=bogus");
-    const uses = legacyUses();
-    emitRelayed(gateway, LEAF, "one");
-    await waitUntil(() => stream.received().includes(RELAYED_NODE_EVENT), "No legacy delivery");
-    expect(legacyUses()).toBe(uses);
-    stream.close();
-  });
-
+describe("relayed stream boundaries", () => {
   test("expired relayed cursors have separate handshake metrics", async () => {
     const { gateway, info } = await startGateway();
     const cursor = rings(gateway).relayedEventReplay.latestCursor;

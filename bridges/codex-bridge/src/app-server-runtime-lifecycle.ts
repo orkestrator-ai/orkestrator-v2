@@ -45,6 +45,7 @@ import {
 } from "./sessions/auth-recovery-notice.js";
 import { RefusedCellTail, reportsRefusal, type RefusedCell } from "./sessions/refused-cell-tail.js";
 import { compareDispatchRecordsNewestFirst, DispatchJournal } from "./sessions/dispatch-journal.js";
+import { adoptLoginBridgeState } from "./login-state-adoption.js";
 
 import {
   createTurnRenderState,
@@ -139,7 +140,19 @@ export class CodexRuntimeLifecycle {
   }
 
   async startOnce(): Promise<void> {
-    await this.ctx.journal.load();
+    // Once per process, before the journal loads, so a record adopted from the
+    // login's own directory stops a re-send. A retried start skips it: the
+    // journal it writes has been loaded by then.
+    this.ctx.loginStateAdoption ??= adoptLoginBridgeState({
+      codexHome: this.ctx.options.codexHome,
+      cwd: this.ctx.options.cwd,
+      dispatchJournalMaxRecords: this.ctx.options.dispatchJournalMaxRecords,
+      dispatchJournalMaxBytes: this.ctx.options.dispatchJournalMaxBytes,
+    }).then(async ({ journalError }) => {
+      await this.ctx.journal.load();
+      if (journalError !== undefined) this.ctx.journal.refuse(journalError);
+    });
+    await this.ctx.loginStateAdoption;
     const persistedSessions = await this.ctx.store.load();
     for (const persisted of persistedSessions) {
       this.ctx.registry.restoreSession({

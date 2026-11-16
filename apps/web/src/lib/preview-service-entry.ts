@@ -3,7 +3,7 @@ import {
   formatPreviewIntentUri,
   formatPreviewServiceUri,
   normalizePreviewPath,
-  resolvePreviewEntryService,
+  parsePreviewPort,
   type PreviewCapabilities,
   type PreviewRegistrySnapshot,
   type PreviewServiceRef,
@@ -19,34 +19,60 @@ import type { Environment } from "@/types";
 
 /**
  * Target for the environment's browser button: the registered entry service
- * (resolved to a transport only when the tab attaches), falling back to the
- * legacy entry address when preview services cannot answer. `scope` is the
- * environment's node (the app's command scope when omitted).
+ * (resolved to a transport only when the tab attaches). Without one, the entry
+ * address opens as an unresolved preview intent (`environmentEntryIntent`), so
+ * the tab offers the service, a choice or registration, exactly as a typed
+ * address does; a raw URL would only reach the "opens in your browser"
+ * placeholder. `scope` is the environment's node (the app's command scope when
+ * omitted).
  */
 export async function environmentBrowserTarget(
-  environment: Pick<Environment, "id">,
+  environment: Pick<Environment, "id" | "environmentType" | "entryPort">,
   legacyUrl: string | null,
   scope: NodeScope = appCommandScope(),
 ): Promise<string | undefined> {
   ensurePreviewServiceSync(scope);
   const store = scope.store(previewServiceStore).getState();
   const capabilities = await store.loadCapabilities();
-  if (!capabilities) return legacyUrl ?? undefined;
+  if (!capabilities) return environmentEntryIntent(environment, legacyUrl);
   const snapshot = await store.refreshEnvironment(environment.id);
-  if (!snapshot) return legacyUrl ?? undefined;
-  // The backend resolves the entry service; an older backend omits it, and the
-  // same protocol rule is applied to its services here.
-  const serviceId =
-    snapshot.entryServiceId !== undefined
-      ? snapshot.entryServiceId
-      : (resolvePreviewEntryService(snapshot.services, environment.id)?.definition.serviceId ??
-        null);
-  if (!serviceId) return legacyUrl ?? undefined;
+  if (!snapshot) return environmentEntryIntent(environment, legacyUrl);
+  // The backend resolves the entry service.
+  const serviceId = snapshot.entryServiceId;
+  if (!serviceId) return environmentEntryIntent(environment, legacyUrl);
   return formatPreviewServiceUri({
     backendInstanceId: capabilities.backendInstanceId,
     environmentId: environment.id,
     serviceId,
     path: "/",
+  });
+}
+
+/**
+ * The environment's entry address as a preview intent, or undefined when it
+ * has none. `legacyUrl` names the backend host port the entry is published
+ * on, which says nothing durable about the application, so a container's
+ * intent names its entry (application) port inside the container instead;
+ * the backend then matches the container service on that port or offers to
+ * register it.
+ */
+export function environmentEntryIntent(
+  environment: Pick<Environment, "id" | "environmentType" | "entryPort">,
+  legacyUrl: string | null,
+): string | undefined {
+  if (!legacyUrl) return undefined;
+  const entryPort = parsePreviewPort(environment.entryPort);
+  if (environment.environmentType === "containerized" && entryPort !== null) {
+    return formatPreviewIntentUri({
+      environmentId: environment.id,
+      source: "container-terminal",
+      url: `http://localhost:${entryPort}/`,
+    });
+  }
+  return formatPreviewIntentUri({
+    environmentId: environment.id,
+    source: "address-bar",
+    url: legacyUrl,
   });
 }
 

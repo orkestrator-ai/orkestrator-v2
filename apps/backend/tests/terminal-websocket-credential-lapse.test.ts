@@ -523,9 +523,10 @@ describe("terminal operations after a credential lapses", () => {
       );
       fixture.grants.revoke(fixture.issued.grant.grantId);
       fixture.release();
-      expect(await nextTerminalControl(durable.inbox, "operation-result")).toMatchObject({
-        ok: true,
-        operation: "input",
+      // Successful input is acknowledged by the cumulative `input-results` frame.
+      expect(await nextTerminalControl(durable.inbox, "input-results")).toMatchObject({
+        channelId: subscribed.channelId,
+        throughOperationId: 1,
       });
       await drained(fixture);
       expect(

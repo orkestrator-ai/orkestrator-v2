@@ -338,7 +338,7 @@ describe("AT-05 older nodes", () => {
     const network = new TestNodeNetwork();
     const command = await network.add("command", { forceRegistration: true });
     const old = await network.add("old");
-    old.legacy = true;
+    old.helloOverrides = { capabilities: { "backend-profile": 1, "summary-reads": 1 } };
     expect(await refusalOf(attach(command, old))).toBe("needs-update");
   });
 });

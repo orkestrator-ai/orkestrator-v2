@@ -12,9 +12,10 @@ and it never follows a reused port to another application.
 The desktop tunnel and the container relay are **on by default**; private
 origins need an operator's domain and certificate, so they stay off. The
 service registry, service tabs and terminal-link intents are always on; with
-the transport turned off, a desktop service tab loads the service's current
-host port over the legacy gateway loopback route ("compatibility" mode), which
-needs a published port.
+the transport turned off, a desktop service tab says this client cannot preview
+the backend's services and loads nothing. There is no fallback route: the
+legacy gateway loopback route and the tab's "compatibility" mode were removed
+on 2026-11-15 (8108 task 3).
 
 The defaults apply only to a backend with no saved preview settings. Saved
 settings keep their values, because a saved off cannot be told apart from a
@@ -36,7 +37,7 @@ stays off until it is turned on.
 | Backend | `core/commands-registry-previews.ts` | Trusted control commands |
 | Protocol | `packages/protocol/src/preview-*.ts` | Contracts, HTTP/1.1 and WebSocket codecs, header policy |
 | Desktop | `electron/preview-transport-manager.ts` | Per-service loopback ingress over the tunnel |
-| Desktop | `electron/preview-tunnel-session.ts` | Tunnel v2 sessions and streams, v1 fallback |
+| Desktop | `electron/preview-tunnel-session.ts` | Tunnel v2 sessions and streams |
 | Desktop | `electron/preview-external-handoff.ts` | External-browser handoff without a credential in a URL |
 | Desktop | `electron/preview-external-forward.ts` | `localhost` forward for the user's own browser (remote backends without a private origin) |
 | Web | `lib/preview-link-external.ts` | Routes Cmd/Ctrl-clicked terminal and agent loopback links to a service |
@@ -186,10 +187,9 @@ a mapping still requires recreating the container.
 The client chooses a mode from the authenticated `get_preview_capabilities`
 response:
 
-- **Desktop app, in-app tab:** desktop tunnel. If the transport is off, it
-  falls back to the legacy gateway path. The legacy path rewrites HTML, has no
-  WebSocket support, and shares one origin between applications; the tab shows
-  these limitations. **Open in browser** uses the private origin when the
+- **Desktop app, in-app tab:** desktop tunnel. If the transport is off, the
+  tab explains that this client cannot preview the backend's services and
+  attaches no view. **Open in browser** uses the private origin when the
   backend publishes one. A remote backend without one gets an
   [external-browser forward](#external-browser-forward) on `localhost`
   instead.
@@ -197,31 +197,46 @@ response:
   publication, the tab explains the required setup. It never falls back to an
   unauthenticated or embedded view.
 
-The legacy route (`/__orkestrator/browser/loopback/<port>/`) stays available
-for old clients and legacy URL tabs. It opens only a port that is the
-verified binding of an enabled service of the requesting environment, and
-never a reserved port (`PreviewRuntime.legacyLoopbackPortAccess`); any other
-port answers 403, so a backend-host port must be registered as a service of
-the tab's environment before a legacy tab can show it. The renderer passes the
-tab's environment with the attach call, and Electron main names it in the
-`x-orkestrator-preview-environment` header on the view's authenticated
-requests; a request without it (an older desktop app) is refused. A legacy URL tab whose loopback port
-belongs to exactly one enabled, available service of its own environment in
-the current backend epoch offers **Open as service**. The click re-reads the
-service list and converts the tab only if the same service still has the
-same endpoint generation, keeping the path, query and fragment
-(`legacyUrlServiceMatch` in `apps/web/src/lib/preview-service-entry.ts`).
-Ownership is never inferred from the port alone or from the active
-environment, so ambiguous tabs get no offer.
+### URL tabs
 
-On the desktop with the tunnel available, a matching tab converts by itself when
-it becomes active, so stored legacy tabs migrate without a click. Web clients
-and desktops with the tunnel off keep the button: a web client's service tab
-needs publication, and a tunnel-less conversion would load the same route. A
-`localhost` URL never matches, because the snapshot does not establish which
-address family the legacy view used, so those tabs stay URL tabs. A migrated tab
-moves to the service's own partition, so its cookies and storage from the shared
-legacy partition do not come with it.
+A browser tab whose target is a plain address (a new tab, or one saved before
+service previews) has no in-app view. The legacy gateway route
+(`/__orkestrator/browser/loopback/<port>/`) that loaded such tabs was removed
+on 2026-11-15 (8108 task 3), together with its port check, body rewrite,
+sandbox policy and `x-orkestrator-preview-environment` header. The gateway
+proxies nothing there: the path gets the renderer fallback, like any other
+unknown `/__orkestrator/` path, and workspace grants and the node relay no
+longer admit it. `get_preview_capabilities` still carries the contract-required
+`surfaces.legacyPath`, now always `available: false`. The tab (`UrlBrowserTab` in
+`apps/web/src/components/browser/BrowserTab.tsx`) works as follows:
+
+- An address typed into it becomes an `address-bar` intent, which the backend
+  resolves in the tab's environment like a terminal link: a service, a choice
+  between services, or an offer to register the port. It never loads a raw
+  host port.
+- A saved address whose loopback port belongs to exactly one enabled,
+  available service of its own environment in the current backend epoch
+  offers **Open as service**. The click re-reads the service list and
+  converts the tab only if the same service still has the same endpoint
+  generation, keeping the path, query and fragment (`legacyUrlServiceMatch` in
+  `apps/web/src/lib/preview-service-entry.ts`). Ownership is never inferred
+  from the port alone or from the active environment, so ambiguous tabs get no
+  offer. On the desktop with the tunnel available a matching tab converts by
+  itself when it becomes active; web clients and desktops with the tunnel off
+  keep the button, because a web client's service tab needs publication.
+- Any other saved address (a `localhost` URL never matches, because the
+  snapshot does not establish which address family it named) stays a URL tab
+  and offers **Open in browser**: `openLinkExternally` with
+  `unresolved: "gateway-proxy"`, so a registered service opens at its
+  `localhost` forward or private origin and anything else through the gateway
+  path proxy (`/__orkestrator/proxy/loopback/<port>`). Saved tabs are never
+  dropped.
+- The annotations panel still lists the environment's saved notes, including
+  ones taken on manual addresses before (`{kind: "port"}` pages), but a URL tab
+  takes no new notes: nothing is attached to select from.
+
+A migrated tab moves to the service's own partition, so its cookies and
+storage from the shared legacy partition do not come with it.
 
 ### Desktop tunnel
 
@@ -235,11 +250,12 @@ authenticates with a scoped attachment credential in the first frame, never in
 a URL or header. The backend connects only to that service's current target.
 The client never names a host, port, or container.
 
-v2 is negotiated. A backend that speaks it advertises `multiplexSubprotocol`
-in the attachment's tunnel descriptor, and the desktop then offers v2 before
-v1. Against a backend that predates v2 (no advertisement), or one that answers
-v1 anyway, the desktop opens one `orkestrator.preview-tunnel.v1` WebSocket per
-connection, as before. Backends serve both.
+v2 is the only tunnel protocol. The attachment's tunnel descriptor names
+`orkestrator.preview-tunnel.v2` as its `subprotocol`, and the desktop offers
+only that. The backend refuses any other offer with 426, and the desktop
+reports a refused handshake, or a server that answers another subprotocol, as
+`backend-unavailable`. Tunnel v1 (one WebSocket per connection) was removed on
+2026-11-15.
 
 - The ingress accepts only requests carrying the per-listener
   `x-orkestrator-preview-ingress` header. Electron injects that header for the
@@ -249,7 +265,11 @@ connection, as before. Backends serve both.
   `persist:orkestrator-preview-svc-<slot>-<connection>-<hash>`, so cookies and
   storage never mix between services. Tabs of one service in one window share
   the partition and the listener; different windows or connections never
-  share. **Reset site data** clears only that partition, and never runs on a
+  share. Every view opens in its service's partition; the shared per-window
+  partition legacy URL tabs used (`browserPreviewPartitionForWindow`) holds no
+  view any more, but stays on disk and counts as held for a live connection
+  until its retention is settled (0042 task 9).
+  **Reset site data** clears only that partition, and never runs on a
   tab switch.
 - Partitions nothing can use again are ended by Electron
   (`PreviewPartitionRetention`, `preview-partition-retention.ts`), because the
@@ -314,18 +334,7 @@ connection, as before. Backends serve both.
   visibility re-attach still carrying the previous path, or a late echo of the
   tab's own earlier save, therefore never undoes a navigation. Renderers that
   send no basis fall back to navigating only for a path they have not already
-  asked for. Legacy URL tabs follow the same rule since 2026-10-25: their
-  states carry `navigation` and their attaches `navigationBasis`
-  (`attachUrl` in `browser-preview-manager.ts`).
-- A URL tab's attach also carries the tab's environment identity
-  (`environmentId`). A tab never changes environment, so an attach with a
-  different identity, null included, is taken for a different tab: main removes
-  the view and creates a new one, deliberately discarding its history, so the
-  new documents keep none of the old environment's access. A synthetic attach
-  in a test must therefore send the same identity the renderer sends, or Back
-  history is lost (the legacy URL tab Back case in
-  `e2e/agent-testing/service-preview-electron.spec.ts` once failed this way on
-  every platform).
+  asked for. Every attach names a service; main no longer shows URL views.
 - The rule has a renderer half. A state whose count equals the basis of the
   path the tab chose still reports the page being left: main sends one as a
   load starts, before anything commits. The tab keeps its chosen path until the
@@ -382,8 +391,9 @@ a tab does (`forwardExternally` in `preview-transport-manager.ts`).
 
 Never open a remote dev server on the gateway's own host name (for example
 `http://<machine>.<tailnet>.ts.net:3000`). Cookies ignore ports, so the page
-would receive `orkestrator_gateway_auth`; the gateway path proxy and the
-forward both keep it away from the application.
+would receive the gateway cookie (`__Host-orkestrator_gateway_auth` over
+HTTPS, `orkestrator_gateway_auth` over plain HTTP); the gateway path proxy and
+the forward both keep it away from the application.
 
 ### Private HTTPS origins
 
@@ -438,7 +448,7 @@ no-referrer form POST from a pre-opened top-level window, so it never reaches a
 URL, history entry or `Referer`. Paths under `/__orkestrator_preview/` are never
 forwarded upstream.
 
-The reserved cookies (the preview cookie and `orkestrator_gateway_auth`) are
+The reserved cookies (the preview cookie and both gateway cookie names) are
 removed from requests before they reach the application, and upstream
 `Set-Cookie` fields using a reserved name are dropped. Upstream `Domain`
 attributes are removed, so application cookies become host-only rather than
@@ -566,7 +576,7 @@ sequenceDiagram
   M->>V: load http://127.0.0.1:p/<path> (webRequest adds S for this origin only)
   V->>I: GET /path + S + application Authorization/cookies
   I->>I: verify S, strip S, map Host/Origin to the private authority
-  I->>G: WS /__orkestrator/preview/tunnel (offers v2, then v1), once per attachment
+  I->>G: WS /__orkestrator/preview/tunnel (offers v2), once per attachment
   I->>G: HELLO {attachmentId, credential}
   G->>A: authenticate (surface, expiry, revocation, generation)
   G-->>I: READY
@@ -577,16 +587,15 @@ sequenceDiagram
 
 ### Connections through the tunnel
 
-Each upstream TCP connection is one stream. On v2, a service's streams share
+Each upstream TCP connection is one stream. A service's streams share
 one outer WebSocket per attachment (up to 32; more open a second session), so
 a page's first burst of parallel requests pays one WebSocket handshake and one
 HELLO, and each further connection costs one OPEN round trip. A session with
-no streams closes after 30 seconds. On v1 each connection is its own
-WebSocket. Idle connections are pooled per service on both; nothing is
-replayed after a reconnect.
+no streams closes after 30 seconds. Idle connections are pooled per service;
+nothing is replayed after a reconnect.
 
 Each stream holds its own admission slot (the "Tunnels" limit below counts
-upstream connections on both versions); a v2 session also holds one slot of a
+upstream connections); a session also holds one slot of a
 separate session budget with the same limits. Flow control is per stream: each
 direction may have 256 KiB sent and not yet credited, and the receiver returns
 credit once its consumer has taken the bytes. A stream whose reader stopped
@@ -700,12 +709,12 @@ token also revokes all preview access.
 ### Rollback
 
 1. Turn **transport** off. Capabilities now report the reason and no new access
-   is issued. Turn the **relay** off with it: compatibility mode needs a host
-   port, and a service the relay resolves has none, so its tab has nothing to
-   load until it re-resolves as unmapped and offers **Publish port (auto)**.
+   is issued; desktop service tabs say they cannot preview and load nothing.
+   Turn the **relay** off with it if needed: a service the relay resolves
+   re-resolves as unmapped and offers **Publish port (auto)**.
 2. **Revoke all.** Open tunnels close with 4410 and sessions stop working.
-3. Service definitions, applications, and layouts are kept. The legacy gateway
-   route keeps working for old clients.
+3. Service definitions, applications, and layouts are kept. There is no
+   fallback route; tabs load again once transport is back on.
 4. Turn off publication if needed. This and the relay switch affect only
    Orkestrator's own listener and relay processes, not Tailscale settings.
 5. Re-enable when ready. Clients get fresh access to the same `serviceId`.
@@ -797,14 +806,10 @@ and a peer that stops reading is cut off 30 seconds after the close.
 Liveness pings stop once the tunnel starts closing, so an unanswered ping
 cannot cut off the drain.
 
-The desktop also acts on missing answers, but only in a v2 session
-(`PreviewTunnelSession`): any inbound frame counts as an answer, and a session
-that leaves two pings unanswered is destroyed (`terminate`, not a close,
-because a dead peer never answers the close frame). A v1 stream
-(`PreviewTunnelStream`) has no such deadline: it pauses its socket when its
-consumer stops reading, so its pongs can wait behind unread data and a
-deadline would close a healthy paused stream. A dead v1 socket costs only its
-one stream.
+The desktop also acts on missing answers (`PreviewTunnelSession`): any
+inbound frame counts as an answer, and a session that leaves two pings
+unanswered is destroyed (`terminate`, not a close, because a dead peer never
+answers the close frame).
 
 ## Framework configuration
 

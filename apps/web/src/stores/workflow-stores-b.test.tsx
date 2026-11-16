@@ -267,21 +267,6 @@ describe("a leaf scope's backend work goes to its own node", () => {
     expect(b.listenerCount(previewServicesChangedEvent.name)).toBe(0);
   });
 
-  test("the preview store addresses frames through a node client that can", () => {
-    const client = Object.assign(new FakeNodeClient({ nodeId: NODE_B }), {
-      resolvePreviewUrl: (url: string) =>
-        `https://relay.example/nodes/b?u=${encodeURIComponent(url)}`,
-    });
-    const { a, b } = twoScopes({ b: client });
-    expect(
-      b.store(previewServiceStore).getState().resolvePreviewUrl("http://localhost:3000/"),
-    ).toBe("https://relay.example/nodes/b?u=http%3A%2F%2Flocalhost%3A3000%2F");
-    // A client without preview addressing keeps the window gateway's (here: direct).
-    expect(
-      a.store(previewServiceStore).getState().resolvePreviewUrl("http://localhost:3000/"),
-    ).toBe("http://localhost:3000/");
-  });
-
   test("change projections are read and applied per node", async () => {
     const key = "environment-net/environment/env-1/live";
     const projection = environmentProjectionFixture("env-1", { revision: 2 });

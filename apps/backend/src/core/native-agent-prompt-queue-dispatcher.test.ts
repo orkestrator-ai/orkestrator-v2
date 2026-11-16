@@ -20,11 +20,7 @@ import {
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { coordinatorRuntimeEnvironment, resolveCoordinatorRuntime } from "./coordinator-runtime.js";
-import {
-  seedLegacyPromptQueueClaim,
-  storageDatabase,
-  readStoredValue,
-} from "./storage-test-support.js";
+import { seedLegacyPromptQueueClaim } from "./storage-test-support.js";
 
 const identity = {
   environmentId: "env-1",
@@ -263,95 +259,17 @@ async function withPersistedQueue(
 
 const queueKey = `${identity.agent}\0${identity.logicalSessionKey}`;
 
-describe("NativeAgentPromptQueueDispatcher legacy claim scans", () => {
-  test("a mixed-backend holder remains the sole submitter across normalization and acknowledgement", async () => {
-    await withPersistedQueue(async (storage, { dispatcher, host }) => {
-      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
-        id: "head",
-        text: "claimed",
-      });
-      const expiresAt = Date.now() + 300_000;
-      const token = seedLegacyPromptQueueClaim(storage.getDataDir(), queueKey, "head", {
-        expiresAt,
-      });
-      const peer = new StorageService(storage.getDataDir());
-      await peer.init();
-      try {
-        // Model the old command's holder crossing submission, then waiting to ack.
-        const submit = mock(async (_requestId: string) => undefined);
-        const dispatch = spyOn(host, "dispatchPrompt");
-        await submit("head");
-        const releaseAck = deferred();
-        const acknowledgement = (async () => {
-          await releaseAck.promise;
-          // The old acknowledge command consumes only the matching token,
-          // under the same cross-backend prompt queue storage lease.
-          const database = storageDatabase(peer);
-          const release = await database.acquireLease(
-            "prompt-queues.json",
-            "legacy claim acknowledgement",
-          );
-          try {
-            database.transaction(() => {
-              const queues = database.readStore("prompt-queues")!.value as Record<
-                string,
-                Record<string, unknown>
-              >;
-              expect(queues[queueKey]!.outstandingClaim).toMatchObject({ token });
-              const { outstandingClaim: _claim, ...queue } = queues[queueKey]!;
-              queues[queueKey] = { ...queue, revision: (queue.revision as number) + 1 };
-              database.writeStoreInTransaction("prompt-queues", queues);
-            });
-          } finally {
-            await release();
-          }
-        })();
-        try {
-          expect((await peer.getPromptQueue(queueKey))?.outstandingClaim?.token).toBe(token);
-          // Normalizing a different expired claim and saving it writes the entire store.
-          const otherKey = "codex\0other-tab";
-          await storage.enqueuePromptQueueMessage(otherKey, identity.environmentId, {
-            id: "other",
-          });
-          seedLegacyPromptQueueClaim(storage.getDataDir(), otherKey, "other", { expiresAt: 1 });
-          await storage.savePromptQueue(otherKey, identity.environmentId, []);
-          expect(
-            readStoredValue<Record<string, unknown>>(storage.getDataDir(), "prompt-queues.json")?.[
-              queueKey
-            ],
-          ).toMatchObject({ messages: [], outstandingClaim: { token } });
-          await dispatcher.forTesting().drainPromptQueues();
-          await dispatcher.drainPromptQueueForSession(identity);
-          expect(host.dispatchPrompt).not.toHaveBeenCalled();
-          expect(submit.mock.calls.length + dispatch.mock.calls.length).toBe(1);
-        } finally {
-          releaseAck.resolve();
-          await Promise.all([acknowledgement, dispatcher.forTesting().drainPromptQueues()]);
-        }
-        const clock = spyOn(Date, "now").mockReturnValue(expiresAt + 1);
-        try {
-          await dispatcher.forTesting().drainPromptQueues();
-          expect(host.dispatchPrompt).not.toHaveBeenCalled();
-          expect(submit.mock.calls.length + dispatch.mock.calls.length).toBe(1);
-          expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([]);
-        } finally {
-          clock.mockRestore();
-        }
-      } finally {
-        peer.close();
-      }
-    });
-  });
-
+describe("NativeAgentPromptQueueDispatcher restored legacy claims", () => {
   test.each(["head", undefined, "", "  ", 42])(
-    "the recurring scan dispatches an expired claim with id %p exactly once",
+    "the recurring scan dispatches a stored claim with id %p exactly once, live lease or not",
     async (id) => {
       await withPersistedQueue(async (storage, { dispatcher, host }) => {
         // Save accepts opaque legacy rows; restoration must repair invalid ids.
         await storage.savePromptQueue(queueKey, identity.environmentId, [
           { id, text: "recovered", attachments: [] },
         ]);
-        seedLegacyPromptQueueClaim(storage.getDataDir(), queueKey, id as string, { expiresAt: 1 });
+        // The default lease has five minutes left; nothing honours it.
+        seedLegacyPromptQueueClaim(storage.getDataDir(), queueKey, id as string);
         const first = await storage.getPromptQueue(queueKey);
         const head = first?.messages[0] as { id: string };
         expect(head.id.trim().length).toBeGreaterThan(0);

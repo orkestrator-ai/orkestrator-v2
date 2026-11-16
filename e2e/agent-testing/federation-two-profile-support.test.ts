@@ -5,9 +5,7 @@ import {
   frameFacts,
   isRelayedFrame,
   lagSummary,
-  legacyMainStreamUrl,
   shouldHold,
-  withoutPerNodeEvents,
 } from "./federation-two-profile-support";
 
 const ORIGIN = "http://127.0.0.1:4000";
@@ -44,38 +42,6 @@ describe("describeStream", () => {
       describeStream(`${ORIGIN}/__orkestrator/events?includeEvents=terminal-output-abc`).kind,
     ).toBe("terminal");
     expect(describeStream(`${ORIGIN}/__orkestrator/invoke`).kind).toBe("other");
-  });
-});
-
-describe("legacyMainStreamUrl", () => {
-  test("drops only the per-node opt-in, keeping the cursor and the other parameters", () => {
-    const legacy = legacyMainStreamUrl(`${MAIN}&since=gen%3A12`);
-    expect(legacy).not.toBeNull();
-    const parsed = new URL(legacy!);
-    expect(parsed.searchParams.has("relayedEvents")).toBe(false);
-    expect(parsed.searchParams.get("since")).toBe("gen:12");
-    expect(parsed.searchParams.get("excludeEvents")).toBe("terminal-output-");
-    expect(parsed.searchParams.get("keepaliveEvents")).toBe("1");
-  });
-
-  test("leaves relayed, terminal and already-legacy streams alone", () => {
-    expect(
-      legacyMainStreamUrl(`${ORIGIN}/__orkestrator/events?includeEvents=relayed-node-event%3Aa`),
-    ).toBeNull();
-    expect(
-      legacyMainStreamUrl(`${ORIGIN}/__orkestrator/events?excludeEvents=terminal-output-`),
-    ).toBeNull();
-  });
-});
-
-describe("withoutPerNodeEvents", () => {
-  test("removes perNodeEvents from a watch answer only", () => {
-    const answer = { result: { watchId: "w", renewed: true, perNodeEvents: true } };
-    expect(withoutPerNodeEvents("watch_node_events", answer)).toEqual({
-      result: { watchId: "w", renewed: true },
-    });
-    expect(withoutPerNodeEvents("get_projects", answer)).toBe(answer);
-    expect(withoutPerNodeEvents("watch_node_events", { error: "x" })).toEqual({ error: "x" });
   });
 });
 

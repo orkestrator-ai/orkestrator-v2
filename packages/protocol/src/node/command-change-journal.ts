@@ -9,10 +9,13 @@
  *
  * Node-only. Bounded on every axis: entries per file (older entries are
  * compacted away), files and path length per entry, and bytes read back.
- * Every operation is failure-silent; a lost record costs a badge.
+ * Every operation is failure-silent; a lost record costs a badge. The two
+ * exceptions serve one-time upgrades, which must not retire a source they
+ * could not read or publish: `readCommandChangeJournalFile` and
+ * `CommandChangeJournal.adoptOlder` reject on any failure but a missing file.
  */
 
-import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { MeasuredFileChange, MeasuredWorkspaceChange } from "../tool-diff.js";
 
@@ -128,6 +131,42 @@ export class CommandChangeJournal {
     return readJournal(this.path, this.maxEntries);
   }
 
+  /**
+   * Merge `older` records under this journal's own, for a one-time upgrade.
+   * Older records go first and this journal's after them, so at the entry
+   * limit the older records are the ones dropped, and an id this journal
+   * already holds keeps its own value. The merged file is published by an
+   * atomic, flushed replace. Unlike every other operation this one rejects
+   * when the journal cannot be read or the merged file cannot be published,
+   * leaving the file as it was, so the caller keeps its source for a retry.
+   */
+  adoptOlder(older: ReadonlyMap<string, MeasuredWorkspaceChange>): Promise<void> {
+    const run = this.writes.then(async () => {
+      if (this.removed) throw new Error("command-change journal was removed");
+      const current = await readJournal(this.path, this.maxEntries, true);
+      const merged = new Map<string, MeasuredWorkspaceChange>();
+      for (const [id, change] of older) {
+        if (current.has(id)) continue;
+        const bounded = parseMeasuredWorkspaceChange(change);
+        if (id && bounded) merged.set(id, bounded);
+      }
+      if (merged.size === 0) return;
+      for (const [id, change] of current) merged.set(id, change);
+      for (const id of Array.from(merged.keys()).slice(
+        0,
+        Math.max(0, merged.size - this.maxEntries),
+      )) {
+        merged.delete(id);
+      }
+      await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+      await this.publish(merged, true);
+      this.sizeChecked = true;
+      this.appendsSinceCompaction = 0;
+    });
+    this.writes = run.catch(() => {});
+    return run;
+  }
+
   async remove(): Promise<void> {
     this.removed = true;
     await this.writes;
@@ -138,16 +177,53 @@ export class CommandChangeJournal {
   private async compact(): Promise<void> {
     this.appendsSinceCompaction = 0;
     const records = await readJournal(this.path, this.maxEntries);
-    const body = Array.from(records, ([id, change]) => JSON.stringify({ id, change })).join("\n");
-    const temp = `${this.path}.${process.pid}.tmp`;
-    await writeFile(temp, body ? `${body}\n` : "", { mode: 0o600 });
-    await rename(temp, this.path);
+    await this.publish(records, false);
   }
+
+  /** Replace the file with `records` through a temporary file and a rename. */
+  private async publish(
+    records: ReadonlyMap<string, MeasuredWorkspaceChange>,
+    durable: boolean,
+  ): Promise<void> {
+    const body = Array.from(records, ([id, change]) => JSON.stringify({ id, change })).join("\n");
+    const text = body ? `${body}\n` : "";
+    const temp = `${this.path}.${process.pid}.tmp`;
+    try {
+      if (durable) {
+        const handle = await open(temp, "w", 0o600);
+        try {
+          await handle.writeFile(text);
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+      } else {
+        await writeFile(temp, text, { mode: 0o600 });
+      }
+      await rename(temp, this.path);
+    } catch (error) {
+      await rm(temp, { force: true }).catch(() => {});
+      throw error;
+    }
+  }
+}
+
+/**
+ * Every surviving record in a journal file, for a one-time upgrade. A missing
+ * file reads as empty; any other read failure rejects, so the caller can tell
+ * an unreadable journal from an empty one.
+ */
+export function readCommandChangeJournalFile(
+  path: string,
+  maxEntries = MAX_JOURNAL_ENTRIES,
+): Promise<Map<string, MeasuredWorkspaceChange>> {
+  return readJournal(path, maxEntries, true);
 }
 
 async function readJournal(
   path: string,
   maxEntries: number,
+  strict = false,
 ): Promise<Map<string, MeasuredWorkspaceChange>> {
   const records = new Map<string, MeasuredWorkspaceChange>();
   let text: string;
@@ -156,7 +232,8 @@ async function readJournal(
     // A runaway file is read from its tail: the newest records are the ones
     // a reload is most likely to show.
     text = buffer.subarray(Math.max(0, buffer.length - MAX_JOURNAL_BYTES)).toString("utf8");
-  } catch {
+  } catch (error) {
+    if (strict && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return records;
   }
   for (const line of text.split("\n")) {

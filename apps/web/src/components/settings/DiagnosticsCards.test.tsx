@@ -226,14 +226,11 @@ test("cancel saves nothing, and a bundle that does not add up is not saved", asy
 });
 
 test("a failed plan says why and offers the button again", async () => {
-  spyOn(backend, "planDiagnosticsBundle").mockRejectedValue(
-    new Error("Unknown backend command: plan_diagnostics_bundle"),
-  );
+  spyOn(backend, "planDiagnosticsBundle").mockRejectedValue(new Error("backend unreachable"));
   mount(<DiagnosticsExportCard />);
   fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
   const alert = await screen.findByRole("alert");
-  // The one incompatibility text (plan item 1005), naming the chosen machine.
-  expect(alert.textContent).toBe("Not available on Selected. Update it.");
+  expect(alert.textContent).toBe("backend unreachable");
   expect(
     (screen.getByRole("button", { name: "Export diagnostics" }) as HTMLButtonElement).disabled,
   ).toBe(false);

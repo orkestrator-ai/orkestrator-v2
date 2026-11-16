@@ -365,11 +365,10 @@ describe("NativeAgentService command intent", () => {
     });
   });
 
-  test("an older bridge that ignored the instructions still counts as compacted", async () => {
-    // The compaction ran; refusing now would invite the user to run it twice.
+  test("a replayed /compact request id does not compact twice", async () => {
     const stub = providerStub("pi", {
       catalogue: async () => ({ enhanced: true, status: "ready", commands: [] }),
-      performSessionAction: async () => ({ outcome: "applied", instructionsIgnored: true }),
+      performSessionAction: async () => ({ outcome: "applied" }),
     });
     await withService(stub.provider, async ({ service }) => {
       await expect(
@@ -379,8 +378,7 @@ describe("NativeAgentService command intent", () => {
           prompt: "/compact keep the plan",
           requestId: "c-old",
         }),
-      ).resolves.toMatchObject({ outcome: "accepted", instructionsIgnored: true });
-      // Replaying the id must not repeat a compaction whose instructions were ignored.
+      ).resolves.toMatchObject({ outcome: "accepted" });
       await expect(
         service.dispatchIntent({
           ...base,

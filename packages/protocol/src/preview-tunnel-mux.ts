@@ -1,16 +1,13 @@
 /**
  * Desktop tunnel wire contract v2: many upstream connections ("streams") over
- * one authenticated WebSocket per attachment.
+ * one authenticated WebSocket per attachment. The WebSocket handshake and
+ * HELLO are paid once per session, not per connection:
  *
- * v1 (`preview-access.ts`) pays a WebSocket handshake plus HELLO and OPEN for
- * every upstream connection. v2 pays them once per session:
- *
- * 1. A v2 backend advertises `multiplexSubprotocol` in the attachment's
- *    tunnel descriptor. The client then offers `PREVIEW_TUNNEL_SUBPROTOCOL_V2`
- *    first and `PREVIEW_TUNNEL_SUBPROTOCOL` second; the server answers v2. A
- *    server that answers v1 anyway gets v1 on that socket.
+ * 1. The attachment's tunnel descriptor names `PREVIEW_TUNNEL_SUBPROTOCOL_V2`.
+ *    The client opens a WebSocket to `PREVIEW_TUNNEL_PATH` offering exactly
+ *    that subprotocol; the server refuses any other offer with 426.
  * 2. Client sends HELLO {version: 2, attachmentId, credential}. Server
- *    answers READY or closes with 4401/4403/4410, as in v1.
+ *    answers READY or closes with 4401/4403/4410.
  * 3. Client sends OPEN {stream} with a new stream id, strictly greater than
  *    every id it used before on this session. Server answers OPEN_OK {stream}
  *    or OPEN_FAILED {stream, error}; a failed OPEN leaves the session up.
@@ -26,13 +23,13 @@
  *    the stream; the client sends nothing further on it. Either side ignores
  *    frames for a stream it has already released.
  * 7. Revocation, lease expiry and shutdown close the WebSocket, and with it
- *    every stream, with the v1 close codes. Nothing is replayed.
+ *    every stream, with the `PREVIEW_TUNNEL_CLOSE` codes. Nothing is replayed.
  *
  * Any malformed frame, a reused or out-of-order stream id, data beyond the
  * granted credit, or more than `maxStreams` open streams closes the session
  * with 4400.
  */
-import { PREVIEW_TUNNEL_SUBPROTOCOL, PREVIEW_TUNNEL_SUBPROTOCOL_V2 } from "./preview-access.js";
+import { PREVIEW_TUNNEL_SUBPROTOCOL_V2 } from "./preview-access.js";
 import {
   isOpaquePreviewId,
   isPreviewErrorCategory,
@@ -43,12 +40,6 @@ import {
 
 export { PREVIEW_TUNNEL_SUBPROTOCOL_V2 };
 export const PREVIEW_TUNNEL_MUX_VERSION = 2;
-
-/** Offer order: v2 first, v1 for a backend that predates multiplexing. */
-export const PREVIEW_TUNNEL_OFFERED_SUBPROTOCOLS = [
-  PREVIEW_TUNNEL_SUBPROTOCOL_V2,
-  PREVIEW_TUNNEL_SUBPROTOCOL,
-] as const;
 
 export const PREVIEW_TUNNEL_MUX = {
   /** Concurrently open streams per session; a client opens another session beyond it. */

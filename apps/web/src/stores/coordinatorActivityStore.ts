@@ -1,10 +1,6 @@
 import { useEffect } from "react";
-import {
-  COORDINATOR_ACTIVITY_COMMAND,
-  type CoordinatorActivityState,
-} from "@orkestrator/protocol/coordinator-activity";
+import type { CoordinatorActivityState } from "@orkestrator/protocol/coordinator-activity";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
-import { isUnknownViewCommandError } from "@orkestrator/protocol/view-sync";
 import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createCoordinatorApi } from "@/lib/backend/coordinator";
@@ -46,7 +42,7 @@ function sameProjects(
  * coordinator session record written (a dispatch), the coordinator workspace
  * changing, and the transport's resync and safety checks, which also cover a
  * missed hint. Hints are coalesced into one read, and one read runs at a
- * time. Against a backend that predates the command nothing is shown.
+ * time.
  */
 export const coordinatorActivityStore = defineScopedStore<CoordinatorActivityStoreState>(
   "coordinator-activity",
@@ -56,7 +52,6 @@ export const coordinatorActivityStore = defineScopedStore<CoordinatorActivitySto
     let timer: ReturnType<typeof setTimeout> | null = null;
     let inFlight: Promise<void> | null = null;
     let rerun = false;
-    let unsupported = false;
 
     const read = async (): Promise<void> => {
       if (inFlight) {
@@ -70,12 +65,8 @@ export const coordinatorActivityStore = defineScopedStore<CoordinatorActivitySto
           }).listCoordinatorActivity();
           const projects = new Map(Object.entries(snapshot.projects));
           if (!sameProjects(get().projects, projects)) set({ projects });
-        } catch (error) {
-          if (isUnknownViewCommandError(error, COORDINATOR_ACTIVITY_COMMAND)) {
-            unsupported = true;
-            if (get().projects.size > 0) set({ projects: new Map() });
-          }
-          // Anything else keeps the last answer; the next hint or check reads again.
+        } catch {
+          // A failed read keeps the last answer; the next hint or check reads again.
         }
       })();
       try {
@@ -90,7 +81,7 @@ export const coordinatorActivityStore = defineScopedStore<CoordinatorActivitySto
     };
 
     function schedule(): void {
-      if (unsupported || retainers === 0 || timer) return;
+      if (retainers === 0 || timer) return;
       timer = setTimeout(() => {
         timer = null;
         void read();
@@ -131,7 +122,7 @@ export const coordinatorActivityStore = defineScopedStore<CoordinatorActivitySto
         retainers += 1;
         if (retainers === 1) {
           subscriptions = subscribe();
-          if (!unsupported) void read();
+          void read();
         }
         let released = false;
         return () => {
@@ -146,7 +137,6 @@ export const coordinatorActivityStore = defineScopedStore<CoordinatorActivitySto
         stop();
         retainers = 0;
         rerun = false;
-        unsupported = false;
         set({ projects: new Map() });
       },
     };

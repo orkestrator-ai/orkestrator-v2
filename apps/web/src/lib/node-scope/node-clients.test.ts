@@ -1,11 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { NodeConnectionState } from "@orkestrator/protocol/node-client";
-import {
-  resolveNodeBrowserPreviewUrl,
-  resolveNodeGatewayUrl,
-  resolveNodeLoopbackBaseUrl,
-} from "@/lib/gateway-url";
+import { resolveNodeGatewayUrl, resolveNodeLoopbackBaseUrl } from "@/lib/gateway-url";
 import type { NodeTransportLifecycle } from "@/lib/native/node-transport";
 import type { OpenedNodeWorkspace } from "@/lib/portal/workspaces";
 import {
@@ -493,9 +489,6 @@ describe("per-node URLs", () => {
     const relay = `${window.location.origin}/__orkestrator/nodes/${LEAF}`;
     expect(client.url("/__orkestrator/hello")).toBe("https://leaf.test/__orkestrator/hello");
     expect(client.resolveMediaUrl("media/a.png")).toBe(`${relay}/media/a.png`);
-    expect(client.resolvePreviewUrl("http://localhost:5173/app?x=1#h")).toBe(
-      `${relay}/__orkestrator/browser/loopback/5173/app?x=1#h`,
-    );
     expect(client.resolveLoopbackUrl("http://127.0.0.1:8080/api/")).toBe(
       `${relay}/__orkestrator/proxy/loopback/8080/api`,
     );
@@ -511,12 +504,6 @@ describe("per-node URLs", () => {
     );
     expect(resolveNodeLoopbackBaseUrl("https://leaf.test", "http://localhost/")).toBe(
       "https://leaf.test/__orkestrator/proxy/loopback/80",
-    );
-    expect(resolveNodeBrowserPreviewUrl("https://leaf.test", "https://localhost:3000/")).toBe(
-      "https://localhost:3000/",
-    );
-    expect(resolveNodeBrowserPreviewUrl("https://leaf.test", "http://[::1]:3000/p")).toBe(
-      "https://leaf.test/__orkestrator/browser/loopback/3000/p",
     );
   });
 });

@@ -183,7 +183,7 @@ export class BuildPipelineStagePrompts {
           notes,
           target,
           worktree,
-          await verificationAddressFindingsReport(this.ctx.transcriptCheckpoints, pipeline),
+          verificationAddressFindingsReport(pipeline),
           await this.validationAncestry(pipeline, worktree),
         ),
         schema: VERIFICATION_SCHEMA,

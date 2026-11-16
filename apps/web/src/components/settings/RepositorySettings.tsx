@@ -492,12 +492,7 @@ export function RepositorySettings({
       // record, so another window's change to a different field is kept. An
       // empty patch still returns the authoritative record.
       const { updates, unset } = repositorySettingsPatch(repoConfig, baselineConfig);
-      const newConfig = await backend.patchRepositorySettings(
-        project.id,
-        updates,
-        unset,
-        repoConfig,
-      );
+      const newConfig = await backend.patchRepositorySettings(project.id, updates, unset);
       setConfig(newConfig);
 
       toast.success("Settings saved");

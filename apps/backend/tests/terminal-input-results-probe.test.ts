@@ -60,7 +60,7 @@ describe("phaseBetween", () => {
     });
   });
 
-  test("a v1 socket's results are per input, and both kinds add up", () => {
+  test("per-input failure results and cumulative results add up", () => {
     const phase = phaseBetween(
       counts(),
       counts({ perInputResultFrames: 3, cumulativeResultFrames: 1 }),

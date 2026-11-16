@@ -395,7 +395,8 @@ test("logs the grant and every route probe with its node, outcome and duration, 
   }
 });
 
-for (const outcome of ["hello", "other-node", "legacy"] as const) {
+// `protocol`: a route that does not answer the hello fails its check.
+for (const outcome of ["hello", "other-node", "protocol"] as const) {
   test(`logs the loopback ${outcome} outcome without grant or origin data`, async () => {
     const { captureLogs } = await import("@orkestrator/protocol/testing/log-capture");
     const logs = captureLogs();
@@ -418,12 +419,8 @@ for (const outcome of ["hello", "other-node", "legacy"] as const) {
             relayBase: "/__orkestrator/nodes/bk_c",
           };
         },
-        fetchImpl: (async (input: string | URL | Request) => {
-          const url = String(input instanceof Request ? input.url : input);
-          if (outcome === "legacy")
-            return url.endsWith("/status")
-              ? Response.json({ ok: true })
-              : new Response("{}", { status: 404 });
+        fetchImpl: (async (_input: string | URL | Request) => {
+          if (outcome === "protocol") return new Response("{}", { status: 404 });
           return Response.json({
             schemaVersion: 1,
             installationId: outcome === "hello" ? "bk_c" : "bk_other",

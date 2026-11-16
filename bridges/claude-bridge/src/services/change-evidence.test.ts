@@ -478,11 +478,9 @@ describe("Claude change-evidence spool claim", () => {
     return directory;
   }
 
-  test("records the pid where an older bridge reads it and the identity beside it", () => {
+  test("records the pid and the identity beside it", () => {
     const directory = claimSpoolDirectory(root, scope)!;
     const [pid, identity] = readFileSync(ownerFile(directory), "utf8").split("\n");
-    // An older bridge parses the leading integer only.
-    expect(Number.parseInt(readFileSync(ownerFile(directory), "utf8"), 10)).toBe(process.pid);
     expect(pid).toBe(String(process.pid));
     expect(JSON.parse(identity!)).toMatchObject({
       instance: BRIDGE_INSTANCE_ID,
@@ -501,14 +499,17 @@ describe("Claude change-evidence spool claim", () => {
   });
 
   test("takes over a claim whose pid is gone", async () => {
-    const directory = seedOwner(String(await exitedChildPid()));
+    const directory = seedOwner(
+      `${await exitedChildPid()}\n${JSON.stringify({ instance: "a-bridge-that-died" })}\n`,
+    );
     expect(claimSpoolDirectory(root, scope)).toBe(directory);
   });
 
-  test("leaves an older bridge's claim to its live pid", () => {
+  test("takes over a claim with no identity line, like any unreadable claim", () => {
     const owner = spawnLiveOwner();
-    seedOwner(String(owner.pid));
-    expect(claimSpoolDirectory(root, scope)).toBeUndefined();
+    const directory = seedOwner(String(owner.pid));
+    expect(claimSpoolDirectory(root, scope)).toBe(directory);
+    expect(readFileSync(ownerFile(directory), "utf8")).toContain(BRIDGE_INSTANCE_ID);
   });
 
   test.skipIf(!HAS_PROC && !HAS_PS)("leaves a claim to a live owner with its identity", () => {

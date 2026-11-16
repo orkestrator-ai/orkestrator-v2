@@ -6,6 +6,8 @@ import { StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase, STORAGE_MIGRATIONS, storeLayout } from "./storage-stores.js";
 import {
   BUILD_PIPELINE_REVIEW_REPORT_UPGRADE_VERSION,
+  KANBAN_TICKET_SECTIONS_UPGRADE_VERSION,
+  upgradeKanbanTaskRecords,
   backfillBuildPipelineReviewReports,
   upgradeBuildPipelineRecords,
   promptQueueMessageFingerprint,
@@ -124,19 +126,22 @@ describe("record shape upgrades", () => {
     expect(restoreLegacyPromptQueueClaims("garbage")).toBe("garbage");
   });
 
-  test("leaves a live legacy claim untouched", () => {
+  test("restores a claim with an unexpired lease too: nothing honours the lease", () => {
     const now = Date.now();
-    const queue = {
-      messages: [{ id: "tail" }],
-      outstandingClaim: {
-        token: "holder",
-        message: { id: "head" },
-        claimedAt: new Date(now - 1000).toISOString(),
-        expiresAt: new Date(now + 300_000).toISOString(),
+    const stored = {
+      queue: {
+        messages: [{ id: "tail" }, { id: "head", text: "stale copy" }],
+        outstandingClaim: {
+          token: "holder",
+          message: { id: "head", text: "claimed" },
+          claimedAt: new Date(now - 1000).toISOString(),
+          expiresAt: new Date(now + 300_000).toISOString(),
+        },
       },
     };
-    const stored = { queue };
-    expect(restoreLegacyPromptQueueClaims(stored)).toBe(stored);
+    expect(restoreLegacyPromptQueueClaims(stored)).toEqual({
+      queue: { messages: [{ id: "head", text: "claimed" }, { id: "tail" }] },
+    });
   });
 
   test.each([undefined, "", "  ", 42])(
@@ -282,6 +287,74 @@ describe("build pipeline review report backfill", () => {
       // The revision is kept: this is the same record, not a new write to it.
       expect(stored["pipeline-1"]!.revision).toBe(4);
       expect(stored["pipeline-1"]!.snapshot.structuredReview).toEqual(currentReport);
+    } finally {
+      upgraded.close();
+    }
+  });
+});
+
+describe("Kanban ticket sections upgrade", () => {
+  const legacyRow = {
+    id: "11111111-1111-4111-8111-111111111111",
+    projectId: "project-1",
+    title: "Legacy",
+    description: "Fix the redirect.\n\n## Background\n\nSeen on mobile.",
+    acceptanceCriteria: "Given a signed-out user\nThen they land on /login.\n\n- [x] Has a test",
+    status: "backlog",
+    comments: [],
+    images: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    order: 0,
+  };
+  const derivedSections = {
+    summary: "Fix the redirect.",
+    context: "Seen on mobile.",
+    acceptanceCriteria: [
+      { id: "ac-1", text: "Given a signed-out user\nThen they land on /login." },
+      {
+        id: "ac-2",
+        text: "Has a test",
+        check: { status: "passed", source: "manual", checkedAt: legacyRow.createdAt },
+      },
+    ],
+  };
+
+  test("derives a row's kind and sections from its text, keeping the text as written", () => {
+    const [row] = upgradeKanbanTaskRecords([legacyRow]) as Array<Record<string, unknown>>;
+    expect(row).toMatchObject({
+      ...legacyRow,
+      kind: "feature",
+      sections: derivedSections,
+      sectionsBasis: expect.any(String),
+    });
+  });
+
+  test("leaves a current row, an unreadable row and an unreadable store untouched", () => {
+    const [current] = upgradeKanbanTaskRecords([legacyRow]) as unknown[];
+    const rows = [current, { ...legacyRow, description: 7 }, "junk"];
+    expect(upgradeKanbanTaskRecords(rows)).toBe(rows);
+    const unreadable = { not: "an array" };
+    expect(upgradeKanbanTaskRecords(unreadable)).toBe(unreadable);
+  });
+
+  test("an upgraded database has its legacy rows given sections once", async () => {
+    const directory = await dataDir();
+    const before = new StorageDatabase(directory, {
+      layoutFor: storeLayout,
+      migrations: STORAGE_MIGRATIONS.filter(
+        (migration) => migration.version < KANBAN_TICKET_SECTIONS_UPGRADE_VERSION,
+      ),
+    });
+    before.writeStore("kanban", [legacyRow]);
+    before.close();
+
+    const upgraded = openBackendDatabase(directory);
+    try {
+      expect(upgraded.schemaVersion()).toBeGreaterThanOrEqual(
+        KANBAN_TICKET_SECTIONS_UPGRADE_VERSION,
+      );
+      const [row] = upgraded.readStore("kanban")!.value as Array<Record<string, unknown>>;
+      expect(row).toMatchObject({ ...legacyRow, kind: "feature", sections: derivedSections });
     } finally {
       upgraded.close();
     }

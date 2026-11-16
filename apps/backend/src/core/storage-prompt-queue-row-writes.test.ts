@@ -277,7 +277,7 @@ describe("a prompt queue mutation touches one row", () => {
   });
 });
 
-describe("a queue row's claim recovery and validation", () => {
+describe("a queue row's legacy-claim restore and validation", () => {
   const live = {
     token: "t-live",
     message: { id: "claimed", text: "claimed" },
@@ -290,6 +290,10 @@ describe("a queue row's claim recovery and validation", () => {
     ["a clean queue", record(KEY, "e1", [{ id: "m1" }])],
     ["a live claim", record(KEY, "e1", [{ id: "m1" }], { outstandingClaim: live })],
     ["an expired claim", record(KEY, "e1", [{ id: "m1" }], { outstandingClaim: expired })],
+    [
+      "a live claim replacing its queued copy",
+      record(KEY, "e1", [{ id: "claimed", text: "stale" }], { outstandingClaim: live }),
+    ],
     [
       "an expired claim replacing its queued copy",
       record(KEY, "e1", [{ id: "claimed", text: "stale" }], { outstandingClaim: expired }),
@@ -338,19 +342,20 @@ describe("a queue row's claim recovery and validation", () => {
     ]);
   });
 
-  test("a live claim survives row writes and excludes its message", async () => {
+  test("a live claim is restored to the head and holds nothing back", async () => {
     const { storage } = await seeded({
       [KEY]: record(KEY, "e1", [{ id: "m1" }], { outstandingClaim: live }),
     });
+    const loaded = await storage.getPromptQueue(KEY);
+    expect(loaded).toMatchObject({ messages: [{ id: "claimed" }, { id: "m1" }] });
+    expect(loaded).not.toHaveProperty("outstandingClaim");
     await storage.savePromptQueue(KEY, "e1", [{ id: "claimed" }, { id: "m1" }]);
     expect(await storage.getPromptQueue(KEY)).toMatchObject({
-      messages: [{ id: "m1" }],
-      outstandingClaim: { token: "t-live" },
+      messages: [{ id: "claimed" }, { id: "m1" }],
     });
-    expect(await storage.reservePromptQueueHeadForDispatch(KEY)).toBeNull();
-    await expect(storage.reservePromptQueueSteer(SESSION, "m1", "run-1")).rejects.toThrow(
-      "already being delivered",
-    );
+    await expect(storage.reservePromptQueueHeadForDispatch(KEY)).resolves.toMatchObject({
+      requestId: "claimed",
+    });
   });
 
   test("a mutation replaces an invalid row and leaves another's alone", async () => {
@@ -795,7 +800,7 @@ describe("prompt queue stores across versions", () => {
     expect(await storage.getPromptQueue(SIBLING)).toMatchObject({ revision: 1 });
   });
 
-  test("a claim an older backend writes while this one runs is held and recovered", async () => {
+  test("a claim stored while this backend runs is restored on the next read", async () => {
     const { storage, dataDir } = await seeded({ [KEY]: record(KEY, "e1", [{ id: "m1" }]) });
     await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m2" });
     const whole = readStoredValue<Record<string, { messages: unknown[]; revision: number }>>(
@@ -816,9 +821,12 @@ describe("prompt queue stores across versions", () => {
         revision: 3,
       },
     });
-    expect(await storage.reservePromptQueueHeadForDispatch(KEY)).toBeNull();
     expect(await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" })).toMatchObject({
+      messages: [{ id: "m1" }, { id: "m2" }],
       revision: 3,
+    });
+    await expect(storage.reservePromptQueueHeadForDispatch(KEY)).resolves.toMatchObject({
+      requestId: "m1",
     });
   });
 });

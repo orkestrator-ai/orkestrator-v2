@@ -40,5 +40,8 @@ test("the retire-opencode2-sessions migration deletes the store the OpenCode 2 p
   open.push(after);
   expect(after.schemaVersion()).toBeGreaterThanOrEqual(RETIRE_OPENCODE2_SESSIONS_VERSION);
   expect(after.readStore(RETIRED_OPENCODE2_SESSIONS_STORE)).toBeNull();
-  expect(after.readStore("kanban")?.value).toEqual([{ id: "t1", projectId: "p1", title: "Kept" }]);
+  // Kept as written; a later migration (10) only adds the derived ticket sections.
+  expect(after.readStore("kanban")?.value).toMatchObject([
+    { id: "t1", projectId: "p1", title: "Kept" },
+  ]);
 });

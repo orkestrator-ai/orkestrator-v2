@@ -20,7 +20,6 @@ import {
   createOrkestratorElectronApi,
   type IpcRendererLike,
 } from "../../desktop/electron/preload-api";
-import { compatibilityPathUsage } from "../src/core/compatibility-path-usage";
 import type { OrkestratorGateway } from "../src/gateway";
 import {
   eventClients,
@@ -42,7 +41,6 @@ const OTHER_EVENT = relayedNodeEventName(OTHER);
 const TRUSTED_RENDERER_URL = "http://127.0.0.1:1420";
 
 type StreamState = {
-  relayedEvents?: string | null;
   relayedStream?: boolean;
   includedPrefixes: string[] | null;
 };
@@ -251,22 +249,14 @@ describe("what the desktop's main process takes from a real gateway", () => {
     const oldName: unknown[] = [];
     window.api.listen(RELAYED_NODE_EVENT, (payload) => void oldName.push(payload));
     await waitUntil(() => mainStreams(gateway).length === 1, "Main's stream never opened");
-    const legacyBefore = compatibilityPathUsage.snapshot().paths;
 
     emitRelayed(gateway, LEAF, "nobody-watches");
     gateway.emit("environment-renamed", { id: "authoritative" });
     await waitUntil(() => authoritative.length === 1, "Main's stream stalled");
 
-    expect(mainStreams(gateway)[0]?.relayedEvents).toBe("per-node");
     expect(relayedFilters(gateway)).toEqual([]);
     expect(oldName).toEqual([]);
     expect(await relayedFramesWritten(info)).toBe(0);
-    expect(compatibilityPathUsage.snapshot().paths["relayed-node-event.legacy-stream"]).toEqual(
-      legacyBefore["relayed-node-event.legacy-stream"],
-    );
-    expect(
-      compatibilityPathUsage.snapshot().paths["relayed-node-event.legacy-desktop-stream"],
-    ).toEqual(legacyBefore["relayed-node-event.legacy-desktop-stream"]);
   });
 
   test("only the per-node events a window listens to, and only to that window", async () => {

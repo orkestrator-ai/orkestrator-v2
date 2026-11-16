@@ -8,13 +8,43 @@ import {
   AnnotatedPreviewArea,
   AnnotationsButton,
 } from "@/components/browser/annotations/BrowserAnnotationsLayout";
-import { currentPageForManualUrl } from "@/components/browser/annotations/format";
+import {
+  webAnnotationPageKey,
+  type WebAnnotationServiceIdentity,
+} from "@orkestrator/protocol/web-annotations";
+import { sanitizeWebAnnotationUrl } from "@orkestrator/protocol/web-annotations-validation";
+import type { CurrentAnnotationPage } from "@/components/browser/annotations/format";
 import { useBrowserAnnotations } from "@/components/browser/annotations/useBrowserAnnotations";
 import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { BrowserAnnotationPanelState, TabInfo } from "@/types/paneLayout";
 import { appCommandStore } from "@/test/app-command-store";
 
 export const PAGE_URL = "http://localhost:5173/settings?tab=profile";
+
+/**
+ * The harness page's identity: a loopback port and route, as notes taken on a
+ * manual address were saved. Production tabs no longer take such notes, but
+ * stored ones still read back with this identity.
+ */
+export function currentPageForManualUrl(displayUrl: string): CurrentAnnotationPage | null {
+  if (!displayUrl) return null;
+  let url: URL;
+  try {
+    url = new URL(displayUrl);
+  } catch {
+    return null;
+  }
+  const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+  const service: WebAnnotationServiceIdentity =
+    Number.isSafeInteger(port) && port > 0 ? { kind: "port", port } : { kind: "unknown" };
+  const { route } = sanitizeWebAnnotationUrl(url.toString());
+  return {
+    service,
+    route,
+    pageKey: webAnnotationPageKey({ service, route }),
+    label: `${url.host}${route}`,
+  };
+}
 
 /** Per-test and per-wait headroom for the full panel harness (see flake 0161). */
 export const ANNOTATION_UI_TEST_TIMEOUT_MS = 10_000;

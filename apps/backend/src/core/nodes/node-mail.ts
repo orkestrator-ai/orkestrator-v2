@@ -14,7 +14,6 @@ import {
   type UpwardCoordinatorNotice,
 } from "@orkestrator/protocol/coordinator-notices";
 
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import type { MailAttachmentBatch } from "../mail-attachments.js";
 
 /**
@@ -144,8 +143,8 @@ export interface NodeMailState {
   threads: Record<string, CoordinatorMailbox>;
   outbox: Record<string, { nextSeq: number; items: OutboxItem[] }>;
   /**
-   * What each command node said on its latest collect: that it takes notices,
-   * and the repositories it has. Optional: an older one never says.
+   * The repositories each command node said it has on its latest collect.
+   * Optional: none before its first collect.
    */
   noticeRoutes?: Record<string, { repositoryHints: string[]; at: string }>;
   /**
@@ -492,7 +491,8 @@ export class LeafNodeMail {
 
   /**
    * The one routing rule, over what the attached command nodes last said. A
-   * command node with no record is an older one, so its notices stay here.
+   * command node with no record yet has no repository known here, so a
+   * repository's notices stay here until it collects.
    */
   async routeNotice(input: {
     contactKey?: string;
@@ -521,43 +521,20 @@ export class LeafNodeMail {
   }
 
   /**
-   * `notices` is present when the command node takes coordinator notices, and
-   * says which repositories it has. A collect without it comes from an older
-   * one, including after a downgrade: anything queued for it is handed back.
-   *
-   * Without `coordinatorMail` (a command node that predates
-   * `node-coordinator-mail`) this node's coordinator's own mail is held, not
-   * offered: such a command node would deliver it as a worker's report from a
-   * runtime id it has no environment for, outside the pair budget that stops
-   * two coordinators waking each other. It stays queued until that command node
-   * is updated, and each collect that holds one is counted
-   * (`node-coordinator-mail.older-command-node`, version-compatibility.md).
+   * `notices` says which repositories the command node has, so this node's
+   * notices for those repositories go to it (`routeNotice`).
    */
   async collect(
     controllerId: BackendId,
     after: number,
-    coordinatorMail = false,
-    /** An older command node would deliver the message and drop its images. */
-    attachmentMail = false,
     notices?: { repositoryHints: string[] },
   ): Promise<{ items: OutboxItem[]; more: boolean }> {
     if (notices) await this.recordNoticeRoute(controllerId, notices.repositoryHints);
-    else await this.forgetNoticeRoute(controllerId);
     return this.store.mutate((state) => {
       const current = state.outbox[controllerId];
       const eligible = (current?.items ?? []).filter(
-        (entry) =>
-          entry.seq > after &&
-          (coordinatorMail || !entry.fromCoordinator) &&
-          (attachmentMail || !entry.attachments) &&
-          (!entry.coordinatorNotice || (notices !== undefined && !entry.handedBack)),
+        (entry) => entry.seq > after && (!entry.coordinatorNotice || !entry.handedBack),
       );
-      if (
-        !coordinatorMail &&
-        (current?.items ?? []).some((entry) => entry.seq > after && entry.fromCoordinator)
-      ) {
-        compatibilityPathUsage.record("node-coordinator-mail.older-command-node");
-      }
       const items = eligible.slice(0, MAX_COLLECT);
       const claimed = new Set(
         items
@@ -573,8 +550,6 @@ export class LeafNodeMail {
                   ...state.outbox,
                   [controllerId]: {
                     ...current,
-                    // Capability withdrawal explicitly hands ownership back, including
-                    // batches collected but deferred before the downgrade.
                     items: current.items.map((entry) =>
                       claimed.has(entry.seq) ? { ...entry, collected: true as const } : entry,
                     ),
@@ -611,37 +586,6 @@ export class LeafNodeMail {
         result: undefined,
       };
     });
-  }
-
-  private async forgetNoticeRoute(controllerId: BackendId): Promise<void> {
-    const handedBack = await this.store.mutate((state) => {
-      if (!state.noticeRoutes?.[controllerId]) return { next: null, result: false };
-      const { [controllerId]: _forgotten, ...noticeRoutes } = state.noticeRoutes;
-      const current = state.outbox[controllerId];
-      return {
-        next: {
-          ...state,
-          noticeRoutes,
-          ...(current
-            ? {
-                outbox: {
-                  ...state.outbox,
-                  [controllerId]: {
-                    ...current,
-                    // Capability withdrawal explicitly hands ownership back, including
-                    // batches collected but deferred before the downgrade.
-                    items: current.items.map((entry) =>
-                      entry.coordinatorNotice ? { ...entry, handedBack: true as const } : entry,
-                    ),
-                  },
-                },
-              }
-            : {}),
-        },
-        result: true,
-      };
-    });
-    if (handedBack) this.context.noticesHandedBack?.();
   }
 
   /**
@@ -721,8 +665,6 @@ export class LeafNodeMail {
     controllerId: BackendId,
     upTo: number,
     sequences?: number[],
-    coordinatorMail = false,
-    attachmentMail = false,
     notices?: { declined?: number[] },
   ): Promise<{ remaining: number }> {
     const declined = new Set(notices?.declined ?? []);
@@ -744,11 +686,7 @@ export class LeafNodeMail {
         })
         .filter(
           (entry) =>
-            entry.handedBack ||
-            (notices === undefined && entry.coordinatorNotice) ||
-            (!coordinatorMail && entry.fromCoordinator) ||
-            (!attachmentMail && entry.attachments) ||
-            (sequences ? !sequences.includes(entry.seq) : entry.seq > upTo),
+            entry.handedBack || (sequences ? !sequences.includes(entry.seq) : entry.seq > upTo),
         );
       if (!handedBack && items.length === current.items.length) {
         return {

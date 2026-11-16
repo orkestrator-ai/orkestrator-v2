@@ -16,11 +16,12 @@
  * resources (shown from its self summary) need no relay and are subscribed
  * on the command scope directly.
  *
- * Frames arrive under the watched node's own name when the command node says it
- * relays that way, on a stream each transport scopes to what is listened to: the
- * gateway client's own, or the desktop main process's relay. They arrive under
- * the one old name from an older command node, so both names are listened to; a
- * backend only uses one.
+ * Frames arrive under the watched node's own name, on a stream each transport
+ * scopes to what is listened to: the gateway client's own, or the desktop main
+ * process's relay. No backend sends the old shared name any more (retired with
+ * legacy support on 2026-11-14, to-do 8108 (retired)); the authoritative listener on it
+ * (`ensureListening`) stays only as the command node's main-stream reconnect
+ * hook, which resyncs every watch.
  */
 
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -175,9 +176,7 @@ async function syncWatch(watch: NodeWatch): Promise<void> {
               .catch(() => undefined);
             return;
           }
-          // A command node downgraded under this lease stops saying it.
-          if (result.perNodeEvents) await listenPerNode(watch);
-          else stopListeningPerNode(watch);
+          await listenPerNode(watch);
           if (watches.get(watch.nodeId) !== watch) {
             stopListeningPerNode(watch);
             return;
@@ -189,7 +188,7 @@ async function syncWatch(watch: NodeWatch): Promise<void> {
             for (const subscriber of watch.subscribers) watch.unsynced.add(subscriber);
         }
       } catch {
-        // An older command node, or one that is unreachable. Views still read
+        // An unreachable command node, or a failed watch. Views still read
         // once; renewal retries the lease.
         live = false;
       }

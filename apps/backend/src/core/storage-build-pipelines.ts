@@ -526,6 +526,20 @@ export class BuildPipelinesRepository {
       .map((record) => structuredClone(record));
   }
 
+  /**
+   * Every stored pipeline id, read strictly for a destructive sweep (the
+   * removed-project sweep's completion comment records, #2328): a
+   * missing or unreadable store throws rather than read as "no pipelines".
+   * Rows that fail validation still count, so their records stay.
+   */
+  pipelineIdsForCleanupNow(): Set<string> {
+    const snapshot = this.context.loadStoreStrict<unknown>(this.files.buildPipelinesFile());
+    if (!snapshot || !isRecord(snapshot.value)) {
+      throw new Error("Build pipeline store is missing or invalid; cleanup refused");
+    }
+    return new Set(Object.keys(snapshot.value));
+  }
+
   async listBuildPipelines(projectId: string): Promise<PersistedBuildPipeline[]> {
     if (!isNonBlankString(projectId)) {
       throw new Error("Build pipeline project ID must not be blank");

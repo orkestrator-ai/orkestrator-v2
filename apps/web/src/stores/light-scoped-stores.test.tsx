@@ -4,8 +4,7 @@
  * For each store: two scopes keep independent state, the hook reads the
  * rendered scope's instance, and the hook carries no command-scope statics. The stores make no backend calls of their own; the calls
  * their companion modules make are tested beside those modules
- * (`multi-review-persistence`, `multi-review-launch-compat`,
- * `agent-model-catalog-cache`, `tab-launch`).
+ * (`multi-review-persistence`, `agent-model-catalog-cache`, `tab-launch`).
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, screen } from "@testing-library/react";

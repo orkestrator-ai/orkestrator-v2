@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { FleetUpdatePolicy } from "@orkestrator/protocol/fleet-currency";
 import {
   HOST_UPDATE_CHANNELS,
@@ -24,12 +23,10 @@ const CHANNEL_LABELS: Record<HostUpdateChannel, string> = {
 /**
  * The command node's opt-in update policy (plan item 5006): per update
  * channel, whether the machines it controls on that channel are kept on its
- * own version. Off until the user turns a channel on. Hidden when the
- * command node predates the policy.
+ * own version. Off until the user turns a channel on.
  */
 export function FleetUpdatePolicySection() {
   const [policy, setPolicy] = useState<FleetUpdatePolicy | null>(null);
-  const [unsupported, setUnsupported] = useState(false);
   const [busy, setBusy] = useState<HostUpdateChannel | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -38,17 +35,13 @@ export function FleetUpdatePolicySection() {
     getFleetUpdatePolicy().then(
       (value) => active && setPolicy(value),
       (error: unknown) => {
-        if (!active) return;
-        if (incompatibility(error, "get_fleet_update_policy")) setUnsupported(true);
-        else setLoadError(errorText(error));
+        if (active) setLoadError(errorText(error));
       },
     );
     return () => {
       active = false;
     };
   }, []);
-
-  if (unsupported) return null;
 
   const change = async (channel: HostUpdateChannel, enabled: boolean) => {
     setBusy(channel);

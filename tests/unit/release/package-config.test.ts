@@ -222,10 +222,11 @@ describe("Electron packaging configuration", () => {
     // Closing a window destroys its previews and the preview transport it owns.
     expect(desktopWindows).toContain("closing?.browserPreviewManager.destroyAll()");
     expect(desktopWindows).toContain("closing?.previewTransport.disposeAll()");
-    // A connection switch builds previews in the new connection's partition,
-    // after use, connect, forget and a command handover alike. (A window never moves to another
-    // node; a realm builds its own previews when it opens.)
-    expect(desktopMain).toContain("browserPreviewPartitionForWindow(slot, partitionKey)");
+    // A connection switch rebuilds the window's previews for the new
+    // connection, after use, connect, forget and a command handover alike. (A
+    // window never moves to another node; a realm builds its own previews when
+    // it opens.) Previews open only on registered services, so the shared
+    // per-window partition that legacy URL tabs used is no longer created.
     expect(desktopWindows).toContain("rebindWindowPreviews(context, connections.getConnectionId");
     // Connect, forget and a command handover in main.ts; use in the bookkeeping.
     expect(desktopMain.match(/followWindowConnection\((?:context|current)\);/g)).toHaveLength(3);

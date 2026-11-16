@@ -281,18 +281,6 @@ function install() {
           return { revision: 1, displayName: "Self", colorToken: "teal", updatedAt: "t" } as T;
         case "get_portal_layout":
           return layout as T;
-        case "arrange_projects": {
-          calls.setState((state) => ({ writes: [...state.writes, { command, args }] }));
-          const ids = args!.projectIds as string[];
-          const folders = args!.folders as Record<string, string | null>;
-          projects = ids.map((id, order) => ({
-            ...projects.find((project) => project.id === id)!,
-            order,
-            ...(id in folders ? { folder: folders[id] } : {}),
-          }));
-          persist();
-          return projects as T;
-        }
         case "arrange_projects_by_intent": {
           // Resolved against current projects, as the backend does. The write
           // records the result too, which is what the specs assert on.

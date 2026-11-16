@@ -177,11 +177,12 @@ the reason: `unshare` is not installed, `ip` (iproute2) is not installed, or the
 host refused the namespace, with the kernel's own message (for example Ubuntu
 24.04's AppArmor restriction or a container's seccomp profile).
 `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose. Read that line first when
-`test:browser` fails on a Linux host other than the one it was qualified on
-(to-do 7020 task 2). On macOS the wrapper runs both suites unchanged on the host
-network and prints no line, because Docker Desktop keeps its networks inside its
-VM; it creates no namespace and changes nothing in the Mac's network
-configuration (qualified 2026-11-13, to-do 7020 task 2).
+`test:browser` fails on a Linux host other than the ones it was qualified on
+([Loopback namespace qualification](#loopback-namespace-qualification)). On
+macOS the wrapper runs both suites unchanged on the host network and prints no
+line, because Docker Desktop keeps its networks inside its VM; it creates no
+namespace and changes nothing in the Mac's network configuration (qualified
+2026-11-13).
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli:test`, which sets no build commit and so
@@ -205,6 +206,37 @@ real host scheduler, so the queueing case skips unless the suite runs with
 run it against a manual profile, export those two variables and
 `ORKESTRATOR_TEST_HOST_MEMORY_MIB=2048` for both `dev:test` and the browser
 suite.
+
+### Loopback namespace qualification
+
+Where `scripts/loopback-network.ts` has been checked, from to-do 7020 (retired
+2026-11-16; the full run record is in Git history,
+`git show a8b89f154:docs/todo/cross-cutting/7020-browser-suites-after-network-churn-qualification.md`).
+The cause it exists for is flake
+[2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
+
+| Date | Host | What ran | Result |
+| --- | --- | --- | --- |
+| 2026-11-06 | beelink (Linux 7.1.8-arch1-3, 16 cores), under Docker network churn | component suite on the host network, then in the namespace | host network: 850 of the first 1,024 cases lost to `ERR_NETWORK_CHANGED`; namespace: 1,475 and 1,479 passed with 15 and 11 load-sensitive failures, no network-change abort; public-site suite passed |
+| 2026-11-09 | containers on beelink's kernel (`--network none`) | Ubuntu 24.04 and Debian 13 userlands, Docker default and unconfined seccomp | the fallback notice named each missing prerequisite (refused, `ip` not installed); Debian 13 unconfined isolated with only `lo` and Chromium loaded a loopback page; exit statuses passed through |
+| 2026-11-13 | macOS 27.2 (18 cores) | both suites through the wrapper | no namespace, no notice line, no change to the interface list or default route; component suite 1,729 passed, 1 failed (flake [0351](../tests/flaky-tests/web-ui/0351-pane-breakpoint-parallel-startup.md), passed on rerun either way); public-site 14 passed |
+| 2026-11-15 | omarchy-hp (Omarchy, Linux 7.2.8-9-omarchy, 12 cores, Playwright 1.65.0) at `a8b89f154` | whole `mise run test:browser`, default 6 workers, private ports, started at load 3.9 | in the namespace: 1,600 passed, 150 failed, 154 skipped (91 min); no `ERR_NETWORK_CHANGED` or connection refusal; 131 of the failures were test timeouts, with 75 `page.goto` or `page.reload` timeout errors among them; the suite alone held load near 30 |
+| 2026-11-16 | omarchy-hp, straight after | the 41 failing files (880 cases) on the host network, then in the namespace, each stopped by `test:logged`'s 30-minute deadline | of 685 cases that ran in both: host network 40 failed, namespace 27; 21 failed in both, 19 only on the host network, 6 only in the namespace (four test timeouts that had also failed in the whole run, two timing assertions); 97 of the whole run's failures passed in both; public-site suite passed in the namespace (14.1 s) |
+
+So far no failure has come from the wrapper: the namespace removed every
+network-change abort, and the failures that remain come and go with load on
+either network. Not yet observed: a host that refuses the namespace on its
+own (Ubuntu 24.04 with `kernel.apparmor_restrict_unprivileged_userns=1`); that
+check is in the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+To requalify on a new host, run `mise run test:browser` with a free
+`ORKESTRATOR_E2E_PORT` and `ORKESTRATOR_PUBLIC_E2E_PORT` and
+`ORKESTRATOR_TEST_GROUP_TIMEOUT_MS` raised past the suite's length. Then rerun
+the failing files with `ORKESTRATOR_E2E_HOST_NETWORK=1` and again without it,
+and compare case by case. A case that fails only inside the namespace, and
+again on a rerun, is a defect of the wrapper. A whole run whose fixture server
+stops answering partway (every later case `ERR_CONNECTION_REFUSED`, as one
+omarchy-hp run did on 2026-11-15) says nothing about the wrapper; see
+[8200](../todo/cross-cutting/8200-component-suite-continues-after-fixture-server-exits.md).
 
 ## Codex typed-prompt resume qualification
 
@@ -345,8 +377,8 @@ ring `agent_failed`, the tab must stop reading busy, the toast must show, and
 the tab must find the CLI's transcript and show its error ("Not logged in ·
 Please run /login", the CLI's wording for a 401). It then submits one more
 prompt and records, for up to 120 s, whether it reaches the model and the tab
-settles (the gap [8092](../todo/containers-and-environments/8092-claude-cli-prompt-after-refused-login-reads-working.md)
-records for the container CLI). It writes
+settles (the gap 8092 (retired) recorded for the container CLI, now settled
+from the CLI's notice; see [container-lifecycle.md](../architecture/container-lifecycle.md#turns-no-hook-ends)). It writes
 `output/agent-testing/<run>/failed-turn-bell/claude-tmux.json` and
 `output/visual-previews/5160-bell-claude-tmux-*.png`.
 
@@ -2611,11 +2643,12 @@ configuration directory never holds the profile's `settings.json`, so
 pointing that file at a fake model reaches every Claude session except the
 coordinator's.
 
-### Multi-client, restarts and an older backend (fake model)
+### Multi-client and restarts (fake model)
 
 `e2e/agent-testing/multi-client-restarts-live.spec.ts` qualifies two headless
-browser clients, backend and bridge restarts, and an older backend without a
-billed turn (todo 0048 task 11). The provider is the profile's real Claude CLI
+browser clients and backend and bridge restarts without a billed turn (todo
+0048 task 11; its older-backend case was retired with mixed-version
+qualification on 2026-11-14, to-do 8108). The provider is the profile's real Claude CLI
 and bridge, sent to a loopback Anthropic endpoint
 (`e2e/agent-testing/fake-anthropic-model.ts`) by a `settings.json` the spec
 writes into the profile's own isolated `CLAUDE_CONFIG_DIR`. Every prompt is
@@ -2642,12 +2675,6 @@ profile alone; a new endpoint makes it restart the profile once so no Claude
 process keeps an old one. `ORKESTRATOR_AGENT_TEST_MULTI_CLIENT_ROUNDS` repeats
 the two-client and queued cases for a p50/p95. Cases:
 
-- **Older backend** (first, and only when
-  `ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_URL` and
-  `ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_AUTH_FILE` name a running older
-  backend whose `--renderer-dev-server-url` is this profile's current
-  `rendererUrl`, and whose Claude config points at the same fake port): two
-  clients run today's renderer against it through a turn and a save.
 - **Two clients, one disconnected**: client B sits behind the outage link
   (`client-outage-support.ts`) and is cut off while client A sends a held
   turn, the turn completes and a file is saved; then B's link returns.
@@ -3498,8 +3525,8 @@ project's "Let the coordinator use environments it did not create" setting
   must report a `container-relay` transport with TCP `ok`. The container
   publishes only its bridge ports, so the backend reaches the service through
   its in-container relay, which cannot see the host decoy. The browser client
-  in compatibility mode cannot embed a relayed service (it has no host port;
-  see [browser-previews.md, "Rollback"](../architecture/browser-previews.md#rollback)),
+  has no embedded fallback for a service (compatibility mode was removed on
+  2026-11-15; see [browser-previews.md, "Transports"](../architecture/browser-previews.md#transports)),
   so the page text is checked only when an embedded frame exists. The
   desktop-app half is on the manual-test checklist (7568).
 
@@ -3596,24 +3623,16 @@ moves the leaf's activity between working and idle on cue.
   goes away (document hidden, offline, streams dropped) while the leaf changes
   and starts a turn; on return, and again after a reload, the badge and the
   activity must match the leaf's.
-- **Older peers on the wire.** A second command page has
-  `relayedEvents=per-node` stripped from its main stream and `perNodeEvents`
-  removed from `watch_node_events` answers, which is what an older renderer
-  sends and what an older command node answers. It must open no relayed
-  stream, receive the leaf's events as `relayed-node-event`, get a `resync`
-  for the leaf after a reconnect, keep the badge right, and move the
-  `relayed-node-event.legacy-stream` counter, which must not move while every
-  client asks for per-node names. Real older releases are a manual check
-  (7568).
 
-Passed on Linux on 2026-11-13 (three cases, 154 s including both profile
-starts). The activity observers are armed before each dispatch and release, so
+The older-peer case (main stream without `relayedEvents=per-node`) was
+removed when the old shared relayed name was retired with legacy support on
+2026-11-14 (to-do 8108). Passed on Linux on 2026-11-13 (then three cases,
+154 s including both profile starts). The activity observers are armed before each dispatch and release, so
 a transition cannot happen before its polls start; the command node's row
 followed the leaf's record by 418–894 ms (median 557 ms). The flood moved the
 relayed ring by 10 and the main ring by 0, the returning tab showed the leaf's
 badge in 0.23 s and its activity in 0.53 s, a relayed stream naming the leaf
-reopened after the reload, and the older-peer page moved the legacy counter by
-3 with one `resync`. Frames are reduced by `frameFacts`, the helper the
+reopened after the reload. Frames are reduced by `frameFacts`, the helper the
 support unit test covers.
 
 Both backends share one kernel and loopback, so a cross-machine or slow link is

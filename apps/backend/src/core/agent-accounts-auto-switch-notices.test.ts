@@ -1,9 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { AGENT_ACCOUNT_AUTO_SWITCHED_EVENT } from "@orkestrator/protocol/agent-account-auto-switch";
-import {
-  bridgeRemoteAutoSwitchNotices,
-  mailAutoSwitchNotice,
-} from "./agent-accounts-auto-switch-notices.js";
+import { mailAutoSwitchNotice } from "./agent-accounts-auto-switch-notices.js";
 
 const NOTICE = {
   platform: "codex" as const,
@@ -122,70 +118,5 @@ describe("who the notice skips", () => {
     await expect(
       mailAutoSwitchNotice(storageWith(send), NOTICE, "leaf", { requireDelivery: true }),
     ).rejects.toThrow("mail is off");
-  });
-});
-
-describe("a switch on a machine this one controls", () => {
-  function bridge() {
-    let listener: ((event: string, payload: unknown, nodeId: string) => void) | undefined;
-    const mailed: Array<[unknown, string]> = [];
-    bridgeRemoteAutoSwitchNotices({
-      onNodeEvent: (next) => {
-        listener = next;
-        return () => undefined;
-      },
-      nodeName: async (nodeId) => {
-        if (nodeId === "gone") throw new Error("not connected");
-        return "Leaf one";
-      },
-      mail: async (event, machineName) => {
-        mailed.push([event, machineName]);
-      },
-    });
-    return { emit: listener!, mailed };
-  }
-
-  test("a machine that sends through its outbox is not told about twice", async () => {
-    let listener: ((event: string, payload: unknown, nodeId: string) => void) | undefined;
-    const mailed: unknown[] = [];
-    bridgeRemoteAutoSwitchNotices({
-      onNodeEvent: (next) => {
-        listener = next;
-        return () => undefined;
-      },
-      nodeName: async () => "Leaf one",
-      mail: async (event) => {
-        mailed.push(event);
-      },
-      sendsThroughOutbox: (nodeId) => nodeId === "new-leaf",
-    });
-    listener!(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, NOTICE, "new-leaf");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(mailed).toHaveLength(0);
-    listener!(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, NOTICE, "older-leaf");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(mailed).toHaveLength(1);
-  });
-
-  test("reaches this node's coordinators, naming the machine", async () => {
-    const { emit, mailed } = bridge();
-    emit(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, NOTICE, "leaf-1");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(mailed).toEqual([[NOTICE, "Leaf one"]]);
-  });
-
-  test("still goes out when the machine's name cannot be read", async () => {
-    const { emit, mailed } = bridge();
-    emit(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, NOTICE, "gone");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(mailed).toEqual([[NOTICE, "gone"]]);
-  });
-
-  test("ignores other events and anything malformed", async () => {
-    const { emit, mailed } = bridge();
-    emit("node-outbox-ready", NOTICE, "leaf-1");
-    emit(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, { platform: "grok" }, "leaf-1");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(mailed).toEqual([]);
   });
 });

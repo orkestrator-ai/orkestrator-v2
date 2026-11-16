@@ -10,7 +10,6 @@ import type { PayloadOf } from "@orkestrator/protocol/contract/event";
 import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createPreviewsApi } from "@/lib/backend/previews";
-import { resolveGatewayBrowserPreviewUrl } from "@/lib/gateway-url";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { commandTransportAvailable } from "@/lib/node-scope/command-client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
@@ -39,22 +38,7 @@ export interface PreviewServiceStoreState {
   confirmEnvironment(environmentId: string): Promise<PreviewRegistrySnapshot>;
   handleChanged(event: PayloadOf<typeof previewServicesChangedEvent>): void;
   service(environmentId: string, serviceId: string): PreviewServiceSnapshot | null;
-  /**
-   * The address a preview frame loads for a loopback page on this store's
-   * node: the node client's preview URL (a leaf's goes through its relay,
-   * plan item 2004), or the window gateway's on the command node.
-   */
-  resolvePreviewUrl(url: string): string;
   reset(): void;
-}
-
-/** A node client that can address its own preview frames (a leaf's, plan item 2004). */
-interface PreviewUrlClient {
-  resolvePreviewUrl(url: string): string;
-}
-
-function hasPreviewUrls(client: unknown): client is PreviewUrlClient {
-  return typeof (client as Partial<PreviewUrlClient> | null)?.resolvePreviewUrl === "function";
 }
 
 /**
@@ -259,11 +243,6 @@ export const previewServiceStore = defineScopedStore<PreviewServiceStoreState>(
         get().environments[environmentId]?.snapshot?.services.find(
           (service) => service.definition.serviceId === serviceId,
         ) ?? null,
-
-      resolvePreviewUrl: (url) =>
-        hasPreviewUrls(scope.client)
-          ? scope.client.resolvePreviewUrl(url)
-          : resolveGatewayBrowserPreviewUrl(url),
 
       reset: () => {
         generation += 1;

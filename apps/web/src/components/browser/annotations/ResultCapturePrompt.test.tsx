@@ -23,11 +23,11 @@ import {
 } from "@/test/web-annotation-fakes";
 import {
   AnnotationHarness,
+  currentPageForManualUrl,
   navigateToPageMock,
   seedBrowserLayout,
   useAnnotationUiTestBudget,
 } from "@/test/web-annotation-harness";
-import { currentPageForManualUrl } from "./format";
 import {
   dismissResultCapturePrompt,
   hasAfterCapture,
@@ -192,6 +192,7 @@ describe("turn-end result capture prompt", () => {
 
     const article = await screen.findByRole("article", { name: /Change request/ });
     await waitFor(() => expect(captureButton(article)).toBeTruthy());
+    // Compare before asserting so a failure cannot dump an unbounded DOM tree.
     expect(screen.queryByRole("region", { name: "Capture the result" }) === null).toBe(true);
   });
 
@@ -211,14 +212,14 @@ describe("turn-end result capture prompt", () => {
         (card) => card.dataset.request === REQUEST_ID,
       )!;
       expect(captureButton(article)).toBeTruthy();
-      expect(screen.queryByRole("region", { name: "Capture the result" })).toBeNull();
+      expect(screen.queryByRole("region", { name: "Capture the result" }) === null).toBe(true);
       view.unmount();
       renderInAppCommandScope(<AnnotationHarness />);
       const again = (await screen.findAllByRole("article", { name: /Change request/ })).find(
         (card) => card.dataset.request === REQUEST_ID,
       )!;
       expect(captureButton(again)).toBeTruthy();
-      expect(screen.queryByRole("region", { name: "Capture the result" })).toBeNull();
+      expect(screen.queryByRole("region", { name: "Capture the result" }) === null).toBe(true);
     });
   }
 

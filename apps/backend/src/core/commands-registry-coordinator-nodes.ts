@@ -705,8 +705,6 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     if (conversation?.role === "side") {
       throw new Error('A side agent can only message the main coordinator. Send to "coordinator".');
     }
-    // The node-mail client leaves it out for a pre-contract leaf that does not
-    // advertise `node-mail-turn-origin` (it would refuse the unknown key).
     const turnOrigin =
       coordinatorCallTurnOrigin(
         conversation?.lastTurnOrigin,

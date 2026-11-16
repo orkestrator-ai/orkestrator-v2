@@ -126,9 +126,8 @@ than GET gets `405`. The response (`parseBackendHello`) contains:
 - `capabilities`: name to version, at most 64 entries
   (`BACKEND_CAPABILITIES`). The backend sends `backend-profile` and
   `summary-reads`, `loopback-client-gateway` while that listener is serving,
-  and, in node mode, the ten node capabilities (`node-attachment`,
-  `public-action-relay`, `node-mail-steer`, `node-mail-turn-origin`,
-  `node-coordinator-mail`, `node-coordinator-build-origin`,
+  and, in node mode, the nine node capabilities (`node-attachment`,
+  `public-action-relay`, `node-mail-steer`, `node-coordinator-mail`, `node-coordinator-build-origin`,
   `coordinator-notices`, `node-mail-attachments`, `node-mail-return`,
   `ticket-sync`). Only backend-to-backend code (a command node about its
   leaves) acts on them; the desktop only lists their names in its connection

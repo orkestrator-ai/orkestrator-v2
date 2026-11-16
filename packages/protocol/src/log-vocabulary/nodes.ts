@@ -28,7 +28,9 @@ export const NODES_LOG_AREAS = defineLogAreas({
         "A remote build started but its ticket work location could not be saved.",
       "ticket-sync.failed": "A Kanban sync with a node failed; it is retried.",
       "ticket-sync.unknown-project":
-        "A node sent ticket changes for a project that no longer exists here.",
+        "A node sent ticket changes for a project this machine does not list, and its project store could not be read to confirm the project was removed; the changes stay queued on the node.",
+      "ticket-sync.removed-project-dropped":
+        "A node's queued ticket changes for a project removed here were dropped and acknowledged; `dropped` counts them, and the node was told to keep its copies as its own.",
       "ticket-sync.forget-failed": "A detached command node's ticket copies could not be released.",
       "usage-sync.failed":
         "Sharing usage readings with a node failed; the next reading or reconnect retries.",

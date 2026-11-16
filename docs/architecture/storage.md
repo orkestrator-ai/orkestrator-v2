@@ -128,8 +128,13 @@ journal, both in `storage-kanban-project-removal.ts`; what that means for sync
 is in [tickets.md](tickets.md#sync-across-machines)), deleting a pipeline
 deletes its Linear and GitHub completion comment records before its row
 (`deleteCompletionCommentsForPipelines`, which project removal also calls for
-any pipeline still listed for the project), session removal deletes the
-session buffer, public
+any pipeline still listed for the project), the startup removed-project sweep
+deletes the rows that projects removed before that change left behind, and
+the completion comment records of pipelines that are gone, deciding each one
+from a strict read of the projects and pipelines stores
+(`ProjectsRepository.sweepRemovedProjectContent`, `sweepRemovedProjectRows` in
+`storage-kanban-removed-projects.ts`; from to-do 8111, retired 2026-11-16),
+session removal deletes the session buffer, public
 operations write projects and environments under those stores' leases
 (`this.repos.projects.enqueueEnvironmentMutation`). A lease
 wrapper (`enqueueEnvironmentMutation`, `enqueueConfigMutation`, …) lives in

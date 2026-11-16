@@ -626,8 +626,9 @@ checks it under the lease or transaction the delete also takes: creating a
 ticket, applying a sync snapshot, recording a leaf's pairing, creating a
 label, saving notes, creating a feature plan. So a write racing the removal
 either lands before the delete (and goes with it) or is refused; a command
-node leaves a leaf's changes for a fenced project queued, as it does for an
-unknown one. The fence outlives a completed removal and is lifted only when a
+node neither applies nor acknowledges a leaf's change for a fenced project, so
+it stays queued on the leaf with every change after it until the removal
+settles. The fence outlives a completed removal and is lifted only when a
 failed removal kept the project. Image ids are journaled
 (`kanban-image-deletions`) in the commit that deletes their tickets and
 unlinked from the journal; a file or sidecar that cannot be removed fails the
@@ -645,11 +646,40 @@ it and its conflicts are dropped. So:
   command node stay queued, because they name the command node's project;
 - removed on the command node, its board is gone from that machine and it no
   longer sends that project to any leaf; each leaf's own project and its
-  copies are that machine's to remove.
+  copies are that machine's to remove. A change a leaf queues for the removed
+  project is dropped when the command node next collects (`NodeTicketSync`;
+  from to-do 8111 task 2, retired 2026-11-16): project ids are never reused,
+  so a project absent from a strict read of the projects store
+  (`loadProjectIdsForCleanup`) is gone for good. The command node acknowledges it in its place, in order, so it no
+  longer holds back the leaf's changes for other projects, and names the
+  project in the acknowledgement's `removedProjects`; the leaf then keeps its
+  copies of that board as its own, as when a command node detaches, and
+  drops anything else queued for it. The sync result counts the dropped
+  changes (`dropped`). When the projects store cannot be read, nothing is
+  dropped: the changes from the first unknown project on stay queued and the
+  sync reports an error and is retried. The leaf returns the actual discarded
+  count, including queued changes beyond the collected batch. Only removed
+  projects reached in the settled prefix are named in the acknowledgement.
+
+**Rows left by earlier removals.** Before 2026-11-15 removing a project left
+its board behind. Each backend start runs `sweepRemovedProjectContentAtStartup`
+(`removed-project-content-sweep.ts`; from to-do 8111 task 1, retired
+2026-11-16), which deletes the tickets, ticket image files, deleted-ticket
+delivery sidecars, label catalogues, notes, feature plans and sync
+bookkeeping that name a project no longer stored, and the Linear and GitHub completion comment records of
+pipelines no longer stored (`sweepRemovedProjectRows`,
+`storage-kanban-removed-projects.ts`). Each decision reads the owner store
+strictly inside the lease or transaction that deletes, so a project added
+meanwhile keeps its rows; an unreadable or invalid projects store, or one
+holding no project, refuses the whole sweep and deletes nothing, and an
+unreadable store being swept, or a missing or unreadable pipelines store,
+skips only that step. Nothing is queued for a command node, and a machine
+with nothing left over writes nothing.
 
 Kanban tickets are not linked to Linear issues or GitHub issues (see
 [Linear](#linear)), so removing a project changes nothing in either.
-`storage-kanban-project-removal.test.ts` and
+`storage-kanban-project-removal.test.ts`,
+`storage-kanban-removed-projects.test.ts` and
 `nodes/node-ticket-sync-project-removal.test.ts` cover it.
 
 ## Linear

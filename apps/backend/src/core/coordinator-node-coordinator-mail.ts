@@ -54,7 +54,7 @@ export async function sendToNodeCoordinator(
     nodeParent?: { id: string; threadId: string; hopCount: number };
     /** Already in that node's spool, for its `deliver_node_mail` to place. */
     attachments?: MailAttachmentBatch;
-    /** Left out by the node-mail client for a pre-contract leaf without `node-mail-turn-origin`. */
+    /** The coordinator's turn was not started by the user. */
     turnOrigin?: "mail";
   },
 ): Promise<JsonRecord> {

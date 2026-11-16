@@ -93,6 +93,8 @@ describe("authenticated hello handshake", () => {
         expect(hello.capabilities[BACKEND_CAPABILITIES.nodeCoordinatorBuildOrigin]).toBe(1);
         expect(hello.capabilities[BACKEND_CAPABILITIES.nodeMailAttachments]).toBe(1);
         expect(hello.capabilities[BACKEND_CAPABILITIES.ticketSync]).toBe(1);
+        // Retired with to-do 6080 (retired) task 7: `turnOrigin` is no longer gated.
+        expect(hello.capabilities["node-mail-turn-origin"]).toBeUndefined();
       }
     });
   }

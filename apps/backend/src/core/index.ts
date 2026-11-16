@@ -121,6 +121,7 @@ import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
 import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { backendClaudeStateSignal, backendTmuxHookSignal } from "./claude-state-signal.js";
+import { backendClaudeStateSettler } from "./claude-terminal-settle.js";
 import { ContainerLifecycleReactor } from "./container-lifecycle-events.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
@@ -265,6 +266,7 @@ import {
   reconcileInterruptedEnvironmentLifecycleTasks,
 } from "./environment-lifecycle-tasks.js";
 import { recoverInterruptedEnvironmentMoves } from "./environment-move.js";
+import { sweepRemovedProjectContentAtStartup } from "./removed-project-content-sweep.js";
 import { createBackendChangeTracking } from "./change-tracking/index.js";
 import {
   cancelScheduledEnvironmentCleanup,
@@ -720,7 +722,10 @@ export class OrkestratorBackend {
           : { dockerAvailability: { probe: () => checkDockerAvailability() } }),
         tmux: {
           localClaudeConfigDirectory: tmuxLocalClaudeConfigDirectory,
-          claudeStatePolls: { signal: backendClaudeStateSignal() },
+          claudeStatePolls: {
+            signal: backendClaudeStateSignal(),
+            settle: backendClaudeStateSettler(),
+          },
           hookSignal: backendTmuxHookSignal(),
         },
         // Read at call time: the keeper and the Codex refresher exist only
@@ -2387,6 +2392,9 @@ export class OrkestratorBackend {
     // state and design canvases whose environment is gone. Background work: it never blocks the
     // gateway and never rejects.
     void runStartupEnvironmentCleanup(this.context);
+    // Rows that projects removed before removal deleted their content left
+    // behind (to-do 8111); background, never rejects.
+    void sweepRemovedProjectContentAtStartup(this.context.storage);
     const reconcileTabTeardowns = this.commands.get("reconcile_tab_teardowns");
     if (reconcileTabTeardowns) {
       await Promise.resolve(reconcileTabTeardowns({}, this.context)).catch((error: unknown) => {

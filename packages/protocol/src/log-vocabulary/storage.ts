@@ -39,6 +39,12 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
         "A removed project's ticket image files could not all be unlinked; they stay journaled and the removal fails so a retry finishes them.",
       "kanban.delivery-sidecar-cleanup-failed":
         "A removed project's deleted-ticket delivery sidecars could not all be removed; the removal fails so a retry finishes them.",
+      "kanban.removed-project-sweep-skipped":
+        "Steps of the startup sweep for rows of projects removed before removal deleted their content were refused or failed (`steps` names them, e.g. an unreadable store); their rows stay for the next start.",
+      "removed-project-sweep.removed":
+        "The startup sweep deleted rows that removed projects or deleted pipelines had left behind; the fields are counts by kind.",
+      "removed-project-sweep.refused":
+        "The startup sweep for removed projects' rows did not run because the projects store could not be read completely; nothing was deleted and the next start tries again.",
       "nodes.entries-dropped": "Unreadable node registry entries were ignored.",
       "preview-identity.reminted":
         "The data directory moved or was copied, so previews get a new backend identity.",

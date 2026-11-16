@@ -284,31 +284,35 @@ export interface TaskNotificationReport {
 
 const TASK_NOTIFICATION_OPEN = "<task-notification>";
 
-/** The text between the first `<name>` and its closing tag, trimmed. */
-function taskNotificationField(text: string, name: string, last = false): string | undefined {
-  const open = `<${name}>`;
-  const close = `</${name}>`;
-  const start = text.indexOf(open);
-  if (start < 0) return undefined;
-  const from = start + open.length;
-  // A report is free text and may itself quote the closing tag, so the result
-  // runs to the *last* one; every other field is a short scalar.
-  const end = last ? text.lastIndexOf(close) : text.indexOf(close, from);
-  if (end < from) return undefined;
-  const value = text.slice(from, end).trim();
-  return value.length > 0 ? value : undefined;
-}
-
 /** Parse a `<task-notification>` user turn, or `undefined` for any other text. */
 export function parseTaskNotification(text: string): TaskNotificationReport | undefined {
   const trimmed = text.trimStart();
   if (!trimmed.startsWith(TASK_NOTIFICATION_OPEN)) return undefined;
+  const fields = new Map<string, string>();
+  let remaining = trimmed.slice(TASK_NOTIFICATION_OPEN.length).trimStart();
+  // Walk envelope fields rather than searching the whole report. In particular,
+  // summary and result are free text: any routing tags they quote belong to
+  // their value, never to the notification's metadata.
+  while (remaining.startsWith("<")) {
+    const field = /^<([a-z][a-z-]*)>/.exec(remaining);
+    if (!field) break;
+    const name = field[1]!;
+    const from = field[0].length;
+    const close = `</${name}>`;
+    // The terminal result may even quote its own closing tag.
+    const end = name === "result" ? remaining.lastIndexOf(close) : remaining.indexOf(close, from);
+    if (end < from) break;
+    const value = remaining.slice(from, end).trim();
+    if (value && !fields.has(name)) fields.set(name, value);
+    if (name === "result") break;
+    remaining = remaining.slice(end + close.length).trimStart();
+  }
   return {
-    taskId: taskNotificationField(trimmed, "task-id"),
-    toolUseId: taskNotificationField(trimmed, "tool-use-id"),
-    status: taskNotificationField(trimmed, "status"),
-    summary: taskNotificationField(trimmed, "summary"),
-    result: taskNotificationField(trimmed, "result", true),
+    taskId: fields.get("task-id"),
+    toolUseId: fields.get("tool-use-id"),
+    status: fields.get("status"),
+    summary: fields.get("summary"),
+    result: fields.get("result"),
   };
 }
 

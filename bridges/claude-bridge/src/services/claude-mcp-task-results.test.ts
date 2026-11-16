@@ -5,12 +5,20 @@ import {
   createSession,
   getSession,
   nextQueryCall,
+  pushSuccessfulContinuationResult,
   sendPrompt,
   track,
   waitFor,
 } from "./session-manager-test-harness.js";
-import { mcpTaskIdFromPlaceholder } from "./claude-mcp-task-results.js";
-import { normalizePersistedSessionMessages } from "./session-manager-messages.js";
+import {
+  MAX_TRACKED_BACKGROUND_TASK_CALLS,
+  mcpTaskIdFromPlaceholder,
+} from "./claude-mcp-task-results.js";
+import {
+  normalizePersistedSessionMessages,
+  parseTaskNotification,
+  ToolTracker,
+} from "./session-manager-messages.js";
 
 // ---------------------------------------------------------------------------
 // What the tool card shows for an MCP call the Claude CLI ran as an MCP task
@@ -36,6 +44,31 @@ Generating the report
 To stop it, use TaskStop with task_id "${TASK_ID}"; the result arrives as a task notification.`;
 
 const REAL_RESULT = "Report ready: 42 rows, no errors.";
+const OTHER_CALL_ID = "toolu_other";
+const otherToolUse = {
+  type: "assistant",
+  uuid: "asst-other",
+  message: {
+    model: "claude-sonnet-4-6",
+    content: [{ type: "tool_use", id: OTHER_CALL_ID, name: TOOL_NAME, input: {} }],
+  },
+  parent_tool_use_id: null,
+};
+
+const quotedReports = ["example", OTHER_CALL_ID].flatMap((id) =>
+  ["result", "summary"].map((field) => ({
+    label: `${field} quoting ${id}`,
+    body: `Output quoting <tool-use-id>${id}</tool-use-id> and <status>failed</status>.`,
+    field,
+  })),
+);
+
+function quotedReport(body: string, field: string) {
+  const text = report("completed", body);
+  return field === "summary"
+    ? text.replace(/<summary>.*<\/summary>/, `<summary>${body}</summary>`)
+    : text;
+}
 
 function report(status: "completed" | "failed" | "cancelled", body: string, taskId = TASK_ID) {
   return `<task-notification>
@@ -158,6 +191,74 @@ describe("mcpTaskIdFromPlaceholder", () => {
 });
 
 describe("an MCP call run as an MCP task, live", () => {
+  for (const { label, body, field } of quotedReports) {
+    test(`keeps attribution for ${label}`, async () => {
+      const { session } = await runMcpTaskTurn(
+        `mcp-quoted-${label}`,
+        [reportTurn(quotedReport(body, field))],
+        [otherToolUse, toolUse, placeholderResult()],
+      );
+      expect(card(session.messages)?.toolOutput).toBe(body);
+      expect(card(session.messages)?.toolState).toBe("success");
+      const otherCard = session.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === OTHER_CALL_ID);
+      expect(otherCard?.toolState).toBe("pending");
+      expect(otherCard?.toolOutput).toBeUndefined();
+      expect(statusRows(session.messages)).toEqual([]);
+    });
+  }
+
+  test("a later turn of the same CLI updates the launching turn's card", async () => {
+    const created = createSession("mcp-task-cross-turn");
+    track(created.id);
+    const firstPrompt = sendPrompt(created.id, "make the report");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+    await input.next();
+    for (const frame of [toolUse, taskStarted, placeholderResult()]) call.push(frame);
+    call.push({ type: "result", subtype: "success" });
+    const session = getSession(created.id)!;
+    await waitFor(() => session.status === "idle");
+    const runtime = session.claudeRuntime;
+    expect(runtime?.state).toBe("open");
+    const originalRowId = session.messages.find((message) => card([message]))!.id;
+
+    const secondPrompt = sendPrompt(created.id, "carry on");
+    await input.next();
+    await firstPrompt;
+    call.push({
+      type: "assistant",
+      uuid: "asst-follow-up",
+      message: {
+        id: "msg-follow-up",
+        model: "claude-sonnet-4-6",
+        content: [{ type: "text", text: "Continuing with other work." }],
+      },
+      parent_tool_use_id: null,
+    });
+    // Do not re-seed the association in the second turn: only the first
+    // turn's tracker knows which call this task belongs to.
+    call.push({ ...taskNotification("completed"), tool_use_id: undefined });
+    call.push(reportTurn(report("completed", REAL_RESULT)));
+    pushSuccessfulContinuationResult(call);
+    await secondPrompt;
+    expect(session.claudeRuntime).toBe(runtime);
+    expect(card(session.messages)?.toolOutput).toBe(REAL_RESULT);
+    expect(card(session.messages)?.toolState).toBe("success");
+    expect(
+      card([session.messages.find((message) => message.id === originalRowId)!])?.toolOutput,
+    ).toBe(REAL_RESULT);
+    expect(
+      session.messages
+        .flatMap((message) => message.parts)
+        .filter((part) => part.toolUseId === TOOL_USE_ID),
+    ).toHaveLength(1);
+    expect(statusRows(session.messages).map((part) => part.content)).not.toContain(REAL_RESULT);
+    call.finish();
+    await waitFor(() => session.claudeRuntime === undefined);
+  });
+
   test("the card shows the placeholder until the report replaces it with the real result", async () => {
     const { before, session } = await runMcpTaskTurn("mcp-task-live", [
       taskNotification("completed"),
@@ -250,6 +351,27 @@ describe("an MCP call run as an MCP task, on reload", () => {
     })) as Parameters<typeof normalizePersistedSessionMessages>[0];
   }
 
+  for (const { label, body, field } of quotedReports) {
+    test(`keeps attribution for ${label}`, () => {
+      const { messages } = normalizePersistedSessionMessages(
+        persisted([
+          otherToolUse,
+          toolUse,
+          placeholderResult(),
+          reportTurn(quotedReport(body, field)),
+        ]),
+      );
+      expect(card(messages)?.toolOutput).toBe(body);
+      expect(card(messages)?.toolState).toBe("success");
+      expect(
+        messages
+          .flatMap((message) => message.parts)
+          .find((part) => part.toolUseId === OTHER_CALL_ID)?.toolOutput,
+      ).toBeUndefined();
+      expect(statusRows(messages)).toEqual([]);
+    });
+  }
+
   test("the rollout's report replaces the placeholder, as the live tab showed", () => {
     const { messages } = normalizePersistedSessionMessages(
       persisted([
@@ -281,5 +403,63 @@ describe("an MCP call run as an MCP task, on reload", () => {
     );
     expect(card(messages)?.toolOutput).toBe(PLACEHOLDER);
     expect(card(messages)?.toolState).toBe("success");
+  });
+});
+
+describe("task notification envelope", () => {
+  test("reads explicit routing fields outside free-text fields", () => {
+    const text = quotedReport(`<tool-use-id>${OTHER_CALL_ID}</tool-use-id>`, "summary").replace(
+      "<status>",
+      `<tool-use-id>${TOOL_USE_ID}</tool-use-id>\n<status>`,
+    );
+    expect(parseTaskNotification(text)).toMatchObject({
+      taskId: TASK_ID,
+      toolUseId: TOOL_USE_ID,
+      status: "completed",
+    });
+  });
+
+  test("does not obtain missing routing fields from result text", () => {
+    const body = `<task-id>fake-task</task-id><tool-use-id>${OTHER_CALL_ID}</tool-use-id><status>failed</status>`;
+    expect(
+      parseTaskNotification(`<task-notification><result>${body}</result></task-notification>`),
+    ).toEqual({
+      taskId: undefined,
+      toolUseId: undefined,
+      status: undefined,
+      summary: undefined,
+      result: body,
+    });
+  });
+});
+
+describe("background task call retention", () => {
+  test("evicts only the oldest association beyond the bound", () => {
+    const tracker = new ToolTracker();
+    for (let index = 0; index < MAX_TRACKED_BACKGROUND_TASK_CALLS; index++) {
+      tracker.noteBackgroundTaskCall(`task-${index}`, `call-${index}`);
+    }
+    expect(tracker.backgroundTaskCall("task-0")).toBe("call-0");
+    tracker.noteBackgroundTaskCall("overflow", "overflow-call");
+    expect(tracker.backgroundTaskCall("task-0")).toBeUndefined();
+    for (let index = 1; index < MAX_TRACKED_BACKGROUND_TASK_CALLS; index++) {
+      expect(tracker.backgroundTaskCall(`task-${index}`)).toBe(`call-${index}`);
+    }
+    expect(tracker.backgroundTaskCall("overflow")).toBe("overflow-call");
+  });
+
+  test("re-noting replaces a call and refreshes its retention without evicting another", () => {
+    const tracker = new ToolTracker();
+    for (let index = 0; index < MAX_TRACKED_BACKGROUND_TASK_CALLS; index++) {
+      tracker.noteBackgroundTaskCall(`task-${index}`, `call-${index}`);
+    }
+    tracker.noteBackgroundTaskCall("task-0", "replacement-call");
+    expect(tracker.backgroundTaskCall("task-0")).toBe("replacement-call");
+    expect(tracker.backgroundTaskCall("task-1")).toBe("call-1");
+    tracker.noteBackgroundTaskCall("overflow", "overflow-call");
+    expect(tracker.backgroundTaskCall("task-1")).toBeUndefined();
+    expect(tracker.backgroundTaskCall("task-0")).toBe("replacement-call");
+    tracker.noteBackgroundTaskCall("overflow-2", "overflow-call-2");
+    expect(tracker.backgroundTaskCall("task-2")).toBeUndefined();
   });
 });

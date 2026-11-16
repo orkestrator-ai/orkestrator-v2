@@ -6,6 +6,7 @@ import { RELEASE_RUNTIME_PATH } from "@orkestrator/protocol/node/standalone-serv
 import {
   BRIDGE_RUNTIMES_DIRECTORY,
   BUNDLED_BRIDGES,
+  claudeAgentSdkManifest,
   ON_DEMAND_BRIDGES,
   RELEASE_RUNTIME_DIRECTORY,
   RUNTIME_DESCRIPTOR,
@@ -29,6 +30,14 @@ await Promise.all([
     mkdir(bridgeOutput(bridge.name), { recursive: true }),
   ),
 ]);
+
+// The Claude bridge inlines the Agent SDK (see `BUNDLED_BRIDGES`), so the
+// version it reports comes from the build rather than an installed manifest.
+const bridgeDefines: Record<string, Record<string, string>> = {
+  "claude-bridge": {
+    __CLAUDE_AGENT_SDK_MANIFEST__: JSON.stringify(await claudeAgentSdkManifest(repositoryRoot)),
+  },
+};
 
 const builds = await Promise.all([
   // The client bundle must stay independent of the backend: the launcher
@@ -54,6 +63,7 @@ const builds = await Promise.all([
       target: "node",
       format: "esm",
       external: bridge.external,
+      define: bridgeDefines[bridge.name],
     }),
   ),
 ]);

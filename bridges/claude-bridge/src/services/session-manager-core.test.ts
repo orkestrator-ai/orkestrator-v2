@@ -246,6 +246,24 @@ describe("getClaudeRuntimeVersions", () => {
     });
   });
 
+  test("reports the manifest a bundling build inlined without resolving the SDK", async () => {
+    // The published CLI's build inlines the SDK and defines this global
+    // (`packages/cli/scripts/build.ts`); its bundle has no SDK install to read.
+    const globals = globalThis as { __CLAUDE_AGENT_SDK_MANIFEST__?: unknown };
+    globals.__CLAUDE_AGENT_SDK_MANIFEST__ = { version: "9.8.7", claudeCodeVersion: "6.5.4" };
+    try {
+      await withClaudeCliPath(undefined, async () => {
+        // Values no installed SDK carries: they can only come from the global.
+        await expect(getClaudeRuntimeVersions()).resolves.toEqual({
+          sdkVersion: "9.8.7",
+          cliVersion: "6.5.4",
+        });
+      });
+    } finally {
+      delete globals.__CLAUDE_AGENT_SDK_MANIFEST__;
+    }
+  });
+
   test("returns unknown bundled versions when the SDK manifest cannot be read", async () => {
     await withClaudeCliPath(undefined, async () => {
       mockReadFile.mockImplementationOnce(async () => {

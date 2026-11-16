@@ -767,3 +767,13 @@ Branch `legacy-retirement-8d61cbbc6765-r1` at `957d14c7c`, base `a8b89f1541e7abb
 - The three owning files together with one worker: `mise run test:logged -- --name browser-failing-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/CoordinatorActions.spec.ts e2e/TranscriptArrival.spec.ts --workers=1` passed (exit 0, 254.7 s).
 
 No implementation, assertion, timeout or skip changed. The cause is unconfirmed.
+
+## Recurrence — 2026-11-16 (worker-count measurement for to-do 8201)
+
+Branch `worker-saturation-82f71cefa2c7-r1`, base `a0920f1a7` (`mise run flaky:recurrence -- 0382 --base a0920f1a7` answered open), beelink (16 cores), no web or e2e change. Whole component suite in the loopback namespace, `--workers N`, no retries, the 120 s test budget, the host shared with other worktrees' builds:
+
+- 8 workers, load median 64: 1,754 passed, 4 failed, 154 skipped (35.8 m). Besides 1012's two cases, desktop `MailTiles.spec.ts:92` (find reveals a match below the mail preview) and desktop `ToolGroupFold.spec.ts:201` (reduce motion), both assertion deadlines.
+- 5 workers, load median 31: 1,755 passed, 3 failed (29.1 m). Besides 1012's two cases, desktop `CoordinatorActions.spec.ts:4` (`anchor` stayed empty for the 30 s assertion budget).
+- 4 workers, load median 22: 1,758 passed, none failed (22.8 m).
+
+Against the 150 failures of the 2026-11-15 omarchy-hp run (30 s budget, six workers), the 120 s budget leaves one or two load failures per whole run. The full table is in [testing-guide.md, Component suite workers](../../../development/testing-guide.md#component-suite-workers). No implementation, assertion, timeout or skip changed.

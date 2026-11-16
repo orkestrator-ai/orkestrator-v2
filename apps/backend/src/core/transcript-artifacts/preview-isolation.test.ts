@@ -509,7 +509,7 @@ describe("Mermaid math labels", () => {
 });
 
 describe("scratch left by a stop", () => {
-  // Content-free evidence for 0248 task 6: whether production previews leave
+  // Content-free evidence for #1425: whether production previews leave
   // scratch behind for startup recovery.
   for (const [label, kept, expected] of [
     ["an unverified worker's scratch is counted", true, 1],

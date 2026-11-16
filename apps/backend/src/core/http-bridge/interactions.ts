@@ -779,7 +779,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     // A parked requestUserInput RPC holds its turn even when Codex's Default
     // mode reports isBlocking:false: Codex awaits the answer with no timeout of
     // its own. Current bridges publish such a question as blocking; bridges
-    // before todo 0161 passed the wire's false through, so a question is
+    // before #1326 passed the wire's false through, so a question is
     // blocking whatever it says. Transcript async questions do not pass through
     // this adapter and keep running. An MCP elicitation keeps the bridge's
     // flag, and an omitted one is blocking, as before the field existed.

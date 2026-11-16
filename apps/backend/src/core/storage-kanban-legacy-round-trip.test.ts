@@ -18,7 +18,7 @@ import { readStoredValue, seedStore } from "./storage-test-support.js";
 
 /**
  * The ticket dialog's round trip on rows written before sections existed
- * (todo 0742, task 6). The rows are hand-made in the shapes legacy tickets
+ * (#1465). The rows are hand-made in the shapes legacy tickets
  * take; each step goes through `update_kanban_task`, the command the dialog's
  * save calls, with the payload the dialog sends.
  */

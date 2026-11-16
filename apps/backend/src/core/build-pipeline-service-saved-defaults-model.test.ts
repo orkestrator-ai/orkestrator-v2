@@ -1,5 +1,5 @@
 /**
- * To-do 7546: a Build started from saved defaults ran its build stage on a
+ * #2046: a Build started from saved defaults ran its build stage on a
  * ChatGPT Codex login and then failed review with "The 'gpt-5.4' model is not
  * supported when using Codex with a ChatGPT account". The review row pinned the
  * inherited platform model, so the stage treated it as an explicit choice and

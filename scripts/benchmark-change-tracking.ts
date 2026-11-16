@@ -37,10 +37,10 @@
  * times the restore preview and `apply` end to end. It reports the turn's end
  * capture, the apply's checkpoint and result captures with their deadlines
  * and outcomes, and how many files were restored. The writes go through one
- * conditional-write helper process per batch of 500 files (todo 7555; before
+ * conditional-write helper process per batch of 500 files (#2085; before
  * that, one per file, about 12 ms each on a quiet host).
  *
- * One fixture for provisional capture churn (todo 4962): `capture-churn` runs
+ * One fixture for provisional capture churn (#2165): `capture-churn` runs
  * one turn on a temporary database with the real worktree watcher feeding its
  * hints to the service, as the environment scan does, at the real capture
  * spacing. A scripted agent makes `--churn-steps` tool calls `--churn-step-ms`
@@ -49,7 +49,7 @@
  * hints, the provisional passes they started, the captures those took, how
  * many captures moved the turn's tree (a published measurement), how many
  * found it unchanged, and how many passes were skipped because their hint
- * named only Git-ignored output (todo 7840). It is opt-in: it runs for about
+ * named only Git-ignored output (#2185). It is opt-in: it runs for about
  * steps x step-ms.
  *
  * Fixture files are left to age `--settle-ms` before the first capture, so a
@@ -706,7 +706,7 @@ async function benchMeasurementRows() {
 }
 
 /**
- * The workload called `capture-churn` (todo 4962): how often a provisional
+ * The workload called `capture-churn` (#2165): how often a provisional
  * capture, started by a real watcher hint during a turn, finds the tree it
  * already published. The service runs on a temporary database with its real
  * spacing; the real worktree watcher's hints go to `onDiffScanEvent` as the

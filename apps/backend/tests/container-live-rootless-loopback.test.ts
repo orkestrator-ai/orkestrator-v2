@@ -1,5 +1,5 @@
 /**
- * Real-Docker check of the default rootless topology (to-do 4730 task 2):
+ * Real-Docker check of the default rootless topology (#1926):
  * on a rootless daemon whose RootlessKit refuses host loopback (its default),
  * the backend reports the agent tools path `blocked` with the rootless
  * remediation, and a restricted runtime behind its egress gateway cannot

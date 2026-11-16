@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * 0015 task 1: slash commands across the support-window floor and this
+ * #2170: slash commands across the support-window floor and this
  * checkout, credential-free.
  *
  *   bun scripts/qualify-slash-mixed-versions.ts [options]

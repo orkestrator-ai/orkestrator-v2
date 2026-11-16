@@ -252,7 +252,7 @@ describe("discovery leaves the 500 ms round", () => {
     await waitFor(() => expect(discoveryReads()).toBe(mounted + 2));
   });
 
-  test("an MCP action's change reads it and shows the re-read row (todo 7221)", async () => {
+  test("an MCP action's change reads it and shows the re-read row (#2031)", async () => {
     // A reconnect from the Agent Info panel brought a failed server up, and
     // the open view kept the row failed until its 30 s backstop.
     const mcpDiscovery = (status: "failed" | "connected"): NativeAgentDiscoveryUpdate => ({

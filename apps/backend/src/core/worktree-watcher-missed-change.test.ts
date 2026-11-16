@@ -22,7 +22,7 @@ import {
 } from "./worktree-watcher.js";
 
 /**
- * A safety scan that finds a change no hint announced (to-do 8171). On a Mac
+ * A safety scan that finds a change no hint announced (#2305). On a Mac
  * whose `fseventsd` has stopped delivering, a watcher receives nothing at all,
  * and its owner waited out the two-minute safety scan for every change. The
  * watcher now withdraws qualified coverage, so its owner polls, unless an
@@ -175,7 +175,7 @@ test("an unreadable directory found while distrusted keeps coverage withdrawn wh
 
 // Distrust starts only from an owner's report. A watcher nobody reports a miss
 // to (every test in worktree-watcher-real.test.ts) keeps the coverage it had
-// before to-do 8171 however late, sparse or absent its events are.
+// before #2305 however late, sparse or absent its events are.
 test("without a reported miss, late or absent events never withdraw coverage", async () => {
   const context = mainCheckout();
   await until(() => context.watcher.qualified === true);

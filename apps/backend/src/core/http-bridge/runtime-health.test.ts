@@ -60,7 +60,7 @@ describe("bridgeRuntimeSummary", () => {
     expect(summary.notices?.[0]).toMatchObject({ severity: "warning", source: "provider" });
   });
 
-  test("reports a Codex session's attachment while its engine is ready (todo 7380)", () => {
+  test("reports a Codex session's attachment while its engine is ready (#2149)", () => {
     expect(
       bridgeRuntimeSummary({ engine: { state: "ready" }, session: { state: "attached" } })?.state,
     ).toBe("attached");

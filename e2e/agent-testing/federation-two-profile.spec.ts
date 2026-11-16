@@ -676,7 +676,7 @@ test.afterAll(async () => {
   setup = null;
 });
 
-test("a remote row's activity keeps up with the leaf's own row (2190 task 3)", async () => {
+test("a remote row's activity keeps up with the leaf's own row (#2212)", async () => {
   test.setTimeout(900_000);
   const { commandPage, leafPage, leafEnvironment, model } = s();
   // Both views start from the same idle state.
@@ -715,7 +715,7 @@ test("a remote row's activity keeps up with the leaf's own row (2190 task 3)", a
   }
 });
 
-test("relayed events arrive per node with a busy leaf and an inactive tab (5840 task 1)", async () => {
+test("relayed events arrive per node with a busy leaf and an inactive tab (#2212)", async () => {
   test.setTimeout(900_000);
   const { command, commandPage, leafEnvironment, leafNodeId, model } = s();
   const before = await metrics(command);
@@ -828,7 +828,7 @@ test("relayed events arrive per node with a busy leaf and an inactive tab (5840 
   ).toBe(0);
 });
 
-test("relayed events still arrive for an older peer, under the one old name (5840 task 2)", async ({
+test("relayed events still arrive for an older peer, under the one old name (#2212)", async ({
   browser,
 }) => {
   test.setTimeout(600_000);

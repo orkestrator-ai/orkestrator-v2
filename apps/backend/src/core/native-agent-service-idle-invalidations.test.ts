@@ -10,7 +10,7 @@ import { collaborators } from "./native-agent-service-test-collaborators.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 
 /*
- * Todo 0049 task 4: an idle Codex view read 27 times a minute live against
+ * #1659: an idle Codex view read 27 times a minute live against
  * Claude's 12. Every invalidation the backend emits now names its cause; these
  * tests count them for a fake idle Codex session and check that each source
  * that can wake an idle view is tagged, and that no tag carries content.
@@ -247,7 +247,7 @@ async function warmUp(service: NativeAgentService, tokens: Record<string, string
   await settle();
 }
 
-describe("idle Codex session invalidations (todo 0049 task 4)", () => {
+describe("idle Codex session invalidations (#1659)", () => {
   test("a stable idle Codex view is told to read again by nothing over a simulated minute", async () => {
     await withIdleCodex(async ({ service, counted, advance }) => {
       const tokens: Record<string, string | undefined> = {};

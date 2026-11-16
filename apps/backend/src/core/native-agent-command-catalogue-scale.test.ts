@@ -1,5 +1,5 @@
 /**
- * Load qualification for the command catalogue (0015, "Performance"), as
+ * Load qualification for the command catalogue (#1184), as
  * counts and bytes rather than latency: same-key coalescing, provider probes
  * per operation, the cross-key read cap, and the retained-bytes budget under
  * maximal inventories. The real `HttpBridgeCatalogAdapter` reads from an

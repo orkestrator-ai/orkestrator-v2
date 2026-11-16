@@ -1,9 +1,9 @@
 /**
  * The design renderer records each browser profile it launches so a later
- * backend can remove the profile of a killed one (0248), and only that: never
+ * backend can remove the profile of a killed one (#1425), and only that: never
  * a profile it did not record, one a live browser or backend still owns, one
  * changed within the age floor, or one a live process names. Each launch's
- * artifacts directory lives in the ledger and goes with its record (0830).
+ * artifacts directory lives in the ledger and goes with its record (#1463).
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";

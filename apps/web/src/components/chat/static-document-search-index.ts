@@ -27,7 +27,7 @@ import { useRichContentViewStore } from "@/stores/richContentViewStore";
 import { staticHtmlPresentationSupported } from "./rich/static-html-frame-source";
 
 /*
- * Find inside static documents the reader has not reached (to-do 5780 task 2).
+ * Find inside static documents the reader has not reached (#2155).
  *
  * A static document's card reports its text once its frame has rendered it,
  * and nothing is read or framed for a card the reader has not reached. While a

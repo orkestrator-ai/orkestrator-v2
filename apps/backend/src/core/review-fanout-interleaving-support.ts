@@ -1346,7 +1346,7 @@ export class InterleavingWorld {
       });
       // Without a crash, the reviewer's own commit is followed by its send
       // before anything else can happen, so a durable `dispatching` nobody
-      // sent was written by a peer's save (0112).
+      // sent was written by a peer's save (#1288).
       if (!this.fired.includes("crash")) {
         for (const requestId of ledger.unsentDispatches) {
           if (!ledger.sendAttempts.has(requestId)) {

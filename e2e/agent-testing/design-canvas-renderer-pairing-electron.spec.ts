@@ -1,5 +1,5 @@
 /**
- * 0036 task 6: the design canvas with an old renderer on a new backend, and a
+ * #2215: the design canvas with an old renderer on a new backend, and a
  * new renderer on an old backend, through the desktop connection manager
  * (`connections.connect`), the pairing `version-compatibility.md` requires in
  * both directions. Each half runs design-canvas-electron-journey.ts in a

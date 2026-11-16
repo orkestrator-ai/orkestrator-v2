@@ -10,7 +10,7 @@ import path from "node:path";
  * The owner label is a hash of the data directory. When that directory was
  * temporary, which is every disposable test backend, nothing left on the host
  * maps the hash back to whatever ran it, so a leaked network could not even be
- * told apart from a profile's or production's (todo 7470 task 2). This label
+ * told apart from a profile's or production's (#2024). This label
  * can, and `disk:report` counts leaked networks by it.
  *
  * Labels are readable by anyone who can reach the daemon, so the value is

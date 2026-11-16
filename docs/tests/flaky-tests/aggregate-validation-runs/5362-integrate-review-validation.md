@@ -55,7 +55,7 @@ and commits. It is **not** classified as a flake or excused here. Evidence:
 
 - **Base:** `17d28238c098b4443d1289df5c4ed75e7cc2802e`; `mise run flaky:recurrence -- 5362 --base 17d28238c --registry-ref origin/main` answered open.
 - **Observed head:** branch `remove-dead-bridge-be98778b92d1-r1` at `16561abbc`
-  (7571 removals). It does not touch `tests/unit/raw-console.test.ts` or the
+  (7571 (retired) removals). It does not touch `tests/unit/raw-console.test.ts` or the
   lint rule it drives.
 - **Test:** `raw console lint rule > rejects console in apps/web-public/src/probe.ts, used directly or passed as a value`
   (`tests/unit/raw-console.test.ts`): exceeded its 5,000 ms deadline at

@@ -153,7 +153,7 @@ export function registerSystemCommands(
   register(planDiagnosticsBundleCommand, (_args, context) => planDiagnostics(context, []));
   /**
    * The same, with the container server logs of the environments the user
-   * chose: opt-in per environment, read only now (todo 6143).
+   * chose: opt-in per environment, read only now (#2053).
    */
   register(planDiagnosticsBundleWithContainerLogsCommand, async (args, context) =>
     planDiagnostics(context, normaliseContainerLogChoice(args.containerLogs)),

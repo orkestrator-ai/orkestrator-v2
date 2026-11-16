@@ -1,5 +1,5 @@
 import type { PreviewPublicationDetail } from "@orkestrator/protocol/contract/domains/previews";
-import type { BackendEmit } from "./backend-emit.js";
+import type { BackendEmit } from "../backend-emit.js";
 import { readFile } from "node:fs/promises";
 import type { Duplex } from "node:stream";
 
@@ -11,29 +11,26 @@ import {
   type PreviewLimits,
 } from "@orkestrator/protocol/preview-services";
 
-import { runCommand } from "./shell.js";
-import { dockerOwnerNamespace } from "./docker-ownership.js";
-import type { Environment } from "./models.js";
-import { PreviewMetrics } from "../preview-metrics.js";
-import { PreviewRelaySupervisor, type RelayProcess } from "../preview-relay-supervisor.js";
-import { PreviewAccessService, type PreviewPublicationPort } from "./preview-access.js";
-import {
-  LoopbackListenerOwnership,
-  type ManagedProcessRoot,
-} from "./preview-listener-ownership.js";
-import { PreviewReadinessProber } from "./preview-readiness.js";
-import { PreviewServiceRegistry, type PreviewRegistryStorage } from "./preview-service-registry.js";
-import type { ResolvedPreviewTarget } from "./preview-service-registry.js";
+import { runCommand } from "../shell.js";
+import { dockerOwnerNamespace } from "../docker-ownership.js";
+import type { Environment } from "../models.js";
+import { PreviewMetrics } from "../../preview-metrics.js";
+import { PreviewRelaySupervisor, type RelayProcess } from "../../preview-relay-supervisor.js";
+import { PreviewAccessService, type PreviewPublicationPort } from "./access.js";
+import { LoopbackListenerOwnership, type ManagedProcessRoot } from "./listener-ownership.js";
+import { PreviewReadinessProber } from "./readiness.js";
+import { PreviewServiceRegistry, type PreviewRegistryStorage } from "./service-registry.js";
+import type { ResolvedPreviewTarget } from "./service-registry.js";
 import {
   PreviewTargetResolver,
   isAlwaysReservedPort,
   type DockerRunner,
-} from "./preview-target-resolver.js";
+} from "./target-resolver.js";
 import {
   DEFAULT_PREVIEW_SETTINGS,
   type PreviewServicesStorage,
   type PreviewSettings,
-} from "./storage-preview-services.js";
+} from "../storage-preview-services.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("preview");

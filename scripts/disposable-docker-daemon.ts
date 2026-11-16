@@ -38,7 +38,7 @@ import {
 
 /**
  * A disposable host rootless Docker daemon for the live container suites
- * (to-do 4730), in one of two modes behind the same commands. One command starts a private `dockerd` under RootlessKit with
+ * (#1926), in one of two modes behind the same commands. One command starts a private `dockerd` under RootlessKit with
  * its own data root, exec root, socket and pid file, prints the `DOCKER_HOST`
  * that selects it, and a second command stops it and removes everything it
  * made. See docs/development/container-qualification.md, "Disposable Docker

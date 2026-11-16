@@ -48,7 +48,7 @@ export interface InteractionRequest {
    * an empty answer after two minutes). So the wire hint chooses the deadline,
    * not this field: `true` waits indefinitely, anything else gets the bounded,
    * pausable one. Transcript async questions are not RPCs and keep running.
-   * Bridges before todo 0161 published the wire hint here, which the backend
+   * Bridges before #1326 published the wire hint here, which the backend
    * still reads as blocking for a question.
    */
   isBlocking: true;

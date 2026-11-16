@@ -10,7 +10,7 @@ import {
 } from "./native-agent-service-projection-test-support.js";
 
 /*
- * Todo 7221: a reconnect from the Agent Info panel brought a failed MCP
+ * #2031: a reconnect from the Agent Info panel brought a failed MCP
  * server up, the backend's projection said `connected`, and the open panel
  * kept the row failed. The action invalidated the projection but announced
  * nothing, so the view read discovery again only on its 30 s backstop, and

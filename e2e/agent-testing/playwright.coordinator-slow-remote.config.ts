@@ -6,7 +6,7 @@ process.once("exit", enterPrivateTestTmpdir());
 
 /**
  * The coordinator slow-remote suite (`mise run test:agent:coordinator-slow-remote`,
- * to-do 4720). Separate from the browser agent config so it runs only
+ * #2050). Separate from the browser agent config so it runs only
  * on a profile set up for it: Pi only, no credentials, a loopback fake model.
  */
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");

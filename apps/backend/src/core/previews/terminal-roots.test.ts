@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
-import { BackendRuntime } from "./backend-runtime.js";
-import type { CommandContext } from "./commands-context.js";
-import { spawnSetupTerminal } from "./commands-environment.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
-import type { PtyProcess } from "./pty.js";
-import { createPreviewHarness } from "./preview-test-support.js";
-import { TerminalRuntime } from "./terminal-runtime.js";
+import { BackendRuntime } from "../backend-runtime.js";
+import type { CommandContext } from "../commands-context.js";
+import { spawnSetupTerminal } from "../commands-environment.js";
+import { EnvironmentLifecycleTaskTracker } from "../environment-lifecycle-tasks.js";
+import type { PtyProcess } from "../pty.js";
+import { createPreviewHarness } from "./test-support.js";
+import { TerminalRuntime } from "../terminal-runtime.js";
 
 const fakePty = (pid: number) => ({ pid }) as PtyProcess;
 

@@ -283,7 +283,7 @@ export class WorktreeChangeOwner {
   /**
    * Whether a settled watcher hint cannot move the next capture's tree, so a
    * provisional capture for it would only find the tree already published
-   * (todo 7840). True only when the hint names its every path
+   * (#2185). True only when the hint names its every path
    * (`filterablePaths`), the previous manifest covers none of them, and Git
    * says each is ignored and the inventory would list none of them or
    * anything below them. Containers, a missing previous manifest and every

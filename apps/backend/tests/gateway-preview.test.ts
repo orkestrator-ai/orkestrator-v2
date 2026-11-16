@@ -14,7 +14,7 @@ import {
   type PreviewWebSocket,
 } from "@orkestrator/protocol/node/preview-websocket";
 
-import { createPreviewHarness, type PreviewHarness } from "../src/core/preview-test-support";
+import { createPreviewHarness, type PreviewHarness } from "../src/core/previews/test-support";
 import {
   startPreviewFixture,
   type PreviewFixture,

@@ -105,7 +105,7 @@ function query(c: Context) {
  * not resident yet (after a bridge restart), exactly as `/messages` does, so
  * its 404 means the session does not exist. Bridges before this change
  * answered 404 there too, and a backend `/messages` fallback loaded the
- * session; that fallback retired on 2026-11-15 (0050 task 1), so the backend
+ * session; that fallback retired on 2026-11-15 (#2285), so the backend
  * now reads this 404 as a missing session.
  */
 export function registerSessionTranscriptRoutes(

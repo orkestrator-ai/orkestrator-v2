@@ -7,7 +7,7 @@ import { SUPERVISED_FLAG, ownerAbortSignal, runUnderSupervisor } from "./dev/own
  * `mise run test:agent:coordinator:node-mail-fake`
  *
  * Coordinator-to-coordinator node mail between two disposable `dev:test
- * --fixture` profiles on this host (to-do 2900): the main profile is the
+ * --fixture` profiles on this host (#2075): the main profile is the
  * command node, the companion its leaf, both with no agent credentials and
  * only Pi enabled. The spec attaches the leaf over its real gateway, points
  * both profiles' Pi at `coordinator-node-mail-fake-model.ts` on loopback, and

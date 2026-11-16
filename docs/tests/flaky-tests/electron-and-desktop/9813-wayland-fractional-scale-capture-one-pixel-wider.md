@@ -35,8 +35,11 @@ artifacts under `/tmp/orkestrator-test-run.*`):
 | 2026-11-14 04:01 | `orkestrator-test-run.pAuKm1` | 1897 / 1896 |
 
 On this branch it failed in the round 3 review run (2026-11-16, 1897 / 1896).
-Run alone headless (`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`) on the same
-commit plus the round 3 fixes, it passed.
+Run alone with `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` at `110e89020` it
+passed; the full `mise run test:agent:electron` rerun with the same variable
+at that commit failed it again (942 / 941). The test drives a native Wayland
+surface in both modes, so headless does not take the display's scale out of
+it.
 
 ## Hypothesis (unproven)
 

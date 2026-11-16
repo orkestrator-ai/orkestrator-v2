@@ -49,7 +49,7 @@ export function resolveConversationBusy(
   session: PersistedNativeAgentSession | null,
   queue: PersistedPromptQueue | null,
 ): boolean {
-  if ((queue?.messages.length ?? 0) > 0 || queue?.outstandingClaim || queue?.inFlight) return true;
+  if ((queue?.messages.length ?? 0) > 0 || queue?.inFlight) return true;
   if (session?.pendingDispatch || session?.pendingSteer) return true;
   const dispatched = session?.dispatchedRequestIds ?? [];
   if (

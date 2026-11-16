@@ -440,7 +440,7 @@ export class NativeAgentUsageLimitResend {
           const queue = await this.deps.storage.getPromptQueue(
             `${locked.agent}\0${locked.logicalSessionKey}`,
           );
-          if (queue && !queue.dispatchError && (queue.inFlight || queue.outstandingClaim)) {
+          if (queue && !queue.dispatchError && queue.inFlight) {
             disposition = "retry";
             return { dispatch: false };
           }

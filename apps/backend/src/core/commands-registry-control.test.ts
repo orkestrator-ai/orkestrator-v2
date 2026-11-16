@@ -21,7 +21,6 @@ import {
   type ProviderStatus,
 } from "./native-agent-provider.js";
 import { queueInternals } from "./native-agent-service-test-collaborators.js";
-import { seedLegacyPromptQueueClaim } from "./storage-test-support.js";
 import { resendToOpenJobTab } from "./native-agent-job-tab-reuse.js";
 import { NATIVE_JOB_RECEIPT_LIMIT, NativeJobReceiptCapacityError } from "./storage-prompts.js";
 import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
@@ -888,8 +887,8 @@ describe("launch_control_job command", () => {
       },
     );
 
-    test.each(["claimed", "in-flight"])("coalesces a matching %s queue item", async (state) => {
-      await withResolveEnvironment(async ({ storage, dataDir, launch, openJobTab, ...fakes }) => {
+    test("coalesces a matching in-flight queue item", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
         await openJobTab(resolveTabId);
         // A composer-created item has no job receipt of its own.
         await storage.enqueuePromptQueueMessage(queueKey, "env-1", {
@@ -898,15 +897,12 @@ describe("launch_control_job command", () => {
           text: "Resolve the merge conflicts.",
           mode: "build",
         });
-        if (state === "claimed") seedLegacyPromptQueueClaim(dataDir, queueKey, "original");
-        else await storage.reservePromptQueueHeadForDispatch(queueKey);
+        await storage.reservePromptQueueHeadForDispatch(queueKey);
         fakes.promptReadiness.mockImplementation(async () => "busy");
         await launch();
         const queue = await storage.getPromptQueue(queueKey);
         expect(queue?.messages).toHaveLength(0);
-        expect(
-          state === "claimed" ? queue?.outstandingClaim?.message.id : queue?.inFlight?.requestId,
-        ).toBe("original");
+        expect(queue?.inFlight?.requestId).toBe("original");
         expect(fakes.dispatchIntent).not.toHaveBeenCalled();
       });
     });

@@ -14,7 +14,6 @@ import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import { AmbiguousPromptDispatchError } from "../native-agent-provider.js";
 import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
 import { StorageService } from "../storage.js";
-import { seedLegacyPromptQueueClaim } from "../storage-test-support.js";
 import {
   WebAnnotationDispatchAdapter,
   webAnnotationQueueKey,
@@ -647,17 +646,6 @@ describe("WebAnnotationDispatchAdapter.observe", () => {
       state: "cancelled",
       cancelSource: "chat-queue",
       reason: expect.stringContaining("Removed from the chat queue"),
-    });
-    // A live legacy holder keeps delivery exclusive and cannot be cancelled
-    // as though its prompt were still waiting in the chat queue.
-    await adapter.publish({ request: request({}, "req-2"), text: text("req-2") });
-    seedLegacyPromptQueueClaim(dataDir, QUEUE_KEY, "req-2");
-    expect((await adapter.observe(request({ state: "queued" }, "req-2"))).state).toBe(
-      "dispatching",
-    );
-    expect(await adapter.cancel(request({ state: "queued" }, "req-2"))).toMatchObject({
-      outcome: "not-cancellable",
-      code: "claimed",
     });
   });
 

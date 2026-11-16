@@ -487,7 +487,7 @@ export class NativeAgentDeliveries {
             queueKey,
             (queue) => {
               if (!queue || queue.environmentId !== session.environmentId) return { result: null };
-              if (queue.inFlight || queue.outstandingClaim)
+              if (queue.inFlight)
                 throw new Error(
                   "A queued prompt is already being delivered; refresh before steering",
                 );

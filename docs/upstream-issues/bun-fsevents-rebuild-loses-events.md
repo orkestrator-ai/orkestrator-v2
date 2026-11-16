@@ -1,59 +1,43 @@
 # Bun: rebuilding the FSEvents stream loses events for every other `fs.watch`
 
 **Tracker:** Bun, <https://github.com/oven-sh/bun/issues> (bug report)
-**Status:** draft
+**Status:** ready to file, as a comment on [oven-sh/bun#44385](https://github.com/oven-sh/bun/issues/44385) (2026-11-15): that open issue already reports this bug with a self-contained reproduction, so post the issue text below there instead of opening a new issue.
 **Source:** [7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md) task 2 (the draft is in its Investigation); filed through the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)'s "file the upstream reports marked ready" item; reproduction [`benchmark-recursive-watch-stall.ts`](../../scripts/benchmark-recursive-watch-stall.ts)
 **Filed:** —
 
 ## Issue text
 
-**Title:** macOS `fs.watch`: starting or closing any watch loses events for every other watch in the process
+**Post as:** a comment on #44385, which already has the bug, a self-contained reproduction and the same reading of `FSEventsLoop::schedule`. This comment adds a recursive-watch measurement, the size of the gap per rebuild, a way to resume without replaying old events, and a related request.
 
-**Summary.** All `fs.watch` watches in a process share one FSEvents stream. Every new watch and every `close()` rebuilds it in `FSEventsLoop::schedule` (`src/runtime/node/fs_events.rs`), and the new stream starts at `kFSEventStreamEventIdSinceNow`. Changes made under any other watch between the old stream stopping and the new one starting are never reported. They are not delivered late; they are lost.
+**Comment.**
 
-**Reproduction.** One recursive watch receives a new numbered file every 10 ms for 2 s. Meanwhile a second watch on another directory is opened and closed ten times. Count the numbered files the first watch never reported, against the same writes with no churn.
+Another data point, with one long-lived **recursive** watch rather than many directory watches. One recursive watch receives a new numbered file every 10 ms for 2 s; meanwhile a second watch on an unrelated directory is opened and closed ten times. Bun 1.4.4, macOS 27.2 arm64, with a healthy `fseventsd` (5-8% of a core):
 
-```sh
-bun benchmark-recursive-watch-stall.ts --count=1 --churn=10
-# compare steadyLost (with churn) against controlLost (no churn)
-```
+- no churn: 0 of 154-179 writes lost;
+- ten open/close cycles: 57-76 of 172-183 writes lost, none delivered late.
 
-Minimal shape of the test:
+That is about 30 ms of events per rebuild, and it did not change whether 1 or 50 other watches churned, so the gap is per rebuild rather than per path in this shape.
 
-```ts
-import { watch, writeFileSync, mkdtempSync } from "node:fs";
-const a = mkdtempSync("./a-"), b = mkdtempSync("./b-");
-const seen = new Set<string>();
-const live = watch(a, { recursive: true }, (_e, name) => name && seen.add(String(name)));
-let n = 0;
-const writer = setInterval(() => writeFileSync(`${a}/${n++}`, ""), 10);
-for (let i = 0; i < 10; i++) { watch(b).close(); await Bun.sleep(150); }
-clearInterval(writer); await Bun.sleep(1000); live.close();
-console.log({ written: n, lost: n - seen.size });
-```
+The rebuild still starts at `kFSEventStreamEventIdSinceNow` on `main` (checked at `ed4363334`, 2026-11-15), and nothing calls `FSEventStreamSetExclusionPaths`.
 
-Run it on a volume that delivers FSEvents (not the system temporary directory).
+On the comment in `schedule` about not reusing the last event id: the old stream's last id (`FSEventStreamGetLatestEventId` before it is stopped) is one id for the whole stream, and replaying from it only reports past changes for **paths new to the stream**. Those could be dropped by remembering, for each watcher added in that rebuild, that only events with ids after the rebuild belong to it. Existing paths would then lose nothing.
 
-**Result** (healthy `fseventsd`, 5-8% CPU): 0 of 154-179 writes lost with no churn; 57-76 of 172-183 lost with churn. That is about 30 ms per rebuild, whether 1 or 50 other watches churned.
-
-**Expected.** Long-lived watches keep receiving every event while other watches in the process start and close.
-
-**Request.** When rebuilding, start the new stream from the last event id the old stream delivered (`FSEventStreamGetLatestEventId` before it is stopped) instead of `kFSEventStreamEventIdSinceNow`. The comment in `schedule` is right that a newly added path would then report changes from before it was watched. Those can be dropped by remembering, for each watcher added in this rebuild, that only events with ids after the rebuild belong to it: the old stream's last id is one id for the whole stream, and the past-event problem applies only to paths new to the stream. Alternatively, keep the old stream running until the new one has started. Related wish: `FSEventStreamSetExclusionPaths` support, so a recursive watch can skip a subtree such as `node_modules` without one watch per sibling (which multiplies these rebuilds).
-
-**Versions.** Bun 1.4.4 (`bun-v1.4.4`, commit `38afee6c8`, our current pin), macOS 27.2 arm64. Source read on 2026-11-11 at that tag: `register_watcher`/`unregister_watcher` queue `schedule` on the CF thread, which stops, invalidates and releases the stream and creates a new one with `kFSEventStreamEventIdSinceNow`, latency 0.05, `NoDefer | FileEvents`. Nothing calls `FSEventStreamSetExclusionPaths`.
-
-**Impact.** A program that watches several trees and opens or closes watches over time (an editor, a dev server, a supervisor of many worktrees) loses changes for its long-lived watches, with no signal that anything was missed.
+Related request: `FSEventStreamSetExclusionPaths` support (for example an `exclude` option on a recursive `fs.watch`), so a recursive watch can skip a subtree such as `node_modules` without one watch per sibling, which multiplies these rebuilds.
 
 ## Existing-report search
 
-None known; the sources record no search. Search terms: `fs.watch macOS lost events`, `FSEvents`, `fs_events`, `kFSEventStreamEventIdSinceNow`, `sinceWhen`, `watch close drops events`, `FSEventStreamSetExclusionPaths`.
+Searched 2026-11-15 (`gh search issues` and `gh search prs` in oven-sh/bun, open and closed) for: `fs.watch macOS lost events`, `FSEvents`, `fs_events`, `kFSEventStreamEventIdSinceNow`, `sinceWhen`, `watch close drops events`, `FSEventStreamSetExclusionPaths`, `fs.watch recursive misses`, `FSEvents stream rebuild`.
+
+- **Duplicate, open:** [#44385](https://github.com/oven-sh/bun/issues/44385), "fs.watch (macOS): opening or closing a watcher drops events for every other watcher while the FSEvents stream is rebuilt" (2026-10-01, Bun 1.4.2, no comments or linked pull request). Same cause and the same reading of `register_watcher`/`unregister_watcher`/`schedule`; its loss grows with the number of watched directories (N=1000: 8/20 and 2/20 delivered; N=4000: 0/20). Its suggested directions include resuming from the last event id and filtering new paths.
+- Related, different bugs: [#44780](https://github.com/oven-sh/bun/issues/44780) (nested non-recursive watches make a recursive watcher lose events), [#43870](https://github.com/oven-sh/bun/issues/43870) (registration blocks the main thread when `fseventsd` is unresponsive), [#44051](https://github.com/oven-sh/bun/issues/44051) (writes to a file kept open stop being reported).
+- No issue asks for `FSEventStreamSetExclusionPaths`.
 
 ## Before filing
 
-- [ ] Re-read `src/runtime/node/fs_events.rs` on the newest Bun release in case it changed; update the version line.
-- [ ] Prepare the attachment: `scripts/benchmark-recursive-watch-stall.ts` imports `WatchHost` from this repository for `--host`, so it is not self-contained as is. Attach a copy with the `--host` path removed, or the minimal script above after running it once on macOS and pasting its output.
-- [ ] Search for duplicates.
+- [x] Re-read `src/runtime/node/fs_events.rs` on the newest Bun release in case it changed; update the version line. Done 2026-11-15: 1.4.4 is still the newest release; `main` at `ed4363334` (the 1.4.5-canary.1 build) restructured ownership in that file but still creates the stream with `kFSEventStreamEventIdSinceNow` and keeps the comment against reusing the last event id. Fetched read-only into this build's git-ignored `output/` and removed.
+- [x] Prepare the attachment. Not needed: #44385 already carries a self-contained reproduction, so the comment cites numbers only. The minimal script that was here was run on arktech-mini on 2026-11-15 and is not cited: `fseventsd` was at 99.5% of a core after ten days up, and every write was lost even with no churn (129 of 129, on the pin and on the canary), as [7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md) task 3 found on 2026-11-11. The numbers in the comment are 7551's measurement of 2026-11-10 on a healthy `fseventsd`.
+- [x] Search for duplicates. Done 2026-11-15: #44385 (above). Repeat right before posting in case it was closed or fixed.
 
 ## After filing
 
-Record the URL and date under **Filed**, set **Status** to `filed`, and record the URL in [7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md) task 2.
+Record the comment's URL and date under **Filed**, set **Status** to `filed`, and record the URL in [7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md) task 2.

@@ -31,13 +31,20 @@ Updated 2026-11-14 after review: task 4 stays agent work here (see "Task 4:
 the macOS run is agent work, not a checklist item" under "Assumptions and
 decisions"); `scratch.ts --jobs` waits for every started run before removing
 its worktree. Task statuses are unchanged.
+Updated 2026-11-15 against `main` at `a8b89f154`: task 4 done on arktech-mini.
+macOS loses events with `nested-tick.ts` too, mostly as a lost `exit` (an
+unreaped zombie), as Bun's source predicts; `plain` and the no-second-child
+control lose nothing. Bun canary 1.4.5-canary.1+ed4363334 loses nothing in any
+mode, and Bun's open issue #33261 already tracks the mechanism, so the upstream
+report is marked do not file. Task 5 added: re-run on the 1.4.5 release.
 
 ### Tasks
 
 1. **Reproduce on the old pipe capture**: run the real test on a scratch copy of the pipe-based `runCommand` with the strict probe, on macOS and on Linux. Status: done (Linux 2026-11-11: 47 lost `close` events in 100 runs; macOS 2026-11-13: 4 lost `exit` and 3 lost `close` events in 100 runs).
 2. **Reduce it from there**: delete from that test until the loss stops, then rebuild it as a standalone script. Status: done (2026-11-13). Faithful replays of test 1's 98 commands lost nothing: 0 in 98,000 children standalone and 0 in 9,800 inside `bun test` next to the harness. The smallest losing case is test 1 cut after its clone, with the watch host stubbed: `scripts/lost-child-event/in-process.ts`, which `scratch.ts` runs on the old pipe capture: 4 children lost in 3 of 350 runs, every one the 67th or 68th. No standalone form reproduced then; task 3 found one.
 3. **Find the in-process trigger**: find what test 1's service calls do around its 66th to 68th child that a replay of the same commands lacks, then rebuild that ingredient standalone. Status: done (2026-11-14, Linux). The ingredient is the test's `await expect(...).rejects` right after its clone: Bun settles it with a nested event-loop tick, which skips the rest of the outer tick's ready polls. With that one `expect` replaced, the reduction lost 0 children in 100 runs, against 42 in 37 of 100; `nested-tick.ts` loses 91 of 3,000 children standalone, and 0 without `expect`.
-4. **Run the standalone reproduction on macOS**: run `nested-tick.ts` on a macOS fleet node, in its four modes and with no other child, and record whether the dropped event is an `exit` there, as Bun's source predicts. Status: open (agent work in an isolated worktree on a macOS fleet node, as tasks 1 and 2 ran on arktech-mini; no person, login, real data or outside hardware is needed, so it is not a [checklist](../manual-test/7568-manual-test-checklist.md) item).
+4. **Run the standalone reproduction on macOS**: run `nested-tick.ts` on a macOS fleet node, in its four modes and with no other child, and record whether the dropped event is an `exit` there, as Bun's source predicts. Status: done (2026-11-15, arktech-mini: `rejects` 8 lost `exit` and 1 lost `close` of 3,000 children, `resolves` 11 and 0, `sleep` 16 and 4 of 2,000, `plain` and no second child 0; every lost `exit` an unreaped zombie).
+5. **Re-run on the Bun 1.4.5 release**: run `nested-tick.ts` in `rejects`, `sleep` and `plain` modes on the first Bun 1.4.5 release, on macOS and on Linux, and act on the [upstream report](../../upstream-issues/bun-nested-tick-loses-child-process-events.md): delete it if nothing is lost, or set its **Status** to `ready to file, as a comment on #33261` if events are still lost, so the user posts it there through the manual-test checklist (agents never post it). Status: open (blocked: waits on the Bun 1.4.5 release).
 
 ### 1. Reproduce on the old pipe capture
 
@@ -284,7 +291,7 @@ What this rules out, beside task 2's list: the commands, their order, overlap an
 
 **Context.** `scripts/lost-child-event/nested-tick.ts` needs only Bun and the probe, which already has a macOS path (`waitid` from `libSystem`, `/dev/fd`). On Linux it lost 91 of 3,000 children with `rejects` and none with `plain` (task 3).
 
-**Investigation.** Not started. Run, from an isolated worktree on a macOS fleet node (arktech-mini, where tasks 1 and 2 ran; [Human-only work](../../README.md#human-only-work) counts a macOS node as somewhere an agent works on its own): `LOST_CHILD_PROBE_OUT=<abs path> LOST_CHILD_NESTED_MODE=<mode> LOST_CHILD_NESTED_ITERATIONS=1000 bun test ./scripts/lost-child-event/nested-tick.ts` for `rejects`, `resolves`, `sleep` and `plain`, and `rejects` with `LOST_CHILD_NESTED_OTHERS=0`. Record each mode's `SUMMARY` (children, `lostExit`, `lostClose`) and whether the lost children were zombies (`LOST_EXIT`). No real data directory, credentials or Docker are needed.
+**Investigation.** Planned as: run, from an isolated worktree on a macOS fleet node (arktech-mini, where tasks 1 and 2 ran; [Human-only work](../../README.md#human-only-work) counts a macOS node as somewhere an agent works on its own): `LOST_CHILD_PROBE_OUT=<abs path> LOST_CHILD_NESTED_MODE=<mode> LOST_CHILD_NESTED_ITERATIONS=1000 bun test ./scripts/lost-child-event/nested-tick.ts` for `rejects`, `resolves`, `sleep` and `plain`, and `rejects` with `LOST_CHILD_NESTED_OTHERS=0`. Record each mode's `SUMMARY` (children, `lostExit`, `lostClose`) and whether the lost children were zombies (`LOST_EXIT`). No real data directory, credentials or Docker are needed.
 
 **Decisions.**
 
@@ -296,9 +303,43 @@ What this rules out, beside task 2's list: the commands, their order, overlap an
     - Pros: macOS rates were lower throughout.
     - Cons: open-ended, and CPU hogs on the user's command node need asking first.
 
+**Result, 2026-11-15**, on arktech-mini (macOS 27.2, arm64, 18 cores, Bun 1.4.4), natively from this build's worktree, one `bun test` process per mode, one at a time, 1,000 iterations each, with `LOST_CHILD_PROBE_HOLD_MS=30000` so a late event would still be seen. Host load average was 18 to 26, all of it other builds; no CPU hogs. The probe records went to this build's git-ignored `output/` and were removed afterwards.
+
+| Mode | Children | Lost `exit` | Lost `close` | Run took |
+| --- | --- | --- | --- | --- |
+| `rejects` | 3,000 | **8** | **1** | 32.0 s |
+| `resolves` | 3,000 | **11** | 0 | 32.0 s |
+| `sleep` (spawns nothing in the `expect`) | 2,000 | **16** | **4** | 32.5 s |
+| `plain` (no `expect`) | 3,000 | 0 | 0 | 2.1 s |
+| `rejects`, `LOST_CHILD_NESTED_OTHERS=0` | 2,000 | 0 | 0 | 2.1 s |
+
+So macOS reproduces with nothing from this repository, and the controls rule out the spawning and the `expect` alone: a loss needs both the nested tick and a second child finishing beside it. Every lost child was the second child of its iteration (the first and the awaited one always settled, or the test would have hung). Each of the 35 lost `exit` events was a child that became a zombie 0 to 20 ms after spawn with its process group gone, and it was still an unreaped zombie when the 30 s hold ended (`neverClosed` held it with `zombie: true`): Bun never delivered its `exit`, which is the `EV_ONESHOT` process watch skipped by the nested tick, and the symptom task 1 saw on the pipe capture. The 5 lost `close` events read as on Linux: group gone, both output ends polling `IN|HUP`, streams flowing and empty with at least one not ended (`fdsAttributed` true for all five). The run times show the cost: a run with a loss waits out the full 30 s hold.
+
+Two more `sleep` runs of 3,000 iterations (7 s hold) lost 23 `exit` and 8 `close`, and 19 and 8, of 6,000 children each, so the rate is about 0.5% of children on this host, against 3% (91 of 3,000 in `rejects`) on beelink2.
+
+**Canary, the same day.** Bun 1.4.5-canary.1+ed4363334, downloaded as the `canary` release's `bun-darwin-aarch64.zip` (checksum matched against the release's `SHASUMS256.txt`) into this build's git-ignored `output/`, never the toolchain, run directly and removed afterwards. All five modes above, 1,000 iterations each: 0 lost of 13,000 children. Interleaved with 1.4.4 in `sleep` mode, 3,000 iterations each, run back to back at load 16 to 20: 1.4.4 lost 31 and 27 of 6,000, the canary 0 and 0. No commit between `bun-v1.4.4` and `ed4363334` (171 commits) names the fix; the event-loop and spawn ownership refactors of 2026-11-13 to 2026-11-15 (#48866, #48885, #48893 and others) are the likely change, but that was not verified. The upstream duplicate search found [oven-sh/bun#33261](https://github.com/oven-sh/bun/issues/33261), open since 2026-07-02, which describes this mechanism and lists `expect().resolves`/`.rejects` as a trigger, so the [upstream report](../../upstream-issues/bun-nested-tick-loses-child-process-events.md) is now marked do not file until the 1.4.5 release is checked (task 5).
+
+### 5. Re-run on the Bun 1.4.5 release
+
+**Problem.** The canary loses nothing, but a canary is not a release, and the canary's fix has not been identified, so it could be accidental or reverted before 1.4.5.
+
+**Context.** Task 4's canary run; [backend runtime](../../architecture/backend-runtime.md#one-shot-commands) has the reaper that removes a macOS zombie Bun never reports, and `runCommand` no longer waits on a pipe's `close`, so this repository's behaviour does not depend on the answer. The [upstream report](../../upstream-issues/bun-nested-tick-loses-child-process-events.md) waits on it.
+
+**Investigation.** Not started: Bun 1.4.4 is the newest release on 2026-11-15. When 1.4.5 is out, run `nested-tick.ts` in `rejects`, `sleep` and `plain` modes (1,000 iterations, 30 s hold) on a throwaway install on arktech-mini and on beelink2, or on the toolchain's Bun once the pin has moved.
+
+**Decisions.**
+
+- **What to do with the upstream report if 1.4.5 loses nothing?**
+  - **Delete it and record the result here, then retire this to-do (recommended).**
+    - Pros: nothing left to file; the [upstream-issues index](../../upstream-issues/0000-index.md) says a report may be deleted once the fix ships.
+    - Cons: the macOS evidence is only in this to-do's history.
+  - **Post the macOS result as a comment on #33261 anyway.**
+    - Pros: gives Bun a regression case for the issue's planned assertion.
+    - Cons: outward-facing work the user has to do, for a bug that is already fixed.
+
 ## Current state
 
-Task 1 reproduced the loss on Linux (2026-11-11) and on macOS (2026-11-13), above. Task 2 is done: the faithful replay of test 1's commands loses nothing, and the smallest losing case, test 1 cut after its clone, is committed as `scripts/lost-child-event/in-process.ts` with `scratch.ts` to run it. Task 3 is done (2026-11-14): the trigger is an awaited `expect(promise).resolves` or `.rejects`, whose nested event-loop tick drops the rest of the outer tick's ready one-shot polls, and `scripts/lost-child-event/nested-tick.ts` reproduces it standalone on Linux. Task 4, the same run on macOS, is open. Filing the upstream report is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md). To-do 4260's task 6 reaper already removes a macOS zombie that Bun never reports, and `runCommand` no longer waits on a pipe's `close`, so this is about the upstream report, not about this repository's behaviour.
+Task 1 reproduced the loss on Linux (2026-11-11) and on macOS (2026-11-13), above. Task 2 is done: the faithful replay of test 1's commands loses nothing, and the smallest losing case, test 1 cut after its clone, is committed as `scripts/lost-child-event/in-process.ts` with `scratch.ts` to run it. Task 3 is done (2026-11-14): the trigger is an awaited `expect(promise).resolves` or `.rejects`, whose nested event-loop tick drops the rest of the outer tick's ready one-shot polls, and `scripts/lost-child-event/nested-tick.ts` reproduces it standalone on Linux. Task 4 is done (2026-11-15): macOS reproduces with `nested-tick.ts`, mostly as lost `exit` events, and Bun canary 1.4.5-canary.1+ed4363334 loses nothing. Task 5, the re-run on the Bun 1.4.5 release, is open and blocked on that release. The [upstream report](../../upstream-issues/bun-nested-tick-loses-child-process-events.md) is marked do not file: Bun's #33261 tracks the mechanism and the canary is fixed; task 5 decides whether it is ever posted. To-do 4260's task 6 reaper already removes a macOS zombie that Bun never reports, and `runCommand` no longer waits on a pipe's `close`, so this is about the upstream report, not about this repository's behaviour.
 
 ## Constraints and rationale
 
@@ -434,13 +475,29 @@ tasks, which spawn nothing. Killing the other children instead would end the
 driver sooner but would cut their records short; waiting costs at most one
 run's length.
 
+### Task 4: a 30 s hold, one mode at a time (2026-11-15)
+
+Task 3 ran four processes at a time with a 7 s hold. On macOS the question was whether a dropped `exit` is ever delivered late, which a 7 s hold cannot answer, so each mode ran alone with a 30 s hold. The five runs took under three minutes in total, so speed did not matter. The two extra `sleep` runs used a 7 s hold, because they only compare rates with the canary.
+
+### Task 4: the canary was checked here, not left to the upstream report (2026-11-15)
+
+The upstream report's checklist asked for a canary run. Done on the same host straight after task 4, it showed the canary loses nothing, which changes what the report should be: a new issue would be a duplicate of #33261 about a bug the canary no longer has. So the report was marked do not file, and task 5 was added rather than retiring this to-do, because the [upstream-issues index](../../upstream-issues/0000-index.md) leaves acting on an upstream fix to the source to-do, and a canary is not a release. Options:
+
+- **Add task 5, blocked on the 1.4.5 release (chosen).**
+  - Pros: the to-do that holds the evidence also holds the last check; the report has an owner.
+  - Cons: the to-do stays open for a check of a few minutes.
+- **Retire this to-do and leave the check to the next Bun pin bump.**
+  - Pros: one fewer open to-do.
+  - Cons: [upgrade-agents.md](../../development/upgrade-agents.md) has no step for this case, so the report would have no owner.
+
 ### Task 2: the reduction started on Linux before the macOS half of task 1 (2026-11-11)
 
 Task 2 depended on task 1 for a reproduction to reduce from. The Linux half gives one, so the first two reduction steps were taken there rather than waiting for a macOS host.
 
 ## Related
 
-- To-do 4260 (retired 2026-11-10): the defect and the draft upstream report, in `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`; the reaper is in [backend runtime](../../architecture/backend-runtime.md#one-shot-commands), and the ready-to-paste report is [`docs/upstream-issues/bun-nested-tick-loses-child-process-events.md`](../../upstream-issues/bun-nested-tick-loses-child-process-events.md) (since 2026-11-14), which the user files through the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)'s "File the upstream reports" item. Record the canary version, its result and the issue URL in that file and here
+- To-do 4260 (retired 2026-11-10): the defect and the draft upstream report, in `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`; the reaper is in [backend runtime](../../architecture/backend-runtime.md#one-shot-commands), and the ready-to-paste report is [`docs/upstream-issues/bun-nested-tick-loses-child-process-events.md`](../../upstream-issues/bun-nested-tick-loses-child-process-events.md) (since 2026-11-14), which the user files through the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)'s "File the upstream reports" item. Canary 1.4.5-canary.1+ed4363334 did not reproduce on 2026-11-15 (task 4), so it is marked do not file; record an issue or comment URL in that file and here if one is ever posted
+- [oven-sh/bun#33261](https://github.com/oven-sh/bun/issues/33261): Bun's open tracking issue for event-loop re-entry from a dispatch callback, the mechanism found in task 3
 - [Flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
 - `scripts/lost-child-event/`: the strict probe and its `bun test` preload; the standalone reproduction (`nested-tick.ts`, task 3); the standalone reductions that do not reproduce (`reduction.ts`: `pattern`, `replay`, `--block`, `--fs`); the in-process reduction (`in-process.ts`, with its `LOST_CHILD_NO_EXPECT` contrast) with its pipe runner (`pipe-runner.ts`) and driver (`scratch.ts`, whose run pool is `pool.ts`)
 - Bun 1.4.4's own account of the re-entry: the comment above `PROCESS_POLL_ONE_SHOT` in `src/spawn/process.rs` at the `bun-v1.4.4` tag of <https://github.com/oven-sh/bun>

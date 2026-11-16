@@ -113,7 +113,7 @@ export function RequestCard({
 }) {
   // This node's annotations (plan item 4001); the command node outside a node scope.
   const annotationScope = useScopesWithCommandFallback().scope;
-  const { environmentId, announce, navigateToPage, features } = useAnnotationPanel();
+  const { environmentId, announce, navigateToPage, features, capture } = useAnnotationPanel();
   // The annotation's environment is on the node of the scope this card renders in.
   const scopeNodeId = useScopesWithCommandFallback().scope.nodeId;
   const [busy, setBusy] = useState<string | null>(null);
@@ -308,6 +308,22 @@ export function RequestCard({
     request.state === "awaiting-review" ||
     (request.state === "completed" && request.operation === "implement");
   const excerpt = response?.excerpt ?? request.response;
+
+  // Announce the turn-end capture prompt once, when this mounted card sees
+  // the request settle into review. The prompt itself is derived from the
+  // request and result records, so a missed transition only skips the
+  // announcement, never the prompt.
+  const previousStateRef = useRef(request.state);
+  const canCaptureResult = features.comparison && capture.available;
+  useEffect(() => {
+    const previous = previousStateRef.current;
+    previousStateRef.current = request.state;
+    if (previous === request.state || !RUNNING_STATES.has(previous)) return;
+    if (!reviewable || !canCaptureResult) return;
+    announce(
+      `${destinationName(request.destination)} finished. Capture the current result from the request card to compare.`,
+    );
+  }, [announce, canCaptureResult, request.destination, request.state, reviewable]);
 
   return (
     <article
@@ -631,6 +647,7 @@ export function RequestCard({
             annotationId={annotation.id}
             originalCaptureId={selection?.captureId ?? null}
             requestId={request.id}
+            page={annotation.page}
             historical={showHistorical}
           />
           <div className="flex flex-wrap gap-1.5">

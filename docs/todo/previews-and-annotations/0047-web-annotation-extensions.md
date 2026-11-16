@@ -3,8 +3,9 @@
 ## Task analysis
 
 Analysed 2026-10-27 against `main` at `863b5782`; statuses rechecked
-2026-10-30 against `main` at `cd7bbe3e`, and task 5 on 2026-11-02 against
-`main` at `38d55ee1`.
+2026-10-30 against `main` at `cd7bbe3e`, task 5 on 2026-11-02 against
+`main` at `38d55ee1`, and task 3 on 2026-11-16 against `main` at `c1fcc573`
+(built the same day).
 
 Checked against `main` at `2459b05c` (2026-10-15).
 
@@ -16,7 +17,9 @@ Checked against `main` at `2459b05c` (2026-10-15).
 2. **Controlled pixel diffs**: code item 1, advisory region or pixel diffs
    behind their own capability. Status: open (not started; still no diff code
    on 2026-10-30).
-3. **Automatic after-capture**: code item 2. Status: open (not started).
+3. **Automatic after-capture**: code item 2. Status: done (2026-11-16, the
+   recommended turn-end prompt on the request card; its live check after a
+   real agent turn moved to 7568).
 4. **Development source hints**: code item 3, a producer plus backend
    verification; also a small trust gap in today's hint handling. Status:
    done (the gap closed in todo 0725, #1416; the producer, backend check and
@@ -110,6 +113,15 @@ state cannot be reproduced.
 
 **Investigation.** `web_annotation_result_capture` and the settle window exist
 (see task 2). Nothing triggers a capture automatically.
+
+Rechecked 2026-11-16 against `main` at `c1fcc573`: still true. The only
+trigger was the plain **Capture current result** button in `ResultReview.tsx`,
+shown whenever a reviewable request's card was open, with nothing saying the
+turn had ended, whether the note already had an after-capture, or whether the
+preview still showed the note's page. Its capture already ran the desktop's
+stable-geometry window and reapplied the original masks
+(`purpose: "result"`), and never navigated. Built on this date; see
+Assumptions and decisions.
 
 **Decisions.**
 
@@ -358,6 +370,74 @@ Kept non-desktop capture blocked rather than choosing a backend-owned browser
 session, because the recorded deferral does not choose that separate-session
 design. The embedding go or no-go is no longer an outstanding decision.
 
+### Task 3: a turn-end prompt, not a silent capture (the recommendation)
+
+Recorded 2026-11-16 against `main` at `c1fcc573`. Chose the recommended
+one-click prompt on the request card. A silent capture at turn end was not
+built: it could record a mid-edit or signed-out page, or a tab that moved on
+while the request ran in the background, and the to-do allows an automatic
+capture only when it can neither navigate nor reload the page. The prompt
+(`ResultCapturePrompt.tsx`) starts exactly the capture the manual button
+started, so the stable-geometry window and the reapplied redaction masks come
+from the existing desktop path, and nothing navigates or reloads. The prompt
+tells the user to set up sign-in or form state in the preview first, which is
+the manual path the to-do keeps for state that cannot be reproduced.
+
+### Task 3: when the prompt shows
+
+`resultCapturePromptState` (`result-capture-prompt.ts`) shows it when the
+request is reviewable (the card's existing rule), the panel can capture and
+the backend advertises `operations.comparison`, the latest result is not
+provisional (or there is none: a turn with no report is still worth
+capturing), and the result holds no after-capture for this note. An
+observation for another note of a batch does not count; a capture recorded
+before observations existed counts for every note, as the review section
+already treats it. Otherwise the plain button stays, so manual capture is
+always available.
+
+### Task 3: the page check compares, it never navigates
+
+The prompt compares the note's page key with the preview's current page
+(`samePage` in `format.ts`) and, when they differ, warns and points to the
+card's existing **Open updated page** button rather than adding a second
+navigation button. Capturing another page stays allowed, as before: the
+comparison metadata already labels a route difference.
+
+### Task 3: no new capability flag
+
+The other extensions each add a capability because each adds a backend
+surface. This one adds none: it is renderer-only and calls
+`web_annotation_result_capture`, which `operations.comparison` already
+gates. A separate flag would only have duplicated that one.
+
+### Task 3: dismissal and the announcement live in the renderer
+
+**Not now** is kept in a bounded module-level set (500 keys of environment,
+request and note) so reopening the thread does not offer it again; it resets
+when the renderer reloads, which costs one extra prompt and never a capture.
+Persisting it in the backend was not worth a new record for a hint. A
+mounted card that sees its request move from a running state into review
+announces the prompt through the panel's live region. That transition is
+seen only by a mounted card, but the prompt is derived from the request and
+result records on every render, so a missed transition (an inactive
+environment, a closed panel) loses only the announcement, never the prompt.
+
+### Task 3: live check moved to 7568
+
+The prompt is covered by `ResultCapturePrompt.test.tsx` against the panel
+harness and fake backend. A run after a real agent turn needs a billed
+provider turn, so it is a `- [ ]` item in
+[7568](../manual-test/7568-manual-test-checklist.md) under Service previews
+and web annotations.
+
+### Task 3: tasks 2 and 5 left for later work
+
+Pixel diffs (task 2) need an unstable-region mask the desktop does not make
+yet and capped image decoding in the backend, and same-origin iframes (the
+rest of task 5) need per-frame generations, coordinate transforms and a
+reviewed cross-frame message path. Each is a change of its own and neither
+was started here.
+
 ### Task 5: open shadow roots first, as recommended
 
 Built open shadow roots only, on branch
@@ -439,6 +519,11 @@ task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
 
 ## Current state
 
+- When a request's turn has finished and the note has no after-capture
+  yet, the request card offers **Capture the result**, a one-click prompt
+  that says whether the preview shows the note's page and never navigates
+  (task 3, 2026-11-16; `ResultCapturePrompt.tsx`). See
+  [web-page-annotations.md](../../architecture/web-page-annotations.md#review-and-resolution).
 - Comparison is side by side only. Capture current result
   (`web_annotation_result_capture`) stores a new immutable after-capture with
   `WebAnnotationComparisonMetadata`: the compared capture, `targetMatch`, and
@@ -487,10 +572,8 @@ task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
    - Cap decode memory and comparison time. Reject incompatible captures
      instead of resizing them, which would hide layout differences.
    - Advertise it through its own capability, separate from `comparison`.
-2. Automatic after-capture. Allowed only when it can neither navigate nor
-   reload the user's active page. Reuse the stable-geometry window, reapply the
-   user's redaction masks, and keep manual capture as the path whenever login
-   or form state cannot be reproduced.
+2. Automatic after-capture: done (task 3) as a turn-end prompt the user
+   presses; its live check is in 7568.
 3. Development source hints: done (task 4). The documented emitter, the thread
    view list and the live captures are done in
    0950.
@@ -548,7 +631,8 @@ task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
 ## Open questions
 
 - Which extension, if any, is wanted next? Answered on 2026-10-30: source
-  hints (task 4), now built; the next pick among tasks 2, 3 and 5 is open.
+  hints (task 4), now built; the turn-end capture prompt (task 3) followed
+  on 2026-11-16. The next pick between tasks 2 and 5 (iframes) is open.
 - Is non-desktop capture worth designing before embedded previews exist? If
   embedded previews are dropped, a backend-owned browser session is the only
   remaining option.
@@ -560,7 +644,7 @@ task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
   iOS `WKWebView` surfaces).
 - [web-page-annotations.md](../../architecture/web-page-annotations.md)
   §"Client capability matrix" and §"Known limitations".
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 7, choosing which product extensions are wanted) moved there on 2026-11-10; on 2026-11-14 the user chose none for now and the item stays open for a later choice.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 7, choosing which product extensions are wanted) moved there on 2026-11-10; on 2026-11-14 the user chose none for now and the item stays open for a later choice. Task 3's live check after a real agent turn moved there on 2026-11-16.
 - The design canvas renderer is a precedent for a bounded worker only. Its
   isolated authored HTML is not the user's authenticated application session
   ([design-canvas.md](../../architecture/design-canvas.md)).

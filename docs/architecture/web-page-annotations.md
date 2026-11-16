@@ -623,7 +623,26 @@ session.
 Review actions: **Open updated page** (navigates the preview on the user's
 action only), **Open changes** (labelled as the current workspace diff),
 **Capture current result** for a side-by-side comparison, **Accept and
-resolve**, and **Reply / request another change**. Acceptance checks the
+resolve**, and **Reply / request another change**.
+
+When the turn has finished (the result is not provisional) and the note has
+no after-capture in the current result yet, **Capture current result** is
+offered as a prompt, **Capture the result**, rather than a plain button
+(`ResultCapturePrompt.tsx`, `result-capture-prompt.ts`). It says whether the
+preview shows the note's page (compared by page key, never by navigating) and,
+when it does not, points to **Open updated page**. The capture is the same
+`result` capture as the manual button: the desktop's stable-geometry window,
+the original capture's masks reapplied, no navigation or reload, so sign-in
+and form state the user set up are what is captured. **Not now** collapses
+it to the plain button for that request and note until the renderer reloads.
+A card that is mounted when its request settles into review also announces
+the prompt in the panel's live region; the prompt itself is derived from the
+request and result records, so a missed transition costs only the
+announcement. Nothing captures without the user's click: a silent
+turn-end capture could record a mid-edit or signed-out page, or a tab that
+has moved on (to-do 0047 task 3). The prompt needs no capability of its
+own: it calls `web_annotation_result_capture` under the existing
+`operations.comparison`. Acceptance checks the
 expected content revision, capture id and result revision; a newer note or
 capture makes the old result historical. Only a human resolves. A new reply on
 a resolved note reopens it.
@@ -685,7 +704,7 @@ What has actually been exercised on a real stack (details and dates in
 | Pins and Show on page | Reorder, hot reload, duplication, offscreen, closed and open modal, late-font shift (blocking and script-loaded), expired sign-in redirect (macOS; Linux headless) | — |
 | Open shadow roots | An element note and a quote inside an open root captured in the desktop's preview view (isolated world, main-side parse), stored, then pinned and shown on page again after a reload (Linux headless, 2026-11-11) | Closed roots (unsupported); a Linux Wayland or X11 window; macOS |
 | Development source hints | Fixture HTML and a real Vite 8 dev server with the documented emitter, captured from the desktop in a local worktree and in a container (Linux, 2026-11-06); fixture HTML in a container (macOS desktop); the container path check through the gateway (Linux) | webpack, Next.js and other Babel setups (unqualified) |
-| Result captures | Stable, unstable (animation, loading font), route, viewport and target differences, expired sign-in (macOS) | Pixel differences (not implemented) |
+| Result captures | Stable, unstable (animation, loading font), route, viewport and target differences, expired sign-in (macOS) | Pixel differences (not implemented); the turn-end capture prompt after a real agent turn (unit-tested only) |
 | Live implement | Claude, Codex, Cursor, Grok, OpenCode, Pi (local worktree); Claude in a Docker container | Other providers in a container |
 | Live Discuss | All six; read-only on Claude and on Codex/Cursor/Grok sessions in Plan | — |
 | Needs input | Claude: approval and clarifying question answered from the request card | Codex (its Ask policy does not gate workspace edits); Cursor, Grok, OpenCode, Pi not run |

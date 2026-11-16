@@ -1,17 +1,17 @@
 import { useEffect, useState } from "react";
-import { Camera } from "lucide-react";
 import type {
   WebAnnotationCapture,
   WebAnnotationCheck,
   WebAnnotationComparisonMetadata,
   WebAnnotationOutcome,
+  WebAnnotationPageIdentity,
   WebAnnotationResult,
 } from "@orkestrator/protocol/web-annotations";
-import { Button } from "@/components/ui/button";
 import { loadWebAnnotationCapture } from "@/lib/web-annotations/assets";
 import { useWebAnnotationScope } from "@/hooks/useWebAnnotations";
 import { AnnotationImage } from "./AnnotationImage";
 import { useAnnotationPanel } from "./panel-context";
+import { ResultCapture } from "./ResultCapturePrompt";
 import {
   captureConditionsLabel,
   citedEvidenceLabel,
@@ -262,12 +262,15 @@ export function ResultReview({
   annotationId,
   originalCaptureId,
   requestId,
+  page,
   historical,
 }: {
   result: WebAnnotationResult | null;
   annotationId: string;
   originalCaptureId: string | null;
   requestId: string;
+  /** The note's page, compared with the preview's current page (never navigated to). */
+  page: WebAnnotationPageIdentity;
   historical?: boolean;
 }) {
   const { environmentId, features, capture } = useAnnotationPanel();
@@ -300,29 +303,13 @@ export function ResultReview({
         />
       )}
       {features.comparison && capture.available && !historical && (
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="h-6 gap-1 px-2 text-[11px]"
-          disabled={capture.selecting}
-          onClick={() =>
-            // No annotationId option: this must never replace the note's own
-            // capture. The intent names the note so batch results attribute it.
-            void capture.start("page", {
-              intent: { kind: "result", requestId, annotationId, createdAt: Date.now() },
-              // The desktop waits for a stable layout and reapplies the
-              // original capture's masks to the after-image.
-              result: {
-                requestId,
-                ...(originalCaptureId ? { originalCaptureId } : {}),
-              },
-            })
-          }
-        >
-          <Camera className="h-3 w-3" aria-hidden />
-          Capture current result
-        </Button>
+        <ResultCapture
+          result={result}
+          annotationId={annotationId}
+          page={page}
+          originalCaptureId={originalCaptureId}
+          requestId={requestId}
+        />
       )}
     </div>
   );

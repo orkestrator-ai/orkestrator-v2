@@ -285,10 +285,15 @@ miss restarts the distrust. The first event the watcher delivers
 no view cares about (a Git object write). Changes made while it was distrusted
 were never announced, so before coverage is announced the watcher sends an
 unknown-path hint that dirties both views; otherwise a file tree walked under
-the earlier qualified coverage would count as valid again. A watcher unqualified for another reason (an unreadable directory, a
-tree left out) ignores these reports. The cost is that of an unwatched
-worktree, for as long as delivery stays late; a healthy host loses at most
-5 min of watching after an unlucky race between a poll and a settling burst.
+the earlier qualified coverage would count as valid again. Trust is restored
+just before that hint, so the scan it starts counts as qualified and is the
+baseline against which the next safety scan spots a change missed after
+recovery. A watcher unqualified for another reason (an unreadable directory, a
+tree left out) ignores these reports, and regaining trust does not qualify it
+while that gap remains. The cost is that of an unwatched worktree, for as long
+as delivery stays late. After an unlucky race between a poll and a settling
+burst, a healthy host polls for at least 5 min and until the watcher next
+delivers an event, which in a quiet worktree can be much later.
 
 On arktech-mini on 2026-11-15 (`fseventsd` at 100% CPU after 10 days of
 uptime, load average 2 to 4), `fseventsd` was not silent but late and

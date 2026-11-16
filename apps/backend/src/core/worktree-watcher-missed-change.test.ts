@@ -51,15 +51,26 @@ async function until(condition: () => boolean): Promise<void> {
 function mainCheckout() {
   grace = installControlledTimeout(GRACE_MS, { label: "missed-change grace" });
   let emit: (eventType: string, filename: string | null) => void = () => undefined;
-  const start: StartWatch = (_target, listener) => {
+  const failures = new Map<string, (error: Error) => void>();
+  const start: StartWatch = (target, listener) => {
     emit = listener;
-    const handle: WatchHandle = { on: () => handle, close: () => undefined };
+    const handle: WatchHandle = {
+      on: (_event, onError) => {
+        failures.set(target, onError);
+        return handle;
+      },
+      close: () => undefined,
+    };
     return handle;
   };
   let clock = 1_000;
   const hints: WorktreeChangeHint[] = [];
+  // Whether the watcher was qualified when it told its owner "anything may
+  // have changed": the owner starts its scan inside that call.
+  const unknownChangeQualified: Array<boolean | undefined> = [];
   let coverageChanges = 0;
   let misses = 0;
+  let current: WorktreeWatcher | undefined;
   const watcher = startWorktreeWatcher({
     worktreePath: "/wt",
     settleMs: 20,
@@ -70,6 +81,7 @@ function mainCheckout() {
     resolveGitPaths: async () => ({ gitDir: "/wt/.git", commonDir: "/wt/.git", linked: false }),
     onChange: (hint) => {
       if (hint) hints.push(hint);
+      else unknownChangeQualified.push(current?.qualified);
     },
     onCoverageChange: () => {
       coverageChanges += 1;
@@ -78,11 +90,21 @@ function mainCheckout() {
       misses += 1;
     },
   });
+  current = watcher;
   opened.push(watcher);
   return {
     watcher,
     hints,
+    unknownChangeQualified,
     emit: (filename: string | null) => emit("change", filename),
+    /** The recursive root watch reports a directory below it it cannot read. */
+    unreadable: (where: string) =>
+      failures.get("/wt")?.(
+        Object.assign(new Error(`EACCES: permission denied, watch '${where}'`), {
+          code: "EPERM",
+          path: where,
+        }),
+      ),
     advance: (ms: number) => {
       clock += ms;
     },
@@ -118,6 +140,37 @@ test("a missed change no event explains withdraws coverage until the watcher del
   expect(context.watcher.qualified).toBe(true);
   expect(context.coverageChanges()).toBe(3);
   await until(() => context.hints.length === 2);
+  // The owner heard "anything may have changed" once, and the watcher already
+  // counted as qualified then, so the scan it started is a trusted baseline.
+  expect(context.unknownChangeQualified).toEqual([true]);
+});
+
+test("an unreadable directory found while distrusted keeps coverage withdrawn when trust returns", async () => {
+  const context = mainCheckout();
+  await until(() => context.watcher.qualified === true);
+  context.watcher.unannouncedChange?.();
+  expect(grace!.advance()).toBe(1);
+  expect(context.watcher.qualified).toBe(false);
+  expect(context.coverageChanges()).toBe(2);
+
+  // An unreadable directory withdraws coverage for good, distrusted or not.
+  context.unreadable("/wt/output/data");
+  expect(context.watcher.watching).toBe(true);
+  expect(context.coverageChanges()).toBe(3);
+
+  // Trust returns, but coverage does not: the owner is still told anything may
+  // have changed (the events went unannounced) and is not told coverage moved.
+  context.advance(60_000);
+  context.emit("src/b.ts");
+  expect(context.watcher.qualified).toBe(false);
+  expect(context.coverageChanges()).toBe(3);
+  expect(context.unknownChangeQualified).toEqual([false]);
+  await until(() => context.hints.length === 1);
+
+  // Its misses prove nothing about delivery any more.
+  context.watcher.unannouncedChange?.();
+  expect(grace!.pendingCount()).toBe(0);
+  expect(context.misses()).toBe(1);
 });
 
 // Distrust starts only from an owner's report. A watcher nobody reports a miss
@@ -349,4 +402,13 @@ test("trust regained on an ignored event reconciles the views cached before the 
     "ignored-generated.txt",
   ]);
   expect(owner.walks()).toBe(2);
+
+  // The scan that reconciled the views ran under restored coverage, so it is
+  // the baseline the next safety scan compares with: a change missed after
+  // recovery demotes the watcher again rather than being absorbed.
+  owner.setFiles(["old.txt", "missed.ts", "missed-after-recovery.ts"]);
+  await owner.time.advance(DIFF_SAFETY_NET_INTERVAL_MS);
+  expect(grace!.advance()).toBe(1);
+  expect(owner.warnings.filter((event) => event === "scan.watcher-missed-change")).toHaveLength(2);
+  expect(owner.intervals.at(-1)).toBe(DIFF_POLL_INTERVAL_MS);
 });

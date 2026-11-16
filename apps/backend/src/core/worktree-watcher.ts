@@ -401,13 +401,18 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     else if (!unreadable) options.onCoverageChange?.();
   };
 
-  /** Like a large tree left out, distrust is withdrawn and restored. */
-  const setDistrusted = (next: boolean) => {
-    if (next === (distrustedAt !== undefined)) return;
-    distrustedAt = next ? now() : undefined;
+  /** Tells the owner that trust, and with it maybe coverage, changed. */
+  const announceTrustChange = () => {
     if (closed) return;
     if (!coverageAnnounced) announceCoverage();
     else if (!unreadable) options.onCoverageChange?.();
+  };
+
+  /** Like a large tree left out, distrust is withdrawn (and restored by `noteDelivery`). */
+  const distrust = () => {
+    if (distrustedAt !== undefined) return;
+    distrustedAt = now();
+    announceTrustChange();
   };
 
   /**
@@ -420,12 +425,21 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
    * Files panel is closed) would otherwise count as valid again the moment
    * coverage returns. So the owner is told "anything may have changed" first,
    * dirtying both views, and only then is coverage announced.
+   *
+   * Trust itself is restored before that call, though. The owner starts its
+   * reconciling scan inside it, and records whether the watcher was qualified
+   * when the scan began; a scan recorded as unqualified cannot be the baseline
+   * against which the next safety scan spots a miss, so the first change
+   * missed after recovery would go unreported (and keep the safety cadence)
+   * until the scan after that.
    */
   const noteDelivery = () => {
     deliveries += 1;
     if (distrustedAt === undefined || now() - distrustedAt < distrustMs) return;
-    if (!closed) options.onChange();
-    setDistrusted(false);
+    distrustedAt = undefined;
+    if (closed) return;
+    options.onChange();
+    announceTrustChange();
   };
 
   /** Everything qualified coverage needs except trust in delivery. */
@@ -462,7 +476,7 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
         return;
       }
       options.onMissedChange?.();
-      setDistrusted(true);
+      distrust();
     }, missGraceMs);
     missTimer.unref?.();
   };

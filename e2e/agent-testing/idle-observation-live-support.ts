@@ -107,7 +107,7 @@ export type InvalidationCounts = Record<string, Record<string, number> | undefin
 
 /**
  * What one provider's views were told to re-read during a window, by cause
- * (todo 0049 task 4): the difference of two samples for `scope` and for the
+ * (#1659): the difference of two samples for `scope` and for the
  * environment-wide announcements every view of the environment also honours.
  * Causes that did not move are omitted; the sum is under `total`.
  */
@@ -253,7 +253,7 @@ export function freshToolResults(
  * and `subagent:toolState` for every sub-agent card (Codex renders a child as
  * a `subagent` part, not a tool call): content-free evidence of what a
  * command still running at the end of its turn looks like afterwards, and of
- * whether a child was left running (todo 0049 tasks 3 and 8).
+ * whether a child was left running (#1960).
  */
 export function freshToolStates(
   messages: readonly { id: string; role: string; parts?: unknown }[],
@@ -283,7 +283,7 @@ export function shellOutputContainsMarker(output: string | undefined, marker: st
 /**
  * True when `text` shows `marker` somewhere other than as the argument of an
  * `echo`: the command line names the marker, the output it emits does not
- * repeat the `echo` (todo 0049 task 8).
+ * repeat the `echo` (#2149).
  */
 export function textShowsEmittedMarker(text: string, marker: string): boolean {
   if (!marker) return false;
@@ -324,7 +324,7 @@ export interface BackgroundTaskEvidence {
 
 /**
  * Output files of background tasks that started after `previous` and have
- * completed (todo 0049 task 2). Claude never puts a backgrounded command's
+ * completed (#1934). Claude never puts a backgrounded command's
  * stdout into a tool result: the call's result only says the command moved to
  * the background, and the task notification carries the output as a file
  * (`outputFile`), which the renderer shows as a link on the task card. A
@@ -370,7 +370,7 @@ export function idleObservationModel(
   fake: boolean,
   override?: string,
 ): string | undefined {
-  // Pi and OpenCode name the fake's provider the same way (todo 0049 tasks 6, 7).
+  // Pi and OpenCode name the fake's provider the same way (#2081).
   return fake && (platform === "pi" || platform === "opencode") ? PI_FAKE_MODEL_REF : override;
 }
 
@@ -389,7 +389,7 @@ export function asyncQuestionPrompt(title: string, word: string): string {
  * and Pi release a session after 10 minutes. Codex detaches a thread only
  * after 30 minutes without a touch (`DEFAULT_THREAD_IDLE_MS`), found by a
  * sweep that runs every 5 minutes (`CLEANUP_INTERVAL_MS` in the bridge's
- * `index.ts`), so up to 35 minutes (todo 7380).
+ * `index.ts`), so up to 35 minutes (#2149).
  */
 export function idleDetachWindowMs(platform: string): number {
   return platform === "codex" ? 35 * 60_000 : 10 * 60_000;

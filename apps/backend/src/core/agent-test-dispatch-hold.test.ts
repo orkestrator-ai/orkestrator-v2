@@ -1,5 +1,5 @@
 /**
- * The test-only prompt dispatch hold (to-do 0050 task 3): off outside an
+ * The test-only prompt dispatch hold (#2086): off outside an
  * isolated agent-test backend, and inside one it parks a bridge send at the
  * marker's point, writes a content-free record and lets it go once the marker
  * is removed.

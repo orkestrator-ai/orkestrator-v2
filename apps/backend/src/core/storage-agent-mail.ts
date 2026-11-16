@@ -1441,7 +1441,7 @@ export class AgentMailRepository {
     await this.store.enqueue(async () => {
       // Planned on the shared read model and committed as the rows it changes:
       // cloning and rewriting the whole store held the event loop for about
-      // 120 ms per delete at 20 MiB of mail (todo 6120 task 6).
+      // 120 ms per delete at 20 MiB of mail (#2029).
       let deletion = planEnvironmentMailDeletion(await this.store.snapshot(), environmentId);
       if (!deletion) return;
       // Reading and committing are each one synchronous block; give timers a

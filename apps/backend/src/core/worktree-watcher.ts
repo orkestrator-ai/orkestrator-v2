@@ -41,7 +41,7 @@ import {
  * announced (`unannouncedChange`) makes the watcher unqualified, so its owner
  * polls, until the watcher delivers an event again: on a Mac whose `fseventsd`
  * has stopped delivering, every change otherwise waited for the two-minute
- * safety scan (to-do 8171).
+ * safety scan (#2305).
  */
 
 /** Editors save in bursts; one scan after the burst is enough. */
@@ -102,7 +102,7 @@ export const WATCH_MISS_GRACE_MS = 3_000;
  * that finds a change before any event does counts as another miss. It is
  * qualified again by the first event it delivers after this, so one that
  * receives nothing, or receives events only after the polls have found their
- * changes (macOS with a saturated `fseventsd`, to-do 8171), leaves its owner
+ * changes (macOS with a saturated `fseventsd`, #2305), leaves its owner
  * polling for as long as that lasts.
  */
 export const WATCH_DISTRUST_MS = 300_000;
@@ -182,7 +182,7 @@ export interface WorktreeWatcher {
    * arrives within {@link WATCH_MISS_GRACE_MS}, a local watcher withdraws
    * qualified coverage until it delivers an event again, at least
    * {@link WATCH_DISTRUST_MS} after its latest miss. Owners also report the
-   * changes their polls find while it is distrusted (to-do 8171).
+   * changes their polls find while it is distrusted (#2305).
    */
   unannouncedChange?(): void;
 }
@@ -323,7 +323,7 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
   let unreadable = false;
   // The owner's scan found a change no hint announced, and no event explained
   // it: the platform is not delivering (macOS's `fseventsd` can stop for every
-  // client on the host, to-do 8171). Set to when that was decided; a quiet
+  // client on the host, #2305). Set to when that was decided; a quiet
   // watcher proves nothing until it delivers again.
   let distrustedAt: number | undefined;
   let missTimer: ReturnType<typeof setTimeout> | undefined;
@@ -461,7 +461,7 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
    * any event does restarts the distrust: a saturated `fseventsd` still hands
    * out a few events tens of seconds late, and each of those would otherwise
    * restore coverage that the next change then waits out the safety scan for
-   * (measured on arktech-mini, to-do 8171). A watcher left unqualified by
+   * (measured on arktech-mini, #2305). A watcher left unqualified by
    * something else (an unreadable directory, a tree left out) is not covering
    * the change, so its miss proves nothing about delivery.
    */

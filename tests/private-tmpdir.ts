@@ -10,13 +10,13 @@ import {
 // Anything a test process leaves in the shared temporary directory has no
 // owner a later run can identify. Playwright's browser profiles are the main
 // case: `playwright_chromiumdev_profile-*` names hold no PID and other tools use
-// the same prefix (0248). So each test process gets a private `TMPDIR` named
+// the same prefix (#1425). So each test process gets a private `TMPDIR` named
 // for its PID; everything it and its children make lands inside it, and a later
 // run removes the whole directory once its owner has exited.
 
 /** Kept short: Unix socket paths made inside it are limited to 104 bytes on macOS. */
 export const PRIVATE_TMPDIR_PREFIX = "ork-test-tmp-";
-/** Set to `1` to keep each private directory for inspection (a leak hunt, as in 0247). */
+/** Set to `1` to keep each private directory for inspection (a leak hunt, as in #1339). */
 export const KEEP_PRIVATE_TMPDIR_ENV = "ORKESTRATOR_TEST_KEEP_PRIVATE_TMPDIR";
 /** The private directory a test process handed to its children, so they reuse it. */
 export const PRIVATE_TMPDIR_ENV = "ORKESTRATOR_TEST_PRIVATE_TMPDIR";
@@ -101,7 +101,7 @@ export function enterPrivateTestTmpdir(root = privateTmpdirRoot()): () => void {
  * launcher a real-stack spec restarts: its temporary files go back to the
  * parent temporary directory. This process removes its private directory on
  * exit, and only a live process's command line keeps it, never its
- * environment, so a profile started inside it would lose its TMPDIR (0830).
+ * environment, so a profile started inside it would lose its TMPDIR (#1463).
  */
 export function outlivingProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const outliving = { ...env };

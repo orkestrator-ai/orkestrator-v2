@@ -54,10 +54,11 @@ RUN cd bridges/cursor-bridge && bun run build && rm -rf node_modules \
 # ACP, like Codex below, bundles every dependency into dist/index.js.
 COPY bridges/acp-bridge bridges/acp-bridge
 RUN cd bridges/acp-bridge && bun run build && rm -rf node_modules
-# Claude: the SDK stays external and `vendor` copies it into dist/node_modules
-# together with its platform packages (`claude-agent-sdk-linux-<arch>` and
-# `-musl`), each holding a ~300 MB Claude Code binary. Every one is dropped and
-# the main `claude-agent-sdk` package kept: the SDK looks for its own binary
+# Claude: the SDK stays external and `vendor` copies only the main
+# `claude-agent-sdk` package into dist/node_modules, never its platform
+# packages (`claude-agent-sdk-linux-<arch>` and `-musl`), each holding a
+# ~300 MB Claude Code binary; the `rm -rf` below is a guard that any that
+# reappear are dropped. None is needed: the SDK looks for its own binary
 # only when `pathToClaudeCodeExecutable` is unset, and the bridge always sets it
 # from CLAUDE_CLI_PATH (the pinned CLI below, `claudeExecutableOptions` in
 # bridges/claude-bridge/src/services/session-manager-core.ts). A bridge started

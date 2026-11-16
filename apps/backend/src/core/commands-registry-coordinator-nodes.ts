@@ -183,7 +183,7 @@ export async function coordinatorNodeTarget(
   const node = summaries.nodes[0];
   if (!node) throw new Error(`No connected node has ID ${nodeId}. Call list_nodes.`);
   if (!node.available) {
-    // Nothing is queued; this conversation is woken once it reconnects (3800 task 8).
+    // Nothing is queued; this conversation is woken once it reconnects (#2059).
     await noteUnavailable(context, {
       ...caller,
       nodeId,
@@ -636,7 +636,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
    * ends, and its report is held until then.
    */
   // A coordinator tool refused a disconnected node: remember who tried, so
-  // the reconnect wakes them (3800 task 8). Nothing about the work is kept.
+  // the reconnect wakes them (#2059). Nothing about the work is kept.
   register(noteCoordinatorNodeUnavailableCommand, async ({ scope, nodeId }, context) => {
     const caller = await identity(scope, context);
     if (!context.coordinators) return { noted: false };

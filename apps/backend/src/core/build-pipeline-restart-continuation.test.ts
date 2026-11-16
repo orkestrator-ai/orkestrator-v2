@@ -157,7 +157,7 @@ for (const toolMode of [false, true]) {
           } else {
             if (outcome === "stale-notice") {
               // Sent, not started: the notice still names the original
-              // request, so it is not the continuation's second restart (0112).
+              // request, so it is not the continuation's second restart (#1288).
               spyOn(provider, "dispatchStatus").mockImplementation(async (_sessionId, requestId) =>
                 requestId === nextId ? "pending" : "dispatched",
               );

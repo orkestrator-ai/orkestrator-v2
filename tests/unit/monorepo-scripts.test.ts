@@ -194,11 +194,14 @@ describe("monorepo orchestration scripts", () => {
     expect(pty).toContain('platform !== "win32"');
   });
 
-  test("Claude vendoring dereferences the SDK and includes optional platform packages", () => {
+  test("Claude vendoring dereferences the SDK and leaves its platform packages out", () => {
+    // Behaviour is pinned by bridges/claude-bridge/src/vendor.test.ts; this
+    // keeps the source from walking the SDK's sibling packages again.
     const source = read("bridges/claude-bridge/scripts/vendor.ts");
     expect(source).toContain("await realpath(sdkLink)");
     expect(source).toContain("dereference: true");
-    expect(source).toContain('name.startsWith("claude-agent-sdk-")');
+    expect(source).not.toContain("readdir(path.dirname(sdkRoot))");
+    expect(source).not.toContain('startsWith("claude-agent-sdk-")');
   });
 
   test("Docker builds the bridges in a separate stage with a frozen filtered install", () => {

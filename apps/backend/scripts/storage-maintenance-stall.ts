@@ -14,7 +14,7 @@ import { storeLayout } from "../src/core/storage-stores.js";
 
 /**
  * How long the periodic storage maintenance holds the backend's event loop
- * (to-do 1202 task 7, report finding ST-13):
+ * (#1939, report finding ST-13):
  *
  *   mise exec -- bun apps/backend/scripts/storage-maintenance-stall.ts \
  *     [--main-mb 256] [--ledger-mb 256] [--runs 3] [--scrub-only] [--json]

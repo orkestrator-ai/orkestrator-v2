@@ -1,5 +1,5 @@
 /**
- * 4761: the evidence body store syncs a body before its rename and the
+ * #1850: the evidence body store syncs a body before its rename and the
  * directory entry before `put` resolves, both awaited off the event loop, and
  * ingestion commits and acknowledges only after that.
  */

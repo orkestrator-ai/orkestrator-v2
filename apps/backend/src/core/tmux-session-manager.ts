@@ -911,7 +911,7 @@ export class TmuxSession {
           // One tick of this tab's loop is one `tmux-tab-loop` attempt: the
           // snapshot's `docker exec` or tmux spawn, the transcript search, the
           // hook drains and the pane observation it starts are charged to it
-          // (todo 7567).
+          // (#2131).
           const next = await this.metrics.observe("tmux-tab-loop", async (span) => {
             const outcome = await runTick({ idle, signalled, ringsBeforeWait, woke });
             // A tick that found hook files or transcript lines changed something.

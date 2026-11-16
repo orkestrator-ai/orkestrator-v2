@@ -1223,7 +1223,7 @@ async function main(): Promise<number> {
 
   // --- State written by the old release ----------------------------------------
   phase = "old release";
-  // Only releases up to 2.30.0-beta honour this switch (removed with todo 0021);
+  // Only releases up to 2.30.0-beta honour this switch (removed with #1245);
   // the default old release, v2.21.0, does. A newer --old-ref creates a
   // volume-backed environment here, which the legacy check below reports.
   let backend = await startBackend("old-legacy", oldRelease, oldImage, {

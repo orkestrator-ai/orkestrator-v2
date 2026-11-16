@@ -290,7 +290,7 @@ describe("tickets on a leaf", () => {
     const listed = await f.ticketOnNode("list", {});
     expect(String(listed.note)).toContain("Build box is not connected");
     f.state.connected = true;
-    // The refused coordinator hears once that the machine is back (3800 task 8).
+    // The refused coordinator hears once that the machine is back (#2059).
     await f.world.coordinator.nodeConnected("bk_leaf");
     await f.world.deliver();
     const reconnected = f.world.received(await f.world.main());

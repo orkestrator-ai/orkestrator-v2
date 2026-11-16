@@ -21,7 +21,7 @@ const modules = readdirSync(directory)
   // Not command files: the client builders, shared helpers and the per-scope
   // aggregate of every factory (`backendForScope`, plan item 4001).
   .filter((file) => file !== "client.ts" && file !== "shared.ts" && file !== "scope-backend.ts")
-  // Bound to one node by design, so they have no factory (7571 task 14):
+  // Bound to one node by design, so they have no factory (#2230):
   // command-node commands always go to the command node over the portal, and
   // self-improvement is this window's own backend.
   .filter((file) => !FIXED_NODE_FILES.has(file))
@@ -109,7 +109,7 @@ function commandName(fnName: string): string {
 }
 
 // The fixed-node files have no factory to hand a client to, so pin their
-// binding instead (7571 task 14): `command-nodes.ts` sends through
+// binding instead (#2230): `command-nodes.ts` sends through
 // `portalBackendClient` and `self-improvement.ts` through
 // `commandBackendClient`, and both of those are the window's command scope
 // (`@/lib/native/backend` `invoke`). A function rebound to another node's

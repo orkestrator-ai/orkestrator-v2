@@ -10,8 +10,8 @@ import {
   parsePsAncestry,
   parseSsListeners,
   type ManagedProcessRoot,
-} from "./preview-listener-ownership.js";
-import { CommandFailedError } from "./shell.js";
+} from "./listener-ownership.js";
+import { CommandFailedError } from "../shell.js";
 
 const PS = [
   "  100     1 Sun Oct 25 09:00:00 2026",

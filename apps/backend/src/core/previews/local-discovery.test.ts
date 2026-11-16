@@ -6,12 +6,12 @@ import {
   LoopbackListenerOwnership,
   type ListenerOwnership,
   type ManagedProcessRoot,
-} from "./preview-listener-ownership.js";
-import { CommandFailedError } from "./shell.js";
-import { resolvePreviewTargetIntent } from "./preview-intent.js";
-import { spawnPty, type PtyProcess } from "./pty.js";
-import { TerminalRuntime } from "./terminal-runtime.js";
-import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
+} from "./listener-ownership.js";
+import { CommandFailedError } from "../shell.js";
+import { resolvePreviewTargetIntent } from "./intent.js";
+import { spawnPty, type PtyProcess } from "../pty.js";
+import { TerminalRuntime } from "../terminal-runtime.js";
+import { createPreviewHarness, type PreviewHarness } from "./test-support.js";
 
 /**
  * Local-environment discovery: seeded worktree services, managed-process
@@ -533,14 +533,16 @@ describe.skipIf(!realHost)("local preview service discovery on this host", () =>
     host = "127.0.0.1",
   ): Promise<{ shell: ChildProcess; port: number }> {
     // Report the bound address after a beat: Bun calls the listen callback of a
-    // bind that then fails with EADDRINUSE.
+    // bind that then fails with EADDRINUSE. The script goes to the shell inside
+    // single quotes, so it (its comments included) must not contain one. The
+    // default-tier local-discovery-fixture.test.ts checks this without a server.
     const script = `const net=require("node:net");
 let port=${port};let attempts=0;
 const listen=()=>{
   const s=net.createServer();
   s.once("error",error=>{
     // A taken port moves to the next one. An ephemeral request (port 0) can
-    // also collide when another test's listener grabs the kernel's pick first;
+    // also collide when a listener in another test grabs the kernel pick first;
     // it asks again rather than exiting before it reports a port.
     if(error.code!=="EADDRINUSE"||port>=65535||++attempts>100)throw error;
     if(port!==0)port++;
@@ -551,6 +553,7 @@ const listen=()=>{
     if(address)console.log("port "+address.port);
   },150));
 };listen();`;
+    expect(script).not.toContain("'");
     // "; true" keeps the shell as the server's parent instead of exec'ing it.
     const shell = spawn("/bin/sh", ["-c", `"${process.execPath}" -e '${script}'; true`], {
       detached: true,

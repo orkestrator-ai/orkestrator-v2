@@ -319,7 +319,7 @@ test("a pull request link opens the PR pane without moving native window focus",
     await seedPullRequests(window);
 
     // Give the window OS focus where the desktop session allows it. A shared
-    // macOS desktop can keep another app key (todo 1170); the main-process
+    // macOS desktop can keep another app key (#1542); the main-process
     // record below holds on every host, and the OS focus is checked when the
     // session did activate this window.
     const nativeKey = await electronApp.evaluate(async ({ app, BrowserWindow }) => {

@@ -632,7 +632,8 @@ reason.
   app-server with `features.goals=false` (`codexAppServerConfigOverrides`;
   the loopback case in `live-network-lock.test.ts` proves Codex's default
   offers the tools and a bridge thread does not). `thread/goal/*`
-  notifications are ignored. Superseded 2026-10-31 by `plans/goals.md`: `/goal`
+  notifications are ignored. Superseded 2026-10-31 by the `/goal` plan (#1979
+  folded it into [goals.md](../../architecture/goals.md)): `/goal`
   is the backend's own loop on every provider, so Codex's stays off and no turn
   is ever one Codex continued on its own.
 - **Claude `createSdkMcpServer()` for the Orkestrator control tools.** One
@@ -838,6 +839,9 @@ The billed Grok `costUsdTicks` run moved to the
   `upgrade-agents.md`) was fixed on 2026-10-30 (task 13).
 
 ## Replaces
+
+Every file below was deleted when this to-do replaced it (#991); read one
+with `git show cd67b7ad9:<path>`.
 
 - `docs/plans/sdk-coverage-2026-09-06.md` (the unadopted surfaces in §3.11,
   §4.12, §6.10, §6.13, §7.7, §7.9 and §8.10; the stale capability matrix is

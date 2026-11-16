@@ -233,7 +233,7 @@ describe("container logs in the written bundle", () => {
     const log = files.get("logs/containers/env-a/codex-bridge.log")!;
 
     expect(log).toContain("line-that-explains-the-bug");
-    // The container bridge's essential event reaches the evidence this way (6143 task 2).
+    // The container bridge's essential event reaches the evidence this way (#2053).
     expect(log).toContain("session.resume-fell-back");
     for (const leaked of [GITHUB_TOKEN, "ghp_", "zZ9zZ9", HOME_DIR, "fixture-user"]) {
       expect(`${leaked}: ${log.includes(leaked)}`).toBe(`${leaked}: false`);

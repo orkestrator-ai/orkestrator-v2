@@ -361,7 +361,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       this.agent,
       await resolvePromptAttachments(options, this.stageImages),
     );
-    // Agent-test profiles only (to-do 0050 task 3): a spec can stop the
+    // Agent-test profiles only (#2086): a spec can stop the
     // backend here, after the caller journaled the attempt and before the
     // request leaves. Production installs no hold, so this is `undefined`.
     const holdDetail = { agent: this.agent, sessionId, requestId: options.requestId };

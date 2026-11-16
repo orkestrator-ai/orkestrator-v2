@@ -4,7 +4,7 @@ import { connect as tlsConnect, rootCertificates } from "node:tls";
 
 import { previewFailure, type PreviewErrorCategory } from "@orkestrator/protocol/preview-services";
 
-import type { ResolvedPreviewTarget } from "./core/preview-service-registry.js";
+import type { ResolvedPreviewTarget } from "./core/previews/index.js";
 
 export interface PreviewUpstreamOptions {
   connectTimeoutMs: number;

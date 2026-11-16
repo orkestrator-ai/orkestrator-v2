@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
-import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
+import { createPreviewHarness, type PreviewHarness } from "./test-support.js";
 
 let harness: PreviewHarness | undefined;
 afterEach(async () => {

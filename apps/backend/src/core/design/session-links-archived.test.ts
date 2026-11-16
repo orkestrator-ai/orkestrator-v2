@@ -16,7 +16,7 @@ import { createTestRenderer } from "./test-support.js";
 type Handler = (args: Record<string, unknown>, context: DesignCommandContext) => Promise<unknown>;
 
 /**
- * A design link whose conversation the agent archived (to-do 0038 task 1):
+ * A design link whose conversation the agent archived (#2174):
  * the link state reads it from a running bridge's archived list, and Resume
  * restores it first only when asked to.
  */

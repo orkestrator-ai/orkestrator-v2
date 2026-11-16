@@ -64,7 +64,9 @@ export async function recoverActionHistory(
     visited.add(cursor);
     const page = await read(cursor);
     if (stopped()) return [];
-    if (page.historyEpoch !== epoch || page.truncated)
+    // `truncated` is also true whenever older rows remain; only a trimmed
+    // row makes the page unfit to prove an action done.
+    if (page.historyEpoch !== epoch || page.rowsTrimmed)
       throw new Error("Action history changed or truncated");
     const older = pageEvidence(page.messages);
     bytes += new TextEncoder().encode(JSON.stringify(older)).byteLength;

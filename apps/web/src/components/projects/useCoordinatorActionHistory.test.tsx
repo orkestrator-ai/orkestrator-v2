@@ -34,29 +34,29 @@ function Probe({ enabled = true, session = "session" }: { enabled?: boolean; ses
 function client() {
   return new FakeNodeClient({
     invoke: {
-      get_native_agent_projection_update: {
-        syncVersion: 1,
+      get_native_agent_transcript_update: {
+        viewVersion: 1,
         status: "snapshot",
         token: "token",
-        historyEpoch: "epoch",
-        historyCursor: "older",
-        historyComplete: false,
-        projection: {
-          platform: "codex",
-          environmentId: "environment",
-          sessionId: "session",
-          messages: Array.from({ length: 512 }, (_, index) => ({
+        value: {
+          identity: {
+            backendInstanceId: "backend",
+            environmentId: "environment",
+            platform: "codex",
+            logicalSessionKey: "env-environment:tab",
+            providerSessionId: "session",
+            sourceGeneration: "1",
+          },
+          freshness: "current",
+          messages: Array.from({ length: 100 }, (_, index) => ({
             ...old,
             id: `tail-${index}`,
             parts: [],
           })),
-          interactions: [],
-          composerControls: [],
-          capabilities: {},
-          turn: { phase: "idle" },
-          revision: 1,
-          generation: 1,
-          connection: "connected",
+          historyCursor: "older",
+          historyPaging: "direct",
+          historyEpoch: "epoch",
+          historyComplete: false,
         },
       },
       get_native_agent_message_page: {
@@ -69,12 +69,14 @@ function client() {
     },
   });
 }
-test("two node-scoped clients reload a bounded projection and independently discover historical cards", async () => {
+test("two node-scoped clients reload a bounded transcript and independently discover historical cards", async () => {
   for (let index = 0; index < 2; index++) {
     const node = client();
     const view = renderInNodeScope(<Probe />, { client: node });
     await waitFor(() => expect(view.container.textContent).toBe("Historical question"));
-    expect(node.calls("get_native_agent_projection_update")).toHaveLength(1);
+    // The view's direct cursor pages the older rows; nothing reads sync-v1.
+    expect(node.calls("get_native_agent_transcript_update")).toHaveLength(1);
+    expect(node.calls("get_native_agent_projection_update")).toHaveLength(0);
     expect(node.calls("get_native_agent_message_page")).toHaveLength(1);
     expect(node.calls("get_native_agent_message_page")[0]!.args).toMatchObject({
       environmentId: "environment",

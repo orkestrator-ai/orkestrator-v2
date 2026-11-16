@@ -27,18 +27,20 @@ export function useCoordinatorActionHistory(
     };
     const backend = backendForScope(scope);
     void (async () => {
-      const snapshot = await backend.getNativeAgentProjectionUpdate<NativeMessage>({
+      // The transcript view names the direct cursor its older rows page from.
+      const snapshot = await backend.getNativeAgentTranscriptUpdate<NativeMessage>({
         ...identity,
-        syncVersion: 1,
+        viewVersion: 1,
         forceSnapshot: true,
         liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
       });
       if (stopped || snapshot.status !== "snapshot") return;
-      if (!snapshot.historyCursor && !snapshot.historyComplete) return;
+      const view = snapshot.value;
+      if (!view.historyCursor && !view.historyComplete) return;
       const messages = await recoverActionHistory(
-        snapshot.projection.messages,
-        snapshot.historyCursor,
-        snapshot.historyEpoch,
+        view.messages,
+        view.historyCursor,
+        view.historyEpoch,
         (before) =>
           backend.getNativeAgentMessagePage<NativeMessage>({
             ...identity,

@@ -329,18 +329,6 @@ export interface NativeAgentSyncRevision {
   createdAt: number;
 }
 
-export interface NativeAgentHistoryState {
-  sessionId: string;
-  epoch: string;
-  messages: unknown[];
-  messageFingerprints: string[];
-  /** First message that was part of the mutable live tail on the last read. */
-  mutableTailStart: number;
-  complete: boolean;
-  bytes: number;
-  updatedAt: number;
-}
-
 export interface NativeAgentSyncState {
   incarnation: string;
   identity: string;
@@ -781,7 +769,6 @@ export const NATIVE_HISTORY_PAGE_MAX_MESSAGES = 200;
 export const NATIVE_HISTORY_PAGE_DEFAULT_MESSAGES = 100;
 export const NATIVE_HISTORY_PAGE_DEFAULT_BYTES = 512 * 1024;
 export const NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES = 1024 * 1024;
-export const NATIVE_HISTORY_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 /**
  * Direct (provider-positioned) history pages kept for repeat reads; see
  * `DirectHistoryPageCache`. A page is at most about one target's worth of

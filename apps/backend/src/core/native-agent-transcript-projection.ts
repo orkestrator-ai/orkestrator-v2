@@ -14,7 +14,6 @@ import type {
   NativeAgentProjectionInput,
   NativeAgentProjectionCacheEntry,
   NativeAgentSyncState,
-  NativeAgentHistoryState,
   NativeAgentServiceOptions,
   ProviderSessionStateSnapshot,
   ProviderTranscriptSnapshot,
@@ -43,7 +42,6 @@ import {
   NATIVE_PROJECTION_MAX_WINDOW_MESSAGES,
   NATIVE_PROJECTION_TAIL_REFRESH_MESSAGES,
   NATIVE_PROJECTION_REVISION_LIMIT,
-  NATIVE_HISTORY_CACHE_MAX_BYTES,
   NATIVE_HISTORY_PAGE_DEFAULT_BYTES,
   NATIVE_HISTORY_PAGE_DEFAULT_MESSAGES,
   NATIVE_HISTORY_PAGE_MAX_MESSAGES,
@@ -149,10 +147,7 @@ import {
 } from "./native-agent-progressive-metrics.js";
 import { readReadableHostFile } from "./path-safety.js";
 import { transcriptMediaPins } from "./transcript-media-pins.js";
-import {
-  BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES,
-  readBridgePartDetail as bridgePartDetail,
-} from "@orkestrator/protocol/node/bridge-transcript-summary";
+import { readBridgePartDetail as bridgePartDetail } from "@orkestrator/protocol/node/bridge-transcript-summary";
 import {
   DirectHistoryPageCache,
   decodeHistoryCursor,
@@ -193,14 +188,12 @@ import {
   sameIds,
   tailDeletions,
   updateHashWithFingerprints,
-  valueFingerprint,
 } from "./native-agent-projection-encoding.js";
 import { PreviewFillAnswers } from "./native-agent-preview-fill.js";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import { goalPublicView, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
-import { type CompatibilityPathId, compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { withNativeTerminalMessages } from "@orkestrator/protocol/native-terminal-rows";
 import { nativeTerminalMessages } from "./native-terminal-messages.js";
 import {
@@ -278,22 +271,6 @@ type DirectCursorSource = {
   historyEpoch: string;
   providerCursor: string;
 };
-
-/**
- * Why a session's latest progressive view carried no direct cursor, kept only
- * to attribute the joined pages that follow (0232 item 3): a source with no
- * direct pages, or one that pages but still named or wrapped no cursor. The
- * `/messages` fallback that made the first common retired (0050 task 1), and
- * the second's known causes have direct recovery (8110), so both should be
- * quiet; joined paging itself retires with 0232 task 4.
- */
-type DirectHistoryGap = "unpaged-source" | "unnamed-cursor";
-/** Sessions whose gap is kept; a view with a direct cursor removes its entry. */
-const DIRECT_HISTORY_GAPS_MAX = 512;
-
-function joinedPageCounter(gap: DirectHistoryGap | undefined): CompatibilityPathId {
-  return gap ? `history.joined-v1-page.${gap}` : "history.joined-v1-page";
-}
 
 /**
  * Whether user rows of this runtime may open with a server-authored context
@@ -446,10 +423,10 @@ interface InteractiveSnapshotShare {
 
 /**
  * Renderer views of provider sessions: the legacy full projection, its sync
- * deltas and history pages, the progressive transcript/state/discovery reads,
- * tool details and the restart display tails.
+ * deltas, direct history pages, the progressive transcript/state/discovery
+ * reads, tool details and the restart display tails.
  *
- * Every cache here is bounded (`toolDetailCacheBytes`, `projectionHistoryBytes`,
+ * Every cache here is bounded (`toolDetailCacheBytes`, `projectionSyncBytes`,
  * `progressiveTranscriptBytes`, the delta bases, the projected-message and
  * direct-page caches) and reconstructible: providers stay authoritative, so dropping any of it
  * costs a re-read, never user state.
@@ -499,11 +476,6 @@ export class NativeAgentTranscriptProjection {
     { generation: string; revision: number }
   >();
   private projectionSyncBytes = 0;
-  /** Bounded normalized transcript source for independent history pages. */
-  private readonly projectionHistory = new Map<string, NativeAgentHistoryState>();
-  private projectionHistoryBytes = 0;
-  /** By session key: why its latest progressive view had no direct cursor. */
-  private readonly directHistoryGaps = new Map<string, DirectHistoryGap>();
   /** Provider cursors too long to wrap, named by handle (8110). */
   private readonly directHistoryCursorHandles = new DirectHistoryCursorHandles();
   /**
@@ -802,11 +774,7 @@ export class NativeAgentTranscriptProjection {
       progressiveReadWaiterCount: () => this.progressiveReadWaiterCount,
       projectedMessages: this.projectedMessages,
       directHistoryPages: this.directHistoryPages,
-      projectionHistory: this.projectionHistory,
-      directHistoryGaps: this.directHistoryGaps,
       directHistoryCursorHandles: this.directHistoryCursorHandles,
-      updateProjectionHistory: (...args: Parameters<typeof this.updateProjectionHistory>) =>
-        this.updateProjectionHistory(...args),
       toolDetailCache: this.toolDetailCache,
       toolDetailCacheBytes: () => this.toolDetailCacheBytes,
       toolDetailEncodings: this.toolDetailEncodings,
@@ -839,13 +807,10 @@ export class NativeAgentTranscriptProjection {
       projectionSync: this.projectionSync.size,
       projectionSyncBytes: this.projectionSyncBytes,
       projectionRevisions: this.projectionRevisions.size,
-      projectionHistory: this.projectionHistory.size,
-      projectionHistoryBytes: this.projectionHistoryBytes,
       projectionEpochs: this.projectionEpochs.size,
       projectionMissingSince: this.projectionMissingSince.size,
       projectionRefreshes: this.projectionRefreshes.size,
       projectionRefreshDescriptors: this.projectionRefreshDescriptors.size,
-      directHistoryGaps: this.directHistoryGaps.size,
       directHistoryCursorHandles: this.directHistoryCursorHandles.size,
       directHistoryCursorHandleBytes: this.directHistoryCursorHandles.bytes,
       stopNotices: this.stopNotices.size,
@@ -891,9 +856,6 @@ export class NativeAgentTranscriptProjection {
     this.projectionCache.clear();
     this.projectionSync.clear();
     this.projectionSyncBytes = 0;
-    this.projectionHistory.clear();
-    this.projectionHistoryBytes = 0;
-    this.directHistoryGaps.clear();
     this.toolDetailCache.clear();
     this.pinnedToolDetailRefs.clear();
     this.toolDetailCacheBytes = 0;
@@ -1587,98 +1549,6 @@ export class NativeAgentTranscriptProjection {
     };
   }
 
-  private updateProjectionHistory(
-    sessionKey: string,
-    sessionId: string,
-    messages: unknown[],
-    mutableTailStart: number,
-    complete: boolean,
-  ): void {
-    // Memoized per projected message: a history refresh re-fingerprints only
-    // the messages this read actually produced anew.
-    const messageFingerprints = messages.map(valueFingerprint);
-    const previous = this.projectionHistory.get(sessionKey);
-    // Everything before the *current* live boundary is now historical. If a
-    // message changed while simultaneously aging out of the live tail, the
-    // old page cache must be invalidated rather than preserving stale text.
-    const stableHistoricalCount = mutableTailStart;
-    const appendCompatible = Boolean(
-      previous &&
-      previous.sessionId === sessionId &&
-      messages.length >= previous.messages.length &&
-      Array.from({ length: previous.messages.length }, (_, index) => index).every((index) =>
-        index < stableHistoricalCount
-          ? (previous.messages[index] as { id?: unknown })?.id ===
-              (messages[index] as { id?: unknown })?.id &&
-            previous.messageFingerprints[index] === messageFingerprints[index]
-          : (previous.messages[index] as { id?: unknown })?.id ===
-            (messages[index] as { id?: unknown })?.id,
-      ),
-    );
-    const epoch = appendCompatible ? previous!.epoch : randomUUID();
-    const bytes = encodedArrayBytes(messages);
-    if (previous) this.projectionHistoryBytes -= previous.bytes;
-    this.projectionHistory.delete(sessionKey);
-    this.projectionHistory.set(sessionKey, {
-      sessionId,
-      epoch,
-      messages,
-      messageFingerprints,
-      mutableTailStart,
-      complete,
-      bytes,
-      updatedAt: this.host.now(),
-    });
-    this.projectionHistoryBytes += bytes;
-    while (this.projectionHistoryBytes > NATIVE_HISTORY_CACHE_MAX_BYTES) {
-      const oldest = this.projectionHistory.keys().next().value as string | undefined;
-      if (!oldest || oldest === sessionKey) break;
-      const entry = this.projectionHistory.get(oldest);
-      if (entry) this.projectionHistoryBytes -= entry.bytes;
-      this.projectionHistory.delete(oldest);
-      this.directHistoryGaps.delete(oldest);
-    }
-  }
-
-  private historyCursor(
-    sessionKey: string,
-    beforeId: string,
-    epoch: string,
-    sessionId: string,
-  ): string {
-    return Buffer.from(
-      JSON.stringify({
-        v: 1,
-        key: createHash("sha256").update(sessionKey).digest("hex").slice(0, 24),
-        session: createHash("sha256").update(sessionId).digest("hex").slice(0, 24),
-        epoch,
-        before: createHash("sha256").update(beforeId).digest("base64url").slice(0, 32),
-      }),
-    ).toString("base64url");
-  }
-
-  private firstHistoryCursor(
-    sessionKey: string,
-    projection: NativeAgentSessionProjection,
-  ): string | undefined {
-    const history = this.projectionHistory.get(sessionKey);
-    if (!history) return undefined;
-    const historyIds = new Set(
-      history.messages.map((message) => (message as { id?: unknown })?.id).filter(String),
-    );
-    const before = projection.messages.find((message) =>
-      historyIds.has((message as { id?: unknown })?.id),
-    ) as { id?: unknown } | undefined;
-    if (!before) return undefined;
-    const beforeIndex = history.messages.findIndex(
-      (message) => (message as { id?: unknown })?.id === before.id,
-    );
-    if (beforeIndex <= 0) return undefined;
-    return typeof before?.id === "string"
-      ? this.historyCursor(sessionKey, before.id, history.epoch, history.sessionId)
-      : undefined;
-  }
-
   private syncCacheKey(input: NativeAgentProjectionUpdateInput): string {
     return `${nativeAgentSessionStorageKey(
       input.environmentId,
@@ -1690,8 +1560,6 @@ export class NativeAgentTranscriptProjection {
   private recordSyncProjection(
     key: string,
     projection: NativeAgentSessionProjection,
-    historyEpoch: string,
-    historyCursor: string | undefined,
   ): { token: string; identityChanged: boolean } {
     let state = this.projectionSync.get(key);
     const identity = JSON.stringify([projection.sessionId ?? null, projection.generation]);
@@ -1704,10 +1572,7 @@ export class NativeAgentTranscriptProjection {
       this.projectionSync.delete(key);
       this.projectionSync.set(key, state);
     }
-    const token = digestWithMessages(
-      `${state.incarnation}\0${historyEpoch}\0${historyCursor ?? ""}`,
-      projection,
-    );
+    const token = digestWithMessages(state.incarnation, projection);
     if (state.currentToken === token) return { token, identityChanged: false };
     state.currentToken = token;
     const bytes = encodedBytesWithMessages(projection);
@@ -1747,7 +1612,6 @@ export class NativeAgentTranscriptProjection {
   private projectionDelta(
     previous: NativeAgentSessionProjection,
     current: NativeAgentSessionProjection,
-    currentHistoryIds: ReadonlySet<string>,
   ): NativeAgentProjectionDelta {
     const previousById = new Map(
       previous.messages.map((message) => [(message as { id: string }).id, message] as const),
@@ -1759,7 +1623,6 @@ export class NativeAgentTranscriptProjection {
       const existing = previousById.get(id);
       return !existing || !sameEncoding(existing, message);
     });
-    const currentIdSet = new Set(currentIds);
     const setFields: Record<string, unknown> = {};
     const unsetFields: string[] = [];
     const previousFields = previous as unknown as Record<string, unknown>;
@@ -1778,8 +1641,12 @@ export class NativeAgentTranscriptProjection {
     return {
       messageUpserts,
       ...(sameIds(previousIds, currentIds) ? {} : { liveMessageIds: currentIds }),
-      deletedMessageIds: previousIds.filter(
-        (id) => !currentIdSet.has(id) && !currentHistoryIds.has(id),
+      // Rows that only aged out of the live tail are not deletions; the same
+      // rule as the transcript view's delta.
+      deletedMessageIds: tailDeletions(
+        previousIds,
+        currentIds,
+        current.messageWindow?.truncated === true,
       ),
       setFields,
       unsetFields: unsetFields as NativeAgentProjectionDelta["unsetFields"],
@@ -1988,24 +1855,6 @@ export class NativeAgentTranscriptProjection {
     });
   }
 
-  private transcriptHistoryCursor(
-    sessionKey: string,
-    messages: unknown[],
-    historyEpoch: string,
-    sessionId: string,
-  ): string | undefined {
-    const first = messages[0] as { id?: unknown } | undefined;
-    if (typeof first?.id !== "string") return undefined;
-    const history = this.projectionHistory.get(sessionKey);
-    if (!history || history.epoch !== historyEpoch) return undefined;
-    const beforeIndex = history.messages.findIndex(
-      (message) => (message as { id?: unknown })?.id === first.id,
-    );
-    return beforeIndex > 0
-      ? this.historyCursor(sessionKey, first.id, history.epoch, sessionId)
-      : undefined;
-  }
-
   private transcriptDelta(
     previous: NativeAgentTranscriptView,
     current: NativeAgentTranscriptView,
@@ -2144,16 +1993,6 @@ export class NativeAgentTranscriptProjection {
   /** Immediate checkpoint of a pending tail (tests and explicit flushes). */
   async flushDisplayTailPersist(sessionKey: string): Promise<void> {
     await this.displayTailScheduler.flush(sessionKey);
-  }
-
-  private recordDirectHistoryGap(sessionKey: string, gap: DirectHistoryGap | undefined): void {
-    this.directHistoryGaps.delete(sessionKey);
-    if (!gap) return;
-    this.directHistoryGaps.set(sessionKey, gap);
-    if (this.directHistoryGaps.size > DIRECT_HISTORY_GAPS_MAX) {
-      const oldest = this.directHistoryGaps.keys().next().value as string | undefined;
-      if (oldest) this.directHistoryGaps.delete(oldest);
-    }
   }
 
   private trimProgressiveTranscriptCache(): void {
@@ -2601,8 +2440,8 @@ export class NativeAgentTranscriptProjection {
      * remains, its response's main row dropped by the bound), the cursor at
      * the window's end pages the whole window again: the client deduplicates
      * the rows it holds and the dropped ones come back with them. Without
-     * these, the client could only page by minting a joined cursor, a whole
-     * transcript read (0232).
+     * these the view would have nothing older to load: joined paging, which
+     * once minted a cursor here with a whole transcript read, is gone (0232).
      */
     const providerHistoryCursor = viewStartsAtSnapshot
       ? snapshot.historyCursor
@@ -2651,26 +2490,11 @@ export class NativeAgentTranscriptProjection {
       sourceComplete === false ||
       byteOmitted;
     const complete = !pageable && sourceComplete !== false && !byteOmitted;
-    // Only a view with older history to load can send a click to joined paging.
-    // A pageable source can omit its cursor at the first message, even when
-    // our byte bound then drops leading rows. Prefer explicit capability;
-    // snapshots predating that field can still prove paging with a cursor.
-    this.recordDirectHistoryGap(
-      sessionKey,
-      complete || directHistoryCursor
-        ? undefined
-        : (snapshot.historyPageable ?? Boolean(snapshot.historyCursor))
-          ? "unnamed-cursor"
-          : "unpaged-source",
-    );
     const historyEpoch =
       snapshot.historyEpoch ??
       (previous?.value.identity.providerSessionId === providerSessionId
         ? previous.value.historyEpoch
         : randomUUID());
-    const historyCursor =
-      directHistoryCursor ??
-      this.transcriptHistoryCursor(sessionKey, bounded.messages, historyEpoch, providerSessionId);
     // Rows the provider says changed outside its window. One can sit in the
     // prefix joined ahead of that window from the previous view, which holds
     // its older copy: the revised copy replaces it there and is not sent again.
@@ -2766,8 +2590,9 @@ export class NativeAgentTranscriptProjection {
         },
         ...(snapshot.title ? { title: snapshot.title } : {}),
         ...(snapshot.revision === undefined ? {} : { providerRevision: snapshot.revision }),
-        ...(historyCursor ? { historyCursor } : {}),
-        ...(directHistoryCursor ? { historyPaging: "direct" as const } : {}),
+        ...(directHistoryCursor
+          ? { historyCursor: directHistoryCursor, historyPaging: "direct" as const }
+          : {}),
         historyEpoch,
         historyComplete: complete,
         ...(revisedMessages.length ? { revisedMessages } : {}),
@@ -4425,21 +4250,7 @@ export class NativeAgentTranscriptProjection {
       throw new ProviderUnavailableError("Native agent sync projection exceeded 20 MiB");
     }
     const key = this.syncCacheKey(input);
-    const sessionKey = nativeAgentSessionStorageKey(
-      input.environmentId,
-      input.agent,
-      input.logicalSessionKey,
-    );
-    const history = this.projectionHistory.get(sessionKey);
-    const historyEpoch = history?.epoch ?? "unavailable";
-    const historyComplete = history?.complete ?? false;
-    const historyCursor = this.firstHistoryCursor(sessionKey, projection);
-    const { token, identityChanged } = this.recordSyncProjection(
-      key,
-      projection,
-      historyEpoch,
-      historyCursor,
-    );
+    const { token, identityChanged } = this.recordSyncProjection(key, projection);
     if (!input.forceSnapshot && input.knownToken === token) {
       return { syncVersion: 1, status: "unchanged", token };
     }
@@ -4448,15 +4259,7 @@ export class NativeAgentTranscriptProjection {
       ? state.revisions.find((entry) => entry.token === input.knownToken)
       : undefined;
     if (!input.forceSnapshot && base) {
-      const delta = this.projectionDelta(
-        base.projection,
-        projection,
-        new Set(
-          (history?.messages ?? [])
-            .map((message) => (message as { id?: unknown })?.id)
-            .filter((id): id is string => typeof id === "string"),
-        ),
-      );
+      const delta = this.projectionDelta(base.projection, projection);
       const operationCount =
         delta.messageUpserts.length +
         delta.deletedMessageIds.length +
@@ -4480,9 +4283,6 @@ export class NativeAgentTranscriptProjection {
           baseToken: input.knownToken!,
           token,
           delta,
-          historyEpoch,
-          historyComplete,
-          ...(historyCursor ? { historyCursor } : {}),
         };
       }
     }
@@ -4491,9 +4291,6 @@ export class NativeAgentTranscriptProjection {
       status: "snapshot",
       token,
       projection,
-      historyEpoch,
-      historyComplete,
-      ...(historyCursor ? { historyCursor } : {}),
       resetReason: input.forceSnapshot
         ? "forced"
         : identityChanged
@@ -4506,106 +4303,17 @@ export class NativeAgentTranscriptProjection {
     };
   }
 
+  /**
+   * Serve one page of older rows behind a direct (provider-positioned) cursor.
+   * No projection refresh, composer or interaction read, and no fingerprint
+   * pass over earlier pages: validate the owner, then answer from the page
+   * cache while the cursor's epoch is still the session's current one, or read
+   * and project only that range. Every view whose provider pages names such a
+   * cursor; any other cursor (including a retired joined v1 one) is expired.
+   */
   async getMessagePage(input: NativeAgentMessagePageInput): Promise<NativeAgentMessagePage> {
     this.host.assertProjectionInput(input);
     if (input.before.length > 1024) throw new Error("History cursor is too large");
-    const direct = await this.directMessagePage(input);
-    if (direct) return direct;
-    const sessionKey = nativeAgentSessionStorageKey(
-      input.environmentId,
-      input.agent,
-      input.logicalSessionKey,
-    );
-    compatibilityPathUsage.record(joinedPageCounter(this.directHistoryGaps.get(sessionKey)));
-    const projection = await this.refreshProjection(
-      { ...input, messageLimit: NATIVE_SYNC_LIVE_MESSAGES, representation: "sync-v1" },
-      true,
-    );
-    if (!projection) throw new Error("Native agent history is unavailable");
-    const history = this.projectionHistory.get(sessionKey);
-    if (!history) throw new Error("Native agent history is unavailable");
-    let cursor: unknown;
-    try {
-      cursor = JSON.parse(Buffer.from(input.before, "base64url").toString("utf8"));
-    } catch {
-      throw new Error("Native agent history cursor is invalid");
-    }
-    const record = cursor as Record<string, unknown>;
-    if (
-      !record ||
-      record.v !== 1 ||
-      record.key !== createHash("sha256").update(sessionKey).digest("hex").slice(0, 24) ||
-      record.session !==
-        createHash("sha256").update(history.sessionId).digest("hex").slice(0, 24) ||
-      record.epoch !== history.epoch ||
-      typeof record.before !== "string"
-    ) {
-      throw new Error("Native agent history cursor expired");
-    }
-    const beforeIndex = history.messages.findIndex(
-      (message) =>
-        typeof (message as { id?: unknown }).id === "string" &&
-        createHash("sha256")
-          .update((message as { id: string }).id)
-          .digest("base64url")
-          .slice(0, 32) === record.before,
-    );
-    if (beforeIndex < 0) throw new Error("Native agent history cursor expired");
-    const limit = Math.min(
-      input.limit ?? NATIVE_HISTORY_PAGE_DEFAULT_MESSAGES,
-      NATIVE_HISTORY_PAGE_MAX_MESSAGES,
-    );
-    const targetBytes = Math.min(
-      input.targetBytes ?? NATIVE_HISTORY_PAGE_DEFAULT_BYTES,
-      NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES,
-    );
-    const candidates = history.messages.slice(Math.max(0, beforeIndex - limit), beforeIndex);
-    let bounded = this.boundedProjectedMessages(candidates, limit, targetBytes);
-    // A row larger than the target on its own is sent whole, up to the same
-    // ceiling a bridge page uses: the next cursor starts before this row, so
-    // any parts trimmed from its front could never be paged back.
-    if (bounded.messages.length === 1 && bounded.window.omittedParts !== undefined) {
-      bounded = this.boundedProjectedMessages(
-        candidates.slice(-1),
-        1,
-        Math.max(targetBytes, BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES),
-      );
-    }
-    const first = bounded.messages[0] as { id?: unknown } | undefined;
-    const firstIndex = first
-      ? history.messages.findIndex((message) => (message as { id?: unknown }).id === first.id)
-      : beforeIndex;
-    const nextCursor =
-      first && typeof first.id === "string" && firstIndex > 0
-        ? this.historyCursor(sessionKey, first.id, history.epoch, history.sessionId)
-        : undefined;
-    return {
-      syncVersion: 1,
-      messages: bounded.messages,
-      historyEpoch: history.epoch,
-      ...(nextCursor ? { nextCursor } : {}),
-      complete: history.complete,
-      truncated: Boolean(nextCursor) || !history.complete,
-    };
-  }
-
-  /**
-   * Serve a direct (provider-positioned) page, or undefined for a joined-
-   * history cursor. No projection refresh, composer or interaction read, and
-   * no fingerprint pass over earlier pages: validate the owner, then answer
-   * from the page cache while the cursor's epoch is still the session's
-   * current one, or read and project only that range.
-   */
-  private async directMessagePage(
-    input: NativeAgentMessagePageInput,
-  ): Promise<NativeAgentMessagePage | undefined> {
-    let peek: unknown;
-    try {
-      peek = JSON.parse(Buffer.from(input.before, "base64url").toString("utf8"));
-    } catch {
-      return undefined;
-    }
-    if ((peek as { v?: unknown } | null)?.v !== 2) return undefined;
     const startedAt = monotonicMs();
     const resolved = await this.host.resolveProjectionSession(input);
     if (!resolved) throw new Error("Native agent history is unavailable");
@@ -4770,6 +4478,8 @@ export class NativeAgentTranscriptProjection {
           complete: !nextCursor && providerPage.complete,
           truncated:
             Boolean(nextCursor) || !providerPage.complete || providerPage.truncated || trimmedRow,
+          // A provider page's own `truncated` means a row it trimmed.
+          ...(providerPage.truncated || trimmedRow ? { rowsTrimmed: true as const } : {}),
         };
         const detailBytes = details.reduce(
           (total, detail) => total + 64 + detail.ref.length + (detail.remote?.locator.length ?? 0),
@@ -5416,10 +5126,6 @@ export class NativeAgentTranscriptProjection {
       this.projectionSync.delete(candidate);
       this.projectionEpochs.set(candidate, (this.projectionEpochs.get(candidate) ?? 0) + 1);
     }
-    const history = this.projectionHistory.get(key);
-    if (history) this.projectionHistoryBytes -= history.bytes;
-    this.projectionHistory.delete(key);
-    this.directHistoryGaps.delete(key);
     // Rewind, resume and replacement all land here: nothing kept for the old
     // history may be reused, and a page read still in flight is not admitted.
     this.projectedMessages.forgetSession(key);
@@ -5653,17 +5359,6 @@ export class NativeAgentTranscriptProjection {
           const sync = this.projectionSync.get(key);
           if (sync) this.projectionSyncBytes -= sync.revisionBytes;
           this.projectionSync.delete(key);
-          if (input.representation === "sync-v1") {
-            const historyKey = nativeAgentSessionStorageKey(
-              input.environmentId,
-              input.agent,
-              input.logicalSessionKey,
-            );
-            const history = this.projectionHistory.get(historyKey);
-            if (history) this.projectionHistoryBytes -= history.bytes;
-            this.projectionHistory.delete(historyKey);
-            this.directHistoryGaps.delete(historyKey);
-          }
           this.projectionMissingSince.delete(key);
         }
         return null;
@@ -5685,7 +5380,8 @@ export class NativeAgentTranscriptProjection {
           ? messageLimit
           : Math.min(messageLimit, tailMessages);
       // One row past the window is what tells a tail read that older history
-      // exists. A sync read fills `projectionHistory`, so it stays whole.
+      // exists. A sync read bounds its live tail from the whole transcript
+      // (below), so its window reports exactly what lies before that tail.
       const readOptions = syncRead ? undefined : { limit: projectedLimit + 1 };
       // These reads describe independent parts of one projection. Keeping
       // them serial made a transcript wait for every approval, queue and slash
@@ -5935,31 +5631,6 @@ export class NativeAgentTranscriptProjection {
             }
           : {}),
       });
-      if (input.representation === "sync-v1") {
-        const historyIds = new Set(
-          normalized.messages
-            .map((message) => (message as { id?: unknown })?.id)
-            .filter((id): id is string => typeof id === "string"),
-        );
-        const firstLiveId = (
-          renderedTranscript.messages.find((message) =>
-            historyIds.has((message as { id?: unknown })?.id as string),
-          ) as { id?: unknown } | undefined
-        )?.id;
-        const mutableTailStart =
-          typeof firstLiveId === "string"
-            ? normalized.messages.findIndex(
-                (message) => (message as { id?: unknown })?.id === firstLiveId,
-              )
-            : normalized.messages.length;
-        this.updateProjectionHistory(
-          sessionKey,
-          resolved.session.providerSessionId,
-          normalized.messages,
-          Math.max(0, mutableTailStart),
-          snapshot.messagesComplete !== false && !normalized.window.truncated,
-        );
-      }
       if (input.agent === "codex" && !resolved.transient) {
         const attentionItemIds = renderedTranscript.messages.flatMap((message) => {
           const record = message as { parts?: unknown };

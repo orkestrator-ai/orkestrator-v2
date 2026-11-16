@@ -189,7 +189,7 @@ export function encodeDirectHistoryCursor(
 }
 
 export type DecodedHistoryCursor =
-  { version: 1 } | { version: 2; epoch: string; providerCursor: string } | { version: "invalid" };
+  { version: 2; epoch: string; providerCursor: string } | { version: "invalid" };
 
 /**
  * Classify a page cursor and, for a direct one, check it belongs to this
@@ -210,7 +210,6 @@ export function decodeHistoryCursor(
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) return { version: "invalid" };
   const record = body as Record<string, unknown>;
-  if (record.v === 1) return { version: 1 };
   const key = shortDigest(owner.sessionKey);
   const session = shortDigest(owner.providerSessionId);
   if (

@@ -68,6 +68,41 @@ test("independent clients recover outstanding evidence beyond a 512-row tail and
     ).toMatchObject({ anchorId: "old-pr", state: "gone", done: true });
   }
 });
+test("history walks every page, and refuses a page with a trimmed row", async () => {
+  const cursors: string[] = [];
+  const history = await recoverActionHistory([], "newest", "epoch", async (cursor) => {
+    cursors.push(cursor);
+    // A page with older rows behind it is `truncated`; that alone is no reason to refuse it.
+    return cursor === "newest"
+      ? {
+          syncVersion: 1,
+          messages: [message("middle")],
+          historyEpoch: "epoch",
+          nextCursor: "older",
+          complete: false,
+          truncated: true,
+        }
+      : {
+          syncVersion: 1,
+          messages: [question],
+          historyEpoch: "epoch",
+          complete: true,
+          truncated: false,
+        };
+  });
+  expect(cursors).toEqual(["newest", "older"]);
+  expect(coordinatorActionCards(history).map((card) => card.anchorId)).toEqual(["old-question"]);
+  await expect(
+    recoverActionHistory([], "page", "epoch", async () => ({
+      syncVersion: 1,
+      messages: [question],
+      historyEpoch: "epoch",
+      complete: true,
+      truncated: true,
+      rowsTrimmed: true,
+    })),
+  ).rejects.toThrow("Action history changed or truncated");
+});
 test("incomplete, changed and cyclic history refuses partial results", async () => {
   for (const page of [
     { historyEpoch: "other", complete: true },

@@ -131,9 +131,16 @@ type ProjectionUpdate = {
     messages: Row[];
     messageWindow?: { truncated?: boolean; omittedMessages?: number; canLoadEarlier?: boolean };
   };
-  historyCursor?: string;
-  historyEpoch?: string;
-  historyComplete?: boolean;
+};
+/** The transcript view's snapshot: its live window and the direct cursor before it. */
+type TranscriptUpdate = {
+  status: string;
+  value?: {
+    messages: Row[];
+    historyCursor?: string;
+    historyEpoch: string;
+    historyComplete: boolean;
+  };
 };
 type MessagePage = {
   messages: Row[];
@@ -1328,14 +1335,25 @@ test.describe("live transcript paging", () => {
           liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
           forceSnapshot: true,
         });
-      /** Every row of the conversation, oldest first: the cursor's pages, then the tail. */
+      /**
+       * Every row of the conversation, oldest first: the pages behind the
+       * transcript view's direct cursor, then its live window. A first page
+       * may repeat rows the window holds (0232); the window's copy wins.
+       */
       const wholeTranscript = async () => {
-        const live = await snapshot();
-        expect(live.status).toBe("snapshot");
-        const tail = live.projection!.messages;
+        const update = await invoke<TranscriptUpdate>("get_native_agent_transcript_update", {
+          ...identity,
+          viewVersion: 1,
+          liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+          forceSnapshot: true,
+        });
+        expect(update.status).toBe("snapshot");
+        const live = update.value!;
+        const tail = live.messages;
+        const tailIds = new Set(tail.map((row) => row.id));
         const pages: Row[][] = [];
         let cursor = live.historyCursor;
-        let complete = live.historyComplete ?? false;
+        let complete = live.historyComplete;
         while (cursor) {
           const page = await invoke<MessagePage>("get_native_agent_message_page", {
             ...identity,
@@ -1345,7 +1363,7 @@ test.describe("live transcript paging", () => {
           });
           expect(page.historyEpoch, "the history epoch moved while paging").toBe(live.historyEpoch);
           expect(page.messages.length).toBeLessThanOrEqual(API_PAGE_MESSAGES);
-          pages.unshift(page.messages);
+          pages.unshift(page.messages.filter((row) => !tailIds.has(row.id)));
           expect(pages.length, "paging did not terminate").toBeLessThan(50);
           complete = page.complete;
           cursor = page.nextCursor;

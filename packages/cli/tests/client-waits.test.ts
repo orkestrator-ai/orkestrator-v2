@@ -20,6 +20,7 @@ import {
 } from "./support/client-harness.js";
 
 import { runClient } from "../src/client/main.js";
+import { writeObservingRecord } from "../src/client/output.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -27,6 +28,20 @@ afterEach(async () => {
 });
 
 const OPERATION = "op-1790000000000-0a1b2c3d-000000000000000001";
+
+test("observing records use stderr in jsonl mode and stay silent in id mode", () => {
+  const jsonl = captureIo({});
+  writeObservingRecord(jsonl, "jsonl", "environment.start", OPERATION);
+  expect(jsonl.out).toEqual([]);
+  expect(jsonl.err).toEqual([
+    `${JSON.stringify({ type: "observing", action: "environment.start", operationId: OPERATION })}\n`,
+  ]);
+
+  const id = captureIo({});
+  writeObservingRecord(id, "id", "environment.start", OPERATION);
+  expect(id.out).toEqual([]);
+  expect(id.err).toEqual([]);
+});
 
 function receipt(overrides: Partial<PublicReceipt>): PublicReceipt {
   return {
@@ -599,6 +614,18 @@ describe("environment --wait through a lost submission response", () => {
         .split("\n")
         .map((line) => JSON.parse(line)),
     ).toEqual([{ type: "observing", action: "environment.start", operationId: OPERATION }]);
+
+    const id = await box.run([
+      "--output",
+      "id",
+      ...START.slice(1),
+      "--wait",
+      "ready",
+      "--timeout",
+      "30s",
+    ]);
+    expect(id.code).toBe(0);
+    expect(id.err).toBe("");
 
     // Human output and a submission without --wait are unchanged.
     const human = await box.run(["environment", "start", "env", "--wait", "ready"]);

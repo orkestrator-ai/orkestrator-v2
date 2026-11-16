@@ -29,9 +29,13 @@ results under the item. The 5340 (retired) task 2 reading of
 `bridge-transcript.messages-fallback` went, its counter and fallback having
 been removed, and 8110 (retired) task 1's real-provider paging check came in.
 
+Updated 2026-11-16: 8050 was retired once the desktop app stopped packing the
+Agent SDK's Claude binary; its signed-release check came in as 8050 (retired)
+task 2, and the CLI's copy went to to-do 8250.
+
 ### Tasks
 
-1. **Manual tests and live checks** (340 items): run each check under
+1. **Manual tests and live checks** (341 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (24 items): make each call
@@ -184,12 +188,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 0 |
 | Containers and environments | 31 | 6 |
 | Coordinator and Multi Review | 86 | 3 |
-| Cross-cutting | 90 | 8 |
+| Cross-cutting | 91 | 8 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 16 | 1 |
 | Transcripts, observation and bandwidth | 27 | 2 |
-| **Total** | 340 | 24 |
+| **Total** | 341 | 24 |
 
 ## Outstanding work
 
@@ -694,6 +698,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 
 - [ ] **8109 (retired) task 5: run the container app-wiring spec on its new pipeline seed.** (Background: the `import_legacy_build_pipelines` Retired row in [version-compatibility.md](../../architecture/version-compatibility.md#retired); the to-do is in Git history at `a8b89f154`.) The spec's "a pipeline naming the run opens in the container's Build tab" step now stores its finished pipeline through `seedBuildPipeline` (`e2e/agent-testing/backend-store.ts`) instead of the removed command. The building session could not reach a Docker daemon, so the spec was not run. On a host with Docker, start a credential-free profile with a container fixture (`mise run dev:test --profile seed-8109 --fixture --fixture-environments local,container --no-agent-credentials --no-host-seed --headless`), wait for `dev:status --json` to report `ready`, then run `ORKESTRATOR_AGENT_TEST_PROFILE=seed-8109 mise run test:logged -- --name app-wiring -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts container-app-wiring.spec.ts`, and stop and reset the profile afterwards (`dev:stop`, `dev:reset`). Expected: every test in the file passes; the seeded pipeline lists, and its Build tab shows the validation run's two commands. Record: the commit, the pass and fail counts and any failing step's message, as a reply to the coordinator. A failure goes to a new to-do for an agent.
 - [ ] **8171 (retired) task 1: burst rescans on arktech-mini once `fseventsd` delivers again.** (Background: [Lost events on macOS](../../architecture/git-scan-caches.md#lost-events-on-macos), "A watcher that missed a change"; the to-do is in Git history.) On 2026-11-15 arktech-mini's `fseventsd` was at 100% CPU after 10 days of uptime and delivered events late and sparsely: a single `fs.watch` saw nothing within 20 s, and the watcher benchmark got a hint for 3 of 30 writes and 11 of 30 removals within 60 s, each 20 to 59 s late. So the fix was measured only on a saturated host; a healthy one is still unmeasured. Restarting `fseventsd` needs a reboot or root, which is yours to do. After the next reboot of arktech-mini, (1) check a watch gets events again: `mkdir -p ~/w8171 && bun -e 'require("fs").watch(process.env.HOME+"/w8171",()=>{console.log("event");process.exit(0)}); setTimeout(()=>require("fs").writeFileSync(process.env.HOME+"/w8171/x","x"),500)'` prints `event` within a few seconds; (2) from a worktree on a current build, run the busy driver as in [the testing guide](../../development/testing-guide.md#live-idle-ab) with `--busy-rounds 5 --busy-clients 0 --busy-environments 10 --busy-burst-files 2500 --busy-turn-files 2500 --fixture-environments local --agent-platforms pi --freshness-probes 0`; (3) in that profile's backend log, count `scan.watcher-missed-change` lines; (4) from a worktree, run `mise run test:logged -- --name watcher-real -- bun test --cwd apps/backend tests/worktree-watcher-real.test.ts` (about 15 minutes). Expected: no `burst-backend` timeout, rescans in a few seconds, no or very few `scan.watcher-missed-change` lines (each one makes that environment poll every 15 s for at least 5 min), and the real-watch file passing. Record: uptime, `fseventsd` CPU, the `burst-backend` and `burst-clear-backend` rows, the line count and the real-watch file's pass/fail counts, as a reply to the coordinator; an agent adds them to the "A watcher that missed a change" paragraph and to flake [9821](../../tests/flaky-tests/environments-and-containers/9821-worktree-watcher-real-in-process-watch-saturated-fseventsd.md) (its next step). This also unblocks [7551](../cross-cutting/7551-macos-watch-churn-loses-events.md) task 3.
+- [ ] **8050 (retired) task 2: no SDK Claude binary in a signed release, and a native Claude turn from it.** (Background: [upgrade-agents.md, The SDK's own Claude binary is not vendored](../../development/upgrade-agents.md#the-sdks-own-claude-binary-is-not-vendored); the to-do is in Git history at `c1fcc573b`.) On 2026-11-16 an agent checked only a local unsigned macOS arm64 `--dir` package: the Claude bridge went from 329 MB to 8.8 MB and the app from 1,024,004 KB to 696,248 KB, and the packaged SDK ran the executable it was given. Nobody has checked a signed, notarized release, a Linux AppImage or pacman package, or a real Claude turn from a packaged app. After the first release built from a commit containing 8050: (a) in the macOS release, list `OrkestratorV2.app/Contents/Resources/claude-bridge/dist/node_modules/@anthropic-ai/` and, on the Linux builder, `resources/claude-bridge/dist/node_modules/@anthropic-ai/` in `release/linux-*unpacked/` (or in an `--appimage-extract` of the AppImage); each must hold only `claude-agent-sdk`. Note the DMG and AppImage sizes next to the previous release's. (b) On a spare Mac account (not your working one), install the signed release, start a native Claude session in a throwaway project and send one short prompt; it must answer, and Settings must show the managed Claude Code version. Record: the release, the folder listings, both download sizes, and pass/fail for the turn with any error text.
 
 #### Design canvas
 

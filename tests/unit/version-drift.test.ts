@@ -577,13 +577,15 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
   });
 
   test("Claude bridge: every SDK platform binary is stripped from the vendored runtime tree", () => {
-    // The claude-bridge build vendors the SDK and its platform packages into
-    // dist/node_modules, the tree the SDK resolves its native binary from. The
-    // container bridge always passes pathToClaudeCodeExecutable (CLAUDE_CLI_PATH,
-    // the image's pinned CLI), so the SDK never looks there and each ~300 MB
-    // platform binary is dead weight (docs/development/container-qualification.md,
-    // "Claude bridge without the SDK's platform binary"). Stripping top-level
-    // node_modules (the historical location) would be a no-op against that tree.
+    // The claude-bridge build vendors the SDK into dist/node_modules, the tree
+    // the SDK would resolve its native binary from. Its vendor step already
+    // leaves the platform packages out (bridges/claude-bridge/src/vendor.test.ts);
+    // the builder still strips any that reappear. The container bridge always
+    // passes pathToClaudeCodeExecutable (CLAUDE_CLI_PATH, the image's pinned
+    // CLI), so the SDK never looks there and each ~300 MB platform binary is
+    // dead weight (docs/development/container-qualification.md, "Claude bridge
+    // without the SDK's platform binary"). Stripping top-level node_modules (the
+    // historical location) would be a no-op against that tree.
     const dockerfile = read("docker/Dockerfile");
     expect(dockerfile).toContain("rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-* \\");
     expect(dockerfile).not.toContain("rm -rf node_modules/@anthropic-ai/claude-agent-sdk-");

@@ -295,10 +295,10 @@ installs them from the registry before a publish.
 
 The image also builds and installs every bridge tree: `claude-bridge`,
 `codex-bridge`, `acp-bridge`, `pi-bridge`, and `cursor-bridge`. The Claude
-bridge vendors the Agent SDK and its platform packages, then the Docker build
-removes every platform package (`claude-agent-sdk-linux-<arch>` and its
-`-musl` variant), keeping only the main `claude-agent-sdk` package. The image
-therefore has one Claude Code binary, the pinned CLI at `CLAUDE_CLI_PATH`: the
+bridge vendors only the main `claude-agent-sdk` package, never its platform
+packages (`claude-agent-sdk-linux-<arch>` and its `-musl` variant); the Docker
+build still removes any it finds and the final stage checks none is left. The
+image therefore has one Claude Code binary, the pinned CLI at `CLAUDE_CLI_PATH`: the
 SDK looks for its own binary only when `pathToClaudeCodeExecutable` is unset,
 and the bridge always sets it from that variable. A container bridge started
 without `CLAUDE_CLI_PATH` fails with the SDK's `Native CLI binary for
@@ -632,10 +632,45 @@ settings, plugins, MCP configuration, and SDK message unions. It passes
 the SDK's fallback executable—is used in packaged local environments. The same
 CLI is used for session-title generation.
 
-`bridges/claude-bridge/scripts/vendor.ts` copies the Agent SDK and all installed
-platform-specific optional packages into `dist/node_modules`. The bridge build
-keeps the Agent SDK external and runs this vendor step, so successful TypeScript
-compilation alone does not prove the distributable bridge is complete.
+`bridges/claude-bridge/scripts/vendor.ts` copies the main Agent SDK package,
+dereferenced, into `dist/node_modules`. The bridge build keeps the Agent SDK
+external and runs this vendor step, so successful TypeScript compilation alone
+does not prove the distributable bridge is complete.
+
+#### The SDK's own Claude binary is not vendored
+
+The vendor step leaves out the SDK's platform packages
+(`@anthropic-ai/claude-agent-sdk-<os>-<arch>`), each of which holds a whole
+Claude Code binary, because nothing that runs `dist/` uses them. The SDK looks
+for its own binary only when `pathToClaudeCodeExecutable` is unset, and every
+host path sets it: both backend launches of a host bridge (`startLocalServerAttempt` in
+`apps/backend/src/core/commands-servers.ts` and the model-catalogue refresh in
+`host-model-catalog-refresh.ts`) set `CLAUDE_CLI_PATH` from
+`resolveClaudeBinary`, which returns the managed toolchain binary or, outside
+agent-test profiles, the bare name `claude` (never empty), and every SDK call
+in the bridge passes it through `claudeExecutableOptions()`. A bare `claude`
+that is not on `PATH` fails with the SDK's "Claude Code executable not found"
+error; the SDK does not fall back to its own copy when given a path. Live probes
+that want the SDK's binary (`bundledCli()` in
+`claude-provider-sandbox.live-probe.ts`, and probes run without
+`CLAUDE_CLI_PATH`) run from `src/` against the workspace `node_modules`, which
+keeps the platform package. The root `package.json`'s `build.extraResources`
+also excludes `dist/node_modules/@anthropic-ai/claude-agent-sdk-*`, so a stale
+`dist/` cannot ship one. `bridges/claude-bridge/src/vendor.test.ts` and
+`tests/unit/bridge-packaging.test.ts` guard both halves.
+
+Measured on 2026-11-16 (to-do 8050, retired) with a local unsigned macOS arm64
+`electron-builder --mac --dir` package: the packaged `claude-bridge` resource
+went from 329 MB to 8.8 MB and the app from 1,024,004 KB to 696,248 KB, about
+320 MiB (31%) less. The binary alone is 321,995,200 bytes, about 144 MB
+gzip-compressed. A Linux package saves at least the same per platform package.
+The packaged SDK still spawned the executable it was given and, with none,
+failed with `Native CLI binary for darwin-arm64 not found`. A signed release
+and a native turn from it are in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(8050 (retired) task 2). The published CLI still pulls the platform package
+through its own SDK dependency; dropping that is
+[8250](../todo/cross-cutting/8250-cli-install-pulls-sdk-claude-binary.md).
 
 `bridges/claude-bridge/src/sdk-compatibility.test.ts` loads the real installed
 SDK in isolated processes and guards the feature-detected APIs that could
@@ -732,10 +767,12 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    gate the toggle on it instead of on `xhigh` support.
 
    Re-check that the SDK still looks for its own platform binary only when
-   `pathToClaudeCodeExecutable` is unset. The container image ships no SDK
-   platform package (see [Container environments](#container-environments)),
-   so an SDK that resolved its binary even when given a path would fail every
-   container turn. At 0.3.319 the only lookup in `sdk.mjs` sits behind
+   `pathToClaudeCodeExecutable` is unset. Neither the container image nor the
+   desktop app ships an SDK platform package (see
+   [Container environments](#container-environments) and
+   [The SDK's own Claude binary is not vendored](#the-sdks-own-claude-binary-is-not-vendored)), so an SDK that resolved
+   its binary even when given a path would fail every container and packaged
+   desktop turn. At 0.3.319 the only lookup in `sdk.mjs` sits behind
    `if(!<pathToClaudeCodeExecutable>)` and throws `Native CLI binary for
    <platform>-<arch> not found` when it finds nothing.
    `bridges/claude-bridge/src/sdk-compatibility.test.ts` (slow tier, so run

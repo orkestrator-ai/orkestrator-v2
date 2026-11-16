@@ -1073,9 +1073,12 @@ What each enforced platform actually does:
   a scripted model (`conformance-coordinator-read-boundary-live.test.ts`). Under
   bubblewrap a denied path reads as missing (`No such file or directory`): the
   directory is masked, with the allowances bound back in. A read-only review turn
-  in a worker bridge gets no boundary, by decision
-  ([6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)
-  task 4).
+  in a worker bridge gets no boundary, by decision (6080 (retired) task 4): that
+  worker's ordinary turns read the directory anyway on a host environment, so
+  bounding only its review turns would risk failing reviews without closing the
+  gap. The scripted run does not cover skills or a large tool result written by
+  a real MCP call; the qualification file is re-run on each CLI bump
+  ([upgrade-agents.md](../development/upgrade-agents.md)).
 - **Pi** blocks every tool outside its read-only set in its own `tool_call`
   gate, which runs in the bridge process and cannot be switched off by the
   workspace. The same gate refuses a coordinator's `read`, `grep`, `find` and
@@ -2237,9 +2240,10 @@ refused (`tool`, `mail`, `mail-reply`, `node-mail`, `node-mail-reply`,
 Control MCP tool, by the tool's name. No id or input is kept, and the counts
 start from zero with each backend. They exist to show whether the default is
 too strict, in particular whether replies to an environment's own mail are
-most of the refusals (to-do
-[6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)
-task 6).
+most of the refusals (to-do 6080 (retired) task 6). Reading them, and
+choosing whether replies get an exception, is an item in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md); an
+agent builds the exception only if that is the choice.
 
 The answer comes from `coordinatorCreatedEnvironment`
 (`coordinator-environment-scope.ts`), and it is per coordinator, not per
@@ -2357,9 +2361,10 @@ The mark is coarse by design, the same line as the account-switch grant: it also
 marks a delegation that merely happened during such a turn, and a later user turn
 clears it even if the content carried over. An agent's reasoning cannot be traced
 to specific input, so tracking provenance per message would only look more
-precise. Two limits: a message the user approved
-(`send_approved_project_home_message`) is not marked, since they read it; and a
-leaf without `node-mail-turn-origin` frames mail as it always did.
+precise. One limit: a message the user approved
+(`send_approved_project_home_message`) is not marked, since they read it. Mail
+to another node's worker carries the mark too: `turnOrigin` is sent to every
+leaf.
 
 `coordinatorCallTurnOrigin` (`@orkestrator/protocol/coordinator`) is the one
 rule every path reads: only a turn the user started is unmarked, and an unknown
@@ -2367,9 +2372,9 @@ origin counts as mail.
 
 ### Delegated prompts from a turn the user did not start
 
-The same mark reaches prompts, which are not mail
-([6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)
-task 5):
+The same mark reaches prompts, which are not mail (to-do 6080 (retired)
+task 5). Whether a real worker reads the note is a live run in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md):
 
 - A launch's delegation frame (`launch_environment`, `launch_job`,
   `fork_worker`, and a launch or fork on another node) ends with

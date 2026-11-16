@@ -602,7 +602,8 @@ is the truth, and the manual-test checklist holds the runs still owed.
   (`homeMailGateFailures`). Approving is left out, because an approved message
   legitimately writes to the checkout. Those steps have been checked without a
   provider turn; their first live run is
-  [6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md) task 1. The prompt forbids
+  an item (6080 (retired) task 1) in the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md). The prompt forbids
   launching workers, and any worker launched anyway is deleted after the
   checkout has been measured. A worker's `git worktree add` changes refs, so the
   digest still catches it. A job on the home itself writes after the turn

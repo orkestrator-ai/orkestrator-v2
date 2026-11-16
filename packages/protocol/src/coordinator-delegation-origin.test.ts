@@ -15,7 +15,7 @@ import {
 } from "./review-evidence-frames.js";
 
 /**
- * To-do 6080 task 5: a delegated prompt says when the coordinator's turn
+ * To-do 6080 (retired) task 5: a delegated prompt says when the coordinator's turn
  * arose from agent mail, as the coordinator's mail already does.
  */
 

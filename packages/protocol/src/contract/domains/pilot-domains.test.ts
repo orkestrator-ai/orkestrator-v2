@@ -296,7 +296,8 @@ describe("node-mail client", () => {
       coordinatorNotices: { declined: [] },
       attachmentMail: true,
     });
-    // turnOrigin, coordinatorNotices and attachmentMail are unknown to it: left out.
+    // coordinatorNotices and attachmentMail are unknown to it: left out.
+    // turnOrigin is no longer gated (to-do 6080 (retired) task 7): it is sent as it is.
     expect(node.sent).toEqual([
       {
         command: "deliver_node_mail",
@@ -306,6 +307,7 @@ describe("node-mail client", () => {
           toEnvironmentId: "env-1",
           body: "Stop.",
           steer: true,
+          turnOrigin: "mail",
         },
         envelope: undefined,
       },

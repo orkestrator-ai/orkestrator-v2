@@ -452,10 +452,11 @@ A `system` sender's `source` says whose words these are: `workflow` is
 Orkestrator's own notice, and `self-reminder` is text a session scheduled for
 itself. A reminder is framed as the session's own note, not from Orkestrator or
 the user, so text an injected agent chose does not come back with more standing
-than it started with. The carrier still spells it `source: "workflow"` with
-`selfReminder: true`, because a renderer before it refuses any other `source` and
-shows the raw block; the stored message and the mail tools carry the real value
-(see the [register](version-compatibility.md#register)). A coordinator's mail may
+than it started with. The carrier, the stored message and the mail tools all
+carry the real value. Carriers written before 2026-11-16 spelled it
+`source: "workflow"` with `selfReminder: true`; the carrier reader still reads
+that spelling back as a reminder, because provider transcripts keep them (see
+[Retired](version-compatibility.md#retired)). A coordinator's mail may
 carry `turnOrigin: "mail"`, which adds its own sentence
 ([coordinator.md](coordinator.md#mail-from-a-turn-the-user-did-not-start)).
 

@@ -219,10 +219,15 @@ A to-do file is deleted when its last task is done
 ([Maintaining the folders](../README.md#maintaining-the-folders)), so a code
 comment that still cites `to-do NNNN` sends the reader to nothing. The guard
 stage's `retired-todo-citations` check (`tests/source-guards/retired-todo-citations.ts`,
-fixtures in `tests/unit/retired-todo-citations.test.ts`) reads every source,
-script, workflow and container file outside `docs/` and `plans/`, and refuses a
+fixtures in `tests/unit/retired-todo-citations.test.ts`) scans TypeScript,
+JavaScript, Swift, shell (including Zsh), YAML, TOML, Perl, Python, CSS, HTML,
+SVG and Dockerfiles outside `docs/` and `plans/`, excluding generated code,
+fixtures and build output listed in the module. It refuses a
 `to-do NNNN`, `todo NNNN` or `to-dos NNNN` citation (any case) whose number has
 no file under `docs/todo/`, unless the word `retired` sits right beside it.
+Deleted files still listed by Git do not count as live to-dos. In plural lists
+such as `to-dos 1234, 2345 and 3456`, each number is checked; commas, `and` and
+`or` separate numbers, and a nearby retirement marker applies to the whole list.
 When a change retires a to-do, repoint its citations in the same change: name
 the pull request that did the work (`#2149`; `git log -S '<citation>'` over the
 source trees finds the commit that wrote it), or mark it

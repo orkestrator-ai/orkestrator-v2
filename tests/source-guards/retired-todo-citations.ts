@@ -8,7 +8,8 @@ import type { SourceIndex } from "./repository-index";
  * retires a file to repoint its references; this guard catches the ones in
  * code, which no link checker reads.
  *
- * A citation is `to-do NNNN`, `todo NNNN` or `to-dos NNNN` (any case). It is
+ * A citation is `to-do NNNN`, `todo NNNN` or `to-dos NNNN` (any case). Plural
+ * citations can list numbers separated by commas, `and` or `or`. Each number is
  * current when `docs/todo/<area>/NNNN-*.md` exists, and acceptable when the
  * word `retired` sits right before or after it (`to-do 0019 (retired) task 5`,
  * `retired to-do 1250`), the form `docs/README.md` ("Maintaining the folders")
@@ -17,7 +18,8 @@ import type { SourceIndex } from "./repository-index";
  */
 
 /** Text files a comment can cite a to-do from; Markdown is the link checker's. */
-const SCANNED_FILE = /(?:\.(?:ts|tsx|js|mjs|cjs|sh|ya?ml|toml|pl|py)|(?:^|\/)Dockerfile[^/]*)$/;
+const SCANNED_FILE =
+  /(?:\.(?:ts|tsx|js|mjs|cjs|sh|zsh|ya?ml|toml|pl|py|swift|css|html|svg)|(?:^|\/)Dockerfile[^/]*)$/;
 
 /** Documentation, plans, generated protocol and build output: not source comments. */
 export const IGNORED: readonly string[] = [
@@ -41,7 +43,8 @@ export const DATA_FILES: readonly string[] = [
 ];
 
 const LIVE_TODO_FILE = /^docs\/todo\/[^/]+\/(\d{4})-[^/]*\.md$/;
-const CITATION = /\b(?:to-?dos?)[ :#]*(\d{4})\b/gi;
+const CITATION =
+  /\b(?:to-?dos[ :#]*\d{4}\b(?:(?:\s*,\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)\d{4}\b)*|to-?do[ :#]*\d{4}\b)/gi;
 /** How far from the number the word `retired` may sit and still mark it. */
 const MARK_WINDOW = 24;
 
@@ -52,12 +55,12 @@ export interface RetiredTodoCitation {
   text: string;
 }
 
-/** Numbers with a to-do file in the listing. */
+/** Numbers with a readable to-do file in the working tree. */
 export function liveTodoNumbers(index: SourceIndex): Set<string> {
   const numbers = new Set<string>();
   for (const file of index.files) {
     const match = LIVE_TODO_FILE.exec(file);
-    if (match) numbers.add(match[1]!);
+    if (match && index.read(file) !== null) numbers.add(match[1]!);
   }
   return numbers;
 }
@@ -74,8 +77,6 @@ export function findRetiredTodoCitations(index: SourceIndex): RetiredTodoCitatio
     const lines = text.split("\n");
     lines.forEach((lineText, lineIndex) => {
       for (const match of lineText.matchAll(CITATION)) {
-        const number = match[1]!;
-        if (live.has(number)) continue;
         const start = match.index;
         const end = start + match[0].length;
         const around = (
@@ -84,7 +85,12 @@ export function findRetiredTodoCitations(index: SourceIndex): RetiredTodoCitatio
           lineText.slice(end, end + MARK_WINDOW)
         ).toLowerCase();
         if (around.includes("retired")) continue;
-        findings.push({ file, line: lineIndex + 1, number, text: match[0] });
+        for (const numberMatch of match[0].matchAll(/\b\d{4}\b/g)) {
+          const number = numberMatch[0];
+          if (!live.has(number)) {
+            findings.push({ file, line: lineIndex + 1, number, text: match[0] });
+          }
+        }
       }
     });
   }

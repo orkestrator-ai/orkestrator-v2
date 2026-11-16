@@ -46,6 +46,54 @@ describe("retired to-do citations", () => {
       "apps/web/src/b.tsx:1:7220",
       "scripts/c.sh:1:0049",
       "scripts/c.sh:1:5180",
+      "scripts/c.sh:1:5181",
+    ]);
+  });
+
+  test("a deleted but still indexed to-do is retired", () => {
+    const source = index({
+      ...LIVE,
+      "docs/todo/x/1234-a.md": null,
+      "apps/a.ts": "// to-do 1234",
+    });
+    expect(liveTodoNumbers(source).has("1234")).toBe(false);
+    expect(findRetiredTodoCitations(source).map((finding) => finding.number)).toEqual(["1234"]);
+  });
+
+  test("every number in a plural list is checked, including after a live number", () => {
+    const source = index({
+      ...LIVE,
+      "apps/a.ts": [
+        "// to-dos 7568 and 1234 task 8",
+        "// TODOS 7568, 2345, and 3456",
+        "// to-dos 7568 or 4567",
+        "// to-dos 5678, 6789 (retired)",
+        "// to-do 7568 task 7890; unrelated number 8901",
+      ].join("\n"),
+    });
+    expect(findRetiredTodoCitations(source).map(({ line, number }) => [line, number])).toEqual([
+      [1, "1234"],
+      [2, "2345"],
+      [2, "3456"],
+      [3, "4567"],
+    ]);
+  });
+
+  test("Swift and other comment-bearing source types are scanned", () => {
+    const source = index({
+      "apps/ios/X.swift": "/// To-do 1234",
+      "apps/ios/Retired.swift": "/// To-do 2345 (retired)",
+      "apps/web/a.css": "/* to-do 1234 */",
+      "apps/web/a.html": "<!-- to-do 1234 -->",
+      "apps/web/a.svg": "<!-- to-do 1234 -->",
+      "scripts/a.zsh": "# to-do 1234",
+    });
+    expect(findRetiredTodoCitations(source).map((finding) => finding.file)).toEqual([
+      "apps/ios/X.swift",
+      "apps/web/a.css",
+      "apps/web/a.html",
+      "apps/web/a.svg",
+      "scripts/a.zsh",
     ]);
   });
 

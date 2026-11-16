@@ -176,9 +176,9 @@ test("a tree left out while the watcher is distrusted keeps coverage withdrawn w
     await until(() => watcher.qualified === true);
     expect(coverage()).toBe(1);
     // The new watches report the gap before them; a burst still settling would
-    // forgive the miss below.
+    // forgive the miss below. onChange runs after the watcher clears its
+    // settle timer, so this callback is the completion signal.
     await until(() => settled() > 0);
-    await new Promise((resolve) => setTimeout(resolve, 5));
 
     // The owner's scan found a change no event announced: distrusted.
     watcher.unannouncedChange?.();

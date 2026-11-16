@@ -34,6 +34,11 @@ Claude CLI prompt the CLI refuses locally, and a turn whose last terminal
 closed) was built; its live spec run came in under Containers and
 environments.
 
+Updated 2026-11-16: 8085 was retired once both its tasks were built and
+proved on the pinned Codex in a disposable container; its check on a real
+administrator-managed machine came in (in Git history before the commit
+that retired it).
+
 Updated 2026-11-16: 0047 task 3's live check of the turn-end result capture
 prompt came in once the prompt was built.
 
@@ -60,7 +65,7 @@ task 2, and the CLI's copy went to to-do 8250.
 
 ### Tasks
 
-1. **Manual tests and live checks** (349 items): run each check under
+1. **Manual tests and live checks** (351 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (24 items): make each call
@@ -220,7 +225,7 @@ agent can apply it.
 
 | Area | Manual tests and live checks | Decisions, approvals and outward actions |
 | --- | --- | --- |
-| Agent engines and provider SDKs | 69 | 3 |
+| Agent engines and provider SDKs | 70 | 3 |
 | CLI and slash commands | 6 | 0 |
 | Containers and environments | 33 | 6 |
 | Coordinator and Multi Review | 86 | 3 |
@@ -229,7 +234,7 @@ agent can apply it.
 | MCP | 10 | 1 |
 | Service previews and web annotations | 17 | 1 |
 | Transcripts, observation and bandwidth | 30 | 2 |
-| **Total** | 349 | 24 |
+| **Total** | 351 | 24 |
 
 ## Outstanding work
 
@@ -428,6 +433,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **0723 (retired) task 3: Grok live card run.** Follow the permission-rule card-run steps above with a valid Grok login (`--profile perm-rules-grok --credential-source grok --agent-platforms grok`), and run the cycle for one plain command such as `git status --short`. Confirm the card offered `allow_once`, and that the profile's `$GROK_HOME` settings snapshot is unchanged. Record the outcome and date in permission-rules.md's Live card runs.
 - [ ] **0723 (retired) task 4: OpenCode live card run (billed).** Follow the permission-rule card-run steps above with `--profile perm-rules-opencode --credential-source opencode --agent-platforms opencode`. Run the cycle for `bash` `git status --short`, a single-file `edit` and `webfetch` `https://example.com/`. Also prompt `cd src && ls` once and confirm it keeps asking with no offer. Record each outcome and the date in permission-rules.md's Live card runs.
 - [ ] **0723 (retired) task 5: Codex card and inactive environment (billed).** Follow the Codex steps in the permission-rule card-run steps above (`--profile perm-rules-codex --credential-source codex --agent-platforms codex`). In environment A, queue a second `touch policy-probe.txt` turn, save the rule from the card, and switch to environment B. Look at the "Approve and remember…" panel: the exact pattern is first and Codex's proposal is preselected. While on B, there should be no attention badge for A. Back on A, the second turn shows the "Approved once by your rule" note, and removing the rule asks again. Record the outcome and date in permission-rules.md's Live card runs.
+- [ ] **8085 (retired) task 1: a Codex tab on a real administrator-managed host.** (Background: [Codex on a managed network host](../../architecture/permission-rules.md#codex-on-a-managed-network-host).) Agents may not write `/etc/codex/requirements.toml` on a real machine, so the container run (`mise run verify:codex:network-card`) proves the bridge and this check proves the app. On a machine whose Codex an administrator already manages (a `/etc/codex/requirements.toml` or a macOS MDM profile whose `allowed_sandbox_modes` leaves out `danger-full-access`), open a Codex tab in a local environment with no execution-policy override and send a prompt. Pass: the turn runs (no 503 naming `DangerFullAccess`), and Agent Info shows the provider sandbox with the note that the administrator's requirements need Codex's sandbox and that `.git` is read-only there. If the requirements only turn the network proxy on, Agent Info instead shows the note that the proxy does not apply to a session without a sandbox. Record the date, Codex version, how the host is managed and what Agent Info showed in permission-rules.md's "Codex on a managed network host", with a screenshot if you can.
 
 #### CLI and slash commands
 

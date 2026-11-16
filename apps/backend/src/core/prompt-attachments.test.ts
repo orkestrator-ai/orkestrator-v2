@@ -54,7 +54,7 @@ describe("mimeTypeForFilename", () => {
 
   test("names no image type for a non-image extension", () => {
     // `mimeTypeForFilename` defaults to PNG for an image; a caller labelling
-    // an arbitrary file must not inherit that default (todo 0166).
+    // an arbitrary file must not inherit that default (#1287).
     expect(imageMimeTypeForFilename("shot.PNG")).toBe("image/png");
     expect(imageMimeTypeForFilename("notes.txt")).toBeUndefined();
     expect(imageMimeTypeForFilename("noextension")).toBeUndefined();

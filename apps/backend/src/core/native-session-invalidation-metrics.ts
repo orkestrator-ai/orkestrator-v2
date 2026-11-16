@@ -30,7 +30,7 @@ export interface NativeSessionInvalidationMetricsOptions {
 
 /**
  * Counts every native session invalidation the backend emits, by cause and by
- * the platform it was scoped to (todo 0049 task 4): which code path keeps
+ * the platform it was scoped to (#1659): which code path keeps
  * waking an idle view. Discovery announcements are also counted by section
  * and changed value path (#2062), which names the field that keeps
  * moving.

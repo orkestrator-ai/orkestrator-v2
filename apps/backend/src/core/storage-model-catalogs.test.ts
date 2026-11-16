@@ -396,7 +396,7 @@ describe("host agent model catalogue cache", () => {
           supportsMode: false,
           contextWindow: 400_000,
           supportsImageInput: false,
-          // Where a Pi tab with no model starts; launch defaults read it (0172).
+          // Where a Pi tab with no model starts; launch defaults read it (#1293).
           sessionDefault: true,
         },
       ];

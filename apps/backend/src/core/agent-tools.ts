@@ -1116,7 +1116,7 @@ export class AgentToolsServer {
       };
       // The saved port keeps workflow-result capabilities valid across
       // restarts, but host agents call 127.0.0.1:<port>, so a port whose
-      // loopback address another process holds is given up (todo 7220).
+      // loopback address another process holds is given up (#1936).
       const { port: boundPort, servers } = await listenAgentTools({
         create,
         bindAddress: this.bindAddress,

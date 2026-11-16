@@ -775,7 +775,7 @@ describe("lib-backend-command-default", () => {
       "workflows",
     );
     expect(resolver.shimOf("apps/web/src/lib/backend", "machineInvoke")).toBe("agent-accounts");
-    // Always the command node by design, so not a command-scope shim (7571 task 14).
+    // Always the command node by design, so not a command-scope shim (#2230).
     expect(resolver.shimOf("apps/web/src/lib/backend/command-nodes", "getNodeStatus")).toBeNull();
     expect(resolver.shimOf("apps/web/src/lib/backend", "createKanbanApi")).toBeNull();
     // Sent through the desktop host, not a command: not part of the shim.

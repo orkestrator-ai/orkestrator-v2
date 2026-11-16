@@ -451,6 +451,6 @@ can stop writing `/tmp/.claude-state` now. The fallback read in
 ## Related
 
 - [version-compatibility.md](../../architecture/version-compatibility.md)
-- [7571](7571-removal-candidates-needing-a-decision.md): removals that need a decision rather than a date.
+- 7571 (retired 2026-11-16; `git show c1fcc573b:docs/todo/cross-cutting/7571-removal-candidates-needing-a-decision.md`): removals that needed a decision rather than a date.
 - [8108](8108-legacy-retirement-sweep.md): the 2026-11-14 legacy-retirement sweep.
 - [Cross-cutting index](0000-index.md)

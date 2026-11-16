@@ -1,6 +1,6 @@
 /**
  * The script of the coordinator node-mail fake model
- * (`coordinator-node-mail-fake-model.ts`, to-do 2900): what a command node's
+ * (`coordinator-node-mail-fake-model.ts`, #2075): what a command node's
  * Pi main coordinator ("desk") and a leaf's Pi main coordinator ("leaf") do
  * when they mail each other across a real node link. Pure, so the rules have
  * unit tests that need no provider.

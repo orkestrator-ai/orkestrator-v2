@@ -488,8 +488,8 @@ describe("summary transcripts", () => {
   }
 
   // The three cases that used to reach joined paging with no direct cursor
-  // (8110): each now pages directly from the view, walking back to the first
-  // message with no gap, no repeat and no whole read.
+  // (#2285): each now pages directly from the view, walking back to the first
+  // message with no gap, no repeat, no joined page and no whole read.
   const walkDirectly = async (
     service: {
       getTranscriptUpdate: (input: never) => Promise<unknown>;

@@ -68,7 +68,7 @@ describe("default allowlists", () => {
     }
   });
 
-  test("no default or required host is a telemetry endpoint (to-do 6100)", () => {
+  test("no default or required host is a telemetry endpoint (#1917)", () => {
     for (const domain of [
       ...DEFAULT_ALLOWED_DOMAINS,
       ...Object.values(AGENT_NETWORK_DOMAINS_BY_PLATFORM).flat(),

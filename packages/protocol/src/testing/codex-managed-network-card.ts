@@ -1,5 +1,5 @@
 /**
- * The card Orkestrator shows for a Codex managed-network approval (to-do 0723
+ * The card Orkestrator shows for a Codex managed-network approval (#2244
  * task 7), as the backend projected it from the pinned Codex 0.167.0 on a
  * disposable host whose `/etc/codex/requirements.toml` turns the network
  * proxy on.

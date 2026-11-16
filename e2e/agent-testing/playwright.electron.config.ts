@@ -3,7 +3,7 @@ import path from "node:path";
 import { enterPrivateTestTmpdir } from "../../tests/private-tmpdir";
 
 // Workers inherit a private TMPDIR, so the browser profiles of a worker that is
-// killed land where a later run can remove them (0248, 0830). Workers load this
+// killed land where a later run can remove them (#1425, #1463). Workers load this
 // file too and reuse the runner's directory.
 process.once("exit", enterPrivateTestTmpdir());
 

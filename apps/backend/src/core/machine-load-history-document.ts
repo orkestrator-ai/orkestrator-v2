@@ -1,6 +1,6 @@
 /**
  * The persisted form of machine-load history (`machine-load.ts`), so a
- * machine's 24-hour figure survives a backend restart or update (to-do 8104).
+ * machine's 24-hour figure survives a backend restart or update (#2287).
  *
  * One small document: the bucket lists as number tuples
  * `[startMs, endMs, coveredMs, cpuWeighted, ramWeighted]`, oldest first. It is

@@ -9,8 +9,8 @@ import {
   type PreviewUrlSource,
 } from "@orkestrator/protocol/preview-services";
 
-import type { Environment } from "./models.js";
-import type { PreviewServiceRegistry } from "./preview-service-registry.js";
+import type { Environment } from "../models.js";
+import type { PreviewServiceRegistry } from "./service-registry.js";
 
 export type PreviewTargetResolutionResult =
   | { kind: "service"; service: PreviewServiceSnapshot; path: string }

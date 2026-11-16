@@ -1,7 +1,7 @@
 /**
  * Fork, rewind and branch switching on the profile's real Codex app-server and
  * real Pi SDK, against a loopback model (`session-history-loopback-model.ts`):
- * no login and no billed turn. To-do 0006, task 6.
+ * no login and no billed turn. #1957.
  *
  * Opt-in (`ORKESTRATOR_AGENT_TEST_LIVE_SESSION_HISTORY=1`) against an already
  * running `dev:test --fixture` profile. Start it with a made-up Codex key so no

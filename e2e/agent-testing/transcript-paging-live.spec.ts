@@ -65,7 +65,7 @@
  *     --credential-source codex --agent-platforms codex
  *
  * Two switches move the native case off its default local environment and
- * browser client (to-do 0050, task 4); the Multi Review case stays local and
+ * browser client (#2141); the Multi Review case stays local and
  * in the browser:
  *
  * - `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container` runs it in the
@@ -1649,7 +1649,7 @@ test.describe("live transcript paging", () => {
         );
 
         // The call `expandStop` opened keeps its own expansion: the replay
-        // renamed its row, not the call (to-do 7270).
+        // renamed its row, not the call (#2064).
         expect(
           await stopCallExpanded(page, list, trail, 2),
           "restart: the stop 2 call the reader expanded folded again",

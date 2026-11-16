@@ -1,4 +1,4 @@
-/** Opt-in live check of a Codex turn refused for its login (todo 0235).
+/** Opt-in live check of a Codex turn refused for its login (#1324).
  *
  * Run against a disposable profile whose Codex login is a made-up API key
  * (`CODEX_HOME=<throwaway dir holding the key> mise run dev:test … --credential-source

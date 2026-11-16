@@ -7,7 +7,7 @@ type FocusState = typeof globalThis & { webContentsFocus?: Map<number, boolean> 
  * contents' `focus` and `blur` events in the main process.
  *
  * `isFocused()` and `getFocusedWebContents()` also need the OS to make the
- * window key, which a locked or shared macOS session never does (todo 1170).
+ * window key, which a locked or shared macOS session never does (#1542).
  * These events follow `webContents.focus()` inside the window either way, so
  * the in-window handoff between views stays checkable there. Playwright's
  * focus emulation makes `document.hasFocus()` true in every page it attaches

@@ -291,6 +291,29 @@ describe("iOS UI and WebKit security contracts", () => {
     expect(consent).toContain("settle(entry, .declined, withdrawPrompt: false)");
   });
 
+  test("a page saves another machine's token only through the native editor", () => {
+    // To-do 8000 (retired). The Swift tests need a simulator; this pins the shape on
+    // every host (docs/architecture/renderer-security.md, iOS app).
+    const bridge = read("apps/ios/OrkestratorMobile/Views/RemoteWebView.swift");
+    const model = read("apps/ios/OrkestratorMobile/Models/ConnectionModel.swift");
+    // The page passes an address and nickname, never a token.
+    const script = bridge.slice(
+      bridge.indexOf("connectInNativeEditor: (input) =>"),
+      bridge.indexOf("rename: (connectionId, nickname)"),
+    );
+    expect(script).toContain('call("connect-in-editor"');
+    expect(script).not.toContain("token");
+    // The page that asked going away (teardown or a new document) refuses it.
+    expect(bridge.match(/^\s+withdrawEditorRequest\(\)$/gm)?.length).toBe(2);
+    // A page's request keeps the current server open, and every way the editor
+    // closes without saving refuses rather than leaving the page waiting.
+    expect(model).toContain("select: request == nil");
+    expect(model).toContain(
+      "if !isShowingConnectionEditor { finishEditorRequest(.failure(EditorRequestError.closed)) }",
+    );
+    expect(model).toContain("guard let continuation = editorContinuation else { return }");
+  });
+
   test("application entry point provides the shared model and forced dark appearance", () => {
     const source = read("apps/ios/OrkestratorMobile/OrkestratorMobileApp.swift");
     expect(source).toContain("@StateObject private var connectionModel");

@@ -45,7 +45,7 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
  * The fake's base URL and token are staged as Claude managed settings
  * (`/etc/claude-code`) in the container, which every turn reads, and removed
  * afterwards. (Read-only turns take only the user settings' connection `env`
- * since to-do 7565, and the entrypoint rewrites that file at container start.) The case also commits one file to the
+ * since #2133, and the entrypoint rewrites that file at container start.) The case also commits one file to the
  * fixture branch so there is something to review. Prompts, tool output and
  * tokens never reach test output: the fake logs step names and error flags.
  */

@@ -1,7 +1,7 @@
 /**
  * Offline qualification, on the pinned CLI and a scripted local Messages
  * endpoint, of a read-only turn whose model connection lives only in the user
- * settings file (to-do 7565). No login and no billed turn: the endpoint is a
+ * settings file (#2133). No login and no billed turn: the endpoint is a
  * loopback fixture and the key is a fixture string.
  *
  * - `ordinary`: a turn that loads the user settings file reaches the endpoint
@@ -217,7 +217,7 @@ async function runBedrockTurn(scenario: BedrockCase) {
 }
 
 const supported = process.platform === "darwin" || process.platform === "linux";
-describe("Claude read-only turn on a settings-file connection (to-do 7565)", () => {
+describe("Claude read-only turn on a settings-file connection (#2133)", () => {
   (supported ? test : test.skip)(
     "ordinary",
     async () => {

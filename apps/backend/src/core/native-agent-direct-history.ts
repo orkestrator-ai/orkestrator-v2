@@ -53,7 +53,7 @@ interface HeldCursor {
 
 /**
  * Provider cursors too long to wrap inside the page command's 1,024-character
- * cursor, held in memory and named by a short handle instead (8110).
+ * cursor, held in memory and named by a short handle instead (#2285).
  *
  * A handle is a digest of what it names, so the view re-registering the same
  * cursor on every read refreshes one entry rather than adding another. It is

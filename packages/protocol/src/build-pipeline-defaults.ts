@@ -68,7 +68,7 @@ function pinOrOmit(value: string | undefined): string | undefined {
  * model, for that stage only, while settings keep the user's choice. A pinned
  * row is an explicit choice and is never swapped, so pinning the inherited
  * default failed every saved-defaults review on a ChatGPT login with "model is
- * not supported" (to-do 7546). Effort and speed still travel with the row; the
+ * not supported" (#2046). Effort and speed still travel with the row; the
  * stage resolves the same values when they are absent.
  */
 function ownModel(value: string | undefined): string | undefined {

@@ -42,7 +42,7 @@ export interface RegisterDocument {
   readonly malformed: readonly RegisterRow[];
 }
 
-/** A counter id: dotted lowercase words (`history.joined-v1-page.unpaged-source`). */
+/** A counter id: dotted lowercase words (`slash-catalogue.outdated-bridge`). */
 const COUNTER_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)+$/u;
 /** File names in a Counter cell are not ids (`compatibility-path-usage.ts`). */
 const FILE_EXTENSION_PATTERN = /\.(?:ts|tsx|js|json|md|sh|toml|yml|yaml)$/u;

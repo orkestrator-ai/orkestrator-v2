@@ -11,7 +11,6 @@ import { act, cleanup, waitFor } from "@testing-library/react";
 import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentMessagePage,
-  NativeAgentProjectionUpdate,
   NativeAgentSessionProjection,
   NativeAgentSessionStateUpdate,
   NativeAgentTranscriptUpdate,
@@ -47,11 +46,9 @@ interface TestMessage {
 
 const realBackendSnapshot = { ...realBackend };
 const SESSION_KEY = "env-env-1:tab-1";
-const PAGING_EPOCH = "paging-epoch-1";
 
 let transcriptUpdates: Array<() => NativeAgentTranscriptUpdate<TestMessage>> = [];
 let stateUpdates: Array<() => NativeAgentSessionStateUpdate> = [];
-let projectionUpdates: Array<() => NativeAgentProjectionUpdate<TestMessage>> = [];
 let messagePages: Array<() => NativeAgentMessagePage<TestMessage>> = [];
 
 const identity: NativeAgentViewIdentity = {
@@ -96,9 +93,7 @@ mock.module("@/lib/backend", () => ({
     return next();
   },
   getNativeAgentProjectionUpdate: async () => {
-    const next = projectionUpdates.shift();
-    if (!next) throw new Error("Unexpected joined projection request");
-    return next();
+    throw new Error("Unexpected sync-v1 projection request");
   },
   ensureNativeAgentSession: async () => ({
     providerSessionId: "session-1",
@@ -226,7 +221,8 @@ function historyPage(
   return {
     syncVersion: 1,
     messages,
-    historyEpoch: PAGING_EPOCH,
+    // A direct page answers with the epoch of the view that named its cursor.
+    historyEpoch: "epoch-1",
     ...(extras.nextCursor ? { nextCursor: extras.nextCursor } : {}),
     complete: extras.complete ?? true,
     truncated: Boolean(extras.nextCursor),
@@ -288,7 +284,6 @@ beforeEach(() => {
   resetNativeAgentSyncCapabilityForTests();
   transcriptUpdates = [];
   stateUpdates = [];
-  projectionUpdates = [];
   messagePages = [];
   appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
@@ -565,19 +560,21 @@ describe("useNativeAgentSession retained-history accounting", () => {
 
   test("duplicate and overlapping pages keep order and measure new messages once", async () => {
     const measured = countMeasuredObjects();
-    transcriptUpdates = [() => tail("t1", [message("m5"), message("m6")])];
-    stateUpdates = [() => stateSnapshot("s1")];
-    projectionUpdates = [
-      () => ({
-        syncVersion: 1,
-        status: "snapshot",
-        token: "joined-1",
-        projection: projection([message("m5"), message("m6")]),
-        historyCursor: "cursor-before-m5",
-        historyEpoch: PAGING_EPOCH,
-        historyComplete: false,
-      }),
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("t1", [message("m5"), message("m6")], {
+          historyComplete: false,
+          historyCursor: "cursor-before-m5",
+          historyPaging: "direct",
+          messageWindow: {
+            limit: 2,
+            truncated: true,
+            truncationReason: "count",
+            canLoadEarlier: true,
+          },
+        }),
     ];
+    stateUpdates = [() => stateSnapshot("s1")];
     const { result } = renderSession();
     await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
 

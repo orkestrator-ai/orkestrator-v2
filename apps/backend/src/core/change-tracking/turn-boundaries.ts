@@ -98,7 +98,7 @@ export class TurnBoundaryService {
    * settles afterwards cannot touch the new one.
    */
   private readonly provisionalPending = new Map<string, Set<symbol>>();
-  /** Provisional passes skipped because their hint could not move the tree (todo 7840). */
+  /** Provisional passes skipped because their hint could not move the tree (#2185). */
   provisionalInertSkips = 0;
   /** Provisional passes that claimed the slot and have released it again. */
   provisionalPassesFinished = 0;
@@ -798,7 +798,7 @@ export class TurnBoundaryService {
    * always publishes.
    *
    * `inert` answers whether the hint that prompted this pass cannot move the
-   * tree (todo 7840, `WorktreeChangeOwner.hintCannotMoveTree`). It runs only
+   * tree (#2185, `WorktreeChangeOwner.hintCannotMoveTree`). It runs only
    * during a running turn, so an idle worktree pays nothing for it, and a
    * skipped pass leaves the spacing untouched. It does not hold the pass
    * slot: a hint arriving meanwhile is judged on its own paths rather than

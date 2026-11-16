@@ -6,7 +6,7 @@ const MACHINE_LOAD_HISTORY_ROW = "local";
 /**
  * The `machine-load-history` store: one row holding this machine's load
  * history (`machine-load-history-document.ts`), so its 24-hour figure survives
- * a backend restart (to-do 8104). Numbers only. Written by the sampler about
+ * a backend restart (#2287). Numbers only. Written by the sampler about
  * once every 15 minutes and at shutdown, each write one `updateStoreRow`; the
  * row is never deleted. Validation lives with the sampler: this returns the
  * stored value as is.

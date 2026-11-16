@@ -148,7 +148,7 @@ describe("a reviewer whose turn a provider restart cut short", () => {
     expect(reviewer.report?.reviewSummary).toBe("Survived the restart");
   });
 
-  // 0112: status is per session, so until the continuation's turn starts the
+  // #1288: status is per session, so until the continuation's turn starts the
   // bridge still reports the restart that cut the original turn short.
   test("waits out the notice about the turn its continuation replaced", async () => {
     const { reviewer, runner, bridge, sent } = harness();

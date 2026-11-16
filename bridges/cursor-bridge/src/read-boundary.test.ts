@@ -1,6 +1,6 @@
 /**
  * A read-only Cursor coordinator's reading tools against a fixture data
- * directory (to-do 7400 task 1). The executors are called the way the SDK
+ * directory (#2082). The executors are called the way the SDK
  * calls them; the real filesystem and the SDK's own ripgrep do the rest.
  * Nothing here reads a real credential.
  */

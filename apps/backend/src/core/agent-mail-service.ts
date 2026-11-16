@@ -391,7 +391,7 @@ export class AgentMailService {
     let offset = 0;
     while (true) {
       // The listing takes the config this pass already read: a second read
-      // was the pass's second revision check (todo 7567 task 2).
+      // was the pass's second revision check (#2131).
       const page = await this.storage.listAgentMailboxes({
         offset,
         limit: AGENT_MAIL_MAX_LIST_LIMIT,
@@ -404,7 +404,7 @@ export class AgentMailService {
     // One environment read per environment per pass rather than one per
     // mailbox, so a stopped environment costs no per-mailbox read at all, and
     // the gate of a running one takes this read instead of repeating it
-    // (todo 7567 task 2).
+    // (#2131).
     const environments = new Map<string, Promise<Environment | null | undefined>>();
     const environmentFor = (environmentId: string) => {
       let read = environments.get(environmentId);
@@ -860,7 +860,7 @@ export class AgentMailService {
       // Deliver now, while a turn may be running: offer the mail to that turn.
       let steerRequestId: string | undefined;
       // What the tmux presence read answered, handed to its dispatch so the
-      // gate does not repeat those reads (to-do 1202 task 8, BG-15).
+      // gate does not repeat those reads (#1667, BG-15).
       let tmuxPresenceRead:
         Awaited<ReturnType<PromptQueueDrainer["mailInjectPresence"]>> | undefined;
       if (mailbox.kind === "native" && mailbox.agent) {

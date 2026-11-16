@@ -96,7 +96,7 @@ export interface NativeAgentSessionBackendOptions {
   };
 }
 
-/** The history epoch every transcript view and joined snapshot names. */
+/** The history epoch every transcript view and history page names. */
 export const FAKE_NATIVE_AGENT_HISTORY_EPOCH = "fake-history-epoch";
 /** The backend instance every view identity names. */
 export const FAKE_NATIVE_AGENT_BACKEND_ID = "fake-backend";
@@ -155,8 +155,8 @@ function historyCursor(end: number): string {
 
 /**
  * The transcript domain of `projection`, as the backend would send it. With
- * `historyRows` earlier rows exist: the view reports them, pageable through
- * the joined snapshot's cursor.
+ * `historyRows` earlier rows exist: the view reports them and names the direct
+ * cursor that pages them.
  */
 export function fakeNativeAgentTranscriptView(
   input: NativeAgentSessionReadInput,
@@ -179,6 +179,9 @@ export function fakeNativeAgentTranscriptView(
     messages: projection.messages,
     ...(messageWindow ? { messageWindow } : {}),
     ...(projection.title ? { title: projection.title } : {}),
+    ...(historyRows > 0
+      ? { historyCursor: historyCursor(historyRows), historyPaging: "direct" as const }
+      : {}),
     historyEpoch: FAKE_NATIVE_AGENT_HISTORY_EPOCH,
     historyComplete: historyRows === 0 && projection.messageWindow?.truncated !== true,
   };
@@ -329,22 +332,15 @@ export function createNativeAgentSessionBackend(options: NativeAgentSessionBacke
         };
       },
     ),
-    /*
-     * The joined snapshot "load earlier" mints a cursor from when the live
-     * tail names none: a cursor to the history rows, or none without any.
-     */
     getNativeAgentProjectionUpdate: mock(
       async (input: ReadInput): Promise<NativeAgentProjectionUpdate<unknown>> => {
-        const [projection, rows] = await Promise.all([read(input), history(input)]);
+        const projection = await read(input);
         if (!projection) return { syncVersion: 1, status: "missing" };
         return {
           syncVersion: 1,
           status: "snapshot",
           token: contentToken("projection", projection),
           projection,
-          ...(rows.length > 0 ? { historyCursor: historyCursor(rows.length) } : {}),
-          historyEpoch: FAKE_NATIVE_AGENT_HISTORY_EPOCH,
-          historyComplete: rows.length === 0,
         };
       },
     ),

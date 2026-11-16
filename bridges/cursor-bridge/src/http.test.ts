@@ -193,7 +193,7 @@ describe("authentication", () => {
   });
 
   test("a hung account lookup neither holds status nor signs the session out", async () => {
-    // To-do 1173: `Cursor.me` only builds the account label, and it used to
+    // #1526: `Cursor.me` only builds the account label, and it used to
     // be awaited with no bound, so a hung network hung this route.
     const previousApiKey = process.env.CURSOR_API_KEY;
     process.env.CURSOR_API_KEY = "hung-lookup-key";

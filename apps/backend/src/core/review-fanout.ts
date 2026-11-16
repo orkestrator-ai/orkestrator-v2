@@ -411,6 +411,8 @@ export interface ReviewFanoutHost {
     selection: ReviewerModelSelection,
     resultKey: string,
   ): Promise<AgentToolConnection | undefined>;
+  /** See `AgentBranchHost.assertAgentToolsReachable`. */
+  assertAgentToolsReachable?(selection: ReviewerModelSelection): Promise<void>;
   /**
    * The reviewer's own mail identity on a turn without a workflow-result
    * connection (build pipeline workers). Absent: such turns keep the
@@ -767,6 +769,12 @@ function reviewBranchHost(host: ReviewFanoutHost): AgentBranchHost<ReviewerRecor
       ? {
           agentMcp: (reviewer: ReviewerRecord, resultKey: string) =>
             host.agentMcp!(reviewer, resultKey),
+        }
+      : {}),
+    ...(host.assertAgentToolsReachable
+      ? {
+          assertAgentToolsReachable: (reviewer: ReviewerRecord) =>
+            host.assertAgentToolsReachable!(reviewer),
         }
       : {}),
     ...(host.workerMailTurn

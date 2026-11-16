@@ -66,7 +66,7 @@ export type BusyOptions = {
    * Files written into the turn environment while each round's held turn is
    * at the model, and removed when the round ends; 0 writes none. Past the
    * measurement file row cap (2,000) this puts capped lists on the turn and
-   * thread-segment owners, not only the environment scan (todo 4960).
+   * thread-segment owners, not only the environment scan (#1937).
    */
   busyTurnFiles: number;
 };
@@ -708,7 +708,7 @@ export async function measureBusy(
     // --- Environments ------------------------------------------------------
     const listing = await step(["environment", "list"]);
     // Every step goes through the worktree's CLI; an unbuilt one fails here,
-    // and reporting that as a missing environment hid the cause (todo 4960).
+    // and reporting that as a missing environment hid the cause (#1937).
     if (listing.status !== 0)
       throw new Error(
         `The CLI's environment list failed (exit ${listing.status}); build it with mise run build:cli`,
@@ -1161,7 +1161,7 @@ export async function measureBusy(
             await step(["review", "cancel", reviewId]);
             // Each review opens tabs in its environment, which holds at most
             // nine; close the last one's as a user would, or every launch
-            // after the ninth is refused (todo 4960's soak).
+            // after the ninth is refused (#1937's soak).
             try {
               await closeReviewTabs(reviewEnvironment.id, reviewId);
             } catch (error) {

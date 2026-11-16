@@ -163,6 +163,45 @@ describe("review fan-out dispatch preparation", () => {
     ]);
   });
 
+  test("checks agent tools reachability before a structured-output turn opens its window", async () => {
+    const testHarness = harness("build");
+    let checks = 0;
+    testHarness.host.assertAgentToolsReachable = async () => {
+      checks += 1;
+      throw new Error("container cannot reach the agent tools server");
+    };
+
+    await new ReviewFanoutRunner(testHarness.host).advanceReviewers([testHarness.reviewer]);
+    // Refused before anything is attached, journaled or sent, with the
+    // preflight's own explanation rather than a bridge refusal later on.
+    expect(checks).toBe(1);
+    expect(testHarness.attached).toHaveLength(0);
+    expect(testHarness.sends).toHaveLength(0);
+    expect(testHarness.reviewer).toMatchObject({
+      status: "failed",
+      dispatchState: "prepared",
+      error: "container cannot reach the agent tools server",
+    });
+  });
+
+  test("leaves a tool-transport turn's reachability check to its agentMcp", async () => {
+    const testHarness = harness("build");
+    let checks = 0;
+    testHarness.host.assertAgentToolsReachable = async () => {
+      checks += 1;
+    };
+    testHarness.host.agentMcp = async () => ({
+      url: "http://127.0.0.1:43123/mcp",
+      token: "broker-token",
+      workflowResultCapability: "signed-attempt-capability",
+    });
+    testHarness.reviewer.resultTransport = "tool-v1";
+
+    await new ReviewFanoutRunner(testHarness.host).advanceReviewers([testHarness.reviewer]);
+    expect(checks).toBe(0);
+    expect(testHarness.sends).toHaveLength(1);
+  });
+
   test("resets a pre-prompt setup failure so the same request can dispatch once", async () => {
     let fail = true;
     const testHarness = harness("plan", async () => {

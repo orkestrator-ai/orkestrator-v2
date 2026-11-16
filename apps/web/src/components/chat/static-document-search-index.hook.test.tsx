@@ -40,7 +40,7 @@ import {
 } from "./static-document-search-index";
 
 /*
- * The React wiring of Find's static-document index (5780 task 2): when it
+ * The React wiring of Find's static-document index (#2155): when it
  * reads, which generation it reads for, and which cards it leaves alone
  * because they show something other than the document or could not display it.
  */

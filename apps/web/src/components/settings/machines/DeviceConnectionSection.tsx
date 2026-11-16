@@ -32,7 +32,14 @@ import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { reloadAfterConnectionChange } from "@/lib/client-platform";
 import { publishConnections } from "@/lib/connections";
 import { SshRouteDialog, errorCode } from "./SshRouteDialog";
-import { FormError, MachineSection, TokenInput, errorText } from "./machine-ui";
+import {
+  FormError,
+  MachineSection,
+  NativeTokenNote,
+  TokenInput,
+  errorText,
+  nativeTokenEntry,
+} from "./machine-ui";
 import type { ConnectionsApi } from "./useMachines";
 
 interface HostKeyReview {
@@ -67,6 +74,7 @@ export function DeviceConnectionSection({
   const [forgetting, setForgetting] = useState(false);
   const routes = connection.routes ?? [];
   const verified = connection.identity === "verified";
+  const nativeSave = nativeTokenEntry(api);
 
   const routeAction = async (
     routeId: string,
@@ -124,7 +132,13 @@ export function DeviceConnectionSection({
     setBusy("token");
     setTokenError(null);
     try {
-      publishConnections(await api.updateToken(connection.id, token.trim()));
+      publishConnections(
+        nativeSave
+          ? // The iOS app replaces the token saved for this address in its own
+            // editor; it keeps the name and the server open.
+            await nativeSave(connection.address ? { address: connection.address } : {})
+          : await api.updateToken(connection.id, token.trim()),
+      );
       setToken("");
       toast.success("Saved the token on this device", { description: connection.name });
     } catch (error) {
@@ -357,30 +371,46 @@ export function DeviceConnectionSection({
           </div>
 
           <form className="space-y-1.5" onSubmit={(event) => void saveToken(event)}>
-            <Label htmlFor={`device-token-${connection.id}`}>Connection token on this device</Label>
-            <div className="flex gap-2">
-              <div className="flex-1">
-                <TokenInput
-                  id={`device-token-${connection.id}`}
-                  value={token}
-                  onChange={setToken}
-                  disabled={disabled}
-                  required
-                  placeholder={
-                    connection.requiresToken ? "Required" : "Saved — enter a new one to replace it"
-                  }
-                />
+            {nativeSave ? (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium">Connection token on this device</span>
+                <Button type="submit" size="sm" variant="outline" disabled={disabled}>
+                  {busy === "token" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                  Replace token
+                </Button>
               </div>
-              <Button
-                type="submit"
-                size="sm"
-                variant="outline"
-                disabled={disabled || !token.trim()}
-              >
-                {busy === "token" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                Save token
-              </Button>
-            </div>
+            ) : (
+              <>
+                <Label htmlFor={`device-token-${connection.id}`}>
+                  Connection token on this device
+                </Label>
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <TokenInput
+                      id={`device-token-${connection.id}`}
+                      value={token}
+                      onChange={setToken}
+                      disabled={disabled}
+                      required
+                      placeholder={
+                        connection.requiresToken
+                          ? "Required"
+                          : "Saved — enter a new one to replace it"
+                      }
+                    />
+                  </div>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    variant="outline"
+                    disabled={disabled || !token.trim()}
+                  >
+                    {busy === "token" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                    Save token
+                  </Button>
+                </div>
+              </>
+            )}
             <p className="text-[11px] text-zinc-500">
               Verified with the machine before it is stored. This does not change the token on the
               machine itself.
@@ -511,6 +541,7 @@ function AddHttpsRouteDialog({
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nativeSave = nativeTokenEntry(api);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -518,7 +549,11 @@ function AddHttpsRouteDialog({
     setError(null);
     try {
       publishConnections(
-        await api.connect({ address, token, select: false, connectionId: connection.id }),
+        nativeSave
+          ? // The iOS app saves each address as its own server and keeps no
+            // routes, so there is no `connectionId` to pass.
+            await nativeSave({ address })
+          : await api.connect({ address, token, select: false, connectionId: connection.id }),
       );
       setAddress("");
       setToken("");
@@ -557,16 +592,20 @@ function AddHttpsRouteDialog({
               required
             />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="device-route-token">Gateway token</Label>
-            <TokenInput
-              id="device-route-token"
-              value={token}
-              onChange={setToken}
-              disabled={busy}
-              required
-            />
-          </div>
+          {nativeSave ? (
+            <NativeTokenNote />
+          ) : (
+            <div className="space-y-1.5">
+              <Label htmlFor="device-route-token">Gateway token</Label>
+              <TokenInput
+                id="device-route-token"
+                value={token}
+                onChange={setToken}
+                disabled={busy}
+                required
+              />
+            </div>
+          )}
           {error ? <FormError message={error} /> : null}
           <DialogFooter>
             <Button
@@ -605,6 +644,7 @@ export function SaveOnDeviceForm({
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nativeSave = nativeTokenEntry(api);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -612,7 +652,9 @@ export function SaveOnDeviceForm({
     setError(null);
     try {
       publishConnections(
-        await api.connect({ address: origin, token: token.trim(), select: false }),
+        nativeSave
+          ? await nativeSave({ address: origin })
+          : await api.connect({ address: origin, token: token.trim(), select: false }),
       );
       setToken("");
       toast.success("Saved on this device", { description: name });
@@ -630,22 +672,39 @@ export function SaveOnDeviceForm({
       testId="machine-save-on-device"
     >
       <form className="space-y-1.5" onSubmit={(event) => void submit(event)}>
-        <Label htmlFor="save-on-device-token">Gateway token for {origin}</Label>
-        <div className="flex gap-2">
-          <div className="flex-1">
-            <TokenInput
-              id="save-on-device-token"
-              value={token}
-              onChange={setToken}
-              disabled={busy}
-              required
-            />
+        {nativeSave ? (
+          <div className="flex items-start gap-2">
+            <div className="flex-1">
+              <NativeTokenNote>
+                You enter the gateway token for {origin} in the app’s own editor, so this page never
+                sees it.
+              </NativeTokenNote>
+            </div>
+            <Button type="submit" size="sm" variant="outline" disabled={busy}>
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Save on this device
+            </Button>
           </div>
-          <Button type="submit" size="sm" variant="outline" disabled={busy || !token.trim()}>
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-            Save on this device
-          </Button>
-        </div>
+        ) : (
+          <>
+            <Label htmlFor="save-on-device-token">Gateway token for {origin}</Label>
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <TokenInput
+                  id="save-on-device-token"
+                  value={token}
+                  onChange={setToken}
+                  disabled={busy}
+                  required
+                />
+              </div>
+              <Button type="submit" size="sm" variant="outline" disabled={busy || !token.trim()}>
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                Save on this device
+              </Button>
+            </div>
+          </>
+        )}
         {error ? <FormError message={error} /> : null}
       </form>
     </MachineSection>

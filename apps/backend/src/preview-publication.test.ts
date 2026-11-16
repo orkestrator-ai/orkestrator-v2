@@ -14,7 +14,7 @@ import {
   startPreviewFixture,
   type PreviewFixture,
 } from "../../../test-fixtures/preview-app/server.ts";
-import { createPreviewHarness, type PreviewHarness } from "./core/preview-test-support.js";
+import { createPreviewHarness, type PreviewHarness } from "./core/previews/test-support.js";
 import { PreviewPublicationManager } from "./preview-publication.js";
 import { certificates } from "./preview-test-pki.js";
 

@@ -851,7 +851,7 @@ retired paths and run the checks required for the files changed:
    `docs/development/agent-testing.md#live-client-outage` and this file's tasks 16–20.
 2. `e2e/agent-testing/connection-outage-electron.spec.ts:21`: the same 0051
    replacement.
-3. `apps/backend/src/core/preview-verification-window.test.ts:11`: deleted
+3. `apps/backend/src/core/previews/verification-window.test.ts:11`: deleted
    `3230-restart-inside-verification-window.md` →
    `docs/todo/previews-and-annotations/0045-preview-service-discovery.md` task 3
    (0045 retired 2026-11-11; the comment now points at

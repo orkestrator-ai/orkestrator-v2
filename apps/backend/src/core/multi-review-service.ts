@@ -18,6 +18,7 @@ import {
   multiReviewRewindTarget,
 } from "./multi-review-code-rewind.js";
 import { probeReviewWorktree } from "./review-worktree-probe.js";
+import { multiReviewDeleteRefusal, multiReviewStartRefusal } from "./multi-review-refusals.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import {
   MAX_CODE_REWIND_PREVIEW_PATHS,
@@ -266,7 +267,7 @@ const DEFAULT_POLL_MS = 1_000;
 /** Running provider work is observed every few seconds, with per-workflow jitter. */
 const DEFAULT_OBSERVATION_MS = 3_000;
 /**
- * Cadence while an accepted result waits for its turn to end (todo 7557).
+ * Cadence while an accepted result waits for its turn to end (#2079).
  * Nothing announces that end, and it usually follows the acceptance within a
  * few hundred milliseconds; the window is one observation interval from the
  * acceptance, after which the ordinary cadence is no slower.
@@ -274,7 +275,7 @@ const DEFAULT_OBSERVATION_MS = 3_000;
 const RESULT_SETTLE_POLL_MS = 250;
 /**
  * How long after a validation run starts it is read on the fast cadence
- * (todo 7564 task 3). The run is a detached worker in the environment and
+ * (#2131). The run is a detached worker in the environment and
  * nothing announces its end, so a short run waited for the next observation
  * pass (3 s plus a spread) before the review could start. Past the window the
  * ordinary cadence applies, so a run that takes minutes pays at most two extra
@@ -1284,14 +1285,22 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       workflow,
     );
     if (!saved) {
-      throw new Error(
-        "Finish, cancel, or delete the existing Multi Review before starting another",
-      );
+      throw new Error(multiReviewStartRefusal(await this.activePhases(workflow.environmentId)));
     }
     workflow.backendRevision = saved.revision;
     await this.syncWorkflowActivity(workflow);
     void this.advanceNow(workflow.id);
     return workflow;
+  }
+
+  /** The phases of the environment's active workflows, for a refused start's wording. */
+  private async activePhases(environmentId: string): Promise<MultiReviewPhase[]> {
+    const stored = await this.storage.listMultiReviewWorkflows(environmentId).catch(() => []);
+    return stored.flatMap((record) =>
+      isMultiReviewWorkflow(record.snapshot) && !isMultiReviewTerminalPhase(record.snapshot.phase)
+        ? [record.snapshot.phase]
+        : [],
+    );
   }
 
   /**
@@ -2561,7 +2570,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       const { workflow, token } = controlled;
       try {
         if (!isMultiReviewTerminalPhase(workflow.phase)) {
-          throw new Error("Cancel or finish the running Multi Review before deleting it");
+          throw new Error(multiReviewDeleteRefusal(workflow.phase));
         }
         const targets = [
           ...workflow.reviewers.flatMap((reviewer) =>
@@ -2841,7 +2850,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * `windowMs` and not consumed yet. Its pass consumes it only once the turn
    * that submitted it has ended, and that end raises no wake, so without a
    * short follow-up the workflow waited a whole observation interval after
-   * a pass that read the turn still running (todo 7557).
+   * a pass that read the turn still running (#2079).
    */
   private async acceptedResultAwaitsTurnEnd(
     workflow: MultiReviewWorkflow,
@@ -4001,6 +4010,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       executionPolicy: () => this.executionPolicy(workflow),
       agentMcp: (selection, resultKey) =>
         this.workflowAgentMcp(workflow, resultKey, selection.agent, "Multi Review reviewer"),
+      assertAgentToolsReachable: (selection) =>
+        this.assertWorkflowAgentToolsReachable(workflow, "Multi Review reviewer", selection.agent),
       ...(this.options.artifactDispatch
         ? {
             artifactTurns: {
@@ -4597,15 +4608,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             ? (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema)
             : REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA;
       const resultKind: WorkflowResultKind = multiReviewStepResultKind(request.kind);
-      const agentMcp =
-        request.resultTransport === "tool-v1"
-          ? await this.workflowAgentMcp(
-              workflow,
-              request.requestId,
-              selection.agent,
-              `Multi Review ${modelLabel} step`,
-            )
-          : undefined;
+      const stage = `Multi Review ${modelLabel} step`;
+      let agentMcp: AgentToolConnection | undefined;
+      if (request.resultTransport === "tool-v1") {
+        agentMcp = await this.workflowAgentMcp(workflow, request.requestId, selection.agent, stage);
+      } else {
+        await this.assertWorkflowAgentToolsReachable(workflow, stage, selection.agent);
+      }
       if (request.resultTransport === "tool-v1" && this.options.workflowResults) {
         await this.options.workflowResults.prepare({
           resultKey: request.requestId,
@@ -5719,6 +5728,25 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     } finally {
       if (this.providerCreations.get(key) === creation) this.providerCreations.delete(key);
     }
+  }
+
+  /**
+   * Refuse a structured-output Claude container turn up front when it cannot
+   * reach the agent tools server. A container's Claude bridge
+   * is always given the Orkestrator MCP server and refuses every turn after
+   * the first while it is not connected, so a structured-output turn that
+   * went ahead would fail at its first schema repair or follow-up with a
+   * message that asks for a retry (to-do 8172).
+   */
+  private async assertWorkflowAgentToolsReachable(
+    workflow: MultiReviewWorkflow,
+    stage: string,
+    agent: StructuredOutputProvider,
+  ): Promise<void> {
+    if (agent !== "claude" || !this.options.assertAgentToolsReachable) return;
+    const environment = await this.storage.getEnvironment(workflow.environmentId);
+    if (!environment || environment.environmentType === "local") return;
+    await this.options.assertAgentToolsReachable(workflow.environmentId, stage);
   }
 
   private async workflowAgentMcp(

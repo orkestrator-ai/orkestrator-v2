@@ -1,6 +1,6 @@
 /**
  * Points a `dev:test` profile's own OpenCode at a scripted loopback model
- * through a custom provider (todo 0049 task 6, todo 0039 task 6).
+ * through a custom provider (#2081, todo 0039 task 6).
  *
  * An agent-test backend runs OpenCode with
  * `XDG_CONFIG_HOME=<dataDir>/agent-credentials/xdg-config`

@@ -1,6 +1,6 @@
 /**
  * A scripted loopback stand-in for OpenAI's Responses WebSocket, for
- * `idle-observation-live.spec.ts` (todo 0049 task 1), so the real pinned
+ * `idle-observation-live.spec.ts` (#1934), so the real pinned
  * Codex app-server and bridge take real turns with no login and nothing
  * billed. Run with Bun (specs run under Node, which has no WebSocket server):
  *
@@ -14,7 +14,7 @@
  * an `additional_tools` input item, and continues later requests with
  * `previous_response_id`, so the tools are remembered per connection.
  *
- * Beyond commands (todo 0049 tasks 3, 5 and 8): an async question is one
+ * Beyond commands (#1960): an async question is one
  * `request_user_input_async` call, which returns at once, so the turn goes on
  * to its reply; a sub-agent is a `spawn_agent` call (no parent history) and,
  * once it returns, one `wait_agent` call before the reply; and a background

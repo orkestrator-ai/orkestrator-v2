@@ -88,7 +88,7 @@ export interface ConditionalWriteItem {
  * How many groups (a file, or both ends of a rename) one helper process
  * writes. Each write is still checked on its own immediately before it
  * happens; batching only removes the per-file process start, which cost 11
- * to 14 ms per file on a quiet host and 30 to 40 ms under load (todo 7555).
+ * to 14 ms per file on a quiet host and 30 to 40 ms under load (#2085).
  * It also bounds how far an owner replacement can run on: the owner fence is
  * asserted before each batch.
  */
@@ -304,7 +304,7 @@ async function executeConditionalWrites(
  * How long a restore preview may spend checking its destinations. The
  * preflight reads and hashes each planned path one at a time, so a fixed
  * deadline refused exactly the bulk restores a user most wants: on a busy
- * host 10,000 files took up to 15 s and 20,000 up to 35 s (todo 4960). The
+ * host 10,000 files took up to 15 s and 20,000 up to 35 s (#1937). The
  * deadline grows with the plan and stays at least the floor, up to the
  * ceiling.
  */

@@ -14,7 +14,7 @@ import path from "node:path";
 
 // Two branches that each take "the next number" for a to-do or flake file in
 // different folders pass todo-index and flaky-tests-index alone and collide
-// once both merge (todo 7142 task 3). A claim file named by the number makes
+// once both merge (retired todo 7142, task 3). A claim file named by the number makes
 // the two branches add the same path, so Git reports an add/add conflict and
 // the second pull request cannot merge until it renumbers.
 // docs/number-claims/README.md explains the rules.

@@ -21,7 +21,7 @@ import {
 } from "./reader.js";
 
 /**
- * To-do 7542 task 1: an isolated agent-test profile's backend reads Claude
+ * #2152: an isolated agent-test profile's backend reads Claude
  * and Codex plan usage from a loopback server, and points its Claude bridges
  * at a loopback model, and nothing else ever does.
  */

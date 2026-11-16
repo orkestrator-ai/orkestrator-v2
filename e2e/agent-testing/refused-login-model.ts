@@ -1,5 +1,5 @@
 /**
- * A loopback model that refuses every login (to-do 5160 task 4), so the real
+ * A loopback model that refuses every login (to-do 5160 (retired) task 4), so the real
  * pinned Claude CLI, Codex app-server, Pi SDK and OpenCode server fail a turn
  * the way a provider does when the key is wrong, with no login and nothing
  * billed. It answers every request with HTTP 401 in the caller's own error
@@ -8,9 +8,12 @@
  * upgrade (Codex's Responses transport) is refused with the same 401, and is
  * held like any other model request.
  *
- *   bun refused-login-model.ts
+ *   bun refused-login-model.ts [--port <port>]
  *
- * prints its origin (`http://127.0.0.1:<port>`) as the first stdout line.
+ * prints its origin (`http://127.0.0.1:<port>`) as the first stdout line. With
+ * no `--port` it takes an ephemeral one; a fixed port lets a spec run it inside
+ * a container (to-do 5160 (retired) task 6) and reach it there by `docker exec curl`.
+ * It imports only `node:` modules, so it runs on its own in the image's `bun`.
  *
  * `POST /__qa/hold` with `{"hold":true}` parks every later model request (HTTP
  * or WebSocket upgrade) until
@@ -54,7 +57,9 @@ export interface RefusedLoginModel {
  * `Bun.serve`, so the unit tests' DOM preload (which replaces the global
  * `Response`) cannot change what it answers.
  */
-export async function serveRefusedLoginModel(): Promise<RefusedLoginModel> {
+export async function serveRefusedLoginModel(
+  options: { port?: number } = {},
+): Promise<RefusedLoginModel> {
   let requests = 0;
   let hold = false;
   const waiting = new Set<() => void>();
@@ -140,7 +145,7 @@ export async function serveRefusedLoginModel(): Promise<RefusedLoginModel> {
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
+    server.listen(options.port ?? 0, "127.0.0.1", () => resolve());
   });
   const { port } = server.address() as AddressInfo;
   return {
@@ -176,8 +181,19 @@ export async function refusedLoginStats(
   return (await response.json()) as { requests: number; held: number };
 }
 
+/** The `--port` argument: 0 (ephemeral) when absent; anything else must be a port. */
+export function portArgument(argv: readonly string[]): number {
+  const index = argv.indexOf("--port");
+  if (index === -1) return 0;
+  const port = Number(argv[index + 1]);
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+    throw new Error("--port must be a TCP port");
+  }
+  return port;
+}
+
 if (import.meta.main) {
-  const model = await serveRefusedLoginModel();
+  const model = await serveRefusedLoginModel({ port: portArgument(process.argv) });
   const stop = () => {
     model.stop();
     process.exit(0);

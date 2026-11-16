@@ -180,7 +180,7 @@ export function logicalKey(environmentId: string, tabId: string): string {
 /**
  * What a completed `project.remove` deleted: the registration and this
  * machine's tickets, ticket images, labels, notes and feature plans for the
- * project (to-do 5820). Checkouts, remote repositories and other machines'
+ * project (#2295). Checkouts, remote repositories and other machines'
  * copies are never touched. Shared with the reconciler, which reports it for
  * a removal that finished before a restart.
  */

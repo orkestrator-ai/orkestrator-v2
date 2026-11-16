@@ -374,7 +374,7 @@ replay shows it as the card, never as a message the user typed. See
   read-only turn without the command sandbox: a narrowed sandbox cannot run
   there, so Codex's own refusal stands. Codex 0.167.0 reports `network` there
   without the experimental API although the generated bindings omit it;
-  re-check on a bump with `mise run verify:codex:network-card` (to-do 8085 (retired)
+  re-check on a bump with `mise run verify:codex:network-card` (to-do 8085
   (retired)).
 - Every turn runs in Codex's Default collaboration mode, which refuses
   `request_user_input`. Threads of a watched session (any policy but

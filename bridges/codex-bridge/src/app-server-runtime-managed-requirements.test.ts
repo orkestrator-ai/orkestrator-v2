@@ -12,7 +12,7 @@
 import { describe, expect, test } from "bun:test";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 
-import { harness, type Harness } from "./app-server-runtime-test-harness.js";
+import { harness, threadPayload, type Harness } from "./app-server-runtime-test-harness.js";
 import {
   CODEX_MANAGED_NETWORK_PROXY_NOTE,
   CODEX_MANAGED_WORKSPACE_SANDBOX_NOTE,
@@ -82,6 +82,85 @@ describe("Codex host session on a managed host", () => {
       type: "workspaceWrite",
     });
     expect(requestsOf(h, "configRequirements/read")).toHaveLength(1);
+  });
+
+  test("narrows a resumed thread and its next turn", async () => {
+    const h = await harness({ "configRequirements/read": forbidsFullAccess });
+    const resumed = await h.runtime.resumeSession({
+      threadId: "thread-1",
+      mode: "build",
+      policy: hostDefault,
+    });
+    expect(resumed).not.toBeNull();
+    expect(requestsOf(h, "thread/resume")[0]!.params.sandbox).toBe("workspace-write");
+    await promptAndComplete(h, resumed!.sessionId, "resumed-turn", "turn-1");
+    expect(requestsOf(h, "turn/start")[0]!.params.sandboxPolicy).toMatchObject({
+      type: "workspaceWrite",
+    });
+    expect(requestsOf(h, "configRequirements/read")).toHaveLength(1);
+  });
+
+  test("narrows a forked thread and its next turn", async () => {
+    const h = await harness({
+      "configRequirements/read": forbidsFullAccess,
+      "thread/fork": () => ({ thread: threadPayload("thread-fork") }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: hostDefault });
+    await promptAndComplete(h, sessionId, "parent-turn", "turn-1");
+    const fork = await h.runtime.forkSession(sessionId);
+    expect(fork).toMatchObject({ outcome: "created", threadId: "thread-fork" });
+    expect(requestsOf(h, "thread/fork")[0]!.params.sandbox).toBe("workspace-write");
+    if (fork.outcome !== "created") throw new Error("Expected a created fork");
+    expect(
+      await h.runtime.prompt(fork.sessionId, {
+        prompt: "Continue",
+        requestId: "fork-turn",
+        attachments: [],
+      }),
+    ).toMatchObject({ ok: true });
+    expect(requestsOf(h, "turn/start")[1]!.params.sandboxPolicy).toMatchObject({
+      type: "workspaceWrite",
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-fork",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+    expect(requestsOf(h, "configRequirements/read")).toHaveLength(1);
+  });
+
+  test("forgets exited requirements and reports the held policy until the replacement answers", async () => {
+    let managed = true;
+    const h = await harness({
+      "configRequirements/read": () => (managed ? forbidsFullAccess() : { requirements: null }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: hostDefault });
+    await promptAndComplete(h, sessionId, "before-restart", "turn-1");
+    expect(h.engine.managedRequirements()).toMatchObject({
+      allowedSandboxModes: ["workspace-write", "read-only"],
+    });
+    expect(h.runtime.getStatus(sessionId)?.policy?.sandbox).toBe("provider");
+
+    h.child().exit(1);
+    // Assert synchronously, before ensureReady can start a new generation:
+    // known() must not retain the exited generation's cached answer.
+    expect(h.engine.managedRequirements()).toBeUndefined();
+    expect(h.runtime.getStatus(sessionId)?.policy).toEqual(hostDefault);
+    expect((await h.runtime.getConfig(sessionId))?.policy).toEqual(hostDefault);
+
+    managed = false;
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+    await promptAndComplete(h, sessionId, "after-restart", "turn-1");
+    expect(h.children).toHaveLength(2);
+    expect(requestsOf(h, "configRequirements/read")).toHaveLength(1);
+    expect(requestsOf(h, "thread/resume")[0]!.params.sandbox).toBe("danger-full-access");
+    expect(requestsOf(h, "turn/start")[0]!.params.sandboxPolicy).toEqual({
+      type: "dangerFullAccess",
+    });
+    expect(h.engine.managedRequirements()).toBeNull();
+    expect(h.runtime.getStatus(sessionId)?.policy).toEqual(hostDefault);
+    expect((await h.runtime.getConfig(sessionId))?.policy).toEqual(hostDefault);
   });
 
   test("the policy the backend sent still applies: re-sending it is not a widening", async () => {

@@ -253,8 +253,9 @@ export interface OrkestratorGatewayOptions {
   };
 }
 
+/** The name issued over plain HTTP, where a `__Host-` cookie cannot be set. */
 export const AUTH_COOKIE = "orkestrator_gateway_auth";
-/** The `__Host-` name, read and stripped everywhere; not issued yet (see `gateway-sessions.ts`). */
+/** The name issued over HTTPS, and the only one read there (see `gateway-sessions.ts`). */
 export const SECURE_AUTH_COOKIE = "__Host-orkestrator_gateway_auth";
 export const GATEWAY_AUTH_COOKIE_NAMES: readonly string[] = [AUTH_COOKIE, SECURE_AUTH_COOKIE];
 export const API_PREFIX = "/__orkestrator";

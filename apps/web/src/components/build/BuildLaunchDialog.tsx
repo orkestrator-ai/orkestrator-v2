@@ -70,6 +70,7 @@ import {
   type BuildLaunchMachine,
   type BuildLaunchMachineChoice,
 } from "./build-machines";
+import { useBuildNetworkPreference } from "./useBuildNetworkPreference";
 import { useMachineDockerAvailability } from "./useMachineDockerAvailability";
 import {
   ReviewLensField,
@@ -332,6 +333,11 @@ interface BuildLaunchDialogProps {
   catalog: AgentModelCatalog;
   defaultAgent: LaunchAgent;
   defaultEnvironmentType: EnvironmentType;
+  /**
+   * The container network access the dialog opens on: the project's last
+   * build choice (`buildLaunchDefaults`). Full access when absent.
+   */
+  defaultNetworkAccessMode?: NetworkAccessMode;
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
   preferredFastModes?: Partial<Record<LaunchAgent, boolean>>;
@@ -801,6 +807,7 @@ export function BuildLaunchDialog({
   catalog,
   defaultAgent,
   defaultEnvironmentType,
+  defaultNetworkAccessMode = "full",
   preferredModels,
   preferredReasoningEfforts,
   preferredFastModes,
@@ -840,6 +847,14 @@ export function BuildLaunchDialog({
   const pickedMachine = pickedLaunchMachine(machines, pickedMachineKey);
   const machineKey = pickedMachine?.key ?? null;
   const machineChoice = machineChoiceFor(machines, machineKey);
+  const networkPreference = useBuildNetworkPreference(
+    machineChoice,
+    open,
+    defaultNetworkAccessMode,
+  );
+  const effectiveNetworkDefault = networkPreference.mode ?? defaultNetworkAccessMode;
+  const networkPreferenceBlocked =
+    Boolean(machineChoice) && (networkPreference.pending || networkPreference.error);
   // Docker and the local checkout belong to the machine the build runs on.
   const remoteDocker = useMachineDockerAvailability(machineChoice?.machine, Boolean(machineChoice));
   // Until the other machine answers, Container is neither offered nor
@@ -852,9 +867,12 @@ export function BuildLaunchDialog({
     ? pickedMachine?.hasCheckout === true
     : ownLocalEnvironmentAvailable;
   const [environmentType, setEnvironmentType] = useState(defaultEnvironmentType);
-  // Pipelines have always created restricted containers; the launcher now
-  // shows that choice instead of making it silently.
-  const [networkAccessMode, setNetworkAccessMode] = useState<NetworkAccessMode>("restricted");
+  // Opens on the project's last build choice; the backend records each
+  // launch's choice (`lastBuildNetworkAccessMode`).
+  const [pickedNetworkAccessMode, setNetworkAccessMode] =
+    useState<NetworkAccessMode>(defaultNetworkAccessMode);
+  const [networkTouched, setNetworkTouched] = useState(false);
+  const networkAccessMode = networkTouched ? pickedNetworkAccessMode : effectiveNetworkDefault;
   const [steps, setSteps] = useState(() =>
     initialSteps(
       defaultAgent,
@@ -948,6 +966,7 @@ export function BuildLaunchDialog({
     wasOpenRef.current = open;
     if (justOpened) {
       touchedRef.current.clear();
+      setNetworkTouched(false);
       setPickedMachineKey(null);
       setEnvironmentType(() => {
         if (defaultEnvironmentType === "containerized" && !dockerAvailable) {
@@ -958,7 +977,6 @@ export function BuildLaunchDialog({
         }
         return defaultEnvironmentType;
       });
-      setNetworkAccessMode("restricted");
       setIncludeComments(commentContext?.defaultIncluded ?? true);
       setDeliveryChoice(effectiveDeliveryPolicy(deliveryPolicy));
       setInstructions({});
@@ -1127,7 +1145,11 @@ export function BuildLaunchDialog({
             if (busy || instructionsTooLong || lensError) return;
             // Covers a pending check too: `dockerAvailable` is false until the
             // picked machine says Docker runs there.
-            if (environmentType === "containerized" && !dockerAvailable) return;
+            if (
+              environmentType === "containerized" &&
+              (!dockerAvailable || networkPreferenceBlocked)
+            )
+              return;
             if (environmentType === "local" && !localEnvironmentAvailable) return;
             const selectedSteps = Object.fromEntries(
               BUILD_STEPS.map(({ key }) => {
@@ -1304,6 +1326,20 @@ export function BuildLaunchDialog({
                   <h4 id={`${networkGroupId}-label`} className="text-xs font-medium text-zinc-300">
                     Network access
                   </h4>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Uses this machine's last build choice for the project.
+                  </p>
+                  {networkPreference.pending && (
+                    <p role="status" className="mt-2 text-xs text-muted-foreground">
+                      Loading saved network access…
+                    </p>
+                  )}
+                  {networkPreference.error && (
+                    <p role="alert" className="mt-2 text-xs text-destructive">
+                      Could not load this machine's saved network access. Reopen the launcher to
+                      retry.
+                    </p>
+                  )}
                   <div
                     className="mt-2 grid gap-2 sm:grid-cols-2"
                     role="radiogroup"
@@ -1312,6 +1348,10 @@ export function BuildLaunchDialog({
                     {NETWORK_OPTIONS.map((option) => {
                       const selected = networkAccessMode === option.value;
                       const id = `${networkGroupId}-${option.value}`;
+                      const chooseNetwork = () => {
+                        setNetworkTouched(true);
+                        setNetworkAccessMode(option.value);
+                      };
                       return (
                         <div key={option.value} className="relative min-w-0">
                           <input
@@ -1319,7 +1359,8 @@ export function BuildLaunchDialog({
                             type="radio"
                             name={`${networkGroupId}-network`}
                             checked={selected}
-                            onChange={() => setNetworkAccessMode(option.value)}
+                            onChange={chooseNetwork}
+                            onClick={chooseNetwork}
                             className="peer sr-only"
                           />
                           <label
@@ -1528,7 +1569,8 @@ export function BuildLaunchDialog({
                 busy ||
                 instructionsTooLong ||
                 lensError ||
-                (environmentType === "containerized" && !dockerAvailable) ||
+                (environmentType === "containerized" &&
+                  (!dockerAvailable || networkPreferenceBlocked)) ||
                 (environmentType === "local" && !localEnvironmentAvailable)
               }
             >

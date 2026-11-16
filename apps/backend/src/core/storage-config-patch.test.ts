@@ -206,6 +206,24 @@ describe("patching repository settings", () => {
     });
   });
 
+  test("keeps the last build network access, which only a build launch records", async () => {
+    await withStorage(async (storage) => {
+      await storage.patchRepositoryConfig("p3", { lastBuildNetworkAccessMode: "restricted" });
+      await storage.patchRepositorySettings(
+        "p3",
+        { lastBuildNetworkAccessMode: "full", entryPort: 4000 },
+        ["lastBuildNetworkAccessMode"],
+      );
+      await storage.updateRepositorySettings("p3", {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        lastBuildNetworkAccessMode: "full",
+      });
+      const repo = (await storage.loadOwnConfig()).repositories.p3!;
+      expect(repo.lastBuildNetworkAccessMode).toBe("restricted");
+    });
+  });
+
   test("unsetting a required field falls back to its default", async () => {
     await withStorage(async (storage) => {
       await storage.patchRepositorySettings("p2", { prBaseBranch: "release" });

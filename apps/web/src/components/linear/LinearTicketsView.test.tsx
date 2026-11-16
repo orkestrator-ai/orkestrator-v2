@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
@@ -22,6 +22,8 @@ import type {
 } from "@/types/linear";
 import { appCommandStore } from "@/test/app-command-store";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
+import type { NodeSummary } from "@orkestrator/protocol/node-summaries";
+import { portalStore } from "@/lib/portal/portal-store";
 
 const realBackendSnapshot = { ...realBackend };
 
@@ -892,7 +894,7 @@ describe("LinearTicketsView", () => {
 
     expect(await screen.findByRole("heading", { name: "Configure build" })).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: /^Container/ }));
-    fireEvent.click(screen.getByRole("radio", { name: /^Full access/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /^Restricted/ }));
     fireEvent.click(screen.getByRole("button", { name: "Start build" }));
 
     await waitFor(() => {
@@ -900,9 +902,137 @@ describe("LinearTicketsView", () => {
         issueDetail,
         "project-1",
         "containerized",
-        expect.objectContaining({ networkAccessMode: "full" }),
+        expect.objectContaining({ networkAccessMode: "restricted" }),
       );
     });
+  });
+
+  test("starts the build on the machine picked in the launcher", async () => {
+    // Another machine holding the same repository, with a checkout there.
+    const builder = {
+      nodeId: "node-builder",
+      available: true,
+      view: { displayName: "Builder" },
+      projects: [
+        {
+          ref: { backendId: "node-builder", projectId: "builder-web" },
+          key: "node-builder:builder-web",
+          name: "web",
+          order: 0,
+          repositoryHint: "github.com/acme/web",
+          pathName: "web",
+        },
+      ],
+      environments: [],
+    } as unknown as NodeSummary;
+    const initialPortal = portalStore.store.getState();
+    let remoteRows: ReturnType<typeof buildPipelineFixture>[] = [];
+    const routed = spyOn(portalStore, "invokeOnNode").mockImplementation((async (
+      _nodeId: unknown,
+      command: string,
+    ) =>
+      command === "check_docker"
+        ? { available: true }
+        : command === "get_config"
+          ? { repositories: { "builder-web": { lastBuildNetworkAccessMode: "restricted" } } }
+          : command === "list_build_pipelines"
+            ? remoteRows.map((snapshot) => ({
+                id: snapshot.id,
+                projectId: snapshot.projectId,
+                snapshot,
+                revision: 1,
+              }))
+            : undefined) as unknown as typeof portalStore.invokeOnNode);
+    try {
+      portalStore.store.setState({ nodes: [builder] });
+      appCommandStore(projectStore).setState({
+        projects: [
+          {
+            id: "project-1",
+            name: "Web",
+            gitUrl: "https://github.com/acme/web.git",
+            localPath: "/work/web",
+            addedAt: "2026-08-11T00:00:00.000Z",
+            order: 0,
+          },
+        ],
+      });
+      renderLinearTicketsView();
+      fireEvent.click(await screen.findByText("Add Linear integration"));
+      await screen.findByText("Build Linear support");
+      await waitFor(() =>
+        expect(
+          (screen.getByRole("button", { name: /^build/i }) as HTMLButtonElement).disabled,
+        ).toBe(false),
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^build/i }));
+
+      const machines = await screen.findByRole("radiogroup", { name: "Machine" });
+      fireEvent.click(within(machines).getByRole("radio", { name: /Builder/ }));
+      const container = () =>
+        within(screen.getByRole("radiogroup", { name: "Where it runs" })).getByRole("radio", {
+          name: /^Container/,
+        }) as HTMLInputElement;
+      await waitFor(() => expect(container().disabled).toBe(false));
+      fireEvent.click(container());
+      await waitFor(() =>
+        expect(
+          (screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement).disabled,
+        ).toBe(false),
+      );
+      startBuildFromLinearIssueMock.mockImplementationOnce(async () => {
+        remoteRows = [
+          buildPipelineFixture({
+            id: "remote-build",
+            projectId: "builder-web",
+            environmentId: "remote-env",
+            phase: "building",
+            source: {
+              type: "linear",
+              issueId: issueDetail.id,
+              issueIdentifier: issueDetail.identifier,
+            },
+          }),
+        ];
+        return undefined;
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Start build" }));
+
+      await waitFor(() => {
+        expect(startBuildFromLinearIssueMock).toHaveBeenCalledWith(
+          issueDetail,
+          "project-1",
+          "containerized",
+          expect.objectContaining({
+            networkAccessMode: "restricted",
+            machine: {
+              machine: "node-builder",
+              nodeId: "node-builder",
+              projectId: "builder-web",
+              name: "Builder",
+            },
+          }),
+        );
+      });
+      await screen.findByRole("button", { name: /View Build.*building/ });
+      expect((screen.getByRole("button", { name: /^build/i }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^build/i }));
+      expect(startBuildFromLinearIssueMock).toHaveBeenCalledTimes(1);
+      // A fresh mount recovers the remote build from its backend, without a local insertion.
+      cleanup();
+      renderLinearTicketsView();
+      fireEvent.click(await screen.findByText("Add Linear integration"));
+      await screen.findByRole("button", { name: /View Build.*building/ });
+      expect((screen.getByRole("button", { name: /^build/i }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+      expect(appCommandStore(buildPipelineStore).getState().pipelines.size).toBe(0);
+    } finally {
+      routed.mockRestore();
+      portalStore.store.setState(initialPortal, true);
+    }
   });
 
   test("redirects an open launcher when a build becomes active in the background", async () => {

@@ -603,6 +603,9 @@ export async function createCommandFixtures() {
             ...(current?.lastEnvironmentType !== undefined
               ? { lastEnvironmentType: current.lastEnvironmentType }
               : {}),
+            ...(current?.lastBuildNetworkAccessMode !== undefined
+              ? { lastBuildNetworkAccessMode: current.lastBuildNetworkAccessMode }
+              : {}),
             ...(current?.lastEnvironmentAgentSelection !== undefined
               ? {
                   lastEnvironmentAgentSelection: current.lastEnvironmentAgentSelection,

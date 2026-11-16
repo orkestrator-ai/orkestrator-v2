@@ -8,13 +8,18 @@ import {
 } from "@orkestrator/protocol/build-pipeline-defaults";
 import type { LaunchAgent } from "@/lib/agent-launch";
 import { resolveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
-import type { AppConfig, EnvironmentType } from "@/types";
+import type { AppConfig, EnvironmentType, NetworkAccessMode } from "@/types";
 
 export type { BuildPipelineConfiguredDefaults };
 
 export interface BuildLaunchDefaults {
   defaultAgent: LaunchAgent;
   defaultEnvironmentType: EnvironmentType;
+  /**
+   * The container network access the launcher opens on: the one last chosen
+   * for a build of this project, else Full access.
+   */
+  defaultNetworkAccessMode: NetworkAccessMode;
   preferredModels: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts: Partial<Record<LaunchAgent, string>>;
   preferredFastModes: Partial<Record<LaunchAgent, boolean>>;
@@ -138,6 +143,7 @@ export function buildLaunchDefaults(
     defaultAgent,
     defaultEnvironmentType:
       repository?.lastEnvironmentType ?? (projectHasLocalPath ? "local" : "containerized"),
+    defaultNetworkAccessMode: repository?.lastBuildNetworkAccessMode ?? "full",
     preferredModels,
     preferredReasoningEfforts,
     preferredFastModes,

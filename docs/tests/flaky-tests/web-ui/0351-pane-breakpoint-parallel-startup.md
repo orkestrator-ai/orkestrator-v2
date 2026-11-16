@@ -222,3 +222,33 @@ Class A candidate (Playwright's default 5 s assertion / 30 s test deadline expir
 ## Triage note (2026-11-15, after the config change)
 
 Follow-up: the hang-watchdog defaults this note deferred have now landed (`e2e/playwright.config.ts`: `timeout: 120_000`, `expect: { timeout: 30_000 }`), but this case stays `open`: later observations are anchor value mismatches (`Transcript message 36.` expected, 35 received), not expired waits.
+
+## Fork-card review repair recurrence — 2026-11-16
+
+Observed with repair `0967f5b2e` on base
+`c1fcc573bc079b4d856d53e31c45d5ebf2485d11`. The read-only command
+`mise run flaky:recurrence -- 0351 --base c1fcc573bc079b4d856d53e31c45d5ebf2485d11`
+reported this case open.
+
+Command: `ORKESTRATOR_E2E_PORT=15383 ORKESTRATOR_PUBLIC_E2E_PORT=15384
+mise run test:logged -- --name browser -- mise run test:browser`.
+The component suite scheduled 1,908 cases with nine workers alongside default
+runtime validation. The mobile test
+`split panes keep terminal output, scroll positions and the draft across the breakpoint (in the app shell, appendChild fallback)`
+failed at `e2e/PaneBreakpoint.spec.ts:145`: expected `Transcript message 36.`,
+received `Transcript message 35.`. This fixture's transcript is plain text in a
+Codex tab; it has no Claude agent launches, and neither the spec nor its pane
+fixture changed on this branch.
+
+The complete unchanged owner then passed with one worker (exit 0, 157.4 s):
+
+```sh
+ORKESTRATOR_E2E_PORT=15383 mise run test:logged -- --name fix-pane-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/PaneBreakpoint.spec.ts --output output/agent-testing/8303-fix/pane-owner --workers=1
+```
+
+Passing raw output was deleted, so counts are not inferred. Aggregate evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Ni6dzT/`
+(browser log); trace:
+`output/playwright/test-results/PaneBreakpoint-split-panes-c1009-shell-appendChild-fallback--mobile-chromium/trace.zip`.
+No pane source, assertion, timeout or skip changed. The pass establishes
+intermittence, not the cause or a repair.

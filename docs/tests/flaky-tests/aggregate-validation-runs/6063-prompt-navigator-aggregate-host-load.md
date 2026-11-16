@@ -186,3 +186,17 @@ Evidence directory:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.0s0ejx/`
 (root/support log). This establishes intermittence, not its cause or a repair.
 No assertion, skip or timeout changed.
+
+The same runtime aggregate also timed out in the unchanged CLI owner:
+`process start reader > reads a real child's start time on this host`,
+`packages/cli/tests/client-descriptor-process.test.ts:191`, after 60,002.13 ms
+(60,000 ms budget). CLI totals: 546 passed, two skipped, one failed across
+42 files in 69.06 s. The workspace ran at concurrency two, with the CLI's
+package tests using the runner's isolated worker pool. The full unchanged owner
+then passed alone in 0.6 s (exit 0):
+`mise run test:logged -- --name fix-cli-process-owner -- bun test --cwd
+packages/cli ./tests/client-descriptor-process.test.ts --parallel=1 --only-failures`.
+Its aggregate evidence is the workspace log in the same `0s0ejx` directory.
+The CLI process reader and test are outside this branch's diff. This is another
+intermittent owner in this aggregate observation, with no confirmed cause;
+no timeout, skip or assertion changed.

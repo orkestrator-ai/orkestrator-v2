@@ -12,7 +12,7 @@ import {
   startPreviewFixture,
   type PreviewFixture,
 } from "../../../test-fixtures/preview-app/server.ts";
-import { createPreviewHarness, type PreviewHarness } from "./core/preview-test-support.js";
+import { createPreviewHarness, type PreviewHarness } from "./core/previews/test-support.js";
 import {
   PREVIEW_RELAY_SCRIPT,
   RELAY_FRAME,

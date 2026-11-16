@@ -397,7 +397,7 @@ test("opt-in service preview checks have tasks that never run by default", () =>
   const docker = String(tasks["test:preview:docker"]!.run);
   // Docker journeys need an explicit image; nothing picks one silently.
   expect(docker).toContain(":?Set ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE");
-  expect(docker).toContain("./src/core/preview-docker.test.ts");
+  expect(docker).toContain("./src/core/previews/docker.test.ts");
   expect(tasks["test:preview:browser"]!.run).toBe(
     "bunx playwright test --config e2e/preview/playwright.preview.config.ts",
   );

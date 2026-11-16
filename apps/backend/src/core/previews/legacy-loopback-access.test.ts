@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
-import { LoopbackListenerOwnership } from "./preview-listener-ownership.js";
-import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
+import { LoopbackListenerOwnership } from "./listener-ownership.js";
+import { createPreviewHarness, type PreviewHarness } from "./test-support.js";
 
 /**
  * Which backend-host ports the legacy `browser/loopback/<port>/` route may

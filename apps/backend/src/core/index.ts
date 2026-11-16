@@ -113,7 +113,7 @@ import { registryWriterStartup } from "./registry-writer-startup.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
 import { sweepOrphanEgressGateways } from "./egress-gateway.js";
 import { DesignService } from "./design/index.js";
-import { PreviewRuntime } from "./preview-runtime.js";
+import { PreviewRuntime } from "./previews/index.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { BackendDiagnostics } from "./backend-diagnostics.js";

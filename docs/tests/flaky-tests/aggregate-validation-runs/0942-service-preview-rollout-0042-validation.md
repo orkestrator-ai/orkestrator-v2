@@ -70,11 +70,11 @@ navigation. Validation started from `4ffb776ba` with these changes uncommitted.
   `--parallel=4`, 37.8 s), and the owning diagnostic guard passed (2.7 s).
 - The same aggregate observed `local preview service discovery on this host >
   two environments, a restart on the reused port, and an auto-incremented port`
-  in `apps/backend/src/core/preview-local-discovery.test.ts:572` failing after
+  in `apps/backend/src/core/previews/local-discovery.test.ts:572` failing after
   421.57 ms. The synthetic child server hit `EADDRINUSE` on `127.0.0.1:60379`
   and its terminal exited before reporting a bound port. The complete unchanged
   owning file passed alone in 4.5 s with
-  `mise run test:logged -- --name discovery-recheck -- bun test --cwd apps/backend ./src/core/preview-local-discovery.test.ts --parallel=1 --only-failures`.
+  `mise run test:logged -- --name discovery-recheck -- bun test --cwd apps/backend ./src/core/previews/local-discovery.test.ts --parallel=1 --only-failures`.
   Reserving then releasing an ephemeral port, and assuming its adjacent port is
   free, can race with other listeners on the shared host; this is an
   evidence-backed hypothesis, not a demonstrated implementation failure. No
@@ -140,12 +140,12 @@ navigation. Validation started from `4ffb776ba` with these changes uncommitted.
   finished in 495.1 s.
 - **Failure:** `local preview service discovery on this host > two environments,
   a restart on the reused port, and an auto-incremented port` in
-  `apps/backend/src/core/preview-local-discovery.test.ts:617` (696.68 ms).
+  `apps/backend/src/core/previews/local-discovery.test.ts:617` (696.68 ms).
   After registering the second server's incremented port, the endpoint was
   available but its ownership was `user-registered` and listener `unattributed`,
   where the test expected `managed-process`.
 - **Complete unchanged owner reruns:**
-  `mise run test:logged -- --name merge-main-preview-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/preview-local-discovery.test.ts --parallel=1 --only-failures`
+  `mise run test:logged -- --name merge-main-preview-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/previews/local-discovery.test.ts --parallel=1 --only-failures`
   failed during the aggregate (18 passed, one failed, 3.91 s): the synthetic
   server hit `EADDRINUSE` on `127.0.0.1:62651` and its terminal exited before
   reporting a bound port. The same command with name
@@ -174,7 +174,7 @@ navigation. Validation started from `4ffb776ba` with these changes uncommitted.
   mismatch as the storage-main merge above: `user-registered` received where
   `managed-process` was expected.
 - **Complete unchanged owner rerun:**
-  `mise run test:logged -- --name preview-discovery-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/preview-local-discovery.test.ts --parallel=1 --only-failures`
+  `mise run test:logged -- --name preview-discovery-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/previews/local-discovery.test.ts --parallel=1 --only-failures`
   passed (8.2 s) at load average about 15.
 - **Evidence:** `orkestrator-test-run.9PpU2I/` below the host temporary
   directory. No assertion, timeout or skip changed.
@@ -197,7 +197,7 @@ on the reused port, and an auto-incremented port` failed at line 531
 before reporting a bound port.
 
 The complete unchanged owner passed alone:
-`mise run test:logged -- --name backend-preview-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/preview-local-discovery.test.ts --parallel=1 --only-failures`
+`mise run test:logged -- --name backend-preview-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/previews/local-discovery.test.ts --parallel=1 --only-failures`
 (4.3 s logged). This confirms intermittence for the port-collision recurrence;
 it does not establish the cause. No assertion, timeout, skip or preview
 implementation changed.
@@ -212,7 +212,7 @@ implementation changed.
 - **Aggregate result:** `local preview service discovery on this host > two
   environments, a restart on the reused port, and an auto-incremented port`
   failed in the backend workspace group.
-- **Unchanged owner reruns:** `bun test --preload ../../tests/setup-node.ts ./src/core/preview-local-discovery.test.ts`
+- **Unchanged owner reruns:** `bun test --preload ../../tests/setup-node.ts ./src/core/previews/local-discovery.test.ts`
   from `apps/backend`, three times in a row: the first failed (18 passed, one
   failed) with `listen EADDRINUSE: address already in use 127.0.0.1:50487`
   and `terminal exited 0`; the next two passed (19 pass, 0 fail). The case

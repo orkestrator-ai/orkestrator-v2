@@ -1313,6 +1313,13 @@ the pinned binary's parser over the production argument shape.
    backend's card mapping and the rule enforcer, and checks the card is still
    "Approve network access" with no amendment
    ([permission-rules.md](../architecture/permission-rules.md#codex-on-a-managed-network-host)).
+   It runs twice: the second time the requirements also leave
+   `danger-full-access` out of `allowed_sandbox_modes`, and the host default
+   must run in Codex's `workspace-write` sandbox instead of being refused.
+   Both runs read the reported policy's note, so they fail if
+   `configRequirements/read` stops reporting `allowedSandboxModes` or the
+   `network` block (0.167.0 reports `network` without the experimental API,
+   although the generated bindings omit it).
 
    Treat a failure in the "live MCP protocol era" block as a release blocker
    rather than a flaky test. Those two contracts stand in for every third-party

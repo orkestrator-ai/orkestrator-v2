@@ -1023,6 +1023,21 @@ Pipeline runs are unattended. The coordinator always
 uses the immutable `coordinator-read-only` policy regardless of an environment
 override.
 
+On a Codex host an administrator manages through `/etc/codex/requirements.toml`
+(or MDM), the Codex bridge reads the effective requirements from app-server
+(`configRequirements/read`, once per app-server generation,
+`codex-managed-requirements.ts`). When `allowed_sandbox_modes` leaves out the
+mode a session asks for, as it does `danger-full-access` for the host default,
+thread and turn requests carry the widest allowed narrower mode instead
+(normally `workspace-write`), so the session runs rather than having every
+turn refused; the reported policy then says `provider` with a note that
+`.git` is read-only there. When the administrator's network proxy is on and a
+host session still runs without Codex's sandbox, the reported policy's note
+says the proxy does not apply to it. Container sessions, permission-profile
+sessions and read-only turns without Codex's command sandbox are left to
+Codex. Proved against the pinned Codex in a disposable container by
+`mise run verify:codex:network-card`.
+
 On Linux the Claude bridge refuses a turn that requires the CLI's command
 sandbox (a `provider` sandbox, or a coordinator qualified on it) when
 bubblewrap on that host cannot nest the user namespace the CLI's seccomp helper needs, as under

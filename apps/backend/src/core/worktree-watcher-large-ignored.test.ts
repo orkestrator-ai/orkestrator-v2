@@ -178,10 +178,15 @@ test("a tree left out while the watcher is distrusted keeps coverage withdrawn w
     // The new watches report the gap before them; a burst still settling would
     // forgive the miss below.
     await until(() => settled() > 0);
-    await new Promise((resolve) => setTimeout(resolve, 5));
 
-    // The owner's scan found a change no event announced: distrusted.
-    watcher.unannouncedChange?.();
+    // The owner's scan found a change no event announced: distrusted. While a
+    // burst is still settling the watcher forgives the report without arming
+    // its grace, so report again until the grace is armed (a repeat while it
+    // is armed is ignored) rather than sleeping past the settle.
+    await until(() => {
+      watcher.unannouncedChange?.();
+      return grace.pendingCount() === 1;
+    });
     expect(grace.advance()).toBe(1);
     expect(watcher.qualified).toBe(false);
     expect(coverage()).toBe(2);

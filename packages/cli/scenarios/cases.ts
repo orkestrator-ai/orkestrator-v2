@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { createForeignOwnerDecoys, DockerClient } from "./docker-decoys.js";
 import { startLossyProxy } from "./lossy-proxy.js";
 import { randomUUID } from "node:crypto";
@@ -15,6 +14,8 @@ import {
   createFixtureRepository,
   exists,
   expectThat,
+  runCommand,
+  runGit,
   type CliResult,
   type ScenarioContext,
   type ScenarioPaths,
@@ -166,10 +167,8 @@ async function expectChangesView(
   }
 }
 
-function git(cwd: string, args: string[]): string {
-  const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-  if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
-  return result.stdout.trim();
+function git(cwd: string, args: string[]): Promise<string> {
+  return runGit(["-C", cwd, ...args]);
 }
 
 export const SCENARIOS: ScenarioDefinition[] = [
@@ -241,7 +240,7 @@ export const SCENARIOS: ScenarioDefinition[] = [
           "worktree was not created",
         );
         expectThat(
-          git(ready.workspacePath!, ["rev-parse", "HEAD"]) === fixture.head,
+          (await git(ready.workspacePath!, ["rev-parse", "HEAD"])) === fixture.head,
           "worktree is not at the pinned base",
         );
       }
@@ -619,10 +618,8 @@ export const SCENARIOS: ScenarioDefinition[] = [
         `command outlived its environment (${drained.state})`,
       );
       if (context.environmentType === "local") {
-        const survivors = spawnSync("pgrep", ["-f", "^sleep 127$"], {
-          encoding: "utf8",
-        });
-        expectThat(survivors.status === 1, "the command's process survived deletion");
+        const survivors = await runCommand(["pgrep", "-f", "^sleep 127$"]);
+        expectThat(survivors.code === 1, "the command's process survived deletion");
       }
     },
   },
@@ -906,7 +903,7 @@ export const SCENARIOS: ScenarioDefinition[] = [
       }
       expectThat(await exists(fixture.projectPath), "the cascade deleted the checkout");
       expectThat(
-        git(fixture.projectPath, ["remote", "get-url", "origin"]) === fixture.originPath,
+        (await git(fixture.projectPath, ["remote", "get-url", "origin"])) === fixture.originPath,
         "the cascade changed the checkout's origin",
       );
       const replay = await context.cli.run(
@@ -945,8 +942,11 @@ export const SCENARIOS: ScenarioDefinition[] = [
           );
         },
       });
-      expectThat(git(target, ["rev-list", "--count", "HEAD"]) === "1", "init made no commit");
-      expectThat(git(target, ["remote"]) === "", "init configured a remote");
+      expectThat(
+        (await git(target, ["rev-list", "--count", "HEAD"])) === "1",
+        "init made no commit",
+      );
+      expectThat((await git(target, ["remote"])) === "", "init configured a remote");
       const environment = await createEnvironment(context, projectId, "init-env");
       const started = await context.cli.ok<{
         environment: PublicEnvironmentSummary;
@@ -957,7 +957,8 @@ export const SCENARIOS: ScenarioDefinition[] = [
       const workspace = started.result.environment.workspacePath;
       expectThat(workspace && (await exists(workspace)), "no worktree was created");
       expectThat(
-        git(workspace!, ["rev-parse", "HEAD"]) === git(target, ["rev-parse", "HEAD"]),
+        (await git(workspace!, ["rev-parse", "HEAD"])) ===
+          (await git(target, ["rev-parse", "HEAD"])),
         "the worktree did not start from the repository's own main",
       );
     },

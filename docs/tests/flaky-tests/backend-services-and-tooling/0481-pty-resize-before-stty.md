@@ -51,3 +51,16 @@ The repository suite repeated `24 80` instead of `31 93` (46.53 ms). `mise run t
 - **Fix:** `apps/backend/src/core/pty.test.ts` has the shell wait on its own terminal (`until [ "$(stty size)" = '31 93' ]; do sleep 0.02; done`) before printing the size and the ready marker. The resize is still proved by the output (`/^31 93\r?$/m`, which ignores the echoed command line); the 3 s exit race became a 50 s hang watchdog and the test's own 5 s third argument was removed (the default 60 s budget applies).
 - **Reproduced:** no — the `24 80` answer was not re-created on demand.
 - **Stress:** `mise run test:logged -- --name f2-cont-pty -- bun scripts/test-under-contention.ts --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/pty.test.ts --rerun-each=3` passed.
+
+## Recurrence (2026-11-16): the resolution's assertion rejected a prompt-prefixed line
+
+- **Recurrence check:** `mise run flaky:recurrence -- 0481 --base c1fcc573bc079b4d856d53e31c45d5ebf2485d11 --registry-ref origin/main` said resolved, and the base contains its fix (6302f96c69), so this is a real recurrence. The case was reopened and is resolved again below in the same change.
+- **Observed:** GitHub Actions CI, `Tests (backend)` shard (Linux x64, `mise run test:full` sharded), on runs 43785231111 (`release/v2.39.0-beta`), 43784353311 (`fix-flaky-tests-57033d2a4f0e-r1`) and 43785776990 (`prepare-upstream-issues-cbdb7609166a-r1`), all on bases containing 6302f96c69. Backend counts on 43785231111: 22,159 passed, 354 skipped, 1 failed.
+- **Failure:** `expect(output).toMatch(/^31 93\r?$/m)` at `pty.test.ts:117` (7.45 ms). The output was the echoed command, then `$ 31 93`, then `__PTY_READY__`. The resize had arrived; the line simply began with the shell's prompt.
+
+## Resolution (2026-11-16)
+
+- **Root cause:** a race in the test's assertion, not the PTY. The command is written before `/bin/sh` prints its first prompt. When the terminal echoes the typed line before the prompt appears, the prompt (`$ `) is printed after the echo and `stty size` writes `31 93` on the same line as it. The 2026-11-15 resolution's anchored `/^31 93\r?$/m` accepted only the other ordering.
+- **Fix:** `apps/backend/src/core/pty.test.ts` accepts an optional prompt before the size, `/^(?:[$#] )?31 93\r?$/m` (`#` for a root shell). The echoed command line still cannot match, because the size is not at its end, and a default `24 80` still fails.
+- **Reproduced:** no. The prompt ordering depends on when the shell starts relative to the write and was not forced on demand. The new pattern was checked against the exact output CI received: it matches that output and the unprefixed form, and it does not match a `$ 24 80` answer.
+- **Stress:** `mise run test:logged -- --name watcher-pty -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-watcher-large-ignored.test.ts ./src/core/pty.test.ts --rerun-each=20 --parallel=2 --only-failures` passed (macOS arm64; the prompt ordering seen on CI did not occur locally).

@@ -12,13 +12,19 @@ import {
   appClaimsShortcut,
   shortcutFocus,
 } from "./keyboard-shortcuts.js";
-import { designBootstrap, designFrameDocument, installDesignRuntime } from "./design-runtime.js";
+import {
+  designBootstrap,
+  designFrameDocument,
+  designRuntimeSource,
+  installDesignRuntime,
+} from "./design-runtime.js";
+import { createStaticHtmlSanitizer } from "./static-html-sanitizer.js";
 
 describe("design runtime sanitizer", () => {
   let testWindow: Window;
   beforeEach(() => {
     testWindow = new Window();
-    testWindow.eval(`(${installDesignRuntime.toString()})()`);
+    testWindow.eval(designRuntimeSource());
   });
 
   const run = (operation: unknown) =>
@@ -84,7 +90,7 @@ describe("design runtime editing", () => {
     (testWindow as unknown as { orkDesign: (operation: unknown) => unknown }).orkDesign(operation);
   beforeEach(() => {
     testWindow = new Window();
-    testWindow.eval(`(${installDesignRuntime.toString()})()`);
+    testWindow.eval(designRuntimeSource());
     run({
       op: "render",
       html: '<main id="root"><h1 id="title" style="color: red">Title</h1><section><p>One</p><p>Two</p></section></main>',
@@ -197,7 +203,7 @@ describe("design runtime editing", () => {
 
 test("a frame regaining focus with nothing focused returns it to the field it last had", () => {
   const frame = new Window();
-  frame.eval(`(${installDesignRuntime.toString()})()`);
+  frame.eval(designRuntimeSource());
   frame.document.body.innerHTML = '<input id="field"><input id="other">';
   const field = frame.document.querySelector("#field") as unknown as HTMLInputElement;
   const other = frame.document.querySelector("#other") as unknown as HTMLInputElement;
@@ -230,7 +236,7 @@ test("serialized design runtime forwards each app shortcut once and consumes aut
     "window.__forwarded = []; window.parent.postMessage = (message) => window.__forwarded.push([message.channel, message.shortcut])",
   );
   frame.eval(
-    `(${installDesignRuntime.toString()})(${matchAppShortcut.toString()}, ${JSON.stringify(APP_SHORTCUTS)}, ${appClaimsShortcut.toString()}, ${shortcutFocus.toString()})`,
+    `(${installDesignRuntime.toString()})(${createStaticHtmlSanitizer.toString()}, ${matchAppShortcut.toString()}, ${JSON.stringify(APP_SHORTCUTS)}, ${appClaimsShortcut.toString()}, ${shortcutFocus.toString()})`,
   );
   // Ctrl+Shift+/ as browsers report it, and ⌘K on a Cyrillic layout.
   const dialog = { key: "?", code: "Slash", ctrlKey: true, shiftKey: true };

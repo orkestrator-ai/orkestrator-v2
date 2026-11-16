@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { connect, createServer, type AddressInfo, type Server, type Socket } from "node:net";
 
-import type { AuthenticatedPreviewAccess } from "./core/preview-access.js";
-import type { ResolvedPreviewTarget } from "./core/preview-service-registry.js";
+import type { AuthenticatedPreviewAccess, ResolvedPreviewTarget } from "./core/previews/index.js";
 import { PreviewUpstreamPool, type PreviewUpstreamPoolLimits } from "./preview-upstream-pool.js";
 
 /** An access service stand-in that records tracked resources, as revocation closes them. */

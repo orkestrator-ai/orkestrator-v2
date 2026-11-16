@@ -44,7 +44,7 @@ const MEASUREMENT_OWNERS_PER_PAGE = 512;
  * How long after a turn ends its superseded measurements stay, for a reader
  * that was paging one or read the history just before the final measurement
  * was selected (restore tokens last five minutes). Then the hourly pass keeps
- * only the turn's newest and selected ones (todo 4960).
+ * only the turn's newest and selected ones (#1937).
  */
 export const FINISHED_TURN_SUPERSEDED_GRACE_MS = 15 * 60_000;
 /** Freed database pages are released in steps of this many 4 KiB pages. */

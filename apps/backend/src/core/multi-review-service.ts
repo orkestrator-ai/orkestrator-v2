@@ -267,7 +267,7 @@ const DEFAULT_POLL_MS = 1_000;
 /** Running provider work is observed every few seconds, with per-workflow jitter. */
 const DEFAULT_OBSERVATION_MS = 3_000;
 /**
- * Cadence while an accepted result waits for its turn to end (todo 7557).
+ * Cadence while an accepted result waits for its turn to end (#2079).
  * Nothing announces that end, and it usually follows the acceptance within a
  * few hundred milliseconds; the window is one observation interval from the
  * acceptance, after which the ordinary cadence is no slower.
@@ -275,7 +275,7 @@ const DEFAULT_OBSERVATION_MS = 3_000;
 const RESULT_SETTLE_POLL_MS = 250;
 /**
  * How long after a validation run starts it is read on the fast cadence
- * (todo 7564 task 3). The run is a detached worker in the environment and
+ * (#2131). The run is a detached worker in the environment and
  * nothing announces its end, so a short run waited for the next observation
  * pass (3 s plus a spread) before the review could start. Past the window the
  * ordinary cadence applies, so a run that takes minutes pays at most two extra
@@ -2850,7 +2850,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * `windowMs` and not consumed yet. Its pass consumes it only once the turn
    * that submitted it has ended, and that end raises no wake, so without a
    * short follow-up the workflow waited a whole observation interval after
-   * a pass that read the turn still running (todo 7557).
+   * a pass that read the turn still running (#2079).
    */
   private async acceptedResultAwaitsTurnEnd(
     workflow: MultiReviewWorkflow,

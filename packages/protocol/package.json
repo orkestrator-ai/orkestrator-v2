@@ -382,6 +382,7 @@
     "./artifact-frame-channel": "./src/artifact-frame-channel.ts",
     "./static-html-presentation": "./src/static-html-presentation.ts",
     "./static-html-document-text": "./src/static-html-document-text.ts",
+    "./static-html-sanitizer": "./src/static-html-sanitizer.ts",
     "./css-resource-scan": "./src/css-resource-scan.ts",
     "./transcript-artifact-commands": "./src/transcript-artifact-commands.ts",
     "./transcript-media-pins": "./src/transcript-media-pins.ts",

@@ -134,7 +134,7 @@ export interface OpenCodeEnvironmentDependencies {
  * taken as cut short. An idle server holds no run, so a run with no boundary
  * row after this long belonged to a server that died (killed, or stopped with
  * its backend): the replacement never writes one. The wait covers the early
- * idle read the boundary row may trail by (to-do 5160, seen 2026-11-14).
+ * idle read the boundary row may trail by (to-do 5160 (retired), seen 2026-11-14).
  */
 export const OPENCODE2_UNSETTLED_RUN_GRACE_MS = 60_000;
 /** Bounds the requests remembered as unsettled (AGENTS.md invariant 11). */

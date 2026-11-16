@@ -13,7 +13,7 @@ import { createHarness, git, type Harness } from "./service-test-support.js";
 import { turnIdFor } from "./turn-boundaries.js";
 
 /**
- * Todo 7840: a provisional capture whose hint names only Git-ignored output
+ * #2185: a provisional capture whose hint names only Git-ignored output
  * is skipped, and nothing that could move the tree is.
  */
 

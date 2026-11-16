@@ -192,6 +192,16 @@ directly on a bare session; extend it with any new row rule. When touching it:
   (`planApprovedThisTurn` and the two pending prompts) live on the turn, where
   the code that reads them is, not on the stream.
 
+A reload puts each subagent's steps back from its own transcript
+(`session-manager-subagent-rehydration.ts`). **Not every record in a subagent
+file is that subagent's.** A fork started from inside a subagent carries a copy
+of the parent subagent's whole conversation ahead of its prompt
+(`<fork-boilerplate>`), sibling launch calls included and without their
+results; read as the fork's own, each became a second launch card that never
+settled. Only what follows the fork prompt is the fork's, and a call the
+transcript already holds is never added again. A new CLI record shape that
+copies history needs the same treatment.
+
 ## Session catalogue and transport
 
 When touching the session catalogue (`session-manager-catalog.ts`):

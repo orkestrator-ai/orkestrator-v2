@@ -1202,7 +1202,7 @@ them as a link to a host path, and Docker resolves a bind source on the host
 #### Environment file patterns: security review
 
 Reviewed and decided on 2026-11-15 under to-do 8106 (retired; the user's
-decision of 2026-11-14 on 7571 task 4, `git log -1 --diff-filter=D --
+decision of 2026-11-14 on 7571 (retired) task 4, `git log -1 --diff-filter=D --
 docs/todo/containers-and-environments/8106-env-file-patterns-copy.md`).
 The threat is the one above: the project folder is repository content, so a
 user's broad pattern must not let a branch make the backend read or copy a

@@ -1,7 +1,7 @@
 /**
  * Real-Docker qualification that the agent CLIs need none of the telemetry
  * hosts the default allowlist used to carry (`sentry.io`,
- * `statsig.anthropic.com`, `statsig.com`; to-do 6100, security finding M12).
+ * `statsig.anthropic.com`, `statsig.com`; #1917, security finding M12).
  *
  * A restricted runtime of the qualification image, behind its egress gateway
  * with name checks, gets an allowlist that omits all three. Each CLI the image
@@ -45,7 +45,7 @@ const TRACE = process.env.ORKESTRATOR_TELEMETRY_HOSTS_TRACE?.trim() ?? "";
 const live = ENABLED ? test : test.skip;
 const RUN = `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
 const LIVE_TIMEOUT_MS = 900_000;
-/** The hosts to-do 6100 removed from the default list. */
+/** The hosts #1917 removed from the default list. */
 const TELEMETRY_HOSTS = ["sentry.io", "statsig.anthropic.com", "statsig.com"];
 /** The DSN hosts Claude Code, Codex and Grok report to (found in their binaries). */
 const SENTRY_INGEST_HOSTS = [
@@ -381,7 +381,7 @@ async function createRuntime(allowedDomains: string[]) {
   return { containerId, gateway: await networkOwnerContainer(containerId) };
 }
 
-describe("default allowlist telemetry hosts (to-do 6100)", () => {
+describe("default allowlist telemetry hosts (#1917)", () => {
   live(
     "every agent CLI finishes a turn against a fake provider without the telemetry hosts",
     async () => {

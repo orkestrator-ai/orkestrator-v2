@@ -113,8 +113,10 @@ describe("Bun PTY adapter", () => {
 
     expect(exitCode).toBe(0);
     // The terminal echoes the command, which names the size too; only
-    // `stty size`'s own line is the size alone.
-    expect(output).toMatch(/^31 93\r?$/m);
+    // `stty size`'s own line ends with the size alone. The command is typed
+    // before the shell prints its prompt, so that line may start with the
+    // prompt (`$ 31 93`, `# ` as root), depending on when the echo landed.
+    expect(output).toMatch(/^(?:[$#] )?31 93\r?$/m);
     expect(output).toContain("__PTY_READY__");
   });
 

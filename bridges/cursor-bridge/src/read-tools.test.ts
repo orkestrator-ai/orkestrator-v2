@@ -1,5 +1,5 @@
 /**
- * The bridge's own Read, Grep (and Glob) and LS (to-do 7400 task 1), on a
+ * The bridge's own Read, Grep (and Glob) and LS (#2082), on a
  * temporary directory with the SDK's own ripgrep. The result shapes are
  * checked against the message descriptors in the installed `@cursor/sdk`
  * bundle, so an SDK bump that renames a field fails here rather than in a

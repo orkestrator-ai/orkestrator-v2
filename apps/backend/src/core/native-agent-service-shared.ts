@@ -329,18 +329,6 @@ export interface NativeAgentSyncRevision {
   createdAt: number;
 }
 
-export interface NativeAgentHistoryState {
-  sessionId: string;
-  epoch: string;
-  messages: unknown[];
-  messageFingerprints: string[];
-  /** First message that was part of the mutable live tail on the last read. */
-  mutableTailStart: number;
-  complete: boolean;
-  bytes: number;
-  updatedAt: number;
-}
-
 export interface NativeAgentSyncState {
   incarnation: string;
   identity: string;
@@ -438,7 +426,7 @@ export interface NativeAgentObservationInvalidation {
   logicalSessionKey: string;
   owner: "environment" | "coordinator";
   observation: ViewRevisionStamp;
-  /** Which observer path announced it; content-free (todo 0049 task 4). */
+  /** Which observer path announced it; content-free (#1659). */
   cause: Extract<
     NativeSessionInvalidationCause,
     "content-revision" | "session-content" | "runtime-stopped"
@@ -689,7 +677,7 @@ export const PARKED_DISPATCH_CONFLICT_MESSAGE =
 
 /**
  * Whether a refused dispatch was a temporary provider refusal with nothing
- * sent, so the same prompt may succeed under a new request id (7260).
+ * sent, so the same prompt may succeed under a new request id (#2060).
  *
  * Only a `ProviderUnavailableError` that is not ambiguous qualifies: a bridge's
  * 503 before dispatch, an unreachable bridge, a failed attach. The caller must
@@ -781,7 +769,6 @@ export const NATIVE_HISTORY_PAGE_MAX_MESSAGES = 200;
 export const NATIVE_HISTORY_PAGE_DEFAULT_MESSAGES = 100;
 export const NATIVE_HISTORY_PAGE_DEFAULT_BYTES = 512 * 1024;
 export const NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES = 1024 * 1024;
-export const NATIVE_HISTORY_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 /**
  * Direct (provider-positioned) history pages kept for repeat reads; see
  * `DirectHistoryPageCache`. A page is at most about one target's worth of

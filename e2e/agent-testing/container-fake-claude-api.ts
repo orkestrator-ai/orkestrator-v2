@@ -16,7 +16,7 @@
  * still cannot match its own echoed input; anything else (title or topic
  * requests the CLI makes on the side) gets `PONG`. A request whose last user
  * message carries `REFUSE_QA_401` is refused with the 401 a wrong key gets,
- * so a turn can end on an API error (to-do 5160 task 4). It keeps no request
+ * so a turn can end on an API error (to-do 5160 (retired) task 4). It keeps no request
  * body and logs nothing. No imports: the file runs on its own inside the image.
  */
 

@@ -1124,7 +1124,7 @@ export interface FreePageRelease {
 /**
  * Returns up to `maxPages` free pages of the database at `file` to the
  * filesystem, in a child process at low priority with its own connection
- * (to-do 1202 task 7, report finding ST-13). In-process each step of
+ * (#1939, report finding ST-13). In-process each step of
  * `incremental_vacuum` and the checkpoint that followed it held the event loop
  * for 30–190 ms, seconds under disk load. The child commits
  * {@link UPKEEP_RELEASE_STEP_PAGES} at a time with the backend's durability

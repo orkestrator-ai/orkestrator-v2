@@ -1,5 +1,5 @@
 /**
- * Per-window figures for `transcript-read-bytes-live.spec.ts` (to-do 5340
+ * Per-window figures for `transcript-read-bytes-live.spec.ts` (#2217
  * (retired), task 1): what a bridge answered in each measured window, split
  * into transcript reads, state reads, the backend's background timers and
  * everything else.

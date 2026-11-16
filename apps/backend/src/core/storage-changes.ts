@@ -124,7 +124,7 @@ export class StorageChanges {
    * a client that refetches in response is guaranteed to observe the new value
    * rather than race the write it was told about.
    *
-   * A `native-agent-session` change carries its `cause` (todo 0049 task 4)
+   * A `native-agent-session` change carries its `cause` (#1659)
    * and is counted by it in `nativeSessionInvalidationMetrics`; one that
    * arrives without a cause is counted as a dropped label.
    */

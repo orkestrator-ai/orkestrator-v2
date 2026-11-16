@@ -1,9 +1,9 @@
 /**
- * The remote synchronization surface: conditional tokens, bounded deltas, the
- * fixed live tail, and independently paged history.
+ * The remote synchronization surface: conditional tokens, bounded deltas and
+ * the fixed live tail. History pages come from the transcript view's direct
+ * cursor; the sync-v1 projection names none (0232 task 4).
  */
 import { describe, expect, mock, test } from "bun:test";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 import { applyNativeAgentProjectionDelta } from "@orkestrator/protocol/native-agent";
 
@@ -98,7 +98,7 @@ describe("native agent remote projection synchronization", () => {
     );
   });
 
-  test("returns unchanged envelopes, bounded deltas, and independent history pages", async () => {
+  test("returns unchanged envelopes and bounded deltas", async () => {
     let messages = Array.from({ length: 150 }, (_, index) => ({
       id: `message-${index}`,
       role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
@@ -106,7 +106,6 @@ describe("native agent remote projection synchronization", () => {
       parts: [{ type: "text", content: `content-${index}` }],
       createdAt: new Date(index * 1_000).toISOString(),
     }));
-    messages[50] = { ...messages[50]!, id: `long-anchor-${"x".repeat(2_000)}` };
     const stub = createProviderStub("cursor", {
       interactiveSnapshot: async () => ({
         status: "running",
@@ -135,8 +134,6 @@ describe("native agent remote projection synchronization", () => {
         expect(first.status).toBe("snapshot");
         if (first.status !== "snapshot") throw new Error("Expected sync snapshot");
         expect(first.projection.messages).toHaveLength(100);
-        expect(first.historyCursor).toBeString();
-        expect(first.historyCursor!.length).toBeLessThan(1_024);
 
         const unchanged = await service.getProjectionUpdate({
           ...identity,
@@ -180,20 +177,6 @@ describe("native agent remote projection synchronization", () => {
         expect(applyNativeAgentProjectionDelta(first.projection, changed.delta)).toEqual(
           fresh.projection,
         );
-
-        const before =
-          compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0;
-        const page = await service.getMessagePage({
-          ...identity,
-          syncVersion: 1,
-          before: changed.historyCursor!,
-        });
-        expect(page.messages).toHaveLength(50);
-        expect(compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count).toBe(
-          before + 1,
-        );
-        expect(page.nextCursor).toBeUndefined();
-        expect(page.complete).toBe(true);
       },
     );
   });
@@ -389,110 +372,69 @@ describe("native agent remote projection synchronization", () => {
     );
   });
 
-  test("anchors history at the first message actually sent in a byte-limited live tail", async () => {
-    const messages = Array.from({ length: 130 }, (_, index) => ({
-      id: `large-${index}`,
+  test("a row that ages out of the live tail is not a deletion, and a removed row is", async () => {
+    let messages = Array.from({ length: 150 }, (_, index) => ({
+      id: `message-${index}`,
       role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-      content: `${index}:${"x".repeat(12 * 1024)}`,
-      parts: [{ type: "text", content: `${index}:${"x".repeat(12 * 1024)}` }],
+      content: `content-${index}`,
+      parts: [{ type: "text", content: `content-${index}` }],
       createdAt: new Date(index * 1_000).toISOString(),
     }));
     const stub = createProviderStub("cursor", {
       interactiveSnapshot: async () => ({ status: "idle", messages, messagesComplete: true }),
     });
     await withService(
-      { prefix: "orkestrator-native-sync-bytes-", provider: async () => stub.provider },
+      { prefix: "orkestrator-native-sync-deletions-", provider: async () => stub.provider },
       async ({ service }) => {
         const identity = {
           environmentId: "env-1",
           agent: "cursor" as const,
-          logicalSessionKey: "env-env-1:tab-sync-bytes",
+          logicalSessionKey: "env-env-1:tab-sync-deletions",
         };
+        const liveWindow = { messages: 100, targetBytes: 512 * 1024 };
         await service.ensureSession(identity);
         const first = await service.getProjectionUpdate({
           ...identity,
           syncVersion: 1,
-          liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+          liveWindow,
         });
         if (first.status !== "snapshot") throw new Error("Expected sync snapshot");
-        expect(first.projection.messages.length).toBeLessThan(100);
+        const firstIds = first.projection.messages.map((message) => (message as { id: string }).id);
+        expect(firstIds[0]).toBe("message-50");
 
-        const collected = [...first.projection.messages];
-        let cursor = first.historyCursor;
-        while (cursor) {
-          const page = await service.getMessagePage({
-            ...identity,
-            syncVersion: 1,
-            before: cursor,
-          });
-          collected.unshift(...page.messages);
-          cursor = page.nextCursor;
-        }
-        expect(new Set(collected.map((message) => (message as { id: string }).id)).size).toBe(130);
-      },
-    );
-  });
-  test("pages a row larger than the page target back whole, not part-trimmed", async () => {
-    const hugeParts = Array.from({ length: 300 }, (_, index) => ({
-      type: "text",
-      content: `part-${index}:${"y".repeat(4 * 1024)}`,
-    }));
-    const messages = [
-      {
-        id: "prompt-1",
-        role: "user" as const,
-        content: "start",
-        parts: [],
-        createdAt: "2026-10-14T07:53:29.000Z",
-      },
-      {
-        id: "huge",
-        role: "assistant" as const,
-        content: "",
-        parts: hugeParts,
-        createdAt: "2026-10-14T07:53:34.000Z",
-      },
-      ...Array.from({ length: 4 }, (_, index) => ({
-        id: `after-${index}`,
-        role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-        content: `after ${index}`,
-        parts: [{ type: "text", content: `after ${index}` }],
-        createdAt: new Date(Date.parse("2026-10-14T10:17:25.000Z") + index * 1_000).toISOString(),
-      })),
-    ];
-    const stub = createProviderStub("cursor", {
-      interactiveSnapshot: async () => ({ status: "idle", messages, messagesComplete: true }),
-    });
-    await withService(
-      { prefix: "orkestrator-native-sync-huge-row-", provider: async () => stub.provider },
-      async ({ service }) => {
-        const identity = {
-          environmentId: "env-1",
-          agent: "cursor" as const,
-          logicalSessionKey: "env-env-1:tab-sync-huge-row",
-        };
-        await service.ensureSession(identity);
-        const first = await service.getProjectionUpdate({
+        // Two new rows push the two oldest out of the tail: still history.
+        messages = [
+          ...messages,
+          ...[150, 151].map((index) => ({
+            ...messages[0]!,
+            id: `message-${index}`,
+            content: `content-${index}`,
+            parts: [{ type: "text", content: `content-${index}` }],
+            createdAt: new Date(index * 1_000).toISOString(),
+          })),
+        ];
+        const grown = await service.getProjectionUpdate({
           ...identity,
           syncVersion: 1,
-          liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+          liveWindow,
+          knownToken: first.token,
         });
-        if (first.status !== "snapshot") throw new Error("Expected sync snapshot");
-        expect(first.projection.messages.map((message) => (message as { id: string }).id)).toEqual([
-          "after-0",
-          "after-1",
-          "after-2",
-          "after-3",
-        ]);
-        const page = await service.getMessagePage({
+        if (grown.status !== "delta") throw new Error("Expected sync delta");
+        expect(grown.delta.deletedMessageIds).toEqual([]);
+        expect(grown.delta.liveMessageIds?.[0]).toBe("message-52");
+        const grownProjection = applyNativeAgentProjectionDelta(first.projection, grown.delta);
+        expect(grownProjection?.messages).toHaveLength(100);
+
+        // A row removed from inside the tail is an authoritative deletion.
+        messages = messages.filter((message) => message.id !== "message-120");
+        const removed = await service.getProjectionUpdate({
           ...identity,
           syncVersion: 1,
-          before: first.historyCursor!,
-          targetBytes: 512 * 1024,
+          liveWindow,
+          knownToken: grown.token,
         });
-        const huge = page.messages.find((message) => (message as { id: string }).id === "huge") as
-          { parts: unknown[] } | undefined;
-        expect(huge?.parts).toHaveLength(300);
+        if (removed.status !== "delta") throw new Error("Expected sync delta");
+        expect(removed.delta.deletedMessageIds).toEqual(["message-120"]);
       },
     );
   });

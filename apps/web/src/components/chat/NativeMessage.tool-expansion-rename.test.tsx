@@ -5,7 +5,7 @@
  * calls a new source row id) while each call keeps its own id; coalescing
  * renames a row whenever earlier rows merge in front of it. A call's own
  * disclosure is remembered by its call id within the transcript, so neither
- * folds it again (to-do 7270).
+ * folds it again (#2064).
  */
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";

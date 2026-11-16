@@ -46,7 +46,7 @@ import { terminalVisibleText } from "./terminal-visible-text";
  *
  * `ORKESTRATOR_AGENT_TEST_CLAUDE_TERMINAL_FAILED_TURN=1` (fake API only) adds
  * a third turn in the background that the fake refuses with a 401, as a wrong
- * key would be (to-do 5160 task 4): the sidebar must leave working, the
+ * key would be (to-do 5160 (retired) task 4): the sidebar must leave working, the
  * environment must ring `agent_failed` and opening it must show "Agent
  * stopped with an error". The next prompt in that session is recorded: the
  * CLI then answers "Not logged in" locally, with no hook (to-do 8092).
@@ -520,7 +520,7 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
       );
       step("refused turn working");
       // The CLI retries a refused request with backoff before it gives up: 179 s
-      // for `claude -p` in the image on 2026-11-14 (to-do 5160 task 4).
+      // for `claude -p` in the image on 2026-11-14 (to-do 5160 (retired) task 4).
       const left = await firstTimeTrue(
         async () => (await backendState()) !== "working",
         "the refused turn to leave working",

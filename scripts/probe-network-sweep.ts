@@ -7,7 +7,7 @@ import { PROBE_CREATOR_PATTERN } from "../apps/backend/src/core/container-host-r
 
 /**
  * Host-reachability probe networks of any owner (rules in
- * docs/development/disk-usage.md; the live run is todo 0241 task 1). Each
+ * docs/development/disk-usage.md; the live run is #1940). Each
  * backend's own reaper only removes its own owner's leftovers, so a probe
  * network leaked by a one-off data directory (a test backend killed
  * mid-check) is never revisited and holds one of the daemon's address pools.
@@ -97,7 +97,7 @@ export function listProbeNetworks(run: DockerRun): ProbeNetwork[] | null {
 /**
  * `agent-test/temporary 3, unlabelled 1`: how many of `networks` each kind of
  * backend made, most first; "unlabelled" counts networks from before the
- * creator label (todo 7470 task 2).
+ * creator label (#2024).
  */
 export function probeNetworkCreators(networks: readonly ProbeNetwork[]): string {
   const counts = new Map<string, number>();

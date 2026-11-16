@@ -1,5 +1,5 @@
 /**
- * A loopback model for `coordinator-slow-remote-live.spec.ts` (to-do 4720), so
+ * A loopback model for `coordinator-slow-remote-live.spec.ts` (#2050), so
  * the profile's real Pi bridge runs the main coordinators' turns with no login
  * and nothing billed. Run with Bun (specs run under Node):
  * `bun coordinator-slow-remote-fake-model.ts`. It prints its origin

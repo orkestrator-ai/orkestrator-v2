@@ -10,7 +10,7 @@ import { gatewayFor } from "./tmux-mail-inject-live";
 
 /**
  * Per-item recurring-work counts on a populated profile: the live counts of
- * to-do 1202 tasks 2 and 10 that an idle fixture could not give
+ * #2088 that an idle fixture could not give
  * (task 1; that to-do was retired on 2026-11-10, method in docs/development/testing-guide.md).
  *
  * It drives a profile the 0048 busy driver has already filled and kept

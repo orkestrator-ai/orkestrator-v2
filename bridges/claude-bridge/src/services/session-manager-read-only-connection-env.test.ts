@@ -16,10 +16,10 @@ import {
 
 /**
  * A read-only turn loads no settings file, so the bridge hands it the user
- * settings' model connection itself (to-do 7565). Driven through the real
+ * settings' model connection itself (#2133). Driven through the real
  * query plan against a private Claude home; the values are fixtures.
  */
-describe("a read-only turn reaches the model the user settings name (to-do 7565)", () => {
+describe("a read-only turn reaches the model the user settings name (#2133)", () => {
   test("gets the settings' connection entries and nothing else from the file", async () => {
     await withTemporaryClaudeHome("claude-read-only-connection-", async (home) => {
       await mkdir(join(home, ".claude"), { recursive: true });

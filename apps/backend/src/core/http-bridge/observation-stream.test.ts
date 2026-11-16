@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import type { BridgeConnection } from "../agent-provider-contract.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import { frameSessionId, HttpBridgeObservationStream } from "./observation-stream.js";
 import { HttpBridgeProvider } from "./provider.js";
 
@@ -83,7 +82,7 @@ function harness(options: { silenceMs?: number; now?: () => number } = {}) {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
 
 describe("HttpBridgeObservationStream", () => {
-  test("subscribes in observation mode and is live only once the bridge confirms it", async () => {
+  test("subscribes in observation mode and is live only once the bridge connects", async () => {
     const { observer, hints, nextStream } = harness();
     try {
       observer.start();
@@ -143,37 +142,6 @@ describe("HttpBridgeObservationStream", () => {
       second.frame("session.reconcile-required", { sessionId: "s-2" }, "13");
       await settle();
       expect(hints.slice(-2)).toEqual([undefined, "s-2"]);
-    } finally {
-      observer.close();
-    }
-  });
-
-  test("an older bridge that ignores observation mode is closed for good, and counted", async () => {
-    const id = "bridge-observation.full-stream";
-    const before = compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;
-    const { observer, streams, nextStream } = harness();
-    observer.start();
-    const first = await nextStream(1);
-    first.frame("connected", { status: "connected", replayed: 0 }, "gen:1");
-    await settle();
-    await settle();
-    expect(observer.isLive).toBe(false);
-    expect(observer.stats().unsupported).toBe(true);
-    expect(streams).toHaveLength(1);
-    expect(compatibilityPathUsage.snapshot().paths[id]?.count).toBe(before + 1);
-  });
-
-  test("a bridge that confirms observation mode is not counted", async () => {
-    const id = "bridge-observation.full-stream";
-    const before = compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;
-    const { observer, nextStream } = harness();
-    try {
-      observer.start();
-      const first = await nextStream(1);
-      first.frame("connected", { status: "connected", observe: true }, "gen:1");
-      await settle();
-      expect(observer.isLive).toBe(true);
-      expect(compatibilityPathUsage.snapshot().paths[id]?.count ?? 0).toBe(before);
     } finally {
       observer.close();
     }

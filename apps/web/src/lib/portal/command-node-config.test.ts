@@ -136,31 +136,18 @@ describe("patching global settings", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("update_global_config", expect.anything());
   });
 
-  test("an older backend gets a read-merge-write of the whole object instead", async () => {
-    invokeMock.mockImplementation(async (command: string) => {
-      if (command === "patch_global_config") {
-        throw new Error(unknownBackendCommandMessage("patch_global_config"));
-      }
-      return config("leaf");
+  for (const failure of [
+    unknownBackendCommandMessage("patch_global_config"),
+    "Select at least one agent platform",
+  ]) {
+    test(`a failed patch is not retried as a whole-object write: ${failure}`, async () => {
+      invokeMock.mockImplementation(async () => {
+        throw new Error(failure);
+      });
+      await expect(patchGlobalConfig({ enabledAgentPlatforms: [] })).rejects.toThrow(failure);
+      expect(invokeMock).not.toHaveBeenCalledWith("update_global_config", expect.anything());
     });
-    await patchGlobalConfig({ terminalScrollback: 7_000 }, { unset: ["reviewInstruction"] });
-    const write = invokeMock.mock.calls.find(([command]) => command === "update_global_config");
-    expect(write?.[1].global).toMatchObject({
-      terminalScrollback: 7_000,
-      allowedDomains: ["leaf.test"],
-    });
-    expect("reviewInstruction" in write![1].global).toBe(false);
-  });
-
-  test("other failures are not retried as a whole-object write", async () => {
-    invokeMock.mockImplementation(async () => {
-      throw new Error("Select at least one agent platform");
-    });
-    await expect(patchGlobalConfig({ enabledAgentPlatforms: [] })).rejects.toThrow(
-      "Select at least one agent platform",
-    );
-    expect(invokeMock).not.toHaveBeenCalledWith("update_global_config", expect.anything());
-  });
+  }
 
   test("a selected machine's terminal link preferences are saved on the command node, which returns the effective config", async () => {
     installCommandWindow();
@@ -321,21 +308,16 @@ describe("layering between two explicit scopes", () => {
     ]);
   });
 
-  test("a leaf without the patch command gets the whole-object write with preserveInheritedSettings", async () => {
+  test("a leaf patch failure fails the save without a whole-object write", async () => {
     leafClient.respond("patch_global_config", () => {
       throw new Error(unknownBackendCommandMessage("patch_global_config"));
     });
-    await runConfigCommand(configTargetsForScopes(leafScope, commandScope), "patch_global_config", {
-      patch: { allowedDomains: ["edited.test"] },
-    });
-    const [write] = leafClient.calls("update_global_config");
-    expect(write?.args).toEqual({
-      global: expect.objectContaining({
-        allowedDomains: ["edited.test"],
-        envFilePatterns: [".env.leaf"],
+    await expect(
+      runConfigCommand(configTargetsForScopes(leafScope, commandScope), "patch_global_config", {
+        patch: { allowedDomains: ["edited.test"] },
       }),
-      preserveInheritedSettings: true,
-    });
+    ).rejects.toThrow("patch_global_config");
+    expect(leafClient.calls("update_global_config")).toHaveLength(0);
     expect(commandClient.calls("patch_global_config")).toHaveLength(0);
     expect(commandClient.calls("update_global_config")).toHaveLength(0);
   });

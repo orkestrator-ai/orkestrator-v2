@@ -15,7 +15,6 @@ import {
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import {
   firstEnabledAgentPlatform,
   normalizeAgentPlatforms,
@@ -593,14 +592,10 @@ export class CoordinatorService {
   }
 
   /**
-   * `clearConversationErrors` serves a renderer that predates per-conversation
-   * failures: its panel has no Retry for one, and opening the panel is the only
-   * recovery it knows (version-compatibility.md).
+   * Creates or answers the project's coordinator workspace. It never clears a
+   * conversation's startup error: only `retry_coordinator_conversation` does.
    */
-  async ensure(
-    projectId: string,
-    options: { clearConversationErrors?: boolean } = {},
-  ): Promise<CoordinatorSnapshot> {
+  async ensure(projectId: string): Promise<CoordinatorSnapshot> {
     const ensured = await this.serialize(projectId, async () => {
       const projectPath = await this.canonicalProjectPath(projectId);
       const before = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
@@ -608,23 +603,15 @@ export class CoordinatorService {
       // startup failures now mark the conversation that failed. Recovering it
       // never rewrites which platform a conversation belongs to.
       const canRecoverError = before?.lifecycleState === "error";
-      const clearErrors =
-        options.clearConversationErrors === true &&
-        before?.conversations.some((item) => item.startupError) === true;
-      if (clearErrors)
-        compatibilityPathUsage.record("coordinator-ensure.conversation-errors-cleared");
       const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
         projectId,
         (current) => {
           if (current) {
-            if ((!canRecoverError && !clearErrors) || current.id !== before?.id) return current;
+            if (!canRecoverError || current.id !== before?.id) return current;
             return {
               ...current,
-              ...(canRecoverError ? { lifecycleState: "ready" as const } : {}),
+              lifecycleState: "ready" as const,
               lastStartupError: undefined,
-              conversations: clearErrors
-                ? current.conversations.map((item) => ({ ...item, startupError: undefined }))
-                : current.conversations,
               updatedAt: new Date().toISOString(),
             };
           }

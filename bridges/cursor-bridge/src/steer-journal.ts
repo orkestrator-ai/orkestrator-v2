@@ -208,14 +208,10 @@ function markOverflow(fence: NonNullable<SessionState["steerFence"]>, at: number
   fence.overflowBefore = Math.max(fence.overflowBefore ?? 0, at);
 }
 
-/**
- * The persisted form: `prepared` becomes `ambiguous`, as a restart must read
- * it. The legacy `overflow` boolean is written beside `overflowBefore` so an
- * older bridge that knows only the boolean still fences conservatively.
- */
+/** The persisted form: `prepared` becomes `ambiguous`, as a restart must read it. */
 export function persistedSteerJournal(state: SessionState): {
   steerJournal: SteerJournalEntry[];
-  steerFence?: { runs: string[]; overflowBefore?: number; overflow?: boolean };
+  steerFence?: { runs: string[]; overflowBefore?: number };
 } {
   const fence = state.steerFence;
   return {
@@ -224,9 +220,7 @@ export function persistedSteerJournal(state: SessionState): {
       ? {
           steerFence: {
             runs: fence.runs.slice(),
-            ...(fence.overflowBefore !== undefined
-              ? { overflowBefore: fence.overflowBefore, overflow: true }
-              : {}),
+            ...(fence.overflowBefore !== undefined ? { overflowBefore: fence.overflowBefore } : {}),
           },
         }
       : {}),
@@ -263,9 +257,11 @@ export function restoreSteerJournal(
     ) {
       markOverflow((state.steerFence ??= { runs: [] }), Math.floor(overflowBefore));
     } else if (rawFence.overflow === true) {
-      // Written by a bridge that recorded only that an overflow happened, at
-      // some point before this process started. Now bounds it conservatively:
-      // every run that could have been dropped was created before this load.
+      // A state file an earlier bridge wrote, recording only that an overflow
+      // happened at some point before this process started. Mapped once, on
+      // load, to the conservative bound (every run that could have been
+      // dropped was created before this load); the next write stores only
+      // `overflowBefore`.
       markOverflow((state.steerFence ??= { runs: [] }), Date.now());
     }
   }

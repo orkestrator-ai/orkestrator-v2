@@ -106,6 +106,7 @@ import * as realUseBuildPipeline from "@/hooks/useBuildPipeline";
 import * as realBackend from "@/lib/backend";
 import * as realClipboard from "@/lib/native/clipboard";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
+import { kanbanTask } from "../../../apps/web/src/test/kanban-task";
 const realUseBuildPipelineSnapshot = { ...realUseBuildPipeline };
 const realBackendSnapshot = { ...realBackend };
 const realClipboardSnapshot = { ...realClipboard };
@@ -240,7 +241,7 @@ function defaultSteps(agent = "claude", model = "sonnet") {
 }
 
 function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
-  return {
+  return kanbanTask({
     id: "task-1",
     projectId: "project-1",
     title: "Existing task",
@@ -253,7 +254,7 @@ function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
     images: [],
     prUrl: null,
     ...overrides,
-  } as KanbanTask;
+  } as KanbanTask);
 }
 
 function deferred<T>() {

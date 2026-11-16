@@ -17,7 +17,7 @@ import {
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
 import { BridgeSessionStore, hashCwd } from "./sessions/persistence.js";
 import { phaseToExternalStatus } from "./sessions/thread-registry.js";
-import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -94,6 +94,55 @@ describe("session lifecycle", () => {
 
     expect(attempts).toBe(2);
     expect(h.engine.getHealth().state).toBe("ready");
+  });
+
+  test("login-state adoption runs once per process, and its journal refusal survives a retried start", async () => {
+    // An added account: the shared state directory is not the login's own.
+    const savedStateDir = process.env.CODEX_BRIDGE_STATE_DIR;
+    process.env.CODEX_BRIDGE_STATE_DIR = join(codexHome, "shared-state");
+    try {
+      const loginDir = join(codexHome, "orkestrator-bridge");
+      const loginJournal = join(loginDir, `dispatch-journal-${hashCwd("/tmp/ws")}.json`);
+      mkdirSync(loginDir, { recursive: true });
+      writeFileSync(loginJournal, "broken", "utf8");
+
+      const h = await harness({}, { deferStart: true });
+      const originalStart = h.engine.start.bind(h.engine);
+      let attempts = 0;
+      h.engine.start = async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("transient startup failure");
+        return originalStart();
+      };
+      await expect(h.runtime.start()).rejects.toThrow("transient startup failure");
+
+      // Were the retry to adopt again, it would merge and remove this journal
+      // and dispatch would no longer be refused.
+      const mergeable = JSON.stringify({ version: 1, records: [] });
+      writeFileSync(loginJournal, mergeable, "utf8");
+      await h.runtime.start();
+      expect(attempts).toBe(2);
+      expect(readFileSync(loginJournal, "utf8")).toBe(mergeable);
+
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      expect(
+        await h.runtime.prompt(sessionId, {
+          prompt: "must not dispatch",
+          requestId: "req-after-adoption-failure",
+          attachments: [],
+        }),
+      ).toMatchObject({ ok: false, status: 503 });
+      expect(
+        h
+          .child()
+          .requests.some(
+            (request) => request.method === "thread/start" || request.method === "turn/start",
+          ),
+      ).toBe(false);
+    } finally {
+      if (savedStateDir === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
+      else process.env.CODEX_BRIDGE_STATE_DIR = savedStateDir;
+    }
   });
 
   test("reports the registry restored only once persisted sessions are back", async () => {

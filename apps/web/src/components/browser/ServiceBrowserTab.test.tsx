@@ -134,8 +134,6 @@ function installBackend(backend: Backend, native = true) {
     attach: mock(
       async (input: {
         tabId: string;
-        url?: string;
-        environmentId?: string;
         navigationBasis?: number;
         service?: {
           backendInstanceId?: string;
@@ -145,7 +143,7 @@ function installBackend(backend: Backend, native = true) {
         };
       }): Promise<BrowserPreviewState> => ({
         tabId: input.tabId,
-        url: input.url ?? `http://127.0.0.1:41000${input.service?.path ?? "/"}`,
+        url: `http://127.0.0.1:41000${input.service?.path ?? "/"}`,
         loading: false,
         canGoBack: false,
         canGoForward: false,
@@ -162,14 +160,6 @@ function installBackend(backend: Backend, native = true) {
           : {}),
       }),
     ),
-    navigate: mock(async (tabId: string, url: string): Promise<BrowserPreviewState> => ({
-      tabId,
-      url,
-      loading: false,
-      canGoBack: true,
-      canGoForward: false,
-      error: null,
-    })),
     setVisible: mock(async () => null),
     setBounds: mock(async () => null),
     reload: mock(async () => null),
@@ -368,7 +358,6 @@ describe("service browser tabs", () => {
     renderTab();
     await waitFor(() => expect(browserPreview.attach).toHaveBeenCalled());
     const input = browserPreview.attach.mock.calls.at(-1)![0];
-    expect(input.url).toBeUndefined();
     expect(input.service).toEqual({
       backendInstanceId: FIXTURE_BACKEND_INSTANCE_ID,
       environmentId: FIXTURE_ENVIRONMENT_ID,
@@ -975,9 +964,7 @@ describe("service browser tabs", () => {
     );
   });
 
-  test("compatibility mode follows the service's current host port", async () => {
-    const service = fixturePreviewService();
-    service.endpoint.hostPort = 49999;
+  test("with the tunnel off the desktop explains it cannot preview and attaches nothing", async () => {
     const { browserPreview } = installBackend({
       capabilities: fixturePreviewCapabilities({
         surfaces: {
@@ -985,77 +972,13 @@ describe("service browser tabs", () => {
           desktopTunnel: { available: false, reason: "disabled", upstreamSchemes: ["http"] },
         },
       }),
-      services: [service],
-    });
-    seedTab(serviceUri("/a"));
-    renderTab();
-    await waitFor(() => expect(browserPreview.attach).toHaveBeenCalled());
-    expect(browserPreview.attach.mock.calls.at(-1)![0].url).toBe("http://localhost:49999/a");
-    // The legacy gateway route opens only this environment's targets (M2).
-    expect(browserPreview.attach.mock.calls.at(-1)![0].environmentId).toBe(FIXTURE_ENVIRONMENT_ID);
-    expect(screen.getByText("Compatibility mode")).toBeTruthy();
-  });
-
-  test("a web client restores a desktop-migrated shared layout through compatibility", async () => {
-    installBackend({
-      capabilities: fixturePreviewCapabilities(),
-      services: [fixturePreviewService()],
-    });
-    seedTab("http://127.0.0.1:49152/shared?x=1");
-    const desktop = renderTab();
-    await waitFor(() => expect(tabUrl()).toBe(serviceUri("/shared?x=1")));
-    const sharedUrl = tabUrl();
-    desktop.unmount();
-    const capabilities = fixturePreviewCapabilities();
-    capabilities.surfaces.browserTopLevel.available = false;
-    installBackend({ capabilities, services: [fixturePreviewService()] }, false);
-    seedTab(sharedUrl);
-    const web = renderTab();
-    await waitFor(() =>
-      expect(web.container.querySelector("iframe")?.getAttribute("src")).toContain("49152"),
-    );
-    expect(screen.getByText("Compatibility mode")).toBeTruthy();
-    expect(tabUrl()).toBe(sharedUrl);
-  });
-
-  test("compatibility navigation and Back retain route and basis on resize/scroll", async () => {
-    const { browserPreview, emitState } = installBackend({
-      capabilities: fixturePreviewCapabilities({
-        surfaces: {
-          ...fixturePreviewCapabilities().surfaces,
-          desktopTunnel: { available: false, reason: "disabled", upstreamSchemes: ["http"] },
-        },
-      }),
       services: [fixturePreviewService()],
     });
     seedTab(serviceUri("/a"));
     renderTab();
-    await waitFor(() => expect(browserPreview.attach).toHaveBeenCalled());
-    for (const [path, navigation] of [
-      ["/next?q=1#top", 3],
-      ["/a", 4],
-    ] as const) {
-      emitState({
-        tabId: "browser-1",
-        url: `http://localhost:49152${path}`,
-        navigation,
-        loading: false,
-        canGoBack: true,
-        canGoForward: false,
-        error: null,
-      });
-      await waitFor(() => expect(tabUrl()).toBe(serviceUri(path)));
-      fireEvent(window, new Event("resize"));
-      fireEvent.scroll(window);
-      await waitFor(() =>
-        expect(browserPreview.attach).toHaveBeenLastCalledWith(
-          expect.objectContaining({
-            url: `http://localhost:49152${path}`,
-            navigationBasis: navigation,
-          }),
-        ),
-      );
-    }
+    expect(await screen.findByText(/This client cannot preview services/)).toBeTruthy();
+    expect(browserPreview.attach).not.toHaveBeenCalled();
+    expect(screen.queryByText("Compatibility mode") === null).toBe(true);
   });
 
   test("a stopped environment explains itself and offers to start it", async () => {
@@ -1253,7 +1176,7 @@ describe("service browser tabs", () => {
     },
   );
 
-  test("an unregistered host terminal port offers a temporary backend host port and opens the original URL", async () => {
+  test("an unregistered host terminal port offers to open the original URL in the browser", async () => {
     appCommandStore(environmentStore).setState((state) => ({
       environments: state.environments.map((environment) => ({
         ...environment,
@@ -1280,13 +1203,12 @@ describe("service browser tabs", () => {
     seedTab(intentUri);
     renderTab();
 
-    const open = await screen.findByRole("button", {
-      name: "Open as a temporary backend host port",
-    });
+    const open = await screen.findByRole("button", { name: "Open in browser" });
     expect(tabUrl()).toBe(intentUri);
     expect(browserPreview.attach).not.toHaveBeenCalled();
     fireEvent.click(open);
-    await waitFor(() => expect(tabUrl()).toBe(url));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("open_in_browser", { url }));
+    expect(tabUrl()).toBe(intentUri);
     expect(invokeMock).toHaveBeenCalledWith("resolve_preview_target", {
       intent: { url, source: "worktree-terminal", environmentId: FIXTURE_ENVIRONMENT_ID },
     });
@@ -1383,35 +1305,58 @@ describe("service browser tabs", () => {
       await waitFor(() => expect(tabUrl()).toBe(serviceUri("/app/next?tab=2")));
     });
 
-    test.each(["typed", "link", "redirect", "back"])(
-      "matching %s navigation after mount stays a URL tab",
-      async (kind) => {
-        const native = installBackend({
-          capabilities: fixturePreviewCapabilities(),
-          services: [fixturePreviewService()],
-        });
-        seedTab("http://localhost:4000/");
-        renderTab();
-        await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
-        if (kind === "typed") {
-          const input = screen.getByLabelText("Browser address");
-          fireEvent.change(input, { target: { value: legacyUrl } });
-          fireEvent.submit(input.closest("form")!);
-        } else {
-          native.emitState({
-            tabId: "browser-1",
-            url: legacyUrl,
-            navigation: 2,
-            loading: false,
-            canGoBack: true,
-            canGoForward: kind === "back",
-            error: null,
-          });
-        }
-        expect(await screen.findByRole("button", { name: "Open as service" })).toBeTruthy();
-        expect(tabUrl()).toBe(legacyUrl);
-      },
-    );
+    test("a matching address another client sets after mount stays a URL tab with the offer", async () => {
+      installBackend({
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      });
+      seedTab("http://localhost:4000/");
+      renderTab();
+      act(() =>
+        appCommandStore(paneLayoutStore)
+          .getState()
+          .updateTabBrowserUrl("browser-1", legacyUrl, FIXTURE_ENVIRONMENT_ID),
+      );
+      expect(await screen.findByRole("button", { name: "Open as service" })).toBeTruthy();
+      expect(tabUrl()).toBe(legacyUrl);
+    });
+
+    test("a typed address resolves as an address-bar intent, never a raw host port", async () => {
+      installBackend({
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      });
+      seedTab("");
+      renderTab();
+      const input = screen.getByLabelText("Browser address");
+      fireEvent.change(input, { target: { value: "localhost:4000/x" } });
+      fireEvent.submit(input.closest("form")!);
+      await waitFor(() =>
+        expect(parsePreviewTabTarget(tabUrl())).toEqual({
+          kind: "intent",
+          environmentId: FIXTURE_ENVIRONMENT_ID,
+          source: "address-bar",
+          url: "localhost:4000/x",
+        }),
+      );
+    });
+
+    test("a saved URL no service owns opens in the browser and attaches no view", async () => {
+      const { browserPreview } = installBackend({
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      });
+      seedTab("http://localhost:4000/docs");
+      renderTab();
+      fireEvent.click(await screen.findByRole("button", { name: "Open in browser" }));
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("open_in_browser", {
+          url: "http://localhost:4000/docs",
+        }),
+      );
+      expect(browserPreview.attach).not.toHaveBeenCalled();
+      expect(tabUrl()).toBe("http://localhost:4000/docs");
+    });
 
     test("an unmatched localhost URL stays a URL with the tunnel available", async () => {
       installBackend({
@@ -1478,12 +1423,12 @@ describe("service browser tabs", () => {
       expect(tabUrl()).toBe(legacyUrl);
     });
 
-    test("native navigation cancels delayed automatic migration", async () => {
+    test("another client's navigation cancels delayed automatic migration", async () => {
       const backend: Backend = {
         capabilities: fixturePreviewCapabilities(),
         services: [fixturePreviewService()],
       };
-      const native = installBackend(backend);
+      installBackend(backend);
       let resolve!: (snapshot: ReturnType<typeof fixturePreviewSnapshot>) => void;
       let reads = 0;
       backend.snapshot = async () =>
@@ -1496,15 +1441,11 @@ describe("service browser tabs", () => {
       renderTab();
       await waitFor(() => expect(resolve).toBeDefined());
       const next = "http://127.0.0.1:49152/new";
-      native.emitState({
-        tabId: "browser-1",
-        url: next,
-        navigation: 2,
-        loading: false,
-        canGoBack: true,
-        canGoForward: false,
-        error: null,
-      });
+      act(() =>
+        appCommandStore(paneLayoutStore)
+          .getState()
+          .updateTabBrowserUrl("browser-1", next, FIXTURE_ENVIRONMENT_ID),
+      );
       await act(async () => {
         resolve(fixturePreviewSnapshot(backend.services));
       });
@@ -1582,14 +1523,14 @@ describe("service browser tabs", () => {
       expect(invokeMock).toHaveBeenCalledWith("get_preview_services", expect.anything());
     });
 
-    test.each(["typed", "link", "external", "service", "unmount", "iframe"])(
+    test.each(["external", "service", "unmount"])(
       "delayed conversion cannot overwrite %s navigation",
       async (kind) => {
         const backend: Backend = {
           capabilities: offerCapabilities(),
           services: [fixturePreviewService()],
         };
-        const native = installBackend(backend, kind !== "iframe");
+        installBackend(backend);
         seedTab(legacyUrl);
         const view = renderTab();
         const open = await screen.findByRole("button", { name: "Open as service" });
@@ -1601,23 +1542,7 @@ describe("service browser tabs", () => {
         fireEvent.click(open);
         await waitFor(() => expect(resolve).toBeDefined());
         const next = kind === "service" ? serviceUri("/new") : "http://127.0.0.1:49152/new";
-        if (kind === "typed") {
-          const input = screen.getByLabelText("Browser address");
-          fireEvent.change(input, { target: { value: next } });
-          fireEvent.submit(input.closest("form")!);
-        } else if (kind === "link") {
-          native.emitState({
-            tabId: "browser-1",
-            url: next,
-            navigation: 2,
-            loading: false,
-            canGoBack: true,
-            canGoForward: false,
-            error: null,
-          });
-        } else if (kind === "iframe") {
-          fireEvent.load(screen.getByTitle("Backend browser preview"));
-        } else if (kind === "unmount") {
+        if (kind === "unmount") {
           view.unmount();
         } else {
           act(() =>
@@ -1626,7 +1551,7 @@ describe("service browser tabs", () => {
               .updateTabBrowserUrl("browser-1", next, FIXTURE_ENVIRONMENT_ID),
           );
         }
-        const expected = kind === "unmount" || kind === "iframe" ? legacyUrl : next;
+        const expected = kind === "unmount" ? legacyUrl : next;
         await act(async () => {
           resolve(fixturePreviewSnapshot(backend.services));
         });

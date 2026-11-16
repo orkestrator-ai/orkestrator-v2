@@ -1,4 +1,3 @@
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { useEffect, useState } from "react";
 import { AlertTriangle, Share2 } from "lucide-react";
 import {
@@ -54,7 +53,7 @@ export type BoardTicketSyncStatus = TicketSyncStatusResult & { error?: string };
 
 /**
  * This board's view as a leaf: the command nodes its copies come from. `null`
- * on a board no command node syncs, and on a backend that predates the read.
+ * on a board no command node syncs.
  */
 export function useTicketSyncLeafStatus(
   projectId: string,
@@ -70,7 +69,7 @@ export function useTicketSyncLeafStatus(
           const next = await nodeBackend.getTicketSyncLeafStatus(projectId);
           if (!disposed && next && Array.isArray(next.controllers)) setStatus(next);
         } catch {
-          // An older backend, or a passing failure: keep what is shown.
+          // A passing failure: keep what is shown.
         }
       })();
     };
@@ -147,17 +146,14 @@ export function useTicketSyncStatus(
         try {
           const next = await nodeBackend.getTicketSyncStatus(projectId);
           if (!disposed && next && Array.isArray(next.nodes)) setStatus(next);
-        } catch (error) {
+        } catch {
           if (disposed) return;
-          if (incompatibility(error, "get_ticket_sync_status")?.code === "unknown-command")
-            setStatus(null);
-          else
-            setStatus((previous) => ({
-              ...(previous?.projectId === projectId
-                ? previous
-                : { projectId, nodes: [], conflicts: [] }),
-              error: "Ticket sync status is unavailable. Retrying…",
-            }));
+          setStatus((previous) => ({
+            ...(previous?.projectId === projectId
+              ? previous
+              : { projectId, nodes: [], conflicts: [] }),
+            error: "Ticket sync status is unavailable. Retrying…",
+          }));
         }
       })();
     };

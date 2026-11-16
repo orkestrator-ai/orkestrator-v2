@@ -52,7 +52,6 @@ import type * as backend from "@/lib/backend";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { previewNodeFor } from "@/lib/native/browser-preview";
 import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
-import { displayUrlFromNativePreview, resolveBrowserAddress } from "@/lib/browser-address";
 import { isWkWebViewClient } from "@/lib/client-platform";
 import {
   attachBrowserPreview,
@@ -68,6 +67,7 @@ import {
   setBrowserPreviewVisible,
 } from "@/lib/native/browser-preview";
 import { openServiceExternally } from "@/lib/preview-external";
+import { openLinkExternally } from "@/lib/preview-link-external";
 import {
   diagnoseService,
   parseServiceAddressInput,
@@ -123,7 +123,7 @@ export interface ServiceBrowserTabProps {
   target: ServiceTarget;
 }
 
-type Mode = "desktop-tunnel" | "compatibility" | "top-level" | "unsupported";
+type Mode = "desktop-tunnel" | "top-level" | "unsupported";
 
 export function ServiceBrowserTab(props: ServiceBrowserTabProps) {
   const { target } = props;
@@ -205,8 +205,6 @@ function ServicePreview({
   const previewNode = previewNodeFor(backendScope);
   const { capabilities, status, services, snapshotLoaded, refreshEnvironment } =
     useEnvironmentServices(serviceRef.environmentId, isActive);
-  // Preview frames load through this node's preview address.
-  const resolvePreviewUrl = usePreviewServiceStore((state) => state.resolvePreviewUrl);
   const retarget = useRetarget(tabId, environmentId);
   const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
   const updateEnvironment = useEnvironmentStore((state) => state.updateEnvironment);
@@ -243,7 +241,6 @@ function ServicePreview({
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState<null | "register" | "edit" | "settings">(null);
   const [confirmingSessionImport, setConfirmingSessionImport] = useState(false);
-  const [iframeRevision, setIframeRevision] = useState(0);
   const locallyPersistedRequest = useRef<string | null>(null);
   const previewHostRef = useRef<HTMLDivElement | null>(null);
   const [previewHost, setPreviewHost] = useObservedElement(previewHostRef);
@@ -297,13 +294,13 @@ function ServicePreview({
   const backendMismatch =
     capabilities !== null && capabilities.backendInstanceId !== serviceRef.backendInstanceId;
   const mode: Mode = useMemo(() => {
-    if (!capabilities) return "compatibility";
+    // Until capabilities load, assume the client's own transport; nothing
+    // attaches without a service from the same snapshot anyway.
+    if (!capabilities) return nativeBrowserPreview ? "desktop-tunnel" : "top-level";
     if (nativeBrowserPreview) {
-      if (capabilities.surfaces.desktopTunnel.available) return "desktop-tunnel";
-      return capabilities.surfaces.legacyPath.available ? "compatibility" : "unsupported";
+      return capabilities.surfaces.desktopTunnel.available ? "desktop-tunnel" : "unsupported";
     }
-    if (capabilities.surfaces.browserTopLevel.available) return "top-level";
-    return capabilities.surfaces.legacyPath.available ? "compatibility" : "unsupported";
+    return capabilities.surfaces.browserTopLevel.available ? "top-level" : "unsupported";
   }, [capabilities, nativeBrowserPreview]);
 
   // Follow the durable path when another client (or an undo) changes it.
@@ -361,7 +358,6 @@ function ServicePreview({
     if (targetServiceId === serviceRef.serviceId) {
       setPath(page.route);
       persistPath(page.route);
-      if (mode === "compatibility") setIframeRevision((value) => value + 1);
       return { ok: true };
     }
     if (!services.some((candidate) => candidate.definition.serviceId === targetServiceId)) {
@@ -379,7 +375,7 @@ function ServicePreview({
       if (state.service && !isCurrentService(state.service, serviceRef)) return;
       setNativeState(state);
       if (state.transport) setTransport(state.transport);
-      const navigation = state.service?.navigation ?? state.navigation;
+      const navigation = state.service?.navigation;
       if (
         navigation !== undefined &&
         viewNavigation.current !== undefined &&
@@ -387,17 +383,7 @@ function ServicePreview({
       )
         return;
       if (navigation !== undefined) viewNavigation.current = navigation;
-      let nextPath = state.service?.path;
-      if (!state.service && mode === "compatibility" && service?.endpoint.hostPort) {
-        const display = `http://localhost:${service.endpoint.hostPort}${routeRef.current.path}`;
-        const current = displayUrlFromNativePreview(state.url, display);
-        if (current) {
-          const parsed = new URL(current);
-          // Only a route belonging to this service's compatibility socket.
-          if (parsed.port === String(service.endpoint.hostPort))
-            nextPath = `${parsed.pathname}${parsed.search}${parsed.hash}`;
-        }
-      }
+      const nextPath = state.service?.path;
       // The view has not navigated since this path was chosen, so the state still
       // reports the page being left (main sends one as the load starts). Adopting
       // it would re-attach that page and cancel the load.
@@ -413,7 +399,7 @@ function ServicePreview({
         setRoute({ path: nextPath, basis: navigation });
       }
     },
-    [mode, persistPath, service, serviceRef, setRoute, tabId],
+    [persistPath, serviceRef, setRoute, tabId],
   );
   // The attach effect reads the latest handler through this ref: the handler
   // is rebuilt whenever the service list refreshes, and re-running the effect
@@ -436,20 +422,6 @@ function ServicePreview({
       ? { ...serviceRef, path }
       : null;
 
-  // Compatibility mode: the service identity still selects the *current*
-  // backend host port, so recreation and port reassignment are followed.
-  const compatibilityUrl = useMemo(() => {
-    if (mode !== "compatibility" || !service || service.definition.scheme !== "http") return null;
-    const hostPort = service.endpoint.hostPort;
-    if (!hostPort || service.endpoint.state !== "available") return null;
-    try {
-      return resolveBrowserAddress(`http://localhost:${hostPort}${path}`, resolvePreviewUrl);
-    } catch {
-      return null;
-    }
-  }, [mode, path, resolvePreviewUrl, service]);
-
-  const compatibilityIframeUrl = compatibilityUrl?.iframeUrl ?? null;
   // Which page the native view shows. A change replaces the page, so the old
   // one must not stay on screen while the new attach is in flight.
   const previewIdentity = `${mode}\u0000${serviceRef.environmentId}\u0000${serviceRef.serviceId}`;
@@ -474,10 +446,7 @@ function ServicePreview({
     // waits for main, and for a service preview on the tunnel, which can take
     // arbitrarily long or fail.
     claimPreviewHide(tabId);
-    const canAttach =
-      host &&
-      ((mode === "desktop-tunnel" && attachTarget) ||
-        (mode === "compatibility" && compatibilityIframeUrl));
+    const canAttach = host && mode === "desktop-tunnel" && attachTarget;
     if (!canAttach || !visible || identityChanged) hide();
     if (!canAttach) {
       return () => {
@@ -495,26 +464,14 @@ function ServicePreview({
           width: rect.width,
           height: rect.height,
         };
-        const attach =
-          mode === "desktop-tunnel" && attachTarget
-            ? attachBrowserPreview({
-                tabId,
-                service: attachTarget,
-                ...(route.basis === undefined ? {} : { navigationBasis: route.basis }),
-                bounds,
-                visible,
-                ...previewNode,
-              })
-            : attachBrowserPreview({
-                tabId,
-                url: compatibilityIframeUrl!,
-                environmentId,
-                ...(route.basis === undefined ? {} : { navigationBasis: route.basis }),
-                bounds,
-                visible,
-                ...previewNode,
-              });
-        void attach
+        void attachBrowserPreview({
+          tabId,
+          service: attachTarget,
+          ...(route.basis === undefined ? {} : { navigationBasis: route.basis }),
+          bounds,
+          visible,
+          ...previewNode,
+        })
           .then((state) => {
             if (disposed) return;
             nativeAttachedRef.current = true;
@@ -555,9 +512,7 @@ function ServicePreview({
     attachTarget?.serviceId,
     attachTarget?.path,
     claimPreviewHide,
-    compatibilityIframeUrl,
     dialog,
-    environmentId,
     hasBlockingOverlay,
     isActive,
     mode,
@@ -614,7 +569,6 @@ function ServicePreview({
             .then(applyNativeState)
             .catch((error: unknown) => setAttachError(errorMessage(error)));
         } else if (resubmitted) setAttachNonce((value) => value + 1);
-        if (!nativeBrowserPreview) setIframeRevision((value) => value + 1);
         return;
       }
       try {
@@ -636,7 +590,7 @@ function ServicePreview({
           );
         } else {
           setAttachError(
-            `No registered service listens on that port. Register it from the service menu, or use a manual backend port.`,
+            "No registered service listens on that port. Register it from the service menu.",
           );
         }
       } catch (error) {
@@ -647,7 +601,6 @@ function ServicePreview({
       backendScope,
       address,
       applyNativeState,
-      nativeBrowserPreview,
       tabId,
       persistPath,
       retarget,
@@ -821,14 +774,12 @@ function ServicePreview({
           size="icon"
           className="h-8 w-8 shrink-0"
           aria-label="Reload preview"
-          disabled={!canNavigate && mode !== "compatibility"}
+          disabled={!canNavigate}
           onClick={() => {
             stopAnnotationForPageChange();
-            if (canNavigate)
-              void reloadBrowserPreview(tabId)
-                .then(applyNativeState)
-                .catch(() => undefined);
-            else setIframeRevision((value) => value + 1);
+            void reloadBrowserPreview(tabId)
+              .then(applyNativeState)
+              .catch(() => undefined);
           }}
         >
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
@@ -851,7 +802,6 @@ function ServicePreview({
                 dialogOpenerRef.current = pickerTriggerRef.current;
                 setDialog("register");
               }}
-              onManual={() => retarget("")}
               triggerRef={pickerTriggerRef}
             />
             <input
@@ -1031,19 +981,11 @@ function ServicePreview({
       )}
 
       <AnnotatedPreviewArea annotations={annotations}>
-        {nativeBrowserPreview && (mode === "desktop-tunnel" || compatibilityUrl) ? (
+        {nativeBrowserPreview && mode === "desktop-tunnel" ? (
           <div
             ref={setPreviewHost}
             data-native-browser-preview={tabId}
             className="absolute inset-0 block h-full w-full bg-background"
-          />
-        ) : mode === "compatibility" && compatibilityUrl ? (
-          <iframe
-            key={`${compatibilityUrl.iframeUrl}:${iframeRevision}`}
-            src={compatibilityUrl.iframeUrl}
-            title="Backend browser preview"
-            className="absolute inset-0 block h-full w-full border-0 bg-background"
-            sandbox="allow-forms allow-pointer-lock allow-presentation allow-scripts"
           />
         ) : (
           <div className="absolute inset-0 grid place-items-center p-6 text-center">
@@ -1158,7 +1100,8 @@ function PreviewIntentChooser({
   const [error, setError] = useState<string | null>(null);
   const [registering, setRegistering] = useState(false);
   const [moving, setMoving] = useState(false);
-  const previews = useNodeScope().store(previewServiceStore);
+  const previewScope = useNodeScope();
+  const previews = previewScope.store(previewServiceStore);
 
   useEffect(() => {
     let cancelled = false;
@@ -1289,8 +1232,22 @@ function PreviewIntentChooser({
                 Register port {resolution.suggestion.applicationPort}
               </Button>
               {!container && (
-                <Button type="button" variant="secondary" onClick={() => retarget(target.url)}>
-                  Open as a temporary backend host port
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="gap-2"
+                  onClick={() =>
+                    void openLinkExternally({
+                      environmentId: target.environmentId,
+                      sourceTabId: tabId,
+                      url: target.url,
+                      scope: previewScope,
+                      unresolved: "gateway-proxy",
+                    })
+                  }
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  Open in browser
                 </Button>
               )}
             </div>

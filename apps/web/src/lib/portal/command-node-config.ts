@@ -24,7 +24,6 @@ import {
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { CONFIG_COMMANDS } from "@orkestrator/protocol/contract/domains/config";
 import { config as configDomain } from "@/lib/node-scope/domains/config";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { deepEqualJson } from "@/lib/chat/message-identity";
 import { scopeBackendClient, type BackendClient } from "@/lib/backend/client";
@@ -111,40 +110,21 @@ export function layerConfig(commandNode: AppConfig, node: AppConfig): AppConfig 
   return { ...node, global };
 }
 
-/**
- * Patch one node's global settings. A node on an older release has no patch
- * command; it gets the previous behaviour instead: read its config, apply the
- * patch, write the whole object back. A machine under a command node sends
- * that write with `preserveInheritedSettings`, the shape such a node expects
- * (and an upgraded leaf answers when it is an unchanged echo,
- * `isGlobalConfigEcho`).
- */
+/** Patch one node's global settings; an empty patch reads them instead. */
 async function patchGlobalOnNode(
   nodeInvoke: ConfigInvoke,
   patchValue: unknown,
   unsetValue: unknown,
-  preserveInheritedSettings: boolean,
 ): Promise<AppConfig> {
   const patch = (patchValue ?? {}) as Partial<GlobalConfig>;
   const unset = Array.isArray(unsetValue) ? (unsetValue as string[]) : [];
   if (Object.keys(patch).length === 0 && unset.length === 0) {
     return nodeInvoke<AppConfig>("get_config");
   }
-  try {
-    return await nodeInvoke<AppConfig>(PATCH_GLOBAL_CONFIG, {
-      patch,
-      ...(unset.length > 0 ? { unset } : {}),
-    });
-  } catch (error) {
-    if (incompatibility(error, PATCH_GLOBAL_CONFIG)?.code !== "unknown-command") throw error;
-    const current = await nodeInvoke<AppConfig>("get_config");
-    const global = { ...current.global, ...patch } as Record<string, unknown>;
-    for (const key of unset) delete global[key];
-    return nodeInvoke<AppConfig>("update_global_config", {
-      global,
-      ...(preserveInheritedSettings ? { preserveInheritedSettings: true } : {}),
-    });
-  }
+  return nodeInvoke<AppConfig>(PATCH_GLOBAL_CONFIG, {
+    patch,
+    ...(unset.length > 0 ? { unset } : {}),
+  });
 }
 
 /**
@@ -184,13 +164,11 @@ async function splitGlobalPatch(
     commandInvoke,
     commandPatch,
     unset.filter((key) => inherited.has(key)),
-    false,
   );
   const savedNode = await patchGlobalOnNode(
     nodeInvoke,
     nodePatch,
     unset.filter((key) => !inherited.has(key)),
-    true,
   );
   return layered(savedCommand, savedNode);
 }
@@ -261,7 +239,7 @@ export async function runConfigCommandLayers(
   if (!targets.node) {
     const config =
       command === PATCH_GLOBAL_CONFIG
-        ? await patchGlobalOnNode(commandInvoke, args?.patch, args?.unset, false)
+        ? await patchGlobalOnNode(commandInvoke, args?.patch, args?.unset)
         : await commandInvoke<AppConfig>(command, args);
     return { config, commandNode: config, node: null };
   }

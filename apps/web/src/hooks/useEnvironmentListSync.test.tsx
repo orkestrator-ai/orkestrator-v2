@@ -13,7 +13,7 @@ function Probe({
   refreshEnvironment,
 }: {
   refreshProject: (projectId: string) => Promise<void>;
-  refreshEnvironment: (projectId: string, environmentId: string) => Promise<boolean>;
+  refreshEnvironment: (projectId: string, environmentId: string) => Promise<void>;
 }) {
   useEnvironmentListSync(["project-1"], refreshProject, refreshEnvironment);
   return null;
@@ -29,7 +29,7 @@ describe("useEnvironmentListSync", () => {
     const windowScope = new WindowScope();
     const command = windowScope.open({ role: "command", client: new FakeNodeClient() });
     const refreshProject = mock(async (_projectId: string) => undefined);
-    const refreshEnvironment = mock(async (_projectId: string, _environmentId: string) => true);
+    const refreshEnvironment = mock(async (_projectId: string, _environmentId: string) => {});
     const { scope: leaf } = renderInNodeScope(
       <Probe refreshProject={refreshProject} refreshEnvironment={refreshEnvironment} />,
       { role: "leaf", client: new FakeNodeClient({ nodeId: LEAF }), windowScope },

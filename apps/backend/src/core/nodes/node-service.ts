@@ -1496,12 +1496,6 @@ export class NodeService {
           timeoutMs: NODE_HELLO_TIMEOUT_MS,
           ...(this.options.fetchImpl ? { fetchImpl: this.options.fetchImpl } : {}),
         });
-        if (outcome.kind !== "hello") {
-          throw new NodeRefusalError(
-            NODE_REFUSAL_CODES.needsUpdate,
-            "This node runs an Orkestrator version without command nodes. Update it first.",
-          );
-        }
         if (outcome.hello.endpointRole !== "client") {
           throw new Error("The route reaches the node's control listener. Use a client endpoint.");
         }

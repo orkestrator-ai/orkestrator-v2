@@ -27,6 +27,10 @@ export const WEB_CHAT_LOG_AREAS = defineLogAreas({
       "compose-draft.persist-failed": "A compose draft could not be saved.",
       "compose-draft.restore-failed": "A saved compose draft could not be restored.",
       "compose-draft.discard-failed": "A saved compose draft could not be discarded.",
+      "compose-draft.retry-recovered":
+        "A compose draft save or discard that had failed succeeded on retry.",
+      "compose-draft.retry-abandoned":
+        "A failed compose draft save or discard stopped retrying (conflict, capacity or attempts).",
       "paste.failed": "Pasting an image into a composer failed unexpectedly.",
       "agent-state.listen-failed": "Subscribing to a tab's agent state events failed.",
       "model-favorites.persist-failed": "The favorite model list could not be saved.",

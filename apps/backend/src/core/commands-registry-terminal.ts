@@ -1058,7 +1058,7 @@ export function registerTerminalCommands(
     ASYNC_HANDLER,
   );
   // Only the diff viewer of v2.21.0 to v2.23.0 asks this and
-  // `read_file_at_branch` (to-do 7570 task 2).
+  // `read_file_at_branch` (to-do 8304).
   register(readLocalFileAtBranchCommand, ({ worktreePath, filePath, branch }, context) => {
     compatibilityPathUsage.record("retired-command.read-file-at-branch");
     return readLocalFileAtBranch(

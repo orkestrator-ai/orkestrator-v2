@@ -34,26 +34,6 @@ export function currentPageForService(serviceId: string, path: string, label?: s
   } satisfies CurrentAnnotationPage;
 }
 
-export function currentPageForManualUrl(displayUrl: string): CurrentAnnotationPage | null {
-  if (!displayUrl) return null;
-  let url: URL;
-  try {
-    url = new URL(displayUrl);
-  } catch {
-    return null;
-  }
-  const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
-  const service: WebAnnotationServiceIdentity =
-    Number.isSafeInteger(port) && port > 0 ? { kind: "port", port } : { kind: "unknown" };
-  const { route } = sanitizeWebAnnotationUrl(url.toString());
-  return {
-    service,
-    route,
-    pageKey: webAnnotationPageKey({ service, route }),
-    label: `${url.host}${route}`,
-  };
-}
-
 export function samePage(
   page: Pick<WebAnnotationPageIdentity, "service" | "route">,
   current: CurrentAnnotationPage | null,

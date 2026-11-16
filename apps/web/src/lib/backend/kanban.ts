@@ -50,10 +50,9 @@ export interface KanbanTask {
   description: string;
   /** The criteria as a markdown list. */
   acceptanceCriteria: string;
-  /** Absent from backends that predate kinds: a feature ticket. */
-  kind?: TicketKind;
-  /** Absent from backends that predate sections; derive them from the text. */
-  sections?: TicketSections;
+  kind: TicketKind;
+  /** The ticket's structured content; the text fields mirror it. */
+  sections: TicketSections;
   /** Label names, in the order they were added; absent when it has none or the backend predates labels. */
   labels?: string[];
   status: KanbanStatus;
@@ -353,18 +352,6 @@ export function createKanbanApi(client: BackendClient) {
     return asKanbanModel<FeaturePlan>(domain().update_feature_plan({ featureId, updates }));
   }
 
-  async function claimFeaturePlanBuild(
-    featureId: string,
-    taskId: string,
-  ): Promise<{ claimed: boolean; feature: FeaturePlan }> {
-    return asKanbanModel<{ claimed: boolean; feature: FeaturePlan }>(
-      domain().claim_feature_plan_build({
-        featureId,
-        taskId,
-      }),
-    );
-  }
-
   async function appendFeaturePlanMessage(
     featureId: string,
     role: FeaturePlanMessage["role"],
@@ -435,7 +422,6 @@ export function createKanbanApi(client: BackendClient) {
     getFeaturePlans,
     createFeaturePlan,
     updateFeaturePlan,
-    claimFeaturePlanBuild,
     appendFeaturePlanMessage,
     appendFeatureStoryMessage,
     readEnvironmentFileBase64,
@@ -469,7 +455,6 @@ export const {
   getFeaturePlans,
   createFeaturePlan,
   updateFeaturePlan,
-  claimFeaturePlanBuild,
   appendFeaturePlanMessage,
   appendFeatureStoryMessage,
   readEnvironmentFileBase64,

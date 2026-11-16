@@ -121,34 +121,6 @@ function sourceHintsAdvertised(environmentId: string, scope?: NodeScope): boolea
   return getWebAnnotationCache(environmentId, scope).capabilities?.operations.sourceHints === true;
 }
 
-/**
- * A target inside an open shadow root goes only to a backend that advertises
- * `operations.shadowTargets`. Any other backend gets the scope it already
- * knows, `unsupported` (`shadow-root`), so the note still saves and its pin
- * reports unsupported, as before.
- */
-export function withAdvertisedShadowScope(
-  capture: WebAnnotationCaptureInput,
-  advertised: boolean,
-): WebAnnotationCaptureInput {
-  const target = capture.target;
-  if (advertised) return capture;
-  const older = { kind: "unsupported", reason: "shadow-root" } as const;
-  if (target.kind === "element" && target.anchor.scope.kind === "shadow") {
-    return { ...capture, target: { ...target, anchor: { ...target.anchor, scope: older } } };
-  }
-  if (target.kind === "text-range" && target.container.scope.kind === "shadow") {
-    return { ...capture, target: { ...target, container: { ...target.container, scope: older } } };
-  }
-  return capture;
-}
-
-function shadowTargetsAdvertised(environmentId: string, scope?: NodeScope): boolean {
-  return (
-    getWebAnnotationCache(environmentId, scope).capabilities?.operations.shadowTargets === true
-  );
-}
-
 /** Durably note the receipt, then clear the spool record (both idempotent). */
 export async function acknowledgeCommittedCapture(
   api: BrowserPreviewCaptureApi,
@@ -244,9 +216,9 @@ export async function commitPendingCapture({
         if (!assetIds.includes(cropped.asset.id)) assetIds.push(cropped.asset.id);
       }
     }
-    const advertised = withAdvertisedShadowScope(
-      withAdvertisedSourceHints(record.capture, sourceHintsAdvertised(environmentId, scope)),
-      shadowTargetsAdvertised(environmentId, scope),
+    const advertised = withAdvertisedSourceHints(
+      record.capture,
+      sourceHintsAdvertised(environmentId, scope),
     );
     const target =
       advertised.target.kind === "region" && record.regionCrop

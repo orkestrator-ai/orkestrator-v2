@@ -19,8 +19,9 @@ export const agentAccountsChangedEvent = defineEvent({
 });
 
 /**
- * A leaf's active account moved by itself (`AgentAccountAutoSwitchedEvent`,
- * in its legacy form: `five-hour` is sent as `limit`).
+ * A leaf's active account moved by itself (`AgentAccountAutoSwitchedEvent`).
+ * Registered, but no longer emitted: a leaf's automatic switch reaches its
+ * command node as a coordinator notice through its outbox.
  */
 export const agentAccountAutoSwitchedEvent = defineEvent({
   domain: accountsDomain,

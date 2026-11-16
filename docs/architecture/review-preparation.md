@@ -57,7 +57,7 @@ no check still fails and `limitations` is empty.
   10 notes, 10 limitations, cut entries counted in `omitted`), opens Verify and
   consumes the slot. An incomplete result (`complete: false`) still goes to
   Verify, which judges the round.
-- **Verify reads it** (`verificationAddressReport` in
+- **Verify reads it** (`verificationAddressFindingsReport` in
   `build-pipeline-address-findings-report.ts`) as an untrusted JSON evidence frame
   (`<address-fix-result-json>`, framed by `ADDRESS_FIX_RESULT_FRAME_INSTRUCTION`
   from `review-evidence-frames.ts`), as another agent's claim to check against
@@ -76,12 +76,10 @@ no check still fails and `limitations` is empty.
   A graph's Verify node captures no HEAD, so it always checks it itself.
 - **Older sessions.** `addressReportKind: "fix-result"` on the session is the
   recorded marker of a typed Address Findings turn. An Address Findings session without it was
-  started before the typed handoff (or by a path with no result transport): it
-  advances to Verify on idle as before, a resume sends it no result slot, and
-  Verify reads its last assistant text, at most 16,000 characters, as it always
-  did. That fallback is a counted compatibility path
-  (`build-pipeline.address-text-report`,
-  [version compatibility](version-compatibility.md#register)).
+  started before the typed handoff. Its transcript is never read as a report:
+  when its turn ends it fails the stage with an error naming the reason (a retry
+  runs Address Findings again with a result slot), and a Verify already started
+  after it is told no Address Findings report is available.
 - **Downgrade.** An older backend ignores `addressReportKind` and `fixResult`
   and advances an idle Address Findings session to Verify without reading the result. A
   pending tool-mode Address Findings dispatch it cannot bind fails the stage with "lost
@@ -389,10 +387,9 @@ failing. A window's copy of another machine's catalogue starts on the bundled
 Codex list and is refreshed only when something loads it, so letting the
 window resolve rows once launched a model the node's login refused. The
 pickers still list the window's copy, which a launcher now reloads from the
-node's cache each time it opens. A node that predates the read answers
-`unknown-command`; the dialog then resolves the rows itself, and a plain click
-against a node without `launch_multi_review` does the same (both are in the
-compatibility register).
+node's cache each time it opens. A failed launch or defaults read, an unknown
+command included, is shown as an error; the window never resolves the rows
+itself.
 
 ## Lifecycle and visibility
 

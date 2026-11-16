@@ -1165,10 +1165,7 @@ export interface ProviderReadOptions {
 
 /** One `/runtime-health` read, as MCP apply evidence. */
 export type ProviderMcpConfigReport =
-  | { state: "evidence"; evidence: ProviderMcpConfigEvidence }
-  | { state: "none" }
-  /** The bridge answered without the MCP configuration report: it predates it. */
-  | { state: "unsupported" };
+  { state: "evidence"; evidence: ProviderMcpConfigEvidence } | { state: "none" };
 
 /** See {@link NativeAgentRuntimeProvider.mcpConfigEvidence}. */
 export interface ProviderMcpConfigEvidence {

@@ -1,11 +1,9 @@
 import { useEffect } from "react";
 import { useStore } from "zustand";
 import {
-  COORDINATOR_LAUNCH_OVERRIDES_COMMAND,
   coordinatorLaunchOverrideKey,
   type CoordinatorLaunchOverride,
 } from "@orkestrator/protocol/coordinator-launch-overrides";
-import { isUnknownViewCommandError } from "@orkestrator/protocol/view-sync";
 import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createCoordinatorApi } from "@/lib/backend/coordinator";
@@ -61,8 +59,7 @@ function sameOverrides(
  * read of its own and nothing to fail. Presentation only: the delegations live
  * in the backend's coordinator store. Hints re-read it, a coordinator store
  * write and the transport's resync and safety checks, which also cover a missed
- * hint. Against a backend that predates the command nothing is shown; a resync
- * asks again, since the backend may have been upgraded behind this window.
+ * hint.
  */
 export const coordinatorLaunchOverrideStore =
   defineScopedStore<CoordinatorLaunchOverrideStoreState>(
@@ -84,7 +81,6 @@ export const coordinatorLaunchOverrideStore =
       let missed = false;
       /** A remount relied on the in-flight read instead of starting its own. */
       let shared = false;
-      let unsupported = false;
 
       const read = async (): Promise<void> => {
         if (inFlight) {
@@ -108,15 +104,10 @@ export const coordinatorLaunchOverrideStore =
               ]),
             );
             if (!sameOverrides(get().overrides, overrides)) set({ overrides });
-          } catch (error) {
-            if (isUnknownViewCommandError(error, COORDINATOR_LAUNCH_OVERRIDES_COMMAND)) {
-              unsupported = true;
-              if (get().overrides.size > 0) set({ overrides: new Map() });
-            } else if (shared) {
-              // A remount took this read as its own; it would have read again.
-              rerun = true;
-            }
-            // Anything else keeps the last answer; the next hint or check reads again.
+          } catch {
+            // A remount took this read as its own; it would have read again.
+            if (shared) rerun = true;
+            // A failed read keeps the last answer; the next hint or check reads again.
           }
         })();
         try {
@@ -131,7 +122,7 @@ export const coordinatorLaunchOverrideStore =
       };
 
       function schedule(): void {
-        if (unsupported || subscriptions === null || timer) return;
+        if (subscriptions === null || timer) return;
         if (retainers === 0) {
           // Inside the grace window: a remount reads for it, otherwise nothing does.
           missed = true;
@@ -145,10 +136,7 @@ export const coordinatorLaunchOverrideStore =
 
       const subscribe = (): Array<() => void> => [
         onResourceChanged("coordinator", () => schedule(), scope),
-        onResourceResync(() => {
-          unsupported = false;
-          schedule();
-        }, scope),
+        onResourceResync(() => schedule(), scope),
         onViewSafetyCheck(() => schedule(), scope),
       ];
 
@@ -186,13 +174,13 @@ export const coordinatorLaunchOverrideStore =
               grace = null;
               if (missed) {
                 missed = false;
-                if (!unsupported) void read();
+                void read();
               } else if (inFlight) {
                 shared = true;
               }
             } else {
               subscriptions = subscribe();
-              if (!unsupported) void read();
+              void read();
             }
           }
           let released = false;
@@ -211,7 +199,6 @@ export const coordinatorLaunchOverrideStore =
           stop();
           retainers = 0;
           rerun = false;
-          unsupported = false;
           set({ overrides: new Map() });
         },
       };

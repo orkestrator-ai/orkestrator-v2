@@ -112,7 +112,7 @@ describe("bounded in-container boot wait", () => {
     const root = await fakeBootRoot();
     await fs.rm(root.runDir, { recursive: true });
     const waited = await runSh(root.remap(bootProbeScript(2_000)));
-    expect(parseBootProbe(waited.stdout)).toEqual({ kind: "legacy" });
+    expect(parseBootProbe(waited.stdout)).toEqual({ kind: "no-boot-status" });
     expect(waited.ms).toBeLessThan(1_000);
   });
 

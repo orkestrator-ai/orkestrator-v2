@@ -76,6 +76,11 @@ function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
     title: "Existing task",
     description: "A description",
     acceptanceCriteria: "Some criteria",
+    kind: "feature",
+    sections: {
+      summary: "A description",
+      acceptanceCriteria: [{ id: "ac-1", text: "Some criteria" }],
+    },
     status: "backlog",
     order: 0,
     createdAt: "2026-01-01T00:00:00.000Z",

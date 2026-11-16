@@ -196,15 +196,16 @@ When touching any of them:
   `{ closed: true, retained: true }` or `{ closed: true, missing: true }`.
   Anything else, including an empty or malformed 2xx, is not a close.
 - **An unknown session is answered in band, never 404.** 200
-  `{ closed: true, missing: true }`. A 404/405 from the close route means the
-  bridge predates it; it is never evidence that the session is gone.
+  `{ closed: true, missing: true }`. A 404/405 from the close route is an
+  unconfirmed close like any other failure; it is never evidence that the
+  session is gone.
 - **503 `{ closed: false, pending: true, error }` keeps everything.** The
   bridge keeps the session registered (and refuses new work on it); the
   backend keeps its durable teardown intent and the tab mapping, and the
   periodic reconcile sweep retries. Errors are fixed, content-free strings.
-- **A close never falls back to DELETE.** On 404/405 the teardown stays pending
-  with a `bridge-upgrade-required` failure the renderer shows as a restart
-  notice, on every platform. No bridge serves `DELETE /session/:id` any more;
+- **A close never falls back to DELETE.** On 404/405, as on any answer that
+  does not affirm `closed: true`, the teardown stays pending and the reconcile
+  sweep retries it, on every platform. No bridge serves `DELETE /session/:id` any more;
   an older Claude bridge's DELETE deleted the rollout. Do not add one back.
 - **The last owner closes.** Two tabs can map to one provider session. Backend
   teardown is serialized per (environment, agent, provider session) and only

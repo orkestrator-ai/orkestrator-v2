@@ -8,7 +8,7 @@
  * from the seeded store. A change to the session key, the registry's goal
  * read, `NodeCoordinatorRemote` or the coordinator's goal hold fails here,
  * without the two backends the script needs. The script itself runs weekly in
- * `.github/workflows/mixed-version-qualification.yml` (`mise run qa:remote-goal-hold`).
+ * `.github/workflows/remote-goal-hold.yml` (`mise run qa:remote-goal-hold`).
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";

@@ -174,8 +174,8 @@ refinements".
 
 - **A window moved to a leaf, live.** Switching is covered by unit, IPC
   and component tests, not yet run against two real backends.
-- **Previews through the relay.** The relay forwards neither the preview
-  tunnel nor relay-prefixed browser-loopback URLs, so a desktop connected
+- **Previews through the relay.** The relay does not forward the preview
+  tunnel, so a desktop connected
   to a *remote* command node that cannot reach a leaf directly has no
   previews of that leaf's environments. A desktop that is its own command
   node reaches leaves directly or over its own SSH route and is not

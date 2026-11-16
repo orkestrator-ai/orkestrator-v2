@@ -32,13 +32,18 @@ describe("browser preview protocol contract", () => {
     } satisfies BrowserPreviewBounds;
     const input = {
       tabId: "browser-1",
-      url: "http://localhost:3000/",
+      service: {
+        backendInstanceId: "backend-1",
+        environmentId: "env-1",
+        serviceId: "web",
+        path: "/",
+      },
       bounds,
       visible: true,
     } satisfies BrowserPreviewAttachInput;
     const state = {
       tabId: input.tabId,
-      url: input.url,
+      url: "http://localhost:3000/",
       loading: false,
       canGoBack: false,
       canGoForward: true,
@@ -47,6 +52,7 @@ describe("browser preview protocol contract", () => {
     const openLinkEvent = {
       tabId: input.tabId,
       url: "http://localhost:3000/docs",
+      service: { ...input.service, path: "/docs" },
     } satisfies BrowserPreviewOpenLinkEvent;
 
     expect(input.bounds).toEqual(bounds);
@@ -54,6 +60,12 @@ describe("browser preview protocol contract", () => {
     expect(openLinkEvent).toEqual({
       tabId: "browser-1",
       url: "http://localhost:3000/docs",
+      service: {
+        backendInstanceId: "backend-1",
+        environmentId: "env-1",
+        serviceId: "web",
+        path: "/docs",
+      },
     });
   });
 });

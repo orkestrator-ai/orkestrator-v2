@@ -27,15 +27,15 @@
  * file carries a `completeness` block beside the records: the bridge sessions
  * created fresh since (at most 256), and a fixed 16 KiB Bloom filter of every
  * request id that left the journal (age, capacity, `forget`, admission) or was
- * steered. A file without the block (an older bridge wrote it last), a merged
- * legacy file, a record with no id, or a load failure leaves the journal
- * untracked for good, and an untracked journal never answers `absent`. The
- * file has no fsync, so this holds across a bridge restart, not an OS crash.
+ * steered. A file without the block (an older bridge wrote it last, or it
+ * absorbed a login journal at bridge start), a record with no id, or a load
+ * failure leaves the journal untracked for good, and an untracked journal
+ * never answers `absent`. The file has no fsync, so this holds across a bridge restart, not an OS crash.
  */
 import { createHash } from "node:crypto";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { codexBridgeStateDir, codexLoginBridgeDir } from "../bridge-state-dir.js";
+import { codexBridgeStateDir } from "../bridge-state-dir.js";
 import { hashCwd } from "./persistence.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -155,6 +155,17 @@ export class DispatchJournalIntegrityError extends DispatchJournalAdmissionError
   }
 }
 
+/** The journal's file name for a workspace, from its {@link hashCwd}. */
+export function dispatchJournalFileName(cwdHash: string): string {
+  return `dispatch-journal-${cwdHash}.json`;
+}
+
+function loadFailureReason(error: unknown): string {
+  return error instanceof DispatchJournalIntegrityError
+    ? error.message
+    : "Dispatch journal could not be safely decoded";
+}
+
 const DISPATCH_STATES = new Set<DispatchState>(["prepared", "accepted", "retryable", "terminal"]);
 const TERMINAL_STATUSES = new Set<DispatchTerminalStatus>(["completed", "interrupted", "failed"]);
 
@@ -258,7 +269,7 @@ export class DispatchJournal {
   }
 
   private path(): string {
-    return join(codexBridgeStateDir(this.codexHome), `dispatch-journal-${this.cwdHash}.json`);
+    return join(codexBridgeStateDir(this.codexHome), dispatchJournalFileName(this.cwdHash));
   }
 
   async load(): Promise<void> {
@@ -270,44 +281,63 @@ export class DispatchJournal {
       return;
     }
 
-    const legacy = join(
-      codexLoginBridgeDir(this.codexHome),
-      `dispatch-journal-${this.cwdHash}.json`,
-    );
     try {
       const hadCurrent = await this.loadPath(this.path());
-      const mergedLegacy = legacy !== this.path() && (await this.loadPath(legacy, true));
       // A missing file is a new journal: the file is created by the first
       // `prepared` write and never deleted, so no prompt was ever handed over
       // here. A file without a valid completeness block was written (or last
-      // rewritten) by an older bridge, whose removals went unrecorded. A merged
-      // legacy journal has the same gap.
-      this.tracked =
-        !mergedLegacy &&
-        !this.unnamedRecordSkipped &&
-        (hadCurrent ? this.restoredCompleteness : true);
+      // rewritten) by an older bridge, or by the adoption of a login journal,
+      // whose removals went unrecorded.
+      this.tracked = !this.unnamedRecordSkipped && (hadCurrent ? this.restoredCompleteness : true);
       if (!this.tracked) this.resetCompleteness();
-      if (mergedLegacy) {
-        // Publish the union before retiring the source. A crash between these
-        // operations safely merges it again on restart.
-        this.collectGarbage();
-        this.refreshCapacityError();
-        if (this.capacityError) throw new DispatchJournalCapacityError(this.capacityError);
-        await this.flush({ failClosed: true });
-        await rm(legacy);
-      }
       this.collectGarbage();
       this.refreshCapacityError();
     } catch (error) {
-      this.integrityError =
-        error instanceof DispatchJournalIntegrityError
-          ? error.message
-          : "Dispatch journal could not be safely decoded";
+      this.integrityError = loadFailureReason(error);
       this.tracked = false;
       this.resetCompleteness();
     } finally {
       this.loadSettled = true;
     }
+  }
+
+  /**
+   * The one-time upgrade at bridge start (`login-state-adoption.ts`): merge the
+   * journal a bridge before the shared state directory kept in this login's own
+   * directory into the shared one, publish the union, then remove the source.
+   * A crash between the two merges it again on the next start, which is safe:
+   * an identical record is kept and a conflicting one is quarantined. Throws
+   * when the source cannot be merged safely; the caller then refuses every
+   * dispatch on the runtime's journal ({@link refuse}), because the source may
+   * hold a prompt that ran. Uses an instance of its own, never the runtime's.
+   */
+  async adoptFrom(source: string): Promise<boolean> {
+    if (this.loaded) throw new DispatchJournalIntegrityError("Dispatch journal is already loaded");
+    this.loaded = true;
+    try {
+      if (!this.persist || source === this.path()) return false;
+      await this.loadPath(this.path());
+      if (!(await this.loadPath(source, true))) return false;
+      // The merged file carries no completeness block, so the runtime's load
+      // reads it as untracked.
+      this.tracked = false;
+      this.resetCompleteness();
+      this.collectGarbage();
+      this.refreshCapacityError();
+      if (this.capacityError) throw new DispatchJournalCapacityError(this.capacityError);
+      await this.flush({ failClosed: true });
+      await rm(source);
+      return true;
+    } finally {
+      this.loadSettled = true;
+    }
+  }
+
+  /** Refuse every dispatch for this process's life, after a failed {@link adoptFrom}. */
+  refuse(error: unknown): void {
+    this.integrityError = loadFailureReason(error);
+    this.tracked = false;
+    this.resetCompleteness();
   }
 
   private async loadPath(path: string, merging = false): Promise<boolean> {

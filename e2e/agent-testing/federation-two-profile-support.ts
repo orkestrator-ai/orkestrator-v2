@@ -86,34 +86,6 @@ export function describeStream(url: string): StreamDescription {
   return { kind: "other", perNode, relayedNodes: [] };
 }
 
-/**
- * The main stream URL as a renderer from before per-node relayed names sends
- * it (no `relayedEvents`; `web-gateway.ts` at `1e6d56391`), or null when the
- * URL is not a main stream asking for per-node names. A command node from
- * before them ignores the parameter, so stripping it is also what an older
- * command node sees of a current renderer's request.
- */
-export function legacyMainStreamUrl(url: string): string | null {
-  const parsed = new URL(url);
-  if (describeStream(url).kind !== "main" || !parsed.searchParams.has(RELAYED_EVENTS_PARAM)) {
-    return null;
-  }
-  parsed.searchParams.delete(RELAYED_EVENTS_PARAM);
-  return parsed.toString();
-}
-
-/**
- * A `watch_node_events` answer as a command node from before per-node names
- * gives it: no `perNodeEvents`. Any other invoke answer is returned as is.
- */
-export function withoutPerNodeEvents(command: unknown, body: unknown): unknown {
-  if (command !== "watch_node_events" || !body || typeof body !== "object") return body;
-  const result = (body as { result?: unknown }).result;
-  if (!result || typeof result !== "object") return body;
-  const { perNodeEvents: _perNodeEvents, ...rest } = result as Record<string, unknown>;
-  return { ...(body as Record<string, unknown>), result: rest };
-}
-
 /** One gateway frame, reduced to what evidence may hold. */
 export interface FrameFacts {
   /** The frame's event name; `relayed-node-event:<id>` keeps its node id. */

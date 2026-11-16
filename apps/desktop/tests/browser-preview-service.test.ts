@@ -127,7 +127,6 @@ function harness() {
   const openServiceExternally = mock(async (_target: BrowserPreviewServiceTarget) => undefined);
   const manager = new BrowserPreviewManager({
     WebContentsViewCtor: FakeView as never,
-    browserSession: { partition: "legacy" } as never,
     menu: {
       buildFromTemplate: (template: MenuItemConstructorOptions[]) => (
         menuTemplates.push(template),
@@ -444,17 +443,6 @@ describe("service previews in BrowserPreviewManager", () => {
     expect(other.enabled).toBe(false);
   });
 
-  test("legacy URL tabs still work and switching to a service rebuilds the view", async () => {
-    const { manager, views } = harness();
-    await manager.attach({ tabId: "tab", url: "http://localhost:5173/", bounds, visible: true });
-    expect(views[0]!.options.webPreferences.session).toEqual({ partition: "legacy" });
-    await manager.attach({ tabId: "tab", service: service("svc_aaaaaaaa"), bounds, visible: true });
-    expect(views).toHaveLength(2);
-    expect(views[1]!.options.webPreferences.session).toEqual({
-      partition: "persist:svc-svc_aaaaaaaa",
-    });
-  });
-
   test("service previews refuse a transport URL navigation from the renderer", async () => {
     const { manager } = harness();
     await manager.attach({ tabId: "tab", service: service("svc_aaaaaaaa"), bounds, visible: true });
@@ -527,7 +515,7 @@ describe("service previews in BrowserPreviewManager", () => {
     gates.shift()!.open();
     await expect(attached).rejects.toThrow("backend-unavailable");
     await expect(
-      manager.attach({ tabId: "tab", url: "http://localhost:5173/", bounds, visible: true }),
+      manager.attach({ tabId: "tab", service: service("svc_aaaaaaaa"), bounds, visible: true }),
     ).rejects.toThrow("backend-unavailable");
     expect(views).toHaveLength(0);
     expect(held.get("bk_backend_1:svc_aaaaaaaa")?.size).toBe(0);
@@ -724,18 +712,6 @@ describe("copying a browser sign-in into a service preview", () => {
     await expect(fixture.manager.startSessionImport("tab")).rejects.toThrow("cannot copy");
     await expect(fixture.manager.openServiceSignIn("tab", 3000)).rejects.toThrow("cannot open");
     expect(fixture.openExternal).not.toHaveBeenCalled();
-  });
-
-  test("a legacy URL tab is not offered it", async () => {
-    const { manager } = harness();
-    const state = await manager.attach({
-      tabId: "legacy",
-      url: "http://localhost:3000/",
-      bounds,
-      visible: true,
-    });
-    expect(state.sessionImport).toBeUndefined();
-    await expect(manager.startSessionImport("legacy")).rejects.toThrow("cannot copy");
   });
 
   test("copies, reloads every view of the service and no other, and keeps the outcome", async () => {

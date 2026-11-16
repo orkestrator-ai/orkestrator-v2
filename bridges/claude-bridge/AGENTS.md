@@ -96,9 +96,8 @@ writers on one `.jsonl`. When touching the prompt path:
   pids repeat after a container restart (the preference directory is a
   persistent volume), a reboot or a wrap. A lock whose owner is proven dead is
   taken over at once; one whose live owner matches or cannot be checked is
-  never taken, because two writers would race the dispatch journal. An older
-  bridge's pid-only lock keeps the 30 s rule unless it names this process's
-  own pid. `ps` (hosts without `/proc`) runs only on the slow path. A claim
+  never taken, because two writers would race the dispatch journal. A lock
+  without an instance id is unreadable and keeps the 30 s rule. `ps` (hosts without `/proc`) runs only on the slow path. A claim
   write that waits out a live owner answers 503 (`unavailable`: nothing was
   journaled or sent), never 500. A lock or recovery marker is published with
   its owner already in it (`createOwnedFile`: written to a staging file, then

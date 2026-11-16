@@ -21,7 +21,7 @@ function status(
 }
 
 describe("TicketSyncStrip", () => {
-  test("shows nothing for a board no other machine shares, or an older backend", () => {
+  test("shows nothing for a board no other machine shares", () => {
     const { container } = renderInAppCommandScope(<TicketSyncStrip status={null} />);
     expect(container.textContent).toBe("");
     renderInAppCommandScope(<TicketSyncStrip status={status([])} />);
@@ -85,6 +85,8 @@ describe("KanbanCard on another machine", () => {
     title: "Fix the parser",
     description: "",
     acceptanceCriteria: "",
+    kind: "feature",
+    sections: {},
     status: "in-progress",
     comments: [],
     images: [],
@@ -141,18 +143,13 @@ test("status failure is visible while the last machine state remains readable", 
   expect(screen.getByTestId("ticket-sync-node").textContent).toBe("Mini");
 });
 
-for (const missing of [false, true]) {
-  test(`status fetch failure; command missing: ${missing}`, async () => {
-    spyOn(backend, "getTicketSyncStatus").mockRejectedValue(
-      new Error(missing ? "Unknown backend command: get_ticket_sync_status" : "disk failure"),
-    );
-    const { result } = renderHookInAppCommandScope(() => useTicketSyncStatus("p1", 1));
-    if (missing) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(result.current).toBeNull();
-    } else await waitFor(() => expect(result.current?.error).toContain("unavailable"));
-  });
-}
+test("a status fetch failure, an unknown command included, shows the error", async () => {
+  spyOn(backend, "getTicketSyncStatus").mockRejectedValue(
+    new Error("Unknown backend command: get_ticket_sync_status"),
+  );
+  const { result } = renderHookInAppCommandScope(() => useTicketSyncStatus("p1", 1));
+  await waitFor(() => expect(result.current?.error).toContain("unavailable"));
+});
 
 test("a status refresh failure retains the last nodes and recovery clears the error", async () => {
   const read = spyOn(backend, "getTicketSyncStatus").mockResolvedValue(
@@ -318,6 +315,8 @@ describe("KanbanCard on a leaf board (#2027)", () => {
     title: "Copied ticket",
     description: "",
     acceptanceCriteria: "",
+    kind: "feature",
+    sections: {},
     status: "backlog",
     comments: [],
     images: [],

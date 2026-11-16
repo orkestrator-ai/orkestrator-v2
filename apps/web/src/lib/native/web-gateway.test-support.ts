@@ -135,7 +135,7 @@ export class MockWebSocket {
   binaryType: BinaryType = "blob";
   bufferedAmount = 0;
   extensions = "";
-  protocol = "orkestrator-terminal.v1";
+  protocol = "orkestrator-terminal.v1.input-results";
   readyState = MockWebSocket.CONNECTING;
   onopen: ((event: Event) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;

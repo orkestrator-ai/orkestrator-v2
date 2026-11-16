@@ -1,6 +1,9 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { formatWebAnnotationError } from "@orkestrator/protocol/web-annotations";
+import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
+import { cancelAllDraftWriteRetriesForTests } from "./compose-draft-retry";
 import { createStore } from "zustand/vanilla";
 import * as realBackend from "@/lib/backend";
 import { mockToastError as toastError } from "../../../../tests/mocks/sonner";
@@ -31,6 +34,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 const compose = await import("./compose-draft-persistence");
+const { setTransportDisconnected } = await import("./transport-connectivity");
 const files = await import("./file-draft-persistence");
 const { useDurableComposeDraft } = await import("../hooks/useDurableComposeDraft");
 const { NATIVE_COMPOSE_DRAFT_SAVE_DEBOUNCE_MS, useNativeComposeDraftPersistence } =
@@ -68,6 +72,7 @@ async function fireSaveDebounce(draftKey: string): Promise<void> {
 }
 
 afterEach(() => {
+  cancelAllDraftWriteRetriesForTests();
   saveDebounce?.restore();
   saveDebounce = undefined;
 });
@@ -365,6 +370,263 @@ describe("compose draft persistence", () => {
 
     await compose.resolveComposeDraftSaveConflict(key, "project", "project", "second", secondState);
     expect(saveComposeDraft.mock.calls.map((call) => (call as unknown[])[4])).toEqual([1, 1, 2]);
+  });
+});
+
+describe("compose draft write retries", () => {
+  /**
+   * A saved draft holds the backend's queue drain and agent mail for its tab.
+   * A discard that failed while the window's connection was down used to
+   * leave that draft behind, so a queued prompt sat unsent with nothing on
+   * screen to say why.
+   */
+  afterEach(() => {
+    setTransportDisconnected("gateway-event-stream", false);
+  });
+
+  function reconnect(): void {
+    setTransportDisconnected("gateway-event-stream", true);
+    setTransportDisconnected("gateway-event-stream", false);
+  }
+
+  function stored(key: string, revision = 1, value = "original") {
+    return {
+      draftKey: key,
+      ownerType: "environment" as const,
+      ownerId: "env-1",
+      value,
+      revision,
+      updatedAt: "2026-11-16T00:00:00.000Z",
+    };
+  }
+
+  test("a queued save captures the hydrated revision on its first attempt and reuses it", async () => {
+    const key = "draft:retry-save-fence";
+    getComposeDraft.mockResolvedValueOnce(stored(key, 7));
+    saveComposeDraft
+      .mockRejectedValueOnce(new Error("backend unavailable"))
+      .mockResolvedValueOnce(stored(key, 8, "local"));
+    const loading = compose.loadComposeDraft(key);
+    const saving = compose.persistComposeDraft(key, "environment", "env-1", "local");
+    await loading;
+    await expect(saving).rejects.toThrow("backend unavailable");
+    reconnect();
+    await compose.awaitComposeDraftWrites(key);
+    expect(saveComposeDraft.mock.calls.map((call) => call[4])).toEqual([7, 7]);
+    expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
+    await compose.discardComposeDraft(key);
+    expect(deleteComposeDraft).toHaveBeenLastCalledWith(key, 8);
+  });
+
+  for (const operation of ["save", "discard"] as const) {
+    for (const followup of ["read", "update"] as const) {
+      test(`a failed ${operation} cannot overwrite another window after an inline failure and ${followup}`, async () => {
+        const key = `draft:retry-fence:${operation}:${followup}`;
+        let record: ReturnType<typeof stored> | null = stored(key);
+        let failures = 2;
+        const fences: unknown[] = [];
+        getComposeDraft.mockImplementation(async () => record);
+        saveComposeDraft.mockImplementation(async (_key, _ownerType, _ownerId, value, revision) => {
+          if (value === "local") {
+            fences.push(revision);
+            if (failures-- > 0) throw new Error("backend unreachable");
+          }
+          if (revision !== (record?.revision ?? 0))
+            throw new Error("Compose draft revision conflict");
+          record = stored(key, (record?.revision ?? 0) + 1, value as string);
+          return record;
+        });
+        deleteComposeDraft.mockImplementation(async (_key, revision) => {
+          fences.push(revision);
+          if (failures-- > 0) throw new Error("backend unreachable");
+          if (revision !== (record?.revision ?? 0))
+            throw new Error("Compose draft revision conflict");
+          record = null;
+        });
+        await compose.loadComposeDraft(key);
+        await expect(
+          operation === "save"
+            ? compose.persistComposeDraft(key, "environment", "env-1", "local")
+            : compose.discardComposeDraft(key),
+        ).rejects.toThrow("backend unreachable");
+        // A second window commits while this window has a pending intent.
+        record = stored(key, 2, "other window");
+        if (followup === "read") {
+          expect((await compose.loadComposeDraft<string>(key))?.value).toBe("other window");
+          expect(compose.composeDraftWritesAwaitingRetry()).toContain(key);
+        } else {
+          await compose.updateSavedComposeDraft<string>(key, (value) => `${value} updated`);
+          expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
+        }
+        reconnect();
+        await compose.awaitComposeDraftWrites(key);
+        expect(fences).toEqual(followup === "read" ? [1, 1, 1] : [1, 1]);
+        expect(record?.value).toBe(followup === "read" ? "other window" : "other window updated");
+        expect(record?.revision).toBe(followup === "read" ? 2 : 3);
+        expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
+      });
+    }
+  }
+
+  test("an update flushes a pending save before reading and modifying its value", async () => {
+    const key = "draft:update-flush-save";
+    let record = stored(key);
+    const order: string[] = [];
+    getComposeDraft.mockImplementation(async () => {
+      order.push("read");
+      return record;
+    });
+    saveComposeDraft
+      .mockRejectedValueOnce(new Error("backend unavailable"))
+      .mockImplementation(async (_key, _ownerType, _ownerId, value, revision) => {
+        order.push(`save:${value}`);
+        expect(revision).toBe(record.revision);
+        record = stored(key, record.revision + 1, value as string);
+        return record;
+      });
+    await compose.loadComposeDraft(key);
+    await compose.persistComposeDraft(key, "environment", "env-1", "local").catch(() => undefined);
+    order.length = 0;
+    await compose.updateSavedComposeDraft<string>(key, (value) => `${value} updated`);
+    expect(order).toEqual(["save:local", "read", "save:local updated"]);
+    expect(record.value).toBe("local updated");
+    expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
+  });
+
+  test.each([
+    new Error("Compose draft belongs to another owner"),
+    new Error("Invalid compose draft value"),
+    Object.assign(new Error("backend unavailable for this client"), { status: 400 }),
+    new Error(
+      formatWebAnnotationError("Web annotations unavailable: upgrade", {
+        code: "upgrade-required",
+      }),
+    ),
+    new Error(
+      formatWebAnnotationError("Web annotation revision conflict: changed", { code: "conflict" }),
+    ),
+  ])("permanent write errors are not replayed on hydration or reconnect: %s", async (error) => {
+    const key = "draft:permanent-save-error";
+    saveComposeDraft.mockRejectedValue(error);
+    await expect(
+      compose.persistComposeDraft(key, "environment", "env-1", "local"),
+    ).rejects.toThrow();
+    expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
+    await compose.loadComposeDraft(key);
+    reconnect();
+    await compose.awaitComposeDraftWrites(key);
+    expect(saveComposeDraft).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    new TypeError("Failed to fetch"),
+    new Error("NetworkError when attempting to fetch resource"),
+    new Error("Request timed out"),
+    Object.assign(new Error("server error"), { status: 503 }),
+  ])("transient save failures remain eligible for reconnect: %s", async (error) => {
+    const key = "draft:transient-save-error";
+    saveComposeDraft.mockRejectedValueOnce(error);
+    await expect(
+      compose.persistComposeDraft(key, "environment", "env-1", "local"),
+    ).rejects.toThrow();
+    expect(compose.composeDraftWritesAwaitingRetry()).toContain(key);
+    reconnect();
+    await compose.awaitComposeDraftWrites(key);
+    expect(saveComposeDraft).toHaveBeenCalledTimes(2);
+    expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
+  });
+
+  test("scope disposal cancels timers and unregisters the reconnect listener", async () => {
+    const key = "draft:disposed-scope";
+    const timers = installControlledTimeout(1000, { label: "draft retry" });
+    const scope = getWindowScope().commandScope();
+    try {
+      saveComposeDraft.mockRejectedValue(new Error("backend unavailable"));
+      await compose
+        .persistComposeDraft(key, "environment", "env-1", "local", undefined, scope)
+        .catch(() => undefined);
+      expect(timers.pendingCount()).toBe(1);
+      scope.dispose();
+      expect(timers.pendingCount()).toBe(0);
+      setTransportDisconnected("gateway-event-stream", true, scope);
+      setTransportDisconnected("gateway-event-stream", false, scope);
+      expect(timers.advance()).toBe(0);
+      await Promise.resolve();
+      expect(saveComposeDraft).toHaveBeenCalledTimes(1);
+    } finally {
+      resetWindowScopeForTests();
+      timers.restore();
+    }
+  });
+
+  test("a discard that failed is retried when the node reconnects", async () => {
+    const key = "native-claude:env-1:retry-on-reconnect";
+    deleteComposeDraft.mockRejectedValueOnce(new Error("backend unreachable"));
+
+    await expect(compose.discardComposeDraft(key)).rejects.toThrow("backend unreachable");
+    expect(compose.composeDraftWritesAwaitingRetry()).toContain(key);
+
+    reconnect();
+    await compose.awaitComposeDraftWrites(key);
+
+    expect(deleteComposeDraft).toHaveBeenCalledTimes(2);
+    expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
+  });
+
+  test("a read runs the failed discard first, so a submitted draft does not resurface", async () => {
+    const key = "native-claude:env-1:retry-before-read";
+    const order: string[] = [];
+    deleteComposeDraft
+      .mockImplementationOnce(async () => {
+        order.push("delete");
+        throw new Error("backend unreachable");
+      })
+      .mockImplementationOnce(async () => {
+        order.push("delete");
+      });
+    getComposeDraft.mockImplementationOnce(async () => {
+      order.push("get");
+      return null;
+    });
+
+    await compose.discardComposeDraft(key).catch(() => undefined);
+    await expect(compose.loadComposeDraft(key)).resolves.toBeNull();
+
+    expect(order).toEqual(["delete", "delete", "get"]);
+    expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
+  });
+
+  test("a newer save replaces the failed discard instead of being undone by it", async () => {
+    const key = "native-claude:env-1:newer-write-wins";
+    deleteComposeDraft.mockRejectedValueOnce(new Error("backend unreachable"));
+    saveComposeDraft.mockResolvedValueOnce({ revision: 1 });
+
+    await compose.discardComposeDraft(key).catch(() => undefined);
+    await compose.persistComposeDraft(key, "environment", "env-1", "typed after");
+    reconnect();
+    await compose.awaitComposeDraftWrites(key);
+
+    expect(deleteComposeDraft).toHaveBeenCalledTimes(1);
+    expect(saveComposeDraft).toHaveBeenCalledTimes(1);
+    expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
+  });
+
+  test("a revision conflict is left for the user, not retried", async () => {
+    const key = "native-claude:env-1:conflict-not-retried";
+    deleteComposeDraft.mockRejectedValueOnce(new Error("Compose draft revision conflict"));
+    getComposeDraft.mockResolvedValueOnce({
+      draftKey: key,
+      ownerType: "environment",
+      ownerId: "env-1",
+      value: "newer elsewhere",
+      updatedAt: "2026-11-16T00:00:00.000Z",
+      revision: 4,
+    });
+
+    await expect(compose.discardComposeDraft(key)).rejects.toBeInstanceOf(
+      compose.DraftRevisionConflictError,
+    );
+    expect(compose.composeDraftWritesAwaitingRetry()).not.toContain(key);
   });
 });
 

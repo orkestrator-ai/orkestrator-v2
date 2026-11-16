@@ -241,16 +241,17 @@ limit, uses no message compression, and is not touched by `--compression`.
 Output ACKs are cumulative and coalesced for 1 s; they are advisory, and flow
 control reads the socket's buffer instead.
 
-A client offers `orkestrator-terminal.v1.input-results` ahead of
-`orkestrator-terminal.v1`. On the former, input that succeeded is answered by a
-cumulative `input-results` frame per channel per flush ("everything up to this
-id"), and a failure or a resize keeps its own `operation-result`. Input on a
+The one subprotocol is `orkestrator-terminal.v1.input-results`
+(`TERMINAL_WEBSOCKET_SUBPROTOCOL`); a client offering anything else, the plain
+`orkestrator-terminal.v1` included, is refused with 426. Input that succeeded
+is answered by a cumulative `input-results` frame per channel per flush
+("everything up to this id"), and a failure or a resize keeps its own
+`operation-result`; the renderer treats an `operation-result` for a successful
+input as a protocol error. Input on a
 channel completes in id order and collected results go out ahead of any other
 control frame, so a cumulative frame never covers an input still in flight or
 about to fail. Nothing waits for a batch: the frame goes out in the flush a lone
-result would have used, so results merge only when they finish together. An
-older client offering only v1, or an older server selecting it, keeps one
-`operation-result` per input.
+result would have used, so results merge only when they finish together.
 
 `apps/backend/scripts/terminal-input-results-probe.ts` checks this in real
 engines: the renderer's own client in a page, typed into by Playwright (52 keys
@@ -258,8 +259,8 @@ engines: the renderer's own client in a page, typed into by Playwright (52 keys
 echoing fake backend, directly, through a command node's relay, and behind a
 proxy that adds 40 ms each way. In WebKit 27.2 and Chromium 158 on macOS
 (2026-11-13, three WebKit sets) every route negotiated
-`orkestrator-terminal.v1.input-results`, the relay included, and offering only
-v1 still gave one result per input. No input failed or fell back, the backend
+`orkestrator-terminal.v1.input-results`, the relay included (that run also
+checked that offering only the since-retired v1 gave one result per input). No input failed or fell back, the backend
 received and echoed exactly what was typed, and input worked after the reload.
 Typing 25 ms apart gave one result per key on every route; the frames are
 smaller (3,215 against 4,567 bytes for 52 keys). Keys with no delay merged only
@@ -627,18 +628,17 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   again for the HTTP fallback, that request waits for the fallback's pending
   retry.
 - The main stream's watchdog cannot see a terminal WebSocket that stalls on
-  its own, so on each return to the page the client asks the socket itself: a
-  server that lists `ping` in its `ready` frame's `features` answers
-  `{ type: "ping", nonce }` with a matching `pong`, and the socket is kept when
-  that arrives within 2.5 s. Otherwise, or when the server does not list the
-  feature, the socket is replaced and every terminal reconciles from a
+  its own, so on each return to the page the client asks the socket itself:
+  the server answers `{ type: "ping", nonce }` with a matching `pong`, and the
+  socket is kept when that arrives within 2.5 s. Otherwise, or when the socket
+  is not yet ready, it is replaced and every terminal reconciles from a
   snapshot. Hiding the page never touches the socket.
 - While the page stays visible, the same server is pinged once the socket has
   been quiet for 10 s (`DEFAULT_TERMINAL_HEARTBEAT_INTERVAL_MS`), and a socket
   that leaves two such pings unanswered is replaced the same way, so a stall
   is noticed 20 to 30 s after its last frame rather than when the user next
   types. Any inbound frame counts as an answer, so a busy terminal sends no
-  pings; a hidden page and a server that does not list `ping` get none.
+  pings; a hidden page gets none.
 - The main stream reports its state (`eventStreamConnection`: `idle`,
   `connecting`, `connected`, `disconnected`). It stays `disconnected` through
   backed-off retries until a stream opens. The renderer uses it
@@ -702,10 +702,10 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
 - `e2e/preview/gateway-browser-security.spec.ts` (part of
   `mise run test:preview:browser`, served by
   `apps/backend/src/gateway-browser-harness.ts`) checks the parts of these rules
-  that depend on the browser: cookie scope across ports, `SameSite=Strict` on
-  typed and cross-site navigations, the legacy route's sandbox header on a
-  top-level load, and credentials from `Origin: null` (security report cases
-  H1, M1 and M2). It runs in Playwright's Chromium, Firefox and WebKit.
+  that depend on the browser: cookie scope across ports and `SameSite=Strict`
+  on typed and cross-site navigations (security report case H1; its M1 and M2
+  cases covered the legacy preview route and went with it). It runs in
+  Playwright's Chromium, Firefox and WebKit.
   Playwright's WebKit is not shipping Safari, whose own cookie policy sits on
   top of the engine; no harness here drives Safari (`safaridriver` needs
   **Allow Remote Automation** turned on), so Safari is checked by hand.
@@ -859,35 +859,15 @@ private origins need an operator's domain and certificate, so they stay off. See
 procedure.
 
 - Preview credentials authenticate only their one service. They never
-  authenticate the app, the backend API, the event stream, or the legacy
-  loopback proxy.
+  authenticate the app, the backend API, the event stream, or the loopback
+  proxy.
 - Rotating the gateway token revokes all active preview access.
-- The legacy loopback proxy (`/__orkestrator/browser/loopback/<port>/`) stays
-  for older clients. Every response under it, error and login pages included,
-  carries `Content-Security-Policy: sandbox allow-scripts allow-forms
-  allow-pointer-lock allow-presentation` in place of the application's own
-  policy, the same flags as the client's preview iframe. The page stays an
-  opaque origin even when opened top-level, so it cannot call gateway routes
-  as the signed-in user. It also has no storage or cookies of its own there;
-  applications that need them use the tunnel or a private origin. The web
-  client without private origins still loads URL tabs through this route.
-  Retiring it is
-  [0042](../todo/previews-and-annotations/0042-service-preview-rollout.md)
-  task 8.
-- The legacy route opens only a port that is the verified binding of an
-  enabled preview service of the requesting environment (a container's own
-  loopback publication, or a backend-host or worktree listener the resolver
-  accepted). The environment is the `x-orkestrator-preview-environment`
-  header Electron main sets from the view's tab; a page cannot set it, the
-  gateway strips it before proxying, and a request without it is refused.
-  Docker's daemon
-  ports and Orkestrator's reserved ports (gateway, control MCP, agent tools,
-  local bridges) are refused even when a service is bound there; every other
-  port answers 403 (security report M2). `Origin: null` gets a wildcard
-  `access-control-allow-origin` and never `allow-credentials`.
-- Electron's dedicated preview session attaches the gateway credential only
-  inside the namespace of the URL the app opened that view on, so a preview
-  page cannot carry it to another port by navigating its main frame.
+- The legacy browser-preview route (`/__orkestrator/browser/loopback/<port>/`),
+  which rewrote pages onto the gateway origin under a sandbox policy, was
+  removed (2026-11-15, 8108 (retired)
+  task 3). The gateway no longer treats that path specially: it falls through
+  to the renderer like any other unknown path, and nothing behind it is
+  proxied. Previews use the tunnel or a private origin.
 - `ORKESTRATOR_PREVIEW_TRANSPORT` and `ORKESTRATOR_PREVIEW_RELAY` (`0`/`1`)
   override the stored preview settings.
 

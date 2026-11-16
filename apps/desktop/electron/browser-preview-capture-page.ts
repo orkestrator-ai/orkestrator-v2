@@ -13,9 +13,6 @@ import {
 /** Scripts run in a dedicated isolated world: the page cannot read or replace the runtime. */
 export const BROWSER_PREVIEW_CAPTURE_WORLD_ID = 1_047;
 const PAGE_SCRIPT_TIMEOUT_MS = 5_000;
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
-const GATEWAY_ROUTE_PREFIX = /^\/__orkestrator\/browser\/loopback\/[1-9]\d{0,4}(\/.*)?$/;
 
 export const CAPTURE_ERROR_MESSAGES: Record<BrowserPreviewCaptureErrorCode, string> = {
   "stale-session": "The page selection is no longer valid. Start the capture again.",
@@ -86,7 +83,10 @@ export interface CapturePreviewHandle {
   visible: boolean;
   /** True while the main frame is loading. */
   loading?: boolean;
-  /** Present for service previews; null when the transport cannot map the URL. */
+  /**
+   * The service page a view URL shows, or null when the transport cannot map
+   * it. Without it no page identity can be derived.
+   */
   describeService?: (url: string) => { serviceId: string; path: string; displayUrl: string } | null;
   /** Navigate within the preview's own scope (the manager re-validates the URL). */
   navigate?: (url: string) => Promise<void>;
@@ -163,9 +163,9 @@ function sanitizedServiceIdentity(
 }
 
 /**
- * Durable page identity from the actual view URL. Gateway prefixes and
- * token-like parameters never survive; service previews use the transport's
- * application address, never the runtime ingress URL.
+ * Durable page identity from the actual view URL: the service transport's
+ * application address, never the runtime ingress URL, and token-like
+ * parameters never survive. A URL the transport cannot map is an unknown page.
  */
 export function browserPreviewPageIdentity(
   url: string,
@@ -173,42 +173,8 @@ export function browserPreviewPageIdentity(
   describeService?: CapturePreviewHandle["describeService"],
 ): { page: WebAnnotationPageIdentity; removedParameters: number } {
   const boundedTitle = title.slice(0, 500);
-  if (describeService) {
-    const described = describeService(url);
-    if (!described) {
-      return {
-        page: {
-          service: { kind: "unknown" },
-          route: "/",
-          displayUrl: "",
-          title: boundedTitle,
-          requiresNavigation: true,
-        },
-        removedParameters: 0,
-      };
-    }
-    const { service, sanitized, absolute } = sanitizedServiceIdentity(
-      described.serviceId,
-      described,
-    );
-    return {
-      page: {
-        service,
-        route: sanitized.route,
-        displayUrl: absolute ? sanitized.displayUrl : sanitized.route,
-        title: boundedTitle,
-        requiresNavigation: sanitized.requiresNavigation,
-      },
-      removedParameters: sanitized.removedParameters,
-    };
-  }
-  let parsed: URL | null = null;
-  try {
-    parsed = new URL(url);
-  } catch {
-    parsed = null;
-  }
-  if (!parsed) {
+  const described = describeService?.(url) ?? null;
+  if (!described) {
     return {
       page: {
         service: { kind: "unknown" },
@@ -220,30 +186,12 @@ export function browserPreviewPageIdentity(
       removedParameters: 0,
     };
   }
-  const gateway = GATEWAY_PREVIEW_PATH.exec(parsed.pathname);
-  if (gateway && (parsed.protocol === "https:" || parsed.protocol === "http:")) {
-    const port = Number(gateway[1]);
-    const sanitized = sanitizeWebAnnotationUrl(url, { routePrefix: GATEWAY_ROUTE_PREFIX });
-    return {
-      page: {
-        service: port >= 1 && port <= 65_535 ? { kind: "port", port } : { kind: "unknown" },
-        route: sanitized.route,
-        displayUrl: `http://localhost:${port}${sanitized.route}`.slice(0, 4_000),
-        title: boundedTitle,
-        requiresNavigation: sanitized.requiresNavigation,
-      },
-      removedParameters: sanitized.removedParameters,
-    };
-  }
-  const sanitized = sanitizeWebAnnotationUrl(url);
-  const loopback = parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname);
-  const port = loopback ? Number(parsed.port || 80) : 0;
+  const { service, sanitized, absolute } = sanitizedServiceIdentity(described.serviceId, described);
   return {
     page: {
-      service:
-        loopback && port >= 1 && port <= 65_535 ? { kind: "port", port } : { kind: "unknown" },
+      service,
       route: sanitized.route,
-      displayUrl: sanitized.displayUrl,
+      displayUrl: absolute ? sanitized.displayUrl : sanitized.route,
       title: boundedTitle,
       requiresNavigation: sanitized.requiresNavigation,
     },
@@ -264,8 +212,8 @@ export function sameBrowserPreviewRoute(left: string, right: string): boolean {
 
 /**
  * The view URL for a stored app-relative route in the same preview scope, or
- * null when the route cannot be addressed safely. The origin (and a gateway
- * prefix) always come from the current view URL, never from the route.
+ * null when the route cannot be addressed safely. The origin always comes
+ * from the current view URL, never from the route.
  */
 export function browserPreviewRouteUrl(currentUrl: string, route: string): string | null {
   if (typeof route !== "string" || !route.startsWith("/") || route.startsWith("//")) return null;
@@ -277,11 +225,9 @@ export function browserPreviewRouteUrl(currentUrl: string, route: string): strin
     return null;
   }
   if (current.protocol !== "http:" && current.protocol !== "https:") return null;
-  const gateway = GATEWAY_PREVIEW_PATH.exec(current.pathname);
-  const prefix = gateway ? `/__orkestrator/browser/loopback/${gateway[1]}` : "";
   let next: URL;
   try {
-    next = new URL(`${current.origin}${prefix}${route}`);
+    next = new URL(`${current.origin}${route}`);
   } catch {
     return null;
   }

@@ -719,8 +719,7 @@ can cause a duplicate count after reload; this is best-effort diagnostic deliver
   browser tab both start the upload (`renderer-error-upload.ts`, started by
   `renderer-diagnostics.ts`): promptly for the first failure, then every 10 seconds, up
   to 20 entries a write. A failed send puts the counts back and waits twice as long, up
-  to five minutes. A backend that predates the command answers "Unknown backend
-  command", which stops the upload for that load. Errors in another node's workspace
+  to five minutes, whatever the failure. Errors in another node's workspace
   shown in the window are the window renderer's, so they go to the window's own
   backend. A browser tab sends to the backend it is signed in to (its command node).
   Its gateway is installed only once the application modules load, so a failure before
@@ -733,9 +732,7 @@ can cause a duplicate count after reload; this is best-effort diagnostic deliver
   (Navigation Timing's `type`): a tab opened from another (`window.open`, "Duplicate
   tab") starts with a copy of its opener's session storage, and takes a fresh id
   instead of sharing the opener's allowance. It identifies no user, device or session
-  and is never logged. A
-  backend from v2.36.5-beta or v2.36.6-beta, whose handler refused any argument but
-  `entries`, gets the batch again without it.
+  and is never logged.
 - **Validated and rate-bound in the backend.** `record_renderer_errors`
   (`renderer-error-recorder.ts`) parses every entry against the fixed lists again: any
   other key (a `message`, a `stack`) or any value outside its list refuses the whole
@@ -896,9 +893,8 @@ whether this plan holds them; at most 64, by name). Ticking some in the Export d
 and choosing **Rebuild with these logs** plans again with
 `plan_diagnostics_bundle_with_container_logs` (at most 8 environments), so the manifest
 on screen is always the plan that will be saved. It is a command of its own rather
-than an argument to `plan_diagnostics_bundle`, whose empty arguments accepted any value;
-a backend without it answers `unknown-command`, which the dialog shows as the
-machine's update notice. Nothing reads a container for a bundle that chose none, and
+than an argument to `plan_diagnostics_bundle`, whose empty arguments accepted any value.
+A failed plan, rebuild or save shows the backend's message in the dialog. Nothing reads a container for a bundle that chose none, and
 the manifest then names "container server logs" as not chosen. For a chosen
 environment, `diagnostics-container-logs.ts` runs one `docker exec` to list which
 servers have written a log, then one bounded tail per log (`boundedTailCommand`, as

@@ -30,7 +30,7 @@ import { connectPreviewUpstream, type PreviewUpstreamOptions } from "./preview-u
 export interface PreviewTunnelMuxContext {
   runtime: PreviewRuntime;
   metrics: PreviewMetrics;
-  /** One slot per upstream connection, shared with v1 tunnels. */
+  /** One slot per upstream connection, shared by every session. */
   streams: PreviewAdmission;
   /** One slot per authenticated session. */
   sessions: PreviewAdmission;
@@ -137,9 +137,10 @@ export function acceptPreviewTunnelMux(
     () => fail(PREVIEW_TUNNEL_CLOSE.timeout, "access-expired"),
     context.helloTimeoutMs ?? PREVIEW_TUNNEL_HELLO_TIMEOUT_MS,
   );
-  // Same liveness rule as v1. A v2 client never stops reading its socket,
-  // since a stalled stream waits for credit rather than pausing the
-  // WebSocket, but it still sends its own pings.
+  // Liveness: any frame from the client proves it is alive, and a session
+  // with none in the last interval is closed. A client never stops reading
+  // its socket, since a stalled stream waits for credit rather than pausing
+  // the WebSocket, but it still sends its own pings.
   const ping = setInterval(() => {
     if (!ws.isOpen) {
       clearInterval(ping);

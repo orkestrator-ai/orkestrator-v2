@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { MultiReviewResolvedDefaults } from "@/components/review/MultiReviewLaunchDialog";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 
@@ -9,9 +8,8 @@ import { useScopeBackend } from "@/hooks/useScopeBackend";
  *
  * The node resolves them from its saved settings and its own model catalogue
  * (`get_multi_review_launch_defaults`), so the dialog never opens on a model
- * the window picked from its own, possibly stale, copy of the catalogue. A node
- * that predates the command answers `unsupported`, and the dialog falls back to
- * the rows it builds itself.
+ * the window picked from its own, possibly stale, copy of the catalogue. A
+ * failed read is `failed`, and the dialog says so instead of guessing.
  */
 export function useMultiReviewLaunchDefaults(
   open: boolean,
@@ -55,13 +53,10 @@ export function useMultiReviewLaunchDefaults(
         if (cancelled) return;
         setAnswer({
           key,
-          defaults:
-            incompatibility(error, "get_multi_review_launch_defaults")?.code === "unknown-command"
-              ? { status: "unsupported" }
-              : {
-                  status: "failed",
-                  message: error instanceof Error ? error.message : String(error),
-                },
+          defaults: {
+            status: "failed",
+            message: error instanceof Error ? error.message : String(error),
+          },
         });
       },
     );

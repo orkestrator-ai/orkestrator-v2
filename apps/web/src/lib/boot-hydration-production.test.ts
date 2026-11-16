@@ -197,20 +197,3 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
     }
   });
 }
-
-test("older-backend fallback restores succeed", async () => {
-  const { EnvironmentHydrationBatcher } = await import("./boot-hydration");
-  const { unknownBackendCommandMessage } = await import("@orkestrator/protocol/unknown-command");
-  const batcher = new EnvironmentHydrationBatcher({
-    listBatch: async () => {
-      throw new Error(unknownBackendCommandMessage("list_environment_hydration"));
-    },
-    listPromptQueues: async () => [],
-    listMultiReviewWorkflows: async () => [],
-  });
-  const restores = Promise.all([
-    hydrateBootPromptQueues("fallback", createPromptQueueSources(), batcher),
-    hydrateBootMultiReviewWorkflows("fallback", batcher),
-  ]);
-  expect(await restores).toHaveLength(2);
-});

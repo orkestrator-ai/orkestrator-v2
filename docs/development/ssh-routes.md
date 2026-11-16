@@ -230,7 +230,6 @@ These outcomes come from the route manager after the tunnel is up:
 | "The SSH connection worked, but no Orkestrator client gateway answered on that remote port." | SSH succeeded, but nothing answers the remote port. Check `--loopback-client-port` and the `loopbackClientUrl` in the ready line. The machine is not marked connected. |
 | "The gateway token was rejected." (`authentication-required`) | SSH succeeded, but the gateway token is wrong. Copy it again from `gateway-auth.json`. |
 | `control-endpoint` | The remote port is the control listener. Forward the loopback client gateway instead. The route is quarantined. |
-| `legacy-backend` | The remote backend predates the hello handshake, so SSH routes are refused. Update the backend or use HTTPS. |
 | `identity-mismatch` | The forward reached a different installation than the saved machine. Nothing was merged, and the route is quarantined until **Retry**. |
 | `no-route` / `incompatible` | No enabled route this client can open. Typical cases are SSH turned off under Connections, or a client without SSH. |
 

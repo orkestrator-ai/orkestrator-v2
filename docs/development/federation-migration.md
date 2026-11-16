@@ -168,7 +168,7 @@ directory. An older backend binary does not use it.
 | Client | Backend | Behaviour |
 | --- | --- | --- |
 | New desktop | New | Hello verifies identity, canonical profile and capabilities. Several routes per machine; SSH when the backend serves `--loopback-client-port`; same-token fallback. |
-| New desktop | Older, without hello | HTTPS works through the authenticated status check (`legacy`). Identity stays provisional: never merged, no fallback. SSH is refused (`legacy-backend`). The colour is the entry's persisted provisional colour (labelled cached) and there is no profile editing. The hello is attempted only per connection attempt, with no unknown-command polling. |
+| New desktop | Older, without hello | The connection check fails with a `protocol` error, as any failed check does; there is no status-check fallback (retired 2026-11-14). |
 | New desktop | Incompatible client API range | `incompatible`, with no retry loop. |
 | New desktop, Local not running | Any | Saved remote machines connect from the native catalogue. Local calls fail with "The Local backend on this computer is not running." This needs a native catalogue with at least one machine. |
 | New hosted browser | New or older | Other machines over direct HTTPS. Each must list the page's origin in `--allowed-origins`. Without a hello, a machine is added provisionally and duplicates cannot be detected. SSH is not available. |

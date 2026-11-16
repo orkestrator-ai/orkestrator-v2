@@ -148,7 +148,7 @@ function writeTurnInFlightMark(session: SessionState, wanted: boolean, claim = f
  * across container restarts and reboots, so a mark carrying this process's own
  * pid but another instance id, or a live pid whose start time or boot differs
  * from the recorded one, is from a dead predecessor. A live pid that cannot be
- * checked (a mark from an older bridge) is still left to its owner. Runs once
+ * checked is still left to its owner. Runs once
  * per restored session, so on hosts without `/proc` it may ask `ps`.
  */
 export function restoredTurnInterruption(

@@ -93,7 +93,7 @@ export interface CleanupPreview {
   rows: CleanupPreviewRow[];
   /** More resources exist than one preview enumerates. */
   truncated: boolean;
-  /** Absent from a backend older than the list, which cannot say either way. */
+  /** Containers to rebuild; optional only in the contract schema. */
   legacyRuntimes?: LegacyRuntimeRow[];
   /** Assigned containers Docker did not answer for, so the list may be short. */
   legacyRuntimesUnchecked?: number;

@@ -5,7 +5,6 @@ import {
 } from "@orkestrator/protocol/gateway-event-stream";
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 import { abortableSleep } from "../abortable-timing.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import type { BridgeConnection } from "../agent-provider-contract.js";
 import { bridgeEventStreamFetch } from "./transport.js";
 
@@ -32,11 +31,8 @@ import { bridgeEventStreamFetch } from "./transport.js";
  *   re-read by the next sweep. A bridge restart ends the stream and reads the
  *   same way.
  * - **Observation mode.** The stream is opened with `?observe=1`: the bridge
- *   sends each event's type, cursor and session id, never its payload; a
- *   current bridge refuses a subscription without it. A bridge that does not
- *   confirm the mode in its `connected` frame predates it; the subscription is
- *   closed for good rather than pulling every full message snapshot, and the
- *   group keeps the full sweep cadence.
+ *   sends each event's type, cursor and session id, never its payload, and
+ *   refuses a subscription without it.
  * - **Bounds.** One connection per bridge, frames bounded by the shared SSE
  *   decoder, reconnects backed off with jitter, and only a session id read
  *   from each frame's prefix: no payload is parsed or retained.
@@ -93,7 +89,6 @@ export class HttpBridgeObservationStream {
   private readonly silenceMs: number;
   private connects = 0;
   private gaps = 0;
-  private unsupported = false;
 
   constructor(private readonly options: HttpBridgeObservationStreamOptions) {
     this.now = options.now ?? Date.now;
@@ -114,13 +109,8 @@ export class HttpBridgeObservationStream {
   }
 
   /** Content-free counters for tests and diagnostics. */
-  stats(): { connects: number; gaps: number; cursor: string | null; unsupported: boolean } {
-    return {
-      connects: this.connects,
-      gaps: this.gaps,
-      cursor: this.cursor,
-      unsupported: this.unsupported,
-    };
+  stats(): { connects: number; gaps: number; cursor: string | null } {
+    return { connects: this.connects, gaps: this.gaps, cursor: this.cursor };
   }
 
   /** Start the subscription once; later calls are no-ops. */
@@ -184,13 +174,6 @@ export class HttpBridgeObservationStream {
     if (frame.id) this.cursor = frame.id;
     const event = frame.event ?? "message";
     if (event === "connected") {
-      if (!frame.data?.includes('"observe":true')) {
-        // An older bridge would stream every full payload to this observer.
-        compatibilityPathUsage.record("bridge-observation.full-stream");
-        this.unsupported = true;
-        this.close();
-        return;
-      }
       this.live = true;
       this.connects += 1;
       this.backoff.connected();

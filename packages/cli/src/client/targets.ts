@@ -268,10 +268,10 @@ export async function descriptorProcessRefusal(
   if (!alive(descriptor.pid)) return "is not running as your user (its descriptor is stale)";
   if (process.platform === "linux" && readStart === readProcessStartTime) {
     if (!descriptor.processIdentity) {
-      // Registered limitation (version-compatibility.md, "Register"): backends
-      // before #1848 publish no identity, and the start-time check is not a
-      // safe fallback here, so the refusal names the explicit-URL route.
-      return `cannot be confirmed: it publishes no Linux process identity (Orkestrator ${FIRST_LINUX_PROCESS_IDENTITY_RELEASE} and later do). Update and restart that backend, or connect with --url <its URL> --credential-file <its data directory>/gateway-auth.json`;
+      // Permanent: backends before #1848 publish no identity, and the
+      // start-time check is not a safe fallback here (it would reopen the
+      // pid-reuse window), so a descriptor without one is never trusted.
+      return `cannot be confirmed: it publishes no Linux process identity (Orkestrator ${FIRST_LINUX_PROCESS_IDENTITY_RELEASE} and later do). Update and restart that backend`;
     }
     const identity = await readLinuxProcessIdentity(descriptor.pid);
     if (identity === null)

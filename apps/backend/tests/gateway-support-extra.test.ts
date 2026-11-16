@@ -3,7 +3,6 @@ import path from "node:path";
 import { compatibilityPathUsage } from "../src/core/compatibility-path-usage.js";
 import { createCommandRegistry } from "../src/core/commands";
 import {
-  AggregateByteBudget,
   BoundedMetricMap,
   canStartStaticFallbackCompression,
   COMPRESSION_MIN_BYTES,
@@ -52,7 +51,7 @@ import {
 describe("remote gateway", () => {
   test("metrics exposes the content-free compatibility path snapshot", async () => {
     const { info } = await startGateway();
-    compatibilityPathUsage.record("bridge-close.upgrade-required");
+    compatibilityPathUsage.record("bridge-credential.token-file");
     const expected = compatibilityPathUsage.snapshot().paths;
     const response = await requestUrl(`${info.url}__orkestrator/metrics`, {
       headers: { authorization: `Bearer ${info.token}` },
@@ -75,31 +74,6 @@ describe("remote gateway", () => {
     expect(resolveGatewayCompressionMode(undefined, {})).toBe("on");
     expect(compressionModeForListener("on", "control")).toBe("off");
     expect(compressionModeForListener("on", "browser")).toBe("on");
-  });
-
-  test("bounds incrementally sized decode buffers with an aggregate byte budget", () => {
-    const budget = new AggregateByteBudget(1024);
-    expect(budget.tryAcquire(512)).toBe(true);
-    expect(budget.tryAcquire(512)).toBe(true);
-    expect(budget.snapshot()).toEqual({ activeBytes: 1024 });
-    expect(budget.tryAcquire(1)).toBe(false);
-    expect(budget.tryAcquire(0)).toBe(true);
-    expect(budget.tryAcquire(-1)).toBe(false);
-    expect(budget.tryAcquire(Number.NaN)).toBe(false);
-    expect(budget.tryAcquire(1.5)).toBe(false);
-    expect(budget.snapshot()).toEqual({ activeBytes: 1024 });
-
-    budget.release(512);
-    expect(budget.snapshot()).toEqual({ activeBytes: 512 });
-    // Releases that cannot describe real bytes must not credit the budget.
-    budget.release(0);
-    budget.release(-1);
-    budget.release(Number.NaN);
-    expect(budget.snapshot()).toEqual({ activeBytes: 512 });
-    // Over-releasing floors at zero rather than manufacturing capacity.
-    budget.release(4096);
-    expect(budget.snapshot()).toEqual({ activeBytes: 0 });
-    expect(budget.tryAcquire(1024)).toBe(true);
   });
 
   test("parses gateway compression modes and rejects unknown values", () => {

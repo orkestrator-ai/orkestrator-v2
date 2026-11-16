@@ -23,11 +23,11 @@ import {
 } from "@/test/web-annotation-fakes";
 import {
   AnnotationHarness,
+  currentPageForManualUrl,
   navigateToPageMock,
   seedBrowserLayout,
   useAnnotationUiTestBudget,
 } from "@/test/web-annotation-harness";
-import { currentPageForManualUrl } from "./format";
 import {
   dismissResultCapturePrompt,
   hasAfterCapture,

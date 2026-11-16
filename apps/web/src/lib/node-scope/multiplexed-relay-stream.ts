@@ -23,12 +23,10 @@
  *   already on their own streams are then moved over (`reconnect`). A node
  *   stays on the shared request while it is open; one node costs one request
  *   either way.
- * - **Older command node.** A 404 or 405 means it predates the route: every
- *   node of that command node uses its own stream for the rest of the page
- *   (register row "Command nodes without the multiplexed relay stream").
- *   Another failure answer, or none (a blocked path, a connect timeout),
- *   falls back the same way for a while
- *   ({@link MULTIPLEXED_FALLBACK_COOLDOWN_MS}), then tries again.
+ * - **A failed request.** Any failure answer (a 404 or 405 included), or none
+ *   (a blocked path, a connect timeout), moves every node of that command node
+ *   to its own stream for a while ({@link MULTIPLEXED_FALLBACK_COOLDOWN_MS}),
+ *   then the shared request is tried again.
  * - **Refused node.** A node the command node refuses (no workspace for it)
  *   uses its own stream until its workspace changes.
  * - **One node's trouble.** A node the command node reports `down` gets its
@@ -78,7 +76,7 @@ export const MIN_MULTIPLEXED_NODES = 2;
 export const REOPEN_DELAY_MS = 50;
 /** A node whose transport closed its stream stays on the request this long. */
 export const DETACH_GRACE_MS = 5_000;
-/** After a failure answer other than 404/405, nodes use their own streams this long. */
+/** After a failed shared request, nodes use their own streams this long. */
 export const MULTIPLEXED_FALLBACK_COOLDOWN_MS = 60_000;
 /** Unread bytes one node's stream may hold before it fails and resumes. */
 export const MAX_NODE_QUEUED_BYTES = 8 * 1024 * 1024;
@@ -110,7 +108,6 @@ export interface MultiplexedRelayStreamsOptions {
 export interface MultiplexedRelayStreamsSnapshot {
   readonly groups: ReadonlyArray<{
     readonly base: string;
-    readonly unsupported: boolean;
     readonly open: boolean;
     readonly requests: number;
     readonly nodes: ReadonlyArray<{
@@ -180,7 +177,6 @@ interface SharedRequest {
 interface Group {
   readonly base: string;
   readonly members: Map<BackendId, Member>;
-  unsupported: boolean;
   cooldownUntil: number;
   shared: SharedRequest | null;
   reopenTimer: ReturnType<typeof setTimeout> | null;
@@ -238,7 +234,6 @@ export function createMultiplexedRelayStreams(
       group = {
         base,
         members: new Map(),
-        unsupported: false,
         cooldownUntil: 0,
         shared: null,
         reopenTimer: null,
@@ -291,8 +286,7 @@ export function createMultiplexedRelayStreams(
     return member;
   };
 
-  const sharedUsable = (group: Group) =>
-    !disposed && !group.unsupported && now() >= group.cooldownUntil;
+  const sharedUsable = (group: Group) => !disposed && now() >= group.cooldownUntil;
 
   /** Nodes wanting a main stream right now, on either path. */
   const activeNodes = (group: Group) =>
@@ -640,9 +634,7 @@ export function createMultiplexedRelayStreams(
       }
       if (!response.ok || !response.body) {
         await response.body?.cancel().catch(() => undefined);
-        // 404/405: an older command node; anything else: not now.
-        if (response.status === 404 || response.status === 405) group.unsupported = true;
-        else group.cooldownUntil = now() + fallbackCooldownMs;
+        group.cooldownUntil = now() + fallbackCooldownMs;
         group.shared = null;
         fallBackAll(group);
         return;
@@ -763,7 +755,6 @@ export function createMultiplexedRelayStreams(
     snapshot: () => ({
       groups: Array.from(groups.values()).map((group) => ({
         base: group.base,
-        unsupported: group.unsupported,
         open: group.shared?.open ?? false,
         requests: group.requests,
         nodes: Array.from(group.members.values()).map((member) => ({

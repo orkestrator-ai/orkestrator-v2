@@ -31,7 +31,6 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useVirtuosoScrollState } from "@/hooks";
-import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import {
   stripFeaturePlannerStateBlocks,
   stripStoryRefinementStateBlocks,
@@ -42,26 +41,12 @@ import {
   loadComposeDraft,
   persistComposeDraft,
 } from "@/lib/compose-draft-persistence";
-import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { cn } from "@/lib/utils";
-import {
-  configStore,
-  featurePlanStore,
-  projectStore,
-  useAgentModelCatalogStore,
-  useFeaturePlanStore,
-  useKanbanStore,
-} from "@/stores";
+import { featurePlanStore, useAgentModelCatalogStore, useFeaturePlanStore } from "@/stores";
 import { isActiveFeaturePlanningPhase } from "@/stores/featurePlanStore";
 import { buildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
-import {
-  FEATURE_BUILD_ALREADY_ACTIVE,
-  legacyStartFeaturePlanBuild,
-} from "@/lib/feature-plan-build-compat";
-import type { EnvironmentType } from "@/types";
 import type {
   FeaturePlan,
   FeaturePlanMessage,
@@ -130,14 +115,8 @@ function FeatureListItem({
   );
 }
 
-function getPreferredEnvironmentType(scope: NodeScope, projectId: string): EnvironmentType {
-  const config = scope.store(configStore).getState().config;
-  const project = scope.store(projectStore).getState().getProjectById(projectId);
-  return (
-    config.repositories[projectId]?.lastEnvironmentType ??
-    (project?.localPath ? "local" : "containerized")
-  );
-}
+/** The backend's refusal when the plan's build is already claimed (`features/plan-build.ts`). */
+const FEATURE_BUILD_ALREADY_ACTIVE = "This feature already has an active build";
 
 function formatStoryTabTitle(story: FeatureStoryCard): string {
   return story.title.length > 24 ? `${story.title.slice(0, 24)}...` : story.title;
@@ -217,16 +196,11 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const isLoading = useFeaturePlanStore((state) => state.isLoading);
   const loadFeatures = useFeaturePlanStore((state) => state.loadFeatures);
   const createFeature = useFeaturePlanStore((state) => state.createFeature);
-  const updateFeature = useFeaturePlanStore((state) => state.updateFeature);
-  const claimFeatureBuild = useFeaturePlanStore((state) => state.claimFeatureBuild);
   const chatDrafts = useFeaturePlanStore((state) => state.chatDrafts);
   const setChatDraft = useFeaturePlanStore((state) => state.setChatDraft);
   const startPlanning = useFeaturePlanStore((state) => state.startPlanning);
   const retryPlanning = useFeaturePlanStore((state) => state.retryPlanning);
   const cancelPlanning = useFeaturePlanStore((state) => state.cancelPlanning);
-  const addTask = useKanbanStore((state) => state.addTask);
-  const deleteTask = useKanbanStore((state) => state.deleteTask);
-  const { startBuild } = useBuildPipeline();
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<RightPaneTab>("chat");
   const [openStoryTabs, setOpenStoryTabs] = useState<string[]>([]);
@@ -553,26 +527,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       try {
         // One request: the backend claims the plan, creates the ticket, starts
         // the pipeline and records the link, undoing its own partial work.
-        const started = await nodeBackend
-          .startFeaturePlanBuild({ featureId: feature.id })
-          .catch((error: unknown) => {
-            if (incompatibility(error, "start_feature_plan_build")?.code !== "unknown-command")
-              throw error;
-            return null;
-          });
-        if (!started) {
-          await legacyStartFeaturePlanBuild(feature, {
-            projectId,
-            environmentType: getPreferredEnvironmentType(scope, projectId),
-            addTask,
-            deleteTask,
-            claimFeatureBuild,
-            updateFeature,
-            startBuild,
-            scope,
-          });
-          return;
-        }
+        const started = await nodeBackend.startFeaturePlanBuild({ featureId: feature.id });
         const pipeline = started.pipeline as BuildPipeline;
         scope.store(buildPipelineStore).getState().replacePipeline(pipeline);
         scheduleBuildPipelineTabActivation(
@@ -599,19 +554,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         setBuildingFeatureId(null);
       }
     },
-    [
-      addTask,
-      buildingFeatureId,
-      claimFeatureBuild,
-      deleteTask,
-      hasBlockingConversation,
-      loadFeatures,
-      projectId,
-      scope,
-      startBuild,
-      updateFeature,
-      nodeBackend,
-    ],
+    [buildingFeatureId, hasBlockingConversation, loadFeatures, projectId, scope, nodeBackend],
   );
 
   return (

@@ -1,4 +1,9 @@
 import { backfillLegacyTestResults } from "@orkestrator/protocol/structured-review";
+import {
+  isTicketKind,
+  isTicketSections,
+  normalizeTicketContent,
+} from "@orkestrator/protocol/ticket-sections";
 import { createHash } from "node:crypto";
 import type { StorageMigration } from "./storage-database.js";
 import {
@@ -245,6 +250,50 @@ export const buildPipelineReviewReportUpgradeMigration: StorageMigration = {
     if (!current) return;
     const next = upgradeBuildPipelineRecords(current.value);
     if (next !== current.value) database.writeStoreInTransaction("build-pipelines", next);
+  },
+};
+
+/**
+ * Kanban rows written before ticket sections (v2.21.0 to v2.34.1, #1388), with
+ * their kind and sections derived from the text exactly as a read derived
+ * them: the text is kept as written, and a legacy `- [x]` becomes a manual
+ * pass dated at the ticket's creation. Rows that already have sections are
+ * left alone, and so is a row whose text fields are not strings, which no
+ * writer produced and which would otherwise lose its text.
+ */
+export function upgradeKanbanTaskRecords(stored: unknown): unknown {
+  if (!Array.isArray(stored)) return stored;
+  let changed = false;
+  const upgraded = stored.map((row: unknown) => {
+    if (!isRecord(row) || isTicketSections(row.sections)) return row;
+    const { description, acceptanceCriteria, createdAt } = row;
+    if (description !== undefined && typeof description !== "string") return row;
+    if (acceptanceCriteria !== undefined && typeof acceptanceCriteria !== "string") return row;
+    changed = true;
+    const content = normalizeTicketContent(
+      {
+        ...(isTicketKind(row.kind) ? { kind: row.kind } : {}),
+        description: description ?? "",
+        acceptanceCriteria: acceptanceCriteria ?? "",
+      },
+      typeof createdAt === "string" ? { now: createdAt } : {},
+    );
+    return { ...row, ...content };
+  });
+  return changed ? upgraded : stored;
+}
+
+export const KANBAN_TICKET_SECTIONS_UPGRADE_VERSION = 10;
+
+export const kanbanTicketSectionsUpgradeMigration: StorageMigration = {
+  version: KANBAN_TICKET_SECTIONS_UPGRADE_VERSION,
+  name: "derive-kanban-ticket-sections",
+  up({ database }) {
+    const current = database.readStoreValueInTransaction("kanban");
+    // Absent or unreadable: nothing an older build wrote is left to upgrade.
+    if (!current) return;
+    const next = upgradeKanbanTaskRecords(current.value);
+    if (next !== current.value) database.writeStoreInTransaction("kanban", next);
   },
 };
 

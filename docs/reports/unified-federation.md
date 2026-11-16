@@ -1238,7 +1238,7 @@ unknown keys on older backends.
    published npm release).
    *Built ([1012](../../plans/unified/1012-mixed-version-qualification.md)):*
    a new runner, `scripts/qualify-contract-mixed-versions.ts`
-   (`mise run qualify:mixed-versions`), rather than an extension of the
+   (the `qualify:mixed-versions` task), rather than an extension of the
    design script, which keeps its own single-backend topology. It installs the
    old release from npm and runs two topologies: `current-command` (this
    checkout's command node with the release as leaf) and `old-command` (the
@@ -1253,7 +1253,10 @@ unknown keys on older backends.
    a missing `requires` name on the release side is `not-applicable`). The
    weekly workflow `.github/workflows/mixed-version-qualification.yml` runs
    `floor` and `latest-stable` (approved by the user on 2026-11-07, in one
-   combined PR).
+   combined PR). *Retired on 2026-11-14* (to-do 8108): every machine and
+   client now updates together, so the runner, the scenarios, the design
+   and slash qualifiers and the workflow were deleted (`git show
+   a8b89f154:scripts/qualify-contract-mixed-versions.ts`).
 5. **Register integration.** A domain bump without a register row fails CI; a
    register row whose adapter is gone fails CI.
    *Built (1008):* the register is read as data

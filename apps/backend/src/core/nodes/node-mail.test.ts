@@ -1,5 +1,4 @@
 import { eventSink } from "../backend-emit.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import { describe, expect, test } from "bun:test";
 
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -326,23 +325,15 @@ describe("routing a leaf coordinator's mail to a command node's coordinator", ()
     ).rejects.toThrow("no longer controls this node");
   });
 
-  // docs/architecture/coordinator.md "Older nodes"; version-compatibility.md register.
-  test("an older command node (no coordinatorMail) is not offered the coordinator's mail; it is held and counted", async () => {
-    const held = () =>
-      compatibilityPathUsage.snapshot().paths["node-coordinator-mail.older-command-node"]?.count ??
-      0;
-    const { mail } = leaf(["bk_old"], "bk_old");
-    await mail.enqueue("bk_old" as BackendId, {
+  test("a collect offers the coordinator's own mail beside a worker's", async () => {
+    const { mail } = leaf(["bk_cmd"], "bk_cmd");
+    await mail.enqueue("bk_cmd" as BackendId, {
       requestId: "worker-1",
       fromEnvironmentId: "e1",
       fromTabId: "t1",
       body: "a worker's report",
     });
-    const before = held();
-    // Nothing from the coordinator queued yet: an older collect counts nothing.
-    await mail.collect("bk_old" as BackendId, 0);
-    expect(held()).toBe(before);
-    const coordinatorMail = await mail.enqueue("bk_old" as BackendId, {
+    await mail.enqueue("bk_cmd" as BackendId, {
       requestId: "coordinator-1",
       fromEnvironmentId: "coordinator-runtime",
       fromTabId: "main",
@@ -350,16 +341,11 @@ describe("routing a leaf coordinator's mail to a command node's coordinator", ()
       fromCoordinator: true,
       allowLocalFallback: false,
     });
-    const older = await mail.collect("bk_old" as BackendId, 0);
-    expect(older.items.map((item) => item.body)).toEqual(["a worker's report"]);
-    expect(held()).toBe(before + 1);
-    // An older command node's ack (everything up to the latest seq) keeps it.
-    expect(await mail.ack("bk_old" as BackendId, coordinatorMail.seq)).toEqual({ remaining: 1 });
-    expect(await mail.queued("bk_old" as BackendId, coordinatorMail.seq)).toBeDefined();
-    // Once updated, the same command node collects it.
-    const updated = await mail.collect("bk_old" as BackendId, 0, true);
-    expect(updated.items.map((item) => item.body)).toEqual(["from the leaf coordinator"]);
-    expect(held()).toBe(before + 1);
+    const collected = await mail.collect("bk_cmd" as BackendId, 0);
+    expect(collected.items.map((item) => item.body)).toEqual([
+      "a worker's report",
+      "from the leaf coordinator",
+    ]);
   });
 });
 

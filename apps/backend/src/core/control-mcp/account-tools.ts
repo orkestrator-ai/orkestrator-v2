@@ -22,7 +22,6 @@ import {
 } from "@orkestrator/protocol/scheduled-jobs";
 import { Schema } from "effect";
 import { describe, str, toolInput } from "../tool-schema.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import { createNodeTargets, type NodeTarget } from "./nodes.js";
 import { nodeIdField, readAnnotations, toolResult, type JsonRecord } from "./tool-support.js";
 import type { CoordinatorControlScope } from "./tools.js";
@@ -543,8 +542,6 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
         }
         if (enabled) {
           const states = (await machineAccounts(machine)).autoSwitch;
-          // A machine that predates this reports no state, so has no pin to end.
-          if (!states && !machine.self) compatibilityPathUsage.record("auto-switch.older-node");
           if (states?.[platform]?.pinnedAccountId) {
             await machine.call("resume_agent_account_auto_switch", { platform });
           }

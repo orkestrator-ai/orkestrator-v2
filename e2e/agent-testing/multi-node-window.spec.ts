@@ -580,9 +580,9 @@ test("a leaf's workspace works: terminal, agent tab without a turn, files, previ
     .first()
     .click();
   if (s().kind === "browser") {
-    // A browser page cannot show a dev server's loopback page: the tab says
-    // so, exactly as it does for the window's own node (checked below).
-    await expect(region.getByText("Browser tabs aren’t supported here")).toBeVisible({
+    // A URL tab has no in-app view on any client: it offers the user's own
+    // browser, exactly as it does for the window's own node (checked below).
+    await expect(region.getByRole("button", { name: "Open in browser" })).toBeVisible({
       timeout: 60_000,
     });
     await seedLayout(
@@ -594,7 +594,7 @@ test("a leaf's workspace works: terminal, agent tab without a turn, files, previ
     await expect(page.getByTestId("project-search-bar")).toBeVisible({ timeout: 90_000 });
     await dismissDialogs(page);
     await environmentButton(page, topology.command).click();
-    await expect(page.getByText("Browser tabs aren’t supported here").first()).toBeVisible({
+    await expect(page.getByRole("button", { name: "Open in browser" }).first()).toBeVisible({
       timeout: 60_000,
     });
     await seedLayout(topology.command);
@@ -602,9 +602,9 @@ test("a leaf's workspace works: terminal, agent tab without a turn, files, previ
   } else {
     // Soft: the rest of the flow still runs. Found 2026-11-07 (fixed): the
     // desktop resolved a leaf's loopback page through the command node's
-    // gateway. The registered port may also open as a service preview over the
-    // leaf's tunnel (the tab migrates), so any view showing the page counts;
-    // its origin says which route it took.
+    // gateway. The registered port opens as a service preview over the leaf's
+    // tunnel (the stored URL tab migrates), so any view showing the page
+    // counts; its origin says which route it took.
     const leafPreview = () =>
       s().app!.evaluate(
         async ({ webContents }, { port, renderer }) => {
@@ -614,7 +614,6 @@ test("a leaf's workspace works: terminal, agent tab without a turn, files, previ
               (contents) =>
                 new URL(contents.getURL() || "about:blank").origin !== renderer &&
                 (contents.getURL().startsWith(`http://127.0.0.1:${port}/`) ||
-                  contents.getURL().includes(`/__orkestrator/browser/loopback/${port}/`) ||
                   /^http:\/\/(127\.0\.0\.1|localhost):\d+\/$/.test(contents.getURL())),
             );
           let fallback: { origin: string; h1: string | null } | null = null;
@@ -886,20 +885,36 @@ test("previews from two nodes in one window keep their z-order and focus", async
     return `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   };
   const leaf = topology.leaves[1] ?? topology.leaves[0]!;
-  const urls = { command: await serve("mn-command-preview"), leaf: await serve("mn-leaf-preview") };
+  const markers = { command: "mn-command-preview", leaf: "mn-leaf-preview" } as const;
+  const urls = { command: await serve(markers.command), leaf: await serve(markers.leaf) };
   try {
+    // Every in-app preview is a service preview: each server is a registered
+    // service of its node's environment, so the stored URL tab migrates to it
+    // when shown and its view loads through that node's tunnel. Views are told
+    // apart by their page title, since an ingress URL names neither server.
     // Distinct tab ids, as the app makes them (`tab-<uuid>`): main keys a
     // window's previews by tab id (see Notes of plan items 2009 and 4001).
-    for (const [node, url, tabId] of [
-      [topology.command, urls.command, `tab-preview-command-${Date.now()}`],
-      [leaf, urls.leaf, `tab-preview-leaf-${Date.now()}`],
+    for (const [node, url, tabId, label] of [
+      [topology.command, urls.command, `tab-preview-command-${Date.now()}`, markers.command],
+      [leaf, urls.leaf, `tab-preview-leaf-${Date.now()}`, markers.leaf],
     ] as const) {
+      await node.invoke("register_preview_service", {
+        service: {
+          environmentId: node.environment.id,
+          label,
+          targetKind: "worktree",
+          applicationPort: Number(new URL(url).port),
+          addressFamily: "ipv4",
+          readinessPath: "/",
+        },
+        operationId: `register-${tabId}`,
+      });
       await seedLayout(node, [{ id: tabId, type: "browser", browserData: { url } }], tabId);
     }
     await page.reload();
     await expect(page.getByTestId("project-search-bar")).toBeVisible({ timeout: 90_000 });
     const views = () =>
-      app!.evaluate(({ BrowserWindow, webContents }, urls) => {
+      app!.evaluate(({ BrowserWindow, webContents }, markers) => {
         const owner = BrowserWindow.getAllWindows()[0]!;
         const children = owner.contentView.children as unknown as Array<{
           webContents?: Electron.WebContents;
@@ -920,22 +935,16 @@ test("previews from two nodes in one window keep their z-order and focus", async
           visible: child.getVisible(),
         }));
         children.forEach((child, index) => {
-          const url = child.webContents?.getURL() ?? "";
+          const title = child.webContents?.getTitle() ?? "";
           for (const key of ["command", "leaf"] as const) {
-            // A node's loopback page is served through that node's gateway
-            // (`/__orkestrator/browser/loopback/<port>/`).
-            const port = new URL(urls[key]).port;
-            if (
-              url.startsWith(urls[key]) ||
-              url.includes(`/__orkestrator/browser/loopback/${port}/`)
-            ) {
+            if (title === markers[key]) {
               out[key] = { index, visible: child.getVisible(), bounds: child.getBounds() };
             }
           }
         });
         void webContents;
         return out;
-      }, urls);
+      }, markers);
     const show = async (node: TopologyNode) => {
       await dismissDialogs(page);
       // A pointer resting on a row opens its hover card, which covers the next
@@ -986,14 +995,10 @@ test("previews from two nodes in one window keep their z-order and focus", async
       .toBe(true);
     const bothShownOnce = await views();
     steps.leafShown = bothShownOnce;
-    steps.leafPreviewPage = await app!.evaluate(async ({ webContents }, port) => {
+    steps.leafPreviewPage = await app!.evaluate(async ({ webContents }, marker) => {
       const view = webContents
         .getAllWebContents()
-        .find(
-          (contents) =>
-            contents.getURL().includes(`/loopback/${port}/`) ||
-            contents.getURL().includes(`:${port}/`),
-        );
+        .find((contents) => contents.getTitle() === marker);
       if (!view) return null;
       return {
         url: view.getURL().replace(/[?#].*$/u, ""),
@@ -1001,7 +1006,7 @@ test("previews from two nodes in one window keep their z-order and focus", async
         h1: (await view.executeJavaScript("document.querySelector('h1')?.textContent ?? null")) as
           string | null,
       };
-    }, new URL(urls.leaf).port);
+    }, markers.leaf);
     // Only the shown node's preview is visible; the other node's stays alive, hidden.
     expect(bothShownOnce.command?.visible).toBe(false);
     expect(bothShownOnce.leaf?.visible).toBe(true);
@@ -1014,18 +1019,16 @@ test("previews from two nodes in one window keep their z-order and focus", async
     expect(leafBounds.x).toBeGreaterThanOrEqual(Math.floor(regionBox.x * zoom) - 1);
     expect(leafBounds.y).toBeGreaterThanOrEqual(Math.floor(regionBox.y * zoom) - 1);
     // Focus the leaf's preview, then switch back: the hidden preview gives focus up.
-    const leafPreviewPath = `/__orkestrator/browser/loopback/${new URL(urls.leaf).port}/`;
-    const isLeafPreview = (url: string) =>
-      url.startsWith(urls.leaf) || url.includes(leafPreviewPath);
-    await app!.evaluate(
-      ({ webContents }, { url, path }) => {
-        webContents
-          .getAllWebContents()
-          .find((contents) => contents.getURL().startsWith(url) || contents.getURL().includes(path))
-          ?.focus();
-      },
-      { url: urls.leaf, path: leafPreviewPath },
-    );
+    // The leaf view's own (ingress) URL is what focus tracking reports.
+    const leafViewUrl = await app!.evaluate(({ webContents }, marker) => {
+      const view = webContents
+        .getAllWebContents()
+        .find((contents) => contents.getTitle() === marker);
+      view?.focus();
+      return view?.getURL() ?? null;
+    }, markers.leaf);
+    expect(leafViewUrl, "the leaf's preview view exists").not.toBeNull();
+    const isLeafPreview = (url: string) => url === leafViewUrl;
     await expect
       .poll(async () => (await focusedWebContentsUrls(app!)).some(isLeafPreview))
       .toBe(true);

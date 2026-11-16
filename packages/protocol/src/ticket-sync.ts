@@ -304,9 +304,9 @@ export function ticketImageUnavailableMessage(nodeName: string): string {
   return `This image is on ${nodeName}, which is not connected. It shows here once ${nodeName} is back.`;
 }
 
-/** A leaf that does not advertise `ticket-sync` (version-compatibility.md, Register). */
+/** A leaf whose `ticket-sync` range shares no version with the command node's. */
 export function olderLeafTicketMessage(nodeName: string): string {
-  return `${nodeName} runs an older Orkestrator that cannot sync tickets. Update that machine to see this board's tickets there and build them by id.`;
+  return `${nodeName} runs an Orkestrator that cannot sync tickets with this one. Update that machine to see this board's tickets there and build them by id.`;
 }
 
 /**

@@ -339,12 +339,6 @@ describe("session preferences", () => {
     ).toBe(false);
   }
 
-  test("does not steal an old lock whose owner process is still alive", async () => {
-    // An older bridge's lock names only a pid: a live one is never overruled.
-    const owner = spawnLiveOwner();
-    await expectHeldUntilReleased(await seedLock({ pid: owner.pid }, { stale: true }));
-  });
-
   test("does not steal an old lock whose live owner still has its recorded identity", async () => {
     const owner = spawnLiveOwner();
     const lockPath = await seedLock(
@@ -360,12 +354,6 @@ describe("session preferences", () => {
     await expectTakenOver();
   });
 
-  test("takes over at once an older bridge's lock naming this process's pid", async () => {
-    // This process records its pid only under its own instance id.
-    await seedLock({ pid: process.pid }, { stale: false });
-    await expectTakenOver();
-  });
-
   test("takes over at once a fresh lock whose owner pid is gone", async () => {
     await seedLock(
       { pid: await exitedChildPid(), instance: "a-bridge-that-died" },
@@ -374,7 +362,7 @@ describe("session preferences", () => {
     await expectTakenOver();
   });
 
-  test("keeps the stale window for an older bridge's lock whose pid is gone", async () => {
+  test("keeps the stale window for a lock with no instance id, like unreadable metadata", async () => {
     const lockPath = await seedLock({ pid: await exitedChildPid() }, { stale: false });
     await expectHeldUntilReleased(lockPath);
   });
@@ -541,7 +529,10 @@ describe("session preferences", () => {
 
   test("refuses with a typed timeout when a live owner keeps the lock", async () => {
     const owner = spawnLiveOwner();
-    const lockPath = await seedLock({ pid: owner.pid }, { stale: false });
+    const lockPath = await seedLock(
+      { pid: owner.pid, instance: "another-bridge" },
+      { stale: false },
+    );
     setPreferenceLockTimeoutForTesting(50);
 
     await expect(updateSessionPreferences(SESSION_ID, { planMode: true })).rejects.toMatchObject({

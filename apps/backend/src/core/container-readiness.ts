@@ -26,8 +26,12 @@ const MAX_BOOT_STATUS_BYTES = 4 * 1024;
 export type BootPhase = "initializing" | "network-ready" | "inputs-ready" | "ready" | "failed";
 
 export type BootObservation =
-  /** The image writes no boot status (predates the capability). */
-  | { kind: "legacy" }
+  /**
+   * No `/run/orkestrator` directory and no `boot-status` capability label: the
+   * image predates boot status, so the container never becomes ready until it
+   * is rebuilt.
+   */
+  | { kind: "no-boot-status" }
   /** No record for this boot yet (the entrypoint has not written one). */
   | { kind: "pending" }
   | { kind: "current"; bootId: string; phase: BootPhase; failureCode: string | null }
@@ -52,7 +56,7 @@ export function parseBootProbe(output: string): BootObservation {
   const pid1Start = startLine.trim();
   const first = statusLine.trim();
   if (first === "ORKESTRATOR_NO_BOOT_STATUS") return { kind: "pending" };
-  if (first === "ORKESTRATOR_NO_BOOT_DIR") return { kind: "legacy" };
+  if (first === "ORKESTRATOR_NO_BOOT_DIR") return { kind: "no-boot-status" };
   // Empty, torn, or foreign output is never positive readiness evidence.
   if (!first.startsWith("{")) return { kind: "pending" };
   if (statusLine.length > MAX_BOOT_STATUS_BYTES || !/^\d+$/.test(pid1Start)) {
@@ -143,6 +147,9 @@ export function parseExitedBootRecord(content: string, startedAt: string): strin
  */
 export const BOOT_RECORD_REFUSED = "boot-record-copy-refused";
 
+/** The image writes no boot status at all; only a rebuild makes it ready. */
+export const BOOT_STATUS_MISSING = "boot-status-missing";
+
 /** Reads the final boot record out of a stopped container (`docker cp` needs no running process). */
 async function readExitedBootFailure(
   containerId: string,
@@ -218,10 +225,10 @@ export async function observeContainerBoot(
       { timeoutMs: 10_000 + waitMs },
     );
     const observation = parseBootProbe(stdout);
-    if (observation.kind !== "legacy") return observation;
-    // A missing status directory is legacy only when the image does not
-    // advertise the boot-status contract. An initialized capable image can
-    // temporarily lose /run during restart.
+    if (observation.kind !== "no-boot-status") return observation;
+    // A missing status directory means the image writes no boot status only
+    // when it does not advertise the boot-status contract. An initialized
+    // capable image can temporarily lose /run during restart.
     try {
       const { stdout: capabilities } = await runCommand(
         "docker",
@@ -259,7 +266,9 @@ export class ContainerInitializationError extends Error {
         reason === "failed"
           ? failureCode === BOOT_RECORD_REFUSED
             ? `Container initialization failed, and Docker refused to copy the container's boot record out (${BOOT_RECORD_REFUSED}), so the reason is unknown. Check the container logs. ${COPY_REFUSED_REMEDY}`
-            : `Container initialization failed (${failureCode ?? "unknown"}). Check the container logs, then retry.`
+            : failureCode === BOOT_STATUS_MISSING
+              ? `Container is not ready: its image predates boot status (${BOOT_STATUS_MISSING}). Rebuild the container to use the current image.`
+              : `Container initialization failed (${failureCode ?? "unknown"}). Check the container logs, then retry.`
           : "Container initialization did not complete in time. Retry once the container is ready.",
       ),
     );
@@ -271,9 +280,9 @@ export class ContainerInitializationError extends Error {
 export const BOOT_WAIT_TIMEOUT_MS = 120_000;
 
 /**
- * Waits for the current boot to reach `ready`. Returns `null` for a legacy
- * image (no boot status), the boot id otherwise. A failed boot or a timeout is
- * a typed, retryable error; nothing proceeds on an unfinished container.
+ * Waits for the current boot to reach `ready` and returns its boot id. A
+ * failed boot, a timeout or an image that writes no boot status is a typed
+ * not-ready error; nothing proceeds on an unfinished container.
  *
  * Each probe waits inside the container for up to {@link PROBE_WINDOW_MS}
  * (`windowMs`), so readiness is seen within {@link IN_CONTAINER_CHECK_MS} of
@@ -291,7 +300,7 @@ export async function waitForContainerBoot(
     inspectTimeoutMs?: number;
     now?: () => number;
   } = {},
-): Promise<string | null> {
+): Promise<string> {
   const now = options.now ?? Date.now;
   const deadline = now() + (options.timeoutMs ?? BOOT_WAIT_TIMEOUT_MS);
   const pollMs = options.pollMs ?? 250;
@@ -302,7 +311,9 @@ export async function waitForContainerBoot(
     const observation = await observeContainerBoot(containerId, {
       waitMs: Math.min(windowMs, Math.max(0, deadline - probedAt)),
     });
-    if (observation.kind === "legacy") return null;
+    if (observation.kind === "no-boot-status") {
+      throw new ContainerInitializationError("failed", BOOT_STATUS_MISSING);
+    }
     if (observation.kind === "current") {
       if (observation.phase === "ready") return observation.bootId;
       if (observation.phase === "failed") {
@@ -344,9 +355,8 @@ export async function waitForContainerBoot(
 export async function ensureCurrentBootReady(
   containerId: string,
   options: { timeoutMs?: number } = {},
-): Promise<string | null> {
+): Promise<string> {
   const observation = await observeContainerBoot(containerId);
-  if (observation.kind === "legacy") return null;
   if (observation.kind === "current" && observation.phase === "ready") return observation.bootId;
   return waitForContainerBoot(containerId, options);
 }

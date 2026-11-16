@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
 
-import { isTicketSections, normalizeTicketContent } from "@orkestrator/protocol/ticket-sections";
+import { normalizeTicketContent } from "@orkestrator/protocol/ticket-sections";
 import { parseTicketSyncItem, ticketUpdatedAt } from "@orkestrator/protocol/ticket-sync";
 import { createLogger } from "@orkestrator/protocol/logger";
 
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import { KanbanProjectRemovalStore } from "./storage-kanban-project-removal.js";
@@ -22,18 +21,15 @@ import { fs, nowIso, type KanbanTask } from "./storage-shared.js";
 const log = createLogger("storage");
 
 /**
- * A stored row as current content. Legacy rows get their kind and sections
- * derived on read; nothing is written back until the ticket is next changed,
- * so this is the migration and it never loses or rewrites text. Results a
- * hand-ticked legacy box records are dated with the ticket's creation, so
- * repeated reads return the same row. A row without `updatedAt` (written
- * before it existed) reads as last updated when it was created.
+ * A stored row as current content. Every stored row has sections (rows
+ * written before them were given theirs once, `upgradeKanbanTaskRecords`).
+ * When a writer changed a text mirror without them, the `sectionsBasis`
+ * fingerprint no longer matches and the sections are rebuilt from the text,
+ * keeping the results of criteria whose text did not change; nothing is
+ * written back until the ticket next changes. A row without `updatedAt`
+ * (written before it existed) reads as last updated when it was created.
  */
 export function normalizeKanbanTask(task: KanbanTask): KanbanTask {
-  // Rows from before v2.34.2-beta (or synced from such a node) carry no
-  // sections. Once the floor passes, this becomes a one-time record upgrade;
-  // the `sectionsBasis` check below stays (to-do 7570 task 2).
-  if (!isTicketSections(task.sections)) compatibilityPathUsage.record("kanban.legacy-row-derived");
   const content = normalizeTicketContent(task, { now: task.createdAt });
   return { ...task, ...content, updatedAt: ticketUpdatedAt(task) };
 }

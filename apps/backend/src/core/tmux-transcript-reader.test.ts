@@ -377,10 +377,16 @@ describe("TmuxTranscriptReader", () => {
       ];
     }
 
+    /** The whole file stamped in one read: with default limits it fits one page. */
     async function wholeRead(lines: unknown[]) {
       writeFileSync(file, lines.map(jsonl).join(""));
-      return (await new TmuxTranscriptReader(TmuxBackend.local(dir), SESSION).readWhole(file))
-        .lines;
+      const page = await new TmuxTranscriptReader(TmuxBackend.local(dir), SESSION).readPage(
+        file,
+        undefined,
+        noSink,
+      );
+      expect(page.earlierCursor).toBeNull();
+      return page.lines;
     }
 
     test.each(["page", "poll"])(

@@ -1,7 +1,5 @@
 import {
-  AGENT_ACCOUNT_AUTO_SWITCHED_EVENT,
   autoSwitchNoticeText,
-  isAgentAccountAutoSwitchedEvent,
   type AgentAccountAutoSwitchedEvent,
 } from "@orkestrator/protocol/agent-account-auto-switch";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
@@ -11,40 +9,10 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import type { AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import { noticeText } from "@orkestrator/protocol/coordinator-notices";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { StorageService } from "./storage.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("agent-accounts");
-
-/**
- * An older machine this one controls moved by itself: tell this node's
- * coordinators. A link that is down when it happens loses the notice; the
- * machine's own `lastSwitch` still records it. A machine that takes
- * `coordinator-notices` sends its notice through the outbox instead, which
- * keeps it across a link drop, so its event is ignored here.
- */
-export function bridgeRemoteAutoSwitchNotices(input: {
-  onNodeEvent(listener: (event: string, payload: unknown, nodeId: string) => void): () => void;
-  nodeName(nodeId: string): Promise<string>;
-  mail(event: AgentAccountAutoSwitchedEvent, machineName: string): Promise<void>;
-  /** Whether that machine's notices arrive through its outbox. */
-  sendsThroughOutbox?(nodeId: string): boolean;
-}): () => void {
-  return input.onNodeEvent((event, payload, nodeId) => {
-    if (event !== AGENT_ACCOUNT_AUTO_SWITCHED_EVENT) return;
-    if (!isAgentAccountAutoSwitchedEvent(payload)) return;
-    if (input.sendsThroughOutbox?.(nodeId)) return;
-    compatibilityPathUsage.record("coordinator-notices.older-leaf");
-    void input
-      .nodeName(nodeId)
-      .catch(() => nodeId)
-      .then((machineName) => input.mail(payload, machineName))
-      .catch(() => {
-        log.warn("switch-notice.failed", { audience: "other-machine" });
-      });
-  });
-}
 
 /**
  * Tell the open main coordinators on this node about an automatic switch, as a

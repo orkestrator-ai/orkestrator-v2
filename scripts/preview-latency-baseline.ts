@@ -9,10 +9,9 @@
  *
  *   direct          plain HTTP to the service's host port on the backend's
  *                   address (normally unreachable from another machine);
- *   legacy          the gateway's `/__orkestrator/browser/loopback/<port>/`
- *                   route with the gateway bearer token;
  *   desktop-tunnel  one `desktop-tunnel` attachment, then Electron's own
- *                   `openPreviewTunnel` per sample (WS, HELLO, OPEN, OPEN_OK);
+ *                   `PreviewTunnelConnector` on a fresh tunnel session per
+ *                   sample (WS, HELLO, OPEN, OPEN_OK);
  *   private-origin  `create_preview_handoff_url`, the session cookie, then
  *                   TLS GETs to the service's private origin.
  *
@@ -49,11 +48,29 @@ import {
   type PreviewServiceSnapshot,
 } from "@orkestrator/protocol/preview-services";
 
-import { openPreviewTunnel } from "../apps/desktop/electron/preview-tunnel-client";
+import type { PreviewTunnelOpenOptions } from "../apps/desktop/electron/preview-tunnel-client";
+import { PreviewTunnelConnector } from "../apps/desktop/electron/preview-tunnel-session";
+
+/**
+ * One tunnelled connection on a session of its own (WebSocket handshake,
+ * HELLO, OPEN, OPEN_OK), so every sample pays the full cold cost. The
+ * session closes with the connection.
+ */
+async function openTunnelConnection(options: PreviewTunnelOpenOptions): Promise<Duplex> {
+  const connector = new PreviewTunnelConnector();
+  try {
+    const stream = await connector.open(options);
+    stream.once("close", () => connector.close());
+    return stream;
+  } catch (error) {
+    connector.close();
+    throw error;
+  }
+}
 
 export const BASELINE_SCHEMA = "orkestrator.preview-latency-baseline.v1";
 export const TOKEN_ENV = "ORKESTRATOR_PREVIEW_BASELINE_TOKEN";
-export const ROUTES = ["direct", "legacy", "desktop-tunnel", "private-origin"] as const;
+export const ROUTES = ["direct", "desktop-tunnel", "private-origin"] as const;
 export type Route = (typeof ROUTES)[number];
 
 const INVOKE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
@@ -497,17 +514,6 @@ export function planRoutes(input: {
         }
         break;
       }
-      case "legacy":
-        if (!capabilities.surfaces.legacyPath.available)
-          plans[route] = skip(
-            capabilities.surfaces.legacyPath.reason ?? "the legacy route is unavailable",
-          );
-        else if (hostPort === null)
-          plans[route] = skip("the service has no host port (container relay or unresolved)");
-        else if (service.definition.scheme !== "http")
-          plans[route] = skip("the legacy route proxies plain HTTP only");
-        else plans[route] = { run: true, port: hostPort };
-        break;
       case "desktop-tunnel":
         if (!capabilities.surfaces.desktopTunnel.available)
           plans[route] = skip(
@@ -603,7 +609,6 @@ export interface BaselineResult {
       access: boolean;
       desktopTunnel: boolean;
       browserTopLevel: boolean;
-      legacyPath: boolean;
       relay: boolean;
     };
   };
@@ -988,13 +993,6 @@ export async function runBaseline(
   const before = await diagnostics();
   const routes = {} as Record<Route, RouteResult>;
   const releases: string[] = [];
-  const gatewayHost = options.url.host;
-  const gatewayName = options.url.hostname.replace(/^\[|\]$/g, "");
-  const gatewayPort = Number(options.url.port || (options.url.protocol === "https:" ? 443 : 80));
-  const gatewayConnect: Connect = (abort) =>
-    options.url.protocol === "https:"
-      ? openTls(gatewayName, gatewayPort, gatewayName, options.ca, abort)
-      : openTcp(gatewayName, gatewayPort, abort);
 
   let afterSampling: unknown = null;
   try {
@@ -1032,17 +1030,6 @@ export async function runBaseline(
           () => timedExchange((abort) => openTcp(host, port, abort), request, options.timeoutMs),
           signal,
         );
-      } else if (route === "legacy") {
-        const request = httpRequestBytes(
-          `/__orkestrator/browser/loopback/${plan.port}${options.path}`,
-          gatewayHost,
-          { authorization: `Bearer ${options.token}` },
-        );
-        routes[route] = await sampleRoute(
-          options,
-          () => timedExchange(gatewayConnect, request, options.timeoutMs),
-          signal,
-        );
       } else if (route === "desktop-tunnel") {
         const issued = performance.now();
         let attachment: PreviewAttachmentDescriptor;
@@ -1074,7 +1061,7 @@ export async function runBaseline(
           () =>
             timedExchange(
               (abort) =>
-                openPreviewTunnel({
+                openTunnelConnection({
                   url: tunnelUrl.toString(),
                   attachmentId: attachment.attachmentId,
                   credential,
@@ -1179,7 +1166,6 @@ export async function runBaseline(
           access: capabilities.access.available,
           desktopTunnel: capabilities.surfaces.desktopTunnel.available,
           browserTopLevel: capabilities.surfaces.browserTopLevel.available,
-          legacyPath: capabilities.surfaces.legacyPath.available,
           relay: capabilities.relay.available,
         },
       },
@@ -1664,7 +1650,7 @@ async function runDownload(argv: string[]): Promise<number> {
     if (!credential) throw new BaselineFailure("the attachment carried no tunnel credential");
     const tunnelUrl = new URL(PREVIEW_TUNNEL_PATH, options.url);
     tunnelUrl.protocol = options.url.protocol === "https:" ? "wss:" : "ws:";
-    stream = await openPreviewTunnel({
+    stream = await openTunnelConnection({
       url: tunnelUrl.toString(),
       attachmentId: attachment.attachmentId,
       credential,

@@ -820,7 +820,7 @@ export class NodeCoordination {
         fallbackNotice: `${controller.displayName} has no coordinator for this repository, so this came to you instead.`,
       },
     );
-    await this.leafMail.ack(controllerId, seq, [seq], true, true);
+    await this.leafMail.ack(controllerId, seq, [seq]);
   }
 
   /** Whether a project here has a coordinator a command node's coordinator can mail. */

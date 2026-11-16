@@ -9,7 +9,6 @@ import {
   isProtectedMcpServerName,
   isSensitiveArg,
   isSensitiveUrl,
-  isUnknownMcpManagementCommandError,
   mcpFailure,
   mcpManagementErrorFromUnknown,
   parseMcpMutation,
@@ -76,15 +75,6 @@ describe("mcp-management protocol", () => {
         }),
       ),
     ).toBeNull();
-  });
-
-  test("recognises an older backend by its unknown-command error only", () => {
-    expect(
-      isUnknownMcpManagementCommandError(
-        new Error("Unknown backend command: get_mcp_management_snapshot"),
-      ),
-    ).toBe(true);
-    expect(isUnknownMcpManagementCommandError(new Error("Unauthorized"))).toBe(false);
   });
 
   test("protects Orkestrator's injected server names in every spelling", () => {

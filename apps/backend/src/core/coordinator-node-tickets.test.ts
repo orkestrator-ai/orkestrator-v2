@@ -30,9 +30,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-async function setup(
-  options: { capability?: boolean; buildOriginCapability?: boolean; ignoresLabels?: boolean } = {},
-) {
+async function setup(options: { ignoresLabels?: boolean } = {}) {
   const world = await MailWorld.create({ statusWakes: { coalesceMs: 0 } });
   cleanups.push(() => world.close());
   await world.storage.updateProject(world.projectId, { gitUrl: REPO });
@@ -90,8 +88,8 @@ async function setup(
   const state = { connected: true };
   const capabilities: Record<string, number> = {
     "node-attachment": 1,
-    ...(options.buildOriginCapability === false ? {} : { "node-coordinator-build-origin": 1 }),
-    ...(options.capability === false ? {} : { "ticket-sync": 1 }),
+    "node-coordinator-build-origin": 1,
+    "ticket-sync": 1,
   };
   const link = {
     get connected() {
@@ -325,100 +323,39 @@ describe("labels with nodeId", () => {
     expect((await f.leaf.kanban.getKanbanTask(id))?.labels).toBeUndefined();
   });
 
-  test.each([true, false])(
-    "updates leaf-only labels when ticket-sync capability is %s",
-    async (capability) => {
-      const f = await setup({ capability });
-      const ticket = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "Leaf only", "", {
-        labels: ["bug"],
-      });
-      const updated = await f.ticketOnNode("update", {
-        ticketId: ticket.id,
-        labels: ["BUG", "ui"],
-      });
-      expect(updated).toMatchObject({ ticket: { labels: ["bug", "ui"] } });
-      expect((await f.leaf.kanban.getKanbanTask(ticket.id))?.labels).toEqual(["bug", "ui"]);
-      expect(await f.world.storage.kanban.getKanbanTask(ticket.id)).toBeNull();
-      const cleared = await f.ticketOnNode("update", { ticketId: ticket.id, labels: [] });
-      expect((cleared.ticket as { labels?: string[] }).labels).toBeUndefined();
-    },
-  );
-
-  test("forwards labels on create to a leaf without ticket sync", async () => {
-    const f = await setup({ capability: false });
-    const created = await f.ticketOnNode("create", {
-      requestId: "leaf",
-      title: "Leaf only",
+  test("updates leaf-only labels", async () => {
+    const f = await setup();
+    const ticket = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "Leaf only", "", {
       labels: ["bug"],
     });
-    expect(created).toMatchObject({ ticket: { labels: ["bug"] }, synced: false });
-    expect((await f.leaf.kanban.getKanbanTasks(f.leafProject.id))[0]?.labels).toEqual(["bug"]);
-    expect(await f.world.storage.kanban.getKanbanTasks(f.scope.projectId)).toEqual([]);
+    const updated = await f.ticketOnNode("update", {
+      ticketId: ticket.id,
+      labels: ["BUG", "ui"],
+    });
+    expect(updated).toMatchObject({ ticket: { labels: ["bug", "ui"] } });
+    expect((await f.leaf.kanban.getKanbanTask(ticket.id))?.labels).toEqual(["bug", "ui"]);
+    expect(await f.world.storage.kanban.getKanbanTask(ticket.id)).toBeNull();
+    const cleared = await f.ticketOnNode("update", { ticketId: ticket.id, labels: [] });
+    expect((cleared.ticket as { labels?: string[] }).labels).toBeUndefined();
   });
 
-  test.each([true, false])(
-    "warns when a pre-label leaf ignores update labels (sync=%s)",
-    async (capability) => {
-      const f = await setup({ capability, ignoresLabels: true });
-      const ticket = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "Leaf only", "");
-      const updated = await f.ticketOnNode("update", {
-        ticketId: ticket.id,
-        labels: ["bug"],
-        title: "Edited",
-      });
-      expect(updated).toMatchObject({
-        ticket: { title: "Edited" },
-        synced: false,
-        sync: {
-          state: "update-required",
-          message: expect.stringContaining("without the requested labels"),
-        },
-      });
-      expect((await f.leaf.kanban.getKanbanTask(ticket.id))?.labels).toBeUndefined();
-    },
-  );
-
-  test("warns when a pre-label leaf ignores create labels", async () => {
-    const f = await setup({ capability: false, ignoresLabels: true });
-    expect(
-      await f.ticketOnNode("create", {
-        requestId: "old-labels",
-        title: "Leaf only",
-        labels: ["bug"],
-      }),
-    ).toMatchObject({
+  test("warns when a leaf ignores update labels", async () => {
+    const f = await setup({ ignoresLabels: true });
+    const ticket = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "Leaf only", "");
+    const updated = await f.ticketOnNode("update", {
+      ticketId: ticket.id,
+      labels: ["bug"],
+      title: "Edited",
+    });
+    expect(updated).toMatchObject({
+      ticket: { title: "Edited" },
       synced: false,
       sync: {
         state: "update-required",
         message: expect.stringContaining("without the requested labels"),
       },
     });
-  });
-});
-
-describe("an older leaf", () => {
-  test("keeps its own tickets, says to update it, and refuses to build a board ticket", async () => {
-    const f = await setup({ capability: false });
-    const created = await f.ticketOnNode("create", { requestId: "old", title: "Made there" });
-    expect(created).toMatchObject({
-      synced: false,
-      sync: { state: "update-required", message: expect.stringContaining("Update that machine") },
-    });
-    const id = (created.ticket as { id: string; projectId: string }).id;
-    expect((created.ticket as { projectId: string }).projectId).toBe(f.leafProject.id);
-    expect(await f.world.storage.kanban.getKanbanTask(id)).toBeNull();
-    // A leaf-local id builds as before.
-    await f.build("build-local", id);
-    expect(f.started).toEqual([
-      expect.objectContaining({ source: { type: "kanban", taskId: id } }),
-    ]);
-    // A board ticket cannot be built there; nothing is sent.
-    const board = await f.world.storage.kanban.addKanbanTask(f.scope.projectId, "Board only", "");
-    await expect(f.build("build-board", board.id)).rejects.toThrow(
-      "cannot sync tickets, so it cannot build ticket",
-    );
-    expect(f.started).toHaveLength(1);
-    expect(f.routed).not.toContain("apply_ticket_sync");
+    expect((await f.leaf.kanban.getKanbanTask(ticket.id))?.labels).toBeUndefined();
   });
 });
 
@@ -461,18 +398,4 @@ test("a started build returns a warning if work location cannot be persisted", a
   const result = await f.build("work-write-failed", task.id);
   expect(result.warning).toContain("build started");
   expect(f.started).toHaveLength(1);
-});
-
-test("a leaf without build-origin capability refuses before ticket sync or build admission", async () => {
-  const f = await setup({ buildOriginCapability: false });
-  const task = await f.world.storage.kanban.addKanbanTask(f.scope.projectId, "Target", "");
-  await expect(f.build("legacy-build-origin", task.id)).rejects.toThrow(
-    "Update this node before launching a coordinator build",
-  );
-  expect(f.started).toEqual([]);
-  expect(f.routed).not.toContain("apply_ticket_sync");
-  expect(f.routed).not.toContain("start_controller_build_pipeline");
-  expect(
-    await f.world.storage.coordinators.listCoordinatorWorkflowAssociations(f.scope.projectId),
-  ).toEqual([]);
 });

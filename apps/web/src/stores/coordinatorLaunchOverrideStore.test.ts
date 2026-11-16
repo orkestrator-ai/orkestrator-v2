@@ -4,11 +4,7 @@ import {
   coordinatorLaunchOverrideKey,
 } from "@orkestrator/protocol/coordinator-launch-overrides";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import {
-  dispatchResourceChange,
-  requestResourceResync,
-  requestViewSafetyChecks,
-} from "@/lib/resource-sync";
+import { dispatchResourceChange, requestViewSafetyChecks } from "@/lib/resource-sync";
 import {
   COORDINATOR_LAUNCH_OVERRIDES_COALESCE_MS,
   coordinatorLaunchOverrideStore,
@@ -296,22 +292,15 @@ describe("coordinator launch override store", () => {
     release();
   });
 
-  test("an older backend shows nothing and is not asked again until a resync", async () => {
+  test("an unknown command is a failed read, asked again on the next hint", async () => {
     failWith = new Error(`Unknown backend command: ${COORDINATOR_LAUNCH_OVERRIDES_COMMAND}`);
     const release = appCommandStore(coordinatorLaunchOverrideStore).getState().retain();
     await settled();
     expect(reads).toBe(1);
 
-    dispatchResourceChange({ resource: "coordinator", id: "project", revision: 1 });
-    requestViewSafetyChecks("interval");
-    await settled();
-    expect(reads).toBe(1);
-    expect(appCommandStore(coordinatorLaunchOverrideStore).getState().overrides.size).toBe(0);
-
-    // The backend was upgraded behind this window.
     failWith = null;
     answer = [{ environmentId: "worker", tabId: "tab" }];
-    requestResourceResync();
+    requestViewSafetyChecks("interval");
     await settled();
     expect(reads).toBe(2);
     expect(appCommandStore(coordinatorLaunchOverrideStore).getState().overrides.size).toBe(1);

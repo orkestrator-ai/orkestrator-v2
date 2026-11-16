@@ -5,11 +5,9 @@ import type {
   CoordinatorAccountSwitchGrantState,
   CoordinatorAccountSwitchRecord,
 } from "@orkestrator/protocol/coordinator-account-switch-grant";
-import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 
 const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 let state: CoordinatorAccountSwitchGrantState;
-let unknown = false;
 let refresh: (() => void) | undefined;
 let resync: (() => void) | undefined;
 let notice: ((event: { payload: unknown }) => void) | undefined;
@@ -98,9 +96,7 @@ function answer(command: string, args: Record<string, unknown> = {}): Promise<un
   calls.push({ command, args });
   switch (command) {
     case "get_coordinator_account_switch_grant":
-      return unknown
-        ? Promise.reject(new Error(unknownBackendCommandMessage(command)))
-        : Promise.resolve(state);
+      return Promise.resolve(state);
     case "set_coordinator_account_switch_grant":
       state = { ...state, grants: { ...state.grants, claude: args.enabled === true } };
       return Promise.resolve(state);
@@ -125,7 +121,6 @@ beforeEach(() => {
   portalState.setState({ nodes: [] });
   mockToastInfo.mockClear();
   mockToastWarning.mockClear();
-  unknown = false;
   state = {
     grants: { claude: false, codex: false },
     limit: { switches: 3, windowMinutes: 60 },
@@ -276,17 +271,6 @@ describe("coordinator account-switch permission in Settings", () => {
     expect(describeCoordinatorAccountSwitch(timed)).toContain(
       "A timer you set allowed it: you asked “check in 2 hours and switch if they are limited”.",
     );
-  });
-
-  test("a machine that predates the permission shows nothing", async () => {
-    unknown = true;
-    const { container } = show();
-    await waitFor(() =>
-      expect(calls.some((call) => call.command === "get_coordinator_account_switch_grant")).toBe(
-        true,
-      ),
-    );
-    expect(container.textContent).toBe("");
   });
 
   test("refreshes open history after a leaf switch and a stream resync", async () => {

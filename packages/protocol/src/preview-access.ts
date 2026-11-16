@@ -1,19 +1,13 @@
 /**
- * Scoped preview access and the desktop tunnel wire contract.
+ * Scoped preview access and the desktop tunnel endpoint (its wire contract is
+ * in `preview-tunnel-mux.ts`).
  *
  * Access is always minted by the authenticated control API for one registered
  * service, bound to `(serviceId, backendEpoch, endpointGeneration, surface)`.
  * Secrets in this module travel only to the trusted initiating client — never
  * into snapshots, events, layouts, logs, or application requests.
  */
-import {
-  isOpaquePreviewId,
-  isPreviewErrorCategory,
-  PREVIEW_LIMITS,
-  previewError,
-  type PreviewError,
-  type PreviewScheme,
-} from "./preview-services.js";
+import type { PreviewScheme } from "./preview-services.js";
 
 export const PREVIEW_SURFACES = [
   "desktop-tunnel",
@@ -40,13 +34,8 @@ export interface PreviewAttachmentRequest {
 
 export interface PreviewTunnelDescriptor {
   path: typeof PREVIEW_TUNNEL_PATH;
-  subprotocol: typeof PREVIEW_TUNNEL_SUBPROTOCOL;
-  /**
-   * Present when the backend also speaks v2, which carries many connections
-   * over one tunnel socket (`preview-tunnel-mux.ts`). A backend that predates
-   * it omits the field and the desktop opens v1 sockets.
-   */
-  multiplexSubprotocol?: typeof PREVIEW_TUNNEL_SUBPROTOCOL_V2;
+  /** The tunnel protocol: many connections over one socket (`preview-tunnel-mux.ts`). */
+  subprotocol: typeof PREVIEW_TUNNEL_SUBPROTOCOL_V2;
   /** Attachment-scoped secret, presented in-band in HELLO. */
   credential: string;
 }
@@ -124,36 +113,18 @@ export function isReservedPreviewCookieName(name: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Desktop tunnel wire contract (v1): one WebSocket per upstream connection.
-// v2, many connections per WebSocket, is in `preview-tunnel-mux.ts`; backends
-// serve both, and desktops use v1 against a backend that does not advertise v2.
-//
-// connecting -> authenticating -> opening -> open -> closing -> closed
-//
-// 1. Client opens a WebSocket to PREVIEW_TUNNEL_PATH offering exactly
-//    PREVIEW_TUNNEL_SUBPROTOCOL. No gateway credential is required or used.
-// 2. Client sends HELLO {attachmentId, credential}. Server answers READY or
-//    closes with 4401/4403/4410.
-// 3. Client sends OPEN (no fields: the destination is the attachment's
-//    service). Server connects to the verified binding for the attachment's
-//    endpoint generation and answers OPEN_OK or OPEN_FAILED.
-// 4. After OPEN_OK, binary messages (<= 32 KiB) carry ordered bytes in both
-//    directions. EOF half-closes one direction. CANCEL or any WebSocket close
-//    tears down both legs. Nothing is replayed after a disconnect.
-//
-// Any unknown, duplicate, out-of-order, or oversized frame closes with 4400.
+// Desktop tunnel endpoint. The wire contract, many upstream connections over
+// one authenticated WebSocket per attachment, is in `preview-tunnel-mux.ts`.
+// No gateway credential is required or used.
 //
 // Liveness: the server pings every 30 s and closes a tunnel from which no
 // frame arrived in the last interval. A client sends its own WebSocket pings
 // (PREVIEW_TUNNEL_CLIENT_PING_MS), so it stays alive while it has stopped
-// reading and cannot answer pings queued behind application data. Older
-// servers answer those pings and ignore them; older clients only pong.
+// reading and cannot answer pings queued behind application data.
 
 export const PREVIEW_TUNNEL_PATH = "/__orkestrator/preview/tunnel";
-export const PREVIEW_TUNNEL_SUBPROTOCOL = "orkestrator.preview-tunnel.v1";
-/** v2: many connections per socket; the contract is in `preview-tunnel-mux.ts`. */
+/** The tunnel's only subprotocol; the contract is in `preview-tunnel-mux.ts`. */
 export const PREVIEW_TUNNEL_SUBPROTOCOL_V2 = "orkestrator.preview-tunnel.v2";
-export const PREVIEW_TUNNEL_VERSION = 1;
 export const PREVIEW_TUNNEL_HELLO_TIMEOUT_MS = 5_000;
 /** Client heartbeat: half the server's 30-second liveness interval. */
 export const PREVIEW_TUNNEL_CLIENT_PING_MS = 15_000;
@@ -169,105 +140,3 @@ export const PREVIEW_TUNNEL_CLOSE = {
   capacity: 4429,
   upstreamFailed: 4502,
 } as const;
-
-export type PreviewTunnelClientFrame =
-  | { type: "hello"; version: number; attachmentId: string; credential: string }
-  | { type: "open" }
-  | { type: "eof" }
-  | { type: "cancel" };
-
-export type PreviewTunnelServerFrame =
-  | { type: "ready"; serviceId: string; endpointGeneration: number; expiresAt: string }
-  | { type: "open-ok" }
-  | { type: "open-failed"; error: PreviewError }
-  | { type: "eof" }
-  | { type: "error"; error: PreviewError };
-
-const CREDENTIAL = /^[A-Za-z0-9_-]{32,128}$/;
-
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value);
-  return actual.length === keys.length && actual.every((key) => keys.includes(key));
-}
-
-function parseControl(text: string): Record<string, unknown> | null {
-  if (typeof text !== "string" || text.length > PREVIEW_LIMITS.controlFrameMaxBytes) return null;
-  try {
-    const value: unknown = JSON.parse(text);
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Strict: unknown types, extra fields (e.g. a host or port), and oversize frames are rejected. */
-export function parsePreviewTunnelClientFrame(text: string): PreviewTunnelClientFrame | null {
-  const frame = parseControl(text);
-  if (!frame) return null;
-  switch (frame.type) {
-    case "hello":
-      return exactKeys(frame, ["type", "version", "attachmentId", "credential"]) &&
-        frame.version === PREVIEW_TUNNEL_VERSION &&
-        isOpaquePreviewId(frame.attachmentId) &&
-        typeof frame.credential === "string" &&
-        CREDENTIAL.test(frame.credential)
-        ? {
-            type: "hello",
-            version: PREVIEW_TUNNEL_VERSION,
-            attachmentId: frame.attachmentId,
-            credential: frame.credential,
-          }
-        : null;
-    case "open":
-    case "eof":
-    case "cancel":
-      return exactKeys(frame, ["type"]) ? { type: frame.type } : null;
-    default:
-      return null;
-  }
-}
-
-export function parsePreviewTunnelServerFrame(text: string): PreviewTunnelServerFrame | null {
-  const frame = parseControl(text);
-  if (!frame) return null;
-  const isError = (value: unknown): value is PreviewError =>
-    !!value &&
-    typeof value === "object" &&
-    isPreviewErrorCategory((value as PreviewError).category) &&
-    typeof (value as PreviewError).message === "string" &&
-    (value as PreviewError).message.length <= 1_000;
-  switch (frame.type) {
-    case "ready":
-      return typeof frame.serviceId === "string" &&
-        Number.isSafeInteger(frame.endpointGeneration) &&
-        typeof frame.expiresAt === "string"
-        ? {
-            type: "ready",
-            serviceId: frame.serviceId,
-            endpointGeneration: frame.endpointGeneration as number,
-            expiresAt: frame.expiresAt,
-          }
-        : null;
-    case "open-ok":
-    case "eof":
-      return { type: frame.type };
-    case "open-failed":
-    case "error":
-      return isError(frame.error)
-        ? {
-            type: frame.type,
-            error: previewError(frame.error.category, { message: frame.error.message }),
-          }
-        : null;
-    default:
-      return null;
-  }
-}
-
-export function encodePreviewTunnelFrame(
-  frame: PreviewTunnelClientFrame | PreviewTunnelServerFrame,
-): string {
-  return JSON.stringify(frame);
-}

@@ -4,7 +4,6 @@ import {
   isPreviewSurface,
   PREVIEW_SESSION_CODE_TTL_MS,
   PREVIEW_TUNNEL_PATH,
-  PREVIEW_TUNNEL_SUBPROTOCOL,
   PREVIEW_TUNNEL_SUBPROTOCOL_V2,
   type PreviewAttachmentDescriptor,
   type PreviewAttachmentSummary,
@@ -295,8 +294,7 @@ export class PreviewAccessService {
         ? {
             tunnel: {
               path: PREVIEW_TUNNEL_PATH,
-              subprotocol: PREVIEW_TUNNEL_SUBPROTOCOL,
-              multiplexSubprotocol: PREVIEW_TUNNEL_SUBPROTOCOL_V2,
+              subprotocol: PREVIEW_TUNNEL_SUBPROTOCOL_V2,
               credential,
             },
           }

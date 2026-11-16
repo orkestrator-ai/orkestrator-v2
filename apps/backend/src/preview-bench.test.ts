@@ -7,11 +7,14 @@ import { join } from "node:path";
 import { connect as tlsConnect } from "node:tls";
 
 import {
-  encodePreviewTunnelFrame,
   PREVIEW_TUNNEL_PATH,
-  PREVIEW_TUNNEL_SUBPROTOCOL,
   type PreviewAttachmentDescriptor,
 } from "@orkestrator/protocol/preview-access";
+import {
+  encodePreviewTunnelMuxData,
+  encodePreviewTunnelMuxFrame,
+  PREVIEW_TUNNEL_SUBPROTOCOL_V2,
+} from "@orkestrator/protocol/preview-tunnel-mux";
 import { connectPreviewWebSocket } from "@orkestrator/protocol/node/preview-websocket";
 
 import {
@@ -146,9 +149,10 @@ describe.skipIf(!enabled)("preview route latency (loopback, one machine)", () =>
       surface: "desktop-tunnel",
     }));
     const started = performance.now();
+    // A fresh session per sample: WebSocket handshake, HELLO, OPEN, OPEN_OK.
     const ws = await connectPreviewWebSocket({
       url: `ws://127.0.0.1:${gatewayPort}${PREVIEW_TUNNEL_PATH}`,
-      protocol: PREVIEW_TUNNEL_SUBPROTOCOL,
+      protocol: PREVIEW_TUNNEL_SUBPROTOCOL_V2,
       maxPayload: 1024 * 1024,
       connectTimeoutMs: 2_000,
       handshakeTimeoutMs: 2_000,
@@ -161,15 +165,17 @@ describe.skipIf(!enabled)("preview route latency (loopback, one machine)", () =>
           return;
         }
         const frame = JSON.parse(String(payload)) as { type: string };
-        if (frame.type === "ready") ws.send(encodePreviewTunnelFrame({ type: "open" }));
-        if (frame.type === "open-ok") ws.send(Buffer.from(REQUEST));
+        if (frame.type === "ready")
+          ws.send(encodePreviewTunnelMuxFrame({ type: "open", stream: 1 }));
+        if (frame.type === "open-ok")
+          ws.send(encodePreviewTunnelMuxData(1, Buffer.from(REQUEST)), true);
       });
       ws.on("close", () => reject(new Error("tunnel closed early")));
       ws.start();
       ws.send(
-        encodePreviewTunnelFrame({
+        encodePreviewTunnelMuxFrame({
           type: "hello",
-          version: 1,
+          version: 2,
           attachmentId: attachment.attachmentId,
           credential: attachment.tunnel!.credential,
         }),

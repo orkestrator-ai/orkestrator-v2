@@ -37,7 +37,6 @@ const RELAYED_PATHS = [
   /^\/__orkestrator\/events$/,
   /^\/__orkestrator\/terminal$/,
   /^\/__orkestrator\/proxy\/loopback\/\d+(?:\/.*)?$/,
-  /^\/__orkestrator\/browser\/loopback\/\d+(?:\/.*)?$/,
 ];
 
 /** Request headers never forwarded: the leaf gets the command node's own credential. */

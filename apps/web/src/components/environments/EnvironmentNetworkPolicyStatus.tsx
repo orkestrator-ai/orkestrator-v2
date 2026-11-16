@@ -146,9 +146,8 @@ function NameChecks({ policy }: { policy: EnvironmentNetworkPolicy }) {
       </div>
     );
   }
-  // A backend that predates the field omits it; say nothing rather than
-  // guess. `null` is a report without it: an image from before the checks.
-  if (effective.egressFilter === undefined || policy.enforcement !== "gateway") return null;
+  // `null` is a report without it: a gateway image from before the checks.
+  if (policy.enforcement !== "gateway") return null;
   return (
     <div>
       This container&apos;s image predates name checks: any site sharing an allowed address is

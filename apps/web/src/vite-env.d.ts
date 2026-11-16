@@ -282,10 +282,6 @@ interface Window {
         tabId: string,
         visible: boolean,
       ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState | null>;
-      navigate(
-        tabId: string,
-        url: string,
-      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
       goBack(
         tabId: string,
       ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;

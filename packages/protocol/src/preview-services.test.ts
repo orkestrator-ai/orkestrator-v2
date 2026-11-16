@@ -17,12 +17,12 @@ import {
   stablePreviewJson,
   validatePreviewServiceInput,
 } from "./preview-services.js";
+import { isReservedPreviewCookieName } from "./preview-access.js";
 import {
-  encodePreviewTunnelFrame,
-  isReservedPreviewCookieName,
-  parsePreviewTunnelClientFrame,
-  parsePreviewTunnelServerFrame,
-} from "./preview-access.js";
+  encodePreviewTunnelMuxFrame,
+  parsePreviewTunnelMuxClientFrame,
+  parsePreviewTunnelMuxServerFrame,
+} from "./preview-tunnel-mux.js";
 import {
   FIXTURE_BACKEND_INSTANCE_ID,
   FIXTURE_SERVICE_ID,
@@ -222,41 +222,46 @@ describe("tunnel frames", () => {
   const credential = "c".repeat(43);
   test("accepts the exact client shapes", () => {
     expect(
-      parsePreviewTunnelClientFrame(
-        encodePreviewTunnelFrame({
+      parsePreviewTunnelMuxClientFrame(
+        encodePreviewTunnelMuxFrame({
           type: "hello",
-          version: 1,
+          version: 2,
           attachmentId: "att_12345678",
           credential,
         }),
       ),
-    ).toEqual({ type: "hello", version: 1, attachmentId: "att_12345678", credential });
-    expect(parsePreviewTunnelClientFrame('{"type":"open"}')).toEqual({ type: "open" });
+    ).toEqual({ type: "hello", version: 2, attachmentId: "att_12345678", credential });
+    expect(parsePreviewTunnelMuxClientFrame('{"type":"open","stream":1}')).toEqual({
+      type: "open",
+      stream: 1,
+    });
   });
 
   test("rejects destinations, unknown types, wrong versions, and oversize frames", () => {
     for (const text of [
-      '{"type":"open","host":"127.0.0.1","port":22}',
-      '{"type":"connect"}',
-      JSON.stringify({ type: "hello", version: 2, attachmentId: "att_12345678", credential }),
+      '{"type":"open","stream":1,"host":"127.0.0.1","port":22}',
+      '{"type":"open"}',
+      '{"type":"connect","stream":1}',
+      JSON.stringify({ type: "hello", version: 1, attachmentId: "att_12345678", credential }),
       JSON.stringify({
         type: "hello",
-        version: 1,
+        version: 2,
         attachmentId: "att_12345678",
         credential: "short",
       }),
-      `{"type":"open","pad":"${"x".repeat(9000)}"}`,
+      `{"type":"open","stream":1,"pad":"${"x".repeat(9000)}"}`,
       "not json",
       "[]",
     ]) {
-      expect(parsePreviewTunnelClientFrame(text)).toBeNull();
+      expect(parsePreviewTunnelMuxClientFrame(text)).toBeNull();
     }
   });
 
   test("server errors are re-sanitized", () => {
-    const parsed = parsePreviewTunnelServerFrame(
+    const parsed = parsePreviewTunnelMuxServerFrame(
       JSON.stringify({
         type: "open-failed",
+        stream: 1,
         error: {
           category: "connection-refused",
           message: "refused",
@@ -267,10 +272,11 @@ describe("tunnel frames", () => {
     );
     expect(parsed).toEqual({
       type: "open-failed",
+      stream: 1,
       error: { category: "connection-refused", message: "refused", retryable: true, layer: "tcp" },
     });
     expect(
-      parsePreviewTunnelServerFrame(
+      parsePreviewTunnelMuxServerFrame(
         JSON.stringify({ type: "error", error: { category: "bogus", message: "x" } }),
       ),
     ).toBeNull();

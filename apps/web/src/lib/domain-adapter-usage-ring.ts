@@ -1,8 +1,6 @@
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { DomainAdapterUsageRecorder } from "@orkestrator/protocol/contract/client";
 import {
   DomainAdapterUsageRing,
-  RECORD_DOMAIN_ADAPTER_USAGE_COMMAND,
   type DomainAdapterUsageEntry,
 } from "@orkestrator/protocol/contract/client-usage";
 
@@ -45,8 +43,7 @@ const browserTimer: UploadTimer = {
 /**
  * Sends the ring's new counts one bounded batch at a time, at most once per
  * interval and only while there are counts to send. A failed send puts them
- * back and waits twice as long, up to the maximum; a backend that predates the
- * command (`unknown-command`) stops the upload for this load. Counts are kept
+ * back and waits twice as long, up to the maximum. Counts are kept
  * in memory only: a reload loses at most one interval of them, which the
  * retirement evidence tolerates.
  */
@@ -80,11 +77,8 @@ export function startDomainAdapterUsageUpload({
     try {
       if (batch.length > 0) await send(batch);
       delay = intervalMs;
-    } catch (error) {
+    } catch {
       ring.restore(batch);
-      if (incompatibility(error, RECORD_DOMAIN_ADAPTER_USAGE_COMMAND)?.code === "unknown-command") {
-        stopped = true;
-      }
       delay = Math.min(delay * 2, maxIntervalMs);
     }
     sending = false;

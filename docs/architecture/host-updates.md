@@ -122,8 +122,9 @@ map to them). A channel also installs every more stable channel's releases.
         `bun install --frozen-lockfile` on the `package.json` and `bun.lock`
         the release publishes in `resources/release-runtime/`, so every host
         gets the same dependency versions. Bun checks each tarball's integrity
-        hash. A release older than that lockfile installs with a plain
-        `bun install`, so its dependencies resolve afresh.
+        hash. A release published without that lockfile (before
+        2.36.4-beta, `FIRST_LOCKED_RELEASE`) is refused with an error naming
+        the reason, rather than installed with dependencies resolved afresh.
      2. The release's `engines.bun` must accept the service's recorded Bun.
      3. `bin/orkestrator.js --version` must print the version.
      4. The release's `toolchain install` runs before any downtime.

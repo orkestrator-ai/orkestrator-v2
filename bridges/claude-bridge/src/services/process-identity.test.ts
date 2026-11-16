@@ -65,20 +65,20 @@ describe("process identity", () => {
     ).toBe("current");
   });
 
-  test("this process's pid under another instance, or none, is a dead predecessor", () => {
+  test("this process's pid under another instance is a dead predecessor", () => {
     expect(
       recordedOwnerState({ pid: process.pid, instance: "a-bridge-that-died" }, { slowPath: false }),
     ).toBe("dead");
-    expect(recordedOwnerState({ pid: process.pid }, { slowPath: false })).toBe("dead");
   });
 
   test("a free pid is dead", async () => {
-    expect(recordedOwnerState({ pid: await exitedChildPid() }, { slowPath: false })).toBe("dead");
+    expect(
+      recordedOwnerState({ pid: await exitedChildPid(), instance: "other" }, { slowPath: false }),
+    ).toBe("dead");
   });
 
   test("a live pid with nothing to compare stays unverified", () => {
     const owner = spawnLiveOwner();
-    expect(recordedOwnerState({ pid: owner.pid }, { slowPath: true })).toBe("unverified");
     expect(recordedOwnerState({ pid: owner.pid, instance: "other" }, { slowPath: true })).toBe(
       "unverified",
     );

@@ -25,6 +25,7 @@ import {
   imageManifestArchive,
   lifecycleEnvironment,
   memoryLifecycleContext,
+  READY_BOOT_RECORD,
   tempDir,
   withDockerScript,
 } from "./container-lifecycle-fixtures";
@@ -248,7 +249,7 @@ describe("a runtime already in the old shape", () => {
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$*" in
-  *boot-status.json*) printf 'ORKESTRATOR_NO_BOOT_DIR\\n1\\n'; exit 0 ;;
+  *boot-status.json*) printf '%s\\n1\\n' '${READY_BOOT_RECORD}'; exit 0 ;;
 esac
 case "$1" in
   context) printf 'unix:///var/run/docker.sock\\n' ;;

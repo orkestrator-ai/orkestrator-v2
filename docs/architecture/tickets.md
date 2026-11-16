@@ -117,10 +117,11 @@ read these.
 - **Text-only writes** (`description` and/or `acceptanceCriteria`, perhaps with
   `kind`) are stored exactly as written, and the sections are derived from them.
   This is how every writer that predates sections changes a ticket.
-- **Legacy rows** (no sections) are migrated on read: sections are derived from
-  the text, and nothing is written back until the ticket next changes. A legacy
-  `- [x]` becomes a manual pass dated at the ticket's creation, so repeated
-  reads return the same row, and an edit that keeps the criterion keeps that
+- **Legacy rows** (no sections, written before v2.34.2-beta) were given their
+  sections once, by a storage migration (`upgradeKanbanTaskRecords`,
+  `storage-record-upgrades.ts`, version 10): sections are derived from the
+  text, which is kept as written. A legacy `- [x]` becomes a manual pass dated
+  at the ticket's creation, and an edit that keeps the criterion keeps that
   date.
 - `sectionsBasis` is a fingerprint of the mirrors the sections were written
   with. If an older writer changes a mirror, the fingerprint no longer matches
@@ -594,7 +595,8 @@ leaf's own reports keep it current. The board's cards name that machine.
 
 **The board's sync line.** Above the columns the board names each machine
 that shares it, with its state: in sync, syncing, behind, offline (changes
-wait here), update needed (an older machine) or failed (retried), and how
+wait here), update needed (its `ticket-sync` version range shares none with
+this machine's) or failed (retried), and how
 many leaf changes lost a conflict. On a leaf it names the command node its
 copies come from (`get_ticket_sync_leaf_status`), with the changes waiting for
 it and Share for older tickets, and each copy's card carries a small mark with

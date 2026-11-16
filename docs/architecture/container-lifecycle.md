@@ -228,8 +228,10 @@ an earlier boot can never release work.
   exited container or a timeout is a typed, retryable `not-ready` failure.
 - Immediately before workspace preparation and before a bridge launch, the
   backend rechecks the current boot and waits if Docker restarted the
-  container in between. A legacy image, or a probe that cannot be answered,
-  does not gate dispatch.
+  container in between. A container with no `/run/orkestrator` directory
+  whose image has no `boot-status` capability label (an image that predates
+  boot status) fails at once with a `not-ready` failure (`boot-status-missing`)
+  that says to rebuild it.
 - `workspace-setup.sh` applies the same rule inside the container and fails
   (retryably) instead of "proceeding anyway" on timeout.
 - In restricted mode a missing firewall script is as fatal as a failed one.
@@ -1988,8 +1990,7 @@ without delegated controllers still creates runtimes, unrestricted. An
 explicit budget on such a daemon is still refused, below. Docker Desktop
 enforces all three axes inside its VM, whose size is the ceiling.
 `get_docker_capacity` carries the default for that daemon as
-`builtInDefault`; policies report its source as `default`. Older backends
-omit both (and apply no default), which the Settings page shows.
+`builtInDefault`; policies report its source as `default`.
 
 | Axis | Docker | Bounds |
 | --- | --- | --- |
@@ -2156,7 +2157,9 @@ Claude started in a container terminal reports its state through the hooks the
 entrypoint writes into `~/.claude/settings.json`: `UserPromptSubmit` writes
 `working`, `Stop` writes `waiting` and `StopFailure` (which runs instead of
 `Stop` when a turn ends on an API error) writes `failed` to
-`/tmp/.claude-state`. Bridge sessions
+`/tmp/.claude-state-snapshot` (with its revision and completion counters; the
+one-line `/tmp/.claude-state` is no longer written, and the backend reads it
+only as a fallback for containers built before #1041). Bridge sessions
 (`ORKESTRATOR_NATIVE_AGENT_BRIDGE` set) write nothing. The same file sets
 bypass permissions as the default mode and records its consent
 (`skipDangerousModePermissionPrompt`), the only place current Claude Code

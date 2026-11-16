@@ -12,7 +12,6 @@ import {
 import {
   RETAINING_CLOSE_SESSION_ID_PREFIX,
   fenceRetainingCloseSessionId,
-  tabTeardownFailureKind,
   unfenceTabTeardownSessionId,
 } from "@orkestrator/protocol/tab-teardown";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
@@ -27,8 +26,8 @@ import { createProviderStub, withService } from "./native-agent-service-projecti
 /**
  * Tab close retains conversation history on every platform. These cover the
  * backend half of that contract: which provider request tab teardown sends,
- * when the durable intent survives, and that an older bridge never gets a
- * destructive DELETE in place of the close route it does not have.
+ * when the durable intent survives, and that a close route answering 404 or
+ * 405 never leads to a destructive DELETE.
  */
 
 /** A close deadline no other timer in these tests uses, so it can be held by hand. */
@@ -704,7 +703,7 @@ describe("tab close retains conversation history", () => {
               tabId: "tab-old",
               kind: "claude-native",
             }),
-          ).rejects.toThrow("predates non-destructive tab close");
+          ).rejects.toThrow(`close is not confirmed (HTTP ${status})`);
           expect(calls.map((call) => call.method)).toEqual(["POST"]);
           expect(await storage.getNativeAgentSession(key)).not.toBeNull();
           expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toHaveProperty(
@@ -720,17 +719,18 @@ describe("tab close retains conversation history", () => {
     });
   }
 
-  test("an older Codex bridge gets the restart notice and no DELETE, as Claude does", async () => {
+  test("a Codex close answering 404 stays pending with no DELETE, as Claude does", async () => {
     await withTeardown(
       () => new Response("404 Not Found", { status: 404 }),
       async ({ invoke, storage, calls }) => {
         const key = await mapTab(storage, "codex", "tab-codex", "codex-old");
-        const failure = await invoke("teardown_tab", {
-          environmentId: "e1",
-          tabId: "tab-codex",
-          kind: "codex-native",
-        }).catch((error: unknown) => error);
-        expect(tabTeardownFailureKind(failure)).toBe("bridge-upgrade-required");
+        await expect(
+          invoke("teardown_tab", {
+            environmentId: "e1",
+            tabId: "tab-codex",
+            kind: "codex-native",
+          }),
+        ).rejects.toThrow("Codex session close is not confirmed (HTTP 404)");
         expect(calls.map((call) => [call.method, new URL(call.url).pathname])).toEqual([
           ["POST", "/session/codex-old/close"],
         ]);
@@ -992,23 +992,6 @@ describe("tab close concurrency and retry", () => {
         expect(providerCloses).toEqual([["e1", "opencode", "oc-shared"]]);
         expect(await storage.listNativeAgentSessions()).toEqual([]);
         expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
-      },
-    );
-  });
-
-  test("marks an old Claude bridge failure so the renderer can show the restart notice", async () => {
-    await withTeardown(
-      () => new Response("Not Found", { status: 404 }),
-      async ({ invoke, storage }) => {
-        await mapTab(storage, "claude", "tab-old", "claude-old");
-        const failure = await invoke("teardown_tab", {
-          environmentId: "e1",
-          tabId: "tab-old",
-          kind: "claude-native",
-        }).catch((error: unknown) => error);
-        expect(tabTeardownFailureKind(failure)).toBe("bridge-upgrade-required");
-        // A generic pending close is not that notice.
-        expect(tabTeardownFailureKind(new Error("Session close is not confirmed"))).toBeNull();
       },
     );
   });

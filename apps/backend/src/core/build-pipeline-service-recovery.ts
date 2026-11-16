@@ -170,8 +170,9 @@ export class BuildPipelineRecovery {
    * then fails the stage, exactly as for Review and Verify. The accepted
    * result is kept, bounded, on the session, where Verify and the inspector
    * read it. An incomplete result (`complete: false`) still goes to Verify,
-   * which judges the round. A session without the marker started before the
-   * typed handoff; Verify reads its last assistant text instead.
+   * which judges the round. A session without the marker (one started before
+   * the typed handoff) has no result to read, so it fails the stage; a retry
+   * runs Address Findings again with a result slot.
    */
   async finishAddressFindings(
     pipeline: BuildPipeline,
@@ -179,8 +180,9 @@ export class BuildPipelineRecovery {
     session: PipelineSession,
   ): Promise<void> {
     if (session.addressReportKind === undefined) {
-      await this.stageSupervisor.startStage(pipeline, "verify", "verifying");
-      return;
+      throw new Error(
+        "This Address Findings session was started before typed fix results and has no result to read; retry the stage to run it again.",
+      );
     }
     const requestId = session.structuredRequestId;
     if (!requestId) throw new Error("Address result key is missing");

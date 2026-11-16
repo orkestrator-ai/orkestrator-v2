@@ -706,10 +706,7 @@ describe("web gateway terminal input and WebSocket", () => {
     expect(String(directSocket.url)).toBe(
       "wss://workstation.tailnet.ts.net/__orkestrator/terminal",
     );
-    expect(directSocket.protocols).toEqual([
-      "orkestrator-terminal.v1.input-results",
-      "orkestrator-terminal.v1",
-    ]);
+    expect(directSocket.protocols).toEqual(["orkestrator-terminal.v1.input-results"]);
     directSocket.open();
     expect(sentControlFrames(directSocket)[0]).toEqual({
       type: "authenticate",
@@ -895,11 +892,9 @@ describe("web gateway terminal input and WebSocket", () => {
       ) =>
         socket.receive(
           JSON.stringify({
-            type: "operation-result",
-            operation: "input",
+            type: "input-results",
             channelId: frame.channelId,
-            operationId: frame.revision,
-            ok: true,
+            throughOperationId: frame.revision,
           }),
         );
       try {
@@ -1188,13 +1183,7 @@ describe("web gateway terminal input and WebSocket", () => {
     expect(invokes).toEqual([]);
 
     socket.receive(
-      JSON.stringify({
-        type: "operation-result",
-        channelId,
-        operationId: inputFrame.revision,
-        operation: "input",
-        ok: true,
-      }),
+      JSON.stringify({ type: "input-results", channelId, throughOperationId: inputFrame.revision }),
     );
     await waitForCondition(
       () => sentControlFrames(socket).some((frame) => frame.type === "resize"),
@@ -1309,13 +1298,7 @@ describe("web gateway terminal input and WebSocket", () => {
 
     for (const frame of frames) {
       socket.receive(
-        JSON.stringify({
-          type: "operation-result",
-          channelId,
-          operationId: frame.revision,
-          operation: "input",
-          ok: true,
-        }),
+        JSON.stringify({ type: "input-results", channelId, throughOperationId: frame.revision }),
       );
     }
     await expect(Promise.all(writes)).resolves.toEqual([
@@ -1377,13 +1360,7 @@ describe("web gateway terminal input and WebSocket", () => {
       socket.sent.find((value) => typeof value !== "string") as ArrayBufferLike,
     );
     socket.receive(
-      JSON.stringify({
-        type: "operation-result",
-        channelId,
-        operationId: frame.revision,
-        operation: "input",
-        ok: true,
-      }),
+      JSON.stringify({ type: "input-results", channelId, throughOperationId: frame.revision }),
     );
     await write;
     // The only HTTP request is the write that failed.

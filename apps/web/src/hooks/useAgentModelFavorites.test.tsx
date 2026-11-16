@@ -5,7 +5,6 @@ import { invoke } from "@/lib/native/backend";
 import type { AgentModel, AgentModelRef } from "@orkestrator/protocol/native-agent";
 import { mockToastError } from "../../../../tests/mocks/sonner";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { bindSettingsParent } from "@/lib/portal/command-node-config";
 import {
@@ -524,7 +523,7 @@ describe("useAgentModelFavorites under a leaf scope", () => {
   });
   afterEach(cleanupNodeScopes);
 
-  function nodeClient(nodeId: string, options: { patch: boolean }): FakeNodeClient {
+  function nodeClient(nodeId: string): FakeNodeClient {
     let stored = structuredClone(appCommandStore(configStore).getInitialState().config);
     const save = (global: GlobalConfig) => {
       stored = { ...stored, global };
@@ -535,10 +534,8 @@ describe("useAgentModelFavorites under a leaf scope", () => {
       invoke: {
         get_config: () => stored,
         update_global_config: (args: FakeArgs) => save(args.global as GlobalConfig),
-        patch_global_config: (args: FakeArgs) => {
-          if (!options.patch) throw new Error(unknownBackendCommandMessage("patch_global_config"));
-          return save({ ...stored.global, ...(args.patch as Partial<GlobalConfig>) });
-        },
+        patch_global_config: (args: FakeArgs) =>
+          save({ ...stored.global, ...(args.patch as Partial<GlobalConfig>) }),
       },
     });
   }
@@ -561,8 +558,8 @@ describe("useAgentModelFavorites under a leaf scope", () => {
   }
 
   test("a favourite is saved on the command scope's node and the leaf gets no write", async () => {
-    const command = nodeClient("bk_fav-command", { patch: true });
-    const leaf = nodeClient("bk_fav-leaf", { patch: true });
+    const command = nodeClient("bk_fav-command");
+    const leaf = nodeClient("bk_fav-leaf");
     const { ref, commandScope, leafScope } = renderInLeaf(command, leaf);
 
     await act(async () => {
@@ -579,23 +576,5 @@ describe("useAgentModelFavorites under a leaf scope", () => {
     expect(ref.current.favorites).toEqual(favourite);
     expect(commandScope.store(configStore).getState().hasLoaded).toBe(false);
     expect(invokeMock).not.toHaveBeenCalled();
-  });
-
-  test("a command node without the patch command gets the whole-object write it expects", async () => {
-    const command = nodeClient("bk_fav-old-command", { patch: false });
-    const leaf = nodeClient("bk_fav-old-leaf", { patch: false });
-    const { ref } = renderInLeaf(command, leaf);
-
-    await act(async () => {
-      ref.current.toggleFavorite(CLAUDE_OPUS);
-    });
-
-    const [write] = command.calls("update_global_config");
-    expect(write?.args.global).toMatchObject({
-      favoriteModels: [{ platform: "claude", modelId: "claude-opus" }],
-    });
-    expect("preserveInheritedSettings" in (write?.args ?? {})).toBe(false);
-    expect(leaf.calls("update_global_config")).toHaveLength(0);
-    expect(mockToastError).not.toHaveBeenCalled();
   });
 });

@@ -2,12 +2,13 @@ import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { useStore } from "zustand";
 import { projectKey, projectRef } from "@orkestrator/protocol/federation";
-import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { PortalStore, OutcomeUnknownError } from "@/lib/portal/portal-store";
 import type { FederatedProject } from "./summaries";
 import { createRemoteProjectWrites, withArrangement } from "./remote-project-writes";
 
 const nodeId = "bk_a" as never;
+const moveA = { kind: "move", activeId: "a", overId: "b" } as const;
+const sortWork = { kind: "sort-folder", folder: "Work" } as const;
 const deadlines: Array<() => void> = [];
 const originalSetTimeout = globalThis.setTimeout;
 afterEach(() => {
@@ -64,16 +65,16 @@ function setup() {
   return { portal, writes, calls, onError, snapshot };
 }
 
-test("coalesces overlapping writes while accumulating folder moves", async () => {
+test("sends each intent in turn while the overlay accumulates folder moves", async () => {
   const { writes, calls, onError } = setup();
-  writes.submit(nodeId, { projectIds: ["b", "a"], folders: { a: "Work" } }, onError);
-  writes.submit(nodeId, { projectIds: ["a", "b"], folders: { b: "Play" } }, onError);
-  writes.submit(nodeId, { projectIds: ["b", "a"], folders: { a: null } }, onError);
+  writes.submit(nodeId, { projectIds: ["b", "a"], folders: { a: "Work" } }, onError, moveA);
+  writes.submit(nodeId, { projectIds: ["a", "b"], folders: { b: "Play" } }, onError, sortWork);
+  writes.submit(nodeId, { projectIds: ["b", "a"], folders: { a: null } }, onError, moveA);
   expect(calls).toHaveLength(1);
   calls[0]!.resolve();
   await flush();
   expect(calls).toHaveLength(2);
-  expect(calls[1]!.args).toEqual({ projectIds: ["b", "a"], folders: { a: null, b: "Play" } });
+  expect(calls[1]!.args).toEqual({ intent: sortWork });
   expect(
     withArrangement(
       [project("a", 0, "Old"), project("b", 1)],
@@ -85,16 +86,19 @@ test("coalesces overlapping writes while accumulating folder moves", async () =>
   ]);
   calls[1]!.resolve();
   await flush();
+  expect(calls).toHaveLength(3);
+  calls[2]!.resolve();
+  await flush();
 });
 
 for (const error of [
   new Error("denied"),
-  new OutcomeUnknownError(nodeId, "arrange_projects", "same-key"),
+  new OutcomeUnknownError(nodeId, "arrange_projects_by_intent", "same-key"),
 ]) {
   test(`${error.name}: discards pending work without retrying an ambiguous write`, async () => {
     const { writes, calls, onError } = setup();
-    writes.submit(nodeId, { projectIds: ["b", "a"], folders: {} }, onError);
-    writes.submit(nodeId, { projectIds: ["a", "b"], folders: { a: "Work" } }, onError);
+    writes.submit(nodeId, { projectIds: ["b", "a"], folders: {} }, onError, moveA);
+    writes.submit(nodeId, { projectIds: ["a", "b"], folders: { a: "Work" } }, onError, moveA);
     calls[0]!.reject(error);
     await flush();
     expect(writes.store.getState().size).toBe(0);
@@ -111,6 +115,7 @@ test("reconciles after the last reader unmounts and owner membership changes", a
     nodeId,
     { projectIds: ["b", "a", "deleted"], folders: { b: "Work", deleted: "Work" } },
     onError,
+    moveA,
   );
   calls[0]!.resolve();
   await flush();
@@ -124,7 +129,7 @@ test("reconciles after the last reader unmounts and owner membership changes", a
 
 test("missing owner snapshots do not confirm writes and the bounded overlay expires", async () => {
   const { writes, calls, onError, snapshot } = setup();
-  writes.submit(nodeId, { projectIds: ["a"], folders: { a: "Work" } }, onError);
+  writes.submit(nodeId, { projectIds: ["a"], folders: { a: "Work" } }, onError, moveA);
   calls[0]!.resolve();
   await flush();
   snapshot(null);
@@ -137,12 +142,12 @@ test("missing owner snapshots do not confirm writes and the bounded overlay expi
 
 test("a new drop cancels the prior overlay deadline and independent owners write concurrently", async () => {
   const { writes, calls, onError } = setup();
-  writes.submit(nodeId, { projectIds: ["a"], folders: {} }, onError);
+  writes.submit(nodeId, { projectIds: ["a"], folders: {} }, onError, moveA);
   calls[0]!.resolve();
   await flush();
   const oldDeadline = deadlines.pop()!;
-  writes.submit(nodeId, { projectIds: ["a"], folders: { a: "New" } }, onError);
-  writes.submit("bk_other" as never, { projectIds: ["a"], folders: {} }, onError);
+  writes.submit(nodeId, { projectIds: ["a"], folders: { a: "New" } }, onError, moveA);
+  writes.submit("bk_other" as never, { projectIds: ["a"], folders: {} }, onError, moveA);
   expect(calls).toHaveLength(3);
   // Captured old callbacks must be cancelled rather than firing in production.
   expect(oldDeadline).toBeFunction();
@@ -173,8 +178,6 @@ function setupByCommand() {
     onError: mock((_error: unknown) => {}),
   };
 }
-const moveA = { kind: "move", activeId: "a", overId: "b" } as const;
-const sortWork = { kind: "sort-folder", folder: "Work" } as const;
 
 test("intents reach the owner one at a time, in order, and none is coalesced away", async () => {
   const { writes, calls, onError } = setupByCommand();
@@ -207,26 +210,6 @@ test("the overlay adopts what the owner resolved rather than this client's previ
   });
 });
 
-test("an owner that predates intents gets the latest arrangement, covering the queue", async () => {
-  const { writes, calls, onError } = setupByCommand();
-  writes.submit(nodeId, { projectIds: ["b", "a"], folders: { a: "Work" } }, onError, moveA);
-  writes.submit(nodeId, { projectIds: ["a", "b"], folders: {} }, onError, sortWork);
-  calls[0]!.reject(new Error(unknownBackendCommandMessage("arrange_projects_by_intent")));
-  await flush();
-  expect(calls).toHaveLength(2);
-  expect(calls[1]!.command).toBe("arrange_projects");
-  expect(calls[1]!.args).toEqual({ projectIds: ["b", "a"], folders: { a: "Work" } });
-  calls[1]!.resolve();
-  await flush();
-  // The newer submit is still owed, as a whole arrangement: its intent was dropped.
-  expect(calls).toHaveLength(3);
-  expect(calls[2]!.command).toBe("arrange_projects");
-  expect(calls[2]!.args).toEqual({ projectIds: ["a", "b"], folders: { a: "Work" } });
-  expect(onError).not.toHaveBeenCalled();
-  calls[2]!.resolve();
-  await flush();
-});
-
 test("an intent the owner refuses is reported and not retried as a whole arrangement", async () => {
   const { writes, calls, onError } = setupByCommand();
   const error = new Error("denied");
@@ -240,7 +223,12 @@ test("an intent the owner refuses is reported and not retried as a whole arrange
 
 test("a truncated owner snapshot cannot confirm a removed project", async () => {
   const { writes, calls, onError, snapshot } = setup();
-  writes.submit(nodeId, { projectIds: ["a", "missing"], folders: { missing: "Work" } }, onError);
+  writes.submit(
+    nodeId,
+    { projectIds: ["a", "missing"], folders: { missing: "Work" } },
+    onError,
+    moveA,
+  );
   calls[0]!.resolve();
   await flush();
   snapshot([project("a", 0)], true);

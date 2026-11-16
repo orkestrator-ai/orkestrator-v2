@@ -216,7 +216,7 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `c1724ab7`): the 20 `http-bridge-*` source files and their 20 tests are in
   `core/http-bridge/` without the prefix (`http-bridge/provider.ts`,
   `http-bridge/transport.ts`, …), with an `index.ts` and both lint
-  patterns. `index.ts` re-exports the six symbols the seven production
+  patterns. `index.ts` re-exports the five symbols the seven production
   importers outside the folder use (`HttpBridgeProvider`, `boundedJson`,
   `bridgeFetch`, `openCodeSdkFetch` and the types `HttpBridgeAgent` and
   `HttpBridgeProviderDependencies`), and all seven import it. No named
@@ -288,9 +288,9 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `previews/readiness.ts`, `previews/listener-ownership.ts`,
   `previews/service-registry.ts`, `previews/target-resolver.ts`,
   `previews/test-support.ts`), with an `index.ts` and both lint patterns.
-  `index.ts` re-exports the six symbols the twelve production importers
+  `index.ts` re-exports the five symbols the twelve production importers
   outside the folder use (`PreviewRuntime`, `resolvePreviewTargetIntent` and
-  the types `AuthenticatedPreviewAccess`, `LegacyLoopbackPortAccess`,
+  the types `AuthenticatedPreviewAccess`,
   `PreviewPublicationPort` and `ResolvedPreviewTarget`), and all of them
   import it; it also re-exports `defaultProbeFamily` for
   `preview-browser-harness.ts`. One module is a named

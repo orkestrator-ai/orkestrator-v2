@@ -459,7 +459,7 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
       await expect(instance.returnOutboxMail("bk_cmd" as never, queued.seq)).rejects.toThrow(
         mode === "missing" ? "no longer exists" : "addressed",
       );
-      expect((await instance.leafMail.collect("bk_cmd" as never, 0, true)).items).toHaveLength(1);
+      expect((await instance.leafMail.collect("bk_cmd" as never, 0)).items).toHaveLength(1);
       const main = await world.main();
       expect(
         (await world.storage.getAgentMailMailbox(main.environmentId, main.tabId)).messages,

@@ -30,8 +30,13 @@ export interface ProcessIdentity {
   processStartedAt?: number;
 }
 
-/** An owner read back from a file. An older bridge wrote only the pid. */
-export type RecordedOwner = Pick<ProcessIdentity, "pid"> & Partial<Omit<ProcessIdentity, "pid">>;
+/**
+ * An owner read back from a file: always a pid and an instance id. A record
+ * without an instance id does not parse as an owner, and each reader treats it
+ * like any other unreadable record.
+ */
+export type RecordedOwner = Pick<ProcessIdentity, "pid" | "instance"> &
+  Partial<Omit<ProcessIdentity, "pid" | "instance">>;
 
 /**
  * - `current`: this bridge process wrote it.
@@ -208,8 +213,8 @@ export function recordedOwnerState(
   options: { slowPath: boolean },
 ): RecordedOwnerState {
   if (owner.instance === BRIDGE_INSTANCE_ID) return "current";
-  // This process never records its pid under another instance (or none), so
-  // the writer was an earlier process that had this pid.
+  // This process never records its pid under another instance, so the writer
+  // was an earlier process that had this pid.
   if (owner.pid === process.pid) return "dead";
   if (!processIsAlive(owner.pid)) return "dead";
   const self = currentProcessIdentity();

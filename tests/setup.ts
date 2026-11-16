@@ -94,6 +94,11 @@ beforeEach(() => {
   environmentRequests.resetForTests();
 });
 
+// A compose-draft write that fails in one test is retried on a timer. Cancel
+// it so it cannot call the next test's backend mocks.
+import { cancelAllDraftWriteRetriesForTests } from "../apps/web/src/lib/compose-draft-retry";
+beforeEach(cancelAllDraftWriteRetriesForTests);
+
 // NOTE: @/hooks/useClipboardImagePaste is NOT mocked here because
 // useClipboardImagePaste.test.ts needs to import the real module.
 // Tests that need it mocked (terminal-paste.test.ts) do so per-file.

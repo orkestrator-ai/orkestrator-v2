@@ -1,5 +1,4 @@
 import { describe, expect, mock, test } from "bun:test";
-import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { renderHook } from "@testing-library/react";
 import {
   MAX_ENVIRONMENT_HYDRATION_IDS,
@@ -167,43 +166,6 @@ describe("EnvironmentHydrationBatcher", () => {
     for (const resolve of gates) resolve(answer(["e1"]));
     expect(await early).toEqual([queue("e1")]);
     expect(await late).toEqual([queue("e1")]);
-  });
-
-  test("falls back to the per-environment reads once an older backend refuses the command", async () => {
-    const listBatch = mock(async (_ids: string[]): Promise<Batch> => {
-      throw new Error(unknownBackendCommandMessage("list_environment_hydration"));
-    });
-    const { instance, scheduler, listPromptQueues, listMultiReviewWorkflows } = batcher({
-      listBatch,
-    });
-    const first = Promise.all([instance.promptQueues("e1"), instance.multiReviewWorkflows("e1")]);
-    scheduler.run();
-    expect(await first).toEqual([[queue("e1")], [workflow("e1")]]);
-
-    // Only the list asked for is read, and the batch is not tried again.
-    const second = instance.multiReviewWorkflows("e2");
-    scheduler.run();
-    expect(await second).toEqual([workflow("e2")]);
-    expect(listBatch).toHaveBeenCalledTimes(1);
-    expect(listPromptQueues.mock.calls).toEqual([["e1"]]);
-    expect(listMultiReviewWorkflows.mock.calls).toEqual([["e1"], ["e2"]]);
-  });
-
-  test("in fallback one environment's failed read does not block the others", async () => {
-    const { instance, scheduler } = batcher({
-      listBatch: async () => {
-        throw new Error(unknownBackendCommandMessage("list_environment_hydration"));
-      },
-      listPromptQueues: async (id) => {
-        if (id === "broken") throw new Error("queue unavailable");
-        return [queue(id)];
-      },
-    });
-    const broken = instance.promptQueues("broken").catch((error: Error) => error.message);
-    const healthy = instance.promptQueues("healthy");
-    scheduler.run();
-    expect(await broken).toBe("queue unavailable");
-    expect(await healthy).toEqual([queue("healthy")]);
   });
 });
 

@@ -7,45 +7,21 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import {
-  ArrowLeft,
-  ArrowRight,
-  Code2,
-  Globe2,
-  Loader2,
-  RefreshCw,
-  Server,
-  ShieldCheck,
-  Smartphone,
-} from "lucide-react";
-import type {
-  BrowserPreviewBounds,
-  BrowserPreviewState,
-} from "@orkestrator/protocol/browser-preview";
+import { ExternalLink, Globe2 } from "lucide-react";
 import type { WebAnnotationPageIdentity } from "@orkestrator/protocol/web-annotations";
-import { parsePreviewTabTarget } from "@orkestrator/protocol/preview-services";
+import {
+  formatPreviewIntentUri,
+  parsePreviewTabTarget,
+} from "@orkestrator/protocol/preview-services";
 import { Button } from "@/components/ui/button";
-import { isWkWebViewClient } from "@/lib/client-platform";
-import { isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { cn } from "@/lib/utils";
-import { displayUrlFromNativePreview, resolveBrowserAddress } from "@/lib/browser-address";
-import { boundBrowserHistory } from "@/lib/browser-history";
 import {
   confirmLegacyUrlServiceMatch,
   legacyUrlHostPort,
   legacyUrlServiceMatch,
 } from "@/lib/preview-service-entry";
-import {
-  attachBrowserPreview,
-  previewNodeFor,
-  goBackBrowserPreview,
-  goForwardBrowserPreview,
-  hasNativeBrowserPreview,
-  navigateBrowserPreview,
-  openBrowserPreviewDevTools,
-  reloadBrowserPreview,
-  setBrowserPreviewVisible,
-} from "@/lib/native/browser-preview";
+import { openLinkExternally } from "@/lib/preview-link-external";
+import { hasNativeBrowserPreview } from "@/lib/native/browser-preview";
 import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import {
@@ -55,21 +31,15 @@ import {
 } from "@/stores/previewServiceStore";
 import type { BrowserTabData } from "@/types/paneLayout";
 import { AnnotatedPreviewArea, AnnotationsButton } from "./annotations/BrowserAnnotationsLayout";
-import { currentPageForManualUrl } from "./annotations/format";
 import { useBrowserAnnotations } from "./annotations/useBrowserAnnotations";
 import {
   BROWSER_ADDRESS_FORM_CLASS,
   BROWSER_ADDRESS_INPUT_CLASS,
   BROWSER_TOOLBAR_ACTIONS_CLASS,
   BROWSER_TOOLBAR_CLASS,
-  errorMessage,
   useAddressBarShortcut,
-  useBlockingOverlay,
-  useDeferredPreviewHide,
-  useObservedElement,
 } from "./browser-tab-hooks";
 import { ServiceBrowserTab } from "./ServiceBrowserTab";
-import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 interface BrowserTabProps {
   tabId: string;
@@ -79,134 +49,69 @@ interface BrowserTabProps {
   refreshRequestId?: number;
 }
 
-const OPAQUE_PREVIEW_SANDBOX = "allow-forms allow-pointer-lock allow-presentation allow-scripts";
 /**
- * Browser tabs are either a registered preview service (durable service
- * reference, transport resolved at attach time) or a manual loopback address
- * (the original behaviour, kept for legacy tabs and explicit backend ports).
+ * Browser tabs are a registered preview service (durable service reference,
+ * transport resolved at attach time) or an unresolved link. A plain URL tab
+ * (a new tab, or one saved before service previews) has no in-app view: an
+ * address typed into it is resolved to a service, and a saved address opens
+ * in the user's browser unless it converts to the one service that owns it.
  */
 export function BrowserTab(props: BrowserTabProps) {
   const target = parsePreviewTabTarget(props.data.url);
   if (target.kind !== "url") return <ServiceBrowserTab {...props} target={target} />;
-  return <ManualBrowserTab {...props} />;
+  return <UrlBrowserTab {...props} />;
 }
 
-function ManualBrowserTab({
-  tabId,
-  environmentId,
-  data,
-  isActive,
-  refreshRequestId = 0,
-}: BrowserTabProps) {
+const NO_PAGE = null;
+
+function UrlBrowserTab({ tabId, environmentId, data, isActive }: BrowserTabProps) {
   const updateTabBrowserUrl = usePaneLayoutStore((state) => state.updateTabBrowserUrl);
   const nativeBrowserPreview = hasNativeBrowserPreview();
-  const previewPublicationAvailable = usePreviewServiceStore(
-    (state) => state.capabilities?.surfaces.browserTopLevel.available === true,
-  );
-  // The environment's node: its preview registry and its preview addresses.
+  // The environment's node: its preview registry.
   const previewScope = useNodeScope();
-  const resolvePreviewUrl = usePreviewServiceStore((state) => state.resolvePreviewUrl);
-  const browserPreviewSupported = (() => {
-    try {
-      return isGatewayBrowserPreviewSupported();
-    } catch {
-      // Address resolution reports malformed gateway state in the existing
-      // error surface. Do not let the availability notice mask that error.
-      return true;
-    }
-  })();
-  // Migration belongs to the restored address only. Once the user or another
-  // client navigates, returning to that address must not re-arm it.
-  const [restoredNavigation] = useState({ url: data.url, requestId: data.navigationRequestId });
-  const [migrationEligible, setMigrationEligible] = useState(true);
-  if (
-    migrationEligible &&
-    (data.url !== restoredNavigation.url ||
-      data.navigationRequestId !== restoredNavigation.requestId)
-  ) {
-    setMigrationEligible(false);
+  const currentUrl = data.url;
+  const [address, setAddress] = useState(currentUrl);
+  const [syncedUrl, setSyncedUrl] = useState(currentUrl);
+  if (currentUrl !== syncedUrl) {
+    setSyncedUrl(currentUrl);
+    setAddress(currentUrl);
   }
-  const [address, setAddress] = useState(data.url);
-  const [currentUrl, setCurrentUrl] = useState(data.url);
-  // A native preview's latest navigation (`BrowserPreviewState.navigation`),
-  // and the one `currentUrl` was chosen against, sent as the attach's
-  // `navigationBasis`: main never loads a URL chosen before the view's latest
-  // navigation, so a routine re-attach cannot undo a link, a redirect or Back.
-  const [viewNavigation, setViewNavigation] = useState<number | undefined>(undefined);
-  const [urlBasis, setUrlBasis] = useState<number | undefined>(undefined);
-  // The tracked history only drives the iframe preview: a native preview's
-  // history lives in Chromium (see `moveThroughHistory`). The refs are the
-  // authoritative cursor for the handlers that mutate it, so a second click or
-  // a submit that lands before React re-renders still reads what the previous
-  // one wrote. Those handlers write them alongside the state; otherwise they
-  // follow the committed state, never during render.
-  const [history, setHistory] = useState<string[]>(
-    () => data.history ?? (data.url ? [data.url] : []),
-  );
-  const [historyIndex, setHistoryIndex] = useState(() => data.historyIndex ?? (data.url ? 0 : -1));
-  const historyRef = useRef(history);
-  const historyIndexRef = useRef(historyIndex);
-  useLayoutEffect(() => {
-    historyRef.current = history;
-    historyIndexRef.current = historyIndex;
-  }, [history, historyIndex]);
-  const [loadRevision, setLoadRevision] = useState(0);
-  const [isLoading, setIsLoading] = useState(Boolean(data.url));
-  const [error, setError] = useState<string | null>(null);
-  const previousRefreshRequestId = useRef(refreshRequestId);
-  /** The address this tab just persisted, so its echo through `data` is not a reset. */
-  const [locallyPersistedUrl, setLocallyPersistedUrl] = useState<string | null>(null);
   const addressInputRef = useRef<HTMLInputElement | null>(null);
-  const previewHostRef = useRef<HTMLDivElement | null>(null);
-  const [previewHost, setPreviewHost] = useObservedElement(previewHostRef);
-  const nativeAttachedRef = useRef(false);
-  const [nativeState, setNativeState] = useState<BrowserPreviewState | null>(null);
-  const hasBlockingOverlay = useBlockingOverlay(nativeBrowserPreview && browserPreviewSupported, {
-    host: previewHost,
+  useAddressBarShortcut({
+    tabId,
+    environmentId,
+    isActive,
+    enabled: true,
+    inputRef: addressInputRef,
   });
-  const deferredPreviewHide = useDeferredPreviewHide();
-  const [nativeAttached, setNativeAttached] = useState(false);
-  const navigateRef = useRef<(address: string) => void>(() => undefined);
-  const currentPage = useMemo(() => currentPageForManualUrl(currentUrl), [currentUrl]);
+
+  // Saved notes stay readable here; nothing is attached, so none are taken.
   const navigateToPage = useCallback(
-    (page: WebAnnotationPageIdentity) => {
-      if (page.requiresNavigation) {
-        return {
-          ok: false,
-          message:
-            "Private parts of this page's address were removed when it was saved. Navigate to it yourself, then reselect the target.",
-        };
-      }
-      if (page.service.kind !== "port") {
-        return {
-          ok: false,
-          message:
-            page.service.kind === "service"
-              ? "This note belongs to a registered preview service. Open that service in a browser tab to view it."
-              : "The page's server is unknown. Navigate to it yourself.",
-        };
-      }
-      let host = "localhost";
-      try {
-        host = new URL(currentUrl).hostname || host;
-      } catch {
-        // Keep the loopback default.
-      }
-      navigateRef.current(`http://${host}:${page.service.port}${page.route}`);
-      return { ok: true };
-    },
-    [currentUrl],
+    (page: WebAnnotationPageIdentity) => ({
+      ok: false,
+      message:
+        page.service.kind === "service"
+          ? "This note belongs to a registered preview service. Open that service in a browser tab to view it."
+          : "This note was taken on a manual address, which no longer previews in the app. Open its service in a browser tab.",
+    }),
+    [],
   );
   const annotations = useBrowserAnnotations({
     tabId,
     environmentId,
     isActive,
     data,
-    currentPage,
-    previewAttached: nativeBrowserPreview && nativeAttached,
+    currentPage: NO_PAGE,
+    previewAttached: false,
     navigateToPage,
   });
-  const stopAnnotationForPageChange = annotations.stopSelection;
+
+  // Migration belongs to the restored address only. Once the user or another
+  // client changes it, returning to that address must not re-arm it.
+  const [restoredNavigation] = useState({ url: data.url, requestId: data.navigationRequestId });
+  const migrationEligible =
+    data.url === restoredNavigation.url &&
+    data.navigationRequestId === restoredNavigation.requestId;
 
   const conversionAttempt = useRef(0);
   const conversionMounted = useRef(false);
@@ -219,141 +124,7 @@ function ManualBrowserTab({
   }, []);
   useLayoutEffect(() => {
     conversionAttempt.current += 1;
-  }, [currentUrl, data.url, data.navigationRequestId, environmentId, viewNavigation]);
-
-  const applyNativeSurfaceState = useCallback(
-    (state: BrowserPreviewState | null) => {
-      if (!state || state.tabId !== tabId) return;
-      setNativeState(state);
-      setIsLoading(state.loading);
-      setError(state.error);
-      if (state.navigation !== undefined) {
-        if (state.navigation !== viewNavigation) conversionAttempt.current += 1;
-        setViewNavigation(state.navigation);
-      }
-    },
-    [tabId, viewNavigation],
-  );
-
-  const applyNativeState = useCallback(
-    (state: BrowserPreviewState | null) => {
-      if (!state || state.tabId !== tabId) return;
-      applyNativeSurfaceState(state);
-      const navigatedDisplayUrl = displayUrlFromNativePreview(state.url, currentUrl);
-      if (!navigatedDisplayUrl) return;
-      if (navigatedDisplayUrl === currentUrl) {
-        // Only the first basis is taken from an unchanged URL: a state sent
-        // while Back is in flight still shows the old URL but already counts
-        // the move, and pairing them would make the old URL look current.
-        if (urlBasis === undefined && state.navigation !== undefined) setUrlBasis(state.navigation);
-        return;
-      }
-      // The view has not navigated since this URL was chosen, so the state still
-      // reports the page being left (main sends one as the load starts). Adopting
-      // it would re-attach that page and cancel the load.
-      if (state.navigation !== undefined && state.navigation === urlBasis) return;
-      setMigrationEligible(false);
-      setAddress(navigatedDisplayUrl);
-      setCurrentUrl(navigatedDisplayUrl);
-      setUrlBasis(state.navigation);
-      setLocallyPersistedUrl(navigatedDisplayUrl);
-      updateTabBrowserUrl(tabId, navigatedDisplayUrl, environmentId);
-    },
-    [applyNativeSurfaceState, currentUrl, environmentId, tabId, updateTabBrowserUrl, urlBasis],
-  );
-  // The attach effect reads the latest handler through this ref: the handler
-  // changes with every navigation, and re-running the effect for that would
-  // re-attach the view for no reason.
-  const applyNativeStateRef = useRef(applyNativeState);
-  useLayoutEffect(() => {
-    applyNativeStateRef.current = applyNativeState;
-  }, [applyNativeState]);
-
-  // The persisted tab changed (restored, or another client navigated it):
-  // follow it while rendering. The echo of a navigation made here keeps the
-  // tracked history it already updated.
-  const [syncedData, setSyncedData] = useState(data);
-  if (
-    data.url !== syncedData.url ||
-    data.history !== syncedData.history ||
-    data.historyIndex !== syncedData.historyIndex
-  ) {
-    setSyncedData(data);
-    const followsLocalNavigation = locallyPersistedUrl === data.url;
-    setLocallyPersistedUrl(null);
-    setAddress(data.url);
-    setCurrentUrl(data.url);
-    if (!followsLocalNavigation) {
-      // Chosen elsewhere, now: against the latest navigation seen here.
-      setUrlBasis(viewNavigation);
-      setHistory(data.history ?? (data.url ? [data.url] : []));
-      setHistoryIndex(data.historyIndex ?? (data.url ? 0 : -1));
-      setIsLoading(Boolean(data.url));
-      setError(null);
-    }
-  }
-
-  // A refresh request reloads the page once per id. Loading state and the
-  // iframe reload are set while rendering; the effect below reaches the
-  // native preview and ends any selection.
-  const [handledRefreshRequestId, setHandledRefreshRequestId] = useState(refreshRequestId);
-  if (refreshRequestId !== handledRefreshRequestId) {
-    setHandledRefreshRequestId(refreshRequestId);
-    if (refreshRequestId > 0 && currentUrl) {
-      setIsLoading(true);
-      if (!nativeBrowserPreview) setLoadRevision((revision) => revision + 1);
-    }
-  }
-  useEffect(() => {
-    const refreshChanged = refreshRequestId !== previousRefreshRequestId.current;
-    previousRefreshRequestId.current = refreshRequestId;
-    if (refreshChanged && refreshRequestId > 0 && currentUrl) {
-      stopAnnotationForPageChange();
-      if (nativeBrowserPreview && nativeAttachedRef.current) {
-        void reloadBrowserPreview(tabId)
-          .then(applyNativeState)
-          .catch((reloadError) => {
-            setIsLoading(false);
-            setError(errorMessage(reloadError));
-          });
-      }
-    }
-  }, [
-    applyNativeState,
-    currentUrl,
-    nativeBrowserPreview,
-    refreshRequestId,
-    stopAnnotationForPageChange,
-    tabId,
-  ]);
-
-  useEffect(() => {
-    if (!nativeBrowserPreview || !browserPreviewSupported) return;
-    return commandClient().listenRaw<BrowserPreviewState>(
-      "browser-preview-state",
-      applyNativeState,
-    );
-  }, [applyNativeState, browserPreviewSupported, nativeBrowserPreview]);
-
-  useAddressBarShortcut({
-    tabId,
-    environmentId,
-    isActive,
-    enabled: browserPreviewSupported,
-    inputRef: addressInputRef,
-  });
-
-  const resolution = useMemo(() => {
-    if (!currentUrl || !browserPreviewSupported) {
-      return { resolved: null, error: null };
-    }
-    try {
-      return { resolved: resolveBrowserAddress(currentUrl, resolvePreviewUrl), error: null };
-    } catch (resolutionError) {
-      return { resolved: null, error: errorMessage(resolutionError) };
-    }
-  }, [browserPreviewSupported, currentUrl, resolvePreviewUrl]);
-  const resolved = resolution.resolved;
+  }, [data.url, data.navigationRequestId, environmentId]);
 
   // "Open as service": offered only when this tab's own environment has
   // exactly one current service on the URL's host port (see
@@ -365,10 +136,10 @@ function ManualBrowserTab({
     (state) => state.environments[environmentId]?.snapshot ?? null,
   );
   useEffect(() => {
-    if (!isActive || legacyHostPort === null || !browserPreviewSupported) return;
+    if (!isActive || legacyHostPort === null) return;
     ensurePreviewServiceSync(previewScope);
     void previewScope.store(previewServiceStore).getState().refreshEnvironment(environmentId);
-  }, [browserPreviewSupported, environmentId, isActive, legacyHostPort, previewScope]);
+  }, [environmentId, isActive, legacyHostPort, previewScope]);
   const serviceMatch = useMemo(
     () =>
       legacyUrlServiceMatch(
@@ -416,32 +187,22 @@ function ManualBrowserTab({
           return;
         }
         setServiceConversion(null);
-        stopAnnotationForPageChange();
         updateTabBrowserUrl(tabId, target, environmentId, [], -1);
       })
       .catch(() => {
         if (isCurrent()) setServiceConversion({ url, state: "error", attempt });
         else if (conversionMounted.current) clearCancelled();
       });
-  }, [
-    currentUrl,
-    environmentId,
-    previewScope,
-    serviceMatch,
-    stopAnnotationForPageChange,
-    tabId,
-    updateTabBrowserUrl,
-  ]);
-  // Stored legacy tabs migrate on their own once the tunnel can carry them. A
+  }, [currentUrl, environmentId, previewScope, serviceMatch, tabId, updateTabBrowserUrl]);
+  // Stored URL tabs migrate on their own once the tunnel can carry them. A
   // browser client or a disabled tunnel keeps the offer instead: converting
-  // there would replace a working view with a setup message or the same route.
+  // there would replace the tab with a setup message.
   // Keyed on the conversion state, not a ref, so StrictMode's cancelled first
   // attempt retries and a "changed" or "error" outcome waits for the user.
   const migrateToService =
     isActive &&
     nativeBrowserPreview &&
     migrationEligible &&
-    currentUrl === restoredNavigation.url &&
     serviceMatch !== null &&
     conversionState === null &&
     previewCapabilities?.surfaces.desktopTunnel.available === true;
@@ -449,285 +210,34 @@ function ManualBrowserTab({
     if (migrateToService) openAsService();
   }, [migrateToService, openAsService]);
 
-  const visibleError = error ?? resolution.error;
-  const visibleLoading = isLoading && resolved !== null;
-  // Direct loopback previews need their real origin for normal browser behavior
-  // (module loading, CORS, cookies, storage, and workers). Gateway previews are
-  // served from the renderer's origin, so those must remain opaque to prevent a
-  // preview from reaching the parent app or its authenticated gateway routes.
-  // They also retain the referrer because gateway routing uses it to recover
-  // runtime-built root-relative requests that cannot be statically rewritten.
-  const isDirectPreview = resolved !== null && resolved.iframeUrl === resolved.displayUrl;
-  const previewSandbox = isDirectPreview
-    ? `${OPAQUE_PREVIEW_SANDBOX} allow-same-origin`
-    : OPAQUE_PREVIEW_SANDBOX;
-  const navigate = useCallback(
-    (nextAddress: string, recordHistory = true) => {
-      let next;
-      try {
-        next = resolveBrowserAddress(nextAddress, resolvePreviewUrl);
-      } catch (navigationError) {
-        setError(errorMessage(navigationError));
-        return;
-      }
-
-      conversionAttempt.current += 1;
-      setMigrationEligible(false);
-      stopAnnotationForPageChange();
-      setError(null);
-      setAddress(next.displayUrl);
-      setCurrentUrl(next.displayUrl);
-      setUrlBasis(viewNavigation);
-      setIsLoading(true);
-      if (!nativeBrowserPreview) setLoadRevision((revision) => revision + 1);
-      setLocallyPersistedUrl(next.displayUrl);
-
-      if (recordHistory && nativeBrowserPreview) {
-        // Chromium recorded this navigation in its own history, so the address is
-        // the only durable part of it.
-        updateTabBrowserUrl(tabId, next.displayUrl, environmentId);
-      } else if (recordHistory) {
-        // Computed outside the state updater on purpose. The updater has to stay
-        // pure: React double-invokes it in development, and a second invocation
-        // that read the cursor the first one advanced would keep the forward
-        // entries this navigation is supposed to truncate.
-        const truncated = historyRef.current.slice(0, historyIndexRef.current + 1);
-        if (truncated[truncated.length - 1] !== next.displayUrl) {
-          truncated.push(next.displayUrl);
-        }
-        const bounded = boundBrowserHistory(truncated, truncated.length - 1);
-        historyRef.current = bounded.history;
-        historyIndexRef.current = bounded.historyIndex;
-        setHistory(bounded.history);
-        setHistoryIndex(bounded.historyIndex);
-        updateTabBrowserUrl(
-          tabId,
-          next.displayUrl,
-          environmentId,
-          bounded.history,
-          bounded.historyIndex,
-        );
-      }
-
-      if (nativeBrowserPreview && nativeAttachedRef.current) {
-        void navigateBrowserPreview(tabId, next.iframeUrl)
-          .then(applyNativeState)
-          .catch((navigationError) => {
-            setIsLoading(false);
-            setError(errorMessage(navigationError));
-          });
-      }
-    },
-    [
-      applyNativeState,
-      environmentId,
-      nativeBrowserPreview,
-      resolvePreviewUrl,
-      stopAnnotationForPageChange,
-      tabId,
-      updateTabBrowserUrl,
-      viewNavigation,
-    ],
-  );
-
-  useLayoutEffect(() => {
-    navigateRef.current = navigate;
-  }, [navigate]);
-
+  // A typed address is resolved by the backend in this environment, exactly
+  // as a service tab's address bar does: a service, a choice, or an offer to
+  // register the port. It never loads as a raw host port.
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      navigate(address);
+      const url = address.trim();
+      if (!url) return;
+      updateTabBrowserUrl(
+        tabId,
+        formatPreviewIntentUri({ environmentId, source: "address-bar", url }),
+        environmentId,
+        [],
+        -1,
+      );
     },
-    [address, navigate],
+    [address, environmentId, tabId, updateTabBrowserUrl],
   );
 
-  const moveThroughHistory = useCallback(
-    (offset: -1 | 1) => {
-      conversionAttempt.current += 1;
-      if (nativeBrowserPreview) {
-        stopAnnotationForPageChange();
-        // Chromium owns this preview's history. The tracked array only records
-        // address-bar navigations, so an in-preview link click already made the
-        // two diverge; forcing a tracked address back onto the surface would
-        // re-attach it as a fresh load and destroy the real forward entries.
-        // Only the RPC's own surface fields are applied here — the URL is
-        // reconciled by the state event that follows the navigation commit, which
-        // is also what persists it.
-        const action = offset === -1 ? goBackBrowserPreview : goForwardBrowserPreview;
-        void action(tabId)
-          .then(applyNativeSurfaceState)
-          .catch((navigationError) => {
-            setError(errorMessage(navigationError));
-          });
-        return;
-      }
-      const nextIndex = historyIndexRef.current + offset;
-      const nextAddress = historyRef.current[nextIndex];
-      if (!nextAddress) return;
-      historyIndexRef.current = nextIndex;
-      setHistoryIndex(nextIndex);
-      updateTabBrowserUrl(tabId, nextAddress, environmentId, historyRef.current, nextIndex);
-      navigate(nextAddress, false);
-    },
-    [
-      applyNativeSurfaceState,
+  const openInBrowser = useCallback(() => {
+    void openLinkExternally({
       environmentId,
-      nativeBrowserPreview,
-      navigate,
-      stopAnnotationForPageChange,
-      tabId,
-      updateTabBrowserUrl,
-    ],
-  );
-
-  const reload = useCallback(() => {
-    if (!currentUrl) return;
-    stopAnnotationForPageChange();
-    setIsLoading(true);
-    if (nativeBrowserPreview && nativeAttachedRef.current) {
-      void reloadBrowserPreview(tabId)
-        .then(applyNativeState)
-        .catch((reloadError) => {
-          setIsLoading(false);
-          setError(errorMessage(reloadError));
-        });
-      return;
-    }
-    setLoadRevision((revision) => revision + 1);
-  }, [applyNativeState, currentUrl, nativeBrowserPreview, stopAnnotationForPageChange, tabId]);
-
-  const { claim: claimPreviewHide, release: releasePreviewHide } = deferredPreviewHide;
-  useEffect(() => {
-    if (!nativeBrowserPreview) return;
-    let disposed = false;
-    const hideNativePreview = (reportFailure: boolean) => {
-      void setBrowserPreviewVisible(tabId, false).catch((visibilityError) => {
-        if (disposed || !reportFailure) return;
-        setIsLoading(false);
-        setError(errorMessage(visibilityError));
-      });
-    };
-    // The previous run's cleanup deferred its hide so a re-run that keeps the
-    // view showing does not flash it away. A re-run that must hide it hides
-    // now rather than after the attach below comes back from main.
-    claimPreviewHide(tabId);
-    const visible = isActive && !hasBlockingOverlay && !annotations.previewHidden;
-    const host = previewHostRef.current;
-    if (!browserPreviewSupported || !host || !resolved) {
-      hideNativePreview(true);
-      return () => {
-        disposed = true;
-      };
-    }
-    if (!visible) hideNativePreview(false);
-
-    let frame = 0;
-    const sync = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const rect = host.getBoundingClientRect();
-        const bounds: BrowserPreviewBounds = {
-          x: rect.left,
-          y: rect.top,
-          width: rect.width,
-          height: rect.height,
-        };
-        void attachBrowserPreview({
-          tabId,
-          url: resolved.iframeUrl,
-          environmentId,
-          ...(urlBasis === undefined ? {} : { navigationBasis: urlBasis }),
-          bounds,
-          visible,
-          // Another node's tab in the window's tree: that node's preview runtime.
-          ...previewNodeFor(previewScope),
-        })
-          .then((state) => {
-            if (disposed) return;
-            nativeAttachedRef.current = true;
-            setNativeAttached(true);
-            applyNativeStateRef.current(state);
-          })
-          .catch((attachError) => {
-            if (disposed) return;
-            // A failed attach applied no visibility: the view may still be
-            // showing from the previous run, whose hide this run claimed.
-            if (!visible) hideNativePreview(false);
-            setIsLoading(false);
-            setError(errorMessage(attachError));
-          });
-      });
-    };
-
-    const observer = new ResizeObserver(sync);
-    observer.observe(host);
-    window.addEventListener("resize", sync);
-    window.addEventListener("scroll", sync, true);
-    sync();
-    return () => {
-      disposed = true;
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-      window.removeEventListener("resize", sync);
-      window.removeEventListener("scroll", sync, true);
-      releasePreviewHide(tabId, () => hideNativePreview(false));
-    };
-  }, [
-    previewScope,
-    annotations.previewHidden,
-    browserPreviewSupported,
-    claimPreviewHide,
-    releasePreviewHide,
-    environmentId,
-    hasBlockingOverlay,
-    isActive,
-    nativeBrowserPreview,
-    resolved,
-    tabId,
-    urlBasis,
-  ]);
-
-  const canGoBack = nativeBrowserPreview ? Boolean(nativeState?.canGoBack) : historyIndex > 0;
-  const canGoForward = nativeBrowserPreview
-    ? Boolean(nativeState?.canGoForward)
-    : historyIndex >= 0 && historyIndex < history.length - 1;
-  const isIosClient = isWkWebViewClient();
-
-  if (!browserPreviewSupported) {
-    // Saved feedback stays readable and reviewable without a preview.
-    return (
-      <div
-        className={cn(
-          "@container/browser absolute inset-0 flex min-w-0 flex-col overflow-hidden bg-background",
-          !isActive && "hidden",
-        )}
-      >
-        <div className="flex shrink-0 justify-end border-b border-border/80 bg-muted/25 px-2 py-1.5">
-          <AnnotationsButton annotations={annotations} />
-        </div>
-        <AnnotatedPreviewArea annotations={annotations}>
-          <div className="absolute inset-0 grid place-items-center p-6">
-            <div className="w-full min-w-0 max-w-sm text-center">
-              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-muted/30 shadow-sm">
-                <Smartphone className="h-6 w-6 text-muted-foreground" />
-              </div>
-              <h2 className="text-base font-semibold text-foreground">
-                {isIosClient
-                  ? "Browser tabs aren’t supported on iOS"
-                  : "Browser tabs aren’t supported here"}
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                {previewPublicationAvailable
-                  ? "Manual addresses need the desktop app. Open a registered service from the environment's browser button instead; it opens in its own browser tab on your private network."
-                  : "Open this browser tab in the Orkestrator desktop app to view the local development server."}
-              </p>
-            </div>
-          </div>
-        </AnnotatedPreviewArea>
-      </div>
-    );
-  }
+      sourceTabId: tabId,
+      url: currentUrl,
+      scope: previewScope,
+      unresolved: "gateway-proxy",
+    });
+  }, [currentUrl, environmentId, previewScope, tabId]);
 
   return (
     <div
@@ -737,66 +247,19 @@ function ManualBrowserTab({
       )}
     >
       <div className={BROWSER_TOOLBAR_CLASS}>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 shrink-0"
-          aria-label="Back"
-          disabled={!canGoBack}
-          onClick={() => moveThroughHistory(-1)}
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 shrink-0"
-          aria-label="Forward"
-          disabled={!canGoForward}
-          onClick={() => moveThroughHistory(1)}
-        >
-          <ArrowRight className="h-4 w-4" />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 shrink-0"
-          aria-label="Reload preview"
-          disabled={!resolved}
-          onClick={reload}
-        >
-          <RefreshCw className={cn("h-4 w-4", visibleLoading && "animate-spin")} />
-        </Button>
-
         <form className={BROWSER_ADDRESS_FORM_CLASS} onSubmit={handleSubmit}>
-          <div
-            className={cn(
-              "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-input-surface shadow-sm transition-colors focus-within:border-ring",
-              visibleError ? "border-destructive/70" : "border-border",
-            )}
-          >
-            <div className="hidden h-full shrink-0 items-center gap-1.5 border-r border-border/70 px-2.5 text-[11px] font-medium text-muted-foreground @lg/browser:flex">
-              <Server className="h-3.5 w-3.5 text-primary" />
-              Backend
-            </div>
+          <div className="flex h-8 min-w-0 flex-1 items-center rounded-md border border-border bg-input-surface shadow-sm transition-colors focus-within:border-ring">
             <input
               ref={addressInputRef}
               value={address}
               onChange={(event) => setAddress(event.target.value)}
               className={BROWSER_ADDRESS_INPUT_CLASS}
               aria-label="Browser address"
-              aria-invalid={Boolean(visibleError)}
               placeholder="localhost:3000"
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
             />
-            {visibleLoading && (
-              <Loader2 className="mr-2 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
-            )}
           </div>
           <Button type="submit" size="sm" className="ml-1.5 h-8 shrink-0 px-3">
             Go
@@ -804,26 +267,6 @@ function ManualBrowserTab({
         </form>
         <div className={BROWSER_TOOLBAR_ACTIONS_CLASS}>
           <AnnotationsButton annotations={annotations} />
-          {nativeBrowserPreview && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0"
-              aria-label="Open preview DevTools"
-              title="Open preview DevTools"
-              disabled={!resolved || !nativeAttached}
-              onClick={() => {
-                void openBrowserPreviewDevTools(tabId)
-                  .then(applyNativeState)
-                  .catch((devToolsError) => {
-                    setError(errorMessage(devToolsError));
-                  });
-              }}
-            >
-              <Code2 className="h-4 w-4" />
-            </Button>
-          )}
         </div>
       </div>
 
@@ -851,57 +294,41 @@ function ManualBrowserTab({
           </Button>
         </div>
       )}
-      {visibleError && (
-        <div
-          role="alert"
-          className="min-w-0 shrink-0 overflow-x-hidden border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-xs text-destructive break-words [overflow-wrap:anywhere]"
-        >
-          {visibleError}
-        </div>
-      )}
 
       <AnnotatedPreviewArea annotations={annotations}>
-        {resolved && nativeBrowserPreview ? (
-          <div
-            ref={setPreviewHost}
-            data-native-browser-preview={tabId}
-            className="absolute inset-0 block h-full min-h-0 w-full min-w-0 max-w-full bg-background"
-          />
-        ) : resolved ? (
-          <iframe
-            key={`${resolved.iframeUrl}:${loadRevision}`}
-            src={resolved.iframeUrl}
-            data-load-revision={loadRevision}
-            title="Backend browser preview"
-            className="absolute inset-0 block h-full min-h-0 w-full min-w-0 max-w-full border-0 bg-background [color-scheme:dark]"
-            sandbox={previewSandbox}
-            referrerPolicy={isDirectPreview ? "no-referrer" : undefined}
-            onLoad={() => {
-              // Cross-origin iframe routes cannot be read here, but a new
-              // document must still invalidate a pending conversion offer.
-              conversionAttempt.current += 1;
-              setIsLoading(false);
-            }}
-          />
-        ) : (
-          <div className="absolute inset-0 grid place-items-center bg-[radial-gradient(circle_at_center,hsl(var(--muted))_0,transparent_65%)] p-6 text-center">
-            <div className="w-full min-w-0 max-w-sm">
-              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-background shadow-sm">
-                <Globe2 className="h-6 w-6 text-primary" />
-              </div>
-              <h2 className="text-base font-semibold text-foreground">Preview a backend service</h2>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                Enter a local address such as{" "}
-                <span className="font-mono text-foreground">localhost:3000</span>. The request runs
-                through the backend machine.
-              </p>
-              <div className="mt-4 inline-flex items-center gap-1.5 rounded-full border border-border bg-background/80 px-3 py-1 text-xs text-muted-foreground shadow-sm">
-                <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-                Authenticated backend route
-              </div>
+        <div className="absolute inset-0 grid place-items-center bg-[radial-gradient(circle_at_center,hsl(var(--muted))_0,transparent_65%)] p-6 text-center">
+          <div className="w-full min-w-0 max-w-sm">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-background shadow-sm">
+              <Globe2 className="h-6 w-6 text-primary" />
             </div>
+            {currentUrl ? (
+              <>
+                <h2 className="text-base font-semibold text-foreground break-words [overflow-wrap:anywhere]">
+                  {currentUrl}
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  This address is not a preview service, so it opens in your browser. Enter it above
+                  to open it as a service or register its port.
+                </p>
+                <Button type="button" className="mt-4 gap-2" onClick={openInBrowser}>
+                  <ExternalLink className="h-4 w-4" />
+                  Open in browser
+                </Button>
+              </>
+            ) : (
+              <>
+                <h2 className="text-base font-semibold text-foreground">
+                  Preview a backend service
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  Enter a local address such as{" "}
+                  <span className="font-mono text-foreground">localhost:3000</span>. It opens as the
+                  environment's preview service on that port, or offers to register one.
+                </p>
+              </>
+            )}
           </div>
-        )}
+        </div>
       </AnnotatedPreviewArea>
     </div>
   );

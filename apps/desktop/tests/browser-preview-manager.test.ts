@@ -1,8 +1,14 @@
 import { APP_SHORTCUTS, type AppShortcutId } from "@orkestrator/protocol/keyboard-shortcuts";
 import { EventEmitter } from "node:events";
 import { describe, expect, mock, test } from "bun:test";
-import { BrowserPreviewManager } from "../electron/browser-preview-manager";
-import { nodePreviewUrl } from "../electron/node-previews";
+import type {
+  BrowserPreviewAttachInput,
+  BrowserPreviewState,
+} from "@orkestrator/protocol/browser-preview";
+import {
+  BrowserPreviewManager,
+  type BrowserPreviewServiceTransport,
+} from "../electron/browser-preview-manager";
 import type { ContextMenuParams, MenuItemConstructorOptions } from "electron";
 
 class FakeWebContents extends EventEmitter {
@@ -61,10 +67,15 @@ class FakeWebContents extends EventEmitter {
   }
 }
 
+/** A test attach names the page by URL; the harness turns it into a service attach. */
+type UrlAttachInput = Omit<BrowserPreviewAttachInput, "service"> & {
+  url?: unknown;
+  service?: BrowserPreviewAttachInput["service"];
+};
+
 function createHarness(
   options: {
     loadURLImplementation?: (url: string) => Promise<void>;
-    resolveAddress?: (url: string) => string;
   } = {},
 ) {
   const createHarnessOptions = options;
@@ -126,9 +137,50 @@ function createHarness(
       return { popup };
     }),
   };
-  const manager = new BrowserPreviewManager({
+  // Every preview is a service preview. Tests attach a page by URL: the fake
+  // service is served at that URL's origin and its application address is
+  // the URL itself, so a link or navigation stays in scope only on that origin.
+  let serviceOrigin: string | null = null;
+  const originOf = (url: string) => {
+    try {
+      return new URL(url).origin;
+    } catch {
+      return null;
+    }
+  };
+  const inService = (url: string) => serviceOrigin !== null && originOf(url) === serviceOrigin;
+  const serviceKey = () => `backend-1:${serviceOrigin}`;
+  let nextServiceUrl = "";
+  const transport: BrowserPreviewServiceTransport = {
+    acquire: async () => ({
+      serviceKey: serviceKey(),
+      partition: `persist:${serviceKey()}`,
+      url: nextServiceUrl,
+    }),
+    release: () => undefined,
+    scopeFor: (url) => (inService(url) ? `service:${serviceKey()}` : null),
+    describe: (url) => {
+      if (!inService(url)) return null;
+      const parsed = new URL(url);
+      return {
+        serviceKey: serviceKey(),
+        serviceId: "service-web",
+        path: `${parsed.pathname}${parsed.search}${parsed.hash}`,
+        displayUrl: url,
+      };
+    },
+    target: () => ({
+      backendInstanceId: "backend-1",
+      environmentId: "env-1",
+      serviceId: "service-web",
+    }),
+    transportState: () => ({ mode: "desktop-tunnel", state: "ready" }),
+    sessionFor: (partition) => ({ id: partition }) as never,
+    resetSiteData: async () => undefined,
+  };
+  const realManager = new BrowserPreviewManager({
     WebContentsViewCtor: FakeView as never,
-    browserSession: { id: "preview-session" } as never,
+    transport,
     menu,
     getWindow: () => (windowAvailable ? (currentWindow as never) : null),
     emitState,
@@ -137,8 +189,28 @@ function createHarness(
     writeClipboardText,
     focusAddressBar,
     requestPreviewShortcut,
-    ...(options.resolveAddress ? { resolveAddress: options.resolveAddress } : {}),
   });
+  const realAttach = realManager.attach.bind(realManager);
+  const manager = Object.assign(realManager, {
+    attach: (value: UrlAttachInput) => {
+      const { url, ...rest } = value;
+      if (typeof url !== "string") return realAttach(value as BrowserPreviewAttachInput);
+      const parsed = new URL(url);
+      serviceOrigin = parsed.origin;
+      nextServiceUrl = url;
+      return realAttach({
+        ...rest,
+        service: {
+          backendInstanceId: "backend-1",
+          environmentId: "env-1",
+          serviceId: "service-web",
+          path: `${parsed.pathname}${parsed.search}${parsed.hash}`,
+        },
+      });
+    },
+  }) as unknown as Omit<BrowserPreviewManager, "attach"> & {
+    attach(value: UrlAttachInput): Promise<BrowserPreviewState>;
+  };
   return {
     manager,
     views,
@@ -258,7 +330,7 @@ describe("BrowserPreviewManager", () => {
     expect(preventDefault).toHaveBeenCalledTimes(1);
   });
 
-  test("creates a sandboxed view in the dedicated session and attaches it to the window", async () => {
+  test("creates a sandboxed view in its service's own session and attaches it to the window", async () => {
     const harness = createHarness();
 
     const state = await harness.manager.attach(input);
@@ -272,7 +344,7 @@ describe("BrowserPreviewManager", () => {
         sandbox: true,
         devTools: true,
         disableDialogs: true,
-        session: { id: "preview-session" },
+        session: { id: "persist:backend-1:http://localhost:3000" },
       },
     });
     expect(harness.contentView.addChildView).toHaveBeenCalledWith(view);
@@ -315,35 +387,6 @@ describe("BrowserPreviewManager", () => {
     expect(view.webContents.openDevTools).toHaveBeenCalledWith({
       mode: "detach",
     });
-  });
-
-  test("keeps the environment a legacy view was attached for, and never moves a view between environments (M2)", async () => {
-    const harness = createHarness();
-    await harness.manager.attach({ ...input, environmentId: "env-a" });
-    const first = harness.views[0]!;
-    expect(harness.manager.environmentForWebContents(first.webContents.id)).toBe("env-a");
-
-    // Resizes and in-tab navigation keep the view and its environment.
-    await harness.manager.attach({
-      ...input,
-      environmentId: "env-a",
-      bounds: { x: 1, y: 2, width: 3, height: 4 },
-    });
-    await harness.manager.navigate(input.tabId, "http://localhost:3000/next");
-    expect(harness.views).toHaveLength(1);
-    expect(harness.manager.environmentForWebContents(first.webContents.id)).toBe("env-a");
-
-    // A different environment gets a fresh view, so no document of the old one keeps access.
-    await harness.manager.attach({ ...input, environmentId: "env-b" });
-    expect(harness.views).toHaveLength(2);
-    const second = harness.views[1]!;
-    expect(harness.manager.environmentForWebContents(second.webContents.id)).toBe("env-b");
-    expect(harness.manager.environmentForWebContents(first.webContents.id)).toBeNull();
-
-    // An older renderer names none.
-    const other = await harness.manager.attach({ ...input, tabId: "browser-2" });
-    expect(other.tabId).toBe("browser-2");
-    expect(harness.manager.environmentForWebContents(harness.views[2]!.webContents.id)).toBeNull();
   });
 
   test("offers Interrogate and inspects the clicked element in that preview", async () => {
@@ -725,7 +768,7 @@ describe("BrowserPreviewManager", () => {
     expect(harness.window.webContents.focus).not.toHaveBeenCalled();
   });
 
-  test("offers link actions that open a preview tab, the external browser, and the clipboard", async () => {
+  test("opens a same-service link as a service tab and copies its application address", async () => {
     const harness = createHarness();
     await harness.manager.attach(input);
     const contents = harness.views[0]!.webContents;
@@ -750,183 +793,17 @@ describe("BrowserPreviewManager", () => {
     expect(harness.emitOpenLink).toHaveBeenCalledWith({
       tabId: input.tabId,
       url: linkURL,
+      service: {
+        backendInstanceId: "backend-1",
+        environmentId: "env-1",
+        serviceId: "service-web",
+        path: "/docs?q=1#intro",
+      },
     });
-    expect(harness.openExternal).toHaveBeenCalledWith(linkURL);
+    // Without a private origin a service link has no external address.
+    expect(openExternal?.enabled).toBe(false);
+    expect(harness.openExternal).not.toHaveBeenCalled();
     expect(harness.writeClipboardText).toHaveBeenCalledWith(linkURL);
-  });
-
-  test("maps gateway preview links back to backend-local addresses for new tabs", async () => {
-    const harness = createHarness();
-    await harness.manager.attach({
-      ...input,
-      url: "https://desk.example/__orkestrator/browser/loopback/3000/",
-    });
-    const contents = harness.views[0]!.webContents;
-    const linkURL = "https://desk.example/__orkestrator/browser/loopback/3000/docs?q=1#intro";
-
-    contents.emit("context-menu", {}, createContextMenuParams({ linkURL }));
-    const openInTab = harness.menuTemplates[0]!.find(
-      (item) => item.label === "Open Link in New Tab",
-    );
-    openInTab?.click?.(undefined as never, undefined as never, undefined as never);
-
-    expect(harness.emitOpenLink).toHaveBeenCalledWith({
-      tabId: input.tabId,
-      url: "http://localhost:3000/docs?q=1#intro",
-    });
-  });
-
-  test("keeps network-path-looking gateway suffixes on the loopback host", async () => {
-    const harness = createHarness();
-    await harness.manager.attach({
-      ...input,
-      url: "https://desk.example/__orkestrator/browser/loopback/3000/",
-    });
-    const contents = harness.views[0]!.webContents;
-    const linkURL =
-      "https://desk.example/__orkestrator/browser/loopback/3000//evil.example/p?q=1#safe";
-
-    contents.emit("context-menu", {}, createContextMenuParams({ linkURL }));
-    const openInTab = harness.menuTemplates[0]!.find(
-      (item) => item.label === "Open Link in New Tab",
-    );
-
-    expect(openInTab?.enabled).toBe(true);
-    openInTab?.click?.(undefined as never, undefined as never, undefined as never);
-    expect(harness.emitOpenLink).toHaveBeenCalledWith({
-      tabId: input.tabId,
-      url: "http://localhost:3000//evil.example/p?q=1#safe",
-    });
-  });
-
-  test("maps a same-origin gateway root without a trailing slash", async () => {
-    const harness = createHarness();
-    await harness.manager.attach({
-      ...input,
-      url: "https://desk.example/__orkestrator/browser/loopback/3000",
-    });
-    const contents = harness.views[0]!.webContents;
-
-    contents.emit(
-      "context-menu",
-      {},
-      createContextMenuParams({
-        linkURL: "https://desk.example/__orkestrator/browser/loopback/3000?q=1#root",
-      }),
-    );
-    const openInTab = harness.menuTemplates[0]!.find(
-      (item) => item.label === "Open Link in New Tab",
-    );
-    openInTab?.click?.(undefined as never, undefined as never, undefined as never);
-
-    expect(harness.emitOpenLink).toHaveBeenCalledWith({
-      tabId: input.tabId,
-      url: "http://localhost:3000/?q=1#root",
-    });
-  });
-
-  test("does not translate gateway-shaped links outside the source gateway origin", async () => {
-    const gatewayHarness = createHarness();
-    await gatewayHarness.manager.attach({
-      ...input,
-      url: "https://desk.example/__orkestrator/browser/loopback/3000/",
-    });
-    const gatewayContents = gatewayHarness.views[0]!.webContents;
-    const mismatchedLink = "https://other.example/__orkestrator/browser/loopback/3000/docs";
-
-    gatewayContents.emit("context-menu", {}, createContextMenuParams({ linkURL: mismatchedLink }));
-
-    expect(
-      gatewayHarness.menuTemplates[0]!.find((item) => item.label === "Open Link in New Tab")
-        ?.enabled,
-    ).toBe(false);
-    expect(
-      gatewayHarness.menuTemplates[0]!.find((item) => item.label === "Open in External Browser")
-        ?.enabled,
-    ).toBe(true);
-
-    const loopbackHarness = createHarness();
-    await loopbackHarness.manager.attach(input);
-    loopbackHarness.views[0]!.webContents.emit(
-      "context-menu",
-      {},
-      createContextMenuParams({
-        linkURL: "https://desk.example/__orkestrator/browser/loopback/3000/docs",
-      }),
-    );
-
-    expect(
-      loopbackHarness.menuTemplates[0]!.find((item) => item.label === "Open Link in New Tab")
-        ?.enabled,
-    ).toBe(false);
-  });
-
-  test("validates gateway port boundaries without throwing from context-menu handling", async () => {
-    const harness = createHarness();
-    await harness.manager.attach({
-      ...input,
-      url: "https://desk.example/__orkestrator/browser/loopback/65535/",
-    });
-    const contents = harness.views[0]!.webContents;
-
-    expect(() => {
-      contents.emit(
-        "context-menu",
-        {},
-        createContextMenuParams({
-          linkURL: "https://desk.example/__orkestrator/browser/loopback/65536/docs",
-        }),
-      );
-    }).not.toThrow();
-    expect(
-      harness.menuTemplates[0]!.find((item) => item.label === "Open Link in New Tab")?.enabled,
-    ).toBe(false);
-
-    contents.emit(
-      "context-menu",
-      {},
-      createContextMenuParams({
-        linkURL: "https://desk.example/__orkestrator/browser/loopback/65535/docs",
-      }),
-    );
-    const validAction = harness.menuTemplates[1]!.find(
-      (item) => item.label === "Open Link in New Tab",
-    );
-    expect(validAction?.enabled).toBe(true);
-    validAction?.click?.(undefined as never, undefined as never, undefined as never);
-    expect(harness.emitOpenLink).toHaveBeenCalledWith({
-      tabId: input.tabId,
-      url: "http://localhost:65535/docs",
-    });
-
-    const invalidHarness = createHarness();
-    await expect(
-      invalidHarness.manager.attach({
-        ...input,
-        url: "https://desk.example/__orkestrator/browser/loopback/65536/",
-      }),
-    ).rejects.toThrow("loopback or authenticated gateway-preview URL");
-  });
-
-  test("supports IPv6 loopback links", async () => {
-    const harness = createHarness();
-    await harness.manager.attach({
-      ...input,
-      url: "http://[::1]:3000/",
-    });
-    const contents = harness.views[0]!.webContents;
-    const linkURL = "http://[::1]:3000/docs?q=1#ipv6";
-
-    contents.emit("context-menu", {}, createContextMenuParams({ linkURL }));
-    const openInTab = harness.menuTemplates[0]!.find(
-      (item) => item.label === "Open Link in New Tab",
-    );
-    openInTab?.click?.(undefined as never, undefined as never, undefined as never);
-
-    expect(harness.emitOpenLink).toHaveBeenCalledWith({
-      tabId: input.tabId,
-      url: linkURL,
-    });
   });
 
   test("keeps ordinary external HTTPS links external-only and malformed links disabled", async () => {
@@ -997,7 +874,7 @@ describe("BrowserPreviewManager", () => {
     expect(allowed.preventDefault).not.toHaveBeenCalled();
     expect(blocked.preventDefault).toHaveBeenCalledTimes(1);
     await expect(harness.manager.navigate(input.tabId, "https://example.com/")).rejects.toThrow(
-      "loopback or authenticated gateway-preview URL",
+      "navigate by service path",
     );
   });
 
@@ -1050,12 +927,9 @@ describe("BrowserPreviewManager", () => {
     ).toBe(false);
   });
 
-  test("accepts gateway-preview URLs and destroys owned webContents explicitly", async () => {
+  test("destroys owned webContents explicitly", async () => {
     const harness = createHarness();
-    await harness.manager.attach({
-      ...input,
-      url: "https://desk.example/__orkestrator/browser/loopback/3000/",
-    });
+    await harness.manager.attach(input);
     const view = harness.views[0]!;
 
     harness.manager.destroy(input.tabId);
@@ -1067,52 +941,11 @@ describe("BrowserPreviewManager", () => {
     expect(view.webContents.destroyed).toBe(true);
   });
 
-  test("another node's runtime loads every address-bar URL through that node's gateway (4006 Finding 1)", async () => {
-    let base: string | null = "https://leaf.example";
-    const harness = createHarness({ resolveAddress: (url) => nodePreviewUrl(base, url) });
-    await harness.manager.attach(input);
-    const view = harness.views[0]!;
-    expect(view.webContents.loadURL).toHaveBeenLastCalledWith(
-      "https://leaf.example/__orkestrator/browser/loopback/3000/",
-    );
-    // A re-attach with the same address loads nothing new.
-    await harness.manager.attach(input);
-    expect(view.webContents.loadURL).toHaveBeenCalledTimes(1);
-    await harness.manager.navigate(input.tabId, "http://localhost:3000/next?q=1#h");
-    expect(view.webContents.loadURL).toHaveBeenLastCalledWith(
-      "https://leaf.example/__orkestrator/browser/loopback/3000/next?q=1#h",
-    );
-    // The node scope moved to another route: the next attach follows it.
-    base = "https://leaf-direct.example";
-    await harness.manager.attach({ ...input, url: "http://localhost:3000/next?q=1#h" });
-    expect(view.webContents.loadURL).toHaveBeenLastCalledWith(
-      "https://leaf-direct.example/__orkestrator/browser/loopback/3000/next?q=1#h",
-    );
-    // No route while the scope is parked: refused, never this computer's page.
-    base = null;
-    await expect(harness.manager.navigate(input.tabId, "http://localhost:4000/")).rejects.toThrow(
-      "reconnecting",
-    );
-    expect(view.webContents.loadURL).toHaveBeenCalledTimes(3);
-  });
-
-  test("rejects invalid tab IDs, URLs, and non-finite bounds", async () => {
+  test("rejects invalid tab IDs and non-finite bounds", async () => {
     for (const tabId of ["", "x".repeat(257), 42] as unknown[]) {
       const harness = createHarness();
       await expect(harness.manager.attach({ ...input, tabId: tabId as string })).rejects.toThrow(
         "browser preview tab ID",
-      );
-    }
-
-    for (const url of [
-      "not a URL",
-      "https://localhost:3000/",
-      "ftp://localhost:3000/",
-      "https://desk.example/__orkestrator/browser/loopback/0000/",
-    ]) {
-      const harness = createHarness();
-      await expect(harness.manager.attach({ ...input, url })).rejects.toThrow(
-        "loopback or authenticated gateway-preview URL",
       );
     }
 
@@ -1125,7 +958,7 @@ describe("BrowserPreviewManager", () => {
     ).rejects.toThrow("finite browser preview bounds");
   });
 
-  test("normalizes bounds, hides zero-area previews, and reuses or reloads attached URLs", async () => {
+  test("normalizes bounds, hides zero-area previews, and reuses or reloads attached paths", async () => {
     const harness = createHarness();
     await harness.manager.attach({
       ...input,
@@ -1145,11 +978,12 @@ describe("BrowserPreviewManager", () => {
 
     const changed = await harness.manager.attach({
       ...input,
-      url: "http://127.0.0.1:4000/next",
+      url: "http://localhost:3000/next",
       visible: false,
     });
-    expect(view.webContents.loadURL).toHaveBeenLastCalledWith("http://127.0.0.1:4000/next");
-    expect(changed.url).toBe("http://127.0.0.1:4000/next");
+    expect(harness.views).toHaveLength(1);
+    expect(view.webContents.loadURL).toHaveBeenLastCalledWith("http://localhost:3000/next");
+    expect(changed.url).toBe("http://localhost:3000/next");
     expect(view.visible).toBe(false);
   });
 
@@ -1427,55 +1261,10 @@ describe("BrowserPreviewManager", () => {
     expect(contents.navigationHistory.goForward).not.toHaveBeenCalled();
     expect(back.error).toBe("Connection failed");
     expect(forward.error).toBe("Connection failed");
-    expect(contents.reload).toHaveBeenCalledTimes(1);
+    // A reload retries the requested application URL, even if nothing committed.
+    expect(contents.loadURL).toHaveBeenCalledTimes(2);
+    expect(contents.loadURL).toHaveBeenLastCalledWith(input.url);
     expect(reloaded.error).toBeNull();
-  });
-
-  test("authorizes validated back and forward destinations across preview scopes", async () => {
-    const harness = createHarness();
-    await harness.manager.attach({
-      ...input,
-      url: "http://localhost:4000/current",
-    });
-    const contents = harness.views[0]!.webContents;
-    contents.canGoBackValue = true;
-    contents.canGoForwardValue = true;
-    contents.activeIndex = 1;
-    contents.historyEntries = [
-      { title: "Port 3000", url: "http://localhost:3000/previous" },
-      { title: "Port 4000", url: "http://localhost:4000/current" },
-      {
-        title: "Gateway 5000",
-        url: "https://desk.example/__orkestrator/browser/loopback/5000/next",
-      },
-    ];
-
-    harness.manager.goBack(input.tabId);
-    contents.currentUrl = contents.historyEntries[0]!.url;
-    contents.emit("did-navigate", {}, contents.currentUrl);
-    const backAllowed = {
-      url: "http://localhost:3000/dashboard",
-      preventDefault: mock(() => undefined),
-    };
-    const oldScopeBlocked = {
-      url: "http://localhost:4000/dashboard",
-      preventDefault: mock(() => undefined),
-    };
-    contents.emit("will-navigate", backAllowed);
-    contents.emit("will-navigate", oldScopeBlocked);
-    expect(backAllowed.preventDefault).not.toHaveBeenCalled();
-    expect(oldScopeBlocked.preventDefault).toHaveBeenCalledTimes(1);
-
-    contents.activeIndex = 1;
-    harness.manager.goForward(input.tabId);
-    contents.currentUrl = contents.historyEntries[2]!.url;
-    contents.emit("did-navigate", {}, contents.currentUrl);
-    const gatewayAllowed = {
-      url: "https://desk.example/__orkestrator/browser/loopback/5000/dashboard",
-      preventDefault: mock(() => undefined),
-    };
-    contents.emit("will-navigate", gatewayAllowed);
-    expect(gatewayAllowed.preventDefault).not.toHaveBeenCalled();
   });
 
   test("blocks invalid history destinations without invoking Chromium navigation", async () => {
@@ -1564,87 +1353,6 @@ describe("BrowserPreviewManager", () => {
         url: "http://localhost:3000/committed#section",
       }),
     );
-  });
-
-  test("a re-attach chosen before a link or an in-page route never undoes it", async () => {
-    const harness = createHarness();
-    await harness.manager.attach(input);
-    const contents = harness.views[0]!.webContents;
-    contents.emit("did-navigate", {}, input.url);
-    const seen = (harness.emitState.mock.calls.at(-1) as unknown as [{ navigation: number }])[0];
-    expect(seen.navigation).toBe(1);
-
-    // A link commits; the renderer's next bounds sync still carries the old URL.
-    contents.currentUrl = "http://localhost:3000/next";
-    contents.emit("did-navigate", {}, contents.currentUrl);
-    const stale = await harness.manager.attach({ ...input, navigationBasis: seen.navigation });
-    expect(contents.loadURL).toHaveBeenCalledTimes(1);
-    expect(stale).toMatchObject({ url: "http://localhost:3000/next", navigation: 2 });
-
-    // The same for an in-page route.
-    contents.currentUrl = "http://localhost:3000/next#section";
-    contents.emit("did-navigate-in-page", {}, contents.currentUrl, true);
-    await harness.manager.attach({
-      ...input,
-      url: "http://localhost:3000/next",
-      navigationBasis: 2,
-    });
-    expect(contents.loadURL).toHaveBeenCalledTimes(1);
-    expect(contents.getURL()).toBe("http://localhost:3000/next#section");
-  });
-
-  test("Back counts as a navigation when it starts, so a re-attach sent before its commit is stale", async () => {
-    const harness = createHarness();
-    await harness.manager.attach(input);
-    const contents = harness.views[0]!.webContents;
-    contents.emit("did-navigate", {}, input.url);
-    contents.currentUrl = "http://localhost:3000/next";
-    contents.emit("did-navigate", {}, contents.currentUrl);
-    contents.canGoBackValue = true;
-    contents.activeIndex = 1;
-    contents.historyEntries = [
-      { title: "Root", url: input.url },
-      { title: "Next", url: "http://localhost:3000/next" },
-    ];
-
-    const back = harness.manager.goBack(input.tabId);
-    expect(back.navigation).toBe(3);
-    // Sent by a resize before the renderer saw Back: its URL is the link's.
-    await harness.manager.attach({
-      ...input,
-      url: "http://localhost:3000/next",
-      navigationBasis: 2,
-    });
-    contents.currentUrl = input.url;
-    contents.emit("did-navigate", {}, input.url);
-    await harness.manager.attach({
-      ...input,
-      url: "http://localhost:3000/next",
-      navigationBasis: 2,
-    });
-    expect(contents.navigationHistory.goBack).toHaveBeenCalledTimes(1);
-    expect(contents.loadURL).toHaveBeenCalledTimes(1);
-    expect(contents.getURL()).toBe(input.url);
-  });
-
-  test("a URL chosen against the latest navigation still loads, and no basis keeps the old rule", async () => {
-    const harness = createHarness();
-    await harness.manager.attach(input);
-    const contents = harness.views[0]!.webContents;
-    contents.emit("did-navigate", {}, input.url);
-
-    // Another client moved the tab after the renderer saw the view's latest navigation.
-    await harness.manager.attach({
-      ...input,
-      url: "http://localhost:3000/chosen",
-      navigationBasis: 1,
-    });
-    expect(contents.loadURL).toHaveBeenLastCalledWith("http://localhost:3000/chosen");
-
-    // An older renderer sends no basis: any URL other than the view's loads.
-    await harness.manager.attach({ ...input, url: "http://localhost:3000/older" });
-    expect(contents.loadURL).toHaveBeenLastCalledWith("http://localhost:3000/older");
-    expect(contents.loadURL).toHaveBeenCalledTimes(3);
   });
 
   test("does not accept committed or in-page URLs outside the authorized scope", async () => {
@@ -1857,7 +1565,7 @@ describe("BrowserPreviewManager", () => {
     await harness.manager.attach({
       ...input,
       tabId: "browser-2",
-      url: "http://127.0.0.1:4000/",
+      url: "http://localhost:3000/other",
     });
     const first = harness.views[0]!;
     const second = harness.views[1]!;
@@ -1871,7 +1579,13 @@ describe("BrowserPreviewManager", () => {
       canGoBack: false,
       canGoForward: false,
       error: null,
-      navigation: 0,
+      service: {
+        serviceId: "service-web",
+        path: "/",
+        displayUrl: "http://localhost:3000/",
+        navigation: 0,
+      },
+      transport: { mode: "desktop-tunnel", state: "ready" },
     });
 
     harness.manager.destroyAll();

@@ -111,7 +111,6 @@ const SSH_UNSUPPORTED_CODES = new Set([
   "config-extra-forwards",
   "forwarding-denied",
   "control-endpoint",
-  "legacy-backend",
   "no-route",
   "invalid-route",
 ]);

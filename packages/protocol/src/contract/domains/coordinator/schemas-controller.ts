@@ -187,7 +187,7 @@ export const WorkerChangesSchema = openRecord({
   uncommitted: Schema.optional(Schema.Unknown),
   truncated: optionalBoolean,
   unavailable: optionalString,
-  /** Added by the command node when the worker's node predates `diffScope`. */
+  /** No longer set (every node honours `diffScope`); kept so the registered result schema is unchanged. */
   diffScopeUnsupported: optionalString,
 });
 

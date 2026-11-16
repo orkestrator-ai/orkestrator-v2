@@ -14,7 +14,7 @@ import { TmuxSession } from "../src/core/tmux-session-manager.js";
  * The real `TmuxSession` and `TmuxBackend` run against a fake `docker` on PATH
  * that runs each command locally and records its stdout size, so what is
  * counted is what crossed the process boundary. "Before" is the whole-file read
- * every reopen took; it is still what a renderer that predates paging gets.
+ * every reopen took before paging, made here through the same backend.
  */
 
 export type Workload = { name: string; lines: number; lineBytes: number };
@@ -106,8 +106,12 @@ export async function measureTmuxReopen(workload: Workload): Promise<ReopenReadS
       return tab;
     };
 
-    const whole = await session().transcriptLines();
-    const before = { ...spy.take(), lines: whole.length };
+    // The whole-file read every reopen took before paging (`test -f`, then `cat`).
+    const whole = (await TmuxBackend.container("fake").readFile(file)) ?? "";
+    const before = {
+      ...spy.take(),
+      lines: whole.split("\n").filter((line) => line.trim()).length,
+    };
 
     // No poll loop has run in this session yet, so this read owes the tail's pass.
     const running = session();

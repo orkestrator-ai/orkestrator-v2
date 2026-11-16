@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
+import { formatPreviewIntentUri } from "@orkestrator/protocol/preview-services";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import {
   act,
@@ -25,7 +26,6 @@ import * as realBackend from "@/lib/backend";
 import * as realKanbanStore from "@/stores/kanbanStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
-import * as realMultiReviewPersistence from "@/lib/multi-review-persistence";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
 import * as realPaneLayoutAuthoritative from "@/lib/pane-layout-authoritative";
 import { resetTabLaunches } from "@/lib/tab-launch";
@@ -73,7 +73,6 @@ const realHooksSnapshot = { ...realHooks };
 const realContextsSnapshot = { ...realContexts };
 const realBackendSnapshot = { ...realBackend };
 const realKanbanStoreSnapshot = { ...realKanbanStore };
-const realMultiReviewPersistenceSnapshot = { ...realMultiReviewPersistence };
 const realUseFileSearchSnapshot = { ...realUseFileSearch };
 const realPaneLayoutAuthoritativeSnapshot = { ...realPaneLayoutAuthoritative };
 
@@ -161,20 +160,32 @@ const enqueuePromptQueueMessageMock = mock(
 );
 
 const startedMultiReview = { id: "multi-workflow-1", phase: "reviewing" as const };
-const startMultiReviewMock = mock(async (_options: unknown) => startedMultiReview);
-// Most of this file drives the renderer path for a backend without the one-request launch.
-const unknownLaunchCommand = async (_input: unknown): Promise<MultiReviewActionResult> => {
-  throw new Error("Unknown backend command: launch_multi_review");
-};
-const launchMultiReviewMock = mock(unknownLaunchCommand);
-// The configure dialog's defaults read: by default a node that predates it, so
-// the dialog opens on the rows it builds itself.
-const unknownLaunchDefaultsCommand = async (
+/** The backend's answer to `launch_multi_review`: it started the review and opened its tab. */
+const launched = (overrides: Partial<MultiReviewActionResult> = {}) =>
+  ({
+    workflow: startedMultiReview,
+    reused: false,
+    outcome: "opened",
+    ui: { status: "opened", tabId: "multi-review:multi-workflow-1", paneId: "default" },
+    ...overrides,
+  }) as unknown as MultiReviewActionResult;
+const defaultLaunch = async (_input: unknown): Promise<MultiReviewActionResult> => launched();
+const launchMultiReviewMock = mock(defaultLaunch);
+// The configure dialog's defaults read: the node answers from the same saved
+// Multi Review settings this file configures.
+const defaultLaunchDefaults = async (
   _environmentId: string,
-): Promise<MultiReviewLaunchDefaultRows> => {
-  throw new Error("Unknown backend command: get_multi_review_launch_defaults");
-};
-const getMultiReviewLaunchDefaultsMock = mock(unknownLaunchDefaultsCommand);
+): Promise<MultiReviewLaunchDefaultRows> => ({
+  reviewers: [
+    { agent: "codex", model: "gpt-6.1-sol" },
+    { agent: "claude", model: "sonnet" },
+  ],
+  reviewModel: { agent: "codex", model: "gpt-6.1-sol" },
+  fixModel: { agent: "codex", model: "gpt-6.1-sol" },
+  autoFix: currentMultiReviewSettings?.autoFix ?? false,
+  autoPr: currentMultiReviewSettings?.autoPr ?? false,
+});
+const getMultiReviewLaunchDefaultsMock = mock(defaultLaunchDefaults);
 // Existing review-only cases have no promotable source tab. Keep the new
 // manual-dialog read at the backend boundary, with a valid typed answer.
 const autoPipelineSourcesMock = mock(
@@ -188,8 +199,7 @@ const autoPipelineSourcesMock = mock(
 
 /**
  * Right-click Multi Review and wait for the dialog to read the node's saved
- * defaults: its rows are not editable until that answer (or an older node's
- * refusal) arrives.
+ * defaults: its rows are not editable until that answer arrives.
  */
 async function openConfiguredMultiReview() {
   fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
@@ -197,16 +207,6 @@ async function openConfiguredMultiReview() {
     expect(screen.queryByTestId("multi-review-defaults-status") === null).toBe(true),
   );
 }
-const cancelMultiReviewMock = mock(
-  async (_workflowId: string): Promise<{ id: string; phase: "cancelled" | "cancelling" }> => ({
-    id: "multi-workflow-1",
-    phase: "cancelled",
-  }),
-);
-const deleteMultiReviewWorkflowMock = mock(async (_workflowId: string) => {});
-const findActiveMultiReviewWorkflowMock = mock(
-  async (_environmentId: string): Promise<{ id: string; phase: string } | null> => null,
-);
 const installMultiReviewWorkflowMock = mock((_workflow: unknown) => {});
 const removeMultiReviewWorkflowMock = mock((_workflowId: string) => {});
 const selectTabMock = mock((_index: number) => {});
@@ -811,12 +811,9 @@ mock.module("@/lib/backend", () => ({
   readLocalFile: readLocalFileMock,
   setEnvironmentPr: setEnvironmentPrBackendMock,
   setEnvironmentAutoMerge: setEnvironmentAutoMergeMock,
-  startMultiReview: startMultiReviewMock,
   launchMultiReview: launchMultiReviewMock,
   getMultiReviewLaunchDefaults: getMultiReviewLaunchDefaultsMock,
   autoPipelineSources: autoPipelineSourcesMock,
-  cancelMultiReview: cancelMultiReviewMock,
-  deleteMultiReviewWorkflow: deleteMultiReviewWorkflowMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
   ensureProjectHomeEnvironment: ensureProjectHomeEnvironmentMock,
   getProjectGitStatus: getProjectGitStatusMock,
@@ -845,11 +842,6 @@ mock.module("@/stores/uiChromeStore", () => ({
   useUIChromeStore: <T,>(
     selector?: (state: { sidebarOpen: boolean; toggleSidebar: () => void }) => T,
   ) => selectState({ sidebarOpen: currentSidebarOpen, toggleSidebar: toggleSidebarMock }, selector),
-}));
-
-mock.module("@/lib/multi-review-persistence", () => ({
-  ...realMultiReviewPersistenceSnapshot,
-  findActiveMultiReviewWorkflow: findActiveMultiReviewWorkflowMock,
 }));
 
 mock.module("@/stores/kanbanStore", () => ({
@@ -882,7 +874,6 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/lib/pane-layout-authoritative", () => realPaneLayoutAuthoritativeSnapshot);
   mock.module("@/stores/kanbanStore", () => realKanbanStoreSnapshot);
-  mock.module("@/lib/multi-review-persistence", () => realMultiReviewPersistenceSnapshot);
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
   appCommandStore(paneLayoutStore).setState({
     clearTabInitialPrompt: realClearTabInitialPrompt,
@@ -967,22 +958,11 @@ beforeEach(() => {
     clearTabInitialPrompt: clearTabInitialPromptMock,
   });
   launchMultiReviewMock.mockReset();
-  launchMultiReviewMock.mockImplementation(unknownLaunchCommand);
+  launchMultiReviewMock.mockImplementation(defaultLaunch);
   autoPipelineSourcesMock.mockReset();
   autoPipelineSourcesMock.mockResolvedValue({ available: false, sources: [] });
   getMultiReviewLaunchDefaultsMock.mockReset();
-  getMultiReviewLaunchDefaultsMock.mockImplementation(unknownLaunchDefaultsCommand);
-  startMultiReviewMock.mockReset();
-  startMultiReviewMock.mockImplementation(async () => startedMultiReview);
-  cancelMultiReviewMock.mockReset();
-  cancelMultiReviewMock.mockImplementation(async () => ({
-    id: "multi-workflow-1",
-    phase: "cancelled" as const,
-  }));
-  deleteMultiReviewWorkflowMock.mockReset();
-  deleteMultiReviewWorkflowMock.mockImplementation(async () => {});
-  findActiveMultiReviewWorkflowMock.mockReset();
-  findActiveMultiReviewWorkflowMock.mockImplementation(async () => null);
+  getMultiReviewLaunchDefaultsMock.mockImplementation(defaultLaunchDefaults);
   installMultiReviewWorkflowMock.mockReset();
   removeMultiReviewWorkflowMock.mockReset();
   selectTabMock.mockReset();
@@ -1735,7 +1715,7 @@ describe("ActionBar browser tabs", () => {
     return root?.kind === "leaf" ? root.tabs[0]?.browserData?.url : undefined;
   };
 
-  test("opens a browser tab at once, then points it at the mapped backend port", async () => {
+  test("opens a browser tab at once, then points it at the environment's entry port", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       entryPort: 3000,
@@ -1750,8 +1730,17 @@ describe("ActionBar browser tabs", () => {
       expect(createTabMock).toHaveBeenCalledWith("browser", {
         tabId: expect.stringMatching(/^tab-/),
       });
-      // Without preview-service support the entry button keeps its legacy target.
-      await waitFor(() => expect(browserTabUrl()).toBe("http://localhost:49152/"));
+      // Without an entry service the tab resolves the container's entry port,
+      // as a typed address would, rather than loading the published host port.
+      await waitFor(() =>
+        expect(browserTabUrl()).toBe(
+          formatPreviewIntentUri({
+            environmentId: "env-1",
+            source: "container-terminal",
+            url: "http://localhost:3000/",
+          }),
+        ),
+      );
     } finally {
       restore();
     }
@@ -4832,43 +4821,19 @@ describe("ActionBar workflow tabs", () => {
         .getByRole("checkbox", { name: "Auto-address findings after consolidation" })
         .getAttribute("aria-checked"),
     ).toBe("true");
-    expect(startMultiReviewMock).not.toHaveBeenCalled();
+    expect(launchMultiReviewMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     fireEvent.click(multiReviewButton);
     expect(screen.queryByRole("dialog", { name: "Configure Multi Review" }) === null).toBe(true);
 
-    await waitFor(() =>
-      expect(startMultiReviewMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          environmentId: "env-1",
-          projectId: "project-1",
-          targetBranch: "main",
-          autoFix: true,
-          reviewers: expect.arrayContaining([
-            expect.objectContaining({ agent: "codex", model: expect.any(String) }),
-          ]),
-          fixModel: expect.objectContaining({ agent: "codex", model: expect.any(String) }),
-        }),
-      ),
-    );
-    expect(createTabMock).toHaveBeenCalledWith("multi-review", {
-      multiReviewId: "multi-workflow-1",
-      displayTitle: "Multi Review",
-    });
+    // A plain click names only the environment; its node fills every row.
+    await waitFor(() => expect(launchMultiReviewMock).toHaveBeenCalledTimes(1));
+    expect(launchMultiReviewMock.mock.calls[0]?.[0]).not.toHaveProperty("reviewers");
     expect(installMultiReviewWorkflowMock).toHaveBeenCalledWith(startedMultiReview);
   });
 
   describe("through the backend's one-request launch", () => {
-    const launched = (overrides: Partial<MultiReviewActionResult> = {}) =>
-      ({
-        workflow: startedMultiReview,
-        reused: false,
-        outcome: "opened",
-        ui: { status: "opened", tabId: "multi-review:multi-workflow-1", paneId: "default" },
-        ...overrides,
-      }) as unknown as MultiReviewActionResult;
-
     beforeEach(() => {
       currentEnvironment = {
         ...selectedEnvironment,
@@ -4902,7 +4867,6 @@ describe("ActionBar workflow tabs", () => {
           "multi-review:multi-workflow-1",
         ),
       );
-      expect(startMultiReviewMock).not.toHaveBeenCalled();
       expect(createTabMock).not.toHaveBeenCalledWith("multi-review", expect.anything());
       expect(installMultiReviewWorkflowMock).toHaveBeenCalledWith(startedMultiReview);
     });
@@ -4996,25 +4960,28 @@ describe("ActionBar workflow tabs", () => {
           description: "The review is saved but its tab could not be opened.",
         }),
       );
-      // The backend already decided what happened to the review.
-      expect(cancelMultiReviewMock).not.toHaveBeenCalled();
     });
 
-    test("reports a refusal without falling back to the renderer sequence", async () => {
-      launchMultiReviewMock.mockImplementation(async () => {
-        throw new Error("Start the environment and finish setup before opening Multi Review");
+    for (const message of [
+      "Start the environment and finish setup before opening Multi Review",
+      "Unknown backend command: launch_multi_review",
+    ]) {
+      test(`reports a refused launch as an ordinary failure (${message})`, async () => {
+        launchMultiReviewMock.mockImplementation(async () => {
+          throw new Error(message);
+        });
+        renderInAppCommandScope(<ActionBar />);
+
+        fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+
+        await waitFor(() =>
+          expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
+            description: message,
+          }),
+        );
+        expect(launchMultiReviewMock).toHaveBeenCalledTimes(1);
       });
-      renderInAppCommandScope(<ActionBar />);
-
-      fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-
-      await waitFor(() =>
-        expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
-          description: "Start the environment and finish setup before opening Multi Review",
-        }),
-      );
-      expect(startMultiReviewMock).not.toHaveBeenCalled();
-    });
+    }
   });
 
   test("right-click Multi Review can override auto-fix for one launch", async () => {
@@ -5033,7 +5000,7 @@ describe("ActionBar workflow tabs", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
     await waitFor(() =>
-      expect(startMultiReviewMock).toHaveBeenCalledWith(
+      expect(launchMultiReviewMock).toHaveBeenCalledWith(
         expect.objectContaining({ autoFix: false }),
       ),
     );
@@ -5056,7 +5023,9 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(checkbox);
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
     await waitFor(() =>
-      expect(startMultiReviewMock).toHaveBeenCalledWith(expect.objectContaining({ autoPr: false })),
+      expect(launchMultiReviewMock).toHaveBeenCalledWith(
+        expect.objectContaining({ autoPr: false }),
+      ),
     );
     expect(currentMultiReviewSettings.autoPr).toBe(true);
   });
@@ -5092,11 +5061,11 @@ describe("ActionBar workflow tabs", () => {
       },
       { timeout: 10_000 },
     );
-    expect(startMultiReviewMock).not.toHaveBeenCalled();
+    expect(launchMultiReviewMock).not.toHaveBeenCalled();
 
     // Consume the click synthesized by mobile browsers after the gesture.
     fireEvent.click(multiReviewButton);
-    expect(startMultiReviewMock).not.toHaveBeenCalled();
+    expect(launchMultiReviewMock).not.toHaveBeenCalled();
   }, 20_000);
 
   test("suppresses a second toolbar click while Multi Review launch is in flight", async () => {
@@ -5107,192 +5076,27 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     currentWorkspaceReady = true;
-    let resolveStart!: (workflow: typeof startedMultiReview) => void;
-    startMultiReviewMock.mockImplementationOnce(
+    let resolveLaunch!: (result: MultiReviewActionResult) => void;
+    launchMultiReviewMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          resolveStart = resolve;
+          resolveLaunch = resolve;
         }),
     );
     renderInAppCommandScope(<ActionBar />);
 
     const multiReviewButton = screen.getByRole("button", { name: "Multi Review" });
     fireEvent.click(multiReviewButton);
-    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(launchMultiReviewMock).toHaveBeenCalledTimes(1));
     expect((multiReviewButton as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.click(multiReviewButton);
-    expect(startMultiReviewMock).toHaveBeenCalledTimes(1);
+    expect(launchMultiReviewMock).toHaveBeenCalledTimes(1);
 
-    resolveStart(startedMultiReview);
-    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
-  });
-
-  /**
-   * Closing a Multi Review tab deliberately leaves the backend workflow
-   * running, and only one may be active per environment. Without reattaching,
-   * that workflow is unreachable — its Abandon control lives inside the tab
-   * that was closed — so the environment can never run another Multi Review.
-   */
-  test("reopens the running Multi Review instead of failing a second launch", async () => {
-    // `ready` is not a terminal phase, so it blocks a new launch while still
-    // offering Abandon once the tab is back on screen.
-    findActiveMultiReviewWorkflowMock.mockImplementation(async () => ({
-      id: "multi-workflow-open",
-      phase: "ready",
-    }));
-    currentEnvironment = {
-      ...selectedEnvironment,
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-    };
-    currentWorkspaceReady = true;
-    renderInAppCommandScope(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-
+    resolveLaunch(launched());
     await waitFor(() =>
-      expect(createTabMock).toHaveBeenCalledWith("multi-review", {
-        multiReviewId: "multi-workflow-open",
-        displayTitle: "Multi Review",
-      }),
+      expect(installMultiReviewWorkflowMock).toHaveBeenCalledWith(startedMultiReview),
     );
-    // Reattaching must not start, cancel, or delete anything: the running
-    // review keeps its reviewers and its report.
-    expect(startMultiReviewMock).not.toHaveBeenCalled();
-    expect(cancelMultiReviewMock).not.toHaveBeenCalled();
-    expect(deleteMultiReviewWorkflowMock).not.toHaveBeenCalled();
-    expect(toastErrorMock).not.toHaveBeenCalled();
-    expect(toastInfoMock).toHaveBeenCalledWith("Multi Review already running", {
-      description: expect.stringContaining("Cancel or abandon it there"),
-    });
-  });
-
-  test("keeps an active Multi Review intact when its tab cannot be reopened", async () => {
-    findActiveMultiReviewWorkflowMock.mockImplementation(async () => ({
-      id: "multi-workflow-open",
-      phase: "failed",
-    }));
-    createTabMock.mockImplementation((type: string) => type !== "multi-review");
-    currentEnvironment = {
-      ...selectedEnvironment,
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-    };
-    currentWorkspaceReady = true;
-    renderInAppCommandScope(<ActionBar />);
-
-    await openConfiguredMultiReview();
-    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
-
-    await waitFor(() =>
-      expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
-        description: expect.stringContaining("Close a tab and try again"),
-      }),
-    );
-    expect(startMultiReviewMock).not.toHaveBeenCalled();
-    expect(cancelMultiReviewMock).not.toHaveBeenCalled();
-    expect(deleteMultiReviewWorkflowMock).not.toHaveBeenCalled();
-    expect(removeMultiReviewWorkflowMock).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Start 2-model review" })).toBeTruthy();
-  });
-
-  /**
-   * The reattach check reads the backend before deciding to launch, so a failed
-   * read has to abort the launch rather than fall through to `startMultiReview`.
-   * Falling through would start a second review that the backend's
-   * one-active-per-environment rule then rejects, leaving the user with a
-   * storage error instead of the real cause.
-   */
-  test("aborts the launch when the active-workflow check cannot be read", async () => {
-    findActiveMultiReviewWorkflowMock.mockImplementation(async () => {
-      throw new Error("backend unavailable");
-    });
-    currentEnvironment = {
-      ...selectedEnvironment,
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-    };
-    currentWorkspaceReady = true;
-    renderInAppCommandScope(<ActionBar />);
-
-    await openConfiguredMultiReview();
-    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
-
-    await waitFor(() =>
-      expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
-        description: "backend unavailable",
-      }),
-    );
-    expect(startMultiReviewMock).not.toHaveBeenCalled();
-    expect(createTabMock).not.toHaveBeenCalledWith("multi-review", expect.anything());
-    expect(cancelMultiReviewMock).not.toHaveBeenCalled();
-    // The dialog stays open so the launch can simply be retried once the
-    // backend answers again.
-    expect(screen.getByRole("button", { name: "Start 2-model review" })).toBeTruthy();
-  });
-
-  test("keeps a still-cancelling Multi Review recoverable when the tab cannot open", async () => {
-    // Cancellation is asynchronous, so the backend answers `cancelling`, not
-    // `cancelled`. Deleting there is rejected, which would replace the real
-    // launch error with a storage error and strand the record.
-    cancelMultiReviewMock.mockImplementation(async () => ({
-      id: "multi-workflow-1",
-      phase: "cancelling" as const,
-    }));
-    createTabMock.mockImplementation((type: string) => type !== "multi-review");
-    currentEnvironment = {
-      ...selectedEnvironment,
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-    };
-    currentWorkspaceReady = true;
-    renderInAppCommandScope(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-
-    await waitFor(() => expect(cancelMultiReviewMock).toHaveBeenCalledWith("multi-workflow-1"));
-    expect(deleteMultiReviewWorkflowMock).not.toHaveBeenCalled();
-    expect(removeMultiReviewWorkflowMock).not.toHaveBeenCalled();
-    expect(installMultiReviewWorkflowMock).toHaveBeenLastCalledWith({
-      id: "multi-workflow-1",
-      phase: "cancelling",
-    });
-    expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
-      description: expect.stringContaining("maximum tab count was reached"),
-    });
-    expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
-      description: expect.stringContaining("remains available for recovery"),
-    });
-    // The rollback already requested cancellation; it must not be re-issued.
-    expect(cancelMultiReviewMock).toHaveBeenCalledTimes(1);
-  });
-
-  test("deletes a Multi Review that finished cancelling before its tab could open", async () => {
-    createTabMock.mockImplementation((type: string) => type !== "multi-review");
-    currentEnvironment = {
-      ...selectedEnvironment,
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-    };
-    currentWorkspaceReady = true;
-    renderInAppCommandScope(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-
-    await waitFor(() =>
-      expect(deleteMultiReviewWorkflowMock).toHaveBeenCalledWith("multi-workflow-1"),
-    );
-    expect(removeMultiReviewWorkflowMock).toHaveBeenCalledWith("multi-workflow-1");
-    expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
-      description: "The environment is not ready or the maximum tab count was reached.",
-    });
-    expect(cancelMultiReviewMock).toHaveBeenCalledTimes(1);
   });
 
   test("falls back from an absent environment and global workflow default to Claude", async () => {
@@ -5722,240 +5526,6 @@ describe("ActionBar configured action defaults", () => {
         }),
       ),
     );
-  });
-
-  test("seeds each Multi Review role from its configured default", async () => {
-    currentEnvironment = {
-      ...selectedEnvironment,
-      agentSettings: { defaultAgent: "codex" },
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-    };
-    currentWorkspaceReady = true;
-    currentActionDefaults = {
-      review: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
-      review2: { platform: "codex", model: "gpt-6.1-sol", reasoningEffort: "xhigh" },
-      fixReviewIssues: {
-        platform: "claude",
-        model: "claude-fable-5[1m]",
-        reasoningEffort: "xhigh",
-      },
-    };
-    currentMultiReviewSettings = {
-      reviewerCount: 3,
-      additionalReviewers: [
-        {
-          platform: "claude",
-          model: "claude-fable-5[1m]",
-          reasoningEffort: "xhigh",
-        },
-      ],
-    };
-
-    renderInAppCommandScope(<ActionBar />);
-    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-
-    // Each role keeps its own provider/model/effort decision all the way to the
-    // backend launch intent.
-    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
-    const launch = startMultiReviewMock.mock.calls.at(-1)?.[0] as {
-      reviewers: Array<{ agent: string; model: string; reasoningEffort?: string }>;
-      fixModel: { agent: string; model: string; reasoningEffort?: string };
-    };
-    expect(launch.reviewers).toHaveLength(3);
-    expect(launch.reviewers[0]).toMatchObject({
-      agent: "claude",
-      model: "sonnet",
-      reasoningEffort: "high",
-    });
-    expect(launch.reviewers[1]).toMatchObject({
-      agent: "codex",
-      model: "gpt-6.1-sol",
-      reasoningEffort: "xhigh",
-    });
-    // Configured as Fable 5, which Claude Code 2.1.280 superseded with Fable
-    // 5.1: the saved choice carries forward rather than dropping to Default.
-    expect(launch.reviewers[2]).toMatchObject({
-      agent: "claude",
-      model: "claude-fable-5-1[1m]",
-      reasoningEffort: "xhigh",
-    });
-    expect(launch.fixModel).toMatchObject({
-      agent: "claude",
-      model: "claude-fable-5-1[1m]",
-      reasoningEffort: "xhigh",
-    });
-  });
-
-  test("does not hand Review's Fast to a later reviewer on the same platform", async () => {
-    currentEnvironment = {
-      ...selectedEnvironment,
-      agentSettings: { defaultAgent: "codex" },
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-    };
-    currentWorkspaceReady = true;
-    // Claude has no platform Fast of its own, so the only Fast in play belongs
-    // to the Review action.
-    currentClaudeFastMode = undefined;
-    currentActionDefaults = {
-      review: { platform: "claude", model: "sonnet", fastMode: true },
-      review2: { platform: "codex", model: "gpt-6.1-sol" },
-    };
-    currentMultiReviewSettings = {
-      reviewerCount: 3,
-      additionalReviewers: [{ platform: "claude", model: "opus" }],
-    };
-
-    renderInAppCommandScope(<ActionBar />);
-    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-
-    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
-    const launch = startMultiReviewMock.mock.calls.at(-1)?.[0] as {
-      reviewers: Array<{ agent: string; model: string; fastMode?: boolean }>;
-    };
-    expect(launch.reviewers).toHaveLength(3);
-    expect(launch.reviewers[0]).toMatchObject({ agent: "claude", fastMode: true });
-    // Reviewer 3 stores no speed of its own, so it follows the Claude platform
-    // default rather than Reviewer 1's action-scoped choice.
-    expect(launch.reviewers[2]?.agent).toBe("claude");
-    expect(launch.reviewers[2]?.fastMode).toBeUndefined();
-  });
-
-  test("preserves configured OpenCode defaults while the repository catalog is loading", async () => {
-    currentEnvironment = {
-      ...selectedEnvironment,
-      agentSettings: { defaultAgent: "codex" },
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-    };
-    currentWorkspaceReady = true;
-    currentActionDefaults = {
-      review: {
-        platform: "opencode",
-        model: "provider/repository-cached-reviewer",
-        reasoningEffort: "high",
-      },
-      review2: { platform: "codex", model: "gpt-6.1-sol", reasoningEffort: "xhigh" },
-      fixReviewIssues: {
-        platform: "opencode",
-        model: "provider/repository-cached-fixer",
-        reasoningEffort: "medium",
-      },
-    };
-
-    renderInAppCommandScope(<ActionBar />);
-    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-
-    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalledTimes(1));
-    const launch = startMultiReviewMock.mock.calls[0]?.[0] as {
-      reviewers: Array<{ agent: string; model: string; reasoningEffort?: string }>;
-      fixModel: { agent: string; model: string; reasoningEffort?: string };
-    };
-    expect(launch.reviewers[0]).toEqual({
-      agent: "opencode",
-      model: "provider/repository-cached-reviewer",
-      reasoningEffort: "high",
-    });
-    expect(launch.fixModel).toEqual({
-      agent: "opencode",
-      model: "provider/repository-cached-fixer",
-      reasoningEffort: "medium",
-    });
-  });
-
-  test("keeps Review as the upgrade fallback for unset Multi Review roles", async () => {
-    currentEnvironment = {
-      ...selectedEnvironment,
-      agentSettings: { defaultAgent: "codex" },
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-    };
-    currentWorkspaceReady = true;
-    currentActionDefaults = {
-      review: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
-    };
-    currentMultiReviewSettings = { reviewerCount: 3 };
-
-    renderInAppCommandScope(<ActionBar />);
-    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-
-    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
-    const launch = startMultiReviewMock.mock.calls.at(-1)?.[0] as {
-      reviewers: Array<{ agent: string; model: string; reasoningEffort?: string }>;
-      fixModel: { agent: string; model: string; reasoningEffort?: string };
-    };
-    expect(launch.reviewers).toEqual([
-      expect.objectContaining({ agent: "claude", model: "sonnet", reasoningEffort: "high" }),
-      expect.objectContaining({ agent: "claude", model: "sonnet", reasoningEffort: "high" }),
-      expect.objectContaining({ agent: "claude", model: "sonnet", reasoningEffort: "high" }),
-    ]);
-    expect(launch.fixModel).toMatchObject({
-      agent: "claude",
-      model: "sonnet",
-      reasoningEffort: "high",
-    });
-  });
-
-  test("falls back to Review when an additional reviewer names a disabled platform", async () => {
-    currentEnvironment = {
-      ...selectedEnvironment,
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-    };
-    currentWorkspaceReady = true;
-    currentEnabledAgentPlatforms = ["codex"];
-    currentActionDefaults = {
-      review: { platform: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
-    };
-    currentMultiReviewSettings = {
-      reviewerCount: 3,
-      additionalReviewers: [{ platform: "claude", model: "sonnet" }],
-    };
-
-    renderInAppCommandScope(<ActionBar />);
-    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-
-    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
-    const launch = startMultiReviewMock.mock.calls.at(-1)?.[0] as {
-      reviewers: Array<{ agent: string; model: string; reasoningEffort?: string }>;
-    };
-    expect(launch.reviewers).toHaveLength(3);
-    expect(launch.reviewers[2]).toMatchObject({
-      agent: "codex",
-      model: "gpt-6.1-sol",
-      reasoningEffort: "high",
-    });
-  });
-
-  test("launches exactly one reviewer when the saved count is one", async () => {
-    currentEnvironment = {
-      ...selectedEnvironment,
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-    };
-    currentWorkspaceReady = true;
-    currentActionDefaults = {
-      review: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
-    };
-    currentMultiReviewSettings = { reviewerCount: 1 };
-
-    renderInAppCommandScope(<ActionBar />);
-    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-
-    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
-    const launch = startMultiReviewMock.mock.calls.at(-1)?.[0] as {
-      reviewers: Array<{ agent: string; model: string; reasoningEffort?: string }>;
-    };
-    expect(launch.reviewers).toEqual([
-      expect.objectContaining({ agent: "claude", model: "sonnet", reasoningEffort: "high" }),
-    ]);
   });
 
   /**
@@ -8086,7 +7656,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         expect.objectContaining({ title: "PR" }),
       ),
     );
-    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(launchMultiReviewMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(openInEditorMock).toHaveBeenCalledWith("container-1", "vscode"));
     expect(closeActiveTabMock).not.toHaveBeenCalled();
     expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
@@ -8108,7 +7678,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true, shiftKey: true });
 
     expect(screen.getByRole("heading", { name: "Configure Multi Review" })).toBeTruthy();
-    expect(startMultiReviewMock).not.toHaveBeenCalled();
+    expect(launchMultiReviewMock).not.toHaveBeenCalled();
   });
 
   test("opens run-script configuration with Cmd+Shift+G", () => {
@@ -8788,7 +8358,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     input.remove();
     editor.remove();
     expect(createTabMock).not.toHaveBeenCalled();
-    expect(startMultiReviewMock).not.toHaveBeenCalled();
+    expect(launchMultiReviewMock).not.toHaveBeenCalled();
     expect(launchTerminalJobMock).not.toHaveBeenCalled();
     expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog") === null).toBe(true);
@@ -8847,8 +8417,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 
     for (const configure of cases) {
       cleanup();
-      findActiveMultiReviewWorkflowMock.mockClear();
-      startMultiReviewMock.mockClear();
+      launchMultiReviewMock.mockClear();
       currentEnvironment = { ...selectedEnvironment };
       currentSelectedEnvironmentId = selectedEnvironment.id;
       currentWorkspaceReady = false;
@@ -8860,18 +8429,17 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
       await Promise.resolve();
 
-      expect(findActiveMultiReviewWorkflowMock).not.toHaveBeenCalled();
-      expect(startMultiReviewMock).not.toHaveBeenCalled();
+      expect(launchMultiReviewMock).not.toHaveBeenCalled();
     }
   });
 
   test("does not start a second Multi Review while the first shortcut launch is pending", async () => {
     currentWorkspaceReady = true;
-    let finishLaunch!: (error: Error) => void;
+    let finishLaunch!: (result: MultiReviewActionResult) => void;
     launchMultiReviewMock.mockImplementationOnce(
       () =>
-        new Promise((_resolve, reject) => {
-          finishLaunch = reject;
+        new Promise((resolve) => {
+          finishLaunch = resolve;
         }),
     );
     renderInAppCommandScope(<ActionBar />);
@@ -8880,9 +8448,12 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
 
     expect(launchMultiReviewMock).toHaveBeenCalledTimes(1);
-    expect(startMultiReviewMock).not.toHaveBeenCalled();
-    finishLaunch(new Error("Unknown backend command: launch_multi_review"));
-    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalledTimes(1));
+    finishLaunch(launched());
+    await waitFor(() =>
+      expect(installMultiReviewWorkflowMock).toHaveBeenCalledWith(startedMultiReview),
+    );
+    fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
+    await waitFor(() => expect(launchMultiReviewMock).toHaveBeenCalledTimes(2));
   });
 
   test("reports the tab limit for every tab-creating shortcut", async () => {

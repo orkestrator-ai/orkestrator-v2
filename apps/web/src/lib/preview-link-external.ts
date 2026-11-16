@@ -24,6 +24,12 @@ export interface ExternalLinkRequest {
   origin?: "terminal" | "agent";
   /** The environment's node; the app's command scope when omitted (no caller has one yet). */
   scope?: NodeScope;
+  /**
+   * What a loopback link that is no registered service does: open a preview
+   * tab where it can be registered (links printed by a terminal or agent), or
+   * open through the gateway proxy (a saved URL tab, which has no in-app view).
+   */
+  unresolved?: "browser-tab" | "gateway-proxy";
 }
 
 function failureMessage(error: unknown): string {
@@ -98,6 +104,7 @@ export async function openLinkExternally({
   url,
   origin = "terminal",
   scope = appCommandScope(),
+  unresolved = "browser-tab",
 }: ExternalLinkRequest): Promise<void> {
   const environment = environmentId
     ? scope.store(environmentStore).getState().getEnvironmentById(environmentId)
@@ -151,6 +158,7 @@ export async function openLinkExternally({
     return openThroughGatewayProxy(url, scope);
   }
   if (resolution.kind !== "service") {
+    if (unresolved === "gateway-proxy") return openThroughGatewayProxy(url, scope);
     requestTerminalBrowserTab({ environmentId, sourceTabId, url, origin });
     return;
   }

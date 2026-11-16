@@ -10,6 +10,15 @@ import {
 } from "@orkestrator/protocol/testing/preview-contract-fixtures";
 
 import {
+  formatPreviewIntentUri,
+  formatPreviewServiceUri,
+  parsePreviewTabTarget,
+} from "@orkestrator/protocol/preview-services";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+
+import {
+  environmentBrowserTarget,
+  environmentEntryIntent,
   legacyUrlHostPort,
   legacyUrlServiceMatch,
   sameLegacyUrlServiceBinding,
@@ -220,5 +229,116 @@ describe("legacy URL tab to service matching", () => {
     }
     expect(legacyUrlHostPort("http://[::1]:49152/")).toBe(49152);
     expect(legacyUrlHostPort("http://localhost/")).toBe(80);
+  });
+});
+
+/**
+ * A disposed scope skips the event subscription; its preview store answers
+ * with what the test gives it.
+ */
+function previewScope(answers: {
+  capabilities: ReturnType<typeof fixturePreviewCapabilities> | null;
+  snapshot: ReturnType<typeof fixturePreviewSnapshot> | null;
+}): NodeScope {
+  const state = {
+    loadCapabilities: async () => answers.capabilities,
+    refreshEnvironment: async () => answers.snapshot,
+  };
+  return { disposed: true, store: () => ({ getState: () => state }) } as unknown as NodeScope;
+}
+
+const CONTAINER_ENVIRONMENT = {
+  id: FIXTURE_ENVIRONMENT_ID,
+  environmentType: "containerized" as const,
+  entryPort: 3000,
+};
+const ENTRY_HOST_URL = "http://localhost:49152/";
+const ENTRY_INTENT = formatPreviewIntentUri({
+  environmentId: FIXTURE_ENVIRONMENT_ID,
+  source: "container-terminal",
+  url: "http://localhost:3000/",
+});
+
+describe("the environment's browser button target", () => {
+  test("opens the registered entry service", async () => {
+    const snapshot = fixturePreviewSnapshot();
+    snapshot.entryServiceId = FIXTURE_SERVICE_ID;
+    await expect(
+      environmentBrowserTarget(
+        CONTAINER_ENVIRONMENT,
+        ENTRY_HOST_URL,
+        previewScope({ capabilities, snapshot }),
+      ),
+    ).resolves.toBe(
+      formatPreviewServiceUri({
+        backendInstanceId: FIXTURE_BACKEND_INSTANCE_ID,
+        environmentId: FIXTURE_ENVIRONMENT_ID,
+        serviceId: FIXTURE_SERVICE_ID,
+        path: "/",
+      }),
+    );
+  });
+
+  test("without an entry service, opens the entry port as an intent, never the raw address", async () => {
+    const snapshot = fixturePreviewSnapshot();
+    snapshot.entryServiceId = null;
+    const target = await environmentBrowserTarget(
+      CONTAINER_ENVIRONMENT,
+      ENTRY_HOST_URL,
+      previewScope({ capabilities, snapshot }),
+    );
+    expect(target).toBe(ENTRY_INTENT);
+    // The intent names the application port inside the container, which the
+    // backend matches against container services, not the published host port.
+    expect(parsePreviewTabTarget(target)).toEqual({
+      kind: "intent",
+      environmentId: FIXTURE_ENVIRONMENT_ID,
+      source: "container-terminal",
+      url: "http://localhost:3000/",
+    });
+  });
+
+  test("opens the same intent when preview services cannot answer", async () => {
+    await expect(
+      environmentBrowserTarget(
+        CONTAINER_ENVIRONMENT,
+        ENTRY_HOST_URL,
+        previewScope({ capabilities: null, snapshot: null }),
+      ),
+    ).resolves.toBe(ENTRY_INTENT);
+    await expect(
+      environmentBrowserTarget(
+        CONTAINER_ENVIRONMENT,
+        ENTRY_HOST_URL,
+        previewScope({ capabilities, snapshot: null }),
+      ),
+    ).resolves.toBe(ENTRY_INTENT);
+  });
+
+  test("an environment with no entry address opens an empty tab", async () => {
+    const snapshot = fixturePreviewSnapshot();
+    snapshot.entryServiceId = null;
+    await expect(
+      environmentBrowserTarget(
+        { id: FIXTURE_ENVIRONMENT_ID, environmentType: "local", entryPort: undefined },
+        null,
+        previewScope({ capabilities, snapshot }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  test("an entry address with no usable entry port is resolved as typed", () => {
+    expect(
+      environmentEntryIntent(
+        { id: FIXTURE_ENVIRONMENT_ID, environmentType: "containerized", entryPort: undefined },
+        ENTRY_HOST_URL,
+      ),
+    ).toBe(
+      formatPreviewIntentUri({
+        environmentId: FIXTURE_ENVIRONMENT_ID,
+        source: "address-bar",
+        url: ENTRY_HOST_URL,
+      }),
+    );
   });
 });

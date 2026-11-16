@@ -10,13 +10,9 @@ import { OrkestratorGateway } from "./gateway.js";
 /**
  * A real gateway for `e2e/preview/gateway-browser-security.spec.ts`, with what
  * the security report's dynamic checks need around it on the same host: another
- * HTTP service on another port, and an agent-controlled legacy preview. Prints
- * one `ready` line, and exits when stdin closes. The token is random and lives
- * only as long as this process.
+ * HTTP service on another port. Prints one `ready` line, and exits when stdin
+ * closes. The token is random and lives only as long as this process.
  */
-
-const PREVIEW_DOCUMENT = '<!doctype html><title>preview</title><p id="preview">preview</p>';
-export const SECRET_RESPONSE = "another-preview-secret";
 
 function listen(server: Server, host = "127.0.0.1"): Promise<number> {
   return new Promise((resolve) => {
@@ -41,18 +37,7 @@ const otherService = createServer((request, response) => {
   response.end(request.headers.cookie ?? "");
 });
 
-const preview = createServer((_request, response) => {
-  response.writeHead(200, { "content-type": "text/html" });
-  response.end(PREVIEW_DOCUMENT);
-});
-const secretPreview = createServer((_request, response) => {
-  response.writeHead(200, { "content-type": "text/plain" });
-  response.end(SECRET_RESPONSE);
-});
-
 const otherPort = await listen(otherService);
-const previewPort = await listen(preview);
-const secretPort = await listen(secretPreview);
 
 const dataDir = await mkdtemp(join(tmpdir(), "ork-gateway-browser-"));
 const rendererRoot = join(dataDir, "dist");
@@ -74,8 +59,6 @@ const gateway = new OrkestratorGateway({
   port: 0,
   env: { ORKESTRATOR_GATEWAY_TOKEN: token },
   allowNonTailscaleBind: true,
-  legacyPreviewPortAccess: async (port) =>
-    port === previewPort || port === secretPort ? "allowed" : "unknown",
 });
 const info = await gateway.start();
 if (!info) throw new Error("gateway did not start");
@@ -86,9 +69,6 @@ process.stdout.write(
     gatewayPort: info.port,
     token,
     otherPort,
-    previewPort,
-    secretPort,
-    secretResponse: SECRET_RESPONSE,
   })}\n`,
 );
 
@@ -97,7 +77,7 @@ async function shutdown(): Promise<void> {
   if (closing) return;
   closing = true;
   await gateway.stop();
-  for (const server of [otherService, preview, secretPreview]) {
+  for (const server of [otherService]) {
     server.closeAllConnections();
     server.close();
   }

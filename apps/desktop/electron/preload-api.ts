@@ -738,9 +738,6 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
       setVisible(tabId: string, visible: boolean): Promise<BrowserPreviewState | null> {
         return ipcRenderer.invoke("orkestrator:browser-preview:set-visible", tabId, visible);
       },
-      navigate(tabId: string, url: string): Promise<BrowserPreviewState> {
-        return ipcRenderer.invoke("orkestrator:browser-preview:navigate", tabId, url);
-      },
       goBack(tabId: string): Promise<BrowserPreviewState> {
         return ipcRenderer.invoke("orkestrator:browser-preview:go-back", tabId);
       },

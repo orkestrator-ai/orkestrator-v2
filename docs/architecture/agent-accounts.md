@@ -154,10 +154,12 @@ on an added account `applyActiveAgentAccountEnvironment` also sets
 (`codexBridgeStateDir`) keeps session records, dispatch journals, session
 titles, change evidence and command-change journals there; its model cache and
 app-server pid file stay under the account's own `CODEX_HOME`, because they
-belong to the login. Records an account wrote in its own directory before this
-(2026-10-26) are moved over the next time a bridge on it loads its sessions,
-without replacing a newer record or a tombstone, and earlier titles and
-command-change badges are still read from there. Without this, a tab whose
+belong to the login. Titles, command-change badges, change evidence and a
+dispatch journal an account wrote in its own directory before this
+(2026-10-26) are adopted once when a bridge on it starts
+(`login-state-adoption.ts`), never replacing what the shared directory already
+holds; nothing reads the account's directory after that. Its session records
+are not adopted: they expire after seven days. Without this, a tab whose
 bridge was replaced after a switch showed "Unable to connect to Codex" and
 **Retry** opened an empty session.
 
@@ -766,13 +768,11 @@ handed to every machine with the same login.
   (`SHARED_USAGE_CLOCK_SKEW_MS`) is dated now; one further ahead is refused,
   because a clock far ahead would otherwise make one old reading outrank every
   real one for as long as it stays ahead.
-- **Mixed versions.** The commands are new in the `accounts` domain (no version
-  bump). A node that predates them answers `unknown-command` and takes no part:
-  it neither sends nor receives readings, and keeps showing its own. Nothing is
-  retried against it. An older command node runs no passes, so its leaves show
-  only their own readings, as before. The event is new and optional; an older
-  window ignores it, and `readOn` is a new optional field an older renderer does
-  not show.
+- **Failures.** A node whose collect fails, an `unknown-command` answer
+  included, is reported as failed for that pass and neither sends nor receives
+  readings in it; it keeps showing its own. (The separate "takes no part"
+  answer for nodes that predate the commands was retired with legacy support
+  on 2026-11-14, to-do 8108.)
 
 ## Containers
 
@@ -1374,9 +1374,9 @@ pins like any other. Each automatic
 switch tells the open main coordinators through the mail store, following
 [Who hears a notice](coordinator.md#who-hears-a-notice): on a leaf the command
 node's coordinators hear it through the leaf's outbox, which keeps it across a link
-drop, and the leaf's only for repositories the command node lacks. An older command
-node still hears through `AGENT_ACCOUNT_AUTO_SWITCHED_EVENT`, where a link that is
-down loses the notice and `lastSwitch` still records the move. A notice never delays
+drop, and the leaf's only for repositories the command node lacks. The leaf no
+longer emits `AGENT_ACCOUNT_AUTO_SWITCHED_EVENT` (the event stays registered in the
+`accounts` domain but nothing sends or reads it). A notice never delays
 a switch, and an automatic switch notice starts no coordinator, because it belongs to
 no repository. Nor does it wake one: it rides along with the coordinator's next
 delivery (`rideAlong`, [agent-messaging.md](agent-messaging.md#scheduling)). The

@@ -151,9 +151,9 @@ describe("useEnvironmentListSync", () => {
         await new Promise((resolve) => originalSetInterval(resolve, 80));
       });
     };
-    const setup = (served: () => Promise<boolean> = () => Promise.resolve(true)) => {
+    const setup = (served: () => Promise<void> = () => Promise.resolve()) => {
       const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
-      const refreshEnvironment = mock<(projectId: string, id: string) => Promise<boolean>>(served);
+      const refreshEnvironment = mock<(projectId: string, id: string) => Promise<void>>(served);
       renderHookInAppCommandScope(() =>
         useEnvironmentListSync(["project-1"], refreshProject, refreshEnvironment),
       );
@@ -172,31 +172,11 @@ describe("useEnvironmentListSync", () => {
       expect(refreshProject).not.toHaveBeenCalled();
     });
 
-    test("falls back to the list, and stays there, on a backend without the read", async () => {
-      const { refreshProject, refreshEnvironment } = setup(() => Promise.resolve(false));
-
-      await announce("env-1", 1);
-      expect(refreshEnvironment).toHaveBeenCalledTimes(1);
-      expect(refreshProject).toHaveBeenCalledTimes(1);
-
-      await announce("env-1", 2);
-      expect(refreshEnvironment).toHaveBeenCalledTimes(1);
-      expect(refreshProject).toHaveBeenCalledTimes(2);
-
-      // A resync may mean a different backend, so the next change asks again.
-      await act(async () => {
-        requestResourceResync();
-        await Promise.resolve();
-      });
-      await announce("env-1", 3);
-      expect(refreshEnvironment).toHaveBeenCalledTimes(2);
-    });
-
     test("a change landing during its read is read afterwards, not lost", async () => {
-      let finish: ((served: boolean) => void) | undefined;
+      let finish: (() => void) | undefined;
       const { refreshProject, refreshEnvironment } = setup(
         () =>
-          new Promise<boolean>((resolve) => {
+          new Promise<void>((resolve) => {
             finish = resolve;
           }),
       );
@@ -205,7 +185,7 @@ describe("useEnvironmentListSync", () => {
       expect(refreshEnvironment).toHaveBeenCalledTimes(1);
 
       await act(async () => {
-        finish?.(true);
+        finish?.();
         await Promise.resolve();
       });
       expect(refreshEnvironment.mock.calls.at(-1)).toEqual(["project-1", "env-2"]);
@@ -213,10 +193,10 @@ describe("useEnvironmentListSync", () => {
     });
 
     test("several changes waiting at once read the list once", async () => {
-      let finish: ((served: boolean) => void) | undefined;
+      let finish: (() => void) | undefined;
       const { refreshProject, refreshEnvironment } = setup(
         () =>
-          new Promise<boolean>((resolve) => {
+          new Promise<void>((resolve) => {
             finish = resolve;
           }),
       );
@@ -234,7 +214,7 @@ describe("useEnvironmentListSync", () => {
       });
       expect(refreshEnvironment).toHaveBeenCalledTimes(1);
       await act(async () => {
-        finish?.(true);
+        finish?.();
         await new Promise((resolve) => originalSetInterval(resolve, 0));
       });
       expect(refreshEnvironment).toHaveBeenCalledTimes(1);
@@ -243,8 +223,8 @@ describe("useEnvironmentListSync", () => {
 
     test("an announcement without a project still reads every list", async () => {
       const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
-      const refreshEnvironment = mock<(projectId: string, id: string) => Promise<boolean>>(() =>
-        Promise.resolve(true),
+      const refreshEnvironment = mock<(projectId: string, id: string) => Promise<void>>(() =>
+        Promise.resolve(),
       );
       renderHookInAppCommandScope(() =>
         useEnvironmentListSync(["project-1", "project-2"], refreshProject, refreshEnvironment),

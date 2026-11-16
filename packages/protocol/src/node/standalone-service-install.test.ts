@@ -268,17 +268,11 @@ describe("installRelease with real bun installs", () => {
     expect(existsSync(path.join(releaseDir, ".cache"))).toBe(false);
   });
 
-  test("a release without a published lockfile still installs, resolving afresh", async () => {
-    const releaseDir = await installRelease(standaloneLayout(dataDir), "1.9.0", {
-      bun: BUN,
-      run,
-      registry,
-    });
-
-    expect(readReleaseManifest(releaseDir)?.version).toBe("1.9.0");
-    expect(await executedVersion(releaseDir)).toBe("1.1.0");
-    // What the lockfile prevents: this is why 2.0.0 above is not a coincidence.
-    expect(await installedVersion(releaseDir, "leaf")).toBe("1.1.0");
+  test("refuses a release without a published lockfile rather than resolving afresh", async () => {
+    await expect(
+      installRelease(standaloneLayout(dataDir), "1.9.0", { bun: BUN, run, registry }),
+    ).rejects.toThrow("was published without its dependency lockfile");
+    expect(leftInReleases()).toEqual([]);
   });
 
   test("refuses a lockfile out of step with its manifest and leaves no release", async () => {

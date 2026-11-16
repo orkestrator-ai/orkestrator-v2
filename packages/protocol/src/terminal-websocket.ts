@@ -1,19 +1,12 @@
 /** Version 1 of the multiplexed gateway terminal protocol. */
 export const TERMINAL_WEBSOCKET_PROTOCOL_VERSION = 1 as const;
-export const TERMINAL_WEBSOCKET_SUBPROTOCOL = "orkestrator-terminal.v1";
 /**
- * Version 1 with one difference: the server answers input that succeeded with
- * cumulative `input-results` frames rather than one `operation-result` each.
+ * The one subprotocol a client offers and the server selects: the server
+ * answers input that succeeded with cumulative `input-results` frames, and
+ * `operation-result` only for failures and resizes. A client that offers
+ * anything else is refused with 426.
  */
-export const TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL = "orkestrator-terminal.v1.input-results";
-/**
- * What a client offers, preferred first. An older server selects the v1 entry,
- * and a client offering only v1 keeps one `operation-result` per input.
- */
-export const TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS = [
-  TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
-  TERMINAL_WEBSOCKET_SUBPROTOCOL,
-];
+export const TERMINAL_WEBSOCKET_SUBPROTOCOL = "orkestrator-terminal.v1.input-results";
 export const TERMINAL_WEBSOCKET_PATH = "/__orkestrator/terminal";
 
 /** Control frames are deliberately small and never contain terminal bytes. */

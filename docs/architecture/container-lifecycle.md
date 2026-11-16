@@ -2189,6 +2189,61 @@ from 2. A backend that predates version 3 reads a `failed` snapshot as an
 unreadable state and keeps the previous state (marked stale after three reads)
 until the next prompt.
 
+### Turns no hook ends
+
+Two ends of a terminal Claude turn fire no hook, so without help the file
+keeps `working` for good (to-do 8092, retired):
+
+- **A prompt the CLI refuses locally.** After a refused login the CLI
+  considers itself signed out and answers the next prompt "Not logged in ·
+  Please run /login" itself, with no model request and no `Stop` or
+  `StopFailure` (seen with Claude Code 2.1.319 in a container on 2026-11-14).
+- **The last terminal closing mid-turn.** Closing the tab ends its shell and
+  Claude in the container; nothing writes the file again.
+
+The poll settles both by rewriting the snapshot itself
+(`claude-terminal-settle.ts`). The rewrite is a compare-and-set run with
+`docker exec` as the image's user, under the hooks' own lock: it writes only
+when the snapshot is still exactly the `working <revision> <completions>` the
+poll observed, so a prompt submitted meanwhile is never overwritten, and it
+bumps the revision as a hook would. Because the result is in the container's
+file, it holds across a closed tab, a later poll lineage and a backend
+restart. The poll counts its own settle as an announced change, so a
+confirmed doorbell is not demoted for it. It needs no new image capability:
+any image with the counted snapshot (version 2 and later) can be settled.
+
+| End | Detected by | Written | Persisted as |
+| --- | --- | --- | --- |
+| Local refusal | While a counted snapshot reads `working`, a 1 s in-memory check of the container's terminal output (`TerminalRuntime`, no exec) finds one of the CLI's sign-in notices printed after the output marks captured before the last non-`working` read began, followed only by prompt-box redraw glyphs and 3 s of quiet | `failed` | `idle` with `completionOutcome: "failed"`, ringing `agent_failed` like `StopFailure` |
+| Last terminal closed | A counted snapshot reads `working` while no terminal or claude-tmux tab demands it; retried on later reads, including cold start | `idle` | `idle` with `completionOutcome: "none"`: the turn ends with no bell |
+
+The notices are the CLI's fixed text (`CLAUDE_SIGN_IN_NOTICES`), matched with
+escape sequences, control characters and whitespace removed, so the
+renderer's colours, cursor moves and line wrapping do not matter. Quiet alone
+does not prove completion: a live turn can wait on a static permission dialog.
+Only prompt-box punctuation and the pinned CLI’s fixed bypass-permissions
+footer and completed-turn duration line may follow a notice; other visible output revokes
+the candidate. A quoted notice with nothing but prompt punctuation after it is
+still ambiguous. On first adoption of a working snapshot the watch scans a
+bounded retained tail (64 KiB of characters); replacing a working revision uses the
+previous watch's consumed positions, without its notice evidence. Reads wait
+for an outstanding settle before persisting its result, so its no-bell metadata
+cannot arrive after an idle transition. Failed notice attempts retry on watch
+ticks; absent-demand attempts retry on safety reads. The check keeps only a
+short normalized tail per terminal and answers a boolean: terminal output never reaches a log or a
+metric. A CLI that rewords the notices silently disables the check, so
+`claude-terminal-settle.test.ts` reads both out of the pinned CLI build the
+Claude bridge's Agent SDK bundles.
+
+Not covered: a turn whose Claude ends while a terminal or tab is still open
+in the container (Claude exited in a shell that stays open, or its tab
+closed beside another one), because `demand` stays; and the host claude-tmux
+tab, which reads
+its own hooks (`tmux-hooks.ts`) and was not observed in this state
+([8094](../todo/containers-and-environments/8094-claude-tmux-prompt-refused-locally.md)).
+Unit tests (`NODE_ENV=test`) build the poll without a settler, so they never
+write to a container.
+
 After persisting, `orkestrator-state-signal` POSTs, detached and with no body,
 to `/claude-state-signal` on the agent
 tools server. The request only says "read now"; the backend reads the file

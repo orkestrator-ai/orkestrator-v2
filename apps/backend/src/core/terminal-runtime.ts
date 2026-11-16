@@ -182,14 +182,20 @@ export class TerminalRuntime {
 
   /** Whether a live terminal shell runs in this container (a full or short id). */
   hasContainerTerminal(containerId: string): boolean {
-    if (!containerId) return false;
+    return this.containerSessionIds(containerId).length > 0;
+  }
+
+  /** Live terminal sessions whose shell runs in this container (a full or short id). */
+  containerSessionIds(containerId: string): string[] {
+    if (!containerId) return [];
+    const ids: string[] = [];
     for (const id of this.processes.keys()) {
       const config = this.sessionConfigs.get(id);
       if (config?.kind !== "container") continue;
       if (config.containerId.startsWith(containerId) || containerId.startsWith(config.containerId))
-        return true;
+        ids.push(id);
     }
-    return false;
+    return ids;
   }
 
   /** Live local terminal shells and the environment each was opened for. */

@@ -660,6 +660,9 @@ describe("build pipeline prompts", () => {
     };
     const section = verificationCriteriaSection(taskSnapshot);
     expect(section).toContain("A not-checked criterion does not by itself mean complete: false.");
+    expect(section).toContain(
+      "is judged by the code, tests or docs in the change that produce that behaviour; it does not need a person to watch it happen",
+    );
     const serialized = section
       .split("<acceptance-criteria-json>\n")[1]!
       .split("\n</acceptance-criteria-json>")[0]!;

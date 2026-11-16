@@ -7,6 +7,7 @@ import {
 } from "./feature-planning.js";
 import { PUBLIC_ACTION_INPUTS } from "./public-api-inputs.js";
 import {
+  ACCEPTANCE_CRITERIA_FORM,
   ACCEPTANCE_CRITERIA_RULE,
   TICKET_SECTIONS_GUIDANCE,
   DELIVERY_POLICY_LABELS,
@@ -607,6 +608,15 @@ describe("what an acceptance criterion may say", () => {
     expect(ACCEPTANCE_CRITERIA_RULE).toContain(
       "Verify judges each against the committed change alone",
     );
+    // Criteria are product requirements seen by a user or other actor, not an
+    // implementation plan naming files and functions.
+    expect(ACCEPTANCE_CRITERIA_RULE.startsWith(ACCEPTANCE_CRITERIA_FORM)).toBe(true);
+    expect(ACCEPTANCE_CRITERIA_FORM).toContain("functional or non-functional requirement");
+    expect(ACCEPTANCE_CRITERIA_FORM).toContain("seen by a user or other actor");
+    expect(ACCEPTANCE_CRITERIA_FORM).toContain(
+      '"Given <situation>, when <action>, then <outcome>"',
+    );
+    expect(ACCEPTANCE_CRITERIA_FORM).toContain("not file, function or test names");
     const story = {
       id: "story-1",
       title: "Existing story",

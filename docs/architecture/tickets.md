@@ -21,6 +21,16 @@ A ticket without a stored kind is a feature ticket. Follow-up and steer
 messages to a running worker stay agent mail, not a ticket kind (see the design
 record).
 
+An acceptance criterion is a functional or non-functional requirement of the
+product, written from the point of view of a user or other actor (a person, an
+operator, another system) as "Given <situation>, when <action>, then
+<outcome>". It says what someone can do, see or rely on, not which files,
+functions or tests change: a list naming exported functions and the doc rows to
+edit reads as an implementation plan, not as something a person can accept.
+`ACCEPTANCE_CRITERIA_FORM` holds that wording, and Verify judges such a
+criterion by the code, tests or docs in the change that produce the behaviour,
+without needing a person to watch it happen.
+
 An acceptance criterion names something the committed change itself can be
 checked against: what its code, tests or documentation do. Rules for how the
 work is carried out (what the worker may read, run, sign in to or touch on the

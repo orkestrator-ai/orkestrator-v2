@@ -1627,6 +1627,32 @@ server's process group is gone, once through Playwright's `SIGINT` teardown
 the 500 ms exit (status 143) can stop the server. Its server is a grandchild of
 a shell that leads the group, as the production `bunx vite` commands are.
 
+Playwright watches a `webServer` only while it starts: once the URL check has
+passed, the server's exit goes unnoticed. A component suite run whose Vite
+fixture server died partway on 2026-11-15 therefore carried on and failed 371
+cases with `net::ERR_CONNECTION_REFUSED` before it was stopped by hand (to-do
+8200 (retired)). The component suite's global setup
+(`e2e/fixture-server-setup.ts`) now watches the server itself, through
+`tests/playwright-fixture-server-watch.ts`, after its existing check that the
+server belongs to this checkout. It asks the fixture URL every ten seconds;
+after three refusals in a row it prints one line naming the server ("The
+fixture server at … stopped answering"), repeats it above the summary, and
+stops the run as Ctrl+C does, with a `SIGINT` to the runner's own PID. The run
+then ends about 30 s after the server died with exit status 130, the case in
+progress reported as interrupted and the rest as "did not run". Only a refused
+or reset connection counts. A probe with no answer within its ten seconds
+neither counts nor clears the tally, so a server slowed by a loaded host does
+not end a healthy run; any HTTP answer clears it. The watch does not restart
+the server: a restarted server would hide why it died, and the cases already
+failed against it would still count. `ORKESTRATOR_E2E_FIXTURE_PROBE_MS`
+shortens the interval for tests of the watch only.
+`tests/unit/playwright-fixture-server-exit.integration.test.ts` (slow tier)
+runs the real config and setup through a real Playwright runner whose server
+exits after the first case. A manual check on 2026-11-16 (beelink2, headless,
+`--project=desktop-chromium --workers=2`) killed the real Vite server 30 s into
+the run; the run ended 30 s later with 28 passed, 2 interrupted, 924 did not
+run and no case failed against the dead port.
+
 Because each group runs in its own process group, the terminal's Ctrl+C reaches
 the runner and nothing else. The runner relays it: on `SIGINT`, `SIGTERM`, or
 `SIGHUP` it terminates every live group tree, escalates to `SIGKILL` after two

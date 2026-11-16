@@ -57,5 +57,5 @@ worker count alone.
 
 ## Related
 
-- [8200](8200-component-suite-continues-after-fixture-server-exits.md), the other finding from the same runs.
+- 8200 (retired 2026-11-16), the other finding from the same runs: the suite now stops when its fixture server stops answering ([testing-guide.md](../../development/testing-guide.md#watchdogs-and-stuck-processes)).
 - [testing-guide.md](../../development/testing-guide.md), worker grants and review validation.

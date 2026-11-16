@@ -235,8 +235,10 @@ the failing files with `ORKESTRATOR_E2E_HOST_NETWORK=1` and again without it,
 and compare case by case. A case that fails only inside the namespace, and
 again on a rerun, is a defect of the wrapper. A whole run whose fixture server
 stops answering partway (every later case `ERR_CONNECTION_REFUSED`, as one
-omarchy-hp run did on 2026-11-15) says nothing about the wrapper; see
-[8200](../todo/cross-cutting/8200-component-suite-continues-after-fixture-server-exits.md).
+omarchy-hp run did on 2026-11-15) says nothing about the wrapper. Such a run
+now stops itself about 30 s after the server dies and says so (to-do 8200
+(retired); see the
+[testing guide](testing-guide.md#watchdogs-and-stuck-processes)).
 
 ## Codex typed-prompt resume qualification
 

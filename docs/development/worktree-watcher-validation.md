@@ -1,5 +1,75 @@
 # Worktree-watcher validation evidence
 
+## Guard repair stability evidence — 2026-11-16
+
+The review of `fddcaab5869bdc0c426a1794f35ad76c953e4418` reported no code
+defects, but lacked recorded evidence of ten consecutive passing executions of
+`apps/backend/src/core/worktree-watcher-large-ignored.test.ts`. The following
+ten fresh-process executions ran sequentially at that exact commit, with a clean
+working tree, on 2026-11-16. All exited 0. No test or production source changed
+during these runs.
+
+```bash
+for i in {1..10}; do
+  mise run test:logged -- --name watcher-stability-${i} -- \
+    bun test --cwd apps/backend ./src/core/worktree-watcher-large-ignored.test.ts \
+    --parallel=1 --only-failures || exit $?
+done
+```
+
+| Logged check | Exit | Reported duration |
+| --- | ---: | ---: |
+| watcher-stability-1 | 0 | 0.1 s |
+| watcher-stability-2 | 0 | 0.1 s |
+| watcher-stability-3 | 0 | 0.1 s |
+| watcher-stability-4 | 0 | 0.1 s |
+| watcher-stability-5 | 0 | 0.1 s |
+| watcher-stability-6 | 0 | 0.1 s |
+| watcher-stability-7 | 0 | 0.1 s |
+| watcher-stability-8 | 0 | 0.1 s |
+| watcher-stability-9 | 0 | 0.1 s |
+| watcher-stability-10 | 0 | 0.1 s |
+
+The loop also exited 0. Each logged check reported PASS and 115 output bytes;
+the logged runner removes successful raw logs by design. These observed exit
+statuses close the review's repeat-run evidence gap; no per-test totals are
+inferred from the compact runner output.
+
+### Preparation validation remains non-green
+
+The original preparation package and artifacts were preserved:
+`.orkestrator/review-artifacts/review-validation-c653d1c1-62e2-49df-aeae-8a97cd99d917/review-package-8ff82b8668fff53cff5f39c4c6f73d94fa1016e395416daf26b9add86e17d52a.json`.
+It records passing format, lint and typechecks, and exit 1 for
+`mise run test:logged -- --name review-default-tests -- mise run test`.
+The review reports 20 failures outside the changed test. The package's
+`validation-04.stderr.txt` and bounded original compressed diagnostics were read;
+the full suite was not rerun or described as passing.
+
+| Recorded failures | Evidence and disposition |
+| --- | --- |
+| Two assertions in `tests/unit/apt-packages-installer.test.ts`, fifteen in `tests/unit/apt-packages-installer-plan.test.ts` | Package failure triage marks all 17 `undetermined`, reason `dependency-graph-incomplete`. Actual exit 1 differs from expected installer policy statuses, including concurrent exits `[1,1]` instead of `[0,3]`. The assertions also failed the runner's isolated retries. No cause tying them to the single changed watcher test was established; left for the verifier. |
+| `gateway-result-channels.test.ts`: baseline harness emits only its JSON readiness record | Original isolated log reports `Harness exited before readiness`, at line 63; no underlying cause is established. Left for the verifier. |
+| `preview-latency-baseline-commands.test.ts`: baseline command lifecycle | Original isolated log reports Apple's LibreSSL 3.3 failing `openssl req -x509` with `Expecting: CERTIFICATE REQUEST`. This identifies the host command failure, but no branch repair was made. Left for the verifier. |
+| `core/git-fsmonitor.test.ts`: project-home status auto-starts and preserves the configured daemon | Original isolated log reports the `fsmonitor--daemon status` promise rejecting at line 286, after 24 other tests passed. No underlying cause is established. Left for the verifier. |
+
+The three backend failures above appear in the original group logs and isolated
+retry logs even though the package's failure-triage list includes only the
+installer failures. Those logs remain under
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.8Mbmf8/`
+as `rerun-apps-backend-src-gateway-result-channels-test-ts.log.gz`,
+`rerun-apps-backend-src-preview-latency-baseline-commands-test-ts.log.gz`, and
+`rerun-apps-backend-src-core-git-fsmonitor-test-ts.log.gz`; the two installer
+retry logs use the `rerun-tests-unit-apt-packages-installer` prefix.
+
+`git diff origin/main...HEAD` at the tested commit changed only the watcher test.
+No source used by these five failing files was edited by this branch. That
+scope check does not prove a pre-existing or environmental cause: the unresolved
+failures remain limitations, not excused passes. The only review finding was the
+missing stability evidence; this follow-up records it without changing unrelated
+code, weakening assertions, or rewriting the validated commit.
+
+## Earlier watcher qualification — 2026-11-10
+
 Observed 2026-11-10 on macOS arm64, Bun 1.4.4 (`38afee6c8`), mise 2026.9.17. This records validation evidence, not a full-suite pass or a claim that unrelated failures are caused by the watcher change. The isolated-owner triage used no production profile, production credentials, production backend service or live agent.
 
 ## Snapshots and outcome

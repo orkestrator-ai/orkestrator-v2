@@ -5,7 +5,7 @@ import { FakeOpenCode2Server } from "./fake-server.test-support.js";
 import { OpenCode2Provider } from "./provider.js";
 
 /**
- * To-do 7559: a 2.x `/api/event` stream that stays open but goes quiet is
+ * #2144: a 2.x `/api/event` stream that stays open but goes quiet is
  * replaced, because while it counts as connected the provider may answer
  * from cache. The 2.x server's idle keepalive is a `: heartbeat` SSE comment,
  * which the event parser never surfaces, so the watchdog is fed by bytes.

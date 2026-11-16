@@ -79,7 +79,7 @@ export function snapshotNotices(options: {
 /**
  * The state a Codex runtime-health body reports for its session.
  *
- * A Codex bridge since todo 7380 reports `session.state` (`attached` while the
+ * A Codex bridge since #2149 reports `session.state` (`attached` while the
  * session's thread is loaded in the running app-server, `detached` once the
  * idle sweep released it), the vocabulary Claude, Cursor and Pi use. It wins
  * only while the engine itself is `ready`: a starting, restarting or failed

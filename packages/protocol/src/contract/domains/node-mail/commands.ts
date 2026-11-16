@@ -52,7 +52,7 @@ export const deliverNodeMailCommand = defineCommand({
     subject: optionalString,
     body: optionalString,
     steer: optionalBoolean,
-    /** The coordinator's turn was not started by the user (`node-mail-turn-origin`). */
+    /** The coordinator's turn was not started by the user. */
     turnOrigin: optionalString,
     nodeParent: optionalUnknown,
     /** The leaf's project, for mail to its coordinator ("coordinator"). */

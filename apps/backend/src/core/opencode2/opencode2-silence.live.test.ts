@@ -7,7 +7,7 @@ import { OpenCode2Client } from "./client.js";
 import { OpenCode2Provider } from "./provider.js";
 
 /**
- * The 2.x event monitor's silence watchdog (to-do 7559) against a real pinned
+ * The 2.x event monitor's silence watchdog (#2144) against a real pinned
  * 2.x server, idle, with no credentials and no model calls. Run with
  * RUN_LIVE_OPENCODE2=1 and OPENCODE2_CLI_PATH set to the 2.x binary.
  *

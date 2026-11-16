@@ -412,8 +412,8 @@ above and [agent-testing.md](agent-testing.md).
 process, in about four seconds: the source-guard ratchet against
 `tests/source-guards/baseline.json` and the checks that each production-source
 guard still reaches its files, the DOM absence scan, project-class inheritance
-chains, test suite ownership, the raw-console directive scan, and the flaky-test,
-to-do and number-claim register tests (one `bun test` child alongside). They
+chains, test suite ownership, the raw-console directive scan, the retired to-do
+citation scan, and the flaky-test, to-do and number-claim register tests (one `bun test` child alongside). They
 share one `git ls-files -co --exclude-standard` listing, one read per file and,
 for the source guards, one parse per file. On failure each guard prints its
 problems and what to do, and the command exits non-zero. `--only <id>`
@@ -422,7 +422,7 @@ problems and what to do, and the command exits non-zero. `--only <id>`
 These checks of the real repository run only there. The guards' fixture tests
 stay in the unit suite (`tests/unit/source-guards.test.ts`,
 `dom-absence-scan.test.ts`, `inheritance-chains.test.ts`, `raw-console.test.ts`,
-`test-suite-ownership.test.ts` and the guard-specific ones), and the root group
+`retired-todo-citations.test.ts`, `test-suite-ownership.test.ts` and the guard-specific ones), and the root group
 leaves the three register test files out once the stage has passed in the same
 run. The stage runs whenever the root group is selected, outside the slow tier,
 without host admission: it is one short process, like lint, and queueing it

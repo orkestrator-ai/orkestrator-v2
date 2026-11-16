@@ -5,7 +5,7 @@ import { isDefaultDataDir } from "../data-dir.js";
 
 /**
  * A test-only hold on prompt dispatch in the backend's bridge client
- * (to-do 0050 task 3), so a live spec can stop the backend at a known point
+ * (#2086), so a live spec can stop the backend at a known point
  * of the at-most-once dispatch window instead of racing it.
  *
  * A spec arms it by creating a marker file in the profile's data directory:

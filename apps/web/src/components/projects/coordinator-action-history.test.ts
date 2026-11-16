@@ -68,6 +68,41 @@ test("independent clients recover outstanding evidence beyond a 512-row tail and
     ).toMatchObject({ anchorId: "old-pr", state: "gone", done: true });
   }
 });
+test("history walks every page, and refuses a page with a trimmed row", async () => {
+  const cursors: string[] = [];
+  const history = await recoverActionHistory([], "newest", "epoch", async (cursor) => {
+    cursors.push(cursor);
+    // A page with older rows behind it is `truncated`; that alone is no reason to refuse it.
+    return cursor === "newest"
+      ? {
+          syncVersion: 1,
+          messages: [message("middle")],
+          historyEpoch: "epoch",
+          nextCursor: "older",
+          complete: false,
+          truncated: true,
+        }
+      : {
+          syncVersion: 1,
+          messages: [question],
+          historyEpoch: "epoch",
+          complete: true,
+          truncated: false,
+        };
+  });
+  expect(cursors).toEqual(["newest", "older"]);
+  expect(coordinatorActionCards(history).map((card) => card.anchorId)).toEqual(["old-question"]);
+  await expect(
+    recoverActionHistory([], "page", "epoch", async () => ({
+      syncVersion: 1,
+      messages: [question],
+      historyEpoch: "epoch",
+      complete: true,
+      truncated: true,
+      rowsTrimmed: true,
+    })),
+  ).rejects.toThrow("Action history changed or truncated");
+});
 test("incomplete, changed and cyclic history refuses partial results", async () => {
   for (const page of [
     { historyEpoch: "other", complete: true },
@@ -83,6 +118,36 @@ test("incomplete, changed and cyclic history refuses partial results", async () 
       })),
     ).rejects.toThrow();
   }
+});
+
+test("overlapping pages retain one row per id and preserve the newer action evidence", async () => {
+  const updatedQuestion = {
+    ...question,
+    parts: [{ ...question.parts[0]!, toolArgs: { title: "Updated question" } }],
+  };
+  const cursors: string[] = [];
+  const history = await recoverActionHistory(
+    [updatedQuestion, message("tail")],
+    "first",
+    "epoch",
+    async (cursor) => {
+      cursors.push(cursor);
+      return {
+        syncVersion: 1,
+        messages:
+          cursor === "first"
+            ? [message("middle"), question, message("tail")]
+            : [message("oldest"), message("middle")],
+        historyEpoch: "epoch",
+        ...(cursor === "first" ? { nextCursor: "second" } : {}),
+        complete: cursor !== "first",
+        truncated: cursor === "first",
+      };
+    },
+  );
+  expect(cursors).toEqual(["first", "second"]);
+  expect(history.map((row) => row.id)).toEqual(["oldest", "middle", "old-question", "tail"]);
+  expect(coordinatorActionCards(history).map((card) => card.title)).toEqual(["Updated question"]);
 });
 export const blockingQuestion: AgentInteractionRequest = {
   version: 1,

@@ -369,7 +369,7 @@ describe("DiffStatsService", () => {
     expect(unwatched.service.isWatching("env-local")).toBe(false);
   });
 
-  test("a safety scan that finds an unannounced change tells the local watcher (to-do 8171)", async () => {
+  test("a safety scan that finds an unannounced change tells the local watcher (#2305)", async () => {
     const harness = createHarness();
     harness.service.track(localTarget());
     await settle();
@@ -394,7 +394,7 @@ describe("DiffStatsService", () => {
     );
   });
 
-  test("a polling local entry tells its watcher what its polls find first (to-do 8171)", async () => {
+  test("a polling local entry tells its watcher what its polls find first (#2305)", async () => {
     // An unqualified watcher (distrusted after a miss) leaves the entry polling.
     const harness = createHarness({ pendingCoverage: true });
     harness.service.track(localTarget());
@@ -422,7 +422,7 @@ describe("DiffStatsService", () => {
     expect(harness.unannouncedFor("env-local")).toBe(1);
   });
 
-  test("the first poll after a demotion reports the change it finds first (to-do 8171)", async () => {
+  test("the first poll after a demotion reports the change it finds first (#2305)", async () => {
     const harness = createHarness();
     harness.service.track(localTarget());
     await settle();

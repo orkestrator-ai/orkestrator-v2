@@ -355,11 +355,22 @@ describe("client-only optimistic messages", () => {
       return row!;
     };
     const system = { kind: "system", projectId: "p", resourceId: "sch-1" };
-    // What this backend writes: `workflow` for an older renderer, and the marker.
+    // What this backend writes: the real source, with no compatibility flag.
     const row = reminder({ ...system, source: "self-reminder" });
     expect(row.peerMail?.kind).toBe("notice");
     expect(row.content).toContain("Reminder you set");
     expect(reminder({ ...system, source: "workflow" }).content).toContain("Orkestrator workflow");
+    // A carrier an older backend wrote into a provider transcript.
+    const [stored] = createPeerMailNativeMessagesFromCarrier({
+      content: renderAgentMailCarrier(
+        mailMessage({
+          id: "mail-reminder-stored",
+          from: { ...system, source: "workflow" } as AgentMailMessage["from"],
+        }),
+      ).replace(/"source":\s*"workflow"/, '"source":"workflow","selfReminder":true'),
+      createdAt: "x",
+    });
+    expect(stored!.content).toContain("Reminder you set");
   });
 
   test("a coordinator's mail still parses with its turn origin", () => {

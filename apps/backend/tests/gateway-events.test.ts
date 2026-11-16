@@ -841,7 +841,7 @@ describe("gateway terminal WebSocket", () => {
     socket.terminate();
   });
 
-  // Todo 3900: the write already in the backend cannot be recalled, but nothing
+  // #1729: the write already in the backend cannot be recalled, but nothing
   // queued behind it may run once the credential that admitted it is revoked. A
   // socket that disconnected first still has its queue waiting on the same tail.
   for (const [revocation, revoke] of [

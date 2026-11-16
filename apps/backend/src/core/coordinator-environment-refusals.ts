@@ -1,7 +1,7 @@
 /**
  * Content-free counts of the coordinator origin refusal
  * (`COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL`): how often a coordinator was
- * stopped from acting on an environment it did not create (to-do 6080 task 6).
+ * stopped from acting on an environment it did not create (to-do 6080 (retired) task 6).
  *
  * The question these answer is whether the default is too strict, and in
  * particular whether replies to an environment's own mail dominate the

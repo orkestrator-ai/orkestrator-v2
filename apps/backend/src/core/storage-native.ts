@@ -296,7 +296,7 @@ export class NativeAgentSessionsRepository {
 
   private displayTailStoreInstance: NativeAgentDisplayTailStore | null = null;
 
-  /** `cause` names the write, never its content (todo 0049 task 4). */
+  /** `cause` names the write, never its content (#1659). */
   announceNativeAgentRecord(
     session: Pick<PersistedNativeAgentSession, "environmentId" | "agent" | "logicalSessionKey">,
     cause: NativeSessionInvalidationCause,
@@ -1068,7 +1068,7 @@ export class NativeAgentSessionsRepository {
   /**
    * The keys of an environment's readable sessions, sorted. Read from the
    * store's indexed owner column, so the cost is this environment's rows, not
-   * the store's (todo 6120 task 6): parsing every session here held the event
+   * the store's (#2029): parsing every session here held the event
    * loop for 150 ms per delete on a 2,000-session store. Rows with no owner
    * (an older build wrote them, or the open-time backfill could not read
    * them) are parsed and checked here, so a row the index misses is still

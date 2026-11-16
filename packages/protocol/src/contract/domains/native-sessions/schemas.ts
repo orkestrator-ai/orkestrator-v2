@@ -790,9 +790,6 @@ export const ProjectionUpdateSchema = openRecord({
   baseToken: optionalString,
   projection: Schema.optional(NativeAgentProjectionSchema),
   delta: optionalObject,
-  historyCursor: optionalString,
-  historyEpoch: optionalString,
-  historyComplete: optionalBoolean,
   resetReason: optionalString,
 });
 
@@ -804,4 +801,5 @@ export const MessagePageSchema = openRecord({
   nextCursor: optionalString,
   complete: Schema.optional(Schema.Boolean),
   truncated: Schema.optional(Schema.Boolean),
+  rowsTrimmed: Schema.optional(Schema.Boolean),
 });

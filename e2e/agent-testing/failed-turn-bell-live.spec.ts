@@ -1,5 +1,5 @@
 /**
- * Failed native turns ring "Agent stopped with an error", live (to-do 5160
+ * Failed native turns ring "Agent stopped with an error", live (to-do 5160 (retired)
  * task 4). Opt-in (`ORKESTRATOR_AGENT_TEST_LIVE_FAILED_TURN_BELL=1`) against a
  * running credential-free agent-test profile. No login and nothing billed:
  * the profile's own Claude settings, Codex config, Pi `models.json` and
@@ -30,6 +30,20 @@
  *   a local bridge goes with it. The restarted backend must ring
  *   `agent_failed`.
  *
+ * `ORKESTRATOR_AGENT_TEST_BELL_ENVIRONMENT=container` (to-do 5160 (retired) task 6) runs
+ * the bell environment as a container instead, for native Claude only, and
+ * by default only the `restart` case (`refused` and `stop` may be selected
+ * too). The model is `refused-login-model.ts` again, run on the container's
+ * loopback by the image's own `bun` and held or released by `docker exec
+ * curl`; the container user's Claude settings point at it. The container's
+ * bridge survives the backend's SIGKILL and restart, so the turn is still
+ * held at the model afterwards: the case checks that the restarted backend
+ * has not rung yet, then releases the hold, and the refusal the surviving
+ * bridge reports must ring `agent_failed`. Build the profile's image first
+ * (`mise run docker:build:dev --profile <p>`); a host whose firewall drops
+ * container traffic to the profile needs the `docker:disposable
+ * --host-loopback` daemon, as `container-claude-terminal-signal.spec.ts` does.
+ *
  * Only processes under this profile's backend are signalled, after their
  * command line is checked. Each platform writes
  * `output/agent-testing/<run>/failed-turn-bell/<platform>.json`, and the
@@ -43,6 +57,8 @@ import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { snapshotFixtureFiles } from "./codex-fixture-files";
 import {
+  CONTAINER_FAKE_PORT,
+  installContainerFakeClaude,
   startLocalFakeModel,
   withFakeModelCleanup,
   type FakeModelHandle,
@@ -63,12 +79,13 @@ import {
 import { devTestRestartArgs, type StoredProfileSelection } from "./profile-restart-args";
 import { outlivingProcessEnv } from "../../tests/private-tmpdir";
 import {
-  bellCases,
-  bellPlatforms,
+  bellEnvironment,
+  bellSelection,
   bridgeProcess,
   expectedUnread,
   loggedBridgePid,
   parseProcessRows,
+  removeEnvironments,
   TOAST_TITLES,
   type BellCase,
   type BellPlatform,
@@ -77,8 +94,13 @@ import {
 const LIVE = process.env.ORKESTRATOR_AGENT_TEST_LIVE_FAILED_TURN_BELL === "1";
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "ork-bell";
 const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? profile;
-const PLATFORMS = bellPlatforms(process.env.ORKESTRATOR_AGENT_TEST_BELL_PLATFORMS);
-const CASES = bellCases(process.env.ORKESTRATOR_AGENT_TEST_BELL_CASES);
+const ENVIRONMENT = bellEnvironment(process.env.ORKESTRATOR_AGENT_TEST_BELL_ENVIRONMENT);
+const IN_CONTAINER = ENVIRONMENT === "container";
+const { platforms: PLATFORMS, cases: CASES } = bellSelection(
+  ENVIRONMENT,
+  process.env.ORKESTRATOR_AGENT_TEST_BELL_PLATFORMS,
+  process.env.ORKESTRATOR_AGENT_TEST_BELL_CASES,
+);
 const REFUSED_MODEL = path.join(import.meta.dirname, "refused-login-model.ts");
 /** Codex retries a refused request before it fails the turn. */
 const FAILURE_TIMEOUT_MS = 600_000;
@@ -104,6 +126,12 @@ type CaseRecord = {
   bridge?: string;
   /** The environment's activity states sampled for 6 s while the model held the turn. */
   activityWhileHeld?: string[];
+  /** Container restart: the states sampled for 10 s after the restart, model still holding. */
+  activityAfterRestart?: string[];
+  /** Container restart: whether the bell stayed silent until the hold was released. */
+  quietUntilReleased?: boolean;
+  /** Container restart: the in-container bridge's PID before and after the restart. */
+  containerBridgePid?: { before?: number; after?: number };
   ms?: number;
   note?: string;
 };
@@ -242,6 +270,63 @@ function madeUpCodexKey(dataDir: string): FakeModelHandle {
   return { origin: "codex-auth", stop: async () => restore() };
 }
 
+/** Holds, releases and counts the refused-login model wherever it runs. */
+type ModelControl = {
+  hold(hold: boolean): Promise<void>;
+  stats(): Promise<{ requests: number; held: number }>;
+};
+
+function hostModelControl(origin: string): ModelControl {
+  return {
+    hold: (hold) => setRefusedLoginHold(origin, hold),
+    stats: () => refusedLoginStats(origin),
+  };
+}
+
+/** The same routes on a container's loopback, through `docker exec curl`. */
+function containerModelControl(containerId: string): ModelControl {
+  const curl = (args: string[]) => {
+    const result = spawnSync(
+      "docker",
+      ["exec", containerId, "curl", "-fsS", "--max-time", "10", ...args],
+      { encoding: "utf8", timeout: 20_000 },
+    );
+    if (result.status !== 0) throw new Error(`the container's model did not answer ${args.at(-1)}`);
+    return result.stdout;
+  };
+  const base = `http://127.0.0.1:${CONTAINER_FAKE_PORT}`;
+  return {
+    hold: async (hold) => {
+      curl([
+        "-X",
+        "POST",
+        "-H",
+        "content-type: application/json",
+        "-d",
+        JSON.stringify({ hold }),
+        `${base}/__qa/hold`,
+      ]);
+    },
+    stats: async () =>
+      JSON.parse(curl([`${base}/__qa/stats`])) as { requests: number; held: number },
+  };
+}
+
+/** The oldest Claude bridge process in the container, or undefined. */
+function containerBridgePid(containerId: string): number | undefined {
+  // The bracket keeps pgrep from matching a shell that carries the pattern.
+  const result = spawnSync(
+    "docker",
+    ["exec", containerId, "pgrep", "-of", "/opt/claude-bridg[e]/"],
+    {
+      encoding: "utf8",
+      timeout: 15_000,
+    },
+  );
+  const pid = Number(result.stdout.trim());
+  return result.status === 0 && Number.isInteger(pid) && pid > 0 ? pid : undefined;
+}
+
 async function dismissStartupDialogs(page: Page) {
   for (const name of ["Continue Without Claude", "Continue Without Docker", "Hide"]) {
     const button = page.getByRole("button", { name, exact: true });
@@ -306,25 +391,30 @@ test.describe("failed native turns ring the right bell", () => {
       };
 
       const handles: FakeModelHandle[] = [];
+      let model: ModelControl | undefined;
       const created: string[] = [];
       // Content-free heartbeat: keeps the logged runner's no-output watchdog fed.
       const beat = setInterval(() => progress("still waiting"), 60_000);
       try {
         await withFakeModelCleanup(handles, async () => {
-          const fake = await startLocalFakeModel(platform, status.dataDir!, {
-            script: REFUSED_MODEL,
-          });
-          handles.push(fake);
-          const origin = fake.origin;
-          summary.fakeModelOrigin = origin;
+          if (!IN_CONTAINER) {
+            const fake = await startLocalFakeModel(platform, status.dataDir!, {
+              script: REFUSED_MODEL,
+            });
+            handles.push(fake);
+            summary.fakeModelOrigin = fake.origin;
+            model = hostModelControl(fake.origin);
+          }
+          summary.environment = ENVIRONMENT;
           if (platform === "codex") handles.push(madeUpCodexKey(status.dataDir!));
           if (platform === "opencode") {
             const restore = await allowOpenCodeFakeProvider(current, PI_FAKE_PROVIDER);
             handles.push({ origin: "opencode-allowlist", stop: restore });
           }
-          const model = platform === "pi" || platform === "opencode" ? PI_FAKE_MODEL_REF : null;
+          const modelRef = platform === "pi" || platform === "opencode" ? PI_FAKE_MODEL_REF : null;
+          const prefix = IN_CONTAINER ? `ctr-${platform}` : platform;
           // An earlier run of this spec that was killed left its two environments.
-          const stale = new RegExp(`^bell-(park-)?${platform}-\\d+$`);
+          const stale = new RegExp(`^bell-(park-)?${prefix}-\\d+$`);
           for (const environment of await invoke<Environment[]>("get_environments", {
             projectId: fixture!.id,
           })) {
@@ -335,14 +425,14 @@ test.describe("failed native turns ring the right bell", () => {
           const stamp = Date.now();
           const bell = await invoke<Environment>("create_environment", {
             projectId: fixture!.id,
-            name: `bell-${platform}-${stamp}`,
-            environmentType: "local",
+            name: `bell-${prefix}-${stamp}`,
+            environmentType: IN_CONTAINER ? "containerized" : "local",
             networkAccessMode: "restricted",
           });
           created.push(bell.id);
           const parked = await invoke<Environment>("create_environment", {
             projectId: fixture!.id,
-            name: `bell-park-${platform}-${stamp}`,
+            name: `bell-park-${prefix}-${stamp}`,
             environmentType: "local",
             networkAccessMode: "restricted",
           });
@@ -353,8 +443,28 @@ test.describe("failed native turns ring the right bell", () => {
             agent: platform,
             logicalSessionKey: `env-${bell.id}:${tabId}`,
           };
+          let containerId: string | null = null;
           const prepare = async () => {
             await invoke("start_environment", { environmentId: bell.id });
+            if (IN_CONTAINER) {
+              const started = await invoke<(Environment & { containerId?: string | null }) | null>(
+                "get_environment",
+                { environmentId: bell.id },
+              );
+              containerId = started?.containerId ?? null;
+              expect(
+                containerId,
+                "the container environment started without a container",
+              ).toBeTruthy();
+              const fake = await installContainerFakeClaude(containerId!, {
+                source: readFileSync(REFUSED_MODEL, "utf8"),
+                serverArgs: [],
+                readyPath: "/__qa/stats",
+              });
+              handles.push(fake);
+              summary.fakeModelOrigin = fake.origin;
+              model = containerModelControl(containerId!);
+            }
             const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
               environmentId: bell.id,
             });
@@ -363,7 +473,7 @@ test.describe("failed native turns ring the right bell", () => {
               expectedRevision: layout?.revision ?? 0,
               layout: {
                 version: PANE_LAYOUT_VERSION,
-                containerId: null,
+                containerId,
                 activePaneId: "bell-pane",
                 root: {
                   kind: "leaf",
@@ -374,8 +484,12 @@ test.describe("failed native turns ring the right bell", () => {
                       id: tabId,
                       type: "agent-native",
                       displayTitle: `${platform} bell`,
-                      nativeAgentData: { environmentId: bell.id, platform, isLocal: true },
-                      ...(model ? { initialAgentModel: model } : {}),
+                      nativeAgentData: {
+                        environmentId: bell.id,
+                        platform,
+                        isLocal: !IN_CONTAINER,
+                      },
+                      ...(modelRef ? { initialAgentModel: modelRef } : {}),
                     },
                   ],
                 },
@@ -385,7 +499,7 @@ test.describe("failed native turns ring the right bell", () => {
           await prepare();
           await invoke("ensure_native_agent_session", {
             ...identity,
-            ...(model ? { model } : {}),
+            ...(modelRef ? { model: modelRef } : {}),
           });
           progress("session ready");
 
@@ -418,8 +532,9 @@ test.describe("failed native turns ring the right bell", () => {
             await goto(parked.name);
             progress(`${kind} parked`);
             const hold = kind !== "refused";
-            await setRefusedLoginHold(origin, hold);
-            const before = await refusedLoginStats(origin);
+            const control = model!;
+            await control.hold(hold);
+            const before = await control.stats();
             const dispatch = await invoke<{ outcome: string; error?: string }>(
               "dispatch_native_agent_intent",
               {
@@ -433,7 +548,7 @@ test.describe("failed native turns ring the right bell", () => {
             progress(`${kind} dispatched`);
             if (hold) {
               await expect
-                .poll(async () => (await refusedLoginStats(origin)).held, {
+                .poll(async () => (await control.stats()).held, {
                   timeout: 180_000,
                   intervals: [500],
                 })
@@ -454,16 +569,62 @@ test.describe("failed native turns ring the right bell", () => {
               } else if (kind === "bridge-kill") {
                 record.bridge = killBridge(status, platform, bell.id);
               } else {
+                const bridgeBefore = containerId ? containerBridgePid(containerId) : undefined;
                 status = await crashAndRestart(status);
                 invoke = await authenticatedInvoke(page, status, profile);
                 openEnvironment = sidebarNavigator(page, fixture!.name);
                 await page.goto(status.browserUrl!);
                 await goto(parked.name);
                 progress("profile restarted");
+                if (IN_CONTAINER) {
+                  // The container's bridge survived, so the turn is still held
+                  // at the model: nothing may ring until the model answers.
+                  record.containerBridgePid = {
+                    before: bridgeBefore,
+                    after: containerBridgePid(containerId!),
+                  };
+                  expect(
+                    bridgeBefore,
+                    "no container bridge was running before the restart",
+                  ).toBeGreaterThan(0);
+                  expect(
+                    record.containerBridgePid.after,
+                    "the container bridge was replaced or disappeared during the backend restart",
+                  ).toBe(bridgeBefore);
+                  const seen = new Set<string>();
+                  let quiet = true;
+                  for (let sample = 0; sample < 10; sample += 1) {
+                    const environment = await invoke<UnreadEnvironment | null>("get_environment", {
+                      environmentId: bell.id,
+                    });
+                    seen.add(environment?.agentActivityState ?? "unknown");
+                    expect(
+                      environment,
+                      "the held environment disappeared after the restart",
+                    ).not.toBeNull();
+                    expect(
+                      environment?.agentActivityState,
+                      `the held turn was not working after the restart (sample ${sample + 1})`,
+                    ).toBe("working");
+                    if (environment?.hasUnreadWork === true) quiet = false;
+                    await sleep(1_000);
+                  }
+                  record.activityAfterRestart = [...seen];
+                  record.quietUntilReleased = quiet;
+                  expect(quiet, "the restarted backend rang while the turn was still held").toBe(
+                    true,
+                  );
+                  expect(
+                    (await control.stats()).held,
+                    "the held request did not survive the restart",
+                  ).toBeGreaterThan(0);
+                  await control.hold(false);
+                  progress("hold released after the restart");
+                }
               }
             } else {
               await expect
-                .poll(async () => (await refusedLoginStats(origin)).requests, {
+                .poll(async () => (await control.stats()).requests, {
                   timeout: 180_000,
                 })
                 .toBeGreaterThan(before.requests);
@@ -477,7 +638,7 @@ test.describe("failed native turns ring the right bell", () => {
               await sleep(QUIET_MS);
             }
             record.unreadReason = await unread();
-            await setRefusedLoginHold(origin, false);
+            await control.hold(false);
             const turn = (await projection())?.turn;
             record.turnPhase = turn?.phase;
             record.turnError = turn?.error?.slice(0, 200);
@@ -508,7 +669,7 @@ test.describe("failed native turns ring the right bell", () => {
                   () =>
                     invoke("ensure_native_agent_session", {
                       ...identity,
-                      ...(model ? { model } : {}),
+                      ...(modelRef ? { model: modelRef } : {}),
                     }).then(
                       () => true,
                       () => false,
@@ -523,13 +684,14 @@ test.describe("failed native turns ring the right bell", () => {
         clearInterval(beat);
         summary.finishedAt = new Date().toISOString();
         writeSummary();
-        await setRefusedLoginHold(String(summary.fakeModelOrigin ?? ""), false).catch(
-          () => undefined,
-        );
-        for (const environmentId of created) {
-          await invoke("stop_environment", { environmentId }).catch(() => undefined);
-          await invoke("delete_environment", { environmentId }).catch(() => undefined);
+        await model?.hold(false).catch(() => undefined);
+        // A restarted backend refuses container changes until it wins the lease.
+        const leftovers = await removeEnvironments(current, created);
+        if (leftovers.length) {
+          summary.cleanupFailures = leftovers;
+          writeSummary();
         }
+        expect.soft(leftovers, "the run could not delete its environments").toEqual([]);
       }
     });
   }

@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { prepareIsolatedBackendEnvironment } from "./provider-homes.js";
 import { prepareProviderRuntime } from "./provider-runtime.js";
 import { randomUUID } from "node:crypto";
@@ -29,6 +28,7 @@ const BIN = path.join(PACKAGE_ROOT, "bin", "orkestrator.js");
 const READY_TIMEOUT_MS = 60_000;
 const TOOLCHAIN_INSTALL_TIMEOUT_MS = 5 * 60_000;
 const COMMAND_TIMEOUT_MS = 10 * 60_000;
+const HELPER_TIMEOUT_MS = 60_000;
 const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
 
 export interface CliResult {
@@ -155,9 +155,9 @@ export async function startIsolatedBackend(options: {
       : {}),
   });
   if (runtime.toolchainTools.length > 0) {
-    const install = spawnSync(
-      process.execPath,
+    const install = await runCommand(
       [
+        process.execPath,
         launcher,
         "toolchain",
         "install",
@@ -166,16 +166,11 @@ export async function startIsolatedBackend(options: {
         dataDir,
         ...runtime.toolchainTools.flatMap((tool) => ["--tool", tool]),
       ],
-      {
-        cwd: options.root,
-        env,
-        encoding: "utf8",
-        timeout: TOOLCHAIN_INSTALL_TIMEOUT_MS,
-      },
+      { cwd: options.root, env, timeoutMs: TOOLCHAIN_INSTALL_TIMEOUT_MS },
     );
-    if (install.status !== 0)
+    if (install.code !== 0)
       throw new Error(
-        `toolchain install ${runtime.toolchainTools.join(",")} failed (exit ${install.status ?? "unknown"})`,
+        `toolchain install ${runtime.toolchainTools.join(",")} failed (exit ${install.code})`,
       );
   }
   const logFile = path.join(options.root, "backend.log");
@@ -292,28 +287,71 @@ export async function createFixtureRepository(
     GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z",
     GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
   };
-  const git = (args: string[], cwd?: string) => {
-    const result = spawnSync("git", args, { cwd, env, encoding: "utf8" });
-    if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
-    return result.stdout.trim();
-  };
-  git(["init", "--bare", "-b", "main", originPath]);
-  git(["init", "-b", "main"], projectPath);
+  const git = (args: string[], cwd?: string) => runGit(args, { cwd, env });
+  await git(["init", "--bare", "-b", "main", originPath]);
+  await git(["init", "-b", "main"], projectPath);
   for (const [file, contents] of Object.entries(files)) {
     await mkdir(path.dirname(path.join(projectPath, file)), {
       recursive: true,
     });
     await writeFile(path.join(projectPath, file), contents);
   }
-  git(["add", "."], projectPath);
-  git(["commit", "-m", "Initial scenario fixture"], projectPath);
-  git(["remote", "add", "origin", originPath], projectPath);
-  git(["push", "-u", "origin", "main"], projectPath);
+  await git(["add", "."], projectPath);
+  await git(["commit", "-m", "Initial scenario fixture"], projectPath);
+  await git(["remote", "add", "origin", originPath], projectPath);
+  await git(["push", "-u", "origin", "main"], projectPath);
   return {
     projectPath,
     originPath,
-    head: git(["rev-parse", "HEAD"], projectPath),
+    head: await git(["rev-parse", "HEAD"], projectPath),
   };
+}
+
+/**
+ * Runs a short helper command without blocking the event loop.
+ *
+ * Scenarios run concurrently in one test process (`cli-client.test.ts` uses
+ * `test.concurrent`), so helpers must not call `spawnSync`. With Bun 1.4.4,
+ * while one scenario ran `git` through `spawnSync`, another scenario's
+ * `Bun.spawn` CLI child sometimes exited without Bun noticing: it stayed a
+ * zombie, its `exited` and both pipes never settled, and the test hung until
+ * its 120 s timeout (on CI, and locally in about half of the file's runs).
+ * With every helper spawn asynchronous the hang no longer appeared. It was
+ * not reproduced outside the test runner, so it is recorded as observed
+ * behaviour, not as a confirmed Bun defect (flaky case 1001).
+ */
+export async function runCommand(
+  argv: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const child = Bun.spawn(argv, {
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    env: options.env ?? process.env,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const deadline = setTimeout(() => child.kill("SIGKILL"), options.timeoutMs ?? HELPER_TIMEOUT_MS);
+  try {
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    return { code, stdout, stderr };
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
+/** Runs `git` through {@link runCommand} and returns its trimmed stdout. */
+export async function runGit(
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<string> {
+  const result = await runCommand(["git", ...args], options);
+  if (result.code !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
+  return result.stdout.trim();
 }
 
 export class ScenarioFailure extends Error {}

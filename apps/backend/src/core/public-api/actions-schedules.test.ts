@@ -6,7 +6,7 @@ import type { PublicActionContext, ReadActionHandler } from "./types.js";
 
 /**
  * `schedule.list` carries whether this backend fires the schedules it lists,
- * the same `scheduler` answer as `list_scheduled_jobs` (8105). The end-to-end
+ * the same `scheduler` answer as `list_scheduled_jobs` (#2280). The end-to-end
  * listing is covered by `public-api-schedules.test.ts`.
  */
 

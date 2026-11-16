@@ -16,7 +16,7 @@ import {
 } from "./coordinator-live-delegation.js";
 
 /**
- * The live coordinator suite's `account-switch` scenario (to-do 1000 task 4,
+ * The live coordinator suite's `account-switch` scenario (#2204,
  * retired; see the `account-switch` case under "Live coordinator suite" in
  * `docs/development/agent-testing.md`).
  *

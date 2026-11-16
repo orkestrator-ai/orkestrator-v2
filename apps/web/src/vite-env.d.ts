@@ -173,6 +173,19 @@ interface Window {
        * editor is shown; the app saves and opens the server itself.
        */
       addInNativeEditor?(): Promise<boolean>;
+      /**
+       * iOS app only: saves a server through the app's own editor, so its
+       * token is typed natively and never into this page. The editor opens
+       * with `address` (when given) and an empty token, and saving there
+       * keeps the current server open. Resolves with the saved list once the
+       * user saves; rejects when they close the editor, when the editor is
+       * already open, or when this page goes away first. Absent on iOS apps
+       * that predate it, which keep the in-page form.
+       */
+      connectInNativeEditor?(input: {
+        address?: string;
+        nickname?: string;
+      }): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
       updateToken(
         connectionId: string,
         token: string,

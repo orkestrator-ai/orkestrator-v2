@@ -168,7 +168,7 @@ export class ChangeTrackingService {
    * acknowledgment for in this process. An acknowledgment releases every
    * entry at or below `upTo`, and the spool only issues sequence numbers
    * above its cursor, so repeating an accepted one releases nothing (todo
-   * 7567 task 3: it was a third bridge request on every activity sweep read).
+   * #2131: it was a third bridge request on every activity sweep read).
    */
   private readonly acknowledged = new Map<string, string>();
   private readonly turnFinalizations = new Map<string, Promise<string[]>>();
@@ -766,7 +766,7 @@ export class ChangeTrackingService {
       return Promise.resolve(0);
     }
     // Its own recurring kind, so the evidence read and acknowledgment are not
-    // charged to the activity sweep that starts most pulls (todo 7567 task 3).
+    // charged to the activity sweep that starts most pulls (#2131).
     const run = recurringWorkMetrics
       .observe("change-evidence-pull", async (span) => {
         const ingested = await this.pullNow(source);

@@ -1,5 +1,75 @@
 # Worktree-watcher validation evidence
 
+## Guard repair stability evidence — 2026-11-16
+
+The review of `fddcaab5869bdc0c426a1794f35ad76c953e4418` reported no code
+defects, but lacked recorded evidence of ten consecutive passing executions of
+`apps/backend/src/core/worktree-watcher-large-ignored.test.ts`. The following
+ten fresh-process executions ran sequentially at that exact commit, with a clean
+working tree, on 2026-11-16. All exited 0. No test or production source changed
+during these runs.
+
+```bash
+for i in {1..10}; do
+  mise run test:logged -- --name watcher-stability-${i} -- \
+    bun test --cwd apps/backend ./src/core/worktree-watcher-large-ignored.test.ts \
+    --parallel=1 --only-failures || exit $?
+done
+```
+
+| Logged check | Exit | Reported duration |
+| --- | ---: | ---: |
+| watcher-stability-1 | 0 | 0.1 s |
+| watcher-stability-2 | 0 | 0.1 s |
+| watcher-stability-3 | 0 | 0.1 s |
+| watcher-stability-4 | 0 | 0.1 s |
+| watcher-stability-5 | 0 | 0.1 s |
+| watcher-stability-6 | 0 | 0.1 s |
+| watcher-stability-7 | 0 | 0.1 s |
+| watcher-stability-8 | 0 | 0.1 s |
+| watcher-stability-9 | 0 | 0.1 s |
+| watcher-stability-10 | 0 | 0.1 s |
+
+The loop also exited 0. Each logged check reported PASS and 115 output bytes;
+the logged runner removes successful raw logs by design. These observed exit
+statuses close the review's repeat-run evidence gap; no per-test totals are
+inferred from the compact runner output.
+
+### Preparation validation remains non-green
+
+The original preparation package and artifacts were preserved:
+`.orkestrator/review-artifacts/review-validation-c653d1c1-62e2-49df-aeae-8a97cd99d917/review-package-8ff82b8668fff53cff5f39c4c6f73d94fa1016e395416daf26b9add86e17d52a.json`.
+It records passing format, lint and typechecks, and exit 1 for
+`mise run test:logged -- --name review-default-tests -- mise run test`.
+The review reports 20 failures outside the changed test. The package's
+`validation-04.stderr.txt` and bounded original compressed diagnostics were read;
+the full suite was not rerun or described as passing.
+
+| Recorded failures | Evidence and disposition |
+| --- | --- |
+| Two assertions in `tests/unit/apt-packages-installer.test.ts`, fifteen in `tests/unit/apt-packages-installer-plan.test.ts` | Package failure triage marks all 17 `undetermined`, reason `dependency-graph-incomplete`. Actual exit 1 differs from expected installer policy statuses, including concurrent exits `[1,1]` instead of `[0,3]`. The assertions also failed the runner's isolated retries. No cause tying them to the single changed watcher test was established; left for the verifier. |
+| `gateway-result-channels.test.ts`: baseline harness emits only its JSON readiness record | Original isolated log reports `Harness exited before readiness`, at line 63; no underlying cause is established. Left for the verifier. |
+| `preview-latency-baseline-commands.test.ts`: baseline command lifecycle | Original isolated log reports Apple's LibreSSL 3.3 failing `openssl req -x509` with `Expecting: CERTIFICATE REQUEST`. This identifies the host command failure, but no branch repair was made. Left for the verifier. |
+| `core/git-fsmonitor.test.ts`: project-home status auto-starts and preserves the configured daemon | Original isolated log reports the `fsmonitor--daemon status` promise rejecting at line 286, after 24 other tests passed. No underlying cause is established. Left for the verifier. |
+
+The three backend failures above appear in the original group logs and isolated
+retry logs even though the package's failure-triage list includes only the
+installer failures. Those logs remain under
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.8Mbmf8/`
+as `rerun-apps-backend-src-gateway-result-channels-test-ts.log.gz`,
+`rerun-apps-backend-src-preview-latency-baseline-commands-test-ts.log.gz`, and
+`rerun-apps-backend-src-core-git-fsmonitor-test-ts.log.gz`; the two installer
+retry logs use the `rerun-tests-unit-apt-packages-installer` prefix.
+
+`git diff origin/main...HEAD` at the tested commit changed only the watcher test.
+No source used by these five failing files was edited by this branch. That
+scope check does not prove a pre-existing or environmental cause: the unresolved
+failures remain limitations, not excused passes. The only review finding was the
+missing stability evidence; this follow-up records it without changing unrelated
+code, weakening assertions, or rewriting the validated commit.
+
+## Earlier watcher qualification — 2026-11-10
+
 Observed 2026-11-10 on macOS arm64, Bun 1.4.4 (`38afee6c8`), mise 2026.9.17. This records validation evidence, not a full-suite pass or a claim that unrelated failures are caused by the watcher change. The isolated-owner triage used no production profile, production credentials, production backend service or live agent.
 
 ## Snapshots and outcome
@@ -117,9 +187,9 @@ Repeated output and unexpanded parameter labels are preserved as names, not inte
 | `apps/backend/tests/commands-environment-image-download.test.ts` | start checks a pending tombstone after the download and lets queued deletion finish | Test deadline 5,000 ms exceeded. | 5005.34 |
 | `apps/backend/tests/commands-environment.test.ts` | Electron backend command registry > preserves unusual Git paths and binary stats in NUL-delimited output | Test deadline 5,000 ms exceeded. | 5006.30 |
 | `apps/backend/tests/commands-environment.test.ts` | Electron backend command registry > rejects a local HEAD that git did not report as a commit sha | Temporary Git fixture push failed with SIGTERM and null exit code; intended HEAD-validation assertion was not reached. | 518.58 |
-| `apps/backend/src/core/preview-listener-ownership.test.ts` | LoopbackListenerOwnership on this host > attributes a real 127.0.0.1 listener and refuses another environment | Expected attribution this-environment; received unchecked (lines 451/491). | 2138.15 |
-| `apps/backend/src/core/preview-listener-ownership.test.ts` | LoopbackListenerOwnership on this host > attributes a real :: listener and refuses another environment | Expected attribution this-environment; received unchecked (lines 451/491). | 2129.59 |
-| `apps/backend/src/core/preview-listener-ownership.test.ts` | LoopbackListenerOwnership on this host > same-port listeners on loopback and a different interface keep distinct owners | Expected attribution this-environment; received unchecked (lines 451/491). | 2150.11 |
+| `apps/backend/src/core/previews/listener-ownership.test.ts` | LoopbackListenerOwnership on this host > attributes a real 127.0.0.1 listener and refuses another environment | Expected attribution this-environment; received unchecked (lines 451/491). | 2138.15 |
+| `apps/backend/src/core/previews/listener-ownership.test.ts` | LoopbackListenerOwnership on this host > attributes a real :: listener and refuses another environment | Expected attribution this-environment; received unchecked (lines 451/491). | 2129.59 |
+| `apps/backend/src/core/previews/listener-ownership.test.ts` | LoopbackListenerOwnership on this host > same-port listeners on loopback and a different interface keep distinct owners | Expected attribution this-environment; received unchecked (lines 451/491). | 2150.11 |
 | `apps/backend/tests/commands-files.test.ts` | Electron backend command registry > does not block local untracked scanning on a named pipe | Test deadline 5,000 ms exceeded. | 5003.01 |
 | `apps/backend/src/core/coordinator-worker-turns.test.ts` | the Work panel's request details > a delegation keeps a bounded summary and selection, and one without them still opens | Test deadline 5,000 ms exceeded. | 5016.87 |
 | `apps/backend/src/core/coordinator-worker-turns.test.ts` | the wake sound's signal > a delivered wake is announced once, with no content | Test deadline 5,000 ms exceeded. | 5017.60 |
@@ -202,7 +272,7 @@ All 32 commands ran once per owner, sequentially, with no intervening edits by t
 | `apps/backend/src/core/native-agent-goal-check.test.ts` | `894861968` | 2 | 0 | 0 | — | 1.17 | pass |
 | `apps/backend/src/core/graph-run-rewind.test.ts` | `310f4fd7a` | 13 | 0 | 0 | — | 11.73 | pass |
 | `apps/backend/tests/commands-environment-image-download.test.ts` | `310f4fd7a` | 11 | 0 | 0 | — | 16.97 | pass |
-| `apps/backend/src/core/preview-listener-ownership.test.ts` | `310f4fd7a` | 20 | 3 | 0 | 0 | 6.91 | non-green; not classified here as a new flake |
+| `apps/backend/src/core/previews/listener-ownership.test.ts` | `310f4fd7a` | 20 | 3 | 0 | 0 | 6.91 | non-green; not classified here as a new flake |
 | `apps/backend/src/core/commands-files-local-scan.test.ts` | `310f4fd7a` | 10 | 0 | 0 | — | 13.38 | pass |
 | `apps/backend/src/core/coordinator-mail-attachments.test.ts` | `310f4fd7a` | 16 | 1 | 0 | 1 | 26.80 | non-green; not classified here as a new flake |
 | `apps/backend/tests/agent-mail-store-size-bench.test.ts` | `310f4fd7a` | 3 | 0 | 0 | — | 8.14 | pass |
@@ -235,9 +305,9 @@ This includes failures that differed from the aggregate; a different test passin
 | `apps/backend/tests/container-workload.test.ts` | startup-failure cleans up only containers labelled for that invocation | test timed out |
 | `tests/unit/firewall-egress-filter.test.ts` | init-firewall.sh with name checks > redirects TCP to allowed tuples and every DNS query to the daemon, and lets only marked traffic leave | test timed out |
 | `tests/unit/firewall-egress-filter.test.ts` | init-firewall.sh with name checks > the daemon counts refusals beside the report, and the boot's own checks are not counted | test timed out |
-| `apps/backend/src/core/preview-listener-ownership.test.ts` | LoopbackListenerOwnership on this host > attributes a real 127.0.0.1 listener and refuses another environment | expect(received).toBe(expected)<br><br>Expected: "this-environment"<br>Received: "unchecked"<br> |
-| `apps/backend/src/core/preview-listener-ownership.test.ts` | LoopbackListenerOwnership on this host > attributes a real :: listener and refuses another environment | expect(received).toBe(expected)<br><br>Expected: "this-environment"<br>Received: "unchecked"<br> |
-| `apps/backend/src/core/preview-listener-ownership.test.ts` | LoopbackListenerOwnership on this host > same-port listeners on loopback and a different interface keep distinct owners | expect(received).toBe(expected)<br><br>Expected: "this-environment"<br>Received: "unchecked"<br> |
+| `apps/backend/src/core/previews/listener-ownership.test.ts` | LoopbackListenerOwnership on this host > attributes a real 127.0.0.1 listener and refuses another environment | expect(received).toBe(expected)<br><br>Expected: "this-environment"<br>Received: "unchecked"<br> |
+| `apps/backend/src/core/previews/listener-ownership.test.ts` | LoopbackListenerOwnership on this host > attributes a real :: listener and refuses another environment | expect(received).toBe(expected)<br><br>Expected: "this-environment"<br>Received: "unchecked"<br> |
+| `apps/backend/src/core/previews/listener-ownership.test.ts` | LoopbackListenerOwnership on this host > same-port listeners on loopback and a different interface keep distinct owners | expect(received).toBe(expected)<br><br>Expected: "this-environment"<br>Received: "unchecked"<br> |
 | `apps/backend/src/core/coordinator-mail-attachments.test.ts` | send_message with attachments, to a container > lands inside the container, readable, Git-excluded and not retried | test timed out |
 | `apps/backend/src/core/nodes/node-seed-worktree.test.ts` | FL-03/FL-04/FL-05 seed files in a leaf environment's worktree > the node's own files are copied, seed files fill only the gaps | test timed out |
 | `apps/backend/src/core/nodes/node-seed-worktree.test.ts` | FL-03/FL-04/FL-05 seed files in a leaf environment's worktree > without a seed copy a missing selected file still fails as before | test timed out |
@@ -284,7 +354,7 @@ The exact commands include JUnit report paths because the logged runner deletes 
 - `mise run test:logged -- --name watcher-triage-goal-check -- bun test --cwd apps/backend ./src/core/native-agent-goal-check.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/goal-check.xml` — exit 0; wrapper 1.183 s; head `8948619686981e7b237f879192ac6ffc86b227c6`.
 - `mise run test:logged -- --name watcher-triage-graph-rewind -- bun test --cwd apps/backend ./src/core/graph-run-rewind.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/graph-rewind.xml` — exit 0; wrapper 11.750 s; head `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
 - `mise run test:logged -- --name watcher-triage-image-download -- bun test --cwd apps/backend ./tests/commands-environment-image-download.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/image-download.xml` — exit 0; wrapper 17.029 s; head `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
-- `mise run test:logged -- --name watcher-triage-listener-ownership -- bun test --cwd apps/backend ./src/core/preview-listener-ownership.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/listener-ownership.xml` — exit 1; wrapper 6.939 s; head `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
+- `mise run test:logged -- --name watcher-triage-listener-ownership -- bun test --cwd apps/backend ./src/core/previews/listener-ownership.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/listener-ownership.xml` — exit 1; wrapper 6.939 s; head `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
 - `mise run test:logged -- --name watcher-triage-local-scan -- bun test --cwd apps/backend ./src/core/commands-files-local-scan.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/local-scan.xml` — exit 0; wrapper 13.397 s; head `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
 - `mise run test:logged -- --name watcher-triage-mail-attachments -- bun test --cwd apps/backend ./src/core/coordinator-mail-attachments.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/mail-attachments.xml` — exit 1; wrapper 26.858 s; head `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
 - `mise run test:logged -- --name watcher-triage-mail-bench -- bun test --cwd apps/backend ./tests/agent-mail-store-size-bench.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/mail-bench.xml` — exit 0; wrapper 8.154 s; head `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
@@ -307,7 +377,7 @@ The exact commands include JUnit report paths because the logged runner deletes 
 - `apps/backend/tests/container-readiness.test.ts`: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.O95ftp/watcher-triage-container-readiness.log.gz`; JUnit `/private/tmp/ork-watcher-failure-triage.0oarZv/container-readiness.xml`.
 - `apps/backend/tests/container-workload.test.ts`: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.lv0Eyq/watcher-triage-container-workload.log.gz`; JUnit `/private/tmp/ork-watcher-failure-triage.0oarZv/container-workload.xml`.
 - `tests/unit/firewall-egress-filter.test.ts`: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.VEiypp/watcher-triage-firewall.log.gz`; JUnit `/private/tmp/ork-watcher-failure-triage.0oarZv/firewall.xml`.
-- `apps/backend/src/core/preview-listener-ownership.test.ts`: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.GYn7uY/watcher-triage-listener-ownership.log.gz`; JUnit `/private/tmp/ork-watcher-failure-triage.0oarZv/listener-ownership.xml`.
+- `apps/backend/src/core/previews/listener-ownership.test.ts`: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.GYn7uY/watcher-triage-listener-ownership.log.gz`; JUnit `/private/tmp/ork-watcher-failure-triage.0oarZv/listener-ownership.xml`.
 - `apps/backend/src/core/coordinator-mail-attachments.test.ts`: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IS76Rt/watcher-triage-mail-attachments.log.gz`; JUnit `/private/tmp/ork-watcher-failure-triage.0oarZv/mail-attachments.xml`.
 - `apps/backend/src/core/nodes/node-seed-worktree.test.ts`: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.L9KFCa/watcher-triage-node-seed.log.gz`; JUnit `/private/tmp/ork-watcher-failure-triage.0oarZv/node-seed.xml`.
 - `bridges/pi-bridge/src/http-command-preview.test.ts`: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.mmBds9/watcher-triage-pi-preview.log.gz`; JUnit `/private/tmp/ork-watcher-failure-triage.0oarZv/pi-preview.xml`.

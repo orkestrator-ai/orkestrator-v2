@@ -5,7 +5,7 @@
 - **Date observed:** 2026-11-13
 - **Base:** `17d28238c098b4443d1289df5c4ed75e7cc2802e`.
 - **Observed head:** branch `remove-dead-bridge-be98778b92d1-r1` at
-  `b043def44` plus uncommitted test fixes (7571 removals of the bridge SSE
+  `b043def44` plus uncommitted test fixes (7571 (retired) removals of the bridge SSE
   mode, Claude tombstones and old renderer readers). It does not touch
   `scripts/loopback-network.ts` or `tests/unit/loopback-network.test.ts`.
 - **Test:** `loopback wrapper failure and signal paths > forwards and re-raises SIGHUP`

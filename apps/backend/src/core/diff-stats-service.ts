@@ -1495,7 +1495,7 @@ export class DiffStatsService {
     // entry in between (no hint, mutation or refresh advanced the epoch), yet
     // the list moved: the watcher missed it. Either kind of watcher stops
     // claiming qualified coverage unless it turns out to have seen the change
-    // (to-do 8171 for local ones), and the entry polls meanwhile. A local
+    // (#2305 for local ones), and the entry polls meanwhile. A local
     // watcher is also told about the changes those polls find first, which
     // keeps one whose events arrive late distrusted; it ignores them when it
     // is unqualified for another reason. The first poll after a demotion

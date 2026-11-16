@@ -49,6 +49,7 @@ import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 import type { MachineLoadHistoryStorage } from "./storage-machine-load-history.js";
 import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
 import type { KanbanStorage } from "./storage-kanban.js";
+import type { RemovedProjectSweepResult } from "./storage-kanban-removed-projects.js";
 import type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
 import type { LinearStorage } from "./storage-linear.js";
 import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
@@ -438,6 +439,10 @@ export class StorageService {
 
   loadProjectIdsForCleanup(): Promise<Set<string>> {
     return this.repos.projects.loadProjectIdsForCleanup();
+  }
+
+  sweepRemovedProjectContent(): Promise<RemovedProjectSweepResult> {
+    return this.repos.projects.sweepRemovedProjectContent();
   }
 
   loadEnvironmentIdsForCleanup(): Promise<Set<string>> {

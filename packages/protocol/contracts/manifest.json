@@ -169,8 +169,8 @@
       "access": "internal",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:70b5065abe4a2361b551c88a52219926b38766c8bc9ba8088b40e04b2269966f",
-      "resultDigest": "sha256:6a3ef05aa407237fd680e097e8035b004f08af83af86a298f1185dc400666c7f"
+      "argsDigest": "sha256:42ceaa690060be5228e24de1dacd91517bd81a04af333ff8e16908b665832a29",
+      "resultDigest": "sha256:61d1c637148dd8f3eb5395bfd2dcacf7087b2884a9dc34a68f3a8968a74596b0"
     },
     "acknowledge_startup_agent_session": {
       "domain": "environments",

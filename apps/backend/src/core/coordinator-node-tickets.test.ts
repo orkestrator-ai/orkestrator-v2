@@ -129,6 +129,7 @@ async function setup(
         })),
       })),
     localProjects: () => world.storage.loadProjects(),
+    storedProjectIds: () => world.storage.loadProjectIdsForCleanup(),
     ticketSync: world.storage.ticketSync,
     localImage: (imageId) => world.storage.kanban.getKanbanImageData(imageId).catch(() => null),
     emit: () => undefined,

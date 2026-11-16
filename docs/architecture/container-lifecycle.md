@@ -2201,6 +2201,11 @@ keeps `working` for good (to-do 8092, retired):
   considers itself signed out and answers the next prompt "Not logged in ·
   Please run /login" itself, with no model request and no `Stop` or
   `StopFailure` (seen with Claude Code 2.1.319 in a container on 2026-11-14).
+  Not reproduced since: on 2026-11-16 the same build, on the host, fired
+  `StopFailure` for every locally refused prompt of a signed-out session,
+  and after a refused login it sent the next prompt to the model instead of
+  refusing it (see [claude-tmux tabs](#claude-tmux-tabs-and-a-refused-prompt)
+  below). The settle stays as the fallback for a CLI that skips the hook.
 - **The last terminal closing mid-turn.** Closing the tab ends its shell and
   Claude in the container; nothing writes the file again.
 
@@ -2240,12 +2245,36 @@ Claude bridge's Agent SDK bundles.
 
 Not covered: a turn whose Claude ends while a terminal or tab is still open
 in the container (Claude exited in a shell that stays open, or its tab
-closed beside another one), because `demand` stays; and the host claude-tmux
-tab, which reads
-its own hooks (`tmux-hooks.ts`) and was not observed in this state
-([8094](../todo/containers-and-environments/8094-claude-tmux-prompt-refused-locally.md)).
+closed beside another one), because `demand` stays; and claude-tmux tabs,
+which read their own hooks (below).
 Unit tests (`NODE_ENV=test`) build the poll without a settler, so they never
 write to a container.
+
+#### claude-tmux tabs and a refused prompt
+
+A claude-tmux tab, host or container, leaves working only on its own `Stop`
+or `StopFailure` hook (`tmux-hooks.ts`, `TmuxSession.updateBusyFromHookKind`)
+and has no screen settle. It does not need one with the pinned CLI (to-do
+8094, retired): on 2026-11-16 Claude Code 2.1.319, run as a claude-tmux tab
+runs it (interactive, in tmux, with Orkestrator's hook script and settings,
+an isolated home and a loopback model refusing with a 401), ended every
+refused prompt with `StopFailure` (`error: "authentication_failed"`):
+
+| Credential | Model's 401 | Prompt | Hooks | Model requests |
+| --- | --- | --- | --- | --- |
+| None (signed out) | any | each prompt, refused locally with "Not logged in · Please run /login" | `UserPromptSubmit`, `StopFailure` within 0.3 s | 0 |
+| Settings `ANTHROPIC_AUTH_TOKEN` | not retryable | the refused prompt and the next one | `UserPromptSubmit`, `StopFailure` within 0.3 s, each | 1 per prompt |
+| Settings `ANTHROPIC_AUTH_TOKEN` | retryable (no `x-should-retry`, the container fake's) | the refused prompt and the next one | `UserPromptSubmit`, `StopFailure` after ten retries (about 3 min), each | sent, not refused locally |
+
+With a home-only config (no `CLAUDE_CONFIG_DIR`, as in a container) the
+rows behaved the same. The hookless refusal of 2026-11-14 above was not
+reproduced. `apps/backend/tests/claude-tmux-local-refusal-live.test.ts`
+(slow tier; skipped without tmux or the bundled pinned CLI) runs the first two
+rows against the pinned CLI the Claude bridge's Agent SDK bundles, so a CLI
+bump that drops the hook for a locally refused prompt fails there; the tab's
+handling of `StopFailure` is covered by `tmux-session.test.ts` ("batched
+StopFailure clears busy"). The live container run is in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 After persisting, `orkestrator-state-signal` POSTs, detached and with no body,
 to `/claude-state-signal` on the agent

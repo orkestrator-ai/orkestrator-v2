@@ -67,3 +67,28 @@ in the failure message.
 ## Triage note (2026-11-15)
 
 Partly addressed; stays `open`. In `apps/backend/src/core/previews/local-discovery.test.ts` every poll deadline (2 s, 5 s, 10 s) is now a named 30 s `POLL_HANG_WATCHDOG_MS`, the explicit 20 s/30 s test budgets are removed (the 60 s default applies), and the fixture script retries an `EADDRINUSE` on an ephemeral (`port 0`) request instead of throwing (up to 100 attempts). The recorded `terminal exited 0` with an `EADDRINUSE` on 61856 is still unexplained (that path already retried on the next port), so the cause is not established. The owner passed under contention (`b-cont`, see 0340).
+
+## Deterministic failure from the 2026-11-15 rewrite (2026-11-16)
+
+Not a recurrence of the intermittent case; stays `open`. On the to-do 0012
+`previews` slice, based on `c1fcc573b`, the owner failed alone, every time:
+`a dual-stack wildcard listener resolves the owning worktree over IPv4 and
+refuses another` and `two environments, a restart on the reused port, and an
+auto-incremented port` with `terminal exited 0`, 17 passed and 2 failed
+(19 tests, 3.5 s):
+
+```sh
+NODE_ENV=test mise run test:logged -- --name previews-local-discovery -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/previews/local-discovery.test.ts --parallel=1 --only-failures
+```
+
+Cause: the triage note's fixture rewrite added the comment "another test's
+listener grabs the kernel's pick first" inside the server script, and the
+script reaches `/bin/sh -c` inside single quotes, so the apostrophe ended
+the quoted argument. Bun reported `Unexpected end of file` at `[eval]:7:38`,
+the end of "another test", and the shell's `; true` turned that into exit 0.
+The file's text on `c1fcc573b` is the same apart from the slice's import
+paths; the base was not run separately. The slice rewords the comment
+without an apostrophe and notes the rule beside the script; the same command
+then passed (19 tests, 4.8 s). The default suite does not run this owner
+(it is in the slow tier), which is why aggregates stayed green. The original
+intermittent `terminal exited 0` is still unexplained.

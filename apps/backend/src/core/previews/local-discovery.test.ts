@@ -533,14 +533,15 @@ describe.skipIf(!realHost)("local preview service discovery on this host", () =>
     host = "127.0.0.1",
   ): Promise<{ shell: ChildProcess; port: number }> {
     // Report the bound address after a beat: Bun calls the listen callback of a
-    // bind that then fails with EADDRINUSE.
+    // bind that then fails with EADDRINUSE. The script goes to the shell inside
+    // single quotes, so it (its comments included) must not contain one.
     const script = `const net=require("node:net");
 let port=${port};let attempts=0;
 const listen=()=>{
   const s=net.createServer();
   s.once("error",error=>{
     // A taken port moves to the next one. An ephemeral request (port 0) can
-    // also collide when another test's listener grabs the kernel's pick first;
+    // also collide when a listener in another test grabs the kernel pick first;
     // it asks again rather than exiting before it reports a port.
     if(error.code!=="EADDRINUSE"||port>=65535||++attempts>100)throw error;
     if(port!==0)port++;

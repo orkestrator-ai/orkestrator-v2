@@ -92,9 +92,13 @@ its task id), pinned by synthetic frames; its live check on a real Claude
 login came in as 8150 (retired) task 1. It is in Git history before the
 commit that retired it (`git log -1 --diff-filter=D -- docs/todo/agent-engines/8150-claude-mcp-task-tool-card-text.md`).
 
+Updated 2026-11-16: 8201 was retired once the component suite's default
+worker count was lowered to a third of the cores from beelink measurements;
+its run on omarchy-hp came in under Cross-cutting.
+
 ### Tasks
 
-1. **Manual tests and live checks** (361 items): run each check under
+1. **Manual tests and live checks** (362 items): run each check under
 
 
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
@@ -224,6 +228,14 @@ the loopback namespace was attributed on omarchy-hp and only these items were
 left; it is in Git history at `a8b89f154`, and its runs are recorded in
 [agent-testing.md](../../development/agent-testing.md#loopback-namespace-qualification).
 
+8201 was retired on 2026-11-16, once the component suite's default worker
+count was measured on beelink and lowered to a third of the cores; its run on
+the 12-core host that showed the saturation came in under Cross-cutting. The
+measurements are in
+[testing-guide.md](../../development/testing-guide.md#component-suite-workers),
+and the old file is in Git history at the parent of the commit that deleted it
+(`git log -1 --diff-filter=D -- docs/todo/cross-cutting/8201-component-suite-default-workers-saturate-the-host.md`).
+
 2960 was retired on 2026-11-16, once the gateway issued the `__Host-` cookie
 over HTTPS; it is in Git history at `c1fcc573b`, and the behaviour is in
 [remote gateway, security notes](../../architecture/remote-gateway.md#security-notes).
@@ -269,12 +281,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 0 |
 | Containers and environments | 33 | 6 |
 | Coordinator and Multi Review | 87 | 3 |
-| Cross-cutting | 101 | 9 |
+| Cross-cutting | 102 | 9 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 18 | 1 |
 | Transcripts, observation and bandwidth | 30 | 2 |
-| **Total** | 361 | 25 |
+| **Total** | 362 | 25 |
 
 
 
@@ -703,6 +715,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **0033 (retired) task 3 (macOS half): `gh` latest and pinned through the zip layout on macOS.** In the same spare Mac account or macOS VM (never a machine someone works on), start a headless backend from this checkout on a private data directory with the Control MCP off and a free port: `ORKESTRATOR_CONTROL_MCP_DISABLED=1 bun apps/backend/src/main.ts --data-dir <dir> --host 127.0.0.1 --allow-non-tailscale-bind --port <port> --runtime-flavor agent-test`, add it with `orkestrator connection add q --data-dir <dir>`, then run `orkestrator --connection q host gh latest --wait --json`, `host status --json`, and `host gh pinned --wait --json`. The Linux tar layout passed on 2026-11-13, and the macOS archive was inspected then (`gh_2.104.0_macOS_arm64.zip` is listed in `gh_2.104.0_checksums.txt` and holds `gh_2.104.0_macOS_arm64/bin/gh`, the path the code extracts), but nothing has unzipped and run it on a Mac. Pass: the `gh` tool row shows the newest upstream version, `channel: "latest"`, under `toolchains/gh-latest/<version>`, and `pinned` returns it to the pin. Record: the macOS version, architecture, the upstream `gh` version and both tool rows, in [host-updates.md, Qualification](../../architecture/host-updates.md#qualification).
 - [ ] **7020 (retired) task 2 (namespace refused by the host): `test:browser`'s loopback namespace on Ubuntu 24.04's AppArmor restriction.** (Background: [agent-testing.md, Loopback namespace qualification](../../development/agent-testing.md#loopback-namespace-qualification); beelink's kernel, omarchy-hp's 7.2.8 kernel and macOS are done, and the refused path has only been exercised by a container's seccomp profile.) On an Ubuntu 24.04 host with its default `kernel.apparmor_restrict_unprivileged_userns=1` (a VM or spare machine is fine; agents have no such host), run `mise run test:browser` with a free `ORKESTRATOR_E2E_PORT` and `ORKESTRATOR_PUBLIC_E2E_PORT`, then rerun any failing files with `ORKESTRATOR_E2E_HOST_NETWORK=1`. Record: the host's distribution and kernel, the `[loopback-network]` notice line (it should say the host refused the namespace, with the kernel's message), and whether the failing sets match, as a new row in that section's table.
 - [ ] **7020 (retired) task 3: `agent-accounts.spec.ts:229` (390px) with Claude credentials.** On a host where using the Claude login is allowed, start a profile with Claude credentials and run `e2e/agent-testing/agent-accounts.spec.ts` case `:229` alone with `--repeat-each=3`. The 2026-11-05 failure left the Settings dialog over the drawer toggle with its modules loaded. Record: pass/fail per repeat and, for a failure, the trace's step, in a reply to the coordinator (a failure becomes a new agent to-do).
+- [ ] **8201 (retired) task 1: the component suite at its new default on omarchy-hp.** (Background: [testing-guide.md, Component suite workers](../../development/testing-guide.md#component-suite-workers); the default dropped from half to a third of the cores on beelink's measurements, and the 12-core host that showed the saturation has not run the new default.) On omarchy-hp with nothing else running, run `mise run test:browser` with a free `ORKESTRATOR_E2E_PORT` and `ORKESTRATOR_PUBLIC_E2E_PORT` and `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS` raised past the suite's length, so it starts 4 workers. Sample `/proc/loadavg` every 15 s during the run. Record: wall time, passed/failed/skipped, failures by kind, and load at the start, median and p90, as a new row in the table in [agent-testing.md, Loopback namespace qualification](../../development/agent-testing.md#loopback-namespace-qualification), to compare with the 2026-11-15 six-worker row. More than a few load failures, or a run far slower than 91 minutes, becomes a new agent to-do.
 - [ ] **[4400](../cross-cutting/4400-gateway-502-under-load-live-evidence.md) task 1: count Serve's proxy errors after the fix ships.** On each node running a build with the 120 s keep-alive (beelink, rkmbp, arktech-mini), count `http: proxy error` lines per day over several days of normal use before and after, split by cause (`read: connection reset by peer`, `EOF`, `use of closed network connection`, dial failures). Linux: `journalctl -u tailscaled`; standalone Tailscale on macOS: `log show --predicate 'eventMessage CONTAINS "proxy error" AND eventMessage CONTAINS "34121"'`. Success: the three race causes fall to about zero (beelink's before-rate was about 1.5 a day). Record: per node, the date range and counts by cause, in 4400's Current state.
 - [ ] **0035 (retired) task 1: the narrow layout on iOS, rotating and through the drawer.** (Background: [narrow-layout.md](../../architecture/narrow-layout.md).) On a Mac with Xcode, run the iOS app in the simulator with `mise run dev:ios` against a throwaway `dev:test --fixture` profile (enter the origin and gateway token yourself, as in `apps/ios/README.md`), using an iPad simulator in split view and the largest iPhone simulator; or open the web client in Safari on a physical iPhone or iPad over the tailnet. (Agent attempts on 2026-10-26 and 2026-10-29 stopped because `xcrun simctl list` hung.) Then: (1) open a project with a split holding a terminal pane and a native agent pane, type a draft in the composer and scroll the terminal back; (2) rotate between portrait (phone layout) and landscape, or resize the split view, across 768 px, at least twice each way; (3) check that terminal output, both scroll offsets, the draft and the caret survive every crossing; (4) open the projects drawer, open a row's "Environment actions" menu, tap Settings, change the section with the picker, close the dialog, and confirm the drawer reopens. Do this in the same session as the 0202 item below. Keep the gateway token out of screenshots. Record: device or simulator, iOS version, build, and pass or fail for each step with a screenshot or recording, in a reply to the coordinator; a failure becomes a new agent to-do.
 - [ ] **0202 (retired) task 3: the title tooltip on iOS before and after the fix.** (Background: [narrow-layout.md](../../architecture/narrow-layout.md#title-tooltip-on-touch).) In the same session as the 0035 item above, in Safari on an iPhone (simulator or device) against the component fixture's `/mobile-shell` page or the app with a long environment title: tap the title (the tooltip opens), tap the bubble (it closes, and nothing under it is activated), tap the title again, tap the workspace below the bubble (it closes), and check that title taps toggle it; then repeat once in the `WKWebView` app. A 2026-10-27 iOS 26.5 Simulator run (iPhone 17, Xcode 27) recorded the same results before and after the fix but could not be repeated on 2026-10-29; instead of a new run you may accept that record. Record: device or simulator, iOS version and the result of each tap, or that you accept the 2026-10-27 record, in a reply to the coordinator.

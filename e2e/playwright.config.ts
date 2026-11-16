@@ -25,16 +25,25 @@ if (browserName !== "chromium" && browserName !== "webkit" && browserName !== "f
   throw new Error(`Unsupported ORKESTRATOR_E2E_BROWSER: ${browserName}`);
 }
 
-// Review validation passes the slots the host scheduler granted this suite.
-// Playwright would otherwise start half the cores whatever was reserved, beside
-// the rest of the validation plan. Never exceed that default either, so an idle
-// host runs the suite exactly as before; a person's run keeps the default.
-const playwrightDefaultWorkers = Math.max(1, Math.floor(os.cpus().length / 2));
+// A person's run starts a third of the cores. At Playwright's own default,
+// half, each worker's Chromium processes plus the shared Vite server held a
+// 12-core host near load 30. On beelink (16 cores) a third finished within the
+// spread of half's run times, with the same failures and about 11 % less CPU
+// (to-do 8201, retired; docs/development/testing-guide.md, "Component suite
+// workers"). `--workers` on the command line still wins.
+const cores = os.cpus().length;
+const defaultWorkers = Math.max(1, Math.floor(cores / 3));
+// Review validation passes the slots the host scheduler granted this suite, so
+// a busy host runs fewer browser workers beside the rest of the validation
+// plan. It is capped at Playwright's half the cores, never at the person's
+// default: the scheduler has already counted what else the host is doing.
+const playwrightDefaultWorkers = Math.max(1, Math.floor(cores / 2));
 const grantedWorkers = Number.parseInt(
   process.env.ORKESTRATOR_VALIDATION_GRANTED_WORKERS ?? "",
   10,
 );
-const workers = grantedWorkers > 0 ? Math.min(grantedWorkers, playwrightDefaultWorkers) : undefined;
+const workers =
+  grantedWorkers > 0 ? Math.min(grantedWorkers, playwrightDefaultWorkers) : defaultWorkers;
 
 export default defineConfig({
   testDir: import.meta.dirname,

@@ -22,7 +22,6 @@ import {
   PREVIEW_WORKER_USER,
   resolveSeccompProfile,
 } from "./runtime.js";
-import { previewTestScratchRoot } from "./fixtures/preview-scratch-root.js";
 
 const CHROMIUM = resolveDesignChromiumPath();
 if (!CHROMIUM)
@@ -135,7 +134,6 @@ describe("module scripts in Chromium (process isolation)", () => {
       async () => {
         runner ??= new TranscriptPreviewRunner({
           isolation: "process",
-          scratchRoot: previewTestScratchRoot(),
           allowProcessInteractive: true,
         });
         await expectPasses(runner, "process", entry);

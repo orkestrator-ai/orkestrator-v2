@@ -15,6 +15,8 @@ import {
   LEGACY_PREVIEW_SCRATCH_STALE_MS,
   PREVIEW_SCRATCH_PREFIX,
   PREVIEW_SCRATCH_STALE_MS,
+  previewScratchRoot,
+  previewScratchSearchRoots,
   runDocker,
   superviseWorker,
   sweepStalePreviewScratch,
@@ -72,6 +74,28 @@ test("a process worker's scratch is named for its backend and removed after a ve
   expect((await worker.exited).verified).toBe(true);
   expect(existsSync(scratch)).toBe(false);
 }, 10000);
+
+test("scratch goes where Chromium's SingletonSocket path fits the platform's socket limit", () => {
+  const exists = () => true;
+  // The path from the crashes: a test runner's private TMPDIR made the socket path 113 bytes.
+  const runnerTmpdir = "/tmp/ork-test-tmp-1337972-iznd8t";
+  const linux = { platform: "linux" as const, pid: 1376237, exists };
+  expect(previewScratchRoot("/tmp", linux)).toBe("/tmp");
+  expect(previewScratchRoot(runnerTmpdir, linux)).toBe("/tmp");
+  // 107 bytes is the longest Linux socket path; one more falls back.
+  const fitting = `/${"a".repeat(25)}`;
+  expect(previewScratchRoot(fitting, linux)).toBe(fitting);
+  expect(previewScratchRoot(`${fitting}a`, linux)).toBe("/tmp");
+  // macOS's per-user temp directory is too long for its 104-byte limit.
+  const macTmpdir = "/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T";
+  const mac = { platform: "darwin" as const, pid: 51234, exists };
+  expect(previewScratchRoot(macTmpdir, mac)).toBe("/private/tmp");
+  // Nothing shorter to use: keep the OS temp directory and let the launch name the cause.
+  expect(previewScratchRoot(runnerTmpdir, { ...linux, exists: () => false })).toBe(runnerTmpdir);
+
+  expect(previewScratchSearchRoots("/tmp", linux)).toEqual(["/tmp"]);
+  expect(previewScratchSearchRoots(runnerTmpdir, linux)).toEqual([runnerTmpdir, "/tmp"]);
+});
 
 test("startup recovery removes only stale scratch of backends that have exited", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "ork-preview-scratch-sweep-"));

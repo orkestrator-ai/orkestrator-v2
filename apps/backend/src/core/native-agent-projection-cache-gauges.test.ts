@@ -96,7 +96,6 @@ test("deleting an environment releases its sessions' projection caches, and only
         projections: 0,
         projectionSync: 0,
         projectionRevisions: 0,
-        projectionHistory: 0,
         projectionEpochs: 0,
         projectionMissingSince: 0,
         toolDetails: 0,

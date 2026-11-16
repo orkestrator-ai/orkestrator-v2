@@ -846,7 +846,7 @@ type BackendInternals = {
 const OOM_CONTAINER = "a".repeat(64);
 const oomLine = (seconds: number) => `${OOM_CONTAINER}\t${BigInt(seconds) * 1_000_000_000n}\n`;
 
-describe("two OrkestratorBackends in one process (todo 0733)", () => {
+describe("two OrkestratorBackends in one process (#1398)", () => {
   test("each owns its OOM follower, login refreshers and log followers, and stops only its own", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "ork-two-backends-"));
     const backends: OrkestratorBackend[] = [];

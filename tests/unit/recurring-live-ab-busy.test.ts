@@ -67,7 +67,7 @@ type Scenario = {
   /**
    * The burst's removal is rescanned only once time passes, or with
    * `burstRemovalMasksBurst` never on its own: the next burst, as many files
-   * again, is then seen together with it and moves no numbers (to-do 8171).
+   * again, is then seen together with it and moves no numbers (#2305).
    */
   lateBurstRemovalRescan?: boolean;
   burstRemovalMasksBurst?: boolean;
@@ -701,7 +701,7 @@ describe("busy phase", () => {
     expect(result.burstRescans.map((entry) => entry.changed)).toEqual([4, 4, 4]);
   });
 
-  test("waits for every environment's burst removal to be rescanned before the round goes on (to-do 8171)", async () => {
+  test("waits for every environment's burst removal to be rescanned before the round goes on (#2305)", async () => {
     const h = busyHarness({ lateBurstRemovalRescan: true });
     const result = await measureBusy(
       h.gateway,

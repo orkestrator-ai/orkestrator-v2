@@ -6,7 +6,7 @@ process.once("exit", enterPrivateTestTmpdir());
 
 /**
  * The Auto-pipeline fake-model suite (`mise run test:agent:auto-pipeline`,
- * to-do 7547 task 4). Separate from the browser agent config so it runs only
+ * #2021). Separate from the browser agent config so it runs only
  * on a profile set up for it: Pi only, no credentials, a loopback fake model.
  */
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");

@@ -38,6 +38,7 @@ import { checkInheritanceChains, findChains } from "../tests/source-guards/inher
 import { createLibBackendCommandDefaultGuard } from "../tests/source-guards/lib-backend-command-default";
 import { RAW_WEBREQUEST_LISTENER_ROOTS } from "../tests/source-guards/raw-webrequest-listener";
 import { checkRawConsole } from "../tests/source-guards/raw-console";
+import { checkRetiredTodoCitations } from "../tests/source-guards/retired-todo-citations";
 import { RepositoryIndex } from "../tests/source-guards/repository-index";
 import { SOURCE_GUARDS, listProductionSources, scanRepository } from "../tests/source-guards/scan";
 import { OwnershipModel } from "../tests/source-guards/test-suite-ownership";
@@ -198,6 +199,16 @@ export const REPOSITORY_GUARDS: readonly RepositoryGuard[] = [
       "The permanent exclusions live in tests/source-guards/raw-console.ts and .oxlintrc.json " +
       '(docs/development/linting.md, "Raw `console`").',
     run: ({ index }) => checkRawConsole(index),
+  },
+  {
+    id: "retired-todo-citations",
+    description: "No source comment cites a to-do number that has no file under docs/todo/",
+    advice:
+      "Point the citation at the pull request that did the work (`#2149`; `git log -S` on the " +
+      "citing line finds it) or mark it retired (`to-do 0019 (retired)`). A to-do number that is " +
+      "data rather than a citation goes in DATA_FILES in tests/source-guards/retired-todo-citations.ts " +
+      'with its reason (docs/development/linting.md, "Retired to-do citations").',
+    run: ({ index }) => checkRetiredTodoCitations(index),
   },
 ];
 

@@ -1399,7 +1399,7 @@ async function startApplication(): Promise<void> {
     updaterLog.info("remote.relaunched", { version: remoteRelaunch.version });
   }
   // Startup blocks on this step, so its duration is the toolchain's share of
-  // launch-to-ready (to-do 1202 task 13 compares it before and after stamps).
+  // launch-to-ready (#1652 compares it before and after stamps).
   const toolchainStartedAt = performance.now();
   const toolchainBinDir = await preparePinnedToolchains({
     dataDir,

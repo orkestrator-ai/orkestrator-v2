@@ -39,8 +39,8 @@ test("backend lifecycle persists compatibility counts, detaches on shutdown, and
     const before = await first.invoke<CompatibilityPathUsageSnapshot>(
       "get_compatibility_path_usage",
     );
-    const prior = before.paths["history.joined-v1-page"]?.count ?? 0;
-    compatibilityPathUsage.record("history.joined-v1-page");
+    const prior = before.paths["preview.legacy-loopback-route"]?.count ?? 0;
+    compatibilityPathUsage.record("preview.legacy-loopback-route");
     // No snapshot: shutdown itself must persist the pending use.
     await first.shutdown();
     const database = openBackendDatabase(dataDir);
@@ -49,16 +49,18 @@ test("backend lifecycle persists compatibility counts, detaches on shutdown, and
         (
           database.readStore(COMPATIBILITY_PATH_USAGE_STORE)!
             .value as CompatibilityPathUsageSnapshot
-        ).paths["history.joined-v1-page"]?.count,
+        ).paths["preview.legacy-loopback-route"]?.count,
       ).toBe(prior + 1);
-      compatibilityPathUsage.record("history.joined-v1-page");
-      expect(compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count).toBe(1);
+      compatibilityPathUsage.record("preview.legacy-loopback-route");
+      expect(compatibilityPathUsage.snapshot().paths["preview.legacy-loopback-route"]?.count).toBe(
+        1,
+      );
       // Recording after shutdown must stay in memory, not reopen the database.
       expect(
         (
           database.readStore(COMPATIBILITY_PATH_USAGE_STORE)!
             .value as CompatibilityPathUsageSnapshot
-        ).paths["history.joined-v1-page"]?.count,
+        ).paths["preview.legacy-loopback-route"]?.count,
       ).toBe(prior + 1);
     } finally {
       database.close();
@@ -68,8 +70,8 @@ test("backend lifecycle persists compatibility counts, detaches on shutdown, and
     const restarted = await second.invoke<CompatibilityPathUsageSnapshot>(
       "get_compatibility_path_usage",
     );
-    expect(restarted.paths["history.joined-v1-page"]?.count).toBe(prior + 2);
-    expect(Object.keys(restarted.paths["history.joined-v1-page"]!).sort()).toEqual([
+    expect(restarted.paths["preview.legacy-loopback-route"]?.count).toBe(prior + 2);
+    expect(Object.keys(restarted.paths["preview.legacy-loopback-route"]!).sort()).toEqual([
       "count",
       "firstSeenAt",
       "lastSeenAt",

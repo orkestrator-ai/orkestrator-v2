@@ -116,7 +116,7 @@ type SummaryValue = Extract<
  * shared helper, so a position is named from the snapshot's own generation
  * and content epoch. That holds when the window starts at the first message
  * and the bridge sent no cursor: a reader whose byte bound dropped leading
- * rows still names the first row it kept (8110).
+ * rows still names the first row it kept (#2285).
  */
 function positionCursors(
   value: SummaryValue,

@@ -1,5 +1,5 @@
 /**
- * What extra recursive watches cost one process (to-do 5060, task 3).
+ * What extra recursive watches cost one process (to-do 5060 (retired), task 3).
  *
  * Bun keeps every directory watch of a process in one FSEvents stream on macOS,
  * and each `fs.watch` or `close()` rebuilds it (`watch-host.ts`). This measures

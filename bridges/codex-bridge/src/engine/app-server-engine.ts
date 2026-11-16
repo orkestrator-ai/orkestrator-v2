@@ -111,6 +111,12 @@ import {
 import { findTranscriptPath, listTranscriptPaths } from "../history/rollout.js";
 import { codexReadOnlyExecRulesInstructions } from "../codex-read-only-exec-rules.js";
 import {
+  CodexManagedRequirementsReader,
+  codexManagedTurnConfig,
+  codexNeedsManagedRequirements,
+  type CodexManagedRequirements,
+} from "../codex-managed-requirements.js";
+import {
   threadToolHistoryVerdict,
   type ToolHistoryVerdict,
 } from "../sessions/tool-history-guard.js";
@@ -885,6 +891,10 @@ export class AppServerEngine implements CodexEngine {
    */
   private hostedNetworkLockVerifiedGeneration: EngineGeneration | null = null;
   private skillExtraRootsGeneration: { id: EngineGeneration; set: Promise<void> } | null = null;
+  /** Each generation's `configRequirements/read` (8085 (retired)). */
+  private readonly managedRequirementsReader = new CodexManagedRequirementsReader((generation) =>
+    this.supervisor.requestOnGeneration(generation, "configRequirements/read"),
+  );
   /** The generation whose `config/read` confirmed tool declarations stay out of history. */
   private toolHistoryLockVerifiedGeneration: EngineGeneration | null = null;
   /**
@@ -955,6 +965,7 @@ export class AppServerEngine implements CodexEngine {
         this.loginSequence++;
         this.hostedNetworkLockVerifiedGeneration = null;
         this.skillExtraRootsGeneration = null;
+        this.managedRequirementsReader.forget();
         this.toolHistoryLockVerifiedGeneration = null;
         this.rejectAllWaiters();
         this.router.abandonGeneration(generation);
@@ -1661,6 +1672,28 @@ export class AppServerEngine implements CodexEngine {
   }
 
   /**
+   * The administrator's Codex requirements as the current generation reported
+   * them, once a thread or turn has asked for them (8085 (retired)). Never sends
+   * a request; session status reads it on every poll.
+   */
+  managedRequirements(): CodexManagedRequirements | null | undefined {
+    return this.managedRequirementsReader.known(this.supervisor.getGeneration());
+  }
+
+  /**
+   * `config` with the sandbox the administrator's requirements accept
+   * (`codexManagedTurnConfig`). Unreadable requirements leave it as it was,
+   * so Codex's own refusal still says what is wrong.
+   */
+  private async withManagedSandbox(
+    generation: EngineGeneration,
+    config: EngineTurnConfig,
+  ): Promise<EngineTurnConfig> {
+    if (!codexNeedsManagedRequirements(config)) return config;
+    return codexManagedTurnConfig(config, await this.managedRequirementsReader.read(generation));
+  }
+
+  /**
    * Thread configuration only app-server can supply: with project resources
    * off, the checkout's own skills, which the untrusted pin does not reach.
    * Failure to establish the inventory refuses the thread, including an older
@@ -2024,7 +2057,15 @@ export class AppServerEngine implements CodexEngine {
       thread: Record<string, unknown>;
       model?: unknown;
       activePermissionProfile?: { id?: unknown } | null;
-    }>(generation, "thread/start", this.toThreadParams(options.config, extra, instructions));
+    }>(
+      generation,
+      "thread/start",
+      this.toThreadParams(
+        await this.withManagedSandbox(generation, options.config),
+        extra,
+        instructions,
+      ),
+    );
     this.assertPermissionProfile(response.activePermissionProfile, options.config);
     return this.bindThread(response.thread, options.config, response.model);
   }
@@ -2040,7 +2081,11 @@ export class AppServerEngine implements CodexEngine {
       activePermissionProfile?: { id?: unknown } | null;
     }>(generation, "thread/resume", {
       threadId,
-      ...this.toThreadParams(options.config, extra, instructions),
+      ...this.toThreadParams(
+        await this.withManagedSandbox(generation, options.config),
+        extra,
+        instructions,
+      ),
     });
     this.assertPermissionProfile(response.activePermissionProfile, options.config);
     const thread = this.bindThread(response.thread, options.config, response.model);
@@ -2108,7 +2153,11 @@ export class AppServerEngine implements CodexEngine {
     }>(generation, "thread/fork", {
       threadId,
       ...(lastTurnId ? { lastTurnId } : {}),
-      ...this.toThreadParams(config, extra, instructions),
+      ...this.toThreadParams(
+        await this.withManagedSandbox(generation, config),
+        extra,
+        instructions,
+      ),
     });
     this.assertPermissionProfile(response.activePermissionProfile, config);
     return this.bindThread(response.thread, config, response.model);
@@ -2814,6 +2863,10 @@ export class AppServerEngine implements CodexEngine {
   async startTurn(options: StartTurnOptions): Promise<EngineTurn> {
     const binding = this.bindings.get(options.handle);
     if (!binding) throw new Error(`Unknown app-server thread handle: ${options.handle}`);
+    // The thread was started under the same narrowing; the turn states it too.
+    const sandboxConfig = codexNeedsManagedRequirements(options.config)
+      ? await this.withManagedSandbox((await this.supervisor.ensureReady()).id, options.config)
+      : options.config;
 
     const params = {
       threadId: binding.threadId,
@@ -2834,7 +2887,7 @@ export class AppServerEngine implements CodexEngine {
       // turn/start takes a resolved policy object, not the mode string.
       ...(options.config.permissionProfile
         ? {}
-        : { sandboxPolicy: toSandboxPolicy(options.config) }),
+        : { sandboxPolicy: toSandboxPolicy(sandboxConfig) }),
     };
     const { result, generation } = await this.supervisor.requestWithGeneration<{
       turn: { id: string };

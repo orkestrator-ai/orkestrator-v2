@@ -154,7 +154,7 @@ describe("a Default-mode question from the fake app-server", () => {
       method: "item/tool/requestUserInput",
       isBlocking: true,
       requestedAt: START,
-      // The deadline recorded for 0161 task 2: Orkestrator's own window, as
+      // The deadline recorded for 0161 (retired) task 2: Orkestrator's own window, as
       // app-server sends no `autoResolutionMs` and never resolves it itself.
       expiresAt: START + WINDOW,
       hold: { available: true },

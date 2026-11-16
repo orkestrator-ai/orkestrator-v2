@@ -705,7 +705,7 @@ describe("session lifecycle", () => {
       error: CODEX_RESTARTED_MID_TURN_MESSAGE,
       interruption: "restart",
       // Named, so a workflow does not read the notice as the outcome of a
-      // newer request whose turn has not started yet (todo 0112).
+      // newer request whose turn has not started yet (#1288).
       interruptedRequestId: "req-interrupted",
     });
     expect(h.events).toContainEqual({
@@ -4984,7 +4984,7 @@ describe("runtime health", () => {
   });
 
   /**
-   * Todo 7380: the no-touch runtime read reports whether the session's thread
+   * #2149: the no-touch runtime read reports whether the session's thread
    * is loaded, so a full idle wait can observe `detached` and then `attached`
    * without the read itself re-attaching or refreshing the idle clock.
    */

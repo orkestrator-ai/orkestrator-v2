@@ -28,7 +28,7 @@ const desktopLog = createLogger("desktop");
  * sheet would surface even a hidden window. No host is created in that mode.
  * An Electron on Chromium's headless Ozone platform (a headless `dev:test`
  * profile on Linux) has no display at all: Electron's GTK message box fails a
- * `CHECK` there and the process dies with SIGTRAP and a core dump (to-do 7554),
+ * `CHECK` there and the process dies with SIGTRAP and a core dump (#2080),
  * so its dialogs are cancelled too, unless a test has replaced
  * `dialog.showMessageBox` to answer them.
  *

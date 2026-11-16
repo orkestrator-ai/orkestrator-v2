@@ -237,7 +237,7 @@ describe("mail presence for environments that are not running", () => {
     }
   });
 
-  test("one config read and one environment read a pass, handed to each gate (todo 7567 task 2)", async () => {
+  test("one config read and one environment read a pass, handed to each gate (#2131)", async () => {
     const { storage, dataDir } = await fixture();
     const known: Array<{ environmentId: string; environment: unknown }> = [];
     const service = new AgentMailService(

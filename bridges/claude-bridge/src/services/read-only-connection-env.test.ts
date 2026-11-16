@@ -42,7 +42,7 @@ const ordinaryPolicy: NativeAgentExecutionPolicy = {
   networkAccess: "full",
 };
 
-describe("which settings `env` entries a read-only turn keeps (to-do 7565)", () => {
+describe("which settings `env` entries a read-only turn keeps (#2133)", () => {
   test("keeps the endpoint, credential and model names of every documented provider", () => {
     for (const name of [
       "ANTHROPIC_BASE_URL",

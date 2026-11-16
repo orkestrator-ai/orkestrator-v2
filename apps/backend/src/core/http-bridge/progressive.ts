@@ -167,7 +167,7 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
  * complete window, as OpenCode answers for a session it does not hold.
  *
  * The whole-body `/messages` fallback that older bridges needed here retired
- * on 2026-11-15 under the user's legacy-retirement decision (0050 task 1);
+ * on 2026-11-15 under the user's legacy-retirement decision (#2285);
  * every bridge and container image is updated together. A 405 can only come
  * from a bridge that predates the route, which this backend no longer reads
  * around: the read fails, and a bridge restart picks up the current bridge.

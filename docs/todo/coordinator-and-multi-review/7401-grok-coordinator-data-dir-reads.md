@@ -3,7 +3,7 @@
 ## Task analysis
 
 Analysed 2026-11-06 against `main` at `c1724ab74`, from
-[6080](6080-x1-coordinator-trust-boundary-follow-ups.md) task 3, which closed
+6080 (retired 2026-11-16) task 3, which closed
 the data directory on Pi and OpenCode but could not on Grok. Re-checked
 2026-11-11 against `main` at `498b68766`: still true (the profile still leaves
 Grok's reading tools, the bridge still has no path check on them); Grok is now
@@ -153,7 +153,7 @@ does not need, in exchange for never printing a path from the person's machine.
 
 ## Related
 
-- [6080](6080-x1-coordinator-trust-boundary-follow-ups.md) task 3
+- 6080 (retired 2026-11-16) task 3: the Pi and OpenCode checks it built are in [`coordinator.md`](../../architecture/coordinator.md#provider-qualification)
 - [coordinator-live-conformance.md](../../development/coordinator-live-conformance.md) (to-do 0024, retired)
 - [`coordinator.md`](../../architecture/coordinator.md#provider-qualification): Grok's boundary.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: running the Grok probe signed in) moved there on 2026-11-10.

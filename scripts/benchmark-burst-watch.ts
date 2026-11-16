@@ -1,6 +1,6 @@
 /**
  * Whether a file burst written into many worktrees at once reaches each one's
- * worktree watcher, and how late (to-do 8171).
+ * worktree watcher, and how late (#2305).
  *
  * The busy driver (`scripts/recurring-live-ab-busy.ts`) writes `--files`
  * one-line files into every environment at once, waits for the backend to

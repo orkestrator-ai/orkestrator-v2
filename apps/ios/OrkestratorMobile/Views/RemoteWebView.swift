@@ -100,6 +100,12 @@ struct RemoteWebView: UIViewRepresentable {
             connect: (input) => call("connect", input || {}),
             // Opens the app's own editor, so a token is never typed into a page.
             addInNativeEditor: () => call("open-editor"),
+            // Saves a server through the app's own editor without leaving this
+            // one; resolves with the saved list once the user saves there.
+            connectInNativeEditor: (input) => call("connect-in-editor", {
+              address: input && input.address,
+              nickname: input && input.nickname,
+            }),
             rename: (connectionId, nickname) => call("rename", { connectionId, nickname }),
             use: (connectionId) => call("use", { connectionId }),
             forget: (connectionId) => call("forget", { connectionId }),
@@ -167,6 +173,8 @@ struct RemoteWebView: UIViewRepresentable {
             #"window.dispatchEvent(new Event("orkestrator:memory-warning"));"#
 
         private var memoryWarningObserver: NSObjectProtocol?
+        /// The editor request this page is waiting on (`connect-in-editor`).
+        private var editorRequestID: UUID?
 
         /// Asks the user before a page adds, replaces, switches to or forgets a
         /// saved server (docs/architecture/renderer-security.md, iOS app). Tests
@@ -292,6 +300,7 @@ struct RemoteWebView: UIViewRepresentable {
             }
             memoryWarningObserver = nil
             consentGate.cancelPending()
+            withdrawEditorRequest()
             authenticationGeneration = UUID()
             authenticationTask?.cancel()
             invalidateReadiness()
@@ -434,6 +443,13 @@ struct RemoteWebView: UIViewRepresentable {
             setInspectable(false)
             // The document that asked is gone, so its question is withdrawn.
             consentGate.cancelPending()
+            withdrawEditorRequest()
+        }
+
+        private func withdrawEditorRequest() {
+            guard let editorRequestID else { return }
+            self.editorRequestID = nil
+            model.cancelEditorRequest(editorRequestID)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -773,6 +789,37 @@ struct RemoteWebView: UIViewRepresentable {
                     // which saves and opens the server itself; the page only asks.
                     if !model.isShowingConnectionEditor { model.showConnectionEditor() }
                     try await reply(id: requestID, result: true)
+                case "connect-in-editor":
+                    // The page names the address and nickname; the user types
+                    // the token natively and the app saves it, keeping this
+                    // server open. Saving there is the user's answer, so no
+                    // separate question is asked.
+                    let address = body["address"]
+                    let nickname = body["nickname"]
+                    guard address == nil || address is NSNull || address is String,
+                          nickname == nil || nickname is NSNull || nickname is String else {
+                        throw ConnectionBridgeError.invalidInput
+                    }
+                    guard !consentGate.isAsking else { throw ConnectionBridgeError.consentBusy }
+                    var shownID: UUID?
+                    let outcome: Result<ConnectionListPayload, Error>
+                    do {
+                        outcome = .success(try await model.requestConnectionInEditor(
+                            address: (address as? String).flatMap { $0.isEmpty ? nil : $0 },
+                            nickname: nickname as? String,
+                            requestedBy: requestedConnection?.name ?? "",
+                            onShow: { [weak self] id in
+                                shownID = id
+                                self?.editorRequestID = id
+                            }
+                        ))
+                    } catch {
+                        outcome = .failure(error)
+                    }
+                    // Only this call's own request: a refused second request
+                    // must not forget the one still waiting.
+                    if let shownID, editorRequestID == shownID { editorRequestID = nil }
+                    try await reply(id: requestID, result: outcome.get())
                 case "set-inspectable":
                     guard let enabled = body["enabled"] as? Bool else {
                         throw ConnectionBridgeError.invalidInput

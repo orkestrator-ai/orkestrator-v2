@@ -1,6 +1,6 @@
 /**
  * The Codex managed-network approval card, end to end on a managed host
- * (to-do 0723 task 7).
+ * (#2244).
  *
  * Codex asks about a host only when the administrator's
  * `/etc/codex/requirements.toml` turns its network proxy on, a file no test
@@ -12,6 +12,11 @@
  * That task writes `[network_proxy] enabled = true` plus
  * `allow_local_binding = true` (so an approved request may reach the
  * loopback probe server) and points `probe-host.example.test` at 127.0.0.1.
+ * It then runs this file a second time with
+ * `CODEX_MANAGED_HOST_FORBIDS_FULL_ACCESS=1` and a requirements file that
+ * also sets `allowed_sandbox_modes = ["read-only", "workspace-write"]`
+ * (8085 (retired) task 1): there the host default must run in Codex's sandbox
+ * rather than be refused every turn.
  *
  * Everything between Codex and the card is the real code: the pinned
  * `codex app-server` under the real codex-bridge process (spawned as the
@@ -63,6 +68,10 @@ import { StorageService } from "../src/core/storage";
 
 const LIVE = process.env.RUN_LIVE_CODEX_MANAGED_NETWORK_CARD === "1";
 const describeLive = LIVE ? describe : describe.skip;
+/** The second run: the administrator also leaves full access out (8085 (retired) task 1). */
+const FORBIDS_FULL_ACCESS = process.env.CODEX_MANAGED_HOST_FORBIDS_FULL_ACCESS === "1";
+const testWithFullAccess = FORBIDS_FULL_ACCESS ? test.skip : test;
+const testWithoutFullAccess = FORBIDS_FULL_ACCESS ? test : test.skip;
 
 const REPOSITORY = path.resolve(import.meta.dir, "../../..");
 const REQUIREMENTS = "/etc/codex/requirements.toml";
@@ -88,6 +97,8 @@ interface Stack {
   /** The card the tab would show: the adapter's snapshot after the enforcer. */
   pendingCard: () => Promise<AgentInteractionRequest | undefined>;
   prompt: () => Promise<void>;
+  /** The policy the bridge reports on `/session/:id/status`, which Agent Info shows. */
+  reportedPolicy: () => Promise<Record<string, unknown> | undefined>;
   /**
    * Waits until the bridge reports the session idle. A tool output reaching
    * the model does not end the turn: the model's final answer and the
@@ -252,6 +263,9 @@ async function withStack(
         });
         expect(sent.status, JSON.stringify(sent.json)).toBeLessThan(300);
       },
+      reportedPolicy: async () =>
+        (await call("GET", `/session/${sessionId}/status`)).json?.policy as
+          Record<string, unknown> | undefined,
       idle: async () => {
         // The no-touch read the backend's activity sweep uses; `idle` is
         // reported only once the turn's phase has left running, starting,
@@ -298,6 +312,12 @@ describeLive("Codex managed-network approval card on a managed host", () => {
     const requirements = existsSync(REQUIREMENTS) ? readFileSync(REQUIREMENTS, "utf8") : "";
     expect(requirements).toMatch(/\[network_proxy\][^[]*enabled\s*=\s*true/);
     expect(requirements).toMatch(/\[network_proxy\][^[]*allow_local_binding\s*=\s*true/);
+    if (FORBIDS_FULL_ACCESS) {
+      expect(requirements).toMatch(/allowed_sandbox_modes\s*=\s*\[[^\]]*workspace-write/);
+      expect(requirements).not.toMatch(/allowed_sandbox_modes\s*=\s*\[[^\]]*danger-full-access/);
+    } else {
+      expect(requirements).not.toContain("allowed_sandbox_modes");
+    }
   });
 
   test("with Codex's sandbox on, the card offers plain approval only and saves no Codex rule", async () => {
@@ -348,18 +368,65 @@ describeLive("Codex managed-network approval card on a managed host", () => {
     });
   }, 300_000);
 
-  test("under the host default (no sandbox) Codex skips the managed proxy and asks nothing", async () => {
-    // The default host policy plus approvals Ask: Codex runs with full access,
-    // where its network proxy does not apply, so the request goes straight out.
-    await withStack({ approvals: "ask" }, async (stack) => {
-      await stack.prompt();
-      await poll(
-        async () => (stack.toolOutputs()[0]?.includes(PROBE_BODY) ? true : undefined),
-        "the unasked request's output",
-      );
-      expect(stack.probeHits()).toBe(1);
-      expect(await stack.rawApprovals()).toEqual([]);
-      expect(stack.rulesFiles()).toEqual([]);
-    });
-  }, 300_000);
+  testWithFullAccess(
+    "under the host default (no sandbox) Codex skips the managed proxy and asks nothing",
+    async () => {
+      // The default host policy plus approvals Ask: Codex runs with full access,
+      // where its network proxy does not apply, so the request goes straight out.
+      await withStack({ approvals: "ask" }, async (stack) => {
+        await stack.prompt();
+        await poll(
+          async () => (stack.toolOutputs()[0]?.includes(PROBE_BODY) ? true : undefined),
+          "the unasked request's output",
+        );
+        expect(stack.probeHits()).toBe(1);
+        expect(await stack.rawApprovals()).toEqual([]);
+        expect(stack.rulesFiles()).toEqual([]);
+        // Agent Info says so (8085 (retired) task 2), and the session keeps no sandbox.
+        const reported = await stack.reportedPolicy();
+        expect(reported?.sandbox).toBe("none");
+        expect(String(reported?.note)).toContain("bypass the proxy");
+      });
+    },
+    300_000,
+  );
+
+  testWithoutFullAccess(
+    "where the administrator forbids full access, the host default runs in Codex's sandbox",
+    async () => {
+      // The default host policy plus approvals Ask. Before 8085 (retired) every prompt of
+      // such a session was refused with 503 ("`DangerFullAccess` is not in the
+      // allowed set"); now the bridge narrows it to workspace-write, the prompt
+      // runs, and the administrator's proxy applies, so the request asks.
+      await withStack({ approvals: "ask" }, async (stack) => {
+        await stack.prompt();
+        const card = await poll(stack.pendingCard, "the network approval card");
+        expect(card.presentation).toEqual(CODEX_MANAGED_NETWORK_CARD_PRESENTATION);
+
+        const reported = await stack.reportedPolicy();
+        expect(reported?.sandbox).toBe("provider");
+        expect(String(reported?.note)).toContain("workspace-write sandbox");
+
+        expect(await stack.resolve(card, "deny")).toBe("applied");
+        await poll(
+          async () => (stack.toolOutputs().length === 1 ? true : undefined),
+          "the denied turn's output",
+        );
+        expect(stack.toolOutputs()[0]).not.toContain(PROBE_BODY);
+        expect(stack.probeHits()).toBe(0);
+        expect(stack.rulesFiles()).toEqual([]);
+
+        // A second turn runs too: the narrowing holds for every turn, not the first.
+        await stack.idle();
+        await stack.prompt();
+        const again = await poll(async () => {
+          const pending = await stack.pendingCard();
+          return pending && pending.id !== card.id ? pending : undefined;
+        }, "the second network approval card");
+        expect(await stack.resolve(again, "deny")).toBe("applied");
+        await stack.idle();
+      });
+    },
+    300_000,
+  );
 });

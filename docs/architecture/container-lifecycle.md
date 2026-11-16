@@ -1202,7 +1202,7 @@ them as a link to a host path, and Docker resolves a bind source on the host
 #### Environment file patterns: security review
 
 Reviewed and decided on 2026-11-15 under to-do 8106 (retired; the user's
-decision of 2026-11-14 on 7571 task 4, `git log -1 --diff-filter=D --
+decision of 2026-11-14 on 7571 (retired) task 4, `git log -1 --diff-filter=D --
 docs/todo/containers-and-environments/8106-env-file-patterns-copy.md`).
 The threat is the one above: the project folder is repository content, so a
 user's broad pattern must not let a branch make the backend read or copy a
@@ -1720,7 +1720,20 @@ name proves it broken. Three checks share one probe script and parser:
 | --- | --- | --- |
 | Backend startup (Linux, desktop and backend-only runs) | Throwaway containers of a pinned ~1 MB `busybox` image on the default bridge and on a temporary per-environment style network (both in parallel) | Publishes `container-host-reachability-changed`; the app shows a banner and a fix dialog |
 | Bridge start (`resolveContainerAgentToolConnection`, Cursor/Grok/Pi starts) | `docker exec` in the environment container, after the host alias and network-policy repair | Logged; a result that contradicts the host verdict re-runs the host check (at most once a minute) |
-| Before a tool-mode workflow stage dispatches (Multi Review, build pipeline, feature planning) | Same, cached 60 s for success and 10 s for failure | A proven block fails the stage at once with the cause and the fix; an inconclusive probe passes |
+| Before a tool-mode workflow stage dispatches (Multi Review, build pipeline, feature planning), and before every Claude Multi Review step or reviewer turn in a container on either result transport | Same, cached 60 s for success and 10 s for failure | A proven block fails the stage at once with the cause and the fix; an inconclusive probe passes |
+
+A Claude Multi Review turn on the structured-output transport needs no result tool,
+but it is preflighted on both the bespoke and graph engines: a container's
+Claude bridge is always given the Orkestrator MCP server (`ORKESTRATOR_AGENT_MCP_URL`), runs a new CLI's first
+turn without waiting for it, and refuses every later turn that joins that CLI
+while the server is not connected (`syncClaudeRuntimeMcp`). Without the
+preflight a review's first turn ran and its schema repair or consolidation
+was refused (to-do 8172, retired 2026-11-16). That refusal now names the
+address the server could not reach and this notice instead of asking for a
+retry, which cannot help: the CLI does not reconnect a server that failed at
+launch. Only a server still `pending` keeps the plain retry advice. Build
+pipeline turns keep the tool-mode-only preflight. Non-Claude structured-output
+turns do not require the agent tools server and skip this extra check.
 
 The startup check pulls busybox once (`--pull never` on every run afterwards)
 and falls back to the environment image; with neither it reports
@@ -2175,6 +2188,61 @@ version 2 have no `StopFailure` hook, so a failed turn there still reads
 from 2. A backend that predates version 3 reads a `failed` snapshot as an
 unreadable state and keeps the previous state (marked stale after three reads)
 until the next prompt.
+
+### Turns no hook ends
+
+Two ends of a terminal Claude turn fire no hook, so without help the file
+keeps `working` for good (to-do 8092, retired):
+
+- **A prompt the CLI refuses locally.** After a refused login the CLI
+  considers itself signed out and answers the next prompt "Not logged in ·
+  Please run /login" itself, with no model request and no `Stop` or
+  `StopFailure` (seen with Claude Code 2.1.319 in a container on 2026-11-14).
+- **The last terminal closing mid-turn.** Closing the tab ends its shell and
+  Claude in the container; nothing writes the file again.
+
+The poll settles both by rewriting the snapshot itself
+(`claude-terminal-settle.ts`). The rewrite is a compare-and-set run with
+`docker exec` as the image's user, under the hooks' own lock: it writes only
+when the snapshot is still exactly the `working <revision> <completions>` the
+poll observed, so a prompt submitted meanwhile is never overwritten, and it
+bumps the revision as a hook would. Because the result is in the container's
+file, it holds across a closed tab, a later poll lineage and a backend
+restart. The poll counts its own settle as an announced change, so a
+confirmed doorbell is not demoted for it. It needs no new image capability:
+any image with the counted snapshot (version 2 and later) can be settled.
+
+| End | Detected by | Written | Persisted as |
+| --- | --- | --- | --- |
+| Local refusal | While a counted snapshot reads `working`, a 1 s in-memory check of the container's terminal output (`TerminalRuntime`, no exec) finds one of the CLI's sign-in notices printed after the output marks captured before the last non-`working` read began, followed only by prompt-box redraw glyphs and 3 s of quiet | `failed` | `idle` with `completionOutcome: "failed"`, ringing `agent_failed` like `StopFailure` |
+| Last terminal closed | A counted snapshot reads `working` while no terminal or claude-tmux tab demands it; retried on later reads, including cold start | `idle` | `idle` with `completionOutcome: "none"`: the turn ends with no bell |
+
+The notices are the CLI's fixed text (`CLAUDE_SIGN_IN_NOTICES`), matched with
+escape sequences, control characters and whitespace removed, so the
+renderer's colours, cursor moves and line wrapping do not matter. Quiet alone
+does not prove completion: a live turn can wait on a static permission dialog.
+Only prompt-box punctuation and the pinned CLI’s fixed bypass-permissions
+footer and completed-turn duration line may follow a notice; other visible output revokes
+the candidate. A quoted notice with nothing but prompt punctuation after it is
+still ambiguous. On first adoption of a working snapshot the watch scans a
+bounded retained tail (64 KiB of characters); replacing a working revision uses the
+previous watch's consumed positions, without its notice evidence. Reads wait
+for an outstanding settle before persisting its result, so its no-bell metadata
+cannot arrive after an idle transition. Failed notice attempts retry on watch
+ticks; absent-demand attempts retry on safety reads. The check keeps only a
+short normalized tail per terminal and answers a boolean: terminal output never reaches a log or a
+metric. A CLI that rewords the notices silently disables the check, so
+`claude-terminal-settle.test.ts` reads both out of the pinned CLI build the
+Claude bridge's Agent SDK bundles.
+
+Not covered: a turn whose Claude ends while a terminal or tab is still open
+in the container (Claude exited in a shell that stays open, or its tab
+closed beside another one), because `demand` stays; and the host claude-tmux
+tab, which reads
+its own hooks (`tmux-hooks.ts`) and was not observed in this state
+([8094](../todo/containers-and-environments/8094-claude-tmux-prompt-refused-locally.md)).
+Unit tests (`NODE_ENV=test`) build the poll without a settler, so they never
+write to a container.
 
 After persisting, `orkestrator-state-signal` POSTs, detached and with no body,
 to `/claude-state-signal` on the agent

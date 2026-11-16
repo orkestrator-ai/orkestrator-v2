@@ -1,6 +1,6 @@
 /**
  * Session titles from a first message whose transcript-annotation envelope is
- * as large as the composer allows (0081 task 3): the title must be the user's
+ * as large as the composer allows (#1650): the title must be the user's
  * request whichever display bound the message passes through, never part of
  * the envelope.
  */

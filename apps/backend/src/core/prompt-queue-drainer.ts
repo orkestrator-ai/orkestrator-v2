@@ -121,7 +121,7 @@ export class PromptQueueDrainer {
    *
    * `presence` is what {@link mailInjectPresence} answered for this tab in the
    * same pass. When it is `idle` those reads have just been made, so the
-   * gate does not repeat them before the probe (to-do 1202 task 8, BG-15).
+   * gate does not repeat them before the probe (#1667, BG-15).
    * Without it they run first, so an unchecked caller still stops at a held
    * queue or draft before spending a probe.
    */
@@ -201,7 +201,7 @@ export class PromptQueueDrainer {
   /**
    * Read-only gate used by agent mail before it claims a durable message.
    * `known.environment` is a read of the environment row the caller made in
-   * the same pass; absent, the gate reads it itself (todo 7567 task 2).
+   * the same pass; absent, the gate reads it itself (#2131).
    */
   async mailInjectPresence(
     input: {

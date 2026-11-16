@@ -34,7 +34,7 @@ import { watchElectronStartup } from "./electron-startup-recovery";
 
 /**
  * The `localWindowGatewayTransport` setting in a real Electron window, off and
- * on (to-do 1202 task 12). Each run writes the counts recorded in that to-do: one
+ * on (#1741). Each run writes the counts recorded in that to-do: one
  * terminal printing LINE_COUNT lines with one window open. It also records
  * Electron main's CPU time (`process.cpuUsage()`) and the window's renderer CPU
  * time while idle, during that load and during a BURST_LINES burst with no
@@ -44,7 +44,7 @@ import { watchElectronStartup } from "./electron-startup-recovery";
  *
  * Playwright drives these windows over the DevTools protocol, and with the
  * direct transport every stream chunk the page receives becomes a DevTools
- * network event that main forwards to it (to-do 5760). So main's figures
+ * network event that main forwards to it (#1894). So main's figures
  * here overstate the direct transport; `local-gateway-transport-cpu-electron.spec.ts`
  * measures main with no DevTools client attached.
  */
@@ -145,7 +145,7 @@ async function sampleCpu(app: ElectronApplication): Promise<CpuSample> {
 
 /**
  * With `ORKESTRATOR_LOCAL_TRANSPORT_PROFILE=1` the two-window burst is also
- * profiled (to-do 5760): a V8 CPU profile of main's JavaScript (`.cpuprofile`,
+ * profiled (#1894): a V8 CPU profile of main's JavaScript (`.cpuprofile`,
  * summarised in `.summary.json`) and a Chromium trace (`.perfetto-trace`,
  * Perfetto protobuf: read it with Perfetto's `trace_processor`), whose
  * `toplevel` tasks carry each thread's own CPU time and whose `mojom` slices
@@ -277,7 +277,7 @@ async function countRelay(app: ElectronApplication): Promise<void> {
  * A development window opens a detached DevTools window (`window.ts`), which
  * records every network load and stream chunk of its page and costs main a
  * DevTools message for each. A shipped window has none, so the measured loads
- * run without them (to-do 5760).
+ * run without them (#1894).
  */
 async function closeDevTools(app: ElectronApplication): Promise<void> {
   await app.evaluate(({ BrowserWindow }) => {

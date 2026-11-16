@@ -95,7 +95,7 @@ const PRIMITIVES = new Map<string, Primitive>([
   ["StorageContext.updateSensitiveStoreRow", { kind: "write", write: "transactional" }],
   // A row diff of a value read earlier, like a whole-value save: it commits
   // what was planned from a read, so it must hold the lease every other writer
-  // of the store holds (todo 6120 task 6, agent mail's environment delete).
+  // of the store holds (#2029, agent mail's environment delete).
   ["StorageContext.updateStoreRows", { kind: "write", write: "whole" }],
   ["StorageContext.atomically", { kind: "atomically" }],
   ["StorageContext.serialize", { kind: "lease" }],

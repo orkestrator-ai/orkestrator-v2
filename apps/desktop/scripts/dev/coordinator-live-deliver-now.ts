@@ -15,7 +15,7 @@ import {
 } from "./coordinator-live-delegation.js";
 
 /**
- * The `deliver-now` scenario (todo 0740): a coordinator corrects a busy
+ * The `deliver-now` scenario (#1462): a coordinator corrects a busy
  * worker with `send_message` `deliverNow: true`.
  *
  * The coordinator launches one worker that touches a start file and then

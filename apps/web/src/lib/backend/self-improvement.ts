@@ -9,7 +9,7 @@ import { commandBackendClient } from "./client";
  * Self-improvement on this window's backend: its status, and starting a run.
  * Both are the machine's own (`admin`): Settings → Self-improvement uses this
  * window's backend, so the file has no `createXApi(client)` factory (plan
- * item 3002): no scope ever wired one in, and it was removed (7571 task 14).
+ * item 3002): no scope ever wired one in, and it was removed (#2230).
  */
 const system = () => systemApi(commandBackendClient);
 

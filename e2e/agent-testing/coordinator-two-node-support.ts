@@ -2,7 +2,7 @@
  * Two real `dev:test` profiles on one host, one attached to the other as its
  * leaf: sign-in, a checkout of one shared repository on each, the node link,
  * and a profile's isolated Pi provider. Shared by
- * `coordinator-node-mail-fake.spec.ts` (to-do 2900) and
+ * `coordinator-node-mail-fake.spec.ts` (#2075) and
  * `coordinator-notice-live.spec.ts` (to-do 7542 (retired)).
  */
 import { expect, type Page } from "./browser-test";

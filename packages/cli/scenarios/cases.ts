@@ -504,7 +504,9 @@ export const SCENARIOS: ScenarioDefinition[] = [
         ["--json", "environment", "start", environment.id, "--wait", "ready", "--timeout", "3m"],
         {
           stage: "interrupted wait",
-          signalAfterMs: { signal: "SIGINT", afterMs: 2_500 },
+          // Interrupt only once the client holds the submission's receipt;
+          // before that it has nothing to print (flake 9869).
+          signalWhenObserving: "SIGINT",
         },
       );
       expectThat(

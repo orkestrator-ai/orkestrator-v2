@@ -1,5 +1,6 @@
 import { connectCoordinatorNodeWakes } from "./coordinator-node-reconnect-wakes.js";
 import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
+import type { BackendStartupProgress } from "./backend-startup-progress.js";
 import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
@@ -375,6 +376,8 @@ export class OrkestratorBackend {
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private readonly workflowResults: WorkflowResultService;
   private readonly agentToolsPort: number | undefined;
+  /** Reports startup phases (`backend-startup-progress.ts`); a no-op unless the caller passes one. */
+  private readonly startupProgress: BackendStartupProgress;
   /** Remote-initiated updates of this host; see host-maintenance.ts. */
   readonly hostMaintenance: HostMaintenanceService;
   /** Persists compatibility-path usage; see compatibility-path-usage.ts. */
@@ -484,6 +487,8 @@ export class OrkestratorBackend {
     credentialSources?: import("@orkestrator/protocol/agent-platforms").AgentPlatform[];
     /** Exact agent tools port (`--agent-tools-port`); a busy one fails startup. */
     agentToolsPort?: number;
+    /** Told as `init()` reaches each startup phase (see `backend-startup-progress.ts`). */
+    onStartupPhase?: BackendStartupProgress;
     /**
      * The event transport (the gateway's fan-out). Read at emit time; the
      * backend wraps it in its typed, checked `BackendEmit`.
@@ -578,6 +583,7 @@ export class OrkestratorBackend {
     compatibilityPathUsage.attach(this.compatibilityPathSink);
     this.workflowResults = new WorkflowResultService(options.dataDir);
     this.agentToolsPort = options.agentToolsPort;
+    this.startupProgress = options.onStartupPhase ?? (() => undefined);
     this.hostMaintenance = new HostMaintenanceService({
       dataDir: options.dataDir,
       updater: options.hostUpdater ?? "none",
@@ -2117,7 +2123,9 @@ export class OrkestratorBackend {
   }
 
   async init(): Promise<void> {
+    this.startupProgress("storage");
     await this.context.storage.init();
+    this.startupProgress("services");
     // After `init`, which applies the upgrade from the single logging switch.
     this.startLogPolicy();
     try {
@@ -2206,6 +2214,7 @@ export class OrkestratorBackend {
     // this start), runs the writer-only startup work then instead of never,
     // with the won lease, and only once it settles do schedules fire and
     // container mutations get admitted. Either way the work runs once.
+    this.startupProgress("recovery");
     const writerStartup = registryWriterStartup({
       runWriterStartupWork: (writer) => this.runWriterStartupWork(writer),
       announceSchedulerStatus: () => this.context.storage.announceSchedulerStatus(),
@@ -2233,6 +2242,7 @@ export class OrkestratorBackend {
     this.removeContainerLifecycleListener = this.runtime.onContainerLifecycle(
       (containerId, action) => lifecycleReactor.handle(containerId, action),
     );
+    this.startupProgress("agent-tools");
     await this.agentTools.start(this.agentToolsPort);
     this.reserveOwnedPreviewPorts();
     // No renderer can be alive yet, so every persisted `frontend` activity
@@ -2353,6 +2363,7 @@ export class OrkestratorBackend {
         );
       },
     };
+    this.startupProgress("orphan-reaping");
     await this.reapPidServers({ storage: reaperStorage }).catch((error) => {
       log.warn("startup.step-failed", {
         step: "orphaned-local-servers",
@@ -2392,8 +2403,9 @@ export class OrkestratorBackend {
     // state and design canvases whose environment is gone. Background work: it never blocks the
     // gateway and never rejects.
     void runStartupEnvironmentCleanup(this.context);
+    this.startupProgress("durable-work");
     // Rows that projects removed before removal deleted their content left
-    // behind (to-do 8111); background, never rejects.
+    // behind (to-do 8111 (retired)); background, never rejects.
     void sweepRemovedProjectContentAtStartup(this.context.storage);
     const reconcileTabTeardowns = this.commands.get("reconcile_tab_teardowns");
     if (reconcileTabTeardowns) {
@@ -2467,6 +2479,7 @@ export class OrkestratorBackend {
         error: formatLogError(error),
       });
     });
+    this.startupProgress("agents");
     const reconcilePendingEnvironmentRenames = this.commands.get(
       "reconcile_pending_environment_renames",
     );

@@ -152,6 +152,26 @@ never runs beside `init()`. It then interrupts startup before the next stage
 and releases, in reverse order, whatever was started. A failed startup
 releases the same way and exits 1. The ready line is the program's last step.
 
+Before it, `main.ts` and `OrkestratorBackend.init()` write one JSON line on
+stdout per startup phase they reach, in order
+(`core/backend-startup-progress.ts`, `BACKEND_STARTUP_PHASES`):
+
+```json
+{"type":"orkestrator-backend-startup","phase":"storage"}
+```
+
+The phases run from `process` (options parsed) through `storage`,
+`recovery`, `orphan-reaping`, `durable-work` and `gateway` to
+`instance-descriptor`. A line carries the phase name only, never a path,
+port or token. It lets a launcher or test tell a slow start (phases keep
+arriving) from a stuck one and name the phase where it stopped:
+`packages/cli/tests/cli-packaged-backend.test.ts` fails only when no new
+phase arrives for 90 s. The lines are additive to the launch protocol:
+every launcher matches the ready line by its `type` and ignores the rest
+(the desktop relays them to its log like any non-record line). A phase is
+announced as it begins, so it says nothing about readiness; only the ready
+line does.
+
 ## Workload priority
 
 Agent and build work runs at nice 10 (`WORKLOAD_NICE`, `process-priority.ts`) so

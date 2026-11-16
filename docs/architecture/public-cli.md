@@ -177,9 +177,28 @@ once after a 401 for reads only (token rotation) — never for a mutation.
 | Mode | stdout | stderr |
 | --- | --- | --- |
 | human (default) | Free-form text; may change between releases | Diagnostics, receipt hints |
-| `--json` | Exactly one envelope, success or failure | Nothing on success |
+| `--json` | Exactly one envelope, success or failure | Nothing on success, except the `--wait` progress record below |
 | `--output id` | Only the documented ID(s); nothing on failure | The error |
-| `--jsonl` | One record per line while following, then the final envelope | — |
+| `--jsonl` | One record per line while following, then the final envelope | The `--wait` progress record below |
+
+A mutation run with `--wait` in `--json` or `--jsonl` mode writes one JSON
+line on **stderr** once the backend has answered its submission (or a lost
+response was found by its request key) and the client holds the operation's
+receipt:
+
+```json
+{"type":"observing","action":"environment.start","operationId":"op-…"}
+```
+
+From that line on, SIGINT or SIGTERM stops only observation, and the
+`observation-interrupted` envelope carries the receipt; before it the client
+has no receipt to print. A wrapper that wants to interrupt a wait, or show
+"waiting for ready", watches stderr for it instead of guessing when
+observation began (the CLI scenario `client-exit` does exactly that). It
+names the action and operation only, never input, prompts or results; stdout
+is unchanged, and human and `--output id` modes do not write it
+(`writeObservingRecord` in `packages/cli/src/client/output.ts`, written by
+`submitForWait`).
 
 The envelope (`PublicSuccessEnvelope` / `PublicErrorEnvelope`):
 `{schemaVersion: 1, action, ok, connection, backend, result | error, receipt?, warnings?}`.

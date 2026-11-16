@@ -11,6 +11,39 @@ import { CliError } from "./errors.js";
 import type { ClientIo } from "./io.js";
 import type { CommandOutcome, GlobalOptions } from "./spec.js";
 
+/** `type` of the stderr record a `--wait` client writes when it starts observing. */
+export const OBSERVING_RECORD_TYPE = "observing";
+
+/**
+ * The machine-readable progress record a `--wait` command writes on stderr
+ * once the backend has answered its submission and it holds the operation's
+ * receipt. From that line on, an interruption stops only observation and the
+ * final envelope carries the receipt. Content-free: the action and operation
+ * ID only, never input, prompt or result. Documented in
+ * docs/architecture/public-cli.md, "Output and exit codes".
+ */
+export interface ObservingRecord {
+  type: typeof OBSERVING_RECORD_TYPE;
+  action: string;
+  operationId: string;
+}
+
+/**
+ * Writes {@link ObservingRecord} on stderr in `--json` and `--jsonl` modes.
+ * stdout keeps its one envelope (or record stream) unchanged; human and `id`
+ * output are unchanged.
+ */
+export function writeObservingRecord(
+  io: ClientIo,
+  mode: GlobalOptions["output"],
+  action: string,
+  operationId: string,
+): void {
+  if (mode !== "json" && mode !== "jsonl") return;
+  const record: ObservingRecord = { type: OBSERVING_RECORD_TYPE, action, operationId };
+  io.stderr(`${JSON.stringify(record)}\n`);
+}
+
 /**
  * Renders results for the selected output mode.
  *

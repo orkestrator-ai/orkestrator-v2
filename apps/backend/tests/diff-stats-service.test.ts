@@ -49,6 +49,7 @@ function createHarness(
     watchable?: boolean;
     watcherStartError?: Error;
     pendingCoverage?: boolean;
+    localScanMinGapMs?: number;
     emit?: BackendEmit;
   } = {},
 ): Harness {
@@ -87,8 +88,8 @@ function createHarness(
 
   const service = new DiffStatsService({
     admission: options.admission,
-    // These cases exercise immediate scans; worktree-snapshots.test.ts covers the gap.
-    localScanMinGapMs: 0,
+    // Most cases exercise immediate scans; opt into a gap for currency coverage.
+    localScanMinGapMs: options.localScanMinGapMs ?? 0,
     scan: (target) => {
       scans.push(target);
       return scan(target);
@@ -479,6 +480,107 @@ describe("DiffStatsService", () => {
     expect(harness.warnings).toEqual([
       expect.objectContaining({ event: "scan.watcher-failed", environmentId: "env-local" }),
     ]);
+  });
+
+  test("reports when the cached file list is current", async () => {
+    const harness = createHarness({ pendingCoverage: true });
+    try {
+      expect(harness.service.fileListCurrency("env-local")).toBeUndefined();
+      let release: () => void = () => {};
+      harness.setScan(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ stats: stats(), changes: [] });
+          }),
+      );
+      harness.service.track(localTarget());
+      expect(harness.service.fileListCurrency("env-local")).toMatchObject({
+        scannedEpoch: null,
+        scanning: true,
+        watcherQualified: false,
+        current: false,
+      });
+
+      // Scanned before coverage was qualified: served by age only, never current.
+      release();
+      await settle();
+      harness.qualifyWatch("env-local");
+      expect(harness.service.fileListCurrency("env-local")).toMatchObject({
+        scanning: false,
+        watcherQualified: true,
+        current: false,
+      });
+
+      // A refresh under coverage makes it current once its scan lands.
+      harness.service.refresh("env-local");
+      expect(harness.service.fileListCurrency("env-local")?.current).toBe(false);
+      release();
+      await settle();
+      const current = harness.service.fileListCurrency("env-local");
+      expect(current?.current).toBe(true);
+      expect(current?.scannedEpoch).toBe(current?.dirtyEpoch);
+
+      // A hint makes it stale until the rescan it asks for lands.
+      harness.signalChange("env-local");
+      expect(harness.service.fileListCurrency("env-local")).toMatchObject({
+        scanning: true,
+        current: false,
+      });
+      release();
+      await settle();
+      expect(harness.service.fileListCurrency("env-local")?.current).toBe(true);
+
+      harness.service.pause("env-local");
+      expect(harness.service.fileListCurrency("env-local")).toBeUndefined();
+    } finally {
+      harness.service.shutdown();
+    }
+  });
+
+  test("reports a held-back file list until the trailing scan finishes", async () => {
+    const harness = createHarness({ localScanMinGapMs: 100 });
+    try {
+      harness.service.track(localTarget());
+      await settle();
+      expect(harness.service.fileListCurrency("env-local")).toMatchObject({
+        current: true,
+        scanHeldBack: false,
+      });
+
+      harness.signalChange("env-local");
+      expect(harness.service.fileListCurrency("env-local")).toMatchObject({
+        scanning: false,
+        scanHeldBack: true,
+        watcherQualified: true,
+        current: false,
+      });
+      expect(harness.scans).toHaveLength(1);
+      const timer = harness.delayed.find((timer) => !timer.cancelled);
+      expect(timer?.delayMs).toBe(100);
+
+      let release: () => void = () => {};
+      harness.setScan(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ stats: stats(), changes: [] });
+          }),
+      );
+      harness.clock.value += 100;
+      timer!.callback();
+      expect(harness.service.fileListCurrency("env-local")).toMatchObject({
+        scanning: true,
+        scanHeldBack: false,
+        current: false,
+      });
+      release();
+      await settle();
+      const currency = harness.service.fileListCurrency("env-local");
+      expect(currency).toMatchObject({ scanning: false, scanHeldBack: false, current: true });
+      expect(currency?.scannedEpoch).toBe(currency?.dirtyEpoch);
+      expect(harness.scans).toHaveLength(2);
+    } finally {
+      harness.service.shutdown();
+    }
   });
 
   test("asynchronous unqualified watch failures retain capped retry backoff", async () => {

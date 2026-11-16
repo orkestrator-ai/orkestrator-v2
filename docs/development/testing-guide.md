@@ -493,6 +493,15 @@ says whether one is armed, and `restore()` reports any it drops. The
   fails.
 - Do not swap a sleep for an async query that waits the same wall time, and
   never change a production debounce or retry constant to make a test cheaper.
+- When the signal a test needs does not exist, add it to the product rather
+  than guessing with a timer. These exist for that reason (to-do 8302, retired 2026-11-16):
+  `DiffStatsService.fileListCurrency(id)` says when an environment's cached
+  file list is current, so a read would reuse it; a `--wait` CLI client writes
+  an `observing` record on stderr once it holds its receipt
+  ([public-cli.md](../architecture/public-cli.md#output-and-exit-codes)); and
+  the backend writes one `orkestrator-backend-startup` line per startup phase
+  before its ready line, so a boot test can fail on no progress instead of on
+  one deadline ([backend-runtime.md](../architecture/backend-runtime.md)).
 
 The `sleep-before-negative-assertion` source guard
 (`tests/unit/source-guards.test.ts`) refuses a new fixed sleep followed by a

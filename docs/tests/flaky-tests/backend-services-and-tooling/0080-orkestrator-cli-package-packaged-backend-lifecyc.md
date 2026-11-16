@@ -1,7 +1,7 @@
 # `orkestrator CLI package` packaged-backend lifecycle (`packages/cli/tests/cli.test.ts`)
 
 - **ID:** 0080
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-14
 - **Original command:** `bun run test` (workspace group, Turbo task `@orkestrator/cli#test:workspace`).
 - **Worker configuration:** Turbo's workspace group running concurrently with the root, bridge, and protocol-lockfile groups. Unlike the resolved built-artifact flake above, the CLI file was selected exactly once — the duplicate-selection root cause fixed there does not apply here.
@@ -124,4 +124,13 @@ The packaged-backend boot cases left `packages/cli/tests/cli.test.ts` for `packa
 - **Reproduction:** on core 15 with six burners (shared with other contention runs, load average about 140), HEAD's file failed 5 of 5 with `Packaged backend did not become ready:` at 20 s. The changed file still failed 5 of 5 under that condition, at 90 s. On core 10 with six burners, the old and new files both passed 3 of 3 (`f3-0080-old2`, `f3-0080-after2`). Alone it passes in 2.3 s.
 - **Status:** still open. Whether the backend is only slow or wedged under that extreme contention is not established. The next step is to capture backend stderr and timing when readiness is late. Base `a8b89f1541e7abb6af36d45121593ae14640a3ca`.
 
-- **Follow-up (2026-11-15):** the product signal this test needs is to-do [8302](../../../todo/cross-cutting/8302-signals-for-deterministic-flake-fixes.md).
+- **Follow-up (2026-11-15):** the product signal this test needs is to-do 8302 (retired 2026-11-16; the signals are described in the [testing guide](../../../development/testing-guide.md#controlled-time)).
+
+## Resolution (2026-11-16)
+
+- **Observed on:** Linux, base `c1fcc573b`, branch `20261116-015626-a440226a702f`.
+- **Root cause:** the test decided pass or fail on one deadline for the whole boot, and the backend reported nothing between spawn and its ready line, so under heavy CPU contention a slow boot and a stuck one looked the same (an empty stderr at the deadline). Whether the load-140 boots were only slow is still unproven.
+- **Fix:** the backend now writes one JSON line per startup phase on stdout before its ready line (`{"type":"orkestrator-backend-startup","phase":"storage"}`, thirteen phases from `process` to `instance-descriptor`; `apps/backend/src/core/backend-startup-progress.ts`, documented in [backend-runtime.md](../../../architecture/backend-runtime.md)). `cli-packaged-backend.test.ts` re-arms a 90 s no-progress watchdog on each phase instead of one 90 s deadline for the whole boot, asserts every phase arrived in order, and on failure reports the last phase reached with per-phase timings and the last 20 stdout lines. Its test budget is now 600 s, a last resort for a boot that keeps progressing.
+- **What this settles:** a slow start that keeps progressing now passes; a start that stops makes the test fail naming the phase, which is a real product failure rather than this flake.
+- **Reproduced:** no — the load average around 140 from the 2026-11-15 triage was not recreated.
+- **Stress:** `bun test --cwd=packages/cli ./tests/cli-packaged-backend.test.ts` passed alone (2.8 s) after `bun run --cwd packages/cli build`. Under `bun scripts/test-under-contention.ts --burners 6 -- … --rerun-each=3` it passed 3 of 3 (41 s), and with 12 burners 3 of 3 (65 s, about 21 s per boot, host load average about 54). Unit test: `apps/backend/src/core/backend-startup-progress.test.ts`.

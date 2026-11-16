@@ -556,6 +556,16 @@ export class NativeAgentTranscriptProjection {
   private readonly progressiveReadWaiters = new Map<string, number>();
   private progressiveReadWaiterCount = 0;
   private readonly progressiveDiscoveryJobsByProvider = new Map<string, number>();
+  /**
+   * Expired discovery sections whose renewal a job limit refused, oldest
+   * first, each a retry of that schedule. A finishing job starts them, so a
+   * section is never left waiting for the view's next read: those reads are
+   * 30 s apart once renewals no longer change the view (todo 8151).
+   */
+  private readonly deferredDiscoveryRenewals = new Map<
+    string,
+    { environmentId: string; sessionKey: string; retry: () => void }
+  >();
   private readonly progressiveDiscoveryCache = new Map<
     string,
     {
@@ -793,6 +803,7 @@ export class NativeAgentTranscriptProjection {
       stopNotices: this.stopNotices,
       progressiveTranscriptCache: this.progressiveTranscriptCache,
       progressiveDiscoveryCache: this.progressiveDiscoveryCache,
+      deferredDiscoveryRenewals: this.deferredDiscoveryRenewals,
       transcriptDeltaBases: this.transcriptDeltaBases,
       progressiveReads: this.progressiveReads,
       progressiveDirtyFollowUps: this.progressiveDirtyFollowUps,
@@ -873,6 +884,7 @@ export class NativeAgentTranscriptProjection {
       progressiveHydrationReadStarts: this.progressiveHydrationReadStarts.size,
       progressivePreviewFills: this.progressivePreviewFills.size,
       progressiveDiscoveryProviders: this.progressiveDiscoveryJobsByProvider.size,
+      deferredDiscoveryRenewals: this.deferredDiscoveryRenewals.size,
       interactiveSnapshotShares: this.interactiveSnapshotShares.size,
       projectedMessages: this.projectedMessages.size,
       projectedMessageSessions: this.projectedMessages.sessionCount,
@@ -963,6 +975,7 @@ export class NativeAgentTranscriptProjection {
     this.progressiveReadWaiters.clear();
     this.progressiveReadWaiterCount = 0;
     this.progressiveDiscoveryJobsByProvider.clear();
+    this.deferredDiscoveryRenewals.clear();
     this.progressiveDiscoveryCache.clear();
     this.progressiveDiscoveryBytes = 0;
     this.progressiveReadEpochs.clear();
@@ -3994,11 +4007,10 @@ export class NativeAgentTranscriptProjection {
    * differs at all (its revision moves), and `announce` when a view would
    * show something different enough to be told now:
    *
-   * - A retained value that only flips between `ready` and `stale` is not
-   *   announced. A renewal that misses its 2 s deadline and then succeeds
-   *   with the same value announced twice per 30 s expiry and reset an idle
-   *   view's quiet backoff each time (0049 code item 5); the view still sees
-   *   the stored availability on its next read.
+   * - A retained value becoming stale is announced so readers learn that a
+   *   renewal failed or timed out without waiting for the 30 s backstop.
+   *   Recovery with the same value stays silent: stale readers already have
+   *   a 2 s follow-up, and unchanged successful renewals must stay quiet.
    * - Diagnostic drift counters in the runtime section are not announced:
    *   `unknownEvents` only ever grows while the provider streams events this
    *   backend has no branch for, so every renewal of an idle session would
@@ -4036,6 +4048,7 @@ export class NativeAgentTranscriptProjection {
     const announce =
       changed &&
       (!retainedValue ||
+        (entry.availability === "stale" && previous.availability !== "stale") ||
         discoveryAnnouncementKey(previous.value) !== discoveryAnnouncementKey(entry.value));
     const bytes = Buffer.byteLength(semantic);
     if (previous) this.progressiveDiscoveryBytes -= previous.bytes;
@@ -4064,7 +4077,10 @@ export class NativeAgentTranscriptProjection {
         ? ["initial"]
         : !retainedValue
           ? ["availability"]
-          : discoveryChangedPaths(previous.value, entry.value);
+          : previous.availability !== entry.availability &&
+              discoveryAnnouncementKey(previous.value) === discoveryAnnouncementKey(entry.value)
+            ? ["availability"]
+            : discoveryChangedPaths(previous.value, entry.value);
     return { changed, announce, changedPaths };
   }
 
@@ -4100,8 +4116,13 @@ export class NativeAgentTranscriptProjection {
     if (
       activeDiscoveryJobs >= 4 ||
       (this.progressiveDiscoveryJobsByProvider.get(providerKey) ?? 0) >= 2
-    )
+    ) {
+      this.deferDiscoveryRenewal(cacheKey, input.environmentId, sessionKey, epoch, () =>
+        this.scheduleProgressiveDiscovery(input, section, provider, providerSessionId),
+      );
       return;
+    }
+    this.deferredDiscoveryRenewals.delete(cacheKey);
     const read = async (): Promise<unknown> => {
       switch (section) {
         case "models":
@@ -4210,12 +4231,22 @@ export class NativeAgentTranscriptProjection {
           phases.phases(),
         );
         const previous = this.progressiveDiscoveryCache.get(cacheKey);
-        this.storeProgressiveDiscovery(cacheKey, {
+        const { announce, changedPaths } = this.storeProgressiveDiscovery(cacheKey, {
           value: previous?.value,
           availability: previous?.value === undefined ? "unavailable" : "stale",
           expiresAt: this.host.now() + 5_000,
           error: error instanceof Error ? error.message.slice(0, 4_000) : "Discovery unavailable",
         });
+        if (!announce) return;
+        this.recordDiscoveryAnnouncement(input, section, changedPaths);
+        this.storage.announceNativeAgentSessionProjection(
+          input.environmentId,
+          "discovery-renewal",
+          {
+            agent: input.agent,
+            logicalSessionKey: input.logicalSessionKey,
+          },
+        );
       })
       .finally(() => {
         const remaining = Math.max(
@@ -4224,7 +4255,52 @@ export class NativeAgentTranscriptProjection {
         );
         if (remaining === 0) this.progressiveDiscoveryJobsByProvider.delete(providerKey);
         else this.progressiveDiscoveryJobsByProvider.set(providerKey, remaining);
+        this.startDeferredDiscoveryRenewals();
       });
+  }
+
+  /**
+   * Remember a renewal a job limit refused. Before todo 8151 a refused
+   * section waited for the view's next read, which the `stale` answer made
+   * 2 s later; that answer was itself a whole changed view. A retry whose
+   * session moved to a new epoch (identity change, invalidation) is dropped:
+   * the next read schedules for the new identity.
+   */
+  private deferDiscoveryRenewal(
+    cacheKey: string,
+    environmentId: string,
+    sessionKey: string,
+    epoch: number,
+    retry: () => void,
+  ): void {
+    this.deferredDiscoveryRenewals.delete(cacheKey);
+    this.deferredDiscoveryRenewals.set(cacheKey, {
+      environmentId,
+      sessionKey,
+      retry: () => {
+        if (this.host.isStopped() || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
+        // Renewed some other way meanwhile (an MCP action's own read).
+        const cached = this.progressiveDiscoveryCache.get(cacheKey);
+        if (cached && cached.expiresAt > this.host.now()) return;
+        retry();
+      },
+    });
+    // Bounded like the section cache it serves.
+    while (this.deferredDiscoveryRenewals.size > 256) {
+      const oldest = this.deferredDiscoveryRenewals.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.deferredDiscoveryRenewals.delete(oldest);
+    }
+  }
+
+  /** Give each deferred renewal one more try; a refused one defers itself again. */
+  private startDeferredDiscoveryRenewals(): void {
+    if (this.deferredDiscoveryRenewals.size === 0 || this.host.isStopped()) return;
+    for (const [cacheKey, entry] of Array.from(this.deferredDiscoveryRenewals)) {
+      if (this.deferredDiscoveryRenewals.get(cacheKey) !== entry) continue;
+      this.deferredDiscoveryRenewals.delete(cacheKey);
+      entry.retry();
+    }
   }
 
   private mcpActionOrdinal = 0;
@@ -4348,10 +4424,15 @@ export class NativeAgentTranscriptProjection {
           resolved.session.providerSessionId,
         );
       }
+      // An expired ready section is still served `ready` while its renewal
+      // runs: the view, and its token, change only if the renewed value does,
+      // and that change is announced. Serving it `stale` made every 30 s
+      // backstop a whole new view plus a 2 s follow-up that was another one
+      // (todo 8151). `stale` now means a renewal failed and the value shown
+      // is the one before it.
       const state: NativeAgentDiscoverySectionState<unknown> = cached
         ? {
-            availability:
-              expired && cached.availability === "ready" ? "stale" : cached.availability,
+            availability: cached.availability,
             value: cached.value,
             revision: cached.revision,
             ...(cached.error ? { error: cached.error } : {}),
@@ -4384,7 +4465,14 @@ export class NativeAgentTranscriptProjection {
                     : "ready",
           });
         }
-        if (detail) Object.assign(state, { catalogue: detail });
+        // `fetchedAt` moves on every renewal, read or not, and no view shows
+        // it: carried here it made each 30 s renewal a whole new discovery
+        // view (todo 8151). The catalogue's revision already moves when the
+        // rows or their state do.
+        if (detail) {
+          const { fetchedAt: _fetchedAt, ...shown } = detail;
+          Object.assign(state, { catalogue: shown });
+        }
       }
       Object.assign(sections, { [section]: state });
     }
@@ -5389,6 +5477,10 @@ export class NativeAgentTranscriptProjection {
         ),
       );
     }
+    // A queued-only session has no cached view or live read descriptor.
+    for (const entry of this.deferredDiscoveryRenewals.values()) {
+      if (entry.environmentId === environmentId) sessionKeys.add(entry.sessionKey);
+    }
     for (const sessionKey of sessionKeys) {
       this.invalidateProjection(sessionKey);
       this.projectionRevisions.delete(sessionKey);
@@ -5431,6 +5523,10 @@ export class NativeAgentTranscriptProjection {
     // different provider session starts its reconnect from a full window.
     this.projectionMissingSince.delete(key);
     const progressivePrefix = `${key}\0progressive-v1\0`;
+    // Remove callbacks before an epoch can be pruned back to its default zero.
+    for (const candidate of Array.from(this.deferredDiscoveryRenewals.keys())) {
+      if (candidate.startsWith(progressivePrefix)) this.deferredDiscoveryRenewals.delete(candidate);
+    }
     for (const candidate of Array.from(this.progressiveTranscriptCache.keys())) {
       if (!candidate.startsWith(progressivePrefix)) continue;
       const entry = this.progressiveTranscriptCache.get(candidate);
@@ -5504,6 +5600,9 @@ export class NativeAgentTranscriptProjection {
         candidate.startsWith(progressivePrefix),
       ) ||
       Array.from(this.progressiveDirtyFollowUps.keys()).some((candidate) =>
+        candidate.startsWith(progressivePrefix),
+      ) ||
+      Array.from(this.deferredDiscoveryRenewals.keys()).some((candidate) =>
         candidate.startsWith(progressivePrefix),
       )
     ) {

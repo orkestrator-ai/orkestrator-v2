@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { KEEP_PRIVATE_TMPDIR_ENV, PRIVATE_TMPDIR_ENV } from "../private-tmpdir";
 import { FIXTURE_SERVER_PROBE_INTERVAL_ENV } from "../playwright-fixture-server-watch";
 import { PARENT_TMPDIR_ENV } from "../temp-sweep";
@@ -63,6 +64,81 @@ async function startFixtureServer(onExit: () => void): Promise<string> {
 }
 
 describe.skipIf(process.platform === "win32")("the component suite's fixture server", () => {
+  test("a real Node probe times out without interrupting and recovers on the next tick", async () => {
+    // A separate Node process avoids the Bun suite's happy-dom fetch/AbortSignal
+    // replacements and uses the same runtime as Playwright's runner.
+    const script = `
+      import assert from "node:assert/strict";
+      import { createServer } from "node:http";
+      import { probeFixtureServer, watchFixtureServer } from ${JSON.stringify(path.join(repository, "tests/playwright-fixture-server-watch.ts"))};
+      let answer = false;
+      let requests = 0;
+      const server = createServer((_request, response) => {
+        requests++;
+        if (answer) response.end("ok");
+      });
+      await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+      const url = "http://127.0.0.1:" + server.address().port;
+      let tick;
+      let pending;
+      let signals = 0;
+      let result;
+      let mode = "refused";
+      const watch = watchFixtureServer({
+        url, intervalMs: 100,
+        setInterval(callback) { tick = callback; return 1; },
+        clearInterval() {},
+        target: { pid: ${fakePid(2)}, listenerCount: () => 1, kill() { signals++; } },
+        log() {},
+        probe(url, timeout) {
+          pending = (async () => {
+            result = mode === "refused"
+              ? { outcome: "refused", detail: "ECONNREFUSED" }
+              : await probeFixtureServer(url, timeout);
+            return result;
+          })();
+          return pending;
+        }
+      });
+      async function step() { tick(); await pending; await Promise.resolve(); }
+      try {
+        await step(); await step();
+        mode = "network";
+        const started = Date.now();
+        await step();
+        assert.equal(requests, 1, "server must accept the hanging request");
+        assert.deepEqual(result, { outcome: "inconclusive" });
+        assert.ok(Date.now() - started < 3000, "probe must finish within its deadline budget");
+        assert.equal(signals, 0);
+        assert.equal(watch.stopReason, undefined);
+        answer = true;
+        await step();
+        assert.deepEqual(result, { outcome: "up" });
+        assert.equal(requests, 2, "the next tick must issue another request");
+        mode = "refused";
+        await step(); await step();
+        assert.equal(signals, 0, "successful recovery must clear the earlier refusals");
+        assert.equal(watch.stopReason, undefined);
+      } finally {
+        watch.stop();
+        server.closeAllConnections();
+        await new Promise(resolve => server.close(resolve));
+      }
+    `;
+    const runner = Bun.spawn(["node", "--input-type=module", "--eval", script], {
+      cwd: repository,
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 8_000,
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(runner.stdout).text(),
+      new Response(runner.stderr).text(),
+      runner.exited,
+    ]);
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+  }, 15_000);
+
   test("a run whose fixture server exits stops within a few probes and says why", async () => {
     // The real config names the setup this test loads by absolute path. Read
     // as text: importing the config here would install its runner-only

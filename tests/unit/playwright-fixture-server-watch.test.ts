@@ -127,6 +127,20 @@ describe("watchFixtureServer", () => {
     expect(run.watch.stopReason).toBeDefined();
   });
 
+  test("client resource errors never accumulate toward an interruption", async () => {
+    for (const code of ["EMFILE", "ENOBUFS"]) {
+      const error = Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error("resource unavailable"), { code }),
+      });
+      const result = classifyProbeError(error);
+      expect(result).toEqual({ outcome: "inconclusive" });
+      const run = harness({ results: [REFUSED, REFUSED, result, result, result] });
+      await run.tick(5);
+      expect(run.calls.some((call) => call.startsWith("kill"))).toBe(false);
+      expect(run.watch.stopReason).toBeUndefined();
+    }
+  });
+
   test("does not signal a runner that is no longer listening for SIGINT", async () => {
     const run = harness({ sigintListeners: 0, results: [REFUSED, REFUSED, REFUSED] });
     await run.tick(3);
@@ -189,8 +203,8 @@ async function listen(handler: RequestListener) {
 describe("probeFixtureServer", () => {
   // The root suite's DOM preload replaces the global fetch and AbortSignal
   // with happy-dom's, which apply a page's CORS rules and which Bun's own
-  // fetch does not accept; the runner calls Node's. The deadline itself is
-  // covered by classifyProbeError below.
+  // fetch does not accept; the runner calls Node's. The real Node deadline
+  // and recovery path are covered in the exit integration test.
   const runtimeFetch = ((url: string, init?: RequestInit) =>
     Bun.fetch(url, { ...init, signal: undefined })) as typeof fetch;
 
@@ -222,6 +236,15 @@ describe("probeFixtureServer", () => {
       outcome: "refused",
       detail: "ECONNREFUSED",
     });
+    for (const code of ["ECONNRESET", "ConnectionReset"]) {
+      expect(classifyProbeError(Object.assign(new Error("reset"), { code }))).toEqual({
+        outcome: "refused",
+        detail: code,
+      });
+    }
+    for (const error of [new Error("fetch failed"), "unknown", { code: "EACCES" }]) {
+      expect(classifyProbeError(error)).toEqual({ outcome: "inconclusive" });
+    }
     const bunRefusal = Object.assign(new Error("Unable to connect"), {
       code: "ConnectionRefused",
     });

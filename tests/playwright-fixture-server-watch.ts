@@ -82,9 +82,17 @@ export function classifyProbeError(error: unknown): FixtureProbeResult {
   const name = error && typeof error === "object" ? (error as { name?: unknown }).name : undefined;
   if (name === "TimeoutError" || name === "AbortError") return { outcome: "inconclusive" };
   const code = errorCode(error);
-  if (code) return { outcome: "refused", detail: code };
-  const message = error instanceof Error ? error.message : String(error);
-  return { outcome: "refused", detail: message.slice(0, 200) };
+  // Node fetch wraps system errors in `cause`; Bun uses its own code names.
+  // Resource exhaustion and unknown failures do not prove the server is down.
+  if (
+    code === "ECONNREFUSED" ||
+    code === "ECONNRESET" ||
+    code === "ConnectionRefused" ||
+    code === "ConnectionReset"
+  ) {
+    return { outcome: "refused", detail: code };
+  }
+  return { outcome: "inconclusive" };
 }
 
 /** Asks the fixture URL once. The body is discarded unread. */

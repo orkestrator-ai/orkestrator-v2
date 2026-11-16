@@ -60,6 +60,8 @@ import {
   responseCompressionContexts,
   jsonResponse,
   getBearerToken,
+  getCookie,
+  AUTH_COOKIE,
   tokenMatches,
   readJsonBody,
   readLoginToken,
@@ -588,7 +590,8 @@ export class GatewayAuth {
       );
       return;
     }
-    const staleCookie = getGatewayAuthCookie(request);
+    // Cleanup must inspect the old name even when HTTPS refuses it as a credential.
+    const staleCookie = getCookie(request.headers, AUTH_COOKIE) ?? getGatewayAuthCookie(request);
     if (staleCookie && this.durableCredentialOutcome(staleCookie, request) === "match") {
       response.setHeader("set-cookie", clearedGatewayCookies());
     }

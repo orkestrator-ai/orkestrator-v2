@@ -1987,6 +1987,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
 
         let request = try XCTUnwrap(captured)
         XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Origin"), "https://desk.example")
         XCTAssertEqual(
             request.url?.absoluteString,
             "https://desk.example/__orkestrator/login"

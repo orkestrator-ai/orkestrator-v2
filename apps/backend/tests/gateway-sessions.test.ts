@@ -193,32 +193,36 @@ describe("gateway browser sessions", () => {
     }
   });
 
-  test("refuses the durable token in a cookie and clears that cookie", async () => {
-    const { info } = await startGateway();
-    const legacy = `orkestrator_gateway_auth=${encodeURIComponent(info.token)}`;
+  for (const secure of [false, true]) {
+    test(`refuses the durable token in a cookie and clears that cookie (${secure ? "HTTPS" : "HTTP"})`, async () => {
+      const { info } = await startGateway();
+      const schemeHeaders = secure ? { "x-forwarded-proto": "https" } : {};
+      const legacy = `orkestrator_gateway_auth=${encodeURIComponent(info.token)}`;
 
-    const api = await requestUrl(`${info.url}__orkestrator/status`, {
-      headers: { cookie: legacy },
-    });
-    expect(api.status).toBe(401);
-    expect(api.headers["set-cookie"]?.[1]).toStartWith("orkestrator_gateway_auth=;");
-    expect(api.headers["set-cookie"]?.[1]).toContain("Max-Age=0");
+      const api = await requestUrl(`${info.url}__orkestrator/status`, {
+        headers: { ...schemeHeaders, cookie: legacy },
+      });
+      expect(api.status).toBe(401);
+      expect(api.headers["set-cookie"]).toEqual(clearedGatewayCookies());
+      expect(api.headers["set-cookie"]?.[1]).toStartWith("orkestrator_gateway_auth=;");
+      expect(api.headers["set-cookie"]?.[1]).toContain("Max-Age=0");
 
-    // A browser that held the old cookie lands on the login page with a reason.
-    const page = await requestUrl(info.url, {
-      headers: { cookie: legacy, accept: "text/html" },
-    });
-    expect(page.status).toBe(401);
-    expect(page.body).toContain("Your browser session has ended");
-    expect(page.headers["set-cookie"]?.[0]).toContain("Max-Age=0");
-    expect(page.body).not.toContain(info.token);
+      // A browser that held the old cookie lands on the login page with a reason.
+      const page = await requestUrl(info.url, {
+        headers: { ...schemeHeaders, cookie: legacy, accept: "text/html" },
+      });
+      expect(page.status).toBe(401);
+      expect(page.body).toContain("Your browser session has ended");
+      expect(page.headers["set-cookie"]?.[0]).toContain("Max-Age=0");
+      expect(page.body).not.toContain(info.token);
 
-    const settings = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
-      headers: { cookie: legacy },
+      const settings = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+        headers: { ...schemeHeaders, cookie: legacy },
+      });
+      expect(settings.status).toBe(401);
+      expect(settings.body).not.toContain(info.token);
     });
-    expect(settings.status).toBe(401);
-    expect(settings.body).not.toContain(info.token);
-  });
+  }
 
   test("an expired session gets the login page, without clearing a cookie it did not issue", async () => {
     const { gateway, info } = await startGateway();

@@ -693,11 +693,12 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   plain one (a TLS proxy that sends no `X-Forwarded-Proto` makes a request
   without an `Origin` look like HTTP). Logout expires both names. A proxy in
   front of the gateway must pass `X-Forwarded-Proto: https`, as Tailscale
-  Serve does: without it, a sign-in with no `Origin` (the iOS app's native
-  login, a `dev:login` link) gets the plain, non-`Secure` cookie, which the
-  iOS app does not accept and which later `Origin`-bearing requests over
-  HTTPS do not read. The iOS app connects only over HTTPS and accepts only the
-  `__Host-` name.
+  Serve does: without it, a sign-in with no `Origin` (such as a
+  `dev:login` link) gets the plain, non-`Secure` cookie, which later
+  `Origin`-bearing requests over HTTPS do not read. The iOS app supplies its
+  connection's HTTPS origin on native login requests, so that exchange does
+  not depend on the proxy header. It connects only over HTTPS and accepts
+  only the `__Host-` name.
 - `e2e/preview/gateway-browser-security.spec.ts` (part of
   `mise run test:preview:browser`, served by
   `apps/backend/src/gateway-browser-harness.ts`) checks the parts of these rules

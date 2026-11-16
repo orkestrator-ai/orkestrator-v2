@@ -314,6 +314,14 @@ struct RemoteWebView: UIViewRepresentable {
                 cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
                 timeoutInterval: 20
             )
+            // Native URLSession requests have no browser-supplied Origin. Supply
+            // ours so TLS terminators without X-Forwarded-Proto still issue the
+            // HTTPS-only session cookie. Keep paths and credentials out of it.
+            var origin = URLComponents()
+            origin.scheme = connection.address.scheme
+            origin.host = connection.address.host
+            origin.port = connection.address.port
+            request.setValue(origin.string, forHTTPHeaderField: "Origin")
             request.httpMethod = "POST"
             request.httpBody = Self.loginFormBody(token: connection.token)
             request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")

@@ -22,7 +22,7 @@ any row's status.
 
 | Folder | backlog | blocked | requires user input | done | Total | Covers |
 | --- | --- | --- | --- | --- | --- | --- |
-| [Agent engines and provider SDKs](agent-engines/0000-index.md) | 2 | 12 | 0 | 0 | 14 | How native agent sessions run across providers: interactions and permissions, steer and interrupt, accounts and sign-in, model parameters, session lifecycle and history, and SDK surfaces not yet adopted. |
+| [Agent engines and provider SDKs](agent-engines/0000-index.md) | 1 | 12 | 0 | 0 | 13 | How native agent sessions run across providers: interactions and permissions, steer and interrupt, accounts and sign-in, model parameters, session lifecycle and history, and SDK surfaces not yet adopted. |
 | [Backend structure](backend-structure/0000-index.md) | 2 | 1 | 0 | 0 | 3 | Refactors of the backend's internal structure: storage repositories, the native agent service, runtime state ownership, domain folders and the Claude bridge prompt stream. |
 | [CLI and slash commands](cli-and-slash-commands/0000-index.md) | 0 | 1 | 0 | 0 | 1 | The public `orkestrator` CLI and the slash-command catalogue: live qualification. |
 | [Containers and environments](containers-and-environments/0000-index.md) | 1 | 12 | 0 | 0 | 13 | Docker environment containers: platform qualification, rebuild state, network and credential isolation, resource budgets, state observation and cleanup. |

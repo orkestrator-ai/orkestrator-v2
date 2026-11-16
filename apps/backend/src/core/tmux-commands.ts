@@ -203,8 +203,9 @@ export async function cleanupEnvironmentTmux(
         });
         return { killed: [], complete: false };
       });
-      // Silent before to-do 7020: a contested tmux socket or a session that
-      // survived kill-session failed the cleanup with nothing in the log.
+      // Silent before to-do 7020 (retired): a contested tmux socket or a
+      // session that survived kill-session failed the cleanup with nothing in
+      // the log.
       if (!result.complete && cleanupComplete) {
         log.warn("cleanup.kill-incomplete", { killed: result.killed.length });
       }

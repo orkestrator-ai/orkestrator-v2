@@ -177,11 +177,12 @@ the reason: `unshare` is not installed, `ip` (iproute2) is not installed, or the
 host refused the namespace, with the kernel's own message (for example Ubuntu
 24.04's AppArmor restriction or a container's seccomp profile).
 `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose. Read that line first when
-`test:browser` fails on a Linux host other than the one it was qualified on
-(to-do 7020 task 2). On macOS the wrapper runs both suites unchanged on the host
-network and prints no line, because Docker Desktop keeps its networks inside its
-VM; it creates no namespace and changes nothing in the Mac's network
-configuration (qualified 2026-11-13, to-do 7020 task 2).
+`test:browser` fails on a Linux host other than the ones it was qualified on
+([Loopback namespace qualification](#loopback-namespace-qualification)). On
+macOS the wrapper runs both suites unchanged on the host network and prints no
+line, because Docker Desktop keeps its networks inside its VM; it creates no
+namespace and changes nothing in the Mac's network configuration (qualified
+2026-11-13).
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli:test`, which sets no build commit and so
@@ -205,6 +206,37 @@ real host scheduler, so the queueing case skips unless the suite runs with
 run it against a manual profile, export those two variables and
 `ORKESTRATOR_TEST_HOST_MEMORY_MIB=2048` for both `dev:test` and the browser
 suite.
+
+### Loopback namespace qualification
+
+Where `scripts/loopback-network.ts` has been checked, from to-do 7020 (retired
+2026-11-16; the full run record is in Git history,
+`git show a8b89f154:docs/todo/cross-cutting/7020-browser-suites-after-network-churn-qualification.md`).
+The cause it exists for is flake
+[2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
+
+| Date | Host | What ran | Result |
+| --- | --- | --- | --- |
+| 2026-11-06 | beelink (Linux 7.1.8-arch1-3, 16 cores), under Docker network churn | component suite on the host network, then in the namespace | host network: 850 of the first 1,024 cases lost to `ERR_NETWORK_CHANGED`; namespace: 1,475 and 1,479 passed with 15 and 11 load-sensitive failures, no network-change abort; public-site suite passed |
+| 2026-11-09 | containers on beelink's kernel (`--network none`) | Ubuntu 24.04 and Debian 13 userlands, Docker default and unconfined seccomp | the fallback notice named each missing prerequisite (refused, `ip` not installed); Debian 13 unconfined isolated with only `lo` and Chromium loaded a loopback page; exit statuses passed through |
+| 2026-11-13 | macOS 27.2 (18 cores) | both suites through the wrapper | no namespace, no notice line, no change to the interface list or default route; component suite 1,729 passed, 1 failed (flake [0351](../tests/flaky-tests/web-ui/0351-pane-breakpoint-parallel-startup.md), passed on rerun either way); public-site 14 passed |
+| 2026-11-15 | omarchy-hp (Omarchy, Linux 7.2.8-9-omarchy, 12 cores, Playwright 1.65.0) at `a8b89f154` | whole `mise run test:browser`, default 6 workers, private ports, started at load 3.9 | in the namespace: 1,600 passed, 150 failed, 154 skipped (91 min); no `ERR_NETWORK_CHANGED` or connection refusal; 131 of the failures were test timeouts, with 75 `page.goto` or `page.reload` timeout errors among them; the suite alone held load near 30 |
+| 2026-11-16 | omarchy-hp, straight after | the 41 failing files (880 cases) on the host network, then in the namespace, each stopped by `test:logged`'s 30-minute deadline | of 685 cases that ran in both: host network 40 failed, namespace 27; 21 failed in both, 19 only on the host network, 6 only in the namespace (four test timeouts that had also failed in the whole run, two timing assertions); 97 of the whole run's failures passed in both; public-site suite passed in the namespace (14.1 s) |
+
+So far no failure has come from the wrapper: the namespace removed every
+network-change abort, and the failures that remain come and go with load on
+either network. Not yet observed: a host that refuses the namespace on its
+own (Ubuntu 24.04 with `kernel.apparmor_restrict_unprivileged_userns=1`); that
+check is in the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+To requalify on a new host, run `mise run test:browser` with a free
+`ORKESTRATOR_E2E_PORT` and `ORKESTRATOR_PUBLIC_E2E_PORT` and
+`ORKESTRATOR_TEST_GROUP_TIMEOUT_MS` raised past the suite's length. Then rerun
+the failing files with `ORKESTRATOR_E2E_HOST_NETWORK=1` and again without it,
+and compare case by case. A case that fails only inside the namespace, and
+again on a rerun, is a defect of the wrapper. A whole run whose fixture server
+stops answering partway (every later case `ERR_CONNECTION_REFUSED`, as one
+omarchy-hp run did on 2026-11-15) says nothing about the wrapper; see
+[8200](../todo/cross-cutting/8200-component-suite-continues-after-fixture-server-exits.md).
 
 ## Codex typed-prompt resume qualification
 

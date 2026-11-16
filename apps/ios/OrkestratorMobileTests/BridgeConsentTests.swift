@@ -468,5 +468,210 @@ final class BridgeConsentTests: XCTestCase {
     func testTheBridgeScriptOffersTheNativeEditor() {
         let script = RemoteWebView.Coordinator.connectionBridgeScript
         XCTAssertTrue(script.contains(#"addInNativeEditor: () => call("open-editor")"#))
+        XCTAssertTrue(script.contains(#"connectInNativeEditor: (input) => call("connect-in-editor""#))
+    }
+
+    // MARK: Saving through the native editor (to-do 8000, retired)
+
+    private func editorReply(_ id: String, _ error: EditorRequestError) -> String {
+        "window.__orkestratorNativeConnectionReply(\"\(id)\", false, \"\(error.errorDescription!)\")"
+    }
+
+    /// Starts a `connect-in-editor` request and waits until the editor shows it.
+    private func openEditorRequest(
+        _ harness: Harness,
+        id: String = "save-id",
+        body: [String: Any] = ["address": "https://lab.example/", "nickname": "Lab"]
+    ) async -> Task<Void, Never> {
+        let request = Task {
+            await harness.coordinator.handleBridgeRequest(id: id, action: "connect-in-editor", body: body)
+        }
+        while harness.model.editorRequest == nil { await Task.yield() }
+        return request
+    }
+
+    func testTheEditorSavesWithoutTheTokenPassingThroughThePage() async throws {
+        let harness = makeHarness(.decline)
+        let request = await openEditorRequest(harness)
+
+        XCTAssertTrue(harness.model.isShowingConnectionEditor)
+        XCTAssertEqual(harness.model.draftAddress, "https://lab.example")
+        XCTAssertEqual(harness.model.draftToken, "")
+        XCTAssertEqual(harness.model.editorRequest?.nickname, "Lab")
+        XCTAssertEqual(harness.model.editorRequest?.requestedBy, first.name)
+        XCTAssertTrue(harness.scripts().isEmpty, "the page is answered only once the user saves")
+
+        harness.model.draftToken = "gateway-token-lab-3"
+        await harness.model.connectDraft()
+        await request.value
+
+        let saved = try XCTUnwrap(harness.model.vault.connections.first { $0.address.host == "lab.example" })
+        XCTAssertEqual(saved.token, "gateway-token-lab-3")
+        XCTAssertEqual(saved.nickname, "Lab")
+        // The server being shown stays open.
+        XCTAssertEqual(harness.model.activeConnection?.id, first.id)
+        XCTAssertFalse(harness.model.isShowingConnectionEditor)
+        XCTAssertNil(harness.model.editorRequest)
+        // Saving natively is the user's answer: no second question.
+        XCTAssertTrue(harness.presenter.requests.isEmpty)
+        let reply = try XCTUnwrap(harness.scripts().last)
+        XCTAssertTrue(reply.hasPrefix(#"window.__orkestratorNativeConnectionReply("save-id", true, {"#))
+        XCTAssertTrue(reply.contains("lab.example"))
+        XCTAssertFalse(reply.contains("gateway-token-lab-3"))
+        XCTAssertEqual(harness.scripts().count, 1)
+    }
+
+    func testAFailedCheckKeepsTheRequestOpenForAnotherTry() async throws {
+        let harness = makeHarness(.decline)
+        let request = await openEditorRequest(harness)
+        harness.validator.checkError = TestFailure.expected
+        harness.model.draftToken = "gateway-token-wrong-4"
+        await harness.model.connectDraft()
+
+        XCTAssertTrue(harness.model.isShowingConnectionEditor)
+        XCTAssertNotNil(harness.model.connectionError)
+        XCTAssertNotNil(harness.model.editorRequest)
+        XCTAssertTrue(harness.scripts().isEmpty)
+
+        harness.validator.checkError = nil
+        harness.model.draftToken = "gateway-token-lab-3"
+        await harness.model.connectDraft()
+        await request.value
+        XCTAssertEqual(harness.model.activeConnection?.id, first.id)
+        XCTAssertTrue(try XCTUnwrap(harness.scripts().last).contains(#""save-id", true"#))
+    }
+
+    func testCancellingTheEditorRefusesAndSavesNothing() async {
+        let harness = makeHarness(.decline)
+        let request = await openEditorRequest(harness)
+        harness.model.draftToken = "gateway-token-lab-3"
+        harness.model.dismissConnectionEditor()
+        await request.value
+
+        XCTAssertEqual(harness.model.vault.connections, [first, second])
+        XCTAssertTrue(harness.store.savedVaults.isEmpty)
+        XCTAssertEqual(harness.scripts(), [editorReply("save-id", .closed)])
+    }
+
+    func testSwipingTheEditorAwayRefuses() async {
+        let harness = makeHarness(.decline)
+        let request = await openEditorRequest(harness)
+        // What the sheet's binding does when the user drags it down.
+        harness.model.isShowingConnectionEditor = false
+        await request.value
+        XCTAssertNil(harness.model.editorRequest)
+        XCTAssertEqual(harness.scripts(), [editorReply("save-id", .closed)])
+    }
+
+    func testTeardownWithdrawsTheRequestAndClosesTheEditor() async {
+        let harness = makeHarness(.decline)
+        let request = await openEditorRequest(harness)
+        harness.model.draftToken = "gateway-token-lab-3"
+        // Teardown clears the evaluator, so capture the reply through the
+        // request's outcome: it must not be a save.
+        harness.coordinator.teardown()
+        await request.value
+
+        XCTAssertFalse(harness.model.isShowingConnectionEditor)
+        XCTAssertNil(harness.model.editorRequest)
+        XCTAssertEqual(harness.model.draftToken, "")
+        XCTAssertTrue(harness.store.savedVaults.isEmpty)
+    }
+
+    func testANewDocumentWithdrawsTheRequest() async {
+        let harness = makeHarness(.decline)
+        let request = await openEditorRequest(harness)
+        harness.coordinator.navigationDidCommit()
+        await request.value
+
+        XCTAssertFalse(harness.model.isShowingConnectionEditor)
+        XCTAssertEqual(harness.scripts(), [editorReply("save-id", .withdrawn)])
+    }
+
+    func testAWithdrawnRequestThatFailsItsCheckClosesRatherThanSwitching() async {
+        let harness = makeHarness(.decline)
+        let request = await openEditorRequest(harness)
+        harness.model.draftToken = "gateway-token-lab-3"
+        harness.validator.checkHandler = { [weak coordinator = harness.coordinator] _, _ in
+            coordinator?.navigationDidCommit()
+            throw TestFailure.expected
+        }
+        await harness.model.connectDraft()
+        await request.value
+
+        XCTAssertFalse(harness.model.isShowingConnectionEditor)
+        XCTAssertEqual(harness.model.activeConnection?.id, first.id)
+        XCTAssertEqual(harness.model.vault.connections, [first, second])
+    }
+
+    func testTheEditorAnswersOnlyOneRequestAtATime() async {
+        let harness = makeHarness(.decline)
+        let request = await openEditorRequest(harness)
+        await harness.coordinator.handleBridgeRequest(
+            id: "second-id",
+            action: "connect-in-editor",
+            body: ["address": "https://other.example"]
+        )
+        XCTAssertEqual(harness.scripts(), [editorReply("second-id", .busy)])
+        XCTAssertEqual(harness.model.draftAddress, "https://lab.example")
+
+        // The refused request must not have forgotten the one still waiting.
+        harness.coordinator.navigationDidCommit()
+        await request.value
+        XCTAssertEqual(harness.scripts().last, editorReply("save-id", .withdrawn))
+    }
+
+    func testAnEditorTheUserOpenedIsNotTakenOver() async {
+        let harness = makeHarness(.decline)
+        harness.model.showConnectionEditor()
+        harness.model.draftAddress = "https://typed.example"
+        await harness.coordinator.handleBridgeRequest(
+            id: "save-id",
+            action: "connect-in-editor",
+            body: ["address": "https://lab.example"]
+        )
+        XCTAssertEqual(harness.scripts(), [editorReply("save-id", .busy)])
+        XCTAssertEqual(harness.model.draftAddress, "https://typed.example")
+        XCTAssertNil(harness.model.editorRequest)
+    }
+
+    func testMalformedEditorRequestsAreRefusedBeforeTheEditorOpens() async {
+        let harness = makeHarness(.decline)
+        await harness.coordinator.handleBridgeRequest(
+            id: "bad-address",
+            action: "connect-in-editor",
+            body: ["address": 42]
+        )
+        XCTAssertEqual(harness.scripts().last, refusal("bad-address", .invalidInput))
+        await harness.coordinator.handleBridgeRequest(
+            id: "bad-nickname",
+            action: "connect-in-editor",
+            body: ["nickname": ["Lab"]]
+        )
+        XCTAssertEqual(harness.scripts().last, refusal("bad-nickname", .invalidInput))
+        await harness.coordinator.handleBridgeRequest(
+            id: "not-an-address",
+            action: "connect-in-editor",
+            body: ["address": "ftp://lab.example"]
+        )
+        XCTAssertTrue(try XCTUnwrap(harness.scripts().last).contains(#""not-an-address", false"#))
+        XCTAssertFalse(harness.model.isShowingConnectionEditor)
+    }
+
+    func testAnEditorRequestWithoutAnAddressOpensAnEmptyEditor() async {
+        let harness = makeHarness(.decline)
+        let request = await openEditorRequest(harness, body: [:])
+        XCTAssertEqual(harness.model.draftAddress, "")
+        XCTAssertNil(harness.model.editorRequest?.nickname)
+        harness.model.dismissConnectionEditor()
+        await request.value
+    }
+
+    func testTheEditorNamesWhoAskedAndWhatTheSaveDoes() {
+        let request = ConnectionModel.EditorRequest(id: UUID(), requestedBy: "desk.example", nickname: "Lab")
+        XCTAssertEqual(ConnectionEditorView.requestTitle(request), "Requested by desk.example")
+        XCTAssertTrue(ConnectionEditorView.requestDetail(request).contains("Saved as “Lab”."))
+        XCTAssertEqual(ConnectionEditorView.submitTitle(isConnecting: false, request: request), "Save securely")
+        XCTAssertEqual(ConnectionEditorView.submitTitle(isConnecting: false, request: nil), "Connect securely")
     }
 }

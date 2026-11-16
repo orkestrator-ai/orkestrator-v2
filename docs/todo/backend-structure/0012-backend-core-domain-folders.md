@@ -570,6 +570,13 @@ they move many files that other work in flight touches.
   imports of `host-server.js` and `listener-identity.js` are reported under
   `apps/backend/src/**`, the three exceptions and `index.js` are not, and a
   deep import of `provider-login.js` is reported under `tests/unit/**`.
+- Two test fixes outside the pure move, in a separate commit, for failures
+  already on `main` at `a0920f1a7`: `tests/unit/runtime-env-wiring.test.ts`
+  still read the plain state file that #2319 stopped
+  `orkestrator-state-signal.sh` writing (it now checks the snapshot), and
+  the backend test typecheck failed on `multi-review-auto-pr.test.ts` from
+  #2334 (its fake invoker's result now casts to the generic `T`). Both
+  failed the same way on the base commit; neither is a flake.
 - No manual checking is left: the move changes no behaviour, and what
   remains (`mise run test`, `build:backend`, `verify:packaged-backend` and the
   OpenCode live tests) is agent work for the validation stage, so nothing was

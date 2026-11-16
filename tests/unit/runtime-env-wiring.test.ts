@@ -255,11 +255,12 @@ describe("container runtime environment wiring", () => {
       }
     ).hooks;
 
-    // StopFailure (an API error) writes `failed`; the legacy file says idle.
-    for (const [event, expected, legacy] of [
-      ["UserPromptSubmit", "working", "working"],
-      ["Stop", "waiting", "waiting"],
-      ["StopFailure", "failed", "idle"],
+    // StopFailure (an API error) writes `failed`. Only the snapshot is
+    // written; the plain state file is no longer kept (#2319).
+    for (const [event, expected] of [
+      ["UserPromptSubmit", "working"],
+      ["Stop", "waiting"],
+      ["StopFailure", "failed"],
     ] as const) {
       const command = hooks[event]?.[0]?.hooks[0]?.command;
       expect(command).toContain(`/usr/local/bin/orkestrator-state-signal ${expected}`);
@@ -274,11 +275,11 @@ describe("container runtime environment wiring", () => {
         expect(
           runShell(script, { PATH: path, ORKESTRATOR_NATIVE_AGENT_BRIDGE: "claude" }).exitCode,
         ).toBe(0);
-        expect(() => statSync(stateFile)).toThrow();
+        expect(() => statSync(`${stateFile}-snapshot`)).toThrow();
 
         expect(runShell(script, { PATH: path }).exitCode).toBe(0);
-        expect(readFileSync(stateFile, "utf8").trim()).toBe(legacy);
         expect(readFileSync(`${stateFile}-snapshot`, "utf8").trim()).toBe(`${expected} 1 0`);
+        expect(() => statSync(stateFile)).toThrow();
       });
     }
   });

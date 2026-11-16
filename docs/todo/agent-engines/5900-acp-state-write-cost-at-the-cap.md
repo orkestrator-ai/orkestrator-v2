@@ -22,7 +22,7 @@ Analysed 2026-11-16 against `main` at `c1fcc573b` (first analysed 2026-11-05 at 
 Answer: on a quiet host the stall at the bound is about half the loaded figure.
 
 - **cap-fits** (256 sessions, 16.0 MB, nothing windowed): 22 to 44 ms median stall across the four shapes, at most 47 ms for any run's median. Nowhere near the 100 ms bar.
-- **cap-over** (256 sessions, every one windowed): 40 to 108 ms. Only the code-like, 2-part shape crosses the bar (107.5 ms, runs 105.5 to 110.7). Windowing is still the largest part: `persistedSnapshot`, which does it, takes 59 to 80 ms of 79 to 108 ms in the two slower shapes, against 15 to 22 ms in cap-fits, where nothing is windowed.
+- **cap-over** (256 sessions, every one windowed): 40 to 108 ms. Only the code-like, 2-part shape crosses the bar (107.5 ms, runs 105.5 to 110.7). Windowing is still the largest part: `persistedSnapshot`, which does it, takes 59 to 80 ms of 79 to 108 ms in the three slower shapes, against 15 to 22 ms in cap-fits, where nothing is windowed.
 - The code-like, 2-part shape gives 44.0 ms and 107.5 ms, the same as the single load-13 trial (44 and 105 ms), so it is probably the closest to the lost E20 fixture.
 - At plausible sizes (8 or 32 sessions, 1.3 or 4.4 MB) a write stalls 1 to 9 ms.
 

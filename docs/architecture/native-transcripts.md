@@ -404,6 +404,19 @@ again; with no read at all nothing would ever refresh, so nothing would ever be
 announced. Coalescing a burst of session changes keeps a cause that names
 discovery (`coalesceChanges`, `resource-sync.ts`).
 
+A backstop read that finds a section expired answers `unchanged` when nothing
+changed (todo 8151). The expired section is still served with its stored
+availability (`ready`) while its renewal runs, so the view and its token move
+only when the renewed value does, and that change is announced. `stale` means
+a renewal failed and the value shown is the one before it. A provider runs at
+most two section jobs at a time; a section the limit refuses is started when
+one of them finishes (`deferredDiscoveryRenewals`), not left for the view's
+next read. The command catalogue's `fetchedAt` is left out of the discovery
+view, because it moves on every renewal and no view shows it. Before this,
+each backstop became a `stale` view, a 2 s follow-up and a second follow-up
+for the refused sections, all three whole bodies (about 32 KB each for a
+Claude tab).
+
 A renewal announces only when the value changed as a view would show it
 (`storeProgressiveDiscovery`), so a stored value must not move when nothing
 did. Two normalisations keep it still: the runtime section's drift counter is

@@ -286,8 +286,13 @@ transcript reads at the bridge.
   (about 30 KB for Claude, 8 KB for Codex). Their number varied from 1 to 4
   per viewer in 40 s against a 30 s backstop. With 4 they carried as many
   bytes as all 84 live updates. To-do
-  [8151](8151-discovery-reads-during-a-quiet-turn.md) attributes both. The
-  layer carries a discovery part too (D4).
+  [8151](8151-discovery-reads-during-a-quiet-turn.md) found three causes:
+  each backstop read found its sections expired and answered `stale` (a new
+  view plus a 2 s follow-up), the follow-up carried a moved `fetchedAt`, and
+  the two sections the job limit refused made a third. Since 8151 an
+  unchanged renewal answers `unchanged`, so a quiet tab's discovery is one
+  small answer per 30 s and a renewal reaches this layer (D4) only when a
+  view would show something new.
 - **Streaming must not get more expensive.** While streaming, nearly every
   round really has a change (transcript `delta` on 39–40 of 40), so push
   saves little there; the throttle in D6 keeps it at or below today's rate.

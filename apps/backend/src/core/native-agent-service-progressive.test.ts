@@ -2049,7 +2049,10 @@ describe("native agent progressive remainder", () => {
         expect(announced).toHaveBeenCalledTimes(1);
 
         now += 31_000;
+        // The expired section is still served ready while it renews (todo
+        // 8151); let that renewal commit before the clock moves again.
         expect(await readyRevision()).toBe(first);
+        await waitForCondition(() => projectionInternals(service).progressiveReads.size === 0);
         expect(runtimeHealth).toHaveBeenCalledTimes(2);
         expect(announced).toHaveBeenCalledTimes(1);
 

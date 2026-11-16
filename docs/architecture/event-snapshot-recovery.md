@@ -280,7 +280,9 @@ announcement reads at once, two views share one read per round),
 `apps/backend/src/core/native-agent-service-reconciliation.test.ts` (content
 announcements in the stamp sequence),
 `apps/backend/src/core/native-agent-service-progressive.test.ts` (unchanged
-discovery and catalogue renewals, stale-only flips and drift stay silent). The
+discovery and catalogue renewals, stale-only flips and drift stay silent),
+`apps/backend/src/core/native-agent-service-quiet-discovery.test.ts` (a quiet
+view's backstop reads answer `unchanged`, todo 8151). The
 live per-provider run is `e2e/agent-testing/idle-observation-live.spec.ts`.
 
 ## Worktree snapshot revisions

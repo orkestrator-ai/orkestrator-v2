@@ -556,6 +556,13 @@ export class NativeAgentTranscriptProjection {
   private readonly progressiveReadWaiters = new Map<string, number>();
   private progressiveReadWaiterCount = 0;
   private readonly progressiveDiscoveryJobsByProvider = new Map<string, number>();
+  /**
+   * Expired discovery sections whose renewal a job limit refused, oldest
+   * first, each a retry of that schedule. A finishing job starts them, so a
+   * section is never left waiting for the view's next read: those reads are
+   * 30 s apart once renewals no longer change the view (todo 8151).
+   */
+  private readonly deferredDiscoveryRenewals = new Map<string, () => void>();
   private readonly progressiveDiscoveryCache = new Map<
     string,
     {
@@ -963,6 +970,7 @@ export class NativeAgentTranscriptProjection {
     this.progressiveReadWaiters.clear();
     this.progressiveReadWaiterCount = 0;
     this.progressiveDiscoveryJobsByProvider.clear();
+    this.deferredDiscoveryRenewals.clear();
     this.progressiveDiscoveryCache.clear();
     this.progressiveDiscoveryBytes = 0;
     this.progressiveReadEpochs.clear();
@@ -4100,8 +4108,13 @@ export class NativeAgentTranscriptProjection {
     if (
       activeDiscoveryJobs >= 4 ||
       (this.progressiveDiscoveryJobsByProvider.get(providerKey) ?? 0) >= 2
-    )
+    ) {
+      this.deferDiscoveryRenewal(cacheKey, sessionKey, epoch, () =>
+        this.scheduleProgressiveDiscovery(input, section, provider, providerSessionId),
+      );
       return;
+    }
+    this.deferredDiscoveryRenewals.delete(cacheKey);
     const read = async (): Promise<unknown> => {
       switch (section) {
         case "models":
@@ -4224,7 +4237,47 @@ export class NativeAgentTranscriptProjection {
         );
         if (remaining === 0) this.progressiveDiscoveryJobsByProvider.delete(providerKey);
         else this.progressiveDiscoveryJobsByProvider.set(providerKey, remaining);
+        this.startDeferredDiscoveryRenewals();
       });
+  }
+
+  /**
+   * Remember a renewal a job limit refused. Before todo 8151 a refused
+   * section waited for the view's next read, which the `stale` answer made
+   * 2 s later; that answer was itself a whole changed view. A retry whose
+   * session moved to a new epoch (identity change, invalidation) is dropped:
+   * the next read schedules for the new identity.
+   */
+  private deferDiscoveryRenewal(
+    cacheKey: string,
+    sessionKey: string,
+    epoch: number,
+    retry: () => void,
+  ): void {
+    this.deferredDiscoveryRenewals.delete(cacheKey);
+    this.deferredDiscoveryRenewals.set(cacheKey, () => {
+      if (this.host.isStopped() || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
+      // Renewed some other way meanwhile (an MCP action's own read).
+      const cached = this.progressiveDiscoveryCache.get(cacheKey);
+      if (cached && cached.expiresAt > this.host.now()) return;
+      retry();
+    });
+    // Bounded like the section cache it serves.
+    while (this.deferredDiscoveryRenewals.size > 256) {
+      const oldest = this.deferredDiscoveryRenewals.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.deferredDiscoveryRenewals.delete(oldest);
+    }
+  }
+
+  /** Give each deferred renewal one more try; a refused one defers itself again. */
+  private startDeferredDiscoveryRenewals(): void {
+    if (this.deferredDiscoveryRenewals.size === 0 || this.host.isStopped()) return;
+    for (const [cacheKey, retry] of Array.from(this.deferredDiscoveryRenewals)) {
+      if (this.deferredDiscoveryRenewals.get(cacheKey) !== retry) continue;
+      this.deferredDiscoveryRenewals.delete(cacheKey);
+      retry();
+    }
   }
 
   private mcpActionOrdinal = 0;
@@ -4348,10 +4401,15 @@ export class NativeAgentTranscriptProjection {
           resolved.session.providerSessionId,
         );
       }
+      // An expired ready section is still served `ready` while its renewal
+      // runs: the view, and its token, change only if the renewed value does,
+      // and that change is announced. Serving it `stale` made every 30 s
+      // backstop a whole new view plus a 2 s follow-up that was another one
+      // (todo 8151). `stale` now means a renewal failed and the value shown
+      // is the one before it.
       const state: NativeAgentDiscoverySectionState<unknown> = cached
         ? {
-            availability:
-              expired && cached.availability === "ready" ? "stale" : cached.availability,
+            availability: cached.availability,
             value: cached.value,
             revision: cached.revision,
             ...(cached.error ? { error: cached.error } : {}),
@@ -4384,7 +4442,14 @@ export class NativeAgentTranscriptProjection {
                     : "ready",
           });
         }
-        if (detail) Object.assign(state, { catalogue: detail });
+        // `fetchedAt` moves on every renewal, read or not, and no view shows
+        // it: carried here it made each 30 s renewal a whole new discovery
+        // view (todo 8151). The catalogue's revision already moves when the
+        // rows or their state do.
+        if (detail) {
+          const { fetchedAt: _fetchedAt, ...shown } = detail;
+          Object.assign(state, { catalogue: shown });
+        }
       }
       Object.assign(sections, { [section]: state });
     }

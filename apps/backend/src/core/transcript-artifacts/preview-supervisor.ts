@@ -11,7 +11,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { lstat, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -75,7 +75,7 @@ export type ProcessWorkerLaunch = {
   command: string;
   /** Worker arguments; the supervisor appends a private scratch ownership argument. */
   args: string[];
-  /** Parent of the per-job private scratch directory (default: the OS temp directory). */
+  /** Parent of the per-job private scratch directory (default: `previewScratchRoot()`), used as given. */
   scratchRoot?: string;
 };
 
@@ -140,8 +140,59 @@ export const PREVIEW_SCRATCH_STALE_MS = 60 * 60_000;
 export const LEGACY_PREVIEW_SCRATCH_STALE_MS = 24 * 60 * 60_000;
 const SCRATCH_OWNER_FILE = ".ork-preview-owner";
 
+/**
+ * What Chromium adds under its TMPDIR for its process-singleton socket, as
+ * observed on Linux (`org.chromium.Chromium.Hl7gS8/SingletonSocket`). Branded
+ * Chrome's `com.google.Chrome.XXXXXX` is shorter.
+ */
+const CHROMIUM_SINGLETON_SOCKET_SUFFIX = "/org.chromium.Chromium.XXXXXX/SingletonSocket";
+/** Longest Unix socket path, excluding the terminating NUL: `sun_path` is 104 bytes on macOS, 108 on Linux. */
+const maxSocketPathBytes = (platform: NodeJS.Platform) => (platform === "darwin" ? 103 : 107);
+
+/**
+ * Where a process-mode worker's scratch directory goes by default. The scratch
+ * is the worker's TMPDIR, so Chromium makes its `SingletonSocket` two levels
+ * inside it, and a socket path past the platform limit makes Chromium abort at
+ * launch (`Socket path too long`). The OS temp directory is used when that
+ * path fits; otherwise the short system directory, as when the backend runs
+ * under a test runner's private TMPDIR or with macOS's per-user temp directory.
+ * If neither fits, the OS temp directory is kept and the launch failure names
+ * the cause.
+ */
+export function previewScratchRoot(
+  base: string = tmpdir(),
+  options: {
+    platform?: NodeJS.Platform;
+    pid?: number;
+    exists?: (directory: string) => boolean;
+  } = {},
+): string {
+  const platform = options.platform ?? process.platform;
+  const pid = options.pid ?? process.pid;
+  const exists = options.exists ?? existsSync;
+  // mkdtemp appends six random characters to `<prefix><pid>-`.
+  const scratchName = `${PREVIEW_SCRATCH_PREFIX}${pid}-XXXXXX`;
+  const fits = (root: string) =>
+    Buffer.byteLength(path.join(root, scratchName) + CHROMIUM_SINGLETON_SOCKET_SUFFIX) <=
+    maxSocketPathBytes(platform);
+  if (fits(base)) return base;
+  const short = platform === "darwin" ? "/private/tmp" : "/tmp";
+  return fits(short) && exists(short) ? short : base;
+}
+
 /** Process-wide on purpose: the start identity of this process, which names scratch it owns. */
 let backendStartIdentity: string | null | undefined;
+
+/**
+ * Where startup recovery looks for scratch: the OS temp directory and, when it
+ * differs, the default scratch root (`previewScratchRoot`).
+ */
+export function previewScratchSearchRoots(
+  base: string = tmpdir(),
+  options: Parameters<typeof previewScratchRoot>[1] = {},
+): string[] {
+  return [...new Set([base, previewScratchRoot(base, options)])];
+}
 
 /**
  * Startup recovery for process isolation, the counterpart of
@@ -150,31 +201,38 @@ let backendStartIdentity: string | null | undefined;
  * unverified (the reaper stops with it). Removes those whose backend has
  * exited or whose PID has been recycled and that are past the age limit.
  * Scratch without a recorded start identity uses the legacy day-long limit
- * if its PID is live. Never throws; returns what it removed.
+ * if its PID is live. Searches `root` when given, otherwise the OS temp
+ * directory and the default scratch root. Never throws; returns what it removed.
  */
 export async function sweepStalePreviewScratch(
   options: {
     root?: string;
+    /** Recovery roots supplier; explicit root takes precedence. */
+    searchRoots?: () => string[];
     now?: number;
     maxAgeMs?: number;
     isProcessAlive?: (pid: number) => boolean;
     processStartIdentity?: (pid: number) => string | null;
   } = {},
 ): Promise<string[]> {
-  const root = options.root ?? tmpdir();
+  const roots = options.root
+    ? [options.root]
+    : (options.searchRoots ?? previewScratchSearchRoots)();
   const now = options.now ?? Date.now();
   const maxAgeMs = options.maxAgeMs ?? PREVIEW_SCRATCH_STALE_MS;
   const alive = options.isProcessAlive ?? isProcessAlive;
   const identity = options.processStartIdentity ?? processStartIdentity;
   const identities = new Map<number, string | null>();
   const removed: string[] = [];
-  let names: string[];
-  try {
-    names = await readdir(root);
-  } catch {
-    return removed;
+  const entries: Array<{ root: string; name: string }> = [];
+  for (const root of roots) {
+    try {
+      for (const name of await readdir(root)) entries.push({ root, name });
+    } catch {
+      // A missing or unreadable root holds nothing to recover.
+    }
   }
-  for (const name of names) {
+  for (const { root, name } of entries) {
     const owner = PREVIEW_SCRATCH_NAME.exec(name);
     let ageLimit: number;
     if (owner) {
@@ -450,7 +508,10 @@ export function superviseWorker(
       // A private, owner-only scratch directory is the worker's HOME, TMPDIR
       // and cwd, so neither the worker nor Chromium sees the user's home.
       scratch = mkdtempSync(
-        path.join(launch.scratchRoot ?? tmpdir(), `${PREVIEW_SCRATCH_PREFIX}${process.pid}-`),
+        path.join(
+          launch.scratchRoot ?? previewScratchRoot(),
+          `${PREVIEW_SCRATCH_PREFIX}${process.pid}-`,
+        ),
       );
       scratchPath = scratch;
       backendStartIdentity ??= processStartIdentity(process.pid);

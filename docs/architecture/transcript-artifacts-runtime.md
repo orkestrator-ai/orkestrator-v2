@@ -223,7 +223,13 @@ Isolation (`ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION`):
   no tokens, credentials, proxies or user configuration) and a private,
   owner-only scratch directory that is its `HOME`, `TMPDIR`, XDG directories
   and cwd; the directory is removed once the exit is verified, by the job or
-  by the reaper of an unverified exit. It is named
+  by the reaper of an unverified exit. Because the scratch is Chromium's
+  `TMPDIR`, Chromium makes its `SingletonSocket` two levels inside it, and a
+  socket path past the platform limit (107 bytes on Linux, 103 on macOS) makes
+  Chromium abort at launch. `previewScratchRoot` therefore puts the scratch in
+  the OS temp directory only when that path fits, and otherwise in `/tmp`
+  (`/private/tmp` on macOS): a test runner's private `TMPDIR` or macOS's
+  per-user temp directory is too long. It is named
   `ork-artifact-preview-<backend pid>-<random>`, and startup removes those of
   backends that have exited or whose PID has been recycled once they are an
   hour old. Each new scratch records the backend's process start identity

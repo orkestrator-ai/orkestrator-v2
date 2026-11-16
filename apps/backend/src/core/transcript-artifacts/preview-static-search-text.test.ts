@@ -20,7 +20,6 @@ import { DEFAULT_PREVIEW_PROFILE } from "@orkestrator/protocol/transcript-artifa
 
 import { resolveDesignChromiumPath } from "../design/index.js";
 import type { PreviewJobResult } from "./contracts.js";
-import { previewTestScratchRoot } from "./fixtures/preview-scratch-root.js";
 import { TranscriptPreviewRunner } from "./preview-runner.js";
 import { WORKER_CONTEXT_LABEL } from "./preview-worker-context-digest.js";
 import {
@@ -86,7 +85,6 @@ const scope = () => ({
 beforeAll(() => {
   runner = new TranscriptPreviewRunner({
     isolation: "process",
-    scratchRoot: previewTestScratchRoot(),
   });
 });
 afterAll(async () => {

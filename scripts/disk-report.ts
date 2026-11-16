@@ -15,6 +15,7 @@ import {
 import { pruneProfiles } from "../apps/desktop/scripts/dev/profile-cleanup";
 import { defaultRuntimeProfileRoots } from "../packages/protocol/src/node/runtime-profile-status";
 import { readStorageDatabaseStore } from "../packages/protocol/src/node/storage-database";
+import { previewScratchSearchRoots } from "../apps/backend/src/core/transcript-artifacts/preview-supervisor";
 import { PRIVATE_TMPDIR_PREFIX, privateTmpdirRoot } from "../tests/private-tmpdir";
 import { CHECKOUT_FILE, disposableDockerStateBase } from "./disposable-docker-daemon";
 import {
@@ -560,16 +561,26 @@ export async function collectReport(context: ReportContext): Promise<ReportRow[]
     owner: "test runs (swept at the next run)",
     cleanup: "removed automatically once their process has exited",
   });
-  rows.push(...temporaryBrowserRows(context.tmpDir));
-  // On macOS test processes keep their private TMPDIR under /private/tmp.
-  const privateRoot = privateTmpdirRoot(context.tmpDir);
-  if (privateRoot !== context.tmpDir)
-    rows.push(
-      ...temporaryBrowserRows(privateRoot).filter((row) =>
-        row.location.endsWith(`${PRIVATE_TMPDIR_PREFIX}*`),
-      ),
-    );
+  rows.push(...temporaryBrowserInventory(context.tmpDir));
   return rows;
+}
+
+/** Include fallback scratch and private test roots without duplicating rows. */
+export function temporaryBrowserInventory(
+  tmpDir: string,
+  options: Parameters<typeof previewScratchSearchRoots>[1] = {},
+): ReportRow[] {
+  const previewRoots = previewScratchSearchRoots(tmpDir, options);
+  const privateRoot = privateTmpdirRoot(tmpDir, options.platform);
+  const roots = new Set([...previewRoots, privateRoot]);
+  return Array.from(roots).flatMap((root) =>
+    temporaryBrowserRows(root).filter(
+      (row) =>
+        root === tmpDir ||
+        (previewRoots.includes(root) && row.location.endsWith("ork-artifact-preview-*")) ||
+        (root === privateRoot && row.location.endsWith(`${PRIVATE_TMPDIR_PREFIX}*`)),
+    ),
+  );
 }
 
 const TEMPORARY_BROWSER_PREFIXES = [

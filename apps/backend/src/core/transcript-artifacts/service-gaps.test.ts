@@ -26,7 +26,6 @@ import {
 } from "./service-test-support.js";
 import { decodeRecord, RECORD_MIGRATIONS, migrateRecord } from "./store-records.js";
 import { fitToolResult } from "./tools.js";
-import { previewTestScratchRoot } from "./fixtures/preview-scratch-root.js";
 
 let h: Harness;
 beforeEach(async () => {
@@ -712,7 +711,6 @@ const assetChromium = resolveDesignChromiumPath();
   async () => {
     const runner = new TranscriptPreviewRunner({
       isolation: "process",
-      scratchRoot: previewTestScratchRoot(),
       executablePath: () => assetChromium!,
     });
     h.service = h.fork({ runtime: { runner, preparer: h.preparer, contentServer: h.content } });

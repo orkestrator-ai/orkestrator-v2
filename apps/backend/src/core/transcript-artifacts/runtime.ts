@@ -82,6 +82,8 @@ const PREVIEW_DRAIN_MS = 60_000;
 const CONTENT_ADDRESSED_IMAGE = /^(sha256:[0-9a-f]{64}|[^\s@]+@sha256:[0-9a-f]{64})$/;
 
 export interface TranscriptArtifactRuntimeOptions {
+  /** Override startup recovery roots for an isolated embedding. */
+  scratchSearchRoots?: () => string[];
   dataDir: string;
   env?: NodeJS.ProcessEnv;
   /** Trusted viewer origins; overrides ORKESTRATOR_ARTIFACT_FRAME_ANCESTORS. */
@@ -543,7 +545,7 @@ export async function createTranscriptArtifactRuntime(
     runner = containerRunner(workerImage);
   } else {
     // Startup recovery: a crash can leave this backend's worker scratch behind.
-    const swept = await sweepStalePreviewScratch();
+    const swept = await sweepStalePreviewScratch({ searchRoots: options.scratchSearchRoots });
     if (swept.length > 0)
       options.logger?.warn(
         `[transcript-artifacts] removed ${swept.length} stale preview scratch director${swept.length === 1 ? "y" : "ies"}`,

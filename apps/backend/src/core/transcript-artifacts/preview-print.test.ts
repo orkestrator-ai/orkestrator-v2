@@ -36,7 +36,6 @@ import {
   PREVIEW_WORKER_USER,
   resolveSeccompProfile,
 } from "./runtime.js";
-import { previewTestScratchRoot } from "./fixtures/preview-scratch-root.js";
 
 const CHROMIUM = resolveDesignChromiumPath();
 if (!CHROMIUM)
@@ -126,12 +125,10 @@ beforeAll(() => {
   // explicit opt-in (container isolation is the production default).
   runner = new TranscriptPreviewRunner({
     isolation: "process",
-    scratchRoot: previewTestScratchRoot(),
     allowProcessInteractive: true,
   });
   strictRunner = new TranscriptPreviewRunner({
     isolation: "process",
-    scratchRoot: previewTestScratchRoot(),
   });
 });
 afterAll(async () => {

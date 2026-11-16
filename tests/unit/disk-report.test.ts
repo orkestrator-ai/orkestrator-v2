@@ -19,6 +19,7 @@ import {
   probeNetworkRow,
   readEnvironments,
   temporaryBrowserRows,
+  temporaryBrowserInventory,
 } from "../../scripts/disk-report";
 import {
   listProbeNetworks,
@@ -157,7 +158,7 @@ describe("disk report", () => {
     if (privateRoot !== tmpDir) {
       expect(
         rows.filter((row) => path.dirname(row.location) === privateRoot).map((row) => row.location),
-      ).toEqual([`${privateRoot}/ork-test-tmp-*`]);
+      ).toEqual([`${privateRoot}/ork-artifact-preview-*`, `${privateRoot}/ork-test-tmp-*`]);
       expect(
         rows.some((row) => row.location === `${tmpDir}/playwright_chromiumdev_profile-*`),
       ).toBe(true);
@@ -397,6 +398,27 @@ describe("disk report", () => {
 });
 
 describe("temporaryBrowserRows", () => {
+  test("includes socket-safe fallback scratch on Linux and macOS exactly once", () => {
+    for (const platform of ["linux", "darwin"] as const) {
+      const fallback = platform === "darwin" ? "/private/tmp" : "/tmp";
+      const rows = temporaryBrowserInventory(`/${"deep".repeat(30)}`, {
+        platform,
+        pid: 1234567,
+        exists: () => true,
+      });
+      expect(
+        rows.filter((row) => row.location === `${fallback}/ork-artifact-preview-*`),
+      ).toHaveLength(1);
+      expect(
+        rows.some((row) => row.location === `${fallback}/playwright_chromiumdev_profile-*`),
+      ).toBe(false);
+      const same = temporaryBrowserInventory(fallback, { platform, exists: () => true });
+      expect(
+        same.filter((row) => row.location === `${fallback}/ork-artifact-preview-*`),
+      ).toHaveLength(1);
+    }
+  });
+
   test("reports browser profiles and the directories holding them, each as its own row", async () => {
     const now = Date.parse("2026-10-28T12:00:00.000Z");
     const directories = {

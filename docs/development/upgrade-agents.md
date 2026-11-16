@@ -680,6 +680,25 @@ under `bypassPermissions`, and that every tool the read-only policy names
 `BUILTIN_TOOL_NAMES` or `LEGACY_TOOL_NAME_ALIASES`: a rule naming a tool the CLI
 no longer has matches nothing.
 
+To recheck the distribution without platform packages, run the focused checks
+below from the repository root. The SDK contract is in the slow tier, so a
+passing default `mise run test` alone does not exercise it. It copies the real
+SDK into an isolated directory, verifies that the supplied fake executable
+runs, and verifies that omitting the executable reports the missing platform
+binary. It makes no provider request.
+
+```bash
+mise run test:logged -- --name address-vendor -- bun test --cwd bridges/claude-bridge ./src/vendor.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name address-packaging -- bun test ./tests/unit/bridge-packaging.test.ts ./tests/unit/monorepo-scripts.test.ts ./tests/unit/version-drift.test.ts --parallel=3 --only-failures
+mise run test:logged -- --name address-docs -- bun test ./tests/unit/number-claims.test.ts ./tests/unit/todo-index.test.ts ./tests/unit/docs/instruction-links.test.ts ./tests/unit/flaky-tests-index.test.ts --parallel=4 --only-failures
+mise run test:logged -- --name address-sdk-no-platform -- bun test --cwd bridges/claude-bridge ./src/sdk-compatibility.test.ts --test-name-pattern 'runs the passed executable without any platform package' --parallel=1 --only-failures
+```
+
+All four commands passed on 2026-11-16 against `07769548a`, closing the review's
+missing execution evidence for the vendor, packaging, documentation and
+no-platform SDK checks. This focused evidence does not qualify a signed or
+Linux package or a real packaged Claude turn; those checks remain in 7568.
+
 `CLAUDE_CONTEXT_CATEGORY_IDS` (`session-manager-core.ts`) maps the CLI's
 context-usage row ids onto the shared `NATIVE_AGENT_CONTEXT_CATEGORY_IDS`
 (`packages/protocol/src/native-agent.ts`). It is a `Record` over the SDK's id

@@ -4,7 +4,7 @@ import {
   type AgentInteractionToolHints,
 } from "@orkestrator/protocol/agent-interactions";
 
-// The safety hints an MCP server declares for one of its tools (to-do 1031
+// The safety hints an MCP server declares for one of its tools (#2074
 // (retired) task 12), for the approval card of a Claude `mcp__*` call.
 //
 // `canUseTool` carries no annotations; only the CLI's MCP status read does.

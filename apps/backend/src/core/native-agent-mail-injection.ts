@@ -80,7 +80,7 @@ export class NativeAgentMailInjection {
    * Delivery gate; recovers proven-unsent mail before checking its durable fence.
    * `known.environment` is a read of the environment row the caller made in
    * the same pass (the presence pass reads each environment once); absent, the
-   * gate reads it itself (todo 7567 task 2).
+   * gate reads it itself (#2131).
    */
   async mailInjectPresence(
     input: NativeAgentProjectionInput,

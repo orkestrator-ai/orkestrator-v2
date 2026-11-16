@@ -401,7 +401,7 @@ export class OrkestratorBackend {
   private readonly transcriptArtifactRuntimeEnabled: boolean;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
-  /** Agent-test profiles only (to-do 0050 task 3); see `agent-test-dispatch-hold.ts`. */
+  /** Agent-test profiles only (#2086); see `agent-test-dispatch-hold.ts`. */
   private uninstallDispatchHold?: () => void;
   /** Agent-test profiles only: a spec's shortened periods (`agent-test-timing.ts`). */
   private readonly agentTestTiming: AgentTestTiming | undefined;
@@ -572,7 +572,7 @@ export class OrkestratorBackend {
     const emit = createBackendEmit((event, payload) => options.emit(event, payload));
     this.activityJobClock = options.activityJobClock;
     const storage = new StorageService(options.dataDir);
-    // History survives a restart through one database row (to-do 8104).
+    // History survives a restart through one database row (#2287).
     this.machineLoad = new MachineLoadSampler({
       historyStore: {
         load: () => storage.machineLoadHistory.loadMachineLoadHistory(),

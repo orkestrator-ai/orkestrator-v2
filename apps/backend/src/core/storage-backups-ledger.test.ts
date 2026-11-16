@@ -260,7 +260,7 @@ describe("database upkeep (reports 0760 and 0910)", () => {
     expect(pragma("page_count")).toBeLessThan(pages / 2);
   });
 
-  test("upkeep releases in a child, never on the backend's connection (to-do 1202 task 7)", async () => {
+  test("upkeep releases in a child, never on the backend's connection (#1939)", async () => {
     const main = opened(openBackendDatabase(await dataDir()));
     const inProcess = spyOn(main, "releaseFreePages");
     const files: string[] = [];

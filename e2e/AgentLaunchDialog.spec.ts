@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { confirmReleaseBranch, openBranchField } from "./agent-launch-branch";
 
 // Chrome's native datalist popup is driven in AgentLaunchDialogNativePopup.spec.ts,
-// which only Chromium can run (todo 1171). Here, in any engine, choosing a
+// which only Chromium can run (#1530). Here, in any engine, choosing a
 // suggestion is what the popup does to the page: it sets the input's value and
 // fires `input`.
 test("offers branch suggestions and confirms a chosen one with the keyboard", async ({ page }) => {

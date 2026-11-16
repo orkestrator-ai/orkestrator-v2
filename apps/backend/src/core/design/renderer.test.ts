@@ -927,7 +927,7 @@ describe("DesignRenderer with real Chromium", () => {
     async () => {
       // The child's TMPDIR is ours, so its profile lands where this test owns it.
       // Names are short: Chromium puts its SingletonSocket in that TMPDIR, the
-      // test process's own TMPDIR is already private (0248), and a longer path
+      // test process's own TMPDIR is already private (#1425), and a longer path
       // passed Linux's 108-byte socket limit, so Chromium aborted at launch.
       const root = mkdtempSync(path.join(tmpdir(), "ork-dk-"));
       const temp = path.join(root, "t");
@@ -956,7 +956,7 @@ describe("DesignRenderer with real Chromium", () => {
         browserPid = record.browser.pid;
         expect(path.dirname(record.profile)).toBe(temp);
         expect(existsSync(record.profile)).toBe(true);
-        // Playwright honoured artifactsDir: nothing unrecorded in the temp dir (0830).
+        // Playwright honoured artifactsDir: nothing unrecorded in the temp dir (#1463).
         expect(path.dirname(record.artifacts!)).toBe(ledgerDir);
         expect(existsSync(record.artifacts!)).toBe(true);
         expect(

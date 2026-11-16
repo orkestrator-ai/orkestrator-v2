@@ -736,7 +736,7 @@ export interface ProviderTranscriptSnapshot {
    * reader that holds fewer rows than the snapshot sent names its first kept
    * row this way, since `historyCursor` would page from before rows it dropped.
    * Present whenever the source pages, including a window that starts at the
-   * first message and so carries no `historyCursor` (8110).
+   * first message and so carries no `historyCursor` (#2285).
    */
   historyCursorBefore?: (messageId: string) => string | undefined;
   /**
@@ -746,7 +746,7 @@ export interface ProviderTranscriptSnapshot {
    * "the newest rows": appends do not move the epoch, and the backend caches a
    * page under its cursor as immutable within one. The last resort for a reader none of
    * whose kept rows can name a cursor, such as one left holding only the
-   * error row of a response whose main row its byte bound dropped (8110).
+   * error row of a response whose main row its byte bound dropped (#2285).
    */
   historyCursorAtEnd?: string;
   /**

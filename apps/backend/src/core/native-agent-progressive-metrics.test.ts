@@ -289,7 +289,7 @@ describe("state and discovery read phase metrics", () => {
 });
 
 describe("discovery on return to an idle view", () => {
-  test("expired sections refill in at most two-job batches: values change, no token is lost", async () => {
+  test("expired sections renew behind an unchanged answer, two jobs at a time", async () => {
     let clock = 1_000;
     const stub = createProviderStub("claude", {
       slashCommands: async () => [{ name: "/review", description: "Review", source: "project" }],
@@ -335,25 +335,27 @@ describe("discovery on return to an idle view", () => {
 
         // Off screen past the 30 s section lifetime, then back.
         clock += 60_000;
-        const seen: unknown[] = [];
-        for (let attempt = 0; attempt < 6; attempt += 1) {
-          const update = await read(token);
-          seen.push(availability(update));
-          if (update.status === "unchanged") break;
-          if (update.status === "snapshot") token = update.token;
+        const startedJobs: number[] = [];
+        const update = await service.getDiscoveryUpdate({ ...input, knownToken: token });
+        startedJobs.push(internals.progressiveReads.size);
+        await waitForCondition(() => internals.progressiveReads.size === 0);
+        // An expired section is served as it was while it renews, so a
+        // renewal that changes nothing keeps the reader's token (todo 8151).
+        // Before, each expired section read `stale` and refilled one two-job
+        // batch per view read: three whole views where none had changed.
+        expect(availability(update)).toBe("unchanged");
+        // A provider still runs at most two section jobs at a time; the third
+        // starts when one of them finishes rather than waiting for a read.
+        expect(startedJobs).toEqual([2]);
+        for (const section of input.sections) {
+          const cached = internals.progressiveDiscoveryCache.get(
+            [...internals.progressiveDiscoveryCache.keys()].find((key) =>
+              key.endsWith(`discovery:${section}`),
+            )!,
+          );
+          expect(cached?.expiresAt).toBeGreaterThan(clock);
         }
-        // Commands follow their catalogue's own state, so they stay ready.
-        // The other sections read stale once expired; a provider runs at most
-        // two section jobs at a time, so they turn ready one batch per read
-        // (the commands job takes one slot). Each snapshot carries a changed
-        // value, and the reader's token is honoured as soon as nothing changed:
-        // the repeats on return are values filling in, not a dropped token.
-        expect(seen).toEqual([
-          ["ready", "stale", "stale"],
-          ["ready", "ready", "stale"],
-          ["ready", "ready", "ready"],
-          "unchanged",
-        ]);
+        expect((await read(token)).status).toBe("unchanged");
       },
     );
   });

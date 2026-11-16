@@ -116,7 +116,7 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "src/core/nodes/node-project-copy.test.ts",
     // Real stand-in `opencode2` servers, polled for readiness.
     "src/core/opencode2-host-server.test.ts",
-    "src/core/preview-local-discovery.test.ts",
+    "src/core/previews/local-discovery.test.ts",
     "src/core/public-api/public-api-exec.test.ts",
     "src/core/public-api/public-api-exec-processes.test.ts",
     "src/core/public-api/public-api-project-init-cascade.test.ts",

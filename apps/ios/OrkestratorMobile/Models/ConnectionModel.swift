@@ -3,7 +3,17 @@ import Foundation
 @MainActor
 final class ConnectionModel: ObservableObject {
     @Published private(set) var vault: ConnectionVault
-    @Published var isShowingConnectionEditor = false
+    @Published var isShowingConnectionEditor = false {
+        didSet {
+            // Covers every way the editor goes away without saving: Cancel, a
+            // swipe down and anything else that clears the binding. A page's
+            // request waiting on it is refused, never left unanswered.
+            if !isShowingConnectionEditor { finishEditorRequest(.failure(EditorRequestError.closed)) }
+        }
+    }
+    /// What a page asked the editor for, while the editor is open on its
+    /// behalf (`requestConnectionInEditor`). Nil when the user opened it.
+    @Published private(set) var editorRequest: EditorRequest?
     @Published var draftAddress = ""
     @Published var draftToken = ""
     @Published var isConnecting = false
@@ -15,6 +25,16 @@ final class ConnectionModel: ObservableObject {
     /// Set while the stored vault has not been read. `vault` is then only what the
     /// UI shows, never a basis for what to write: a save replaces the whole item.
     private var unreadVaultMessage: String?
+    private var editorContinuation: CheckedContinuation<ConnectionListPayload, Error>?
+
+    /// A page's request to save a server through the native editor. Only what
+    /// the editor shows besides the fields: the token is never part of it.
+    struct EditorRequest: Equatable {
+        let id: UUID
+        /// The saved server whose page asked, shown so the user knows who asked.
+        let requestedBy: String
+        let nickname: String?
+    }
 
     init(
         credentialStore: any ConnectionCredentialStoring = KeychainCredentialStore(),
@@ -73,14 +93,79 @@ final class ConnectionModel: ObservableObject {
         isConnecting = true
         connectionError = nil
         defer { isConnecting = false }
+        // Read once: a request settled meanwhile (teardown) must not change
+        // what this save does, nor be answered by it.
+        let request = editorRequest
         do {
-            _ = try await connect(address: draftAddress, token: draftToken)
+            let result = try await connect(
+                address: draftAddress,
+                token: draftToken,
+                nickname: request?.nickname,
+                // A page's request keeps the server it is shown in open.
+                select: request == nil
+            )
             draftToken = ""
+            if let request, request.id == editorRequest?.id {
+                finishEditorRequest(.success(result))
+            }
             isShowingConnectionEditor = false
             requiresLaunchSelection = false
         } catch {
             connectionError = error.localizedDescription
+            if let request, request.id != editorRequest?.id {
+                // Withdrawn while checking. Left open, a retry would save as the
+                // user's own request and switch servers, which nobody asked for.
+                draftToken = ""
+                isShowingConnectionEditor = false
+            }
         }
+    }
+
+    /// Opens the editor for a page that needs a server saved without its token
+    /// passing through the page, and returns the saved list once the user saves.
+    /// The editor starts with `address` (when given) and an empty token, and the
+    /// save keeps the current server open. Closing the editor, or
+    /// `cancelEditorRequest`, throws instead; it answers exactly once.
+    func requestConnectionInEditor(
+        address: String?,
+        nickname nicknameValue: String?,
+        requestedBy: String,
+        onShow: (UUID) -> Void = { _ in }
+    ) async throws -> ConnectionListPayload {
+        guard !isShowingConnectionEditor, editorRequest == nil, !isConnecting else {
+            throw EditorRequestError.busy
+        }
+        let nickname = try RemoteConnection.normalizedNickname(nicknameValue)
+        let prefill = try address.map { try validator.normalizedAddress($0).absoluteString } ?? ""
+        let request = EditorRequest(id: UUID(), requestedBy: requestedBy, nickname: nickname)
+        return try await withCheckedThrowingContinuation { continuation in
+            editorContinuation = continuation
+            editorRequest = request
+            draftAddress = prefill
+            draftToken = ""
+            connectionError = nil
+            isShowingConnectionEditor = true
+            onShow(request.id)
+        }
+    }
+
+    /// Refuses the page's waiting request, if it is `requestID`, and closes the
+    /// editor it opened. Called when the page that asked goes away.
+    func cancelEditorRequest(_ requestID: UUID? = nil) {
+        guard let editorRequest, requestID == nil || requestID == editorRequest.id else { return }
+        finishEditorRequest(.failure(EditorRequestError.withdrawn))
+        guard isShowingConnectionEditor else { return }
+        // The draft belongs to the withdrawn request; a save already checking
+        // finishes on its own and keeps the editor until it does.
+        draftToken = ""
+        if !isConnecting { isShowingConnectionEditor = false }
+    }
+
+    private func finishEditorRequest(_ result: Result<ConnectionListPayload, Error>) {
+        guard let continuation = editorContinuation else { return }
+        editorContinuation = nil
+        editorRequest = nil
+        continuation.resume(with: result)
     }
 
     func selectConnectionForLaunch(_ connection: RemoteConnection) async {
@@ -266,6 +351,23 @@ final class ConnectionModel: ObservableObject {
     private static func readFailureMessage(for error: Error) -> String {
         if case KeychainError.invalidData = error { return error.localizedDescription }
         return ConnectionModelError.vaultUnreadable.localizedDescription
+    }
+}
+
+enum EditorRequestError: LocalizedError, Equatable {
+    /// The editor is already open, for the user or for another request.
+    case busy
+    /// The user closed the editor without saving.
+    case closed
+    /// The page that asked went away before the user saved.
+    case withdrawn
+
+    var errorDescription: String? {
+        switch self {
+        case .busy: return "The server editor is already open in the app."
+        case .closed: return "Nothing was saved: the server editor was closed in the app."
+        case .withdrawn: return "Nothing was saved: the page that asked was closed."
+        }
     }
 }
 

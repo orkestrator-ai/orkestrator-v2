@@ -3,16 +3,16 @@
  * directory and a scriptable Docker runner that answers `docker inspect` the
  * way the resolver asks.
  */
-import { eventSink } from "./backend-emit.js";
+import { eventSink } from "../backend-emit.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { dockerOwnerNamespace } from "./docker-ownership.js";
-import type { Environment, PortMapping } from "./models.js";
-import { PreviewRuntime } from "./preview-runtime.js";
-import type { DockerRunner } from "./preview-target-resolver.js";
-import { StorageService } from "./storage.js";
+import { dockerOwnerNamespace } from "../docker-ownership.js";
+import type { Environment, PortMapping } from "../models.js";
+import { PreviewRuntime } from "./runtime.js";
+import type { DockerRunner } from "./target-resolver.js";
+import { StorageService } from "../storage.js";
 
 export interface FakeContainer {
   id: string;

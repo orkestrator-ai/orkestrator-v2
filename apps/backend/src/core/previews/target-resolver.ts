@@ -1,4 +1,4 @@
-import { parseNetworkModeOwner } from "./container-network-owner.js";
+import { parseNetworkModeOwner } from "../container-network-owner.js";
 import { connect } from "node:net";
 
 import {
@@ -15,14 +15,14 @@ import {
   RETIRED_OPENCODE1_SERVER_PORT,
   OPENCODE2_SERVER_PORT,
   PI_BRIDGE_PORT,
-} from "./constants.js";
-import type { Environment } from "./models.js";
-import type { LoopbackListenerOwnership } from "./preview-listener-ownership.js";
+} from "../constants.js";
+import type { Environment } from "../models.js";
+import type { LoopbackListenerOwnership } from "./listener-ownership.js";
 import type {
   PreviewResolution,
   PreviewTargetResolverPort,
   ResolvedPreviewTarget,
-} from "./preview-service-registry.js";
+} from "./service-registry.js";
 
 export type DockerRunner = (
   args: string[],
@@ -48,7 +48,7 @@ export interface PreviewTargetResolverOptions {
     available(environment: Environment): boolean;
   };
   /**
-   * Who listens on a backend-loopback port (`preview-listener-ownership.ts`).
+   * Who listens on a backend-loopback port (`listener-ownership.ts`).
    * Without it every loopback target is `user-registered` and `unchecked`.
    */
   listenerOwnership?: Pick<LoopbackListenerOwnership, "attribute" | "listenerPids" | "stats">;

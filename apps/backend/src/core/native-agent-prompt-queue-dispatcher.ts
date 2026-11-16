@@ -417,7 +417,7 @@ export class NativeAgentPromptQueueDispatcher {
     const queueKey = `${agent}\0${logicalSessionKey}`;
     const queue = await this.storage.getPromptQueue(queueKey);
     this.queueScheduling?.note(queue, queueKey);
-    if (!queue || queue.outstandingClaim || (queue.dispatchError && !queue.inFlight?.steer)) return;
+    if (!queue || (queue.dispatchError && !queue.inFlight?.steer)) return;
     if (queue.inFlight === undefined && queue.messages.length === 0) return;
     await this.drainPromptQueue(queueKey);
   }
@@ -433,7 +433,6 @@ export class NativeAgentPromptQueueDispatcher {
           const agent = queue.queueKey.split("\0", 1)[0];
           return (
             BUILD_PIPELINE_AGENTS.includes(agent as BuildPipelineAgent) &&
-            queue.outstandingClaim === undefined &&
             (queue.messages.length > 0 || queue.inFlight !== undefined) &&
             (queue.inFlight?.steer || queue.dispatchError === undefined) &&
             (this.queueRetryAt.get(queue.queueKey) ?? 0) <= now
@@ -558,7 +557,7 @@ export class NativeAgentPromptQueueDispatcher {
     }
     const queue = await this.storage.getPromptQueue(queueKey);
     this.queueScheduling?.note(queue, queueKey);
-    if (!queue || queue.outstandingClaim) return;
+    if (!queue) return;
     if (queue.inFlight?.steer) {
       const key = nativeAgentSessionStorageKey(queue.environmentId, agent, logicalSessionKey);
       await this.storage.recoverPromptQueueSteer(key, queue.inFlight.requestId);

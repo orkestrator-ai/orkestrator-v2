@@ -258,12 +258,7 @@ export class NativeAgentPromptDispatch {
       if (status === "running" || status === "blocked") return "busy";
       if (status !== "idle") return "unavailable";
       // Sending past a backlog would overtake prompts the user queued first.
-      return queue &&
-        (queue.outstandingClaim !== undefined ||
-          queue.inFlight !== undefined ||
-          queue.messages.length > 0)
-        ? "busy"
-        : "idle";
+      return queue && (queue.inFlight !== undefined || queue.messages.length > 0) ? "busy" : "idle";
     } catch {
       return "unavailable";
     }
@@ -868,8 +863,7 @@ export class NativeAgentPromptDispatch {
       );
       if (
         queue?.messages.some((message) => asRecord(message)?.id === turnRequestId) ||
-        queue?.inFlight?.requestId === turnRequestId ||
-        queue?.outstandingClaim?.message.requestId === turnRequestId
+        queue?.inFlight?.requestId === turnRequestId
       ) {
         return { outcome: "applied", deliveredAs: "queued", requestId: turnRequestId };
       }

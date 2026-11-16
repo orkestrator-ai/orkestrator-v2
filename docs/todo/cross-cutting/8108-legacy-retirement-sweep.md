@@ -41,7 +41,8 @@ To-dos that already own a removal and were unblocked on 2026-11-14:
 0050 (task 1 done and the file retired on 2026-11-15),
 0232 (task 4 done and the file retired on 2026-11-16),
 [7570](7570-compatibility-paths-waiting-on-the-floor.md),
-[0078](0078-legacy-prompt-queue-claim-state.md),
+0078 (task 1 done and the file retired on 2026-11-16; see the Retired table in
+[version-compatibility.md](../../architecture/version-compatibility.md#retired)),
 6080 task 7 (done 2026-11-16 and the to-do retired; see the
 [Retired](../../architecture/version-compatibility.md#retired) table), [4740](4740-workflow-vocabulary-stage-two.md) and
 2960 (retired 2026-11-16, once the gateway issued the `__Host-` cookie over

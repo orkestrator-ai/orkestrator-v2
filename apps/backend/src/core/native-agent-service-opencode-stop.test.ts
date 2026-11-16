@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNativeAgentProvider } from "./native-agent-provider.js";
-import { NativeAgentService } from "./native-agent-service.js";
+import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import {
   addEnvironment,
   createStorage,
@@ -129,4 +129,91 @@ describe("OpenCode stop with a pending-request reject the server refuses", () =>
       }
     });
   }
+});
+
+/**
+ * A user steer whose acknowledgement was lost stays a pending steer in storage.
+ * When it is still held behind a card, the stop withdraws it (to-do 8100
+ * (retired)), and OpenCode's answer for it becomes `absent`: the pending steer
+ * clears and the next prompt runs alone, without the stopped redirect.
+ */
+describe("OpenCode stop with an unconfirmed user steer held behind a card", () => {
+  test("the view names the parked run, and the withdrawn steer clears so the next prompt runs alone", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-opencode-stop-unknown-"));
+    const storage = await createStorage(root);
+    await addEnvironment(storage);
+    const server = new FakeOpenCode2Server();
+    const provider = openCodeProvider(server);
+    const service = new NativeAgentService(storage, refusingInvoke, {
+      provider: async () => provider,
+      abortGraceMs: 20,
+    });
+    const key = nativeAgentSessionStorageKey(
+      identity.environmentId,
+      identity.agent,
+      identity.logicalSessionKey,
+    );
+    try {
+      const session = await service.ensureSession(identity);
+      const providerSessionId = session.providerSessionId;
+      await expect(
+        service.dispatchIntent({ ...identity, prompt: "run a command", requestId: "stop-turn" }),
+      ).resolves.toEqual({ outcome: "accepted", requestId: "stop-turn" });
+      server.sessions.get(providerSessionId)!.permissions.push({
+        id: "per_1",
+        sessionID: providerSessionId,
+        action: "shell",
+        resources: ["echo parked"],
+      });
+
+      // Parked on the card, the view still names the run a steer joins.
+      const parked = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+      if (parked.status !== "snapshot") throw new Error("expected snapshot");
+      expect(parked.value.turn.phase).toBe("blocked");
+      expect(parked.value.turn.runId).toBeString();
+      expect(await provider.activeSteerRun!(providerSessionId)).toEqual({
+        state: "running",
+        runId: parked.value.turn.runId!,
+      });
+
+      // OpenCode holds the steer behind the card, but its answer is lost.
+      server.loseNextPromptAck = true;
+      const steered = await service.performProjectionAction({
+        ...identity,
+        action: { kind: "steer", text: "held redirect", expectedRunId: parked.value.turn.runId },
+      });
+      expect(steered.outcome).toBe("unknown");
+      const steerRequestId = steered.requestId!;
+      const pending = (await storage.getNativeAgentSession(key))?.pendingSteer;
+      expect(pending).toMatchObject({ requestId: steerRequestId, origin: "user" });
+      expect(server.sessions.get(providerSessionId)!.inbox).toHaveLength(1);
+
+      await service.stopProjectionSession(identity);
+      expect(server.withdrawals).toEqual([
+        { sessionId: providerSessionId, inputId: expect.any(String) },
+      ]);
+      expect(server.sessions.get(providerSessionId)!.inbox).toEqual([]);
+      expect(await provider.steerStatus!(providerSessionId, steerRequestId)).toBe("absent");
+
+      // The next prompt settles the pending steer as never delivered and runs.
+      await expect(
+        service.dispatchIntent({ ...identity, prompt: "the next prompt", requestId: "after-stop" }),
+      ).resolves.toEqual({ outcome: "accepted", requestId: "after-stop" });
+      const settled = await storage.getNativeAgentSession(key);
+      expect(settled?.pendingSteer).toBeUndefined();
+      expect(settled?.dispatchedRequestIds ?? []).not.toContain(steerRequestId);
+      expect(settled?.dispatchedRequestIds).toContain("after-stop");
+      server.finishRun(providerSessionId);
+      const texts = server.sessions
+        .get(providerSessionId)!
+        .rows.filter((row) => row.type === "user")
+        .map((row) => String(row.text));
+      expect(texts).toEqual(["run a command", "the next prompt"]);
+    } finally {
+      await service.shutdown();
+      await provider.dispose?.();
+      server.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

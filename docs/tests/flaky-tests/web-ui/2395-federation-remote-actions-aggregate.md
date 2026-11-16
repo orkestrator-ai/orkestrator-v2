@@ -18,3 +18,7 @@ Still open, no new evidence. On this branch (base c1724ab74),
 `mise run test:logged -- --name web-2395-owners -- bun --cwd=apps/web test src/components/federation/WorkspaceRealmHost.test.tsx src/components/federation/federation-ui.test.tsx --parallel=2 --rerun-each=5`
 passed (exit 0, 13.1 s). There is still only the single 2026-11-01 observation
 on base 2d183a53c, and no cause is established.
+
+## Triage note (2026-11-15)
+
+Partly closed; stays `open`. `WorkspaceRealmHost.test.tsx` no longer exists: `ad283290e` (#1983) deleted it with `WorkspaceRealmHost` (replaced by `NodeWorkspaceHost`), so its five recorded tests are gone. In `federation-ui.test.tsx` the folder-action `waitFor` timeouts (about 1 s) are now covered by `useAsyncUtilHangWatchdog()` (30 s), and an explicit 2 s `findByTestId` timeout is removed in its favour. The recorded `expect(describedBy).toBeNull()` mismatch at the then line 756 is a value assertion that a longer wait does not address, and its cause is not established.

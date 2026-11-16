@@ -32,7 +32,7 @@ import {
 // This slow-tier file creates real repositories/worktrees and waits for
 // subprocess cleanup. Give that fixture work its own bounded host budget;
 // explicit operation deadlines and shorter test budgets remain unchanged.
-setDefaultTimeout(30_000);
+setDefaultTimeout(60_000);
 registerEnvironmentMoveFixtureHooks();
 
 describe("move_environment", () => {

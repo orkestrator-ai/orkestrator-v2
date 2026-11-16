@@ -64,3 +64,7 @@ The final exact Electron suite rerun with the ruler fixture passed (69 passed,
 Evidence: `output/agent-testing/address-electron-final/electron/results.json`.
 An intervening adjacent-port setup failure is tracked separately as
 [9902](../previews-annotations-and-gateway/9902-seeded-preview-adjacent-port-reservation.md).
+
+## Partial change, 2026-11-15 (unverified, case stays open)
+
+`terminal-input-resume-electron.spec.ts`: the page's default action timeout was 20 s and is now 60 s (actions auto-wait for actionability, so it only guards a hang); `openEnvironment` now waits for the environment entry to be visible after expanding the project (60 s) before it dismisses overlays and clicks. The recorded failure was `entry.click()` hitting its 20 s budget while a startup dialog handler ran; this removes that fixed budget, but the cause was never established and nothing was run, so the case is not marked resolved. The spec's `waitForTimeout(1_000)` before the lost-write fault is a pacing sleep and was not changed (there is no editor-idle signal to wait on yet).

@@ -39,3 +39,7 @@ Unconfirmed. 2503 px looks like the graph's own initial scroll toward its
 active or final stage, landing after the test set `scrollLeft = 0`, so on a
 loaded page the reopened graph re-applied its initial placement instead of
 the reader's pan. Not investigated further in the change that observed it.
+
+## Triage note (2026-11-15)
+
+Changed, unverified. The hypothesis is refined from the code: `FlowViewport` saves the reader's pan only from its `onScroll` handler, and the browser delivers that event a frame after `scrollLeft = 0`. The test collapsed the graph through a programmatic click in the next `evaluate`. On a loaded page that ran before the frame, so the graph unmounted with the landing's 2503 px still saved, and the reopened graph restored it. `e2e/PipelineFlow.spec.ts` now resolves each pan (`scrollLeft` 0, overview `scrollTop` 40) only once that element's `scroll` event has fired. Assertions are unchanged. A user cannot pan and collapse within one frame, so this is not treated as a product race. The spec was not run. Stays `open` until a browser run confirms it.

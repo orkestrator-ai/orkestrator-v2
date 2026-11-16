@@ -54,7 +54,7 @@ export interface DeliverNowProbe {
  */
 export function deliverNowApplies(platform: AgentPlatform): boolean {
   // OpenCode included: its mid-turn steer is qualified through the composer,
-  // the public CLI and against a parked card (to-do 7905 tasks 3 and 4).
+  // the public CLI and against a parked card (to-do 7905 (retired) tasks 3 and 4).
   return nativeAgentCapabilities(platform).actions?.steer === true;
 }
 

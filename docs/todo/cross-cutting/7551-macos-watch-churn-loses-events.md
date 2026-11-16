@@ -11,7 +11,7 @@ done then.
 ### Tasks
 
 1. **Decide how a watch owner learns that its events were lost by a stream rebuild**: choose between telling every other watch after a rebuild, one helper per worktree, and leaving it to the next event and the safety scan; then implement and test the choice. Status: done (2026-11-11).
-2. **Ask Bun to rebuild its FSEvents stream from the last event it saw**: read Bun's macOS `fs.watch` source to confirm the rebuild starts from "now", and draft the upstream report with the reproduction below in this file. Status: done (2026-11-11); the report is drafted in [`docs/upstream-issues/bun-fsevents-rebuild-loses-events.md`](../../upstream-issues/bun-fsevents-rebuild-loses-events.md) (2026-11-14; Status `draft` until its "Before filing" checks pass), and the user files it once it is marked ready.
+2. **Ask Bun to rebuild its FSEvents stream from the last event it saw**: read Bun's macOS `fs.watch` source to confirm the rebuild starts from "now", and draft the upstream report with the reproduction below in this file. Status: done (2026-11-11); the report is drafted in [`docs/upstream-issues/bun-fsevents-rebuild-loses-events.md`](../../upstream-issues/bun-fsevents-rebuild-loses-events.md) (2026-11-14). On 2026-11-15 its duplicate search found [oven-sh/bun#44385](https://github.com/oven-sh/bun/issues/44385), open since 2026-10-01 with the same cause, so the report is now a comment for that issue, marked ready, and the user posts it.
 3. **Measure the `lost` flag through the helper on a healthy `fseventsd`**: run the `--host` benchmark and record how many lost writes no flag covered. Status: open (blocked: waits on a healthy `fseventsd` on arktech-mini).
 
 ### 1. Tell a watch when a rebuild may have lost its events

@@ -443,6 +443,12 @@ export type ProviderNativeAgentSessionAction =
       text: string;
       requestId: string;
       expectedRunId: string;
+      /**
+       * `user`: the user typed it for this run, so a stop before it lands
+       * withdraws it where the provider holds steers (OpenCode's inbox; to-do
+       * 8100 (retired)). Mail and queued steers leave it out and are never withdrawn.
+       */
+      origin?: "user";
     };
 
 export interface ProviderCreateSessionOptions {
@@ -656,6 +662,12 @@ export interface ProviderInteractiveSnapshot {
   turnStartedAt?: number;
   /** What the provider reports doing inside the running turn, when it does. */
   turnActivity?: NativeAgentTurnActivity;
+  /**
+   * The running turn's id, the same one {@link NativeAgentRuntimeProvider.activeSteerRun}
+   * answers, while the turn runs. The projection publishes it so a steer is
+   * bound to the turn the view showed (to-do 8107 (retired)).
+   */
+  turnRunId?: string;
   contextUsage?: NativeAgentContextUsage;
   policy?: NativeAgentExecutionPolicy;
   rateLimits?: NativeAgentRateLimitWindow[];
@@ -723,8 +735,20 @@ export interface ProviderTranscriptSnapshot {
    * cannot name one (not in `messages`, or not where a page can end). A
    * reader that holds fewer rows than the snapshot sent names its first kept
    * row this way, since `historyCursor` would page from before rows it dropped.
+   * Present whenever the source pages, including a window that starts at the
+   * first message and so carries no `historyCursor` (8110).
    */
   historyCursorBefore?: (messageId: string) => string | undefined;
+  /**
+   * A provider page cursor for the history before the end of `messages`, in
+   * the same epoch: its first page holds the window's newest rows again, and
+   * the reader deduplicates them by id. It names the window's own end, never
+   * "the newest rows": appends do not move the epoch, and the backend caches a
+   * page under its cursor as immutable within one. The last resort for a reader none of
+   * whose kept rows can name a cursor, such as one left holding only the
+   * error row of a response whose main row its byte bound dropped (8110).
+   */
+  historyCursorAtEnd?: string;
   /**
    * Rows from before `messages` that changed recently, newest change first,
    * in the same representation as `messages`. A row is one model response,

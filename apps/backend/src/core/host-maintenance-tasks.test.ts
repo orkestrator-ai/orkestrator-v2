@@ -52,7 +52,9 @@ function context(): CommandContext {
 }
 
 async function until(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 10_000;
+  // The wait is for the service to settle the task; the deadline is only a
+  // hang watchdog (inside the default test budget), not a speed bound.
+  const deadline = Date.now() + 50_000;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error("timed out");
     await Bun.sleep(10);

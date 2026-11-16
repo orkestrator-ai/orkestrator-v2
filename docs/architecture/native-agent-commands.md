@@ -335,12 +335,12 @@ catalogue read cannot let `/clear` reach the CLI.
   SDK adds a terminal marker to `SlashCommand`, read it from the probe's rows
   and delete the remembered list; every SDK bump checks for it
   ([upgrade-agents.md](../development/upgrade-agents.md#how-to-upgrade-claude)).
-  Still absent at 0.3.319 (the pin) and 0.3.322 (the newest published, checked
-  2026-11-11). The feature request for the marker (to-do 0016, retired, task
-  1) is drafted in
+  Still absent at 0.3.319 (the pin) and 0.3.325 (the newest published, checked
+  2026-11-15). The feature request for the marker (to-do 0016, retired, task
+  1) is in
   [`docs/upstream-issues/claude-agent-sdk-slash-command-terminal-flag.md`](../upstream-issues/claude-agent-sdk-slash-command-terminal-flag.md)
-  (Status `draft` until its "Before filing" checks pass); the user files it
-  once it is marked ready, and its URL is recorded there.
+  (Status `ready to file` since 2026-11-15); the user files it, and its URL is
+  recorded there.
 - **Codex**: skills run as structured `skill` input (`$name`, alias
   `/skill:name`); templates are an Orkestrator compatibility feature with
   bounded discovery and `$ARGUMENTS` only. Inline `` !`…` `` shell spans are

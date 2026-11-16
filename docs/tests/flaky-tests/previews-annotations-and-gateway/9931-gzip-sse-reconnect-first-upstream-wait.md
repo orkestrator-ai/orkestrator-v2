@@ -1,7 +1,7 @@
 # Gateway gzip SSE reconnect: first request did not reach upstream in 2 s
 
 - **ID:** 9931
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-10
 
 Test: `gzip proxied event stream directly > a reconnect sends its cursor upstream and starts a fresh gzip stream`
@@ -79,3 +79,10 @@ Two tests in this file now fail at the same first upstream wait under
 aggregate load, which points at the gateway-plus-proxy start-up rather than
 either test's own assertions. Cause still unconfirmed.
 
+## Resolution (2026-11-15)
+
+- **Class:** the test's own deadline (B).
+- **Root cause:** every wait in the file goes through `waitUntil` (`apps/backend/tests/gateway-test-harness.ts`), whose 2 s default deadline is a wall-clock bound on a gateway proxying its first request; under aggregate load that took more than 2 s. Every caller waits for a state the gateway will reach; none asserts a condition stays false.
+- **Fix:** the default is now `WAIT_UNTIL_HANG_WATCHDOG_MS` (30 s), named and commented as a hang watchdog below the 60 s test budget (`tests/default-test-timeout.ts` (a 60 s per-test and hook hang watchdog in both shared preloads, replacing Bun's 5 s default)). The signal each wait observes is unchanged.
+- **Reproduced:** no — the unchanged code passed under the same contention; the evidence is the removed deadline, not a reproduced failure, which is weaker.
+- **Stress:** `mise run test:logged -- --name gw-cont3 -- bun scripts/test-under-contention.ts --core 4 --burners 6 -- bash -c 'cd apps/backend && bun test tests/gateway-events.test.ts tests/gateway-proxy.test.ts tests/gateway-sse-gzip-routes.test.ts --preload ../../tests/setup-node.ts --parallel=1'` passed (65.9 s); each file also passed alone with `--rerun-each=2` (208, 66 and 190 tests).

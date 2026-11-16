@@ -467,8 +467,11 @@ So a backend crash in the app is still captured, by the desktop, which is what t
 choice is for. Three limits follow from it:
 
 - **A desktop crash cannot write its own entry.** A JavaScript exception is logged by
-  the existing handler (`native-dialogs.ts`) and the process carries on. A native crash
-  writes nothing, and only its next start can show it: `essential.started` with no
+  the existing handler (`native-dialogs.ts`) and the process carries on; during a quit
+  its dialog is cancelled rather than opened on a new window, which on macOS crashed
+  Electron before `essential.stopped`
+  ([process-crashes-and-kills.md](../debugging/process-crashes-and-kills.md#7-a-native-dialog-during-a-quit-macos-sigsegv)).
+  A native crash writes nothing, and only its next start can show it: `essential.started` with no
   `essential.stopped` before it means the last writer died. A process ended by a kill
   rather than a quit reads the same way, as `dev:stop`'s does.
 - **A container bridge has no hop**, so nothing in it reaches this file: its

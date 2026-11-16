@@ -2,6 +2,7 @@
 import "./isolate-git-config";
 import "./isolate-worktree-dir";
 import "./isolate-tmpdir";
+import "./default-test-timeout";
 import { installBoundedTestDiagnostics } from "./bounded-test-diagnostics";
 
 process.env.CODEX_BRIDGE_NO_SERVER ??= "1";

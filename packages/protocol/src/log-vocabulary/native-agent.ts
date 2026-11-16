@@ -14,7 +14,6 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
       "job.pr-refresh-rollback-failed": "Rolling back a pull request refresh for a job failed.",
       "job.resend-queue-failed": "A resend could not be queued for a job.",
       "interaction.requests-dropped": "Interaction requests that could not be mapped were dropped.",
-      "interaction.observe-failed": "Observing a session's interactions failed. Error class only.",
       "human-prompt.listener-failed": "A human prompt listener threw; the others still run.",
       "question.attention-record-failed":
         "Attention for an async question could not be recorded; the transcript stays readable.",
@@ -121,6 +120,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "The 2.x event stream sent a heartbeat and then went quiet, so it is replaced. `silenceMs` only.",
       "steer.unconfirmed":
         "A 2.x steer got no definite answer, so its delivery is reconciled from history. Error class only.",
+      "steer.withdraw-failed":
+        "A stop could not withdraw the user's steer still in a 2.x inbox, so it stays for the next run (to-do 8100 (retired)). Error class only.",
       "provider.dispose-failed":
         "Disposing the 2.x provider of a replaced server failed. Error class only.",
       "location.reload-unconfirmed":

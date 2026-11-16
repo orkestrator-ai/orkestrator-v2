@@ -1,7 +1,7 @@
 # Workspace realm spec cleanup hits ENOTEMPTY on its temporary profile
 
 - **ID:** 0941
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-25
 - **Test:** `a leaf's workspace opens in the window's central region without moving or reloading the window`
 - **File:** `e2e/agent-testing/workspace-realm-electron.spec.ts:162`
@@ -11,3 +11,10 @@
 - **Evidence:** `output/agent-testing/svc0042-suite-1/electron/results.json`.
 - **Hypothesis:** a backend or design-canvas writer had not exited when the recursive remove ran. Not established. No assertion, timeout or skip changed.
 - **Recurrence (2026-11-01):** `ENOTEMPTY … rmdir '<tmp>/orkestrator-electron-realm-*/dev/profiles/electron-realm/data'` in `t1170-electron-suite-1`, after Electron crashed with `SIGSEGV` mid-test (1302), so the backend it had started may still have been writing. The cleanup error replaced the test's own failure in Playwright's report; read the trace for the first error.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** not established. The recorded failure was the recursive remove of the temporary profile racing a still-running backend writer.
+- **Fix:** none needed for this entry: `e2e/agent-testing/workspace-realm-electron.spec.ts` was deleted by `ad283290e` (#1983, "unify multi-node workspaces under window scopes"; `git merge-base --is-ancestor ad283290e HEAD` is true), which removed the realm host the spec exercised. Its successors are `multi-node-window.spec.ts` and `scope-proof-electron.spec.ts`; no recurrence is recorded against them. Other Electron specs still end with `rm(temporaryRoot, { recursive: true, force: true })`, so that cleanup pattern was not changed.
+- **Reproduced:** no (the owning file no longer exists).
+- **Stress:** none.

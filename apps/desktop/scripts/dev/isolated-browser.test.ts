@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, writeFile, readFile, rm, access } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
+import { DEFAULT_TEST_TIMEOUT_MS } from "../../../../tests/default-test-timeout.js";
 import { resolveElectronHeadless } from "./lifecycle.js";
 import { parseAgentTestArguments } from "./arguments.js";
 import {
@@ -17,9 +19,9 @@ import {
 const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
 
 /**
- * The default poll. A probe that starts just before the startup deadline is cut short
- * and reports "Command timed out" instead of the deadline error, so a run that is meant
- * to hit the deadline keeps the production cadence rather than racing it with a fast one.
+ * The default poll, so a run that is meant to hit the startup deadline keeps the
+ * production cadence. (A probe the deadline cuts short reports the deadline, not
+ * "Command timed out"; the `status-hang` case pins that.)
  */
 const STARTUP_DEADLINE_POLL_MS = 250;
 
@@ -54,6 +56,9 @@ if (task === "dev:test") {
     if (mode === "launcher-dies" && fs.existsSync(path.join(root, "tests-started"))) process.exit(8);
     if (mode === "suite-restarts" && fs.existsSync(path.join(root, "tests-started"))) process.exit(0);
   }, 20);
+} else if (task === "dev:status" && mode === "status-hang") {
+  // A probe that never answers: only the startup deadline can end the wait.
+  setInterval(() => {}, 1000);
 } else if (task === "dev:status") {
   const ready = fs.existsSync(readyFile(profile));
   console.log(JSON.stringify({ profile, status: ready ? "ready" : "starting", live: { launcher: ready, vite: ready, electron: ready, backend: ready } }));
@@ -113,7 +118,7 @@ if (task === "dev:test") {
 
 /**
  * Records the image qualification's arguments and environment, then exits
- * with `code`. It first waits (bounded) for a profile launcher, so a runner
+ * with `code`. It first waits (up to a hang watchdog) for a profile launcher, so a runner
  * that starts profiles only after the qualification records `false`.
  */
 async function writeFakeBun(root: string, code = 0) {
@@ -123,7 +128,8 @@ async function writeFakeBun(root: string, code = 0) {
 const fs = require("node:fs");
 const path = require("node:path");
 const root = process.env.ORK_ISOLATED_TEST_ROOT;
-const deadline = Date.now() + 3000;
+// A hang watchdog on a wait for the launcher's marker file, not an assertion.
+const deadline = Date.now() + 45000;
 const record = () => {
   const launcherStarted = fs.existsSync(path.join(root, "launcher"));
   if (!launcherStarted && Date.now() < deadline) return setTimeout(record, 20);
@@ -151,8 +157,62 @@ function cleanupByProfile(events: Array<{ task: string; profile: string }>) {
   return Object.fromEntries(byProfile);
 }
 
+/**
+ * A fake command that would outlast the run (30 s) unless it is stopped. Only
+ * a run that waited it out sees `<name>-finished`: the runner stops the whole
+ * process group on failure or cancel and awaits its exit before rejecting, so
+ * once the run has settled a stopped fake can no longer write the marker.
+ */
+function sleepingFake(name: string) {
+  return `#!/bin/sh
+sleep 30
+touch "$ORK_ISOLATED_TEST_ROOT/${name}-finished"
+`;
+}
+
+/**
+ * Moves the runner's clock (`performance.now`, which its startup deadlines
+ * read) forward by `jump` ms once `condition` first holds, so a deadline that
+ * is meant to pass does so on an explicit event instead of after real time.
+ * Returns the restore function; call it in a `finally`.
+ */
+function jumpClockWhen(condition: () => boolean, jump: number) {
+  const real = performance.now.bind(performance);
+  let offset = 0;
+  performance.now = () => {
+    if (offset === 0 && condition()) offset = jump;
+    return real() + offset;
+  };
+  return () => {
+    performance.now = real;
+  };
+}
+
+/** Whether `profile`'s `dev:test` launcher has recorded itself. */
+function launcherStarted(root: string, profile: string) {
+  const events = path.join(root, "events");
+  return (
+    existsSync(events) &&
+    readFileSync(events, "utf8")
+      .split("\n")
+      .some((line) => line.includes('"task":"dev:test"') && line.includes(`"profile":"${profile}"`))
+  );
+}
+
+const exists = (file: string) =>
+  access(file).then(
+    () => true,
+    () => false,
+  );
+
+/** The fake was stopped with the run, not waited out to its natural end. */
+async function expectStoppedNotWaitedOut(root: string, name: string) {
+  expect(await exists(path.join(root, `${name}-finished`))).toBe(false);
+}
+
 async function waitForFile(file: string) {
-  const deadline = Date.now() + 8000;
+  // A hang watchdog on a wait for a real marker file, not an assertion.
+  const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
     if (
       await access(file).then(
@@ -401,15 +461,27 @@ test("companion profiles start after the main one, stay up for the suite, and ar
 
 test("a profile that fails to start stops the run before its companions and is still reset", async () => {
   const f = await fixture("startup-hang");
-  await expect(
-    runIsolatedBrowser({
-      ...f,
-      profile: "qa-node-desk-test",
-      companionProfiles: ["qa-node-leaf-test"],
-      startupTimeoutMs: 400,
-      statusPollMs: STARTUP_DEADLINE_POLL_MS,
-    }),
-  ).rejects.toThrow("startup timed out");
+  // The deadline passes only once the hanging launcher has recorded itself, so
+  // a slow host cannot stop it before it starts; the generous budget is only a
+  // watchdog for a launcher that never runs.
+  const startupTimeoutMs = 60_000;
+  const restoreClock = jumpClockWhen(
+    () => launcherStarted(f.root, "qa-node-desk-test"),
+    startupTimeoutMs + 1,
+  );
+  try {
+    await expect(
+      runIsolatedBrowser({
+        ...f,
+        profile: "qa-node-desk-test",
+        companionProfiles: ["qa-node-leaf-test"],
+        startupTimeoutMs,
+        statusPollMs: STARTUP_DEADLINE_POLL_MS,
+      }),
+    ).rejects.toThrow("startup timed out");
+  } finally {
+    restoreClock();
+  }
   const events = await f.events();
   expect(events.some((event) => event.task === "playwright")).toBe(false);
   // The main profile never got ready, so the companion was never started
@@ -423,6 +495,19 @@ test("a profile that fails to start stops the run before its companions and is s
     "dev:stop qa-node-desk-test",
     "dev:reset qa-node-desk-test",
   ]);
+});
+
+test("a status probe cut short by the startup deadline reports the deadline", async () => {
+  // The probe never answers, so the deadline is the only thing that can end it:
+  // whichever of the loop's check and the probe's own cut a slow host reaches
+  // first, the failure is the startup timeout and not "Command timed out".
+  const f = await fixture("status-hang");
+  await expect(runIsolatedBrowser({ ...f, startupTimeoutMs: 300 })).rejects.toThrow(
+    "Isolated profile startup timed out",
+  );
+  const events = await f.events();
+  expect(events.some((event) => event.task === "playwright")).toBe(false);
+  expect(events.slice(-2).map((event) => event.task)).toEqual(["dev:stop", "dev:reset"]);
 });
 
 test("a companion profile must not repeat the main one", async () => {
@@ -508,7 +593,7 @@ test.each(["SIGTERM", "SIGKILL"] as const)(
       await child.exited;
     }
   },
-  15000,
+  DEFAULT_TEST_TIMEOUT_MS,
 );
 
 test("isolated browser overrides an inherited live Multi Review opt-in", async () => {
@@ -676,12 +761,11 @@ test("a failed image smoke stops the qualification and the starting profiles", a
   const f = await fixture("startup-hang");
   await writeFile(path.join(f.root, "bash"), "#!/bin/sh\nexit 4\n", { mode: 0o755 });
   // A qualification that would outlast the run unless it is stopped.
-  await writeFile(path.join(f.root, "bun"), `#!/bin/sh\nexec sleep 30\n`, { mode: 0o755 });
-  const started = performance.now();
+  await writeFile(path.join(f.root, "bun"), sleepingFake("bun"), { mode: 0o755 });
   await expect(runIsolatedBrowser({ ...f, docker: true })).rejects.toThrow(
     "Docker qualification image smoke failed",
   );
-  expect(performance.now() - started).toBeLessThan(15_000);
+  await expectStoppedNotWaitedOut(f.root, "bun");
   const events = await f.events();
   expect(events.map((event) => event.task)).not.toContain("playwright");
   for (const start of events.filter((event) => event.task === "dev:test"))
@@ -791,10 +875,9 @@ test("a launcher's budget covers every startup that runs before its tests", () =
 test("cancelling during the Docker image checks stops the checks and the starting profiles", async () => {
   const f = await fixture("startup-hang");
   // A smoke and a qualification that would both outlast the run unless stopped.
-  await writeFile(path.join(f.root, "bash"), "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
-  await writeFile(path.join(f.root, "bun"), "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+  await writeFile(path.join(f.root, "bash"), sleepingFake("bash"), { mode: 0o755 });
+  await writeFile(path.join(f.root, "bun"), sleepingFake("bun"), { mode: 0o755 });
   const controller = new AbortController();
-  const started = performance.now();
   const run = runIsolatedBrowser({
     ...f,
     docker: true,
@@ -805,7 +888,8 @@ test("cancelling during the Docker image checks stops the checks and the startin
   await waitForFile(path.join(f.root, "launcher"));
   controller.abort(new Error("owner cancelled"));
   await expect(run).rejects.toThrow("owner cancelled");
-  expect(performance.now() - started).toBeLessThan(15_000);
+  await expectStoppedNotWaitedOut(f.root, "bash");
+  await expectStoppedNotWaitedOut(f.root, "bun");
   const events = await f.events();
   expect(events.map((event) => event.task)).not.toContain("playwright");
   const starts = events.filter((event) => event.task === "dev:test");
@@ -864,17 +948,30 @@ for (const mode of ["startup-hang", "launcher-dies"]) {
   test(`companion ${mode} stops the suite and resets both started profiles`, async () => {
     const f = await fixture(mode);
     f.env.ORK_ISOLATED_TEST_FAIL_PROFILE = "qa-companion-failure";
-    await expect(
-      runIsolatedBrowser({
-        ...f,
-        profile: "qa-main-ok",
-        companionProfiles: ["qa-companion-failure"],
-        startupTimeoutMs: 1500,
-        statusPollMs: STARTUP_DEADLINE_POLL_MS,
-      }),
-    ).rejects.toThrow(
-      mode === "startup-hang" ? "startup timed out" : "exited during browser tests",
-    );
+    // The main profile must become ready before the companion starts, however
+    // slow the host, so the startup deadline is a generous watchdog. The
+    // companion's wait for readiness is ended by the clock reaching that
+    // deadline once its launcher is running, not by waiting out real time.
+    const startupTimeoutMs = 60_000;
+    const restoreClock =
+      mode === "startup-hang"
+        ? jumpClockWhen(() => launcherStarted(f.root, "qa-companion-failure"), startupTimeoutMs + 1)
+        : () => {};
+    try {
+      await expect(
+        runIsolatedBrowser({
+          ...f,
+          profile: "qa-main-ok",
+          companionProfiles: ["qa-companion-failure"],
+          startupTimeoutMs,
+          statusPollMs: STARTUP_DEADLINE_POLL_MS,
+        }),
+      ).rejects.toThrow(
+        mode === "startup-hang" ? "startup timed out" : "exited during browser tests",
+      );
+    } finally {
+      restoreClock();
+    }
     const events = await f.events();
     const browser = events.find((event) => event.task === "playwright");
     if (mode === "startup-hang") expect(browser).toBeUndefined();

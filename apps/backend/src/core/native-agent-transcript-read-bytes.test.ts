@@ -1,8 +1,8 @@
 /**
  * How many transcript bytes the backend reads from a provider for the reads
  * report 0110 (E9) is about: a prompt send, a turn-state read, and an evicted
- * summary-backed tool detail. Also the `/messages` fallback of a bridge whose
- * `/transcript` route is missing.
+ * summary-backed tool detail. (The `/messages` fallback this file also
+ * measured retired on 2026-11-15, 0050 task 1.)
  *
  * The provider is a fake over an in-memory history of fixed-size rows, and
  * every byte is counted where it leaves the fake, as the JSON a bridge would
@@ -20,8 +20,6 @@ import type {
   ProviderTranscriptPage,
   ProviderTranscriptSnapshot,
 } from "./agent-provider-contract.js";
-import type { BridgeConnection } from "./agent-provider-contract.js";
-import { HttpBridgeTranscriptReader } from "./http-bridge/transcript-reader.js";
 import {
   createProviderStub,
   waitForCondition,
@@ -187,11 +185,11 @@ async function settled(service: { shutdown?: unknown }): Promise<void> {
  * bytes): a prompt send read 33 raw rows (271,676 bytes); a one-message
  * projection for a turn check read 2 raw rows (16,466 bytes); an evicted
  * remote detail read all 400 raw rows (3,292,561 bytes) and still failed; the
- * `/messages` fallback received 3,292,610 bytes to keep 100 rows. Set
- * `E9_FIGURES` to a path to write the figures this run measured.
+ * since-retired `/messages` fallback received 3,292,610 bytes to keep 100
+ * rows. Set `E9_FIGURES` to a path to write the figures this run measured.
  */
 describe("transcript read bytes (report 0110)", () => {
-  test("turn checks, evicted remote details and the /messages fallback read no extra rows", async () => {
+  test("turn checks and evicted remote details read no extra rows", async () => {
     const messages = history();
     const { stub, read, reset } = countingProvider(messages);
     const figures: Record<string, unknown> = {
@@ -268,44 +266,6 @@ describe("transcript read bytes (report 0110)", () => {
         expect(read.raw).toBe(0);
       },
     );
-
-    // 0200: the `/messages` fallback of a bridge whose `/transcript` answers 404.
-    let fallbackBytes = 0;
-    let fallbackQuery = "";
-    const fetchImpl = (async (url: string | URL) => {
-      const parsed = new URL(String(url));
-      if (parsed.pathname.endsWith("/transcript")) return new Response("{}", { status: 404 });
-      fallbackQuery = parsed.search;
-      const limit = Number(parsed.searchParams.get("limit") ?? "0");
-      const rows = limit > 0 ? messages.slice(-limit) : messages;
-      const body = JSON.stringify({
-        messages: rows,
-        messageWindow: { truncated: rows.length < messages.length },
-      });
-      fallbackBytes += Buffer.byteLength(body);
-      return new Response(body, { headers: { "content-type": "application/json" } });
-    }) as unknown as typeof fetch;
-    const connection = {
-      agent: "codex",
-      baseUrl: "http://bridge.test",
-      authToken: "test",
-    } as BridgeConnection;
-    const reader = new HttpBridgeTranscriptReader("codex", connection, fetchImpl);
-    const snapshot = await reader.snapshot("provider-session", {
-      limit: liveWindow.messages,
-      targetBytes: liveWindow.targetBytes,
-    });
-    if (!("messages" in snapshot)) throw new Error("expected a snapshot");
-    figures.messagesFallback = {
-      bytes: fallbackBytes,
-      query: fallbackQuery,
-      rows: snapshot.messages.length,
-      complete: snapshot.complete,
-    };
-    expect(fallbackQuery).toBe(`?limit=${liveWindow.messages}`);
-    expect(snapshot.messages).toHaveLength(liveWindow.messages);
-    expect(snapshot.complete).toBe(false);
-    expect(fallbackBytes).toBeLessThan(bytesOf(messages.slice(-liveWindow.messages)) + 1024);
 
     if (process.env.E9_FIGURES) {
       await Bun.write(process.env.E9_FIGURES, JSON.stringify(figures, null, 2));

@@ -1241,7 +1241,9 @@ spec, `e2e/agent-testing/steer-missed-live.spec.ts` (todo 0005 task 10), on
 the real Claude, Codex, Cursor and Pi bridges with scripted models and nothing
 billed. Each platform's case finishes a turn and steers after it (one new turn
 must start, on the session's controls), then steers while a second turn runs
-(it joins that turn; to-do 8107 is to queue it instead). Both steers must
+(it names no run, so it joins that turn; a composer or Agent Info steer
+names the run its view showed and is queued as the next turn instead, to-do
+8107 (retired), covered by `native-agent-service-missed-steer.test.ts`). Both steers must
 also reach the model exactly once: the Claude, Codex and Pi scripted models
 count a spec's marker in the user-role items of every request they are sent
 (`MARKER_WATCH_PATH` in `idle-observation-fake-claude.ts`, counts only), and
@@ -1734,6 +1736,22 @@ spec report a launch timeout. The Wayland rendering case in
 run under that command. The packaged-app specs are always headless on Linux (see
 [Packaged-app Electron spec](#packaged-app-electron-spec)).
 
+CI runs that same command, over the whole suite, in
+`.github/workflows/electron-qualification.yml`: weekly on the container live
+qualification's schedule (Mondays 04:17 UTC), on demand (`workflow_dispatch`),
+and on pull requests that change the workflow, `playwright.electron.config.ts`
+or `electron-display-setup.ts`. It uses one GitHub-hosted `ubuntu-latest`
+runner and no secrets, sets `ORKESTRATOR_NATIVE_MENU_INPUT=1` (the runner's
+Xvfb display is an isolated desktop) and uploads
+`output/agent-testing/electron-qualification/electron` (the Playwright JSON
+report, traces and failure screenshots) for 14 days. The opt-in cases stay
+skipped there: container environments, the transport CPU measurement and the
+macOS-only window cases. There is no macOS leg; macOS, live providers and
+Docker Desktop stay manual (to-do
+[0031](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md)
+task 8). `native-application-menu.yml` still runs its three menu specs on
+pull requests on Linux, Windows and macOS.
+
 A development window loads its renderer's modules from Vite, and on Linux
 Chromium aborts them with `net::ERR_NETWORK_CHANGED` when another build's
 Docker work changes a host interface (flake
@@ -1751,6 +1769,33 @@ renderer needs none. Startup recovery does not cover a later lazy load. The
 failure check looks for the startup heading's presence, not its visibility:
 headless Ozone ignores a window's constructor size, so until a spec sizes it
 the window is 1x1 and the heading has no box.
+
+Two tests cover the recovery outside the unit tests
+(`electron-startup-recovery.test.ts`):
+
+- `startup-recovery-electron.spec.ts`, part of `test:agent:electron`, runs on
+  any display, macOS included. Main's protocol handler fails a real Electron
+  window's first module fan-out with Chromium's own `net::ERR_NETWORK_CHANGED`
+  (net error -21), and the spec watches the window the way the other specs do.
+  The window must recover with exactly one reload and a `startup-recovery`
+  annotation. A different network error must get no reload, and an abort on
+  every load must fail after three reloads. The abort is injected, not caused
+  by an interface change: on a Mac changing an interface needs root and would
+  abort every other Chromium on the host. Docker Desktop keeps its networks
+  inside its VM, so the specs are not expected to meet the abort on macOS at
+  all.
+- `electron-startup-recovery.integration.test.ts` (Linux only) does cause the
+  abort by changing interfaces, inside a private user and network namespace
+  that no other build can see. It covers both real Chromium and a real
+  headless Electron window, and its fixtures hold the module responses and
+  let the network settle, so that exactly one reload is measured:
+
+```bash
+mise run test:logged -- --name startup-live -- bun test ./e2e/agent-testing/electron-startup-recovery.integration.test.ts --parallel=1
+```
+
+On a macOS display (mbp3, 2026-11-15) the whole suite printed no
+`[startup-recovery]` line apart from the covering spec's own, as expected.
 
 `design-canvas-electron.spec.ts`, `electron-cleanup.spec.ts`,
 `web-annotations-electron.spec.ts`, `service-preview-seeded-electron.spec.ts`,
@@ -2346,8 +2391,9 @@ that session, and graceful shutdown rejects all held sends and clears their poll
 A cancellation before send is a rejection; one after acceptance keeps an ambiguous
 outcome for reconciliation. The live test re-arms the before-send marker after the
 second crash, so even a bridge-deduplicated resend fails the no-resend assertion.
-Results are in
-[0050](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md#qualification-results-2026-11-10-pre-acceptance-dispatch-window).
+Results are in to-do 0050 (retired 2026-11-15), section "Qualification
+results (2026-11-10): pre-acceptance dispatch window":
+`git show a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`.
 
 A spec that restarts a profile builds the launcher's arguments with
 `devTestRestartArgs` (`e2e/agent-testing/profile-restart-args.ts`): a
@@ -2389,8 +2435,9 @@ scripted turn:
 | `large-window` | 26 rounds of 30 KB | ten rounds in, when the window is near 512 KiB |
 | `trimmed-head` | one 150 s response at 20 KB/s | 600,000 characters (`E10_READY_CHARS` moves it) |
 
-Each run measures 20 s with one viewer, 20 s with a second page on the same
-tab and 30 s idle, and writes counts, bytes and milliseconds (no content,
+It runs on Linux and macOS (it finds the profile's toolchain directory from
+the backend's command line, through `/proc` or `ps`). Each run measures 20 s
+with one viewer, 20 s with a second page on the same tab and 30 s idle, and writes counts, bytes and milliseconds (no content,
 token or session id) to
 `output/agent-testing/<run id>/conditional-reads[-codex][-<scenario>].json`.
 Non-baseline scenarios add the whole turn's bridge totals and the exact
@@ -2758,8 +2805,10 @@ MCP tool.
 `e2e/agent-testing/agent-tab-requests-live.spec.ts` counts what one visible
 Claude tab sends while its turn is in a foreground wait (the `running-quiet`
 workload), then drops the page's connection during a second running turn and
-checks the view recovers without a reload. It has its own opt-in and uses the
-host's Claude credentials:
+checks the view recovers without a reload. `running-quiet-two-viewers` counts
+the same workload with a second browser context open on the same tab, each
+viewer separately. It has its own opt-in and uses the host's Claude
+credentials:
 
 ```bash
 mise run dev:test --profile qa-tab-requests --fixture --credential-source claude --agent-platforms claude
@@ -2776,7 +2825,10 @@ It knows nothing about which commands the renderer sends, so the same file
 measures two commits. Results are appended to
 `output/agent-testing/<run id>/agent-tab-requests.json`: command names, counts
 and byte totals, per round and per second, from both the page and the gateway's
-`/__orkestrator/metrics`.
+`/__orkestrator/metrics`. Add `--grep running-quiet` to run only the two
+`running-quiet` cases. The push event layer's before-measurement (to-do
+[8102](../todo/transcripts-and-observation/8102-push-event-layer.md#the-polling-baseline-2026-11-15))
+was taken with them and with the conditional-reads spec below.
 
 ### Live revision tokens with inactive views
 
@@ -4148,7 +4200,7 @@ verdict are in `coordinator-live-research.ts`;
 `coordinator-live-research.test.ts` runs the orchestration over a scripted
 command transport.
 
-The `surfaces` case (to-do 0395 task 4) proves the worker-surface tools on a
+The `surfaces` case (to-do 0395 (retired) task 4) proves the worker-surface tools on a
 real stack. It runs only on Claude, so other platforms record a skip: the tools
 are Control MCP calls, so one provider covers them. It waits at most four step
 budgets:

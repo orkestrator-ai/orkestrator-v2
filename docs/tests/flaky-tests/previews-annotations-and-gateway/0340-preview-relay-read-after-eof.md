@@ -64,3 +64,11 @@ each in under 0.25 s. The case 0959 fix (production hello timeout, a
 its own server through `controlledTunnel`. Next step: on a recurrence, log
 whether the upstream ever emitted `end` (a paused upstream waiting on a
 `drain` that never comes would hold EOF in its readable queue).
+
+## Resolution (2026-11-15)
+
+- **Class:** default budget (A), with the file's poll deadline widened as a watchdog.
+- **Root cause:** per the 2026-11-10 investigation, the 2026-10-26 recurrence was the 5 s default expiring while the relay case awaited `controlled.closed`; the 1001 was `afterEach` teardown.
+- **Fix:** `tests/default-test-timeout.ts` (a 60 s per-test and hook hang watchdog in both shared preloads, replacing Bun's 5 s default); `waitForTunnelCleanup` in `apps/backend/src/preview-tunnel-server.test.ts` now uses a 30 s `TUNNEL_WAIT_HANG_WATCHDOG_MS` instead of 2 s (all callers wait for states the tunnel reaches). If the upstream genuinely never emits `end`, it will now fail at the watchdog rather than pass, so a recurrence after this means a real hang.
+- **Reproduced:** no — the unchanged code passed under the same contention; the evidence is the removed deadline, not a reproduced failure, which is weaker.
+- **Stress:** `mise run test:logged -- --name b-cont -- bun scripts/test-under-contention.ts --core 2 --burners 6 -- bash -c 'cd apps/backend && bun test src/preview-tunnel-server.test.ts src/preview-publication.test.ts src/core/preview-local-discovery.test.ts src/core/preview-terminal-roots.test.ts --preload ../../tests/setup-node.ts --parallel=1 --rerun-each=3'` passed (59.7 s).

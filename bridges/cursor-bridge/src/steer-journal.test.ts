@@ -514,35 +514,46 @@ describe("steer route", () => {
   });
 
   test("escape-heavy ids at the allowed length hit the byte cap before the count cap", async () => {
-    const runId = `run-${"\u0001".repeat(MAX_STEER_ID_BYTES - 4)}`;
-    expect(Buffer.byteLength(runId)).toBe(MAX_STEER_ID_BYTES);
-    const { state, delivered } = runningSession(runId);
-    const idFor = (index: number) => {
-      const prefix = `${index}-`;
-      return `${prefix}${"\u0001".repeat(MAX_STEER_ID_BYTES - prefix.length)}`;
-    };
-    let refusedAt = -1;
-    for (let index = 0; index < MAX_STEER_JOURNAL; index += 1) {
-      const response = await steer(state, idFor(index), "same text", runId);
-      if (response.status === 429) {
-        expect(await response.json()).toMatchObject({ reason: "steer-capacity-exceeded" });
-        refusedAt = index;
-        break;
+    // Up to 256 publications, each with a file and a directory fsync: the same
+    // cost that pushed the 300-steer test past the hook budget on a loaded host
+    // (flake 0216). The writes stay real; only the fsyncs are skipped.
+    const restoreFs = usePersistenceFsForTests({
+      fsyncFile: async () => {},
+      fsyncDirectory: async () => {},
+    });
+    try {
+      const runId = `run-${"\u0001".repeat(MAX_STEER_ID_BYTES - 4)}`;
+      expect(Buffer.byteLength(runId)).toBe(MAX_STEER_ID_BYTES);
+      const { state, delivered } = runningSession(runId);
+      const idFor = (index: number) => {
+        const prefix = `${index}-`;
+        return `${prefix}${"\u0001".repeat(MAX_STEER_ID_BYTES - prefix.length)}`;
+      };
+      let refusedAt = -1;
+      for (let index = 0; index < MAX_STEER_JOURNAL; index += 1) {
+        const response = await steer(state, idFor(index), "same text", runId);
+        if (response.status === 429) {
+          expect(await response.json()).toMatchObject({ reason: "steer-capacity-exceeded" });
+          refusedAt = index;
+          break;
+        }
+        expect(response.status).toBe(202);
+        await response.body?.cancel();
       }
-      expect(response.status).toBe(202);
-      await response.body?.cancel();
+      expect(refusedAt).toBeGreaterThan(0);
+      expect(refusedAt).toBeLessThan(MAX_STEER_JOURNAL);
+      expect(state.steerJournal.size).toBe(refusedAt);
+      expect(delivered).toHaveLength(refusedAt);
+      expect(state.steerJournalBytes).toBe(heldBytes(state));
+      expect(state.steerJournalBytes).toBeLessThanOrEqual(MAX_STEER_JOURNAL_BYTES);
+      // Refused precisely because one more record would cross the byte budget.
+      const next = entry(idFor(refusedAt), runId, "prepared", "same text");
+      expect(state.steerJournalBytes + steerEntryBytes(next)).toBeGreaterThan(
+        MAX_STEER_JOURNAL_BYTES,
+      );
+    } finally {
+      restoreFs();
     }
-    expect(refusedAt).toBeGreaterThan(0);
-    expect(refusedAt).toBeLessThan(MAX_STEER_JOURNAL);
-    expect(state.steerJournal.size).toBe(refusedAt);
-    expect(delivered).toHaveLength(refusedAt);
-    expect(state.steerJournalBytes).toBe(heldBytes(state));
-    expect(state.steerJournalBytes).toBeLessThanOrEqual(MAX_STEER_JOURNAL_BYTES);
-    // Refused precisely because one more record would cross the byte budget.
-    const next = entry(idFor(refusedAt), runId, "prepared", "same text");
-    expect(state.steerJournalBytes + steerEntryBytes(next)).toBeGreaterThan(
-      MAX_STEER_JOURNAL_BYTES,
-    );
   });
 
   test("two concurrent requests for the last slot: at most one reserves it", async () => {

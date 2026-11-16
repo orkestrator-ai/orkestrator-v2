@@ -1,7 +1,7 @@
 # Change-tracking review validation under concurrent host load
 
 - **ID:** 0509
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-20
 - **Checkout:** `implement-file-change-f3950a40ac3a-r1`
 - No assertion, timeout, or skip was weakened.
@@ -125,3 +125,12 @@ container execution was covered by the Docker command shim; standalone
 Docker, Electron and iOS scenario suites were omitted because those platform
 lifecycles were unchanged. Credentialed live-provider scenarios were skipped
 in the credential-free isolated profile.
+
+## Resolution (2026-11-15)
+
+- **Class:** umbrella observation whose failures are each tracked and closed elsewhere (D), plus default budget (A).
+- **Backend:** the two `commands-registry-environments.test.ts` timeouts and the `environment-move.test.ts` timeout are recurrences of [0226](../environments-and-containers/0226-deletion-reap-failure-aggregate-timeout.md) and [0248](../environments-and-containers/0248-move-restart-recovery-submodule-timeout.md), both `resolved` in the environments group. Both files then had a 5 s budget; both now run with a 60 s default budget (`tests/default-test-timeout.ts`, and each file's own `setDefaultTimeout` raised to 60 s by the same flake sweep). The coordinator-service timeout is case 0165 and the Claude fixture `EISDIR` is case 0385, both `resolved`.
+- **Browser:** the four mobile `e2e/MultiReviewFlow.spec.ts` failures (including `Execution context was destroyed ... navigation`) happened while renderer sources were being edited, so Vite reloads were reloading the page mid-test. The full component rerun with frozen sources passed with two workers. No timing check in the spec was implicated.
+- **Fix:** none specific to this case.
+- **Reproduced:** no.
+- **Stress:** none run for this umbrella; see the linked cases' Resolutions.

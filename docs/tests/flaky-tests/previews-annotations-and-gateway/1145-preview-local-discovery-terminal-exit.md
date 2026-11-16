@@ -63,3 +63,7 @@ Running the script 240 times, four processes at once, against a held
 `127.0.0.1` port (host load about 58) never exited early: every run reported
 the next port. Next step: on a recurrence, keep the script's stderr
 in the failure message.
+
+## Triage note (2026-11-15)
+
+Partly addressed; stays `open`. In `apps/backend/src/core/preview-local-discovery.test.ts` every poll deadline (2 s, 5 s, 10 s) is now a named 30 s `POLL_HANG_WATCHDOG_MS`, the explicit 20 s/30 s test budgets are removed (the 60 s default applies), and the fixture script retries an `EADDRINUSE` on an ephemeral (`port 0`) request instead of throwing (up to 100 attempts). The recorded `terminal exited 0` with an `EADDRINUSE` on 61856 is still unexplained (that path already retried on the next port), so the cause is not established. The owner passed under contention (`b-cont`, see 0340).

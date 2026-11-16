@@ -3,6 +3,7 @@
 import "./isolate-git-config";
 import "./isolate-worktree-dir";
 import "./isolate-tmpdir";
+import "./default-test-timeout";
 import { installBoundedConsoleDiagnostics } from "./bounded-console-diagnostics";
 import { setClaudeLinuxSandboxStatusForTests } from "@orkestrator/protocol/node/claude-linux-sandbox";
 

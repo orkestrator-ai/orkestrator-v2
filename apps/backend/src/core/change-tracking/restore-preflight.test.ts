@@ -65,13 +65,13 @@ describe("restore preflight deadline", () => {
     const files = 20;
     const h = harness({
       restorePreflightDeadlineMs: 40,
-      restorePreflightPerPathMs: 250,
-      restorePreflightMaxDeadlineMs: 60_000,
+      restorePreflightPerPathMs: 5_000,
+      restorePreflightMaxDeadlineMs: 600_000,
     });
     const turn = await addFilesInTurn(h, files);
     const slow = slowDestinationChecks(5);
     try {
-      // At least 20 × 5 ms of checks: past the 40 ms floor, inside 20 × 250 ms.
+      // At least 20 × 5 ms of checks: past the 40 ms floor, inside 20 × 5,000 ms, so host speed cannot decide it.
       const preview = await h.service.restore.prepare({ measurementId: turn.measurementId });
       if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
       expect(preview.files).toHaveLength(files);
@@ -100,96 +100,96 @@ describe("restore preflight deadline", () => {
   });
 
   test.each([
-    { name: "covers multiple container batches beyond the floor", files: 5_001, perPathMs: 10 },
+    { name: "covers multiple container batches beyond the floor", files: 5_001, perPathMs: 100 },
     { name: "refuses a container batch that exceeds the whole deadline", files: 20, perPathMs: 0 },
-  ])(
-    "$name",
-    async ({ files, perPathMs }) => {
-      const h = harness({
-        restorePreflightDeadlineMs: 40,
-        restorePreflightPerPathMs: perPathMs,
-        restorePreflightMaxDeadlineMs: 60_000,
-      });
-      const turn = await addFilesInTurn(h, files);
-      const owner = h.service.registry.ownerById(turn.worktreeId)!;
-      const host = owner.executor;
-      const executor = new ContainerCaptureExecutor("fake", h.repo);
-      // Replace only the remote transport. Exercise the real container executor's
-      // framing and describe path without a Docker daemon or container lifecycle.
-      const transport = executor as unknown as {
-        helper: (
-          mode: string,
-          limits: CaptureLimits,
-          stdin: Buffer,
-          timeoutMs: number,
-          signal: AbortSignal,
-        ) => Promise<string>;
-      };
-      const signals: AbortSignal[] = [];
-      const batches: string[][] = [];
-      const helper = spyOn(transport, "helper").mockImplementation(
-        async (mode, limits, stdin, _timeoutMs, signal) => {
-          expect(mode).toBe("describe");
-          const paths = stdin
-            .toString("latin1")
-            .split("\0")
-            .filter(Boolean)
-            .map((encoded) => `u:${Buffer.from(encoded, "base64").toString()}`);
-          batches.push(paths);
-          signals.push(signal);
-          expect(limits.maxCandidates).toBe(files);
-          await new Promise((resolve) => setTimeout(resolve, 70));
-          signal.throwIfAborted();
-          const records = await host.describe(paths, limits, signal);
-          return records
-            .map((record) => {
-              if (record.kind !== "file") throw new Error("expected a destination file");
-              return JSON.stringify({
-                p: Buffer.from(decodePath(record.pathId)).toString("base64"),
-                k: "file",
-                m: record.mode,
-                s: record.size,
-                st: record.stamp,
-                o: record.oid,
-                ok: record.stable,
-              });
-            })
-            .join("\n");
-        },
-      );
-      const describe = spyOn(executor, "describe");
-      const lookup = spyOn(h.service.registry, "ownerById").mockReturnValue(
-        Object.assign(Object.create(owner), { executor }),
-      );
-      try {
-        const result = await h.service.restore.prepare({ measurementId: turn.measurementId });
-        if (perPathMs === 0) {
-          expect(result).toEqual({
-            kind: "disabled",
-            reasonKey: "changes.restore.runtime-unavailable",
-          });
-          expect(signals[0]?.aborted).toBe(true);
-          expect(batches.map((batch) => batch.length)).toEqual([20]);
-        } else {
-          if (result.kind !== "preview") throw new Error(`expected a preview, got ${result.kind}`);
-          expect(result.files).toHaveLength(files);
-          expect(result.files.every((file) => file.action === "delete")).toBe(true);
-          expect(batches.map((batch) => batch.length)).toEqual([5_000, 1]);
-          expect(new Set(batches.flat()).size).toBe(files);
-          expect(signals[1]).toBe(signals[0]);
-          expect(signals[0]?.aborted).toBe(false);
-        }
-        // Restore preflight must send each batch once, rather than using the
-        // host's one-describe-per-path path or checking only the first batch.
-        expect(describe).toHaveBeenCalledTimes(batches.length);
-      } finally {
-        lookup.mockRestore();
-        describe.mockRestore();
-        helper.mockRestore();
+  ])("$name", async ({ files, perPathMs }) => {
+    const h = harness({
+      restorePreflightDeadlineMs: 40,
+      // The per-path budget is generous on purpose: what is asserted is that
+      // the deadline grows past the 40 ms floor with the plan and covers every
+      // batch, not that the host finishes 5,001 real checks inside a tight
+      // wall-clock window.
+      restorePreflightPerPathMs: perPathMs,
+      restorePreflightMaxDeadlineMs: 600_000,
+    });
+    const turn = await addFilesInTurn(h, files);
+    const owner = h.service.registry.ownerById(turn.worktreeId)!;
+    const host = owner.executor;
+    const executor = new ContainerCaptureExecutor("fake", h.repo);
+    // Replace only the remote transport. Exercise the real container executor's
+    // framing and describe path without a Docker daemon or container lifecycle.
+    const transport = executor as unknown as {
+      helper: (
+        mode: string,
+        limits: CaptureLimits,
+        stdin: Buffer,
+        timeoutMs: number,
+        signal: AbortSignal,
+      ) => Promise<string>;
+    };
+    const signals: AbortSignal[] = [];
+    const batches: string[][] = [];
+    const helper = spyOn(transport, "helper").mockImplementation(
+      async (mode, limits, stdin, _timeoutMs, signal) => {
+        expect(mode).toBe("describe");
+        const paths = stdin
+          .toString("latin1")
+          .split("\0")
+          .filter(Boolean)
+          .map((encoded) => `u:${Buffer.from(encoded, "base64").toString()}`);
+        batches.push(paths);
+        signals.push(signal);
+        expect(limits.maxCandidates).toBe(files);
+        await new Promise((resolve) => setTimeout(resolve, 70));
+        signal.throwIfAborted();
+        const records = await host.describe(paths, limits, signal);
+        return records
+          .map((record) => {
+            if (record.kind !== "file") throw new Error("expected a destination file");
+            return JSON.stringify({
+              p: Buffer.from(decodePath(record.pathId)).toString("base64"),
+              k: "file",
+              m: record.mode,
+              s: record.size,
+              st: record.stamp,
+              o: record.oid,
+              ok: record.stable,
+            });
+          })
+          .join("\n");
+      },
+    );
+    const describe = spyOn(executor, "describe");
+    const lookup = spyOn(h.service.registry, "ownerById").mockReturnValue(
+      Object.assign(Object.create(owner), { executor }),
+    );
+    try {
+      const result = await h.service.restore.prepare({ measurementId: turn.measurementId });
+      if (perPathMs === 0) {
+        expect(result).toEqual({
+          kind: "disabled",
+          reasonKey: "changes.restore.runtime-unavailable",
+        });
+        expect(signals[0]?.aborted).toBe(true);
+        expect(batches.map((batch) => batch.length)).toEqual([20]);
+      } else {
+        if (result.kind !== "preview") throw new Error(`expected a preview, got ${result.kind}`);
+        expect(result.files).toHaveLength(files);
+        expect(result.files.every((file) => file.action === "delete")).toBe(true);
+        expect(batches.map((batch) => batch.length)).toEqual([5_000, 1]);
+        expect(new Set(batches.flat()).size).toBe(files);
+        expect(signals[1]).toBe(signals[0]);
+        expect(signals[0]?.aborted).toBe(false);
       }
-    },
-    30_000,
-  );
+      // Restore preflight must send each batch once, rather than using the
+      // host's one-describe-per-path path or checking only the first batch.
+      expect(describe).toHaveBeenCalledTimes(batches.length);
+    } finally {
+      lookup.mockRestore();
+      describe.mockRestore();
+      helper.mockRestore();
+    }
+  });
 });
 
 describe("restore apply capture deadline", () => {

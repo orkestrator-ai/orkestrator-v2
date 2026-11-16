@@ -56,7 +56,8 @@ describe("environment.exec", () => {
     const started = await exec(harness, "x1", {
       argv: ["sh", "-c", "echo out; echo err >&2; exit 3"],
     });
-    expect(started.ok).toBe(true);
+    // The whole response, so a refused start (case 0624) names its error code.
+    expect(started).toMatchObject({ ok: true });
     const final = await waitTerminal(harness, started.receipt!.operationId);
     expect(final.state).toBe("failed");
     expect(final.error?.code).toBe("exec-failed");

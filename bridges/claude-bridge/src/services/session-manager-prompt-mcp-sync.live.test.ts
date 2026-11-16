@@ -7,6 +7,11 @@ import {
   type ReplaceLingerResult,
 } from "./claude-mcp-replace-linger.live-probe.js";
 
+// The probes poll for real states with their own 120 s watchdogs (the CLI and
+// its servers start slowly on a starved host); this one only ends a probe that
+// has gone silent, after those have had their say.
+const PROBE_WATCHDOG_MS = 240_000;
+
 // Runs the pinned Claude CLI for real (no credentials, a loopback model) and
 // proves what `session-manager-prompt-mcp-sync.ts` relies on. Run it with
 // `mise run verify:claude:mcp-live` for a focused rerun; also runs in the slow tier (`mise run test:slow`) and CI.
@@ -26,7 +31,7 @@ test.concurrent(
       stdout: "pipe",
       stderr: "pipe",
     });
-    const deadline = setTimeout(() => probe.kill(), 90_000);
+    const deadline = setTimeout(() => probe.kill(), PROBE_WATCHDOG_MS);
     let stdout = "";
     let stderr = "";
     let exitCode: number;
@@ -120,7 +125,7 @@ test.concurrent(
       initialized: ["keep"],
     });
   },
-  120_000,
+  PROBE_WATCHDOG_MS + 30_000,
 );
 
 // The standalone repro for the upstream report (0039 task 1). Kept beside the
@@ -136,7 +141,7 @@ test.concurrent(
       [process.execPath, join(import.meta.dir, "claude-mcp-replace-linger.live-probe.ts")],
       { cwd: join(import.meta.dir, "..", ".."), env: process.env, stdout: "pipe", stderr: "pipe" },
     );
-    const deadline = setTimeout(() => repro.kill(), 90_000);
+    const deadline = setTimeout(() => repro.kill(), PROBE_WATCHDOG_MS);
     let stdout = "";
     let stderr = "";
     let exitCode: number;
@@ -180,5 +185,5 @@ test.concurrent(
     }
     expect(result.reproduced).toBe(true);
   },
-  120_000,
+  PROBE_WATCHDOG_MS + 30_000,
 );

@@ -142,7 +142,11 @@ import {
 } from "./remote-relaunch.js";
 import { relaunchApplication } from "./relaunch.js";
 import { showRestartPrompt } from "./restart-prompt.js";
-import { createNativeDialogs, installUncaughtExceptionDialog } from "./native-dialogs.js";
+import {
+  createNativeDialogs,
+  installUncaughtExceptionDialog,
+  quitGuardedHostWindowFactory,
+} from "./native-dialogs.js";
 import { createDialogAttention } from "./dialog-attention.js";
 import { createStartupFailureReporter } from "./startup-failure.js";
 import {
@@ -420,13 +424,17 @@ const nativeDialogs = createNativeDialogs<BrowserWindow>({
   hiddenWindows,
   // A headless `dev:test` profile on Linux (HEADLESS_ELECTRON_SWITCHES).
   noDisplay: app.commandLine.getSwitchValue("ozone-platform") === "headless",
+  quitting: quitReopen.isQuitting,
   dialog,
   platform: process.platform,
   currentWindow: currentDialogWindow,
-  createHostWindow: async () => {
-    await app.whenReady();
-    return createDialogHostWindow({ BrowserWindowCtor: WindowCtor, dirname: __dirname });
-  },
+  createHostWindow: quitGuardedHostWindowFactory<BrowserWindow>({
+    whenReady: () => app.whenReady(),
+    quitting: quitReopen.isQuitting,
+    productName,
+    create: (onCreated) =>
+      createDialogHostWindow({ BrowserWindowCtor: WindowCtor, dirname: __dirname, onCreated }),
+  }),
   requestAttention: requestDialogAttention,
 });
 nativeDialogs.install();

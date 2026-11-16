@@ -35,3 +35,11 @@ the only cases with two navigations in their 30 s budget. That navigation was
 removed afterwards because it served no purpose. There is no evidence that it
 caused the timeout, so this case stays open until the timeout is seen again or
 explained. No assertion, timeout or retry was changed for it.
+
+## Triage note (2026-11-15)
+
+Class A candidate (Playwright's default 5 s assertion / 30 s test deadline expiring on a loaded host). Not changed. The fix would be hang-watchdog defaults in `e2e/playwright.config.ts` (`expect.timeout` and `timeout`), but that config is shared with every group's component browser specs, so it is left for a separate decision rather than changed in a per-group sweep. Not reproduced; the browser suite was not run. Stays `open`.
+
+## Triage note (2026-11-15, after the config change)
+
+Follow-up: the hang-watchdog defaults this note deferred have now landed (`e2e/playwright.config.ts`: `timeout: 120_000`, `expect: { timeout: 30_000 }`), but this case stays `open`: the bare `Test timeout of 30000ms exceeded` named no pending action and the page snapshot showed the fixture rendered, so it is not established that the test was waiting on a real signal; cause unclear.

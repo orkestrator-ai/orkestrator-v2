@@ -47,7 +47,11 @@ describe("fixPath", () => {
     console.info = info;
 
     try {
-      fixPath();
+      // The fake shell prints at once, but a starved host can delay its exit
+      // past the backend's five-second login-shell deadline, and fixPath then
+      // (correctly) falls back without it. That deadline is not under test
+      // here, so give it a hang watchdog inside the test budget.
+      fixPath({ loginShellTimeoutMs: 50_000 });
     } finally {
       console.info = originalInfo;
     }

@@ -111,12 +111,16 @@ const nodeState = (node: BackendId, state: "live" | "down" | "refused", reason?:
     payload: { node, state, ...(reason ? { reason } : {}) },
   });
 
+// A hang watchdog on a condition the streams will reach, not a speed bound:
+// a worker starved beside a whole aggregate run needs far more than the
+// fraction of a second the original poll allowed.
+const WAIT_HANG_WATCHDOG_MS = 30_000;
 const waitFor = async (condition: () => boolean, label: string) => {
-  for (let i = 0; i < 400; i += 1) {
-    if (condition()) return;
+  const deadline = Date.now() + WAIT_HANG_WATCHDOG_MS;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${label}`);
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
-  throw new Error(`timed out waiting for ${label}`);
 };
 
 let transports: NodeTransport[] = [];

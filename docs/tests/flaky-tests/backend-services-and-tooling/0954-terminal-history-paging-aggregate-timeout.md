@@ -1,7 +1,7 @@
 # Terminal history backward paging exceeds the aggregate deadline
 
 - **ID:** 0954
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-26
 - **Test:** `terminal history > pages fixed history backwards and rejects a cursor for another history`
 - **Owning file:** `apps/backend/src/core/terminal-history.test.ts`
@@ -14,3 +14,11 @@
 The same file's normalization case times out the same way under load
 ([0213](0213-terminal-history-aggregate-timeout.md)); host load is the likely
 cause, not a confirmed diagnosis. No test, timeout, assertion or skip changed.
+
+## Resolution (2026-11-15)
+
+- **Owner moved:** the test is now in `apps/backend/src/core/terminal-history-part-1.test.ts` (file split by `dc90609bf`, 2026-11-14).
+- **Root cause:** the five-second default test budget under host load (5001.73 ms); the case itself has no deadline or sleep, and the part file sets no smaller budget.
+- **Fix:** `tests/default-test-timeout.ts` (preloaded by `tests/setup-node.ts`) raises the default budget to a 60 s hang watchdog. No test change. Same cause as [0213](0213-terminal-history-aggregate-timeout.md).
+- **Reproduced:** no — not reproduced; classified from the recorded duration.
+- **Stress:** none for this case.

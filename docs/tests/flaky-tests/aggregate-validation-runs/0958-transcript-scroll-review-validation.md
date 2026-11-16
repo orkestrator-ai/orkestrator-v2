@@ -75,3 +75,7 @@ owner rerun used `ORKESTRATOR_E2E_PORT=54123`; no other checkout's server was
 stopped. Evidence: `orkestrator-test-run.uvQKxe/review-browser.log.gz` and
 `orkestrator-test-run.6h3q1i/goal-branch-picker.log.gz` in the host temporary
 directory. No native-picker code, assertion, timeout or skip changed.
+
+## Triage (2026-11-15)
+
+Left open. `apps/backend/src/core/environment-move.test.ts` calls `setDefaultTimeout(30_000)`, smaller than the shared 60 s default in `tests/default-test-timeout.ts`, so that default does not govern the two submodule-move timeouts; [0248](../environments-and-containers/0248-move-restart-recovery-submodule-timeout.md) and [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md) own them. The root-group and browser items in this case are not default-budget failures.

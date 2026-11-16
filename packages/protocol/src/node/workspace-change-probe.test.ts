@@ -227,7 +227,11 @@ describe("WorkspaceChangeProbe", () => {
     const subject = probe();
     await subject.begin(repo, "denied");
     subject.discard("denied");
-    for (let attempt = 0; attempt < 50 && readdirSync(probeTemp).length > 0; attempt += 1) {
+    // The release is asynchronous with no event to await, so poll for the
+    // directory to empty. The deadline is only a hang watchdog: it reports a
+    // snapshot that is never released, not a slow host.
+    const watchdog = Date.now() + 30_000;
+    while (readdirSync(probeTemp).length > 0 && Date.now() < watchdog) {
       await new Promise((resolve) => setTimeout(resolve, 1));
     }
     expect(readdirSync(probeTemp)).toEqual([]);
@@ -378,13 +382,16 @@ describe.skipIf(process.platform === "win32")("runGit capture", () => {
   test("settles at git's exit while a background child holds its output", async () => {
     const bin = await mkdtemp(join(tmpdir(), "ork-probe-fake-git-"));
     try {
-      await writeFile(join(bin, "git"), "#!/bin/sh\nprintf output\nsleep 5 &\nexit 0\n", {
+      // The background child holds git's output pipe for 30 s, longer than the
+      // runner's own 20 s git timeout. A runner that waited for the pipe to
+      // close would therefore reject with a timeout instead of returning
+      // "output", so no elapsed-time measurement is needed: the result is
+      // decided by whether the runner settles at git's exit.
+      await writeFile(join(bin, "git"), "#!/bin/sh\nprintf output\nsleep 30 &\nexit 0\n", {
         mode: 0o755,
       });
-      const started = Date.now();
       const { stdout } = await runGit(["status"], { cwd: bin, env: { PATH: bin } });
       expect(stdout).toBe("output");
-      expect(Date.now() - started).toBeLessThan(4_000);
     } finally {
       await rm(bin, { recursive: true, force: true });
     }

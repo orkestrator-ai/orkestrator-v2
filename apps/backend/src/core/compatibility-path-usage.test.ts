@@ -72,8 +72,8 @@ describe("CompatibilityPathUsage", () => {
 
   test("peek without a sink is the pending counts", () => {
     const usage = new CompatibilityPathUsage();
-    usage.record("bridge-transcript.messages-fallback");
-    expect(usage.peek().paths["bridge-transcript.messages-fallback"]?.count).toBe(1);
+    usage.record("history.joined-v1-page.unpaged-source");
+    expect(usage.peek().paths["history.joined-v1-page.unpaged-source"]?.count).toBe(1);
   });
 
   test("counts each path with its first and last use, without a sink", () => {
@@ -147,14 +147,14 @@ describe("CompatibilityPathUsage", () => {
     const merged: number[] = [];
     const sink: CompatibilityPathUsageSink = {
       merge: (pending) => {
-        merged.push(pending.get("bridge-transcript.messages-fallback")?.count ?? 0);
+        merged.push(pending.get("history.joined-v1-page.unpaged-source")?.count ?? 0);
         return { version: 1, paths: {} };
       },
     };
     const usage = new CompatibilityPathUsage(undefined, 5);
     usage.attach(sink);
-    usage.record("bridge-transcript.messages-fallback");
-    usage.record("bridge-transcript.messages-fallback");
+    usage.record("history.joined-v1-page.unpaged-source");
+    usage.record("history.joined-v1-page.unpaged-source");
     const deadline = Date.now() + 1_000;
     while (merged.length === 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -288,8 +288,8 @@ describe("CompatibilityPathUsage", () => {
         return {
           version: 1,
           paths: {
-            "bridge-transcript.messages-fallback": {
-              ...pending.get("bridge-transcript.messages-fallback")!,
+            "history.joined-v1-page.unpaged-source": {
+              ...pending.get("history.joined-v1-page.unpaged-source")!,
             },
           },
         };
@@ -297,11 +297,11 @@ describe("CompatibilityPathUsage", () => {
     };
     const usage = new CompatibilityPathUsage(clock().now);
     usage.attach(sink);
-    usage.record("bridge-transcript.messages-fallback");
-    expect(usage.snapshot().paths["bridge-transcript.messages-fallback"]?.count).toBe(1);
+    usage.record("history.joined-v1-page.unpaged-source");
+    expect(usage.snapshot().paths["history.joined-v1-page.unpaged-source"]?.count).toBe(1);
     fail = false;
-    usage.record("bridge-transcript.messages-fallback");
-    expect(usage.snapshot().paths["bridge-transcript.messages-fallback"]?.count).toBe(2);
+    usage.record("history.joined-v1-page.unpaged-source");
+    expect(usage.snapshot().paths["history.joined-v1-page.unpaged-source"]?.count).toBe(2);
     usage.detach(sink);
   });
 
@@ -310,8 +310,8 @@ describe("CompatibilityPathUsage", () => {
     const usage = new CompatibilityPathUsage(clock().now);
     const sink = compatibilityPathUsageDatabaseSink(dir);
     usage.attach(sink);
-    usage.record("bridge-transcript.messages-fallback");
-    expect(usage.snapshot().paths["bridge-transcript.messages-fallback"]?.count).toBe(1);
+    usage.record("workspace-grant.config-echo");
+    expect(usage.snapshot().paths["workspace-grant.config-echo"]?.count).toBe(1);
     usage.detach(sink);
     await expect(fs.stat(dir)).rejects.toThrow();
   });
@@ -396,7 +396,7 @@ test("an idle reader refreshes another backend's totals on each bounded timer ti
     reader.attach(sink);
     writer.attach(sink);
     expect(reader.peek().paths).toEqual({});
-    writer.record("bridge-transcript.messages-fallback");
+    writer.record("history.joined-v1-page.unpaged-source");
     writer.snapshot();
     const before = reads;
     expect(reader.peek().paths).toEqual({});
@@ -404,7 +404,7 @@ test("an idle reader refreshes another backend's totals on each bounded timer ti
     time.advance(60_000);
     // peek replaced the initial attach timer; tick the reader's current timer.
     callbacks[2]!();
-    expect(reader.peek().paths["bridge-transcript.messages-fallback"]?.count).toBe(1);
+    expect(reader.peek().paths["history.joined-v1-page.unpaged-source"]?.count).toBe(1);
     expect(writes).toBe(1);
     expect(callbacks.length).toBeGreaterThan(2);
   } finally {

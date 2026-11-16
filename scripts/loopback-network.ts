@@ -132,9 +132,14 @@ if (import.meta.main) {
     console.error(
       `[loopback-network] running on the host network (${plan.reason}); host interface changes can abort browser requests (flake 2340)`,
     );
-  const child = spawn(plan.command, plan.args, { stdio: "inherit" });
+  // Forwarding handlers exist before the command does (AGENTS.md invariant 16):
+  // the command can announce readiness as soon as it starts, and a signal that
+  // reached this script before its handlers would kill it with the default
+  // action and orphan the command (flake 9943).
+  let child: ReturnType<typeof spawn> | undefined;
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
-    process.on(signal, () => child.kill(signal));
+    process.on(signal, () => child?.kill(signal));
+  child = spawn(plan.command, plan.args, { stdio: "inherit" });
   child.on("error", (error) => {
     console.error(`[loopback-network] ${error.message}`);
     process.exit(127);

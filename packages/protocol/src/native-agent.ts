@@ -922,6 +922,12 @@ export interface NativeAgentTurnState {
   /** Present only while the turn is running and the provider reported one. */
   activity?: NativeAgentTurnActivity;
   /**
+   * The provider's id for the running turn, present only while it runs and
+   * the provider reported one. A steer sends it back as `expectedRunId`, so
+   * it is bound to the turn the view showed (to-do 8107 (retired)).
+   */
+  runId?: string;
+  /**
    * The backend announces every change to this session's idle view: activity
    * transitions and, for a provider whose idle view can change without one
    * (Claude background tasks, Codex async questions), content revisions from
@@ -1370,6 +1376,14 @@ export type NativeAgentSessionAction =
        * replay. The backend mints one when absent.
        */
       turnRequestId?: string;
+      /**
+       * The provider run the caller saw (`turn.runId` of the projection it
+       * showed). When a different run is running, the steer missed its turn
+       * and `onMissedTurn` applies, so a steer written for a turn that has
+       * ended is never delivered into the next one (to-do 8107 (retired)). Absent: the
+       * steer joins whichever run is running when the backend reads it.
+       */
+      expectedRunId?: string;
     }
   | { kind: "review" }
   | { kind: "rewind-messages"; messageId: string }

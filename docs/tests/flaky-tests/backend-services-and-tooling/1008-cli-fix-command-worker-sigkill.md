@@ -10,3 +10,7 @@
 - **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts --parallel=2 tests/fix-command.test.ts` from `packages/cli`: 32 passed.
 - **Evidence:** `/tmp/orkestrator-test-run.XMCWCR/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` on omarchy-hp.
 - **Hypothesis:** memory pressure or the runner's own kill under heavy host load. Related timeouts in the same file: 0746, 0765.
+
+## Triage (2026-11-15)
+
+- **Not changed:** the worker was SIGKILLed with no OOM evidence; no timed check is involved. The file's own deadlines were made hang watchdogs under 0746. Still open, pending kernel or OOM evidence.

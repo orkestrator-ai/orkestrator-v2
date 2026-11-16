@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { installControlledTimeout } from "../../../../tests/helpers/controlled-timeout.js";
 import type { WatchHandle } from "./watch-host.js";
 import {
   WATCH_PLAN_MAX_IGNORED_TREE_DIRECTORIES,
@@ -7,6 +8,7 @@ import {
 } from "./worktree-watch-plan.js";
 import {
   startWorktreeWatcher,
+  WATCH_DISTRUST_MS,
   WATCH_IGNORED_REMEASURE_MS,
   type StartWatch,
   type WorktreeWatcher,
@@ -101,6 +103,7 @@ function open(
   context: ReturnType<typeof fixture>,
   perDirectoryWatches = true,
   now: () => number = Date.now,
+  missGraceMs?: number,
 ) {
   let coverage = 0;
   let settled = 0;
@@ -108,6 +111,7 @@ function open(
     worktreePath: ROOT,
     settleMs: 1,
     now,
+    missGraceMs,
     startWatch: context.start,
     plan: context.io,
     perDirectoryWatches,
@@ -159,6 +163,55 @@ test("leaving a tree out withdraws coverage, and putting it back reports it agai
   await until(() => watcher.qualified === true);
   expect(coverage()).toBe(3);
   expect(context.watches()).toContain("recursive /wt/output");
+});
+
+// To-do 8171: distrust in delivery is a separate gap from a tree left out, so
+// trust returning while a tree is still left out must not announce coverage.
+test("a tree left out while the watcher is distrusted keeps coverage withdrawn when trust returns", async () => {
+  const grace = installControlledTimeout(37, { label: "missed-change grace" });
+  try {
+    let clock = 1_000;
+    const context = fixture({ others: ["dist", "output"], large: [] });
+    const { watcher, coverage, replan, settled } = open(context, true, () => clock, 37);
+    await until(() => watcher.qualified === true);
+    expect(coverage()).toBe(1);
+    // The new watches report the gap before them; a burst still settling would
+    // forgive the miss below.
+    await until(() => settled() > 0);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    // The owner's scan found a change no event announced: distrusted.
+    watcher.unannouncedChange?.();
+    expect(grace.advance()).toBe(1);
+    expect(watcher.qualified).toBe(false);
+    expect(coverage()).toBe(2);
+
+    // Meanwhile the tree grows past the bound and is left out.
+    context.state.large.add("output");
+    context.replace("output");
+    replan();
+    await until(() => coverage() === 3);
+    await until(() => !context.watches().includes("recursive /wt/output"));
+    expect(watcher.qualified).toBe(false);
+
+    // The first event after the distrust window restores trust, and the owner
+    // hears both that anything may have changed and that coverage moved, but
+    // the tree left out still withholds qualified coverage.
+    clock += WATCH_DISTRUST_MS;
+    const before = settled();
+    context.live.get("recursive /wt/src")!.emit("change", "a.ts");
+    expect(settled()).toBe(before + 1);
+    expect(coverage()).toBe(4);
+    expect(watcher.qualified).toBe(false);
+
+    // Putting the tree back is what qualifies the watcher again.
+    context.state.trees = { dependencies: ["node_modules"], others: ["dist"] };
+    replan();
+    await until(() => watcher.qualified === true);
+    expect(coverage()).toBe(5);
+  } finally {
+    grace.restore();
+  }
 });
 
 test("each tree is counted once per directory identity", async () => {

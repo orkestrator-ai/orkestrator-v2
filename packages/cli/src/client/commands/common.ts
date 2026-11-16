@@ -97,7 +97,10 @@ export async function submitForWait<T>(
   warnings?: string[];
   deadline?: number;
 }> {
-  const deadline = Date.now() + timeoutMs;
+  // The observation clock: the real one in the executable, a test's own
+  // virtual clock when its IO supplies `sleep`, so one deadline governs both.
+  const now = observationClock(context.io).now ?? Date.now;
+  const deadline = now() + timeoutMs;
   const session = await context.session();
   try {
     return {
@@ -118,7 +121,7 @@ export async function submitForWait<T>(
     try {
       receipt = await observe<PublicReceipt>(
         async () => {
-          if (Date.now() >= deadline) throw new ObservationStopped("deadline");
+          if (now() >= deadline) throw new ObservationStopped("deadline");
           try {
             const found = await session.readWithReceipt(
               "run.get",
@@ -128,7 +131,7 @@ export async function submitForWait<T>(
                 namespace,
                 submittedInput: input,
               },
-              Math.max(1, deadline - Date.now()),
+              Math.max(1, deadline - now()),
             );
             return found.receipt ? { done: true, value: found.receipt } : { done: false };
           } catch (lookup) {
@@ -142,7 +145,7 @@ export async function submitForWait<T>(
           }
         },
         {
-          timeoutMs: Math.max(0, deadline - Date.now()),
+          timeoutMs: Math.max(0, deadline - now()),
           signal: context.signal,
           ...observationClock(context.io),
         },
@@ -169,7 +172,8 @@ export async function submitForWait<T>(
     return {
       session,
       receipt,
-      deadline,
+      // Callers measure what is left against `Date.now()`.
+      deadline: Date.now() + Math.max(0, deadline - now()),
       warnings: [`The ${action} response was lost; found the operation by its request key`],
     };
   }

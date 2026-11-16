@@ -1,7 +1,7 @@
 # Cursor steering-at-capacity restart case hits a hook timeout
 
 - **ID:** 0240
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `steering at capacity across a restart > a lost refusal and a
   recovered run never produce a duplicate or a fabricated absent`
@@ -71,3 +71,10 @@ the same fix.
 ## Design-agent links refresh through d6ed0717d — 2026-10-24
 
 The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 7.6 s: `mise run test:logged -- --name design-links-owner-cursor-conformance -- bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/conformance-interactions.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.
+
+## Resolution (2026-11-15, second resolution)
+
+- **Root cause:** after the 2026-10-15 fsync stub the case still timed out on loaded hosts (2026-10-17 and 2026-10-24) at 10005 ms, which is the five-second default budget used twice (test plus teardown). The stub removed the dominant cost but the body still publishes the state file about 500 times and restarts from disk, which a starved host can stretch past five seconds. The file sets no budget of its own.
+- **Fix:** `tests/default-test-timeout.ts` now sets the default budget to 60 s for every preloaded run (including the package's `test:bridge`). `bridges/cursor-bridge/src/testing/router-harness.ts` `waitFor`, which this file uses to wait for the engine and the held send, is now a 30 s hang watchdog instead of a 2 s deadline.
+- **Reproduced:** no. The recorded failures happened on macOS and GitHub Actions; the unchanged file passes alone and I did not make it fail locally. This is a reasoned fix, not a measured one.
+- **Stress:** `bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/http.test.ts ./src/steer-journal.test.ts ./src/conformance-interactions.test.ts --parallel=2` passed (7.6 s, exit 0). No contention run of this file was made.

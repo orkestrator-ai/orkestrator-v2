@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
 import { rpc } from "./test-support.js";
 import { ControlMcpServer, controlMcpPortOverride } from "./server.js";
 
@@ -54,7 +55,9 @@ async function holdPort(): Promise<{ port: number; release: () => Promise<void> 
   };
 }
 
-async function waitFor(condition: () => boolean, timeoutMs = 5_000): Promise<void> {
+// The condition is a real signal (a retry failing, the listener binding); the
+// deadline is only a hang watchdog, so a slow host waits longer instead of failing.
+async function waitFor(condition: () => boolean, timeoutMs = 60_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!condition()) {
     if (Date.now() > deadline) throw new Error("condition not met in time");
@@ -107,8 +110,9 @@ describe("a fixed Control MCP port held by another process", () => {
       url: `http://127.0.0.1:${port}/mcp`,
     });
 
-    // Several retries fail while the port stays taken; none surfaces as a rejection.
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    // Several retries fail while the port stays taken (each failure notifies
+    // once); none surfaces as a rejection.
+    await waitFor(() => changes.length >= 3);
     expect(mcp.getSettings().running).toBe(false);
 
     await held!.release();
@@ -162,13 +166,23 @@ describe("a fixed Control MCP port held by another process", () => {
   );
 
   test("stop() cancels the retry", async () => {
-    const mcp = create(held!.port);
-    await expect(mcp.start()).rejects.toThrow();
-    await mcp.stop();
-    await held!.release();
-    held = null;
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(mcp.getSettings().running).toBe(false);
+    // Capture the first retry (the initial delay is the only one scheduled
+    // before it fires) so the test can show it was armed and then cancelled,
+    // rather than sleeping past a deadline and hoping nothing happened.
+    const retryClock = installControlledTimeout(20, { label: "control MCP bind retry" });
+    try {
+      const mcp = create(held!.port);
+      await expect(mcp.start()).rejects.toThrow();
+      expect(retryClock.pendingCount()).toBe(1);
+      await mcp.stop();
+      expect(retryClock.pendingCount()).toBe(0);
+      await held!.release();
+      held = null;
+      expect(retryClock.advance()).toBe(0);
+      expect(mcp.getSettings().running).toBe(false);
+    } finally {
+      retryClock.restore();
+    }
   });
 
   test("an ephemeral port is never retried and publishes the bound URL", async () => {

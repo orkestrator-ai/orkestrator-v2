@@ -1606,6 +1606,8 @@ export function SharedNativeAgentController({
     (sendingHeld && phase === "blocked");
   const isTurnActive = isDispatching || isProviderTurnActive;
   const turnActivity = phase === "running" ? projection?.turn.activity : undefined;
+  // The run a `/steer` from this tab is bound to (to-do 8107 (retired)).
+  const turnRunId = projection?.turn.runId;
   /*
    * "Stopping" and "reconnecting" are still loading, but they mean something
    * different to the user than ordinary thinking. Derived from the neutral
@@ -2252,12 +2254,16 @@ export function SharedNativeAgentController({
           // Steering carries text only. Attachments travel as the same marked
           // path-reference block a prompt carries, so the agent opens each file
           // from the workspace and the transcript shows it as an attachment.
+          // Bound to the turn this view shows: one that ended meanwhile makes
+          // the steer the next turn instead of joining another (to-do 8107 (retired)).
+          const expectedRunId = turnRunId;
           const outcome = await performAction({
             kind: "steer",
             text: buildInitialPromptWithAttachmentReferences(
               sessionAction.text,
               submittedAttachments.map(({ name, path }) => ({ name, path })),
             ),
+            ...(expectedRunId ? { expectedRunId } : {}),
           });
           if (outcome.outcome === "applied") {
             // Also a steer that missed its turn: the backend sent it as a new
@@ -2641,6 +2647,7 @@ export function SharedNativeAgentController({
       projection?.capabilities,
       projection?.sessionId,
       projection?.slashCommands,
+      turnRunId,
       recoverableDispatch,
       actionableDispatch,
       releaseRetiredRequestId,

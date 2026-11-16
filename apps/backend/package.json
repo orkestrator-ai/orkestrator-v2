@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/backend",
-  "version": "2.38.3-beta",
+  "version": "2.39.0-beta",
   "private": true,
   "type": "module",
   "exports": {

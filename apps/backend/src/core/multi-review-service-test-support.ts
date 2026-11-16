@@ -909,9 +909,16 @@ export async function withService(
   }
 }
 
+/**
+ * Polls `predicate` until it holds. Callers drive the work from inside the
+ * predicate (usually `service.advanceNow`), so this is not an assertion about
+ * how long the host takes: the deadline is only a hang watchdog, set below the
+ * 60 s default test budget so a stuck wait still reports which state it waited
+ * for rather than a bare test timeout.
+ */
 export async function waitUntil(
   predicate: () => boolean | Promise<boolean>,
-  timeoutMs = 5_000,
+  timeoutMs = 45_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!(await predicate())) {

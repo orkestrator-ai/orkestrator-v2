@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { installControlledTimeout } from "../../../../tests/helpers/controlled-timeout.js";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -28,6 +29,9 @@ import { createProviderStub, withService } from "./native-agent-service-projecti
  * when the durable intent survives, and that a close route answering 404 or
  * 405 never leads to a destructive DELETE.
  */
+
+/** A close deadline no other timer in these tests uses, so it can be held by hand. */
+const CLOSE_DEADLINE_MS = 987_661;
 
 type Call = { method: string; url: string; signal?: AbortSignal };
 type Responder = (call: Call) => Response | Promise<Response>;
@@ -247,24 +251,36 @@ describe("tab close retains conversation history", () => {
   }
 
   test("a bridge close can finish after the legacy request budget", async () => {
-    await withTeardown(
-      async () => {
-        await Bun.sleep(70);
-        return retained();
-      },
-      async ({ invoke, storage }) => {
-        const key = await mapTab(storage, "claude", "tab-slow", "claude-slow");
-        await expect(
-          invoke("teardown_tab", {
-            environmentId: "e1",
-            tabId: "tab-slow",
-            kind: "claude-native",
-          }),
-        ).resolves.toEqual({ completed: true });
-        expect(await storage.getNativeAgentSession(key)).toBeNull();
-      },
-      { deleteTimeoutMs: 20, closeTimeoutMs: 200 },
-    );
+    // Hold the close deadline by hand: a close that outlasts the 20 ms legacy
+    // budget must not be cut off, and a wall-clock close deadline would only
+    // measure how busy the host is. The sleep outlasts the legacy budget by
+    // construction (a timer never fires early), so the case needs no timing luck.
+    const closeDeadline = installControlledTimeout(CLOSE_DEADLINE_MS, {
+      label: "tab teardown close deadline",
+    });
+    try {
+      await withTeardown(
+        async () => {
+          await Bun.sleep(70);
+          expect(closeDeadline.pendingCount()).toBe(1);
+          return retained();
+        },
+        async ({ invoke, storage }) => {
+          const key = await mapTab(storage, "claude", "tab-slow", "claude-slow");
+          await expect(
+            invoke("teardown_tab", {
+              environmentId: "e1",
+              tabId: "tab-slow",
+              kind: "claude-native",
+            }),
+          ).resolves.toEqual({ completed: true });
+          expect(await storage.getNativeAgentSession(key)).toBeNull();
+        },
+        { deleteTimeoutMs: 20, closeTimeoutMs: CLOSE_DEADLINE_MS },
+      );
+    } finally {
+      closeDeadline.restore();
+    }
   });
 
   test("records the closing session on a design link as the tab mapping is retired", async () => {

@@ -443,7 +443,7 @@ async function withService<T>(
       async (command: string) => {
         throw new Error(`Unexpected backend command: ${command}`);
       },
-      { provider: async () => provider, interactionMonitorMode: "disabled" },
+      { provider: async () => provider },
     );
     return await run(service);
   } finally {

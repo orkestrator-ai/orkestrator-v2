@@ -711,8 +711,8 @@ bounded-state occupancy in `/runtime-health`) are decided below.
   steer and interrupt support per provider.
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md):
   the interaction contract behind the dead-generation case.
-- [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md):
-  truncated history views.
+- [native-transcripts.md](../../architecture/native-transcripts.md#history-pages-and-cursors):
+  truncated history views (to-do 0050, retired 2026-11-15).
 - [credentials-and-models.md](../../development/credentials-and-models.md#default-model):
   how a Pi tab with no model picks its default, which the live run in
   Qualification item 1 needed (todo 0054, retired on 2026-10-29; Pi's case

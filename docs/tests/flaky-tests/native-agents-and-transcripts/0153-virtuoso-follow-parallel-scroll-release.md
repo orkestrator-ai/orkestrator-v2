@@ -226,3 +226,7 @@ command passed both follow cases (39 passed, one automatic-paging failure,
 two skips in 75.4 s; `orkestrator-test-run.IBipuK`). The case remains **open**
 for the distinct original scroll-release symptom; this result does not establish
 its cause or claim that every historical failure is resolved.
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. The recorded failures are a wrong follow state (`false` instead of `auto`, scroll distance stuck at 0), and the owner also fails alone and under `--repeat-each`; a longer assertion budget does not address a decision that never changes. The 2026-11-15 config change (`expect: { timeout: 30_000 }` in `e2e/playwright.config.ts`) is not a fix for this case.

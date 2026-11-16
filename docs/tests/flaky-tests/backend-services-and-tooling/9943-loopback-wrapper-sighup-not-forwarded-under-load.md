@@ -1,7 +1,7 @@
 # Loopback wrapper's SIGHUP child never prints "forwarded" under load (`tests/unit/loopback-network.test.ts`)
 
 - **ID:** 9943
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-13
 - **Base:** `17d28238c098b4443d1289df5c4ed75e7cc2802e`.
 - **Observed head:** branch `remove-dead-bridge-be98778b92d1-r1` at
@@ -37,3 +37,28 @@ Either the signal reaches the child while Bun's runtime rather than the
 handler owns SIGHUP, or the handler's `console.log` is lost when it re-raises
 the signal straight away. Treat it as a possible signal-forwarding race before
 raising any budget. No assertion, timeout or skip was changed.
+
+## Recurrence — 2026-11-15 (Environment Files review fix)
+
+- **Branch and base:** `environment-files-1d94a340e118-r1` at `df9bdce8b`,
+  base `f53768371`. The branch changes backend seed-file code,
+  `docker/workspace-setup.sh`, tests and docs; the loopback wrapper and its
+  test import none of them.
+- **Original command:** `mise run test:full` (default worker plan, 1,193.6 s
+  of test groups, other worktrees' suites holding host slots). Root and
+  agent-support: 5,467 pass, 1 skip, 1 fail (this case, 19.38 ms, output
+  `ready\n` without `forwarded`).
+- **Isolated rerun:** the runner's own alone rerun of
+  `tests/unit/loopback-network.test.ts` passed in 488 ms ("likely a load
+  flake").
+- **Evidence:** `orkestrator-test-run.vonYRa` under the host temporary
+  directory.
+- `mise run flaky:recurrence -- 9943 --base f53768371` answered open. No
+  assertion, timeout or skip changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** product race in `scripts/loopback-network.ts`. It spawned the command and only then installed its SIGINT/SIGTERM/SIGHUP forwarding handlers. The command can print `ready` before those handlers exist; a signal arriving in that window kills the wrapper with the default action and leaves the command running, never signalled (AGENTS.md invariant 16). The test also resolved on the wrapper's `exit`, which can precede the last stdout chunk.
+- **Fix:** the wrapper installs its handlers before `spawn` (`child?.kill`). The test waits for `close` (stdout drained) rather than `exit`, drops its 3 s readiness timer and 5 s budget, and the fixture writes `forwarded` with `writeSync` because it re-raises the signal at once.
+- **Reproduced:** yes. A copy of the unchanged wrapper with `Bun.sleepSync(400)` after `spawn` lost all 4 SIGHUPs (`ready` only, command orphaned); the fixed wrapper with the same injected delay forwarded 8/8 SIGHUP, 4/4 SIGINT and SIGTERM. The unfixed wrapper also hung the `close`-based test once in a loaded parallel run (orphaned child holding the pipe, killed by pid after identity check).
+- **Stress:** `mise run test:logged -- --name f4-signal-cont -- bun scripts/test-under-contention.ts --burners 6 -- bun test tests/unit/loopback-network.test.ts tests/unit/test-tiers.test.ts --parallel=1 --rerun-each=3` passed (136.2 s). Base `a8b89f154`.

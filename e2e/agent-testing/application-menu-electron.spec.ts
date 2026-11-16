@@ -47,6 +47,8 @@ test("Help offers Open Developer Tools only while a renderer has debug logging o
     const headless = headlessElectronRequested();
     const inherited = headless ? withoutDisplay(process.env) : process.env;
     app = await electron.launch({
+      // A watchdog on launch, not a startup budget: a loaded host can take longer than 30 s.
+      timeout: 60_000,
       executablePath: createRequire(import.meta.url)("electron") as string,
       args: [
         "--no-sandbox",
@@ -57,8 +59,9 @@ test("Help offers Open Developer Tools only while a renderer has debug logging o
       ],
       env: electronSpecEnvironment(inherited, { ELECTRON_RUN_AS_NODE: undefined }),
     });
-    const page = await app.firstWindow();
-    await expect(page).toHaveTitle("Orkestrator menu qualification");
+    const page = await app.firstWindow({ timeout: 60_000 });
+    // The title arrives with the fixture page load; the deadline only guards a hang.
+    await expect(page).toHaveTitle("Orkestrator menu qualification", { timeout: 60_000 });
     const launched = app;
     const helpLabels = () =>
       launched.evaluate(({ Menu }) =>
@@ -77,17 +80,30 @@ test("Help offers Open Developer Tools only while a renderer has debug logging o
 
     await report(true);
     expect(await helpLabels()).toContain("Open Developer Tools");
-    await launched.evaluate(({ Menu, BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows()[0]!;
-      Menu.getApplicationMenu()!
-        .items.find((item) => item.label === "Help" || item.role === "help")!
-        .submenu!.items.find((item) => item.label === "Open Developer Tools")!
-        .click({} as Electron.KeyboardEvent, window, window.webContents);
-    });
+    // The detached DevTools window reports itself through the webContents
+    // `devtools-opened` and `devtools-closed` events, so wait for those rather
+    // than for a poll deadline that a cold, loaded runner can miss (flake 9935).
+    // The listener is registered before the click, so it cannot be missed.
+    await launched.evaluate(
+      ({ Menu, BrowserWindow }) =>
+        new Promise<void>((resolve) => {
+          const window = BrowserWindow.getAllWindows()[0]!;
+          window.webContents.once("devtools-opened", () => resolve());
+          Menu.getApplicationMenu()!
+            .items.find((item) => item.label === "Help" || item.role === "help")!
+            .submenu!.items.find((item) => item.label === "Open Developer Tools")!
+            .click({} as Electron.KeyboardEvent, window, window.webContents);
+        }),
+    );
     await expect.poll(devToolsOpen).toBe(true);
-    await launched.evaluate(({ BrowserWindow }) => {
-      for (const window of BrowserWindow.getAllWindows()) window.webContents.closeDevTools();
-    });
+    await launched.evaluate(
+      ({ BrowserWindow }) =>
+        new Promise<void>((resolve) => {
+          const window = BrowserWindow.getAllWindows()[0]!;
+          window.webContents.once("devtools-closed", () => resolve());
+          window.webContents.closeDevTools();
+        }),
+    );
     await expect.poll(devToolsOpen).toBe(false);
 
     await report(false);
@@ -126,6 +142,8 @@ test("built application menu resolves native roles and dispatches callbacks", as
         ? { WAYLAND_DISPLAY: undefined, GDK_BACKEND: "x11", XDG_SESSION_TYPE: "x11" }
         : {};
     app = await electron.launch({
+      // A watchdog on launch, not a startup budget: a loaded host can take longer than 30 s.
+      timeout: 60_000,
       executablePath: createRequire(import.meta.url)("electron") as string,
       args: [
         "--no-sandbox",
@@ -136,8 +154,8 @@ test("built application menu resolves native roles and dispatches callbacks", as
       ],
       env: electronSpecEnvironment(process.env, { ELECTRON_RUN_AS_NODE: undefined, ...x11 }),
     });
-    const page = await app.firstWindow();
-    await expect(page).toHaveTitle("Orkestrator menu qualification");
+    const page = await app.firstWindow({ timeout: 60_000 });
+    await expect(page).toHaveTitle("Orkestrator menu qualification", { timeout: 60_000 });
     const snapshot = await app.evaluate(({ Menu }) => {
       const menu = Menu.getApplicationMenu()!;
       return menu.items.map((item) => ({

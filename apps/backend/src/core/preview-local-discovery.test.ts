@@ -19,6 +19,12 @@ import { createPreviewHarness, type PreviewHarness } from "./preview-test-suppor
  * docs/architecture/browser-previews.md, "Local environments") (two environments on one
  * dev port, a restart on a reused port, an auto-incremented port).
  */
+// Every poll in this file waits for a state the registry or the host will reach
+// (a listener becoming available, a process inventory catching up, a port
+// closing); none asserts that it stays false. The bound is a hang watchdog
+// below the test budget (`tests/default-test-timeout.ts`), not a speed limit.
+const POLL_HANG_WATCHDOG_MS = 30_000;
+
 describe("local preview service discovery", () => {
   let harness: PreviewHarness;
   /** Who listens on each backend port: an environment id, a stranger, or nobody. */
@@ -265,7 +271,7 @@ describe("local preview service discovery", () => {
     await runtime.registry.refresh(serviceId);
     expect(runtime.registry.serviceSnapshot(serviceId)!.endpoint.state).toBe("unavailable");
     listeners.set(3000, { owner: "a", started: "t1" });
-    const deadline = Date.now() + 2_000;
+    const deadline = Date.now() + POLL_HANG_WATCHDOG_MS;
     while (
       runtime.registry.serviceSnapshot(serviceId)!.endpoint.state !== "available" &&
       Date.now() < deadline
@@ -287,7 +293,7 @@ describe("local preview service discovery", () => {
     const { serviceId } = seeded(runtime.registry, "a").definition;
     expect(runtime.registry.serviceSnapshot(serviceId)!.endpoint.listener).toBe("none");
     listeners.set(3000, { owner: "a", started: "t1" });
-    const deadline = Date.now() + 2_000;
+    const deadline = Date.now() + POLL_HANG_WATCHDOG_MS;
     while (
       runtime.registry.serviceSnapshot(serviceId)!.endpoint.state !== "available" &&
       Date.now() < deadline
@@ -332,7 +338,7 @@ describe("local preview service discovery", () => {
         failure: { retryable: true },
       });
       failing = false;
-      const deadline = Date.now() + 2000;
+      const deadline = Date.now() + POLL_HANG_WATCHDOG_MS;
       while (
         runtime.registry.serviceSnapshot(serviceId)!.endpoint.state !== "available" &&
         Date.now() < deadline
@@ -380,7 +386,7 @@ describe("local preview service discovery", () => {
       await runtime.init();
       await runtime.registry.settle();
       const service = seeded(runtime.registry, "a");
-      const exhausted = Date.now() + 2000;
+      const exhausted = Date.now() + POLL_HANG_WATCHDOG_MS;
       while (probes < 2 && Date.now() < exhausted) await Bun.sleep(5);
       expect(probes).toBe(2);
       failed = true;
@@ -393,7 +399,7 @@ describe("local preview service discovery", () => {
       ).rejects.toThrow();
       failed = false;
       listeners.set(3000, { owner: "a", started: "t2" });
-      const deadline = Date.now() + 2000;
+      const deadline = Date.now() + POLL_HANG_WATCHDOG_MS;
       while (
         runtime.registry.serviceSnapshot(service.definition.serviceId)!.endpoint.state !==
           "available" &&
@@ -529,12 +535,16 @@ describe.skipIf(!realHost)("local preview service discovery on this host", () =>
     // Report the bound address after a beat: Bun calls the listen callback of a
     // bind that then fails with EADDRINUSE.
     const script = `const net=require("node:net");
-let port=${port};
+let port=${port};let attempts=0;
 const listen=()=>{
   const s=net.createServer();
   s.once("error",error=>{
-    if(error.code!=="EADDRINUSE"||port===0||port>=65535)throw error;
-    port++;listen();
+    // A taken port moves to the next one. An ephemeral request (port 0) can
+    // also collide when another test's listener grabs the kernel's pick first;
+    // it asks again rather than exiting before it reports a port.
+    if(error.code!=="EADDRINUSE"||port>=65535||++attempts>100)throw error;
+    if(port!==0)port++;
+    listen();
   });
   s.listen({port,host:"${host}",ipv6Only:false},()=>setTimeout(()=>{
     const address=s.address();
@@ -570,7 +580,8 @@ const listen=()=>{
         socket.once("connect", () => finish(true));
         socket.once("error", () => finish(false));
       });
-    const deadline = Date.now() + 2_000;
+    // A hang watchdog on a SIGKILLed listener closing, not a speed bound.
+    const deadline = Date.now() + POLL_HANG_WATCHDOG_MS;
     while (await isListening()) {
       if (Date.now() >= deadline) throw new Error("Stopped fixture listener did not close");
       await Bun.sleep(20);
@@ -601,7 +612,7 @@ const listen=()=>{
       listener: "other-environment",
       hostPort: null,
     });
-  }, 20_000);
+  });
 
   test("two environments, a restart on the reused port, and an auto-incremented port", async () => {
     // Keep the listener open while the environments are prepared: reserving a
@@ -658,7 +669,7 @@ const listen=()=>{
     // new terminal. Keep refreshing until attribution catches up, rather than
     // accepting the transient user-registered fallback as the final result.
     let movedService = await registry.refresh(b.serviceId);
-    const attributionDeadline = Date.now() + 5000;
+    const attributionDeadline = Date.now() + POLL_HANG_WATCHDOG_MS;
     while (
       movedService.endpoint.ownership !== "managed-process" &&
       Date.now() < attributionDeadline
@@ -689,7 +700,7 @@ const listen=()=>{
     await expect(
       registry.acquireTarget(a.serviceId, opened.endpoint.endpointGeneration),
     ).rejects.toThrow(/generation-changed/);
-  }, 30_000);
+  });
 
   test("a dev server typed into a real local terminal PTY is that environment's", async () => {
     const port = await freePort();
@@ -723,7 +734,7 @@ const listen=()=>{
       pty.write(
         `"${process.execPath}" -e 'require("node:net").createServer().listen(${port},"127.0.0.1",()=>console.log("lis"+"tening"))'\n`,
       );
-      const deadline = Date.now() + 10_000;
+      const deadline = Date.now() + POLL_HANG_WATCHDOG_MS;
       while (!output.includes("listening") && Date.now() < deadline) await Bun.sleep(25);
       expect(output).toContain("listening");
 
@@ -739,5 +750,5 @@ const listen=()=>{
     } finally {
       if (pty) await pty.terminate();
     }
-  }, 30_000);
+  });
 });

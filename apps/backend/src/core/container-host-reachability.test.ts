@@ -164,7 +164,11 @@ ${name === "mkdir" ? 'exec /bin/mkdir "$@"' : "exit 0"}
           FAIL_ARGUMENT: options.failArgument ?? "",
         },
         encoding: "utf8",
-        timeout: 5_000,
+        // Only a hang watchdog on the script's own exit. The fixture binaries
+        // exit at once, so a finite bound still catches a remediation that
+        // waits forever, and it sits far above what a starved host spends
+        // forking a dozen shells (flake 6601: SIGTERM at 5 s under load).
+        timeout: 30_000,
       });
       if (result.error) throw result.error;
       expect(result.signal).toBeNull();

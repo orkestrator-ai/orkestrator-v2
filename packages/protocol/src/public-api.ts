@@ -921,7 +921,8 @@ export const PUBLIC_ACTIONS = {
     effects: [],
     observation: "immediate",
     milestone: "D",
-    summary: "List scheduled jobs with their next fire time, owner and last outcome.",
+    summary:
+      "List scheduled jobs with their next fire time, owner and last outcome, and whether this backend fires them.",
   },
   "schedule.get": {
     version: 1,

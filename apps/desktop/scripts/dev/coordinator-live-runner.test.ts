@@ -89,9 +89,13 @@ if (task === "dev:test") {
   return { root, env, events };
 }
 
+/**
+ * Waits for a marker file the fake launcher or runner writes when it reaches
+ * that step. No deadline of its own: a slow host only delays the marker, and
+ * one that never appears is a hang that the test's budget reports.
+ */
 async function waitForFile(file: string) {
-  const deadline = Date.now() + 8000;
-  while (Date.now() < deadline) {
+  for (;;) {
     if (
       await access(file).then(
         () => true,
@@ -101,7 +105,6 @@ async function waitForFile(file: string) {
       return;
     await Bun.sleep(25);
   }
-  throw new Error(`Timed out waiting for ${path.basename(file)}`);
 }
 
 function alive(pid: number) {
@@ -115,7 +118,9 @@ function alive(pid: number) {
 
 const quiet = {
   log: () => undefined,
-  startupTimeoutMs: 5_000,
+  // A hang watchdog on the fake launcher's readiness line, not an assertion: the
+  // fixture spawns real Bun children, which a loaded host can start slowly.
+  startupTimeoutMs: 30_000,
   scenarios: ["read-only"] as const,
 };
 
@@ -287,7 +292,6 @@ test.each(["SIGTERM", "SIGKILL"] as const)(
       await child.exited;
     }
   },
-  15000,
 );
 
 test("runner budgets cover selected Playwright timeouts, underlying waits and cleanup margin", () => {

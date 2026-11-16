@@ -34,3 +34,9 @@
   same test name with a different cause (a fixed temporary data directory
   holding a newer schema, which fails the owner unchanged). This case is the
   load-dependent one: the owner passes alone every time.
+
+## Triage 2026-11-15
+
+- **Disposition:** open.
+- **Evidence:** the failure is a fast rejection (~300 ms), not a budget timeout, so the 60 s default in `tests/default-test-timeout.ts` does not address it. `get_orkestrator_containers` reads `docker ps` through the file's fake `docker` on `PATH` (20 s command deadline) and rejects only if that command fails; the rejection message was never recorded. The owner has changed in 10 commits since the last observation (2026-10-21), including `f5e5c9a12` (per-runtime module state) and `cd5770409` (temp-dir leaks), and no recurrence has been recorded since; that is not evidence of a fix.
+- **Next step:** on recurrence, record the rejection message and whether the fake `docker` was the binary that ran.

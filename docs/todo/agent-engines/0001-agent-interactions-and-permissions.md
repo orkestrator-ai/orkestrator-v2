@@ -19,7 +19,7 @@ repeated as tasks; their live checks are. The open questions and the
 
 ### Tasks
 
-1. **Grok project resources off**: Grok loads a trusted checkout's resources whatever the policy says (item 12); re-probe on every Grok bump and honour the switch once xAI adds one. Status: blocked (on xAI: no "never trust" switch in Grok 1.0.67). The upstream request is drafted in [`docs/upstream-issues/grok-never-trust-switch.md`](../../upstream-issues/grok-never-trust-switch.md) (2026-11-14: upstream reports are not to-dos); the user files it.
+1. **Grok project resources off**: Grok loads a trusted checkout's resources whatever the policy says (item 12); re-probe on every Grok bump and honour the switch once xAI adds one. Status: blocked (on xAI: no "never trust" switch in Grok 1.0.77, re-checked 2026-11-15; 1.0.87 checked statically). The upstream request is ready to file in [`docs/upstream-issues/grok-never-trust-switch.md`](../../upstream-issues/grok-never-trust-switch.md) (2026-11-14: upstream reports are not to-dos; marked ready 2026-11-15); the user files it through `/feedback`.
 2. **Codex project-resources residual risks**: the three risks left open under item 6. Status: done (the hook canary is added, the slash-catalogue risk was already closed, and a skill written during a running turn is kept as residual risk).
 3. **Live Grok pause and approval kinds**: make the `grok-approval` case of the paused-interactions spec assert `command-approval` rather than the generic approval set, so the live run proves item 2's mapping. Status: done (2026-11-13; see "Task 3: assert the kind after finding the card"). The live Grok runs themselves (they need a valid Grok login) moved to 7568 on 2026-11-10.
 7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: done with provider fakes (`e2e/InteractionPolicyChecks.spec.ts`); a coordinator turn on a real model went to 0024 and then 6940 (both retired 2026-11-13): the live suite's `ask` scenario, whose billed runs are on the manual-test checklist.
@@ -32,7 +32,7 @@ repeated as tasks; their live checks are. The open questions and the
 
 **Context.** Codex was closed the same way in item 6. Decision 14 rejected a throwaway `GROK_HOME`. `acpReportedPolicy` reports the axis honestly as on, with a note.
 
-**Investigation.** Unchanged. Grok is pinned at `1.0.67` (`packages/toolchain/src/manifest.ts:9`). The bridge only opens the gate: `PROJECT_TRUST.grok.env = { GROK_FOLDER_TRUST: "0" }` when the policy enables project resources (`bridges/acp-bridge/src/acp-provider-config.ts:115-143`); `acp-policy.ts:73-75` reports `projectResources: true` otherwise.
+**Investigation.** Unchanged. Grok was pinned at `1.0.67` (`packages/toolchain/src/manifest.ts:9`) when this was written; on 2026-11-15 the upstream report's reproduction ran on 1.0.77, the current pin, with the same result (the worktree stays trusted and no override closes the gate). The bridge only opens the gate: `PROJECT_TRUST.grok.env = { GROK_FOLDER_TRUST: "0" }` when the policy enables project resources (`bridges/acp-bridge/src/acp-provider-config.ts:115-143`); `acp-policy.ts:73-75` reports `projectResources: true` otherwise.
 
 **Decisions.**
 
@@ -43,7 +43,7 @@ repeated as tasks; their live checks are. The open questions and the
   - **Qualify a throwaway `GROK_HOME` with `GROK_AUTH_PATH` pointing at the real login, resume included, and ship it for policy-off sessions.**
     - Pros: closes the leak now.
     - Cons: loses user-level config and skills; resume depends on a session store in the throwaway home; the very qualification decision 14 found too costly.
-- **Ask xAI?** Filing is an outward action; the report is drafted in [`docs/upstream-issues/grok-never-trust-switch.md`](../../upstream-issues/grok-never-trust-switch.md) (Status `draft` until its "Before filing" checks pass), and filing it once it is marked ready is the manual-test checklist's "File the upstream reports" item.
+- **Ask xAI?** Filing is an outward action; the report is drafted in [`docs/upstream-issues/grok-never-trust-switch.md`](../../upstream-issues/grok-never-trust-switch.md) (Status `ready to file` since 2026-11-15, after its "Before filing" checks reproduced the gap on Grok 1.0.77), and filing it is the manual-test checklist's "File the upstream reports" item.
   - **File an upstream request for a per-process "never trust" switch (recommended).**
     - Pros: the only clean fix; small for xAI.
     - Cons: no control over timing.

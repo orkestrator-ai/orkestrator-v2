@@ -427,6 +427,9 @@ export class GraphProjectTemplates {
       if (error instanceof GraphTemplateError) this.forget(projectId);
       return;
     }
+    // A reader closed while this rescan was in flight must not announce it:
+    // its owner has already torn the watch down.
+    if (this.closed) return;
     const current = this.watches.get(projectId) ?? watch;
     const signature = scanSignature(scan);
     if (current.signature === signature) return;

@@ -728,10 +728,14 @@ describe("remote gateway", () => {
       import { connect } from "node:net";
       import { OrkestratorGateway } from ${JSON.stringify(gatewayModule)};
 
+      // A hang watchdog: the scenario waits on real signals (eight parked
+      // requests, the upstream's close, the recovery response) and boots a
+      // gateway beside whatever else the host is running, so it must not be
+      // a few seconds. It stays below the test's own budget.
       const failTimer = setTimeout(() => {
         console.log("TIMED_OUT");
         process.exit(1);
-      }, 8000);
+      }, 45000);
       const recoveryBody = "disconnect recovery ".repeat(256);
       let parked = 0;
       let closed = 0;

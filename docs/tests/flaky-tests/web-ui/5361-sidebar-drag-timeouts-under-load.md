@@ -1,7 +1,7 @@
 # Sidebar drag spec timed out across both viewports under host load
 
 - **ID:** 5361
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-05
 - **Tests:** 13 cases of `e2e/SidebarDrag.spec.ts` across `mobile-chromium` and `desktop-chromium`, including `local project header drop reorders expanded projects and survives reload`, `machine name keyboard reorder persists and restores focus` and `keyboard machine reorder from Self visits adjacent unequal-height sections`
 - **File:** `e2e/SidebarDrag.spec.ts`
@@ -64,3 +64,26 @@ The owning spec and its implementation were unchanged. No assertion, deadline,
 retry or skip was changed. This establishes intermittency, not its cause.
 The full run and remaining undetermined failures are recorded in
 [9924](../aggregate-validation-runs/9924-auto-pipeline-fix-browser-owners.md).
+
+## Triage note (2026-11-15)
+
+Class A candidate (Playwright's default 5 s assertion / 30 s test deadline expiring on a loaded host). Not changed. The fix would be hang-watchdog defaults in `e2e/playwright.config.ts` (`expect.timeout` and `timeout`), but that config is shared with every group's component browser specs, so it is left for a separate decision rather than changed in a per-group sweep. Not reproduced; the browser suite was not run. Stays `open`.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** every recorded failure is a Playwright default deadline
+  expiring on a loaded host while the spec waited on a real signal: `Test timeout of 30000ms exceeded`, mostly at `page.reload`, or a fixture row or repository group not found at the default assertion deadline; no wrong order or position was reported (the 2026-11-10 table records test names only, from a run killed at its 1,800 s deadline).
+  No wrong value, crash or lost input is recorded. `e2e/SidebarDrag.spec.ts` passes no smaller
+  timeout of its own at the failing calls.
+- **Fix:** `e2e/playwright.config.ts`, which runs this component spec, now sets
+  `timeout: 120_000` (was Playwright's 30 s default) and
+  `expect: { timeout: 30_000 }` (was 5 s). Navigations have no timeout of
+  their own, so they are bounded by the 120 s test budget. Both budgets are
+  hang watchdogs on real signals, not speed checks.
+- **Reproduced:** no — the recorded failure was not reproduced. The evidence
+  is a rerun, under the new config, of the component specs that had failed in
+  a loaded run (112 passed); that is not a targeted reproduction of this case,
+  and a raised budget is weaker evidence than a reproduced fix.
+- **Reopen:** a recurrence that hangs near the new budgets (120 s test, 30 s
+  assertion) means the signal never arrived rather than arrived late; reopen
+  this case.

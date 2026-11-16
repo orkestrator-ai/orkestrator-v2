@@ -182,3 +182,7 @@ The final-source retry, `mise run test:logged -- --name final-complete-tests -- 
 - **Complete unchanged Pi owner:** `mise run test:logged -- --name pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed (exit 0, 23.4 seconds logged).
 - **Evidence:** host temporary artifact `orkestrator-test-run.9oxrhT/root-and-agent-support-tests.log` (compressed when the aggregate finishes); outer run `orkestrator-test-run.cHUVnH`.
 - **Assessment:** confirmed intermittent recurrence. No Pi source, test assertion, deadline or skip changed.
+
+## Deadline change, still open (2026-11-15)
+
+Same test and same change as [0178](0178-pi-vendor-runtime-aggregate-timeout.md): the 30 s test timeout and the 15 s child `execFile` timeout in `tests/unit/pi-bridge-vendor.test.ts` are now 180 s and 150 s hang watchdogs. The contention rerun still timed out at 180 s on an extremely loaded host, so the case stays open; see 0178 for the evidence and what is not verified.

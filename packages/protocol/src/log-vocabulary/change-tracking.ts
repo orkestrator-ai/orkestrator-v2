@@ -34,6 +34,8 @@ export const CHANGE_TRACKING_LOG_AREAS = defineLogAreas({
       "baseline.update-failed": "An environment's diff baseline could not be updated.",
       "scan.watcher-failed":
         "An environment's diff watcher failed; its scans fall back to polling.",
+      "scan.watcher-missed-change":
+        "A safety scan found a change an environment's local diff watcher never reported (macOS: often an fseventsd that has stopped delivering), so its scans poll until the watcher delivers events again.",
       "scan.failed":
         "A diff scan failed; the last results stay, marked stale, and the scan is retried.",
       "scan.target-missing":

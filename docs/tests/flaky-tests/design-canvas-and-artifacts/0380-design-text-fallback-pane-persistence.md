@@ -165,3 +165,7 @@ each run below is
   missing-pane-layout observations are not explained by the tree, so the case
   stays open.
 
+
+## Triage note (2026-11-15)
+
+Changed, unverified. The pane-layout check after opening each text-fallback file now uses a 30 s `expect.poll` timeout instead of the 5 s default. The poll waits for the real signal, the saved layout containing the file, and the renderer writes the layout with no debounce, so the bound is only a hang watchdog over that backend round trip. That matches this case's original missing-pane-layout symptom. The guided-brief miss recorded on 2026-11-14 is not addressed. The live design suite was not run. Stays `open`.

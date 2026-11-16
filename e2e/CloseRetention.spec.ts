@@ -29,7 +29,6 @@ test.beforeAll(async ({ browserName }, testInfo) => {
     browserName !== "chromium" || testInfo.project.name !== "desktop-chromium",
     "The flow is layout-independent; one viewport covers it",
   );
-  test.setTimeout(90_000);
   host = spawn("bun", [path.join(import.meta.dirname, "fixtures/close-retention-host.ts")], {
     stdio: ["ignore", "pipe", "pipe"],
   });

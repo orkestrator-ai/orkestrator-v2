@@ -1,7 +1,7 @@
 # Cursor runtime-health read times out only in the aggregate
 
 - **ID:** 0185
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-08
 - **Test:** `liveness routes > runtime health reports the attached agent's MCP configuration without attaching`
 - **File:** `bridges/cursor-bridge/src/http.test.ts`
@@ -59,3 +59,10 @@ Failing once alone on a loaded host keeps this load-sensitive; the stalled opera
 - **Disposition:** recorded evidence only; no assertion, timeout or skip changed.
   Whether SDK 1.2.0 makes the hook slower is not established: the case passed
   in one of the two aggregates on 1.2.0.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** the recorded failures are all the default test/hook budget (five seconds, reported as 5000 ms or 10002 ms with teardown) running out on a starved host while the body (a temporary directory, three loopback requests, one fake agent attach) takes about a tenth of a second alone. `http.test.ts` sets no smaller budget: its `beforeEach` and `afterEach` have no timeout argument and the case has no deadline of its own.
+- **Fix:** `tests/default-test-timeout.ts` (imported by `tests/setup-node.ts`, which the package's `test:bridge` preloads) now makes the default budget 60 s. In the same file, the three prompt-dispatch cases that raced the route against a 200 ms `setTimeout` ("prompt 502 was held by detach cleanup" and its siblings) now use `notHeldBy`, a 30 s hang watchdog that is cleared when the response settles; a correct route answers without any timer, and a route stuck on the held cleanup still fails. `bridges/cursor-bridge/src/testing/router-harness.ts` `waitFor` (used by every Cursor router test) now defaults to a 30 s watchdog instead of 2 s.
+- **Reproduced:** no. I could not make the runtime-health case fail on demand; the 200 ms races were found by reading the file and are the same class of load-sensitive deadline, not the recorded failure.
+- **Stress:** `bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/http.test.ts ./src/steer-journal.test.ts` passed together with `conformance-interactions.test.ts` (`mise run test:logged -- --name cursor-owners ... --parallel=2`, 7.6 s, exit 0). No contention run of `http.test.ts` was made.

@@ -1,7 +1,7 @@
 # Tab teardown hanging-delete case exceeds its 250 ms elapsed bound under load
 
 - **ID:** 0460
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Test:** `durable tab teardown commands > times out a hanging provider delete without blocking other intents`
 - **File:** `apps/backend/src/core/commands-state-sync.test.ts:3184`
@@ -54,3 +54,10 @@ text, durations, commands, suite counts and retained evidence are recorded in
 [0887](../aggregate-validation-runs/0887-live-provider-review-validation.md).
 No implementation, assertion, deadline or skip changed; the original aggregate
 remains failed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** a wall-clock assertion, `expect(performance.now() - startedAt).toBeLessThan(250)`, around a reconcile whose hanging request never settles. Host load alone moved the elapsed time past 250 ms (264–875 ms observed) while the result was correct.
+- **Fix:** `apps/backend/src/core/commands-state-sync.test.ts` drops the elapsed bound. The hanging fetch ignores its AbortSignal and never resolves, so `reconcile_tab_teardowns` resolving `{ completed: 1 }` at all proves the command's own 20 ms deadline fired and did not block the other intent; the storage assertions that the fast intent completed and the hanging one is retained are unchanged.
+- **Reproduced:** no — the failure is the bound itself; there is no load-independent way to make 250 ms fail on demand other than starving the host, which this host already was.
+- **Stress:** `mise run test:logged -- --name f2-teardown -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-state-sync.test.ts -t "times out a hanging provider delete" --rerun-each=5 --parallel=1` passed. A contention run of the whole describe block did not finish within 290 s on the loaded host and was stopped.

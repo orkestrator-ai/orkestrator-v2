@@ -34,11 +34,10 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "../src/core/shell";
-import { GITHUB_RANGES_FILE } from "../src/core/github-ranges-cache";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import type { Environment } from "../src/core/models";
-import { lifecycleEnvironment } from "./container-lifecycle-fixtures";
+import { lifecycleEnvironment, writeGithubRangesSeedFixture } from "./container-lifecycle-fixtures";
 import { hostServiceContext } from "./container-live-host-service-context";
 import { startRuntime } from "./container-live-start";
 import { removeLabelledResources } from "./container-live-cleanup";
@@ -78,7 +77,9 @@ beforeAll(async () => {
   if (!ROOTFUL) return;
   dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-rootful-host-reach-"));
   owner = dockerOwnerNamespace(dataDir);
-  if (GITHUB_SEED) await fs.copyFile(GITHUB_SEED, path.join(dataDir, GITHUB_RANGES_FILE));
+  if (GITHUB_SEED) {
+    await writeGithubRangesSeedFixture(dataDir, await fs.readFile(GITHUB_SEED, "utf8"));
+  }
 });
 
 afterAll(async () => {

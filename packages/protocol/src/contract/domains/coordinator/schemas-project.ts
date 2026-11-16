@@ -319,9 +319,13 @@ export const RootChangesListingSchema = openRecord({
   headCommit: NullableString,
 });
 
-/** `ApplyRootChangesOutcome`: the files applied to the worker. */
+/**
+ * `ApplyRootChangesOutcome`: the files applied to the worker; `outcomeUnknown`
+ * when another node's answer was lost and nothing was resent.
+ */
 export const ApplyRootChangesOutcomeSchema = openRecord({
   files: Schema.Array(Schema.String),
+  outcomeUnknown: optionalBoolean,
 });
 
 /** `stopWorkerTurn`'s answer, plus `delegationOpen` from the coordinator's command. */

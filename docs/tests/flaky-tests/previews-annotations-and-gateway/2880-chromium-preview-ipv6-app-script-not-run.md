@@ -29,3 +29,7 @@ The observation establishes an intermittent failure on another engine; it
 does not establish that the Chromium and WebKit failures share a cause.
 
 Failure log: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.I1BXa5/merge-preview-browser.log.gz`.
+
+## Triage note (2026-11-15)
+
+Not changed. Recorded failure: a `/assets/app.js` run within 5 s. The specs run through `e2e/preview/playwright.preview.config.ts` or `e2e/agent-testing/playwright.browser.config.ts`, which this pass did not change (shared configs; a global assertion budget could loosen latency rules like the banner delay). Not run. Stays `open`.

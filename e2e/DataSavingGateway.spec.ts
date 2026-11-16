@@ -19,7 +19,9 @@ test("data saving survives reload, stays client-local and preserves event latenc
   browser,
   baseURL,
 }, testInfo) => {
-  test.setTimeout(60_000);
+  // A hang watchdog: the body waits on real signals (reloads, SSE events,
+  // visibility changes) and its fixed cadence windows total under 10 s.
+  test.setTimeout(120_000);
   const child = spawn(
     "bun",
     [path.join(import.meta.dirname, "fixture/data-saving-gateway-server.ts"), baseURL!],
@@ -44,7 +46,7 @@ test("data saving survives reload, stays client-local and preserves event latenc
       let text = "";
       const timer = setTimeout(
         () => reject(new Error("Disposable gateway startup timed out")),
-        10_000,
+        30_000,
       );
       child.once("error", reject);
       child.once("exit", () => {

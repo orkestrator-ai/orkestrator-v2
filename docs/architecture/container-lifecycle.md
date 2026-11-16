@@ -1134,36 +1134,101 @@ the earlier ones in to-do 1202, task 15 (retired 2026-11-10).
 
 ### Project seed files
 
-The project folder's own `.env`, `.env.local` and `opencode.json` are copied
-into every new container (`container-project-seed-files.ts`), where
-`workspace-setup.sh` moves them into `/workspace`. They are repository
-content, so a branch can commit any of them as a link to a host path, and
-Docker resolves a bind source on the host (as root on a rootful daemon). They
-are therefore never bind-mounted (security report H3):
+The files the **Environment Files** setting (`envFilePatterns`, by default
+`.env` and `.env.local`) matches in the project folder, and the project's
+`opencode.json`, are copied into every new container
+(`container-project-seed-files.ts`, matching in
+`project-env-file-patterns.ts`), where `workspace-setup.sh` moves them into
+`/workspace`. They are repository content, so a branch can commit any of
+them as a link to a host path, and Docker resolves a bind source on the host
+(as root on a rootful daemon). They are therefore never bind-mounted
+(security report H3):
 
 - Before `docker create` the backend `lstat`s each one and reads it only when
   it is a regular file, not a link (even one to a file inside the project),
   whose `realpath` stays inside the project folder and which is at most 1 MiB.
   It is opened `O_NOFOLLOW | O_NONBLOCK` and must be the inode it listed.
 - The bytes it read are what `docker cp` writes into the created, stopped
-  container at `/project-env/<name>` and `/opencode-project-json`, owned by
-  `node` (uid/gid 1000), `0600`, with a `0700` parent directory. An archive
-  with explicit ownership is sent through `docker cp -a`, so delivery works
-  even on images without the staged-input relay. Nothing re-reads the checkout.
+  container: `.env` and `.env.local` at `/project-env/<name>`, every other
+  match at `/project-files/<path>` (which the setup copies to
+  `/workspace/<path>`, as it does configured files), and `opencode.json` at
+  `/opencode-project-json`. Everything is owned by `node` (uid/gid 1000),
+  files `0600` and directories `0700`. An archive with explicit ownership is
+  sent through `docker cp -a`, so delivery works even on images without the
+  staged-input relay. Nothing re-reads the checkout.
+- `workspace-setup.sh` writes each of them into `/workspace` with
+  `copy_project_file_into_workspace`. `/workspace` is the cloned branch, so
+  it can commit a link where a folder or the file should be
+  (`config -> /home/node/.codex`). Every existing folder on the path must be
+  a real directory and the file absent or a regular file; anything else is
+  skipped with a `Skipped <path>` line, never written through. Staged paths
+  are read NUL-delimited, so a name with leading or trailing spaces is copied
+  exactly.
 - A refused file is skipped, never a failed environment. The refusal
   (`symlink`, `not-a-file`, `outside-project`, `too-large`,
-  `changed-while-reading` or `unreadable`) is logged as
-  `docker project-seed.refused`, recorded on the container as the
-  `orkestrator-project-seed-refused` label (`name=reason` pairs), and printed
-  as one `[orkestrator] Skipped …` line per file at the top of the setup
-  terminal, before the setup's own "Setting up environment files" step. A
-  rebuild re-reads and re-checks the files; a container that predates the
-  label shows nothing.
-- These three seed names are excluded from generic configured-file staging.
-  A command-node fallback for a configured seed is read with the same rules,
-  only when the project file is absent; a refusal never permits fallback.
-  Other configured files still use `stageConfiguredProjectFilesForContainer`
-  (realpath-confined, `docker cp` into `/project-files`).
+  `changed-while-reading`, `unreadable`, `unsafe-name`, `invalid-pattern`,
+  `too-many-patterns`, or a bound: `too-many-matches`, `matches-too-large`,
+  `scan-limit`) is logged as `docker project-seed.refused`, recorded on the
+  container as the `orkestrator-project-seed-refused` label
+  (URI-encoded `name=reason` pairs, at most 24), and printed as one
+  `[orkestrator] …` line per refusal at the top of the setup terminal,
+  before the setup's own "Setting up environment files" step. A rebuild
+  re-reads and re-checks the files; a container that predates the label
+  shows nothing.
+- `.env`, `.env.local`, `opencode.json` and every match are excluded from
+  generic configured-file staging (for a local worktree, `opencode.json` is
+  not: see below). A configured file the repository's own
+  files-to-copy list names is left to that staging; `.env` or `.env.local` in
+  that list (or a command node's staged manifest) is read here as a literal
+  pattern even when the setting omits it, as it always was. A command-node
+  fallback is read with the same rules, only for a literal pattern whose
+  project file is absent; a refusal never permits fallback, and a wildcard
+  never reads the fallback. Other configured files still use
+  `stageConfiguredProjectFilesForContainer` (realpath-confined, `docker cp`
+  into `/project-files`).
+- A new local worktree gets the same matches through the same reader
+  (`createLocalWorktree`). Its `opencode.json` is the checkout's, unless
+  files-to-copy or a command node's staged manifest names one: that copy then
+  goes through the generic configured-file copy, as before the setting was
+  honoured. A path the
+  branch already has in the worktree, a link included, is left alone, as
+  `.env` always was; one behind a linked or non-directory parent is refused
+  as `linked-destination`. New files are created `0600` with `O_EXCL`, so a
+  final link is never followed. The refusals are logged as
+  `environment project-seed.refused` and held in memory until the
+  environment's setup terminal prints them once (a backend restart in
+  between loses only that notice). An environment with no setup commands
+  has no setup terminal, so its refusals are printed in a setup session
+  opened only for them (`showWorktreeSeedRefusalsWithoutSetup`).
+
+#### Environment file patterns: security review
+
+Reviewed and decided on 2026-11-15 under to-do 8106 (retired; the user's
+decision of 2026-11-14 on 7571 task 4, `git log -1 --diff-filter=D --
+docs/todo/containers-and-environments/8106-env-file-patterns-copy.md`).
+The threat is the one above: the project folder is repository content, so a
+user's broad pattern must not let a branch make the backend read or copy a
+file outside the project, follow a link, or fill a container.
+
+| Question | Decision |
+| --- | --- |
+| Pattern syntax | A relative path of `/`-separated segments. `*` matches any run of characters within one segment and `?` one character; everything else is literal. Refused (reported as `invalid-pattern`, nothing read): `**`, an absolute path (`/`, `~`, a drive letter), an empty, `.` or `..` segment, a backslash, a control character, any `.git` segment, more than 8 segments or 256 characters. At most 32 patterns; the 33rd is reported once (`too-many-patterns`). |
+| Which names a wildcard matches | Not a name starting with `.` unless the segment does (as in a shell), so `*` never picks up `.ssh` or `.npmrc`; never `.git`, so Git's credentials and hooks cannot be named at all. |
+| Where matches come from | The project checkout only (`project.localPath`, through its real path), never the worktree a branch produced. A command node's staged copy fills only an absent literal. |
+| Directories, links, devices, escapes | Matching never descends through a linked directory: the link is reported as `symlink` and its contents are not listed. Every matched path then passes the per-file reader above: a link, a directory, a FIFO or device, a real path outside the project, more than 1 MiB, or a file swapped while it was read is refused and reported. A matched name with a control character or backslash is refused as `unsafe-name` (it would be printed in the setup terminal and copied by a line-based loop). Names in the label are URI-encoded and parsed back only when printable. |
+| Bounds | A wildcard folder followed by a literal name (`apps/*/.env`) lists only the folders where that name exists, so folders without the file do not count. At most 32 matched files and 4 MiB in total (each file also at most 1 MiB), and at most 5,000 directory entries examined across wildcard listings. Over any bound, none of the matches is copied and one aggregate refusal says which bound (`opencode.json` is not a match and is unaffected). Copying up to the bound was rejected: which files arrive would depend on listing order, silently. |
+| Files staged by other paths | Matches land only below `/project-env/` (for `.env`, `.env.local`) and `/project-files/`, and from there only under `/workspace`, so a pattern cannot reach a staged credential (`/claude-config`, `/codex-home`, …) or `/opencode-project-json`. The setup's copy into `/workspace` refuses a committed link (or non-directory) on the destination path, so a branch cannot redirect a match to `/home/node/.codex` or any other path outside the workspace. A match that names a committed file overwrites the container's copy with the project folder's, as configured files do; in a local worktree the committed file is kept. |
+| Restricted and full network modes | No difference: the copy happens before the container starts and does not use the network. A copied secret can leave through any allowed host in either mode, exactly as `.env` could. |
+| Stored settings that differ from the default | Honoured as written; refused matches show in the setup terminal. An empty setting copies no `.env` (unless files-to-copy names it). |
+| Rootless `docker cp` refusals | Every match travels in the one seed archive, so the refusals of [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md) apply to it exactly as to `.env`: no extra copy call. |
+
+Residual risk: between the reader's `lstat`, `realpath` and `open`, a
+process that can already write the user's checkout could swap a parent
+directory for a link and back; the final inode comparison catches a single
+swap but not a timed double swap. Such a process already controls the
+checkout, so this is accepted. The live check on a real daemon is in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(8106 (retired)).
 
 ## Environment networks (`network-policy=2`)
 
@@ -1187,24 +1252,50 @@ three policy inputs the root bootstrap captures once, root-owned:
 | `/etc/orkestrator/host-service-ports` | Host TCP ports the workload may call (the agent-tools port) |
 | `/etc/orkestrator/ingress-ports` | Container ports Docker publishes (bridges, entry and mapped ports) |
 
-GitHub's published ranges come from a backend seed (`github-ranges-cache.ts`,
-refreshed at most hourly and copied into the created container, or its egress
-gateway, at `/etc/orkestrator-seed/github-ranges` with `docker cp` before the
-first start) when it is under a day old, else a live
-fetch cached in the container, else either copy under a week old; with none
-the firewall fails closed. Reachability is verified against `github.com`, not
-the rate-limited API. The report's `githubRanges` says which source applied.
-The seed is copied rather than bound because a rootless daemon may be unable
-to mount a read-only file bind from a `nosuid`/`nodev` filesystem; a file
-bind already pinned the seed as it was at creation (the backend replaces it by
-rename), so nothing is lost. A failed copy leaves the container to fetch the
-ranges itself.
+GitHub's published ranges come from a backend seed (`github-ranges-cache.ts`)
+when it is under a day old, else a live fetch cached in the container, else
+either copy under a week old; with none the firewall fails closed.
+Reachability is verified against `github.com`, not the rate-limited API. The
+report's `githubRanges` says which source applied. The fetch is anonymous and
+stays so (the user's decision of 2026-11-14): no GitHub credential goes near a
+restricted container's root phase, so the seed is what keeps boots off
+`api.github.com/meta`'s 60-an-hour, per-address allowance.
 
-Why copy the seed and classify the rest (decided 2026-10-26, todo 0109). The
-GitHub ranges seed is the only single-file bind outside the input revision;
-it is not a secret and nothing revokes it, so copying it in costs nothing a
-bind gave. Staged-input file binds stay binds, because revocation empties
-them in place. Any other refused remount is classified rather than worked
+The seed lives alone in `<data directory>/github-ranges-seed/github-ranges`,
+and whichever container runs the firewall (the egress gateway, or a
+restricted runtime without one) binds that directory read-only at
+`/etc/orkestrator-seed` (`githubRangesSeedMountArguments`). The backend
+refreshes it at most hourly, one fetch at a time and none for five minutes
+after a failed one, when it creates such a container and again just before
+the start path boots one (`deliverGithubRangesSeedBeforeBoot`,
+`github-ranges-seed-delivery.ts`, called from
+`startContainerWithAgentAccounts` for the runtime and through
+`prepareEgressGatewayForStart`'s `beforeGatewayBoot` for its gateway). It
+writes the new file beside the directory and renames it in, so a container
+never sees a partial file, and a directory bind (unlike the file bind before
+0109) shows each boot the file the directory holds then. Docker never boots
+these containers on its own, so every boot reads a seed under an hour old
+whenever the backend could reach GitHub in the last hour. A seed an older
+backend kept at `<data directory>/github-ranges.txt` is moved into the
+directory on first use.
+
+A container created before the bind has no seed directory; it was given a
+copy at creation, and the start path gives it a fresh copy (`docker cp`,
+best effort, `github-ranges.seed-copied-before-boot`) before each boot until
+it is rebuilt. A failed copy leaves it to fetch the ranges itself.
+
+Why bind the seed directory, and classify the rest (decided 2026-10-26,
+todo 0109; the seed's delivery changed by
+[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 2 on 2026-11-15). 0109 replaced the seed's file bind with a copy for the
+start-time refusal below; a copy into a container that is not running is what
+a rootless daemon then refused as busy, and a copy, like the file bind, pinned
+the seed as it was at creation, so restarts more than a day later fetched.
+The directory bind removes both: it is an ordinary read-only directory bind
+from the data directory, like the input revision every runtime already has,
+so it adds no start-time exposure a runtime did not have (a gateway gains
+one), and it follows the backend's renames. Staged-input file binds stay
+binds, because revocation empties them in place. Any other refused remount is classified rather than worked
 around, reusing `unsupported-topology` so older clients still parse it. The
 start-time refusal pattern comes from the 2026-10-25 report and has not been
 captured from a start; the 2026-11-09 rootless run captured the same refusal
@@ -1266,12 +1357,14 @@ failure: configured project files and project seed files fail creation
 with `unsupported-topology` and the remedy (move Orkestrator's data
 directory or run Docker rootful), a rebuild's copy step likewise, the
 boot record read reports `boot-record-copy-refused` instead of
-`container-exited`, and the best-effort GitHub seed logs
+`container-exited`, and the best-effort GitHub seed copy (only for a
+container created before the seed directory bind) logs
 `refusal=read-only-bind-remount`. The CLI hides the daemon's answer for a
 copy into a directory (`must be a directory`), so a failed copy asks once
 more with a copy out of a path that cannot exist.
 
-Those three copies into a created container go through `copyIntoContainer`,
+Those three copies into a created container (the GitHub seed only for a
+container created before its bind) go through `copyIntoContainer`,
 which also handles a daemon that cannot mount the container's filesystem
 because it is busy (`failed to mount … device or resource busy`, seen once,
 on beelink2's rootless daemon on 2026-11-09, and not reproduced since,
@@ -1406,7 +1499,7 @@ and the Network section says whether a root terminal can change the rules.
   report. It holds everything that belongs to a namespace: the environment
   network, `net.ipv6.conf.all.disable_ipv6=1`, the published ports, the
   Linux Engine `host.docker.internal` alias (the runtime shares its
-  `/etc/hosts` and `resolv.conf`), the GitHub seed (copied in) and the policy
+  `/etc/hosts` and `resolv.conf`), the GitHub seed directory (bound read-only) and the policy
   environment. It carries the owner label, role `egress-gateway`,
   `orkestrator-egress-environment` and `orkestrator-egress-workload` (the
   runtime's name), and neither the app label nor `environment-id`, so no

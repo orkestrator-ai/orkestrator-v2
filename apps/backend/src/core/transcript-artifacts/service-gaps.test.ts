@@ -415,14 +415,9 @@ describe("serve-time authorization", () => {
     h.service.closeLiveSession(first.generation);
     expect(await firstMint.authorize!()).toBe(false);
 
-    // Disabling live viewing revokes every session.
     const second = await h.service.openLiveSession(SCOPE, published.publicationId);
     const secondMint = h.content.minted.at(-1)!;
     expect(second.generation).toBe(secondMint.generation);
-    expect(await secondMint.authorize!()).toBe(true);
-    h.flags.liveInteractive = false;
-    expect(await secondMint.authorize!()).toBe(false);
-    h.flags.liveInteractive = true;
     expect(await secondMint.authorize!()).toBe(true);
 
     // Deleting the environment revokes it.

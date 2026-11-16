@@ -94,6 +94,9 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   kanban: { kind: "array", owner: ownerField("projectId") },
   "kanban-sync": { kind: "document" },
   "kanban-labels": { kind: "array", key: "projectId" },
+  // Image files a project removal still has to unlink, one row per image id
+  // (`storage-kanban-project-removal.ts`); content-free.
+  "kanban-image-deletions": { kind: "record" },
   "project-notes": { kind: "array", key: "projectId" },
   "feature-plans": { kind: "array", owner: ownerField("projectId") },
   "linear-auth": { kind: "document" },
@@ -147,6 +150,8 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "setup-approvals": { kind: "record", owner: ownerField("projectId") },
   // Pull requests a coordinator watches, one row per project (`coordinator-pr-watches.ts`).
   "coordinator-watched-pull-requests": { kind: "record", owner: ownerField("projectId") },
+  // This machine's load history, one row (`storage-machine-load-history.ts`).
+  "machine-load-history": { kind: "record" },
 };
 
 /**

@@ -276,35 +276,155 @@ describe("what the supervisor records", () => {
 
     // A restart back into round one drops what round two recorded and the
     // verification of the round it reruns.
-    pruneKeyInformationAfterRewind(subject, 0, false);
+    pruneKeyInformationAfterRewind(subject, 0, { kind: "session", phase: "verify" });
     expect(subject.keyInformation?.issues.map((issue) => issue.round)).toEqual([0]);
     expect(subject.keyInformation?.verifications).toEqual([]);
   });
-  test("clears superseded narrative and update history on rewind", () => {
-    const subject = pipeline({ iteration: 1 });
+  function briefedPipeline(): BuildPipeline {
+    const subject = pipeline({ iteration: 0, phase: "building" });
     applyAgentKeyInformationUpdate(subject, {
-      summary: "Later summary",
-      statement: "Later objective",
-      context: "Later context",
-      solution: "Later solution",
-      workDone: ["Later work"],
-      notDone: ["Later omission"],
-      decisions: [{ decision: "Later choice", options: [], chosen: "A" }],
-      tests: [{ name: "Later test", result: "passed" }],
+      framing: "objective",
+      summary: "Build summary",
+      statement: "Build objective",
+      context: "Build context",
+      solution: "Build solution",
+      workDone: ["Build work"],
+      notDone: ["Build omission"],
+      decisions: [{ decision: "Build choice", options: [], chosen: "A" }],
+      tests: [{ name: "Build test", result: "passed" }],
     });
-    pruneKeyInformationAfterRewind(subject, 0, false);
+    recordReviewIssuesInKeyInformation(
+      subject,
+      { iteration: 0 },
+      { issues: [{ title: "Round one issue", severity: "P2" } as never] },
+    );
+    subject.phase = "addressing";
+    applyAgentKeyInformationUpdate(subject, {
+      issues: [{ issue: "Round one issue", resolution: "Fixed it", status: "resolved" }],
+    });
+    recordVerdictInKeyInformation(
+      subject,
+      { iteration: 0 },
+      {
+        passed: true,
+        rationale: "All criteria met",
+        criteria: [{ id: "ac-1", text: "Header shows the timer" }],
+        results: [{ id: "ac-1", status: "passed", evidence: "In the diff" }],
+      },
+    );
+    subject.phase = "complete";
+    return subject;
+  }
+
+  function expectBuildNarrativeKept(subject: BuildPipeline) {
+    expect(subject.keyInformation).toMatchObject({
+      framing: "objective",
+      summary: "Build summary",
+      statement: "Build objective",
+      context: "Build context",
+      solution: "Build solution",
+      workDone: ["Build work"],
+      notDone: ["Build omission"],
+      decisions: [{ decision: "Build choice", options: [], chosen: "A" }],
+      tests: [{ name: "Build test", result: "passed" }],
+    });
+  }
+
+  test("a restart of a PR stage keeps every earlier section and the update history", () => {
+    const subject = briefedPipeline();
+    const updates = subject.keyInformation!.updates.length;
+    pruneKeyInformationAfterRewind(subject, 0, { kind: "session", phase: "resolve-conflicts" });
+    expectBuildNarrativeKept(subject);
+    expect(subject.keyInformation?.issues).toEqual([
+      {
+        round: 0,
+        issue: "Round one issue",
+        resolution: "Fixed it",
+        status: "resolved",
+      },
+    ]);
+    expect(subject.keyInformation?.verifications.map((entry) => entry.passed)).toEqual([true]);
+    expect(subject.keyInformation?.updates).toHaveLength(updates);
+  });
+
+  test("a restart of Verify drops only the round's verification", () => {
+    const subject = briefedPipeline();
+    pruneKeyInformationAfterRewind(subject, 0, { kind: "session", phase: "verify" });
+    expectBuildNarrativeKept(subject);
+    expect(subject.keyInformation?.issues.map((issue) => issue.status)).toEqual(["resolved"]);
+    expect(subject.keyInformation?.verifications).toEqual([]);
+  });
+
+  test("a restart of Address keeps the round's issues and resolutions for it to revise", () => {
+    const subject = briefedPipeline();
+    pruneKeyInformationAfterRewind(subject, 0, { kind: "session", phase: "address" });
+    expectBuildNarrativeKept(subject);
+    expect(subject.keyInformation?.issues.map((issue) => issue.resolution)).toEqual(["Fixed it"]);
+    expect(subject.keyInformation?.verifications).toEqual([]);
+  });
+
+  test("a restart at or before Review drops the round's issues but keeps the narrative", () => {
+    for (const restart of [
+      { kind: "session", phase: "review" },
+      { kind: "review-package", implementationPhase: "build" },
+      { kind: "validation", implementationPhase: "build" },
+      { kind: "session", phase: "fix" },
+    ] as const) {
+      const subject = briefedPipeline();
+      pruneKeyInformationAfterRewind(subject, 0, restart);
+      expectBuildNarrativeKept(subject);
+      expect(subject.keyInformation?.issues).toEqual([]);
+      expect(subject.keyInformation?.verifications).toEqual([]);
+      expect(subject.keyInformation?.updates.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("a restart that runs Build again clears the brief Build writes", () => {
+    const subject = briefedPipeline();
+    pruneKeyInformationAfterRewind(subject, 0, { kind: "session", phase: "build" });
     expect(subject.keyInformation).toMatchObject({
       framing: "problem",
       workDone: [],
       notDone: [],
       decisions: [],
       tests: [],
+      issues: [],
+      verifications: [],
       updates: [],
     });
     expect(subject.keyInformation?.summary).toBeUndefined();
     expect(subject.keyInformation?.statement).toBeUndefined();
     expect(subject.keyInformation?.context).toBeUndefined();
     expect(subject.keyInformation?.solution).toBeUndefined();
+  });
+
+  test.each(["review", "address", "verify", "pr", "resolve-conflicts"] as const)(
+    "a code rewind to %s clears sections without commit provenance",
+    (phase) => {
+      const subject = briefedPipeline();
+      pruneKeyInformationAfterRewind(subject, 0, { kind: "session", phase }, true);
+      expect(subject.keyInformation).toMatchObject({
+        framing: "problem",
+        workDone: [],
+        notDone: [],
+        decisions: [],
+        tests: [],
+        issues: [],
+        verifications: [],
+        updates: [],
+      });
+      expect(subject.keyInformation?.summary).toBeUndefined();
+      expect(subject.keyInformation?.statement).toBeUndefined();
+      expect(subject.keyInformation?.context).toBeUndefined();
+      expect(subject.keyInformation?.solution).toBeUndefined();
+    },
+  );
+
+  test("a restart that removes nothing leaves the updated time alone", () => {
+    const subject = briefedPipeline();
+    const updatedAt = subject.keyInformation!.updatedAt;
+    pruneKeyInformationAfterRewind(subject, 0, { kind: "session", phase: "pr" });
+    expect(subject.keyInformation?.updatedAt).toBe(updatedAt);
   });
 });
 

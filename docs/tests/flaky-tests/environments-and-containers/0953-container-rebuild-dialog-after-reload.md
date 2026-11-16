@@ -23,3 +23,7 @@ intermittent dialog observation. No timeout or assertion was relaxed.
 
 Aggregate evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.sCziks/summary.json`.
 Passing isolated output was removed by the logged runner.
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. The recorded failure is the spec's own 15 s wait for `Before a rebuild`, smaller than the new default and not changed by the 2026-11-15 config change.

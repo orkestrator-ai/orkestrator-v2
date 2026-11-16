@@ -46,3 +46,11 @@ fixed. The unchanged owner case
 (`bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/sidebar-width-consumers.spec.ts:119 --workers=1`
 against a fresh `--fixture --headless` profile at load about 7) passed
 (19.6 s). No assertion was changed.
+
+## Triage note (2026-11-15)
+
+Not changed. The owner is an `e2e/agent-testing` spec run through `playwright.browser.config.ts`, which this pass left alone because the config is shared with other groups' specs (a global assertion budget could loosen latency checks they rely on); no safe spec-local signal was identified without a live agent-testing profile. Stays `open`; Playwright agent-testing suites were not run.
+
+## Triage note (2026-11-15, after the config change)
+
+Follow-up: `playwright.browser.config.ts` now sets `expect: { timeout: 30_000 }` (its `timeout: 120_000` was already in place), but this case stays `open`: both recorded failures are value mismatches in layout sampling, not expired waits.

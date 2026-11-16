@@ -24,6 +24,7 @@ import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { appCommandStore } from "@/test/app-command-store";
 import { PINNED_SCROLL_ATTRIBUTE } from "@/lib/pinned-scroll";
 
+import { useAsyncUtilHangWatchdog } from "@/test/async-util-hang-watchdog";
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
@@ -83,6 +84,8 @@ function getTitleBarSidebarTrigger(container: HTMLElement): HTMLButtonElement {
   expect(trigger).toBeTruthy();
   return trigger!;
 }
+
+useAsyncUtilHangWatchdog();
 
 describe("MobileAppShellLayout", () => {
   test("exposes the collapsed tools trigger under its published selector", () => {
@@ -497,7 +500,7 @@ describe("MobileAppShellLayout", () => {
     expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
     expect(screen.getByText("Workspace")).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(menuButton));
-  }, 20_000);
+  });
 
   test("toggles the project drawer closed with a second menu-button tap", () => {
     const { container } = renderLayout({}, { keepInitialDrawerOpen: true });

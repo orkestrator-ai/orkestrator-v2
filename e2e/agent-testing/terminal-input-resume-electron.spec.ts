@@ -150,6 +150,8 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     await waitForUrl(rendererUrl);
     const headless = headlessElectronRequested();
     app = await electron.launch({
+      // A watchdog on launch, not a startup budget: a loaded host can take longer than 30 s.
+      timeout: 60_000,
       executablePath: electronExecutable,
       args: [
         ...ELECTRON_TEST_SWITCHES,
@@ -168,8 +170,9 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     const startup = watchElectronStartup(electronApp);
     dismissStartupDialogs(electronApp);
     await installFetchFault(electronApp);
-    const window = await electronApp.firstWindow();
-    window.setDefaultTimeout(20_000);
+    const window = await electronApp.firstWindow({ timeout: 60_000 });
+    // Actions auto-wait for the element to be actionable; this only guards a hang.
+    window.setDefaultTimeout(60_000);
     // index.html's title stays until Vite serves and runs renderer-entry; under
     // host load that startup takes longer than expect's 5 s default. A start
     // that lost its modules to ERR_NETWORK_CHANGED is reloaded (flake 2340).
@@ -252,8 +255,11 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     const openEnvironment = async (page: Page, name: string) => {
       const expand = page.getByRole("button", { name: `Expand project ${project.name}` });
       const entry = page.getByText(name, { exact: true }).first();
-      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+      await expect(expand.or(entry)).toBeVisible({ timeout: 60_000 });
       if (await expand.isVisible()) await expand.click();
+      // The entry renders after the project expands; a startup dialog handler
+      // may also run first (flake 1320). Wait for the entry, then act.
+      await expect(entry).toBeVisible({ timeout: 60_000 });
       await page.mouse.move(0, 0);
       await page.keyboard.press("Escape");
       await entry.click();

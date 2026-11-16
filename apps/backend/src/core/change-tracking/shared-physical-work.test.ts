@@ -36,6 +36,42 @@ test("shared watcher releases only the last listener and closes once", () => {
   expect(registry.activeWatchers()).toBe(0);
 });
 
+test("a missed change reaches the shared watcher and its miss every subscriber (to-do 8171)", () => {
+  let unannounced = 0;
+  const misses: string[] = [];
+  let physical!: WorktreeWatcherOptions;
+  const registry = new SharedWatcherRegistry((options) => {
+    physical = options;
+    return {
+      watching: true,
+      qualified: true,
+      close() {},
+      unannouncedChange: () => {
+        unannounced++;
+      },
+    };
+  });
+  const a = registry.startWatcher({
+    worktreePath: "/tmp",
+    onChange() {},
+    onMissedChange: () => misses.push("a"),
+  });
+  const b = registry.startWatcher({
+    worktreePath: "/tmp",
+    onChange() {},
+    onMissedChange: () => misses.push("b"),
+  });
+  a.unannouncedChange?.();
+  expect(unannounced).toBe(1);
+  physical.onMissedChange?.();
+  expect(misses).toEqual(["a", "b"]);
+  // A released subscriber reports nothing.
+  a.close();
+  a.unannouncedChange?.();
+  expect(unannounced).toBe(1);
+  b.close();
+});
+
 test("replacing an unwatched physical watcher preserves earlier subscribers", () => {
   let first = 0,
     second = 0,

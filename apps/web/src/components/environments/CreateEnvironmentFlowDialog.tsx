@@ -182,6 +182,8 @@ export function CreateEnvironmentFlowDialog({
   const scope = useScopesWithCommandFallback().scope;
   const dockerAvailable = useDockerAvailability();
   const [isCreating, setIsCreating] = useState(false);
+  // What the busy button is doing, so a slow step reads as a named step.
+  const [createStage, setCreateStage] = useState<string | null>(null);
   const [pendingCredentialWarning, setPendingCredentialWarning] =
     useState<PendingGitHubCredentialWarning | null>(null);
   const mountedRef = useRef(true);
@@ -230,6 +232,7 @@ export function CreateEnvironmentFlowDialog({
 
     if (mountedRef.current && (preflight || cancellableWarning)) {
       setIsCreating(false);
+      setCreateStage(null);
     }
   }, [settleCredentialWarning]);
 
@@ -278,6 +281,9 @@ export function CreateEnvironmentFlowDialog({
     if (!projectId || !canCreateEnvironment(options.environmentType)) return false;
 
     setIsCreating(true);
+    setCreateStage(
+      options.environmentType === "local" ? "Creating git worktree…" : "Creating environment…",
+    );
     try {
       const request = resolveEnvironmentCreateRequest(options);
       const environment = await createEnvironment(
@@ -292,6 +298,7 @@ export function CreateEnvironmentFlowDialog({
         ...(request.worktreeBaseDir ? ([undefined, request.worktreeBaseDir] as const) : []),
       );
 
+      setCreateStage("Saving agent settings…");
       const agentSettings = resolveEnvironmentAgentSettings(options);
       const launchSettings = resolveEnvironmentAgentLaunchSettings(options);
       const configuredEnvironment = await nodeBackend.updateEnvironmentAgentSettings(
@@ -340,6 +347,7 @@ export function CreateEnvironmentFlowDialog({
       return true;
     } finally {
       setIsCreating(false);
+      setCreateStage(null);
     }
   };
 
@@ -369,6 +377,7 @@ export function CreateEnvironmentFlowDialog({
     };
     activePreflightRef.current = preflight;
     setIsCreating(true);
+    setCreateStage("Checking GitHub access…");
     const result = await Promise.race([
       nodeBackend.getContainerGitHubCredentialStatus().then(
         (status) => ({ status }),
@@ -380,11 +389,22 @@ export function CreateEnvironmentFlowDialog({
     if (activePreflightRef.current === preflight) {
       activePreflightRef.current = null;
     }
-    if (result === PREFLIGHT_CANCELLED) return false;
-    if (!mountedRef.current || !open || preflight.projectId !== projectId) {
+    // Every way out that does not enter `create()` hands the button back,
+    // unless a newer preflight has already taken it over.
+    const releaseBusy = () => {
+      if (!mountedRef.current || activePreflightRef.current !== null) return;
+      setIsCreating(false);
+      setCreateStage(null);
+    };
+    if (result === PREFLIGHT_CANCELLED) {
+      releaseBusy();
       return false;
     }
-    setIsCreating(false);
+    if (!mountedRef.current || !open || preflight.projectId !== projectId) {
+      releaseBusy();
+      return false;
+    }
+    releaseBusy();
     if (!canCreateEnvironment(environmentType)) return false;
 
     const status = "status" in result ? result.status : null;
@@ -422,6 +442,7 @@ export function CreateEnvironmentFlowDialog({
   const performFeatureBuild = async (input: CreateFeatureBuildInput): Promise<boolean> => {
     if (!projectId) return false;
     setIsCreating(true);
+    setCreateStage("Starting build…");
     try {
       const result = await nodeBackend.createFeatureBuild(input);
       // Selecting the environment is what mounts its terminal surface. An
@@ -441,6 +462,7 @@ export function CreateEnvironmentFlowDialog({
       return false;
     } finally {
       setIsCreating(false);
+      setCreateStage(null);
     }
   };
 
@@ -497,6 +519,7 @@ export function CreateEnvironmentFlowDialog({
         onCreate={handleCreate}
         onCreateFeatureBuild={handleCreateFeatureBuild}
         isLoading={isCreating}
+        loadingLabel={createStage ?? undefined}
         projectId={projectId}
         projectName={projectName}
         localEnvironmentAvailable={localEnvironmentAvailable}

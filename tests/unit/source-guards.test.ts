@@ -43,7 +43,6 @@ import {
 } from "../source-guards/scan";
 import { sleepBeforeNegativeAssertion } from "../source-guards/sleep-before-negative-assertion";
 import { smallFakePid } from "../source-guards/small-fake-pid";
-import { subprocessWithoutBudget } from "../source-guards/subprocess-without-budget";
 import {
   LibBackendShimResolver,
   createLibBackendCommandDefaultGuard,
@@ -367,56 +366,6 @@ describe("released-port-rebind", () => {
       "const owned = server.getPort();",
     ].join("\n");
     expect(lines(guard, source)).toEqual([]);
-  });
-});
-
-describe("subprocess-without-budget", () => {
-  const guard = subprocessWithoutBudget;
-
-  test("flags a test file that starts real processes with no budget, at the first one", () => {
-    const cases: Array<[string, number]> = [
-      ["test('a', () => {\n  Bun.spawnSync(['git', 'status']);\n});", 2],
-      [
-        "import { execFile } from 'node:child_process';\nimport { promisify } from 'node:util';\nconst run = promisify(execFile);",
-        3,
-      ],
-      ["import { $ } from 'bun';\ntest('a', async () => {\n  await $`git status`;\n});", 3],
-      [
-        "import * as cp from 'node:child_process';\ntest('a', () => {\n  cp.spawnSync('ls');\n});",
-        3,
-      ],
-      ["import { git } from './test-support';\ntest('a', () => {\n  git(repo, 'init');\n});", 3],
-      ["import { spawn as run } from 'child_process';\ntest('a', () => {\n  run('ls');\n});", 3],
-    ];
-    for (const [source, line] of cases)
-      expect([source, lines(guard, source)]).toEqual([source, [line]]);
-  });
-
-  test("accepts setDefaultTimeout or any explicit test or hook budget", () => {
-    const spawn = "Bun.spawnSync(['git', 'status']);";
-    const cases = [
-      `import { setDefaultTimeout } from 'bun:test';\nsetDefaultTimeout(30_000);\ntest('a', () => { ${spawn} });`,
-      `test('a', () => { ${spawn} }, 30_000);`,
-      `test('a', async () => { ${spawn} }, { timeout: TIMEOUT_MS });`,
-      `beforeAll(() => { ${spawn} }, 60_000);\ntest('a', () => {});`,
-      `test.each([1, 2])('a %d', () => { ${spawn} }, 20_000);`,
-      `test.if(posix)('a', () => { ${spawn} }, 20_000);`,
-    ];
-    for (const source of cases) expect([source, lines(guard, source)]).toEqual([source, []]);
-  });
-
-  test("ignores type-only imports, local fakes, non-test modules and Playwright specs", () => {
-    const source = [
-      "import type { ChildProcess } from 'node:child_process';",
-      "import { type SpawnOptions, spawnSync as unused } from 'node:child_process';",
-      "const git = mock(() => '');",
-      "const spawn = mock(() => fakeChild);",
-      "test('a', () => { git('status'); spawn('ls'); });",
-    ].join("\n");
-    expect(lines(guard, source)).toEqual([]);
-    const spawning = "test('a', () => { Bun.spawnSync(['ls']); });";
-    expect(lines(guard, spawning, "tests/helpers/support.ts")).toEqual([]);
-    expect(lines(guard, spawning, "e2e/thing.spec.ts")).toEqual([]);
   });
 });
 
@@ -899,9 +848,9 @@ describe("the ratchet", () => {
   });
 
   test("fails on a baseline entry above reality, including a file that no longer offends", () => {
-    const findings = findingsOf([["subprocess-without-budget", "kept.test.ts", [1]]]);
+    const findings = findingsOf([["released-port-rebind", "kept.test.ts", [1]]]);
     const baseline = baselineOf([
-      ["subprocess-without-budget", "kept.test.ts", 1],
+      ["released-port-rebind", "kept.test.ts", 1],
       ["small-fake-pid", "fixed.test.ts", 2],
       ["small-fake-pid", "deleted.test.ts", 1],
     ]);

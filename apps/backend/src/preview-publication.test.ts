@@ -316,8 +316,12 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
     expect((await request(host, "/", { headers: { cookie } })).status).toBe(401);
   });
 
+  // Waits for a state the publication proxy will reach (an upstream socket
+  // closing). The bound is a hang watchdog, far beyond what a loaded host
+  // needs, not a statement about how fast the proxy is.
   async function until(predicate: () => boolean): Promise<void> {
-    for (let attempt = 0; attempt < 200 && !predicate(); attempt += 1) await Bun.sleep(5);
+    const deadline = Date.now() + 30_000;
+    while (!predicate() && Date.now() < deadline) await Bun.sleep(5);
     expect(predicate()).toBe(true);
   }
 
@@ -406,6 +410,9 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
         }
       });
       socket.on("error", reject);
+      // A refused or closed upgrade fails here with what the server said,
+      // instead of waiting for the test's budget to expire.
+      socket.once("close", () => reject(new Error(`Upgrade closed before the app frame: ${text}`)));
     });
     expect(response).toStartWith("HTTP/1.1 101");
     expect(response.toLowerCase()).toContain("sec-websocket-protocol: fixture.v1");
@@ -517,10 +524,11 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
       // the one-second resolution of certificate timestamps.
       certificates(dir, undefined, { days: 3 });
       // The 50 ms certificate check re-binds and then logs the reload.
-      for (
-        let attempt = 0;
-        attempt < 400 && !logs.records().some((record) => record.event === "certificate.reloaded");
-        attempt += 1
+      // The wait is a hang watchdog on a reload that will happen, not a speed bound.
+      const reloadDeadline = Date.now() + 30_000;
+      while (
+        !logs.records().some((record) => record.event === "certificate.reloaded") &&
+        Date.now() < reloadDeadline
       ) {
         await Bun.sleep(10);
       }

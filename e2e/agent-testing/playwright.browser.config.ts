@@ -101,6 +101,11 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 120_000,
+  // Web-first assertions wait for a real DOM condition, so their budget is a
+  // hang watchdog, not a speed check: Playwright's 5 s default failed healthy
+  // specs on a loaded host (docs/development/testing-guide.md, "Controlled time").
+  // A spec that measures latency asserts it explicitly.
+  expect: { timeout: 30_000 },
   reporter: [
     ["line"],
     ["json", { outputFile: path.join(outputRoot, "results.json") }],

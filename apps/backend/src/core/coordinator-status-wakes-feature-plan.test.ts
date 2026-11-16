@@ -1,5 +1,5 @@
 /**
- * Feature-plan status wakes (todo 0395 task 3) on the real mail world: a
+ * Feature-plan status wakes (to-do 0395 (retired) task 3) on the real mail world: a
  * coordinator that sent a planning message hears once when its reply is ready
  * and once per failure, nothing for a cancelled exchange or one it did not
  * start, and an association kind this backend does not know is kept and
@@ -560,7 +560,7 @@ describe("association kinds a reader does not know", () => {
 });
 
 /*
- * Todo 0395 task 5: a feature plan the coordinator started is adopted like
+ * To-do 0395 (retired) task 5: a feature plan the coordinator started is adopted like
  * any other workflow. Through the same `adopt_coordinator_workflow` command
  * the `adopt_workflow` tool calls, a conversation that did not start the plan
  * takes it over from a closed one and is told its planning reply is ready.

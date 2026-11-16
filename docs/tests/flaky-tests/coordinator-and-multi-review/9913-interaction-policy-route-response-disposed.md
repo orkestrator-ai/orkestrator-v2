@@ -63,3 +63,7 @@ reported the existing case open and directed recording it. No interaction test,
 route handler, assertion or timeout changed. The fresh pass establishes
 intermittence, not a cause or an environmental exemption for the aggregate
 failure. The broad browser validation remains red.
+
+## Triage note (2026-11-15)
+
+Changed, unverified. Both recorded errors (`route.fulfill: Fetch response has been disposed` and `apiRequestContext.fetch: Target page, context or browser has been closed`) come from the `/__claude-test/**` route handler. That handler forwards the fixture page's polling through the test's `request` context, and teardown disposes the context under a call still in flight. `e2e/InteractionPolicyChecks.spec.ts` now runs `page.unrouteAll({ behavior: "ignoreErrors" })` in `test.afterEach`, which Playwright documents for exactly this teardown race. No assertion changed. The spec was not run (no Playwright runs in this sweep). Stays `open` until a browser run confirms it.

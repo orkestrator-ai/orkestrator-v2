@@ -8,6 +8,8 @@ export const ENVIRONMENT_LOG_AREAS = defineLogAreas({
         "Session metadata cleanup failed during environment deletion; deletion continues.",
       "cleanup.branch-kept":
         "A deleted environment's local branch was kept, as it may hold unmerged work.",
+      "project-seed.refused":
+        "A project file the Environment Files setting matched was not copied into a new local worktree: a link, not a regular file, outside the project, too large, behind a link in the worktree, or over the match bounds. Path and reason only, never contents.",
       "rename.failed": "Naming an environment from its pending prompt failed for the first time.",
       "rename.still-failing":
         "That rename is still failing; written at the 2nd, 4th, 8th... failure.",

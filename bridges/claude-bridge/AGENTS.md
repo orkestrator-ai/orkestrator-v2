@@ -60,6 +60,14 @@ writers on one `.jsonl`. When touching the prompt path:
   at spawn the MCP servers, tools, hooks and environment a prompt decides. Do not
   park a CLI ahead of a prompt without re-reading the decision and its numbers
   in [0005](../../docs/todo/agent-engines/0005-mid-turn-steer-and-interrupt.md).
+- **Nothing on the launch path waits for the CLI to boot.** A control request
+  (`supportedAgents()`, `initializationResult()`, …) is answered only once the
+  CLI process is up, which is seconds on a cold start, and `send-resolved` is
+  what the backend's dispatch (and the person's spinner) waits on. The prompt is
+  already in the held input, so `runTurnOnRuntime` starts consuming the stream
+  and reads such answers in the background (`publishSupportedAgents`), patching
+  and re-emitting the init snapshot when one lands late. A new read that must
+  be in `init` goes the same way; never `await` it before `consumeClaudeRuntime`.
 - **The newest turn owns the root conversation.** Root frames, results, hooks
   and continuations go to `runtime.latestTurn`; only a subagent's frames go to
   the turn whose row holds its call (`routeClaudeFrame`). A superseded turn

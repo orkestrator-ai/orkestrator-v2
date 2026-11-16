@@ -41,7 +41,7 @@ export function registerStandaloneCleanup() {
     for (const process of children) process.kill("SIGTERM");
     // A backend that is still shutting down can recreate files in its data
     // directory after it has been removed.
-    await Promise.all(children.map((child) => Promise.race([child.exited, Bun.sleep(5_000)])));
+    await Promise.all(children.map((child) => Promise.race([child.exited, Bun.sleep(30_000)])));
     await Promise.all(
       temporaryDirectories
         .splice(0)
@@ -132,7 +132,9 @@ export function isProcessRunning(pid: number): boolean {
 }
 
 export async function waitForProcessExit(pid: number): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  // Polls a real exit; the deadline is only a hang watchdog, so a loaded host
+  // that reaps the tree slowly still passes.
+  const deadline = Date.now() + 60_000;
   while (isProcessRunning(pid) && Date.now() < deadline) {
     await Bun.sleep(10);
   }

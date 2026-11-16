@@ -11,3 +11,7 @@
 - **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts --parallel=2 tests/cli-client.test.ts` from `packages/cli`: 9 passed.
 - **Evidence:** `/tmp/orkestrator-test-run.s0jA9M/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` on omarchy-hp.
 - **Hypothesis:** under load the test backend exits by signal (or the stop's deadline escalates to a kill) so no exit code is recorded. Not confirmed.
+
+## Triage (2026-11-15)
+
+- **Analysis:** `backend.stop()` in `packages/cli/scenarios/harness.ts` returns `child.exitCode` without signalling when the backend has already exited. A `null` therefore means the backend had already died by a signal before the scenario's `finally`, 3 s in, not that the 20 s stop escalation fired. Who signalled it is not established. Still open.

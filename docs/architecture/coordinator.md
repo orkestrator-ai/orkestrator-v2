@@ -15,9 +15,11 @@ why each platform holds the read-only boundary the way it does is in
 [`coordinator-read-only-decisions.md`](coordinator-read-only-decisions.md);
 OpenCode and Grok steer in
 [0005-mid-turn-steer-and-interrupt.md](../todo/agent-engines/0005-mid-turn-steer-and-interrupt.md);
-worker-surface follow-ups (root changes on other nodes, adopting feature
-plans) in
-[0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md);
+the worker surfaces on other nodes, root changes into a leaf worker and
+adopting feature plans are built (to-do 0395, retired 2026-11-15; its
+decision record is
+`git show a8b89f154:docs/todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md`,
+and [Worker surfaces](#worker-surfaces) has the behaviour);
 the gap tools (`resolve_conflicts`, PR wakes, `stop_worker_turn`,
 `get_worker_changes`, `fork_worker`, schedule edits, worker slash commands,
 `answer_worker_question`) pass the live suite's `gap-tools` case on a fake
@@ -611,16 +613,36 @@ on `self` and on each node:
   than three intervals (a sleeping host) is no history, not a reading. Windows
   end at the newest reading while sampling is on schedule, so a steady machine
   reads as fully covered; `latestSampleAgeSeconds` says how old that reading is.
-- **Restarts.** History is in memory (`MachineLoadSampler`,
-  `apps/backend/src/core/machine-load.ts`) and starts empty on each start.
-  On 2026-11-14 the user decided to persist it through a database document so
-  the 24-hour figure survives a restart or update (not prompted by an observed
-  misplacement); that is to-do
-  [8104](../todo/coordinator-and-multi-review/8104-persist-machine-load-history.md),
-  and until it lands the coverage field keeps the short figure honest. A bucket a minute for the
-  shorter windows and one every 15 minutes for the longest bound it to about
-  160 buckets, so the 24-hour edge is accurate to 15 minutes. Cost and cadence:
-  [recurring-work.md](recurring-work.md) B29.
+- **Restarts.** History survives a restart or update. `MachineLoadSampler`
+  (`apps/backend/src/core/machine-load.ts`) keeps it in memory and in one
+  row of the `machine-load-history` store (`storage-machine-load-history.ts`;
+  the user's decision of 2026-11-14, built under to-do 8104 (retired
+  2026-11-15)). The row is read once at start, written when a 15-minute
+  period has passed since the last write, and written once more when the
+  backend stops, before storage closes. A crash loses at most the newest
+  15 minutes, which the short windows recover anyway. The time the backend
+  was down holds no buckets, so it is no history and `coveredSeconds` counts
+  only real readings; `latestSampleAgeSeconds` stays `null` until the
+  restarted backend takes its own first reading. Restored readings dated
+  after the current clock are dropped, the rest age out of the windows as
+  usual.
+  - **The document** (`machine-load-history-document.ts`): `version: 1` and
+    the two bucket lists as number tuples `[startMs, endMs, coveredMs,
+    cpuWeighted, ramWeighted]`, numbers only, under 16 KB after days of
+    readings. On load anything malformed (a wrong shape, a bucket wider than
+    its period allows, coverage beyond its span, more than 100%, overlapping
+    or out-of-order buckets), too large (more buckets than the history
+    holds) or from a newer version is discarded whole: history starts empty,
+    `[host] load.history-fresh` logs the reason at warn, and the next write
+    replaces it. A missing row logs the same event at info with
+    `reason=missing`; a restore logs `load.history-restored` with the bucket
+    count. A failed write logs `load.history-save-failed` and is retried at
+    the next period or at stop. All machines update together under the
+    user's 2026-11-14 decision, so no older reader needs an adapter.
+  - **Bounds.** A bucket a minute for the shorter windows and one every 15
+    minutes for the longest bound the history to about 160 buckets, so the
+    24-hour edge is accurate to 15 minutes. Cost and cadence:
+    [recurring-work.md](recurring-work.md) B29.
 - **Machines that cannot answer.** One node never fails or holds up the call:
   each is asked in parallel through `invoke_on_node` with a 2 s limit, and its
   `machine` is otherwise `{ "status": "unavailable", "reason", "detail" }` with
@@ -3683,8 +3705,9 @@ an answer, the tool returns outcome-unknown and asks for a retry with the same
 is resent automatically. A remote custom fix that is already past its handoff
 when the retry arrives is reported, with its Address Findings tab, rather than refused as
 not ready. A node from before these commands answers "update that node".
-`request_root_changes` stays on this node; see
-[0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md).
+`request_root_changes` also takes `nodeId`: its request and approval stay on
+the command node, and only the approved patch crosses the link
+(`apply_controller_root_patch`; see "Uncommitted changes in a worker" below).
 `answer_worker_question` also takes `nodeId`; its request stays on the command
 node and only the approved answer crosses the link
 (`answer_controller_worker_question`).
@@ -3702,7 +3725,7 @@ node and only the approved answer crosses the link
 | `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `multi-review-auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. A launched PR is followed: status wakes when it opens, conflicts, fails a check, is ready to merge, merges or closes ([Status wakes](#status-wakes)). |
 | `resolve_conflicts` | The **Resolve Conflicts** button: the worker's `Resolve` tab, with the Resolve Conflicts prompt, the `resolve` action default and the button's completion action (the PR monitor rechecks the PR when the agent finishes), against `targetBranch`, else the PR's own base branch, else the repository's PR base branch, else `main`, as `pr.resolve` does (`launchWorkerResolve` in `coordinator-pr.ts`, `launchResolveConflictsAgent` in `multi-review-auto-pr.ts`). The button's precondition applies: refused when the worker has no PR, when it is merged or closed, or when GitHub reports no conflicts (an unknown mergeability is allowed), and while the worker's pipeline owns it. Pass `nodeId` for a remote worker. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same Resolve agent. | The `Resolve` tab, opened without taking focus. One status wake when it finishes, with the refreshed PR state; the PR stays followed. |
 | `launch_feature_plan`, `get_feature_plan` | **New feature** and **Send** on the Features board: a planning agent in its own environment turns the message into a summary and stories. Building from a plan stays the user's Build button. | Replays; a retry after a crash finds the plan that attempt created. | The plan on the Features board. A `feature-plan` association, written before planning starts: status wakes when the reply is ready and when planning fails ([Status wakes](#status-wakes)); `list_workflows` lists it. |
-| `request_root_changes` | Asks the user to apply some of the checkout's uncommitted changes to a worker (below). | Replays the same approval request. | An approval dialog listing the checkout's changed files. |
+| `request_root_changes` | Asks the user to apply some of the checkout's uncommitted changes to a worker (below). Takes `nodeId` for a worker on a connected node. | Replays the same approval request. | An approval dialog listing the checkout's changed files, naming the worker's node when it is another one. |
 | `get_worker_changes` | Reads what a worker changed, local or container, without fetching its branch (below). Read-only, capability `discovery`. | No receipt: a read. | Nothing; it changes nothing. |
 | `fork_worker` | The sidebar's **Fork** for a worker: a new worker on its own branch from the worker's last commit, with an optional prompt for its agent (below). Main coordinator only (`environments`). | Replays the receipt; the fork's record carries a control request ID derived from the request, so a retry after a crash finds the same fork, and its association and delegation are idempotent. | A new environment in the sidebar, started in the background. Deleting it is the user's. |
 | `answer_worker_question` | Proposes an answer to a question a worker is waiting on, for the user to confirm (below). Takes `nodeId` for a worker on a connected node. | Replays the same approval request. | An approval dialog with the worker, its tab, the question, its options and the proposed answer, which the user may change. Declining leaves the question waiting in the worker's tab. |
@@ -3805,7 +3828,41 @@ runs `git apply --check` and `git apply` in the worker (a local worktree, or
 `docker exec` in a running container): the patch applies whole or not at
 all. Paths the checkout no longer reports as changed are refused. The
 outcome is mailed to the conversation as a system notice, which wakes it.
-The coordinator never sees the patch. `mise run test:agent:coordinator:surfaces-fake`
+The coordinator never sees the patch.
+
+*A worker on another node* (`nodeId`, todo 0395 task 2, retired). The
+changes are still this node's: the user picks them from this checkout, so the
+request is created here, its target naming the worker's node, the worker and
+that node's copy of the project (`nodeProjectId`; `projectId` stays this
+node's project), and the dialog names the node. After approval,
+`apply_project_root_changes` builds the patch here exactly as above, then
+`root-changes-node.ts` sends it in one node-link call to
+`apply_controller_root_patch` on that node, base64-encoded with its SHA-256.
+The patch's headers are always `a/` and `b/` whatever the checkout's
+`diff.mnemonicPrefix`, `diff.noprefix` or `diff.srcPrefix`/`dstPrefix`, since
+that node reads the file list from them.
+That node checks that the worker belongs to its copy of the project and is
+not its checkout, refuses a patch whose digest does not match, and runs the
+same `git apply --check` and `git apply` under the same lock and fence a
+local apply takes. The command is `internal` (node-link only, never through a
+workspace grant) and the coordinator's invoker refuses it by name.
+Refusals, all with nothing sent:
+
+- a patch over 16 MiB (`MAX_NODE_ROOT_CHANGE_PATCH_BYTES`), however large:
+  the capture stops at that limit, so a selection past the local 32 MiB cap
+  gets the same message. It travels inside
+  one invoke body, which a gateway caps at 48 MiB, and within one node-link
+  call's 60-second budget, so the cap leaves room for base64 and a slow link;
+  the message says to pick fewer files or commit and push them;
+- a node that is not connected, and one whose Orkestrator predates the
+  command ("update that node").
+
+A lost answer is never resent: the request settles `outcome-unknown` and the
+mail tells the coordinator to check the worker's files before asking again.
+A patch that does not apply there fails the request with Git's error lines,
+and the worker is left untouched.
+
+`mise run test:agent:coordinator:surfaces-fake`
 runs a reject and two approvals (a local and a container worker) end to end
 in the browser client on a loopback fake model, together with
 `open_worker_browser` on the container worker

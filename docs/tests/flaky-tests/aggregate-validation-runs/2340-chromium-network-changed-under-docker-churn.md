@@ -311,7 +311,8 @@ This launch failure is separate from Chromium's network-change failures.
 - **Rerun:** with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, the next four runs had no
   `ERR_NETWORK_CHANGED`, although bridge events still occurred during at least two.
   Those four failed later, for an unrelated reason
-  ([6303](../../../todo/cross-cutting/6303-window-close-during-request-throws.md)).
+  (to-do 6303, retired 2026-11-15; its throw was fixed under
+  [flake 0622](../previews-annotations-and-gateway/0622-service-preview-window-close-remote-release.md)).
 - **Change:** the spec launches with the probe off. Its module loads still go through
   Chromium, so other Docker work on the host can still cause this.
 
@@ -417,8 +418,9 @@ click rather than `goto` or `reload`. None of these failed in runs 3 to 7.
   that churn would abort other builds' Chromium loads on the same host.
 - Other Electron specs that wait on their first title (`electron-main.spec.ts`,
   `local-gateway-transport-electron.spec.ts` and the rest of that run's
-  failures) were not changed; extending the helper to them is
-  [to-do 7062](../../../todo/cross-cutting/7062-electron-specs-recover-network-changed-startup.md).
+  failures) were not changed; extending the helper to them was to-do 7062
+  (retired 2026-11-15; the rule is in
+  [agent-testing.md](../../../development/agent-testing.md#electron-specs-and-their-display)).
 
 ## 2026-11-06: the annotation Electron spec on beelink (to-do 0044 tasks 5 and 8)
 
@@ -441,9 +443,9 @@ stopping.
   which cannot use the namespace because container ports are published in the
   host's. The command is in
   [agent-testing.md](../../../development/agent-testing.md#electron-specs-and-their-display).
-- The spec's launcher then adopted `waitForRendererStart` (to-do
-  [7062](../../../todo/cross-cutting/7062-electron-specs-recover-network-changed-startup.md)
-  task 1). In the host namespace both container cases passed (50 s), each
+- The spec's launcher then adopted `waitForRendererStart` (to-do 7062
+  (retired) task 1, now described in
+  [agent-testing.md](../../../development/agent-testing.md#electron-specs-and-their-display)). In the host namespace both container cases passed (50 s), each
   after one startup reload for `ERR_NETWORK_CHANGED`. The whole spec there
   still failed once after a recovered startup: 72 `ERR_NETWORK_CHANGED` lines
   and 6 failed module imports when the Kanban view loaded, so the Home

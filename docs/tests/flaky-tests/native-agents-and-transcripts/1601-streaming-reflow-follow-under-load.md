@@ -12,3 +12,7 @@
 - **Owning-file rerun:** `ORKESTRATOR_REVIEW_VALIDATION=0 mise run test:logged -- --name streaming-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts --workers=1 --output output/playwright/review-streaming-owner` passed all 26 cases without retries in 111.2 seconds. A separate isolated application browser run was active on its own profile and server during this rerun.
 - **Evidence:** `/tmp/orkestrator-test-run.ZCNLHR/browser.log.gz` and `/tmp/orkestrator-test-run.acPUsW/summary.json`. The complete browser suite remains non-green.
 - **Hypothesis:** viewport reflow and follow convergence are sensitive to timing; the cause is not established. No source assertion, timeout, or skip was changed to obtain the pass.
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. The 5 s poll read a stable 88 px distance after the reflow, which is a follow-state value rather than a late DOM signal; the cause is not established. The 2026-11-15 `expect: { timeout: 30_000 }` change in `e2e/playwright.config.ts` is not claimed as a fix.

@@ -63,3 +63,10 @@
 - **Further isolated attempts under the same concurrent load:** the same command reported 55 passes, two skips, 28 failures and five errors in 187.83 s (`orkestrator-test-run.MRWGab`), then 56 passes, two skips, 27 failures and two errors in 107.92 s (`orkestrator-test-run.N4vaJr`). The first fixture timeout left Git configuration locks and cascaded into later template setup failures. These are failed observations, not isolated passes.
 - **Final isolated rerun:** the exact original command passed, exit 0, in 8.583 s after the aggregate run stopped. Its retained passing summary is `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4PVxhY/summary.json`. No timeout, assertion or skip was loosened. The new local invalidation test now uses a directory-only fixture because its nested-repository preflight rejects before Git is invoked; all pre-existing failing cases were unchanged.
 - **Hypothesis:** shared-host filesystem stalls remain plausible. A contemporaneous sample of the web typecheck showed a worker blocked in `fstatat` while its other workers waited on semaphores (`output/agent-testing/folder-delete-fixes/web-typecheck-sample.txt`). That observation does not identify a filesystem fault or prove the registry failures had the same cause. The case remains open.
+
+## Triage 2026-11-15
+
+- **Disposition:** open.
+- **Covered:** every recorded assertion-free failure since 2026-09-19 is a 5,00x ms timeout on the default budget, which `tests/default-test-timeout.ts` (preloaded by `tests/setup-node.ts`) now makes a 60 s hang watchdog; the owner sets no smaller file-level budget (one test has its own `30_000`).
+- **Not covered:** the original worker SIGKILL and the killed fake-Docker / Git fixture processes. Nothing here identifies the sender, so the budget change cannot be claimed to fix them. Not reproduced on this host.
+- **Next step:** on recurrence, record whether the failure is a timeout (then reopen against the budget) or a killed process (record the signal and the process that received it).

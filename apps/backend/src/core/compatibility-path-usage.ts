@@ -27,8 +27,6 @@ import {
 export const COMPATIBILITY_PATH_IDS = [
   /** A container bridge's token was read from its `node`-readable `/tmp` file. */
   "bridge-credential.token-file",
-  /** A bridge without `/transcript` was read through its whole `/messages` body. */
-  "bridge-transcript.messages-fallback",
   /**
    * A history page was served from the joined sync-v1 projection while the
    * session's latest view carried a direct cursor, or no view was read: a
@@ -81,13 +79,13 @@ export const COMPATIBILITY_PATH_IDS = [
   "retired-command.cleanup-stale-local-servers",
   /**
    * `read_file_at_branch` or `read_local_file_at_branch` was called: only the
-   * diff viewer of v2.21.0 to v2.23.0 asks them (to-do 8111).
+   * diff viewer of v2.21.0 to v2.23.0 asks them (to-do 8304).
    */
   "retired-command.read-file-at-branch",
   /**
    * `get_coordinator_upstream_auto_merge` or `set_coordinator_upstream_auto_merge`
    * was called: a renderer from before v2.36.0 asked about the retired
-   * "always merge" setting (to-do 8111).
+   * "always merge" setting (to-do 8304).
    */
   "retired-command.coordinator-upstream-auto-merge",
 ] as const;

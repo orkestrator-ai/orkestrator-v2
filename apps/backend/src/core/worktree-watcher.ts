@@ -37,7 +37,11 @@ import {
  * Events are hints, never proof. A burst is reported once, after
  * {@link WATCH_SETTLE_MS}, as a {@link WorktreeChangeHint} saying which views it
  * may have changed. The owner decides what to rescan; missed events are the
- * owner's safety scan's job.
+ * owner's safety scan's job. A safety scan that finds a change no hint
+ * announced (`unannouncedChange`) makes the watcher unqualified, so its owner
+ * polls, until the watcher delivers an event again: on a Mac whose `fseventsd`
+ * has stopped delivering, every change otherwise waited for the two-minute
+ * safety scan (to-do 8171).
  */
 
 /** Editors save in bursts; one scan after the burst is enough. */
@@ -85,6 +89,24 @@ export const WATCH_HINT_MAX_PATHS = 256;
  */
 export const WATCH_IGNORED_REMEASURE_MS = 60_000;
 
+/**
+ * A change the owner's safety scan found that no hint announced is forgiven
+ * when the watcher delivers any event within this: FSEvents' latency, the
+ * helper's flush and the settle window can still be carrying it.
+ */
+export const WATCH_MISS_GRACE_MS = 3_000;
+
+/**
+ * How long a watcher that missed a change stays unqualified at least, counted
+ * from its latest miss: while it is distrusted its owner polls, and a poll
+ * that finds a change before any event does counts as another miss. It is
+ * qualified again by the first event it delivers after this, so one that
+ * receives nothing, or receives events only after the polls have found their
+ * changes (macOS with a saturated `fseventsd`, to-do 8171), leaves its owner
+ * polling for as long as that lasts.
+ */
+export const WATCH_DISTRUST_MS = 300_000;
+
 export type StartWatch = (
   target: string,
   listener: (eventType: string, filename: string | null) => void,
@@ -121,11 +143,23 @@ export interface WorktreeWatcherOptions {
    * Called when {@link WorktreeWatcher.qualified} becomes true, and again if a
    * directory this process may not read turns up after that, which makes it
    * false for good. A large ignored tree left out (Linux) withdraws it the same
-   * way, and putting the tree back reports it true again.
+   * way, and putting the tree back reports it true again; so does a missed
+   * change ({@link WorktreeWatcher.unannouncedChange}) and the first event
+   * delivered once {@link WATCH_DISTRUST_MS} has passed.
    */
   onCoverageChange?: () => void;
   /** Injected for tests; the clock {@link WATCH_IGNORED_REMEASURE_MS} is read from. */
   now?: () => number;
+  /** Injected for tests; defaults to {@link WATCH_MISS_GRACE_MS}. */
+  missGraceMs?: number;
+  /** Injected for tests; defaults to {@link WATCH_DISTRUST_MS}. */
+  distrustMs?: number;
+  /**
+   * Called when a change the owner reported through
+   * {@link WorktreeWatcher.unannouncedChange} is held against the watcher, just
+   * before it withdraws qualified coverage.
+   */
+  onMissedChange?: () => void;
 }
 
 export interface WorktreeWatcher {
@@ -144,7 +178,11 @@ export interface WorktreeWatcher {
   /**
    * The owner's safety scan found a change that no hint since its previous
    * scan announced. Container watchers use it to stop being trusted
-   * (`container-worktree-signal.ts`); local watchers omit it.
+   * (`container-worktree-signal.ts`), and so do local ones: unless an event
+   * arrives within {@link WATCH_MISS_GRACE_MS}, a local watcher withdraws
+   * qualified coverage until it delivers an event again, at least
+   * {@link WATCH_DISTRUST_MS} after its latest miss. Owners also report the
+   * changes their polls find while it is distrusted (to-do 8171).
    */
   unannouncedChange?(): void;
 }
@@ -258,6 +296,8 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
   // Large ignored trees are measured before they are watched (Linux).
   const measuring = splitting && !!plan?.listIgnoredTrees && !!plan.exceedsDirectories;
   const now = options.now ?? Date.now;
+  const missGraceMs = options.missGraceMs ?? WATCH_MISS_GRACE_MS;
+  const distrustMs = options.distrustMs ?? WATCH_DISTRUST_MS;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
@@ -281,6 +321,14 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
   // polling. Closing it instead had its owner re-walk the whole tree on every
   // retry, and gave it nothing a polling owner does not already have.
   let unreadable = false;
+  // The owner's scan found a change no hint announced, and no event explained
+  // it: the platform is not delivering (macOS's `fseventsd` can stop for every
+  // client on the host, to-do 8171). Set to when that was decided; a quiet
+  // watcher proves nothing until it delivers again.
+  let distrustedAt: number | undefined;
+  let missTimer: ReturnType<typeof setTimeout> | undefined;
+  // Raw platform events received, whatever they named.
+  let deliveries = 0;
   let excluded: readonly string[] = [];
   // Ignored trees too large for Bun to walk on the event loop (Linux only,
   // `WATCH_PLAN_MAX_IGNORED_TREE_DIRECTORIES`). Left out like `node_modules`,
@@ -332,6 +380,7 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       closed ||
       coverageAnnounced ||
       unreadable ||
+      distrustedAt !== undefined ||
       oversized.length > 0 ||
       !metadataCovered ||
       !treeCovered ||
@@ -350,6 +399,86 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     if (closed || was === next.length > 0) return;
     if (!coverageAnnounced) announceCoverage();
     else if (!unreadable) options.onCoverageChange?.();
+  };
+
+  /** Tells the owner that trust, and with it maybe coverage, changed. */
+  const announceTrustChange = () => {
+    if (closed) return;
+    if (!coverageAnnounced) announceCoverage();
+    else if (!unreadable) options.onCoverageChange?.();
+  };
+
+  /** Like a large tree left out, distrust is withdrawn (and restored by `noteDelivery`). */
+  const distrust = () => {
+    if (distrustedAt !== undefined) return;
+    distrustedAt = now();
+    announceTrustChange();
+  };
+
+  /**
+   * Every platform event is proof of delivery, relevant to a view or not.
+   *
+   * Trust comes back on whichever event arrives first, and that may be one no
+   * view cares about (Git writing an object). Whatever changed while the
+   * watcher was distrusted was never announced, and a view cached under its
+   * earlier qualified coverage (the file tree, which nothing reads while the
+   * Files panel is closed) would otherwise count as valid again the moment
+   * coverage returns. So the owner is told "anything may have changed" first,
+   * dirtying both views, and only then is coverage announced.
+   *
+   * Trust itself is restored before that call, though. The owner starts its
+   * reconciling scan inside it, and records whether the watcher was qualified
+   * when the scan began; a scan recorded as unqualified cannot be the baseline
+   * against which the next safety scan spots a miss, so the first change
+   * missed after recovery would go unreported (and keep the safety cadence)
+   * until the scan after that.
+   */
+  const noteDelivery = () => {
+    deliveries += 1;
+    if (distrustedAt === undefined || now() - distrustedAt < distrustMs) return;
+    distrustedAt = undefined;
+    if (closed) return;
+    options.onChange();
+    announceTrustChange();
+  };
+
+  /** Everything qualified coverage needs except trust in delivery. */
+  const coveredApartFromTrust = () =>
+    watchEstablished &&
+    !closed &&
+    !unreadable &&
+    oversized.length === 0 &&
+    metadataCovered &&
+    treeCovered &&
+    unestablished === 0;
+
+  /**
+   * The owner's scan found a change no hint announced. A burst still settling
+   * here, or an event arriving within the grace, means the watcher saw it and
+   * the scan merely came first.
+   *
+   * A distrusted watcher's owner polls, and a poll that finds a change before
+   * any event does restarts the distrust: a saturated `fseventsd` still hands
+   * out a few events tens of seconds late, and each of those would otherwise
+   * restore coverage that the next change then waits out the safety scan for
+   * (measured on arktech-mini, to-do 8171). A watcher left unqualified by
+   * something else (an unreadable directory, a tree left out) is not covering
+   * the change, so its miss proves nothing about delivery.
+   */
+  const suspectMiss = () => {
+    if (!coveredApartFromTrust() || missTimer || timer) return;
+    const seen = deliveries;
+    missTimer = setTimeout(() => {
+      missTimer = undefined;
+      if (closed || deliveries !== seen || timer) return;
+      if (distrustedAt !== undefined) {
+        distrustedAt = now();
+        return;
+      }
+      options.onMissedChange?.();
+      distrust();
+    }, missGraceMs);
+    missTimer.unref?.();
   };
 
   /** Everything the plan leaves out; a dependency tree inside a large one goes with it. */
@@ -438,9 +567,14 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     // `undefined` when the watched directory itself is removed. Both mean
     // "unknown"; normalising here keeps every listener on one spelling instead
     // of throwing from inside the platform's event dispatch.
-    const handle = start(target, (eventType, filename) => listener(eventType, filename ?? null), {
-      recursive,
-    });
+    const handle = start(
+      target,
+      (eventType, filename) => {
+        noteDelivery();
+        listener(eventType, filename ?? null);
+      },
+      { recursive },
+    );
     // A watch can fail asynchronously - the directory is removed, the platform
     // runs out of descriptors or watches. Surfacing it lets the owner fall back
     // to polling instead of going quiet forever. An unreadable directory inside
@@ -841,6 +975,8 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     closed = true;
     if (timer) clearTimeout(timer);
     timer = undefined;
+    if (missTimer) clearTimeout(missTimer);
+    missTimer = undefined;
     for (const { handle } of treeWatches.values()) closeQuietly(handle);
     for (const handle of metadataWatchers) closeQuietly(handle);
     treeWatches.clear();
@@ -852,17 +988,10 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       return watchEstablished && !closed;
     },
     get qualified() {
-      return (
-        watchEstablished &&
-        !closed &&
-        !unreadable &&
-        oversized.length === 0 &&
-        metadataCovered &&
-        treeCovered &&
-        unestablished === 0
-      );
+      return distrustedAt === undefined && coveredApartFromTrust();
     },
     close,
+    unannouncedChange: suspectMiss,
   };
 }
 

@@ -1,7 +1,7 @@
 # `ACP bridge > reaps a session process when the creating HTTP client disconnects` (`bridges/acp-bridge/src/acp-http.test.ts`)
 
 - **ID:** 0034
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-25
 - **Original command:** `bun run test` (complete concurrent cross-platform
   suite).
@@ -79,3 +79,33 @@
   host temporary directory.
 - **Disposition:** existing intermittent failure; no assertion, timeout, skip,
   or production disconnect behavior changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** a test race, not a disconnect defect. The test set
+  `ACP_RPC_TIMEOUT_MS: "100"`, and the bridge starts that timer when it sends
+  `initialize` right after spawning the fake agent. When the fake agent's
+  module graph took longer than 100 ms to load (a loaded host), the bridge
+  timed out `initialize` and killed the agent before it appended `start:`,
+  so the wait for `start:` read an empty file until its deadline: the recorded
+  `Timed out waiting for ACP state: ""`. The 100 ms timeout also meant the RPC
+  timeout, not the client disconnect, could reap the session. Separately, the
+  harness passed the ambient `ORKESTRATOR_AGENT_MCP_URL`/`_TOKEN` and the
+  backend's `ORKESTRATOR_PARENT_PID` to every test bridge (the 2026-09-25
+  recurrence's deterministic failure inside an agent environment).
+- **Fix:** `bridges/acp-bridge/src/acp-http.test.ts` sets the RPC timeout to
+  one hour, so the client disconnect is the only way the hung session can be
+  reaped and the `start:` wait always ends on the agent's own line.
+  `bridges/acp-bridge/src/acp-test-harness.ts` (`spawnBridge`) removes the
+  agent MCP variables and points `ORKESTRATOR_PARENT_PID` at the test process,
+  and its waits are hang watchdogs on real signals: 60 s per state wait, 90 s
+  for the child's own `server.listening` line, 180 s per test.
+- **Reproduced:** yes. A temporary `Bun.sleepSync(500)` before the fake agent
+  writes `start:` (`testing/fake-agent-context.ts`) made the unchanged test
+  fail with `Timed out waiting for ACP state: ""`. With the fix and the same
+  injected delay it passed 3 of 3 (`--rerun-each=3`). Contention alone
+  (6 burners, `--rerun-each=5`) did not reproduce it with the old value.
+- **Stress:** `mise run test:logged -- --name stress-acp-http-transcript -- bun scripts/test-under-contention.ts --burners 6 -- bun test --cwd bridges/acp-bridge --preload ../../tests/setup-node.ts ./src/acp-http.test.ts ./src/acp-transcript.test.ts -t "reaps a session process|bounds an aggregate interactive transcript" --rerun-each=3`:
+  this test passed 3 of 3. (The run's three failures were 9853's file, second
+  in a non-isolated process, whose shared-bridge `beforeAll` got Bun's own 5 s
+  budget; see the note in 0039.)

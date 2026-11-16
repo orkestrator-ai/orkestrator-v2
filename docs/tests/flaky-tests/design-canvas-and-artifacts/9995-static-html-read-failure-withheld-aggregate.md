@@ -1,7 +1,7 @@
 # a read failure is withheld too, and a successful Retry releases it
 
 - **ID:** 9995
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-13
 - **Test:** `StaticHtmlArtifactView > document text in Find > a read failure is withheld too, and a successful Retry releases it`
 - **File:** `apps/web/src/components/chat/rich/StaticHtmlArtifactView.test.tsx:606`
@@ -71,9 +71,45 @@ merged `main`; the 9996 claim stays so the number is not reused.
   of the unchanged file: `PASSED ALONE (2.5s)`. Evidence:
   `orkestrator-test-run.2L8bxS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 
+- **2026-11-15**, base `f53768371` (origin/main merged into branch
+  `environment-files-1d94a340e118-r1` at `59bcba591`; the branch changes
+  backend seed-file code, `docker/workspace-setup.sh`, tests and docs,
+  nothing under `apps/web`). Same assertion at line 606, received `false`
+  (39.43 ms) right after the wait for "The document could not be loaded."
+  passed. Command: `mise run test:full` on Linux x86_64 with another
+  worktree holding host test capacity. Counts: web 15,014 passed, 10
+  skipped, 1 failed (this case); backend 22,109 passed, 308 skipped, 4
+  failed (unrelated: a seed regression fixed on the branch and three WebKit
+  engine files on a host missing `libicu74`/`libxml2`); desktop 2,437,
+  protocol 5,943, toolchain 135 and web-public 52 passed; root, bridge and
+  codex protocol lockfile groups passed. The aggregate runner's lone rerun
+  of the unchanged file: `PASSED ALONE (3.2s)`. `mise run flaky:recurrence
+  -- 9995` against this base: open, a recurrence. Evidence:
+  `orkestrator-test-run.hmAGNc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  under the host temporary directory.
+
 A hypothesis recorded with those observations, still unconfirmed: the error
 text and the search-withheld mark may be published in separate steps, so the
 assertion can run between them when a loaded host delays the second.
 Reproduce it first before changing the test. If the gap is real, Find could
 briefly see a failed document's text, which is a product question, not a
 test budget.
+
+## Recurrence 2026-11-15 (base a8b89f154)
+
+The project-removal review fix (`ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run
+test`, default worker plan, host slots shared with other worktrees) failed
+the sibling test `a frame over the element limit and a read over the budget
+both withhold the document` again on the same `artifactSearchBodyWithheld`
+assertion (57 ms). The aggregate runner's lone rerun of the unchanged file:
+`PASSED ALONE (2.1s)`. The branch changes backend storage only; the web
+component imports none of it. `mise run flaky:recurrence -- 9995 --base
+a8b89f154` answered open.
+
+## Resolution (2026-11-15)
+
+- **Class:** product race (C). The hypothesis above was right.
+- **Root cause:** `StaticHtmlArtifactView` withheld a failed read's text from Find (`withholdArtifactSearchBody`) in a passive `useEffect` keyed on `readFailed`. The commit that shows "The document could not be loaded." (or the `unavailable` state) and that effect ran in separate tasks. A loaded host widened the gap enough for the test, and Find, to see the failure on screen while `artifactSearchBodyWithheld` still answered `false`.
+- **Fix:** `apps/web/src/components/chat/rich/StaticHtmlArtifactView.tsx` runs that withhold in a `useLayoutEffect`, so it happens in the same commit that shows the failure. The frame-error paths already withheld synchronously in their callbacks. The test is unchanged.
+- **Reproduced:** yes. `NODE_ENV=test mise run test:logged -- --name r9995 -- bun scripts/test-under-contention.ts --core 12 --burners 6 -- bun --cwd=apps/web test src/components/chat/rich/StaticHtmlArtifactView.test.tsx -t "withhold" --rerun-each=40` failed on the unchanged code at run 34 of 40. That was the recorded sibling assertion at line 594, `artifactSearchBodyWithheld(REF)` received `false`.
+- **Stress:** the same command passed with the fix, at `--rerun-each=40` (20.0 s) and at `--rerun-each=150` (47.2 s). The whole `src/components/chat/rich` directory passed with `--parallel=4` (27.6 s).

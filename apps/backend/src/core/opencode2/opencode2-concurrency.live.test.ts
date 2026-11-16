@@ -14,7 +14,7 @@ import {
 } from "./reload-gate.js";
 
 /**
- * Concurrent sessions on one 2.x server (to-do 7905 task 2): two tabs in one
+ * Concurrent sessions on one 2.x server (to-do 7905 (retired) task 2): two tabs in one
  * environment share one `opencode serve` and its reload gate. Two providers
  * on the same server generation (a tab's and a pipeline's, as
  * `environment-provider.ts` builds them) and two sessions on one provider

@@ -13,7 +13,7 @@ import {
 } from "./coordinator-live-delegation.js";
 
 /**
- * The `surfaces` scenario (to-do 0395 task 4): a main coordinator calls the
+ * The `surfaces` scenario (to-do 0395 (retired) task 4): a main coordinator calls the
  * worker-surface tools once each on a worker of its own node, and the user's
  * approval copies an uncommitted checkout file into that worker.
  *
@@ -51,7 +51,7 @@ export interface SurfacesProbe {
 }
 
 /**
- * Whether the scenario runs on `platform`. Claude only (to-do 0395 task 4):
+ * Whether the scenario runs on `platform`. Claude only (to-do 0395 (retired) task 4):
  * the tools are Control MCP calls, so the provider matters little, and one
  * run covers every tool without a billed turn per platform. Other platforms
  * record a skip.

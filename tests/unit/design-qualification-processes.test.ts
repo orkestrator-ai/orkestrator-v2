@@ -40,7 +40,9 @@ async function fixture() {
   return {
     root,
     port,
-    options: (mode = "ready", timeoutMs = 5_000) => ({
+    // The readiness wait ends on the server answering; this is only its hang
+    // watchdog, so it is generous enough for a starved host.
+    options: (mode = "ready", timeoutMs = 60_000) => ({
       command: [process.execPath, script, String(port), mode],
       cwd: root,
       outDir: root,
@@ -212,13 +214,23 @@ describe("design qualification process ownership", () => {
       stdio: "ignore",
     });
     try {
+      // Wait for the wrapper to record its descendant (the readiness signal).
+      // A read can land between the file's creation and its write and see "",
+      // which is 0, so keep reading until a pid arrives (flake 1011). A
+      // wrapper that exits first ends the wait at once, so a broken fixture
+      // fails fast and a slow host is never mistaken for one; the test's budget
+      // is only the hang watchdog.
+      const wrapperExited = new Promise<void>((resolve) => {
+        child.once("exit", () => resolve());
+        child.once("error", () => resolve());
+      });
       let descendant = 0;
-      for (let i = 0; i < 200; i++) {
+      while (!descendant) {
         try {
           descendant = Number(await readFile(path.join(f.root, "descendant"), "utf8"));
-          break;
         } catch {
-          await delay(10);
+          const exited = await Promise.race([wrapperExited.then(() => true), delay(10, false)]);
+          if (exited) break;
         }
       }
       expect(descendant).toBeGreaterThan(0);

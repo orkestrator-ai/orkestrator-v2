@@ -125,7 +125,6 @@ const stopNativeAgentBackgroundTaskMock = mock(async (input: { taskId: string })
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getNativeAgentSyncCapabilities: async () => ({
-    projectionSyncVersions: [1],
     historyPagingVersions: [1],
     progressiveViewVersions: [1],
   }),
@@ -143,9 +142,6 @@ mock.module("@/lib/backend", () => ({
     accounts: [],
     active: { claude: "default", codex: "default" },
   }),
-  getNativeAgentProjectionUpdate: async () => {
-    throw new Error("joined projection must not run on the progressive path");
-  },
   getNativeAgentTranscriptUpdate: async () => {
     transcriptReads += 1;
     const next = transcriptUpdates.shift();

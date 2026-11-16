@@ -39,7 +39,6 @@ const transcriptKnownTokens: Array<string | undefined> = [];
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getNativeAgentSyncCapabilities: async () => ({
-    projectionSyncVersions: [1],
     historyPagingVersions: [1],
     progressiveViewVersions: [1],
     transcriptPatchVersions: [],
@@ -90,9 +89,6 @@ mock.module("@/lib/backend", () => ({
     agent: "codex",
   }),
   adoptNativeAgentSession: async () => ({}),
-  getNativeAgentProjectionUpdate: async () => {
-    throw new Error("Unexpected joined projection request");
-  },
 }));
 
 const { useNativeAgentSession, resetNativeAgentSyncCapabilityForTests } =

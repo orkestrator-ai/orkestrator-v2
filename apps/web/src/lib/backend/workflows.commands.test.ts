@@ -6,7 +6,6 @@ import {
   enqueuePromptQueueMessage,
   getNativeAgentDiscoveryUpdate,
   getNativeAgentLiveUpdate,
-  getNativeAgentProjectionUpdate,
   listNativeAgentBranches,
   refreshNativeAgentCommands,
   setNativeAgentResumableSessionArchived,
@@ -91,7 +90,7 @@ describe("native command wrappers", () => {
  * before it sent `slashCommands` rows without `id`, `executionKind` or
  * `bindingRevision`, and no `slashCommandCatalogue` or section `catalogue`.
  */
-describe("mixed-version: command fields in projection and discovery payloads", () => {
+describe("mixed-version: command fields in discovery payloads", () => {
   const identity = {
     backendInstanceId: "backend-1",
     environmentId: "env-1",
@@ -113,34 +112,6 @@ describe("mixed-version: command fields in projection and discovery payloads", (
     token: "d-1",
     value: { identity, sections: { commands }, ...extra },
   });
-  const projectionInput = {
-    environmentId: "env-1",
-    agent: "codex" as const,
-    logicalSessionKey: "k",
-    syncVersion: 1 as const,
-    liveWindow: { messages: 100, targetBytes: 512 * 1024 } as const,
-  };
-  const projection = (extra: Record<string, unknown> = {}) => ({
-    platform: "codex",
-    environmentId: "env-1",
-    sessionId: "session-1",
-    connection: "connected",
-    turn: { phase: "idle" },
-    messages: [],
-    interactions: [],
-    composerControls: [],
-    capabilities: {},
-    revision: 1,
-    generation: "generation-1",
-    ...extra,
-  });
-  const snapshot = (value: Record<string, unknown>) => ({
-    syncVersion: 1,
-    status: "snapshot",
-    token: "t-1",
-    projection: value,
-  });
-
   test("an older backend's commands section without catalogue state is accepted as is", async () => {
     const response = discovery({
       availability: "ready",
@@ -200,58 +171,6 @@ describe("mixed-version: command fields in projection and discovery payloads", (
         "Invalid native agent discovery update response",
       );
     }
-  });
-
-  test("sync-v1 snapshots are accepted with or without command fields, and with unknown ones", async () => {
-    for (const value of [
-      // An older backend: no command fields at all, or legacy rows only.
-      projection(),
-      projection({ slashCommands: [{ name: "/review", source: "project" }] }),
-      // A current backend, plus fields a newer one may add.
-      projection({
-        slashCommands: [{ name: "/review", id: "codex:/review", source: "project" }],
-        slashCommandCatalogue: { status: "ready", revision: 3, enhanced: true },
-        futureProjectionField: { anything: true },
-      }),
-    ]) {
-      invokeMock.mockImplementation(async () => snapshot(value));
-      await expect(getNativeAgentProjectionUpdate(projectionInput)).resolves.toMatchObject({
-        status: "snapshot",
-        projection: value,
-      });
-    }
-  });
-
-  test("a sync-v1 delta naming a projection field this renderer does not know is refused", async () => {
-    // Known limitation, not reached inside the support window: this renderer
-    // reads projections progressively and asks sync-v1 only for forced
-    // snapshots, which accept unknown fields (above). A renderer old enough
-    // to poll sync-v1 deltas would refuse every delta that changes a field it
-    // predates, such as `slashCommandCatalogue`, and keep its old view.
-    const delta = (setFields: Record<string, unknown>) => ({
-      syncVersion: 1,
-      status: "delta",
-      baseToken: "t-1",
-      token: "t-2",
-      delta: {
-        messageUpserts: [],
-        deletedMessageIds: [],
-        setFields,
-        unsetFields: [],
-        revision: 2,
-        generation: "generation-1",
-      },
-    });
-    invokeMock.mockImplementation(async () =>
-      delta({ slashCommandCatalogue: { status: "stale", revision: 4, enhanced: true } }),
-    );
-    await expect(getNativeAgentProjectionUpdate(projectionInput)).resolves.toMatchObject({
-      status: "delta",
-    });
-    invokeMock.mockImplementation(async () => delta({ futureProjectionField: 1 }));
-    await expect(getNativeAgentProjectionUpdate(projectionInput)).rejects.toThrow(
-      "Invalid native agent projection update response",
-    );
   });
 });
 

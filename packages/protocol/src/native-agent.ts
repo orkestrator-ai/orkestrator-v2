@@ -2717,14 +2717,13 @@ export interface NativeAgentTranscriptView<TMessage = unknown> {
   messageWindow?: NativeAgentMessageWindow;
   title?: string;
   providerRevision?: number;
-  historyCursor?: string;
   /**
-   * `direct` when `historyCursor` pages this view's own `historyEpoch`
-   * straight from the provider (`get_native_agent_message_page` answers with
-   * the same epoch). Absent: the cursor belongs to the joined sync-v1 paging
-   * namespace, as before.
+   * Pages this view's own `historyEpoch` straight from the provider
+   * (`get_native_agent_message_page` answers with the same epoch). Every
+   * cursor is direct: joined paging retired on 2026-11-16, and with it the
+   * `historyPaging` flag that told the two apart.
    */
-  historyPaging?: NativeAgentHistoryPaging;
+  historyCursor?: string;
   historyEpoch: string;
   historyComplete: boolean;
   /**
@@ -2740,8 +2739,6 @@ export interface NativeAgentTranscriptView<TMessage = unknown> {
 
 /** Bound on `revisedMessages`, per view and per delta. */
 export const NATIVE_AGENT_REVISED_MESSAGES_MAX = 64;
-
-export type NativeAgentHistoryPaging = "direct";
 
 /** Action-critical state which is safe to apply without transcript/discovery. */
 export interface NativeAgentSessionStateView {
@@ -2860,7 +2857,6 @@ export interface NativeAgentTranscriptDelta<TMessage = unknown> {
   historyEpoch: string;
   historyComplete: boolean;
   historyCursor?: string;
-  historyPaging?: NativeAgentHistoryPaging;
   title?: string;
   messageWindow?: NativeAgentMessageWindow;
   providerRevision?: number;
@@ -2917,75 +2913,6 @@ export const DEFAULT_NATIVE_AGENT_LIVE_WINDOW = {
 export const NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES = 20 * 1024 * 1024;
 export const NATIVE_AGENT_SYNC_MAX_PAGE_BYTES = 16 * 1024 * 1024 + 64 * 1024;
 
-export type NativeAgentProjectionField =
-  | "sessionId"
-  | "title"
-  | "shareUrl"
-  | "cursor"
-  | "messageWindow"
-  | "composer"
-  | "readiness"
-  | "queue"
-  | "asyncQuestionResponses"
-  | "contextUsage"
-  | "goal"
-  | "suborks"
-  | "rateLimits"
-  | "runtime"
-  | "runtimeHealthAuthoritative"
-  | "notices"
-  | "recoverableDispatch"
-  | "retiredDispatch"
-  | "backgroundTasks"
-  | "suggestedPrompt"
-  | "completionBlockedByBackgroundTasks"
-  | "turnBoundaries"
-  | "slashCommands"
-  | "slashCommandCatalogue";
-
-export interface NativeAgentProjectionDelta<TMessage = unknown> {
-  messageUpserts: TMessage[];
-  /** Present only when the ordered membership of the live tail changed. */
-  liveMessageIds?: string[];
-  /** Authoritative removals from the conversation, not ordinary tail eviction. */
-  deletedMessageIds: string[];
-  /** Complete replacements for changed non-message projection fields. */
-  setFields: Partial<
-    Omit<NativeAgentSessionProjection<TMessage>, "messages" | "revision" | "generation">
-  >;
-  /** Optional fields that ceased to exist. */
-  unsetFields: NativeAgentProjectionField[];
-  /** Target projection authority installed atomically with the operations. */
-  revision: number;
-  generation: string | number;
-  cursor?: string;
-}
-
-export type NativeAgentProjectionUpdate<TMessage = unknown> =
-  | {
-      syncVersion: typeof NATIVE_AGENT_SYNC_VERSION;
-      status: "snapshot";
-      token: string;
-      projection: NativeAgentSessionProjection<TMessage>;
-      resetReason?: "initial" | "forced" | "unknown-token" | "expired" | "identity-changed";
-    }
-  | {
-      syncVersion: typeof NATIVE_AGENT_SYNC_VERSION;
-      status: "unchanged";
-      token: string;
-    }
-  | {
-      syncVersion: typeof NATIVE_AGENT_SYNC_VERSION;
-      status: "delta";
-      baseToken: string;
-      token: string;
-      delta: NativeAgentProjectionDelta<TMessage>;
-    }
-  | {
-      syncVersion: typeof NATIVE_AGENT_SYNC_VERSION;
-      status: "missing";
-    };
-
 export interface NativeAgentMessagePage<TMessage = unknown> {
   syncVersion: typeof NATIVE_AGENT_SYNC_VERSION;
   messages: TMessage[];
@@ -3001,66 +2928,6 @@ export interface NativeAgentMessagePage<TMessage = unknown> {
    */
   rowsTrimmed?: true;
 }
-
-const PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
-  "platform",
-  "environmentId",
-  "sessionId",
-  "title",
-  "shareUrl",
-  "cursor",
-  "connection",
-  "turn",
-  "messageWindow",
-  "interactions",
-  "composerControls",
-  "composer",
-  "readiness",
-  "capabilities",
-  "queue",
-  "asyncQuestionResponses",
-  "contextUsage",
-  "goal",
-  "suborks",
-  "rateLimits",
-  "runtime",
-  "runtimeHealthAuthoritative",
-  "notices",
-  "recoverableDispatch",
-  "retiredDispatch",
-  "backgroundTasks",
-  "suggestedPrompt",
-  "completionBlockedByBackgroundTasks",
-  "turnBoundaries",
-  "slashCommands",
-  "slashCommandCatalogue",
-]);
-const OPTIONAL_PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
-  "sessionId",
-  "title",
-  "shareUrl",
-  "cursor",
-  "messageWindow",
-  "composer",
-  "readiness",
-  "queue",
-  "asyncQuestionResponses",
-  "contextUsage",
-  "goal",
-  "suborks",
-  "rateLimits",
-  "runtime",
-  "runtimeHealthAuthoritative",
-  "notices",
-  "recoverableDispatch",
-  "retiredDispatch",
-  "backgroundTasks",
-  "suggestedPrompt",
-  "completionBlockedByBackgroundTasks",
-  "turnBoundaries",
-  "slashCommands",
-  "slashCommandCatalogue",
-]);
 
 export function isNativeAgentSessionProjection(
   value: unknown,
@@ -3100,89 +2967,6 @@ export function isNativeAgentSessionProjection(
     candidate.connection === "connecting" ||
     candidate.connection === "connected" ||
     candidate.connection === "error"
-  );
-}
-
-export function isNativeAgentProjectionUpdate(
-  value: unknown,
-): value is NativeAgentProjectionUpdate {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const candidate = value as Record<string, unknown>;
-  if (candidate.syncVersion !== NATIVE_AGENT_SYNC_VERSION || typeof candidate.status !== "string") {
-    return false;
-  }
-  if (candidate.status === "missing") return true;
-  if (
-    typeof candidate.token !== "string" ||
-    candidate.token.length === 0 ||
-    candidate.token.length > 1024
-  ) {
-    return false;
-  }
-  if (candidate.status === "unchanged") return true;
-  if (candidate.status === "snapshot") {
-    return Boolean(
-      isNativeAgentSessionProjection(candidate.projection) &&
-      (candidate.resetReason === undefined ||
-        ["initial", "forced", "unknown-token", "expired", "identity-changed"].includes(
-          candidate.resetReason as string,
-        )),
-    );
-  }
-  if (
-    candidate.status !== "delta" ||
-    typeof candidate.baseToken !== "string" ||
-    candidate.baseToken.length === 0 ||
-    candidate.baseToken.length > 1024
-  ) {
-    return false;
-  }
-  const delta = candidate.delta as Record<string, unknown> | undefined;
-  if (!delta || typeof delta !== "object") return false;
-  if (
-    !Array.isArray(delta.messageUpserts) ||
-    !Array.isArray(delta.deletedMessageIds) ||
-    !delta.setFields ||
-    typeof delta.setFields !== "object" ||
-    Array.isArray(delta.setFields) ||
-    !Array.isArray(delta.unsetFields) ||
-    delta.messageUpserts.length > 1024 ||
-    delta.deletedMessageIds.length > 1024 ||
-    delta.unsetFields.length > 64 ||
-    (delta.liveMessageIds !== undefined && !Array.isArray(delta.liveMessageIds))
-  ) {
-    return false;
-  }
-  const operationCount =
-    delta.messageUpserts.length +
-    delta.deletedMessageIds.length +
-    delta.unsetFields.length +
-    (Array.isArray(delta.liveMessageIds) ? delta.liveMessageIds.length : 0) +
-    Object.keys(delta.setFields as object).length;
-  const upsertIds = delta.messageUpserts.map((message) => (message as { id?: unknown })?.id);
-  const liveMessageIds = Array.isArray(delta.liveMessageIds) ? delta.liveMessageIds : [];
-  if (
-    upsertIds.some((id) => typeof id !== "string" || id.length === 0 || id.length > 4_096) ||
-    new Set(upsertIds).size !== upsertIds.length ||
-    delta.deletedMessageIds.some(
-      (id) => typeof id !== "string" || id.length === 0 || id.length > 4_096,
-    ) ||
-    new Set(delta.deletedMessageIds).size !== delta.deletedMessageIds.length ||
-    liveMessageIds.some((id) => typeof id !== "string" || id.length === 0 || id.length > 4_096) ||
-    new Set(liveMessageIds).size !== liveMessageIds.length
-  ) {
-    return false;
-  }
-  return (
-    operationCount <= 1024 &&
-    Number.isSafeInteger(delta.revision) &&
-    (delta.revision as number) >= 0 &&
-    (typeof delta.generation === "string" || typeof delta.generation === "number") &&
-    Object.keys(delta.setFields as object).length <= 64 &&
-    Object.keys(delta.setFields as object).every((field) => PROJECTION_FIELD_SET.has(field)) &&
-    delta.unsetFields.every(
-      (field) => typeof field === "string" && OPTIONAL_PROJECTION_FIELD_SET.has(field),
-    )
   );
 }
 
@@ -3261,7 +3045,6 @@ function isNativeAgentTranscriptDelta(value: unknown): value is NativeAgentTrans
     typeof candidate.historyComplete !== "boolean" ||
     (candidate.historyCursor !== undefined &&
       (typeof candidate.historyCursor !== "string" || candidate.historyCursor.length > 1_024)) ||
-    (candidate.historyPaging !== undefined && candidate.historyPaging !== "direct") ||
     (candidate.liveMessageIds !== undefined &&
       (!Array.isArray(candidate.liveMessageIds) || candidate.liveMessageIds.length > 4_096)) ||
     (candidate.messagePatches !== undefined &&
@@ -3338,8 +3121,6 @@ export function applyNativeAgentTranscriptDelta<TMessage>(
      * to `historyComplete` and to whatever paging state the consumer owns.
      */
     historyCursor: delta.historyCursor,
-    // Mirrors the cursor it describes, so it is authoritative in the same way.
-    historyPaging: delta.historyPaging,
     ...(delta.title === undefined ? {} : { title: delta.title }),
     ...(delta.messageWindow === undefined ? {} : { messageWindow: delta.messageWindow }),
     ...(delta.providerRevision === undefined ? {} : { providerRevision: delta.providerRevision }),
@@ -3389,7 +3170,6 @@ export function isNativeAgentTranscriptUpdate(
     typeof transcript.historyComplete !== "boolean" ||
     (transcript.historyCursor !== undefined &&
       (typeof transcript.historyCursor !== "string" || transcript.historyCursor.length > 1_024)) ||
-    (transcript.historyPaging !== undefined && transcript.historyPaging !== "direct") ||
     (transcript.historyReconciliationToken !== undefined &&
       (typeof transcript.historyReconciliationToken !== "string" ||
         transcript.historyReconciliationToken.length > 128)) ||
@@ -3519,49 +3299,4 @@ export function isNativeAgentMessagePage(value: unknown): value is NativeAgentMe
     );
   }
   return false;
-}
-
-/** Pure, fail-closed application of one exact-base projection delta. */
-export function applyNativeAgentProjectionDelta<TMessage>(
-  current: NativeAgentSessionProjection<TMessage>,
-  delta: NativeAgentProjectionDelta<TMessage>,
-): NativeAgentSessionProjection<TMessage> | null {
-  const currentMessages = new Map<string, TMessage>();
-  for (const message of current.messages) {
-    const id = (message as { id?: unknown })?.id;
-    if (typeof id !== "string" || currentMessages.has(id)) return null;
-    currentMessages.set(id, message);
-  }
-  for (const id of delta.deletedMessageIds) {
-    if (typeof id !== "string") return null;
-    currentMessages.delete(id);
-  }
-  for (const message of delta.messageUpserts) {
-    const id = (message as { id?: unknown })?.id;
-    if (typeof id !== "string") return null;
-    currentMessages.set(id, message);
-  }
-  const order =
-    delta.liveMessageIds ?? current.messages.map((message) => (message as { id: string }).id);
-  if (new Set(order).size !== order.length || order.some((id) => !currentMessages.has(id)))
-    return null;
-  // An upsert the resolved order never mentions has no defined position. Its
-  // membership change is exactly what `liveMessageIds` exists to describe, so a
-  // delta that omits it is ambiguous rather than empty — appending or dropping
-  // would both invent an ordering the sender never sent. Fail closed and let
-  // the caller recover from an authoritative snapshot.
-  const ordered = new Set(order);
-  for (const message of delta.messageUpserts) {
-    if (!ordered.has((message as { id: string }).id)) return null;
-  }
-  const next = {
-    ...current,
-    ...delta.setFields,
-    messages: order.map((id) => currentMessages.get(id)!),
-    revision: delta.revision,
-    generation: delta.generation,
-    ...(delta.cursor === undefined ? {} : { cursor: delta.cursor }),
-  } as NativeAgentSessionProjection<TMessage>;
-  for (const field of delta.unsetFields) delete (next as unknown as Record<string, unknown>)[field];
-  return next;
 }

@@ -13,17 +13,13 @@ import type {
   EnsureNativeAgentSessionInput,
   NativeAgentProjectionInput,
   NativeAgentProjectionCacheEntry,
-  NativeAgentSyncState,
   NativeAgentServiceOptions,
   ProviderSessionStateSnapshot,
   ProviderTranscriptSnapshot,
-  NativeAgentProjectionUpdateInput,
   NativeAgentMessagePageInput,
-  NativeAgentProjectionUpdate,
   NativeAgentTranscriptUpdateInput,
   NativeAgentProgressiveInput,
   NativeAgentDiscoveryUpdateInput,
-  NativeAgentProjectionDelta,
   NativeAgentMessagePage,
 } from "./native-agent-service-shared.js";
 import path from "node:path";
@@ -46,15 +42,9 @@ import {
   NATIVE_HISTORY_PAGE_DEFAULT_MESSAGES,
   NATIVE_HISTORY_PAGE_MAX_MESSAGES,
   NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES,
-  NATIVE_SYNC_LIVE_MESSAGES,
-  NATIVE_SYNC_LIVE_TARGET_BYTES,
-  NATIVE_SYNC_MAX_DELTA_BYTES,
-  NATIVE_SYNC_MAX_DELTA_OPERATIONS,
+  NATIVE_DETAIL_RECOVERY_TAIL_MESSAGES,
+  NATIVE_DETAIL_RECOVERY_TAIL_TARGET_BYTES,
   NATIVE_SYNC_MAX_SNAPSHOT_BYTES,
-  NATIVE_SYNC_MAX_REVISIONS,
-  NATIVE_SYNC_MAX_REVISION_BYTES,
-  NATIVE_SYNC_MAX_TOTAL_REVISION_BYTES,
-  NATIVE_SYNC_REVISION_TTL_MS,
   NATIVE_DIRECT_PAGE_CACHE_MAX_BYTES,
   NATIVE_DIRECT_PAGE_CACHE_MAX_ENTRIES,
   NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_BYTES,
@@ -422,11 +412,12 @@ interface InteractiveSnapshotShare {
 }
 
 /**
- * Renderer views of provider sessions: the legacy full projection, its sync
- * deltas, direct history pages, the progressive transcript/state/discovery
- * reads, tool details and the restart display tails.
+ * Renderer views of provider sessions: the legacy full projection, direct
+ * history pages, the progressive transcript/state/discovery reads, tool
+ * details (with the detail-recovery tail that rebuilds an evicted one) and the
+ * restart display tails.
  *
- * Every cache here is bounded (`toolDetailCacheBytes`, `projectionSyncBytes`,
+ * Every cache here is bounded (`toolDetailCacheBytes`,
  * `progressiveTranscriptBytes`, the delta bases, the projected-message and
  * direct-page caches) and reconstructible: providers stay authoritative, so dropping any of it
  * costs a re-read, never user state.
@@ -459,15 +450,13 @@ export class NativeAgentTranscriptProjection {
   private readonly projectionCache = new Map<string, NativeAgentProjectionCacheEntry>();
   /** Content-free debug line for a queue held while the turn is not running. */
   private readonly queuedTurnLog = new QueuedTurnPhaseLog();
-  /** Bounded wire revisions for conditional/delta projection reads. */
-  private readonly projectionSync = new Map<string, NativeAgentSyncState>();
   /**
    * One revision sequence per logical native-agent session.
    *
-   * The legacy full-projection representation and the sync-v1 live tail are
+   * The legacy full-projection representation and the detail-recovery tail are
    * cached under different keys but describe the same session and carry the
    * same generation, and the renderer compares `revision` as a single ordering.
-   * Allocating from separate per-key counters let the sync counter run ahead,
+   * Allocating from separate per-key counters let the recovery counter run ahead,
    * so an authoritative projection returned by a mutation could arrive with a
    * lower revision than the client already held and be discarded as stale.
    */
@@ -475,7 +464,6 @@ export class NativeAgentTranscriptProjection {
     string,
     { generation: string; revision: number }
   >();
-  private projectionSyncBytes = 0;
   /** Provider cursors too long to wrap, named by handle (#2285). */
   private readonly directHistoryCursorHandles = new DirectHistoryCursorHandles();
   /**
@@ -706,7 +694,7 @@ export class NativeAgentTranscriptProjection {
    * for a long time.
    */
   private showChosenTitle(sessionKey: string, title: string, providerSessionId: string): void {
-    for (const key of [sessionKey, `${sessionKey}\0sync-v1`]) {
+    for (const key of [sessionKey, `${sessionKey}\0detail-recovery`]) {
       const entry = this.projectionCache.get(key);
       if (
         !entry ||
@@ -815,8 +803,6 @@ export class NativeAgentTranscriptProjection {
   cacheGauges(): Record<string, number> {
     return {
       projections: this.projectionCache.size,
-      projectionSync: this.projectionSync.size,
-      projectionSyncBytes: this.projectionSyncBytes,
       projectionRevisions: this.projectionRevisions.size,
       projectionEpochs: this.projectionEpochs.size,
       projectionMissingSince: this.projectionMissingSince.size,
@@ -866,8 +852,6 @@ export class NativeAgentTranscriptProjection {
   /** Drop every legacy projection cache; run after shutdown settled the reads. */
   clear(): void {
     this.projectionCache.clear();
-    this.projectionSync.clear();
-    this.projectionSyncBytes = 0;
     this.toolDetailCache.clear();
     this.pinnedToolDetailRefs.clear();
     this.toolDetailCacheBytes = 0;
@@ -1562,113 +1546,6 @@ export class NativeAgentTranscriptProjection {
     };
   }
 
-  private syncCacheKey(input: NativeAgentProjectionUpdateInput): string {
-    return `${nativeAgentSessionStorageKey(
-      input.environmentId,
-      input.agent,
-      input.logicalSessionKey,
-    )}\0sync-v1`;
-  }
-
-  private recordSyncProjection(
-    key: string,
-    projection: NativeAgentSessionProjection,
-  ): { token: string; identityChanged: boolean } {
-    let state = this.projectionSync.get(key);
-    const identity = JSON.stringify([projection.sessionId ?? null, projection.generation]);
-    const identityChanged = Boolean(state && state.identity !== identity);
-    if (!state || identityChanged) {
-      if (state) this.projectionSyncBytes -= state.revisionBytes;
-      state = { incarnation: randomUUID(), identity, revisions: [], revisionBytes: 0 };
-      this.projectionSync.set(key, state);
-    } else {
-      this.projectionSync.delete(key);
-      this.projectionSync.set(key, state);
-    }
-    const token = digestWithMessages(state.incarnation, projection);
-    if (state.currentToken === token) return { token, identityChanged: false };
-    state.currentToken = token;
-    const bytes = encodedBytesWithMessages(projection);
-    if (bytes <= NATIVE_SYNC_MAX_REVISION_BYTES) {
-      state.revisions.push({ token, projection, bytes, createdAt: this.host.now() });
-      state.revisionBytes += bytes;
-      this.projectionSyncBytes += bytes;
-    }
-    const expiredBefore = this.host.now() - NATIVE_SYNC_REVISION_TTL_MS;
-    while (
-      state.revisions.length > NATIVE_SYNC_MAX_REVISIONS ||
-      state.revisionBytes > NATIVE_SYNC_MAX_REVISION_BYTES ||
-      (state.revisions[0]?.createdAt ?? this.host.now()) < expiredBefore
-    ) {
-      const removed = state.revisions.shift();
-      if (!removed) break;
-      state.revisionBytes -= removed.bytes;
-      this.projectionSyncBytes -= removed.bytes;
-    }
-    while (this.projectionSyncBytes > NATIVE_SYNC_MAX_TOTAL_REVISION_BYTES) {
-      const oldestKey = this.projectionSync.keys().next().value as string | undefined;
-      if (!oldestKey) break;
-      const oldest = this.projectionSync.get(oldestKey)!;
-      const removed = oldest.revisions.shift();
-      if (removed) {
-        oldest.revisionBytes -= removed.bytes;
-        this.projectionSyncBytes -= removed.bytes;
-      } else if (oldestKey !== key) {
-        this.projectionSync.delete(oldestKey);
-      } else {
-        break;
-      }
-    }
-    return { token, identityChanged };
-  }
-
-  private projectionDelta(
-    previous: NativeAgentSessionProjection,
-    current: NativeAgentSessionProjection,
-  ): NativeAgentProjectionDelta {
-    const previousById = new Map(
-      previous.messages.map((message) => [(message as { id: string }).id, message] as const),
-    );
-    const currentIds = current.messages.map((message) => (message as { id: string }).id);
-    const previousIds = previous.messages.map((message) => (message as { id: string }).id);
-    const messageUpserts = current.messages.filter((message) => {
-      const id = (message as { id: string }).id;
-      const existing = previousById.get(id);
-      return !existing || !sameEncoding(existing, message);
-    });
-    const setFields: Record<string, unknown> = {};
-    const unsetFields: string[] = [];
-    const previousFields = previous as unknown as Record<string, unknown>;
-    const currentFields = current as unknown as Record<string, unknown>;
-    const fields = new Set([...Object.keys(previousFields), ...Object.keys(currentFields)]);
-    for (const field of fields) {
-      if (field === "messages" || field === "revision" || field === "generation") {
-        continue;
-      }
-      if (!(field in currentFields)) {
-        unsetFields.push(field);
-      } else if (JSON.stringify(previousFields[field]) !== JSON.stringify(currentFields[field])) {
-        setFields[field] = currentFields[field];
-      }
-    }
-    return {
-      messageUpserts,
-      ...(sameIds(previousIds, currentIds) ? {} : { liveMessageIds: currentIds }),
-      // Rows that only aged out of the live tail are not deletions; the same
-      // rule as the transcript view's delta.
-      deletedMessageIds: tailDeletions(
-        previousIds,
-        currentIds,
-        current.messageWindow?.truncated === true,
-      ),
-      setFields,
-      unsetFields: unsetFields as NativeAgentProjectionDelta["unsetFields"],
-      revision: current.revision,
-      generation: current.generation,
-      ...(current.cursor === undefined ? {} : { cursor: current.cursor }),
-    };
-  }
-
   private progressiveKey(
     input: Pick<NativeAgentProgressiveInput, "environmentId" | "agent" | "logicalSessionKey">,
     domain: string,
@@ -1901,7 +1778,6 @@ export class NativeAgentTranscriptProjection {
       historyEpoch: current.historyEpoch,
       historyComplete: current.historyComplete,
       ...(current.historyCursor ? { historyCursor: current.historyCursor } : {}),
-      ...(current.historyPaging ? { historyPaging: current.historyPaging } : {}),
       ...(current.title ? { title: current.title } : {}),
       ...(current.messageWindow ? { messageWindow: current.messageWindow } : {}),
       ...(current.providerRevision === undefined
@@ -2603,9 +2479,7 @@ export class NativeAgentTranscriptProjection {
         },
         ...(snapshot.title ? { title: snapshot.title } : {}),
         ...(snapshot.revision === undefined ? {} : { providerRevision: snapshot.revision }),
-        ...(directHistoryCursor
-          ? { historyCursor: directHistoryCursor, historyPaging: "direct" as const }
-          : {}),
+        ...(directHistoryCursor ? { historyCursor: directHistoryCursor } : {}),
         historyEpoch,
         historyComplete: complete,
         ...(revisedMessages.length ? { revisedMessages } : {}),
@@ -3038,7 +2912,7 @@ export class NativeAgentTranscriptProjection {
       if (!holdsPreview) scheduleHydration(false);
       throw error;
     }
-    if (!holdsPreview) scheduleHydration(projection.value.historyPaging === "direct");
+    if (!holdsPreview) scheduleHydration(projection.value.historyCursor !== undefined);
     return projection;
   }
 
@@ -3531,7 +3405,7 @@ export class NativeAgentTranscriptProjection {
     // transcript cache.
     const storedContextUsage = [
       this.projectionCache.get(resolved.key)?.projection,
-      this.projectionCache.get(`${resolved.key}\0sync-v1`)?.projection,
+      this.projectionCache.get(`${resolved.key}\0detail-recovery`)?.projection,
     ].find(
       (projection) => projection?.sessionId === resolved.session.providerSessionId,
     )?.contextUsage;
@@ -4324,73 +4198,6 @@ export class NativeAgentTranscriptProjection {
     };
   }
 
-  async getProjectionUpdate(
-    input: NativeAgentProjectionUpdateInput,
-  ): Promise<NativeAgentProjectionUpdate> {
-    this.host.assertProjectionInput(input);
-    const projection = await this.refreshProjection(
-      { ...input, messageLimit: NATIVE_SYNC_LIVE_MESSAGES, representation: "sync-v1" },
-      true,
-    );
-    if (!projection) return { syncVersion: 1, status: "missing" };
-    const projectionBytes = encodedBytesWithMessages(projection);
-    if (projectionBytes > NATIVE_SYNC_MAX_SNAPSHOT_BYTES) {
-      throw new ProviderUnavailableError("Native agent sync projection exceeded 20 MiB");
-    }
-    const key = this.syncCacheKey(input);
-    const { token, identityChanged } = this.recordSyncProjection(key, projection);
-    if (!input.forceSnapshot && input.knownToken === token) {
-      return { syncVersion: 1, status: "unchanged", token };
-    }
-    const state = this.projectionSync.get(key)!;
-    const base = input.knownToken
-      ? state.revisions.find((entry) => entry.token === input.knownToken)
-      : undefined;
-    if (!input.forceSnapshot && base) {
-      const delta = this.projectionDelta(base.projection, projection);
-      const operationCount =
-        delta.messageUpserts.length +
-        delta.deletedMessageIds.length +
-        (delta.liveMessageIds?.length ?? 0) +
-        Object.keys(delta.setFields).length +
-        delta.unsetFields.length;
-      const deltaBytes = encodedBytesWithMessages({
-        ...delta,
-        messages: delta.messageUpserts,
-        messageUpserts: [],
-      });
-      const snapshotBytes = projectionBytes;
-      if (
-        operationCount <= NATIVE_SYNC_MAX_DELTA_OPERATIONS &&
-        deltaBytes <= NATIVE_SYNC_MAX_DELTA_BYTES &&
-        deltaBytes < snapshotBytes
-      ) {
-        return {
-          syncVersion: 1,
-          status: "delta",
-          baseToken: input.knownToken!,
-          token,
-          delta,
-        };
-      }
-    }
-    return {
-      syncVersion: 1,
-      status: "snapshot",
-      token,
-      projection,
-      resetReason: input.forceSnapshot
-        ? "forced"
-        : identityChanged
-          ? "identity-changed"
-          : input.knownToken
-            ? base
-              ? "expired"
-              : "unknown-token"
-            : "initial",
-    };
-  }
-
   /**
    * Serve one page of older rows behind a direct (provider-positioned) cursor.
    * No projection refresh, composer or interaction read, and no fingerprint
@@ -4641,7 +4448,7 @@ export class NativeAgentTranscriptProjection {
   }
 
   /**
-   * Register an evicted provider-held reference again (0110). A raw `sync-v1`
+   * Register an evicted provider-held reference again (0110). A raw `detail-recovery`
    * refresh cannot: raw rows carry no locator, so it would read the whole
    * transcript and still mint only inline references. Instead, in order:
    *
@@ -4718,7 +4525,11 @@ export class NativeAgentTranscriptProjection {
           // live tail. Otherwise expanding an older paged row after detail-cache
           // eviction could never make its reference resolvable again.
           await this.refreshProjection(
-            { ...input, messageLimit: NATIVE_SYNC_LIVE_MESSAGES, representation: "sync-v1" },
+            {
+              ...input,
+              messageLimit: NATIVE_DETAIL_RECOVERY_TAIL_MESSAGES,
+              representation: "detail-recovery",
+            },
             true,
           );
           entry = this.toolDetailCache.get(input.detailRef);
@@ -5167,7 +4978,7 @@ export class NativeAgentTranscriptProjection {
     for (const [key, descriptor] of this.projectionRefreshDescriptors) {
       if (descriptor.environmentId !== environmentId) continue;
       descriptor.forgotten = true;
-      sessionKeys.add(key.replace(/\0sync-v1$/, ""));
+      sessionKeys.add(key.replace(/\0detail-recovery$/, ""));
     }
     for (const [key, request] of this.progressiveRequests) {
       if (request.environmentId !== environmentId) continue;
@@ -5205,17 +5016,14 @@ export class NativeAgentTranscriptProjection {
         this.progressiveReadEpochs.delete(candidate);
     }
     this.pruneProjectionEpoch(sessionKey);
-    this.pruneProjectionEpoch(`${sessionKey}\0sync-v1`);
+    this.pruneProjectionEpoch(`${sessionKey}\0detail-recovery`);
   }
 
   invalidateProjection(key: string): void {
     this.stopNotices.delete(key);
-    const keys = [key, `${key}\0sync-v1`];
+    const keys = [key, `${key}\0detail-recovery`];
     for (const candidate of keys) {
       this.projectionCache.delete(candidate);
-      const sync = this.projectionSync.get(candidate);
-      if (sync) this.projectionSyncBytes -= sync.revisionBytes;
-      this.projectionSync.delete(candidate);
       this.projectionEpochs.set(candidate, (this.projectionEpochs.get(candidate) ?? 0) + 1);
     }
     // Rewind, resume and replacement all land here: nothing kept for the old
@@ -5346,7 +5154,8 @@ export class NativeAgentTranscriptProjection {
       input.agent,
       input.logicalSessionKey,
     );
-    const key = input.representation === "sync-v1" ? `${sessionKey}\0sync-v1` : sessionKey;
+    const key =
+      input.representation === "detail-recovery" ? `${sessionKey}\0detail-recovery` : sessionKey;
     const previousRefresh = this.projectionRefreshes.get(key);
     const epoch = this.projectionEpochs.get(key) ?? 0;
     const signature = JSON.stringify({
@@ -5388,7 +5197,7 @@ export class NativeAgentTranscriptProjection {
         this.projectionRefreshes.delete(key);
         this.projectionRefreshDescriptors.delete(key);
         if (forgotten) {
-          const sessionKey = key.replace(/\0sync-v1$/, "");
+          const sessionKey = key.replace(/\0detail-recovery$/, "");
           // Normalization can have populated row/detail caches before the
           // commit's epoch check rejected the late view.
           this.invalidateProjection(sessionKey);
@@ -5455,9 +5264,6 @@ export class NativeAgentTranscriptProjection {
       if (!resolved) {
         if ((this.projectionEpochs.get(key) ?? 0) === epoch) {
           this.projectionCache.delete(key);
-          const sync = this.projectionSync.get(key);
-          if (sync) this.projectionSyncBytes -= sync.revisionBytes;
-          this.projectionSync.delete(key);
           this.projectionMissingSince.delete(key);
         }
         return null;
@@ -5473,15 +5279,15 @@ export class NativeAgentTranscriptProjection {
             .refreshUsage?.(resolved.session.providerSessionId)
             .catch(() => undefined)
         : undefined;
-      const syncRead = input.representation === "sync-v1";
+      const recoveryRead = input.representation === "detail-recovery";
       const projectedLimit =
-        tailMessages === undefined || syncRead
+        tailMessages === undefined || recoveryRead
           ? messageLimit
           : Math.min(messageLimit, tailMessages);
       // One row past the window is what tells a tail read that older history
-      // exists. A sync read bounds its live tail from the whole transcript
+      // exists. A detail-recovery read bounds its tail from the whole transcript
       // (below), so its window reports exactly what lies before that tail.
-      const readOptions = syncRead ? undefined : { limit: projectedLimit + 1 };
+      const readOptions = recoveryRead ? undefined : { limit: projectedLimit + 1 };
       // These reads describe independent parts of one projection. Keeping
       // them serial made a transcript wait for every approval, queue and slash
       // command round trip in turn, even though none produces message text.
@@ -5686,7 +5492,7 @@ export class NativeAgentTranscriptProjection {
       const normalized = this.projectionMessages(
         sessionKey,
         snapshot.messages,
-        syncRead ? NATIVE_PROJECTION_MAX_WINDOW_MESSAGES : projectedLimit,
+        recoveryRead ? NATIVE_PROJECTION_MAX_WINDOW_MESSAGES : projectedLimit,
         NATIVE_PROJECTION_MAX_BYTES,
         resolved.session.initialPromptPresentation,
         resolved.session.owner?.kind === "coordinator",
@@ -5694,11 +5500,11 @@ export class NativeAgentTranscriptProjection {
         this.artifactOverlay(input),
       );
       const transcript =
-        input.representation === "sync-v1"
+        input.representation === "detail-recovery"
           ? this.boundedProjectedMessages(
               normalized.messages,
-              NATIVE_SYNC_LIVE_MESSAGES,
-              NATIVE_SYNC_LIVE_TARGET_BYTES,
+              NATIVE_DETAIL_RECOVERY_TAIL_MESSAGES,
+              NATIVE_DETAIL_RECOVERY_TAIL_TARGET_BYTES,
             )
           : normalized;
       const stopNotice = this.stopNotices.get(sessionKey);
@@ -6049,7 +5855,7 @@ export class NativeAgentTranscriptProjection {
    * asked for it.
    *
    * The renderer treats `revision` as a single ordering within a generation, so
-   * the legacy full projection and the sync-v1 live tail must draw from the
+   * the legacy full projection and the detail-recovery tail must draw from the
    * same sequence. A counter that was never recorded — or was evicted — is
    * re-seeded from whatever is still cached for this session, so a restart
    * cannot hand back a revision a client already holds.
@@ -6058,7 +5864,7 @@ export class NativeAgentTranscriptProjection {
     const record = this.projectionRevisions.get(sessionKey);
     let previous = record?.generation === generation ? record.revision : 0;
     if (record?.generation !== generation) {
-      for (const candidate of [sessionKey, `${sessionKey}\0sync-v1`]) {
+      for (const candidate of [sessionKey, `${sessionKey}\0detail-recovery`]) {
         const cached = this.projectionCache.get(candidate);
         if (cached?.generation === generation) {
           previous = Math.max(previous, cached.projection.revision);
@@ -6144,9 +5950,6 @@ export class NativeAgentTranscriptProjection {
        */
       if (oldest) {
         this.projectionCache.delete(oldest);
-        const sync = this.projectionSync.get(oldest);
-        if (sync) this.projectionSyncBytes -= sync.revisionBytes;
-        this.projectionSync.delete(oldest);
         this.projectionMissingSince.delete(oldest);
         this.pruneProjectionEpoch(oldest);
       }
@@ -6178,7 +5981,7 @@ export class NativeAgentTranscriptProjection {
   ): NativeAgentSessionProjection | null {
     const sessionKey = nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey);
     return (
-      this.projectionCache.get(`${sessionKey}\0sync-v1`)?.projection ??
+      this.projectionCache.get(`${sessionKey}\0detail-recovery`)?.projection ??
       this.projectionCache.get(sessionKey)?.projection ??
       null
     );

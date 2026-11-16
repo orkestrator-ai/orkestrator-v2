@@ -65,7 +65,7 @@ export interface NativeAgentProgressiveCacheEntry {
   /** Direct paging and reconciliation survive an unchanged first remount read. */
   transcriptHistoryMetadata?: Pick<
     NativeAgentTranscriptView,
-    "historyCursor" | "historyPaging" | "historyComplete" | "historyReconciliationToken"
+    "historyCursor" | "historyComplete" | "historyReconciliationToken"
   >;
   /** Rows before the live tail still await a re-read; a remount owes it too. */
   heldHistoryReconcileOwed?: boolean;

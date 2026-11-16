@@ -237,7 +237,6 @@ describe("a scope's capability cache is independent", () => {
       changes_get_capabilities: { capability: "change-tracking", history: true },
       design_capabilities: { ok: true, value: { library: true } },
       get_native_agent_sync_capabilities: {
-        projectionSyncVersions: [1],
         historyPagingVersions: [1],
         progressiveViewVersions: [1],
       },

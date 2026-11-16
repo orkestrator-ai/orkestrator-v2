@@ -46,8 +46,6 @@ import type {
   NativeAgentMessageWindow,
   NativeAgentLiveWindow,
   NativeAgentMessagePage,
-  NativeAgentProjectionDelta,
-  NativeAgentProjectionUpdate,
   NativeAgentReadiness,
   NativeAgentResumeEntry,
   NativeAgentSessionProjection,
@@ -260,18 +258,12 @@ export interface NativeAgentProjectionInput {
   messageLimit?: number;
   /** Explicit panel-open read of provider billing/quota data. */
   refreshUsage?: boolean;
-  /** Internal cache namespace for the fixed remote-sync representation. */
-  representation?: "sync-v1";
-}
-
-export interface NativeAgentProjectionUpdateInput {
-  environmentId: string;
-  agent: BuildPipelineAgent;
-  logicalSessionKey: string;
-  syncVersion: 1;
-  liveWindow: NativeAgentLiveWindow;
-  knownToken?: string;
-  forceSnapshot?: boolean;
+  /**
+   * Internal cache namespace for the tool-detail recovery read: the fixed
+   * live tail `getProjectionToolDetails` re-projects so an evicted detail
+   * reference resolves again.
+   */
+  representation?: "detail-recovery";
 }
 
 export interface NativeAgentProgressiveInput {
@@ -321,27 +313,6 @@ export interface NativeAgentMessagePageInput {
   limit?: number;
   targetBytes?: number;
 }
-
-export interface NativeAgentSyncRevision {
-  token: string;
-  projection: NativeAgentSessionProjection;
-  bytes: number;
-  createdAt: number;
-}
-
-export interface NativeAgentSyncState {
-  incarnation: string;
-  identity: string;
-  currentToken?: string;
-  revisions: NativeAgentSyncRevision[];
-  revisionBytes: number;
-}
-
-export type NativeAgentSyncProtocolTypes = [
-  NativeAgentMessagePage,
-  NativeAgentProjectionDelta,
-  NativeAgentProjectionUpdate,
-];
 
 export function controlsFromSessionInput(
   input: EnsureNativeAgentSessionInput,
@@ -750,21 +721,16 @@ export const NATIVE_PROJECTION_MAX_MESSAGES = 512;
  */
 export const NATIVE_PROJECTION_MAX_WINDOW_MESSAGES = 4_096;
 export const NATIVE_PROJECTION_MAX_BYTES = 16 * 1024 * 1024;
-export const NATIVE_SYNC_LIVE_MESSAGES = 100;
-export const NATIVE_SYNC_LIVE_TARGET_BYTES = 512 * 1024;
+/** The tail the tool-detail recovery read re-projects (`representation: "detail-recovery"`). */
+export const NATIVE_DETAIL_RECOVERY_TAIL_MESSAGES = 100;
+export const NATIVE_DETAIL_RECOVERY_TAIL_TARGET_BYTES = 512 * 1024;
 /**
  * Rows a refresh whose result nobody reads asks for (after a dispatch, an
  * interaction answer). It exists for the turn state and side caches, which do
  * not depend on the transcript's length.
  */
 export const NATIVE_PROJECTION_TAIL_REFRESH_MESSAGES = 32;
-export const NATIVE_SYNC_MAX_REVISIONS = 128;
-export const NATIVE_SYNC_MAX_REVISION_BYTES = 2 * 1024 * 1024;
-export const NATIVE_SYNC_MAX_TOTAL_REVISION_BYTES = 32 * 1024 * 1024;
-export const NATIVE_SYNC_REVISION_TTL_MS = 60_000;
-export const NATIVE_SYNC_MAX_DELTA_BYTES = 1024 * 1024;
 export const NATIVE_SYNC_MAX_SNAPSHOT_BYTES = 20 * 1024 * 1024;
-export const NATIVE_SYNC_MAX_DELTA_OPERATIONS = 1_024;
 export const NATIVE_HISTORY_PAGE_MAX_MESSAGES = 200;
 export const NATIVE_HISTORY_PAGE_DEFAULT_MESSAGES = 100;
 export const NATIVE_HISTORY_PAGE_DEFAULT_BYTES = 512 * 1024;
@@ -1082,8 +1048,6 @@ export type {
   NativeAgentForkOutcome,
   NativeAgentMessageWindow,
   NativeAgentMessagePage,
-  NativeAgentProjectionDelta,
-  NativeAgentProjectionUpdate,
   NativeAgentReadiness,
   NativeAgentResumeEntry,
   NativeAgentSessionProjection,

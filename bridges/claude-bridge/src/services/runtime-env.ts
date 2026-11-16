@@ -23,11 +23,14 @@ const GH_TOKEN_FAILURE_CACHE_MS = 15_000;
 type CachedGhToken = { expiresAt: number; value: Promise<string | undefined> };
 const ghTokenCache = new WeakMap<ReadGitHubCliToken, Map<string, CachedGhToken>>();
 
-export async function readGitHubCliToken(env: NodeJS.ProcessEnv): Promise<string | undefined> {
+export async function readGitHubCliToken(
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number = GH_TOKEN_TIMEOUT_MS,
+): Promise<string | undefined> {
   try {
     const { stdout } = await execFileAsync("gh", ["auth", "token", "--hostname", "github.com"], {
       env,
-      timeout: GH_TOKEN_TIMEOUT_MS,
+      timeout: timeoutMs,
     });
     return stdout.trim() || undefined;
   } catch {

@@ -27,7 +27,10 @@ test("a detached child creates temporary files after its private-TMPDIR owner ex
     import { tmpdir } from "node:os";
     import path from "node:path";
     writeFileSync(${JSON.stringify(ready)}, "ready");
-    const deadline = Date.now() + 15_000;
+    // The test releases this child once its owner has exited. The deadline is
+    // only a leak guard for a detached process whose test never got that far;
+    // it is far longer than any slow host needs and asserts nothing.
+    const deadline = Date.now() + 300_000;
     while (!existsSync(${JSON.stringify(release)})) {
       if (Date.now() > deadline) process.exit(1);
       await Bun.sleep(10);
@@ -58,14 +61,12 @@ test("a detached child creates temporary files after its private-TMPDIR owner ex
       });
       child.unref();
       console.log(JSON.stringify({ directory: tmpdir(), pid: child.pid }));
-      const deadline = Date.now() + 5_000;
-      while (!existsSync(${JSON.stringify(ready)})) {
-        if (Date.now() > deadline) process.exit(1);
-        await Bun.sleep(10);
-      }
+      // Readiness is the child's ready file; the spawnSync timeout below is the
+      // hang watchdog, not a bound on how long a loaded host may take.
+      while (!existsSync(${JSON.stringify(ready)})) await Bun.sleep(10);
       `,
     ],
-    { env, encoding: "utf8", timeout: 10_000 },
+    { env, encoding: "utf8", timeout: 110_000 },
   );
   const child = JSON.parse(owner.stdout.trim()) as { directory: string; pid: number };
   roots.push(child.directory);
@@ -75,11 +76,8 @@ test("a detached child creates temporary files after its private-TMPDIR owner ex
     expect(existsSync(child.directory)).toBe(false);
     // spawnSync returned only after the owner exited and its exit handler removed TMPDIR.
     writeFileSync(release, "go");
-    const deadline = Date.now() + 5_000;
-    while (!existsSync(resultFile)) {
-      if (Date.now() > deadline) throw new Error("detached child did not create temporary files");
-      await Bun.sleep(10);
-    }
+    // The result file is the signal; the test's budget is the hang watchdog.
+    while (!existsSync(resultFile)) await Bun.sleep(10);
     const result = JSON.parse(readFileSync(resultFile, "utf8"));
     expect(path.dirname(result.directory)).toBe(root);
     expect(result.privateTmpdir).toBeUndefined();
@@ -95,7 +93,7 @@ test("a detached child creates temporary files after its private-TMPDIR owner ex
       /* already exited */
     }
   }
-}, 20_000);
+}, 120_000);
 
 // CI's test job installs no Playwright browsers (the runner image has Google
 // Chrome), so the spec launches whichever Chromium is present, in the order the
@@ -174,7 +172,10 @@ describe.skipIf(!CHROMIUM)("Playwright private TMPDIR wiring", () => {
           export default { ...actual, webServer: undefined, globalSetup: undefined, globalTeardown: undefined,
             testDir: ${JSON.stringify(fixture)}, testMatch: "tmpdir.spec.ts", testIgnore: [], workers: 1,
             outputDir: ${JSON.stringify(path.join(root, "results"))},
-            projects: [{ name: "tmpdir" }], reporter: "line" };
+            projects: [{ name: "tmpdir" }], reporter: "line",
+            // No per-test budget in the nested run: it ends when the spec does,
+            // and the outer spawnSync timeout is the hang watchdog.
+            timeout: 0 };
         `,
         );
         writeFileSync(
@@ -201,13 +202,15 @@ describe.skipIf(!CHROMIUM)("Playwright private TMPDIR wiring", () => {
               pid = child.pid;
               child.unref();
               writeFileSync(${JSON.stringify(workerFile)}, JSON.stringify({ tmp: tmpdir(), pid }));
-              // Bounded inside the spec's 30 s budget; the default 5 s raced a loaded runner.
-              await expect.poll(() => {
-                try { return readFileSync(path.join(profile, "DevToolsActivePort"), "utf8").length > 0; }
-                catch { return false; }
-              }, { timeout: 20_000 }).toBe(true);
+              // Chrome writes DevToolsActivePort once it is listening; wait for
+              // that file itself rather than for a number of seconds.
+              const active = path.join(profile, "DevToolsActivePort");
+              for (;;) {
+                try { if (readFileSync(active, "utf8").length > 0) break; } catch {}
+                await new Promise((resolve) => setTimeout(resolve, 25));
+              }
             } else {
-              const browser = await chromium.launch({ executablePath: ${JSON.stringify(CHROMIUM)} });
+              const browser = await chromium.launch({ executablePath: ${JSON.stringify(CHROMIUM)}, timeout: 0 });
               await browser.close();
             }
             writeFileSync(${JSON.stringify(workerFile)}, JSON.stringify({ tmp: tmpdir(), pid }));
@@ -227,7 +230,7 @@ describe.skipIf(!CHROMIUM)("Playwright private TMPDIR wiring", () => {
           cwd: repository,
           env,
           encoding: "utf8",
-          timeout: 45_000,
+          timeout: 110_000,
         });
         const runner = existsSync(runnerFile) ? JSON.parse(readFileSync(runnerFile, "utf8")) : null;
         const worker = existsSync(workerFile) ? JSON.parse(readFileSync(workerFile, "utf8")) : null;
@@ -248,7 +251,7 @@ describe.skipIf(!CHROMIUM)("Playwright private TMPDIR wiring", () => {
             }
           }
         }
-      }, 60_000);
+      }, 120_000);
     }
   }
 });

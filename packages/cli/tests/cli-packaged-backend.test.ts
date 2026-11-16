@@ -13,13 +13,17 @@ const packageRoot = path.resolve(import.meta.dir, "..");
 const temporaryDirectories: string[] = [];
 const processes: Bun.Subprocess[] = [];
 
-// Generous because these run alongside the rest of the workspace suite; the
-// timeout only has to be shorter than Bun's own, so a stall reports the child's
-// stderr instead of failing as an anonymous hang.
-const READY_TIMEOUT_MS = 20_000;
-const EXIT_TIMEOUT_MS = 10_000;
+// Hang watchdogs, not performance bounds. The test waits on two real signals
+// (the backend's readiness line, then its exit) and decides on those alone; a
+// starved host only delays them. Each deadline just turns a child that never
+// signals into a report of its stderr instead of an anonymous hang, so each
+// sits well above how long a one-core, six-burner host takes to boot it
+// (`mise run test:contention`, tens of seconds), and the test budget covers
+// both of them plus setup.
+const READY_TIMEOUT_MS = 90_000;
+const EXIT_TIMEOUT_MS = 60_000;
 
-setDefaultTimeout(40_000);
+setDefaultTimeout(180_000);
 
 type ReadyMessage = { type?: string; authFile?: string };
 

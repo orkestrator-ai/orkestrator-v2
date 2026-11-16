@@ -188,7 +188,7 @@ describe("test tier selection", () => {
 function packageFixture() {
   const context = fixture();
   context.write("scripts/placeholder", "");
-  for (const file of ["bun-test-tier.ts", "test-tiers.ts"])
+  for (const file of ["bun-test-tier.ts", "test-progress-dots.ts", "test-tiers.ts"])
     copyFileSync(
       path.join(repositoryRoot, "scripts", file),
       path.join(context.root, "scripts", file),
@@ -346,6 +346,83 @@ describe("package tier wrapper", () => {
     expect(missing.stderr).toContain("Usage:");
   });
 
+  test.skipIf(process.platform === "win32").each(["natural exit", "SIGINT", "SIGTERM", "SIGHUP"])(
+    "an inherited stderr writer cannot prevent %s after child exit",
+    async (mode) => {
+      const context = packageFixture();
+      const stopped = path.join(context.root, "stop-writer");
+      const finished = path.join(context.root, "writer-finished");
+      const exited = path.join(context.root, "runner-exited");
+      context.write(
+        "writer.ts",
+        `import { existsSync, writeFileSync } from "node:fs";
+const timer = setInterval(() => {
+  if (existsSync(${JSON.stringify(stopped)})) {
+    clearInterval(timer);
+    writeFileSync(${JSON.stringify(finished)}, "done");
+  }
+}, 10);
+setTimeout(() => process.exit(2), 15000).unref();`,
+      );
+      context.write(
+        "apps/backend/src/writer.test.ts",
+        `import { test } from "bun:test";
+test("inherited writer", () => {
+  const writer = Bun.spawn([process.execPath, ${JSON.stringify(path.join(context.root, "writer.ts"))}], {
+    stdin: "ignore", stdout: "ignore", stderr: "inherit", detached: true,
+  });
+  writer.unref();
+  throw new Error("retained failure diagnostic");
+});`,
+      );
+      // The copied wrapper announces the exact post-exit boundary. Widen only
+      // its drain grace so signal tests can reliably hit that boundary on CI.
+      const wrapper = path.join(context.root, "scripts/bun-test-tier.ts");
+      let source = readFileSync(wrapper, "utf8").replace(
+        "child = undefined;",
+        `child = undefined; await Bun.write(${JSON.stringify(exited)}, "exited");`,
+      );
+      if (mode !== "natural exit")
+        source = source.replace("drain.abort(), 250", "drain.abort(), 30000");
+      writeFileSync(wrapper, source);
+      const child = Bun.spawn(
+        [process.execPath, "--no-env-file", wrapper, "apps/backend", "./src", "--"],
+        {
+          cwd: context.cwd,
+          env: context.environment(),
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 5000,
+        },
+      );
+      const output = Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      try {
+        while (!existsSync(exited) && child.exitCode === null && child.signalCode === null)
+          await Bun.sleep(10);
+        expect(existsSync(exited)).toBe(true);
+        expect(existsSync(finished)).toBe(false);
+        if (mode !== "natural exit") child.kill(mode as NodeJS.Signals);
+        expect(await child.exited).toBe(
+          mode === "natural exit"
+            ? 1
+            : 128 + { SIGINT: 2, SIGTERM: 15, SIGHUP: 1 }[mode as "SIGINT" | "SIGTERM" | "SIGHUP"],
+        );
+        expect((await output).join("")).toContain("retained failure diagnostic");
+      } finally {
+        writeFileSync(stopped, "stop");
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await child.exited;
+        await output;
+        const cleanupDeadline = performance.now() + 5000;
+        while (!existsSync(finished) && performance.now() < cleanupDeadline) await Bun.sleep(10);
+        expect(existsSync(finished)).toBe(true);
+      }
+    },
+  );
+
   // Windows does not implement these Unix process-group signal semantics.
   test.skipIf(process.platform === "win32").each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
     "%s reaches the child and waits for its cleanup",
@@ -390,18 +467,14 @@ test("wait for cancellation", async () => {
         new Response(child.stderr).text(),
       ]);
       try {
-        const deadline = Date.now() + 5000;
-        while (!existsSync(ready) && Date.now() < deadline)
+        // The ready file is the readiness signal. A wrapper that exits first
+        // ends the wait at once; otherwise the test's budget is only the hang
+        // watchdog, so a slow host is never mistaken for a failed handoff.
+        while (!existsSync(ready) && child.exitCode === null && child.signalCode === null)
           await new Promise((resolve) => setTimeout(resolve, 10));
         expect(existsSync(ready)).toBe(true);
         child.kill(signal);
-        const exited = await Promise.race([
-          child.exited,
-          new Promise<never>((_, reject) => {
-            const timeout = setTimeout(() => reject(new Error("child did not stop")), 5000);
-            child.exited.finally(() => clearTimeout(timeout));
-          }),
-        ]);
+        const exited = await child.exited;
         expect(exited).toBe(0);
         expect(readFileSync(handled, "utf8")).toBe(signal);
       } finally {
@@ -414,6 +487,5 @@ test("wait for cancellation", async () => {
         await output;
       }
     },
-    15_000,
   );
 });

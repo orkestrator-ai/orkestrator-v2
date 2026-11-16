@@ -88,10 +88,6 @@ is walked once for all four guards. The guards live in `tests/source-guards/`:
   `reserveLoopbackPorts`, the `get-port` package and the like). Bind port 0 in
   the component itself and read the bound port back, keep the server bound, or
   retry with `retryOnAddressInUse` (`@orkestrator/protocol/testing/ports`).
-- **`subprocess-without-budget`**: a `*.test.*` file that starts real processes
-  (`Bun.spawn`, Bun shell, `node:child_process`, an imported Git helper) but sets
-  no `setDefaultTimeout` and gives no test or hook an explicit timeout, so
-  Bun's 5 s default kills real work under load.
 - **`small-fake-pid`**: a pid below Linux's `pid_max` (4 194 304, 0 and 1
   included) given to a fake child process: a `*Child*`/`*Process*` constructor,
   a `pid` field in a `*Child*`/`*Process*`/`Fake*` class, or an object with

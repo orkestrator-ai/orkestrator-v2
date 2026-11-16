@@ -1,7 +1,7 @@
 # Multiplexed relay: one node's re-attach wait times out under load
 
 - **ID:** 9997
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-13
 - **Base:** `17d28238c098b4443d1289df5c4ed75e7cc2802e`.
 - **Observed head:** `dev-test-checks-415ac044ae03-r1` at `0178a2e78`. The
@@ -36,3 +36,11 @@ loop gives up. Reproduce it first (for example under
 `scripts/test-under-contention.ts`) before changing the test, and check
 whether a slow host could leave the product's re-attach path in the same
 state before treating this as a short budget.
+
+## Resolution (2026-11-15)
+
+- **Class:** the test's own deadline (B).
+- **Root cause:** the file's `waitFor` helper polled 400 times at 2 ms, about 0.8 s of timer turns, so a starved worker failed (`timed out waiting for A back`, 1,060 ms) while the streams were still progressing.
+- **Fix:** in `apps/web/src/lib/node-scope/multiplexed-relay-stream.test.ts` the helper polls until a named 30 s hang-watchdog deadline; each wait's condition is unchanged.
+- **Reproduced:** no — the unchanged file passed 20 of 20 under 10 pinned burners (`--rerun-each=20`).
+- **Stress:** `mise run test:logged -- --name web-cont2 -- bun scripts/test-under-contention.ts --core 3 --burners 6 -- bash -c 'cd apps/web && for i in 1 2 3; do NODE_ENV=test bun test src/components/projects/CoordinatorPanel.render-cost.test.tsx || exit 1; done && NODE_ENV=test bun test src/lib/node-scope/multiplexed-relay-stream.test.ts src/components/layout/MobileAppShellLayout.test.tsx src/components/federation/ProjectCopyDialog.test.tsx src/components/graph-designer/GraphDesignerEditing.test.tsx src/components/federation/federation-ui.test.tsx ../../tests/unit/components/FeaturesView.test.tsx --parallel=1'` passed (100.2 s). (`CoordinatorPanel.render-cost.test.tsx` is not `--rerun-each` safe: its `afterAll` restores the real modules, so the second in-process run fails on the unchanged file too; it is looped in fresh processes.)

@@ -1,7 +1,7 @@
 # CLI bash completion execution exceeds the aggregate deadline
 
 - **ID:** 9944
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-11
 - **Observing base:** `498b68766` (`main`), with the uncommitted renderer error ring changes of branch `renderer-error-ring-e3a48fce2746-r1` (to-dos 6300 and 6301; no CLI, completion or shell code changed).
 - **Test:** `shell completion > bash completion completes command words across IDs and flags per command`
@@ -13,3 +13,10 @@
 - **Evidence:** `orkestrator-test-run.PS6O8Y/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
 
 Related: [0955](0955-cli-fish-completion-aggregate-timeout.md), the fish case in the same file with the same five-second deadline and process-per-completion shape. Host load is the likely cause, not a confirmed diagnosis. No test, timeout, assertion or skip changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** the bash completion case spawns one `bash` for all queries; under load it used up Bun's 5 s default budget.
+- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup.ts`, `tests/setup-node.ts`), raises Bun's default per-test and hook budget from 5 s to 60 s (a hang watchdog only). The bash case has no inner timeout and `packages/cli/tests/command-surface.test.ts` sets no smaller budget.
+- **Reproduced:** no — the 5 s default budget was not exhausted before the change under the contention runner; the post-change run below shows only the current state. Base `a8b89f1541e7abb6af36d45121593ae14640a3ca`.
+- **Stress:** `mise run test:logged -- --name f3-a-batch -- bun scripts/test-under-contention.ts --core 10 --burners 6 -- bun test --cwd=packages/cli --preload ../../tests/setup-node.ts ./tests/command-surface.test.ts ./tests/fix-command.test.ts --rerun-each=3` passed.

@@ -1,7 +1,7 @@
 # Diff-stats reset waits past the baseline-owner deadline
 
 - **ID:** 1110
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-27
 - **Owning file:** `apps/backend/src/core/diff-stats-tracking.test.ts`
 - **Test:** `a successful reset to creation clears the advanced baseline and retargets scans`
@@ -84,3 +84,11 @@ The reset case passed again, including in the 649-second required aggregate.
 The sibling timeout also reproduced on the exact pinned base above. No
 further repeat was used to search for a passing full-owner result; the
 non-green evidence and unconfirmed reset cause remain explicit.
+
+## Resolution (2026-11-15)
+
+- **Class:** the test's own deadline (`idleBaseline`), as for [0962](0962-diff-stats-in-flight-baseline-aggregate-timeout.md), which owns the fix.
+- **Root cause:** the recorded `baselineChecks.size` of 1 was `idleBaseline` giving up after its five-second poll while the real-Git baseline check was still running; the entry was not stuck.
+- **Fix:** `idleBaseline` in `apps/backend/src/core/diff-stats-tracking.test.ts` now waits for the owner's map to empty with no wall-clock deadline of its own, and the file inherits `tests/default-test-timeout.ts` (60 s) in place of its former `setDefaultTimeout(30_000)`.
+- **Reproduced:** no (see 0962). The reset case passed in every earlier rerun, so only the code reading supports the cause.
+- **Verified after the fix:** the complete owner passed under contention, `--core 14 --burners 6 --rerun-each=2` (80.9 s).

@@ -14,3 +14,7 @@
 - **Evidence:** `orkestrator-test-run.EmUGIL/` under the host temporary directory.
 
 No assertion, timeout or skip was changed for these four tests. The concurrent Docker image build and the external-volume worktree are possible contributors, not established causes.
+
+## Triage (2026-11-15)
+
+Left open. `environment-move.test.ts` calls `setDefaultTimeout(30_000)`, smaller than the shared 60 s default in `tests/default-test-timeout.ts`, so [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md) owns that failure. The 31 s `codex-subagent-cards` failure also exceeds a five-second budget and is not governed by the default.

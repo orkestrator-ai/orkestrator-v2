@@ -18,7 +18,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createSocket, type Socket } from "node:dgram";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { Agent as HttpAgent, createServer, request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -52,6 +52,21 @@ if (!imagePresent)
 const browserTest = CHROMIUM ? test : test.skip;
 const containerTest = CHROMIUM && imagePresent ? test : test.skip;
 
+/**
+ * Hang watchdogs for the preview runner, not assertions. These cases are about
+ * what a hostile document can reach, so a starved host that delays Chromium's
+ * launch must not turn the run into a `render_timeout` before the document's
+ * own requests were attempted (no blocked request is then recorded).
+ */
+const GENEROUS_BUDGETS = {
+  readinessMs: 30_000,
+  workerWallMs: 90_000,
+  operationDeadlineMs: 120_000,
+} as const;
+/** Longest the control case waits for its sinks to be reached: a hang watchdog. */
+const SINKS_WATCHDOG_MS = 180_000;
+const DRAIN_MARKER = "/__drain";
+
 const random = () => Math.random().toString(36).slice(2, 12);
 const CANARY = {
   env: `canary-env-${random()}`,
@@ -66,6 +81,31 @@ interface Observed {
   app: Array<{ url: string; cookie: string }>;
 }
 const observed: Observed = { http: [], connections: 0, udp: 0, app: [] };
+/** Called after every recorded sink observation, so waiters need no polling. */
+const observers = new Set<() => void>();
+const noteObserved = () => {
+  for (const observer of Array.from(observers)) observer();
+};
+/** Resolves as soon as `ready()` holds, checked on every sink observation. */
+function untilObserved(ready: () => boolean, watchdogMs: number, describe: () => string) {
+  return new Promise<void>((resolve, reject) => {
+    const check = () => {
+      if (!ready()) return;
+      cleanup();
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`sinks were never all reached: ${describe()}`));
+    }, watchdogMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      observers.delete(check);
+    };
+    observers.add(check);
+    check();
+  });
+}
 const reset = () => {
   observed.http.length = 0;
   observed.connections = 0;
@@ -80,6 +120,7 @@ let sinkOrigin = "";
 let appOrigin = "";
 let udpPort = 0;
 let fakeHome = "";
+let drainedUdp: (() => void) | undefined;
 const saved = { HOME: process.env.HOME, env: process.env.ORK_ESCAPE_CANARY };
 
 beforeAll(async () => {
@@ -90,7 +131,13 @@ beforeAll(async () => {
   process.env.ORK_ESCAPE_CANARY = CANARY.env;
 
   sink = createServer((request, response) => {
+    if (request.url === DRAIN_MARKER) {
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("ok");
+      return;
+    }
     observed.http.push(`${request.method} ${request.url} ${request.headers.cookie ?? ""}`);
+    noteObserved();
     if (request.url?.startsWith("/redirect")) {
       response.writeHead(302, { location: `${sinkOrigin}/after-redirect` });
       response.end();
@@ -99,13 +146,18 @@ beforeAll(async () => {
     response.writeHead(200, { "content-type": "text/plain", "access-control-allow-origin": "*" });
     response.end("ok");
   });
-  sink.on("connection", () => observed.connections++);
+  sink.on("connection", () => {
+    observed.connections++;
+    noteObserved();
+  });
   sink.on("upgrade", (request, socket) => {
     observed.http.push(`UPGRADE ${request.url}`);
     socket.destroy();
+    noteObserved();
   });
   app = createServer((request, response) => {
     observed.app.push({ url: request.url ?? "", cookie: String(request.headers.cookie ?? "") });
+    noteObserved();
     response.writeHead(200, {
       "content-type": "text/html",
       "set-cookie": `ork_session=${CANARY.cookie}; Path=/; SameSite=Lax`,
@@ -113,7 +165,14 @@ beforeAll(async () => {
     response.end("<!doctype html><title>app</title>");
   });
   udp = createSocket("udp4");
-  udp.on("message", () => observed.udp++);
+  udp.on("message", (message) => {
+    if (message.toString() === DRAIN_MARKER) {
+      drainedUdp?.();
+      return;
+    }
+    observed.udp++;
+    noteObserved();
+  });
   await Promise.all([
     new Promise<void>((resolve) => sink.listen(0, "127.0.0.1", resolve)),
     new Promise<void>((resolve) => app.listen(0, "127.0.0.1", resolve)),
@@ -153,7 +212,13 @@ const escapeBody = () => `
   <form id="f" action="${sinkOrigin}/form" method="post" target="form-target"><input name="a" value="b"></form>
   <a id="custom" href="orkestrator-canary://open?x=1">custom</a>`;
 
-const escapeScript = () => `
+/**
+ * `redirectAfterMs: null` leaves the final navigation to the caller. The control
+ * page needs that: a fixed-delay navigation tears the page (and an ICE gather
+ * still in flight, whose STUN request is one of the sinks) down, so on a slow
+ * host it would race the very request the control exists to observe.
+ */
+const escapeScript = (redirectAfterMs: number | null = 1200) => `
   const found = [];
   const note = (label, value) => { if (value) found.push(label + "=" + String(value).slice(0, 200)); };
   try { note("cookie", document.cookie); } catch {}
@@ -182,7 +247,11 @@ const escapeScript = () => `
   try { const i = new Image(); i.src = "${sinkOrigin}/img2"; } catch {}
   setTimeout(() => { try { window.open("${sinkOrigin}/popup"); } catch {} }, 40);
   setTimeout(() => { try { document.getElementById("custom").click(); } catch {} }, 50);
-  setTimeout(() => { try { location.href = "${sinkOrigin}/redirect"; } catch {} }, 1200);`;
+  ${
+    redirectAfterMs === null
+      ? ""
+      : `setTimeout(() => { try { location.href = "${sinkOrigin}/redirect"; } catch {} }, ${redirectAfterMs});`
+  }`;
 
 /** Byte search over everything the worker handed back, including PNG captures. */
 function leakedCanaries(result: PreviewJobResult): string[] {
@@ -195,6 +264,45 @@ function leakedCanaries(result: PreviewJobResult): string[] {
 function seenCanaries(): string[] {
   const seen = JSON.stringify(observed);
   return Object.values(CANARY).filter((canary) => seen.includes(canary));
+}
+
+/**
+ * Waits until everything the (already terminated) worker had sent to the sinks
+ * has been processed, instead of sleeping and hoping. A request over a fresh
+ * connection and a datagram to the UDP sink queue behind whatever arrived
+ * earlier on the same listener, so once both answered, earlier egress has been
+ * recorded. The drain's own connection is not counted as an observation.
+ */
+async function drainSinks(): Promise<void> {
+  const agent = new HttpAgent({ keepAlive: false });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const request = httpRequest(`${sinkOrigin}${DRAIN_MARKER}`, { agent }, (response) => {
+        response.resume();
+        response.on("end", resolve);
+      });
+      request.on("error", reject);
+      request.end();
+    });
+  } finally {
+    agent.destroy();
+  }
+  observed.connections -= 1;
+  const probe = createSocket("udp4");
+  try {
+    const drained = new Promise<void>((resolve) => {
+      drainedUdp = resolve;
+    });
+    await new Promise<void>((resolve, reject) =>
+      probe.send(DRAIN_MARKER, udpPort, "127.0.0.1", (error) =>
+        error ? reject(error) : resolve(),
+      ),
+    );
+    await drained;
+  } finally {
+    drainedUdp = undefined;
+    probe.close();
+  }
 }
 
 async function runPreview(runner: TranscriptPreviewRunner): Promise<PreviewJobResult> {
@@ -230,7 +338,7 @@ async function runPreview(runner: TranscriptPreviewRunner): Promise<PreviewJobRe
     new AbortController().signal,
   );
   // Late egress (timers, ICE gathering) would still have to arrive somewhere.
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  await drainSinks();
   return result;
 }
 
@@ -262,6 +370,30 @@ function expectContained(result: PreviewJobResult, mode: string) {
   }
 }
 
+const CONTROL_FRAGMENTS = [
+  "/img ",
+  "/css",
+  "/fetch",
+  "/xhr",
+  "/beacon",
+  "/script",
+  "/iframe",
+  "/object",
+  "/form",
+  "/redirect",
+];
+/** What the unrestricted control page has not yet reached. */
+function controlMissing(): string[] {
+  const missing = CONTROL_FRAGMENTS.filter(
+    (fragment) => !observed.http.some((hit) => hit.includes(fragment)),
+  );
+  if (observed.connections === 0) missing.push("tcp connection");
+  // STUN binding requests from ICE gathering reach the UDP sink.
+  if (observed.udp === 0) missing.push("udp");
+  if (!observed.app.some((hit) => hit.cookie.includes(CANARY.cookie))) missing.push("app cookie");
+  return missing;
+}
+
 describe("credential isolation and resource escape", () => {
   browserTest(
     "control: an unrestricted page reaches every sink and carries the cookie canary",
@@ -274,26 +406,33 @@ describe("credential isolation and resource escape", () => {
         // The application session: the cookie canary lands in this browser.
         await page.goto(`${appOrigin}/login`);
         await page.setContent(
-          `<!doctype html><html><body>${escapeBody()}<script>${escapeScript()}</script></body></html>`,
+          `<!doctype html><html><body>${escapeBody()}<script>${escapeScript(null)}</script></body></html>`,
+          // This page's `load` stays pending once it no longer navigates away on a
+          // timer (setContent timed out waiting for it), so do not wait for it:
+          // the sink observations below are the signal.
+          { waitUntil: "commit" },
         );
-        await page.waitForTimeout(2_500);
+        // Each sink is reached by its own event; wait for those, not for time.
+        // The redirect goes last, so leaving the page cannot cut off the others.
+        await untilObserved(
+          () => controlMissing().every((entry) => entry === "/redirect"),
+          SINKS_WATCHDOG_MS,
+          () => controlMissing().join(", "),
+        );
+        await page.evaluate((target) => {
+          location.href = target;
+        }, `${sinkOrigin}/redirect`);
+        await untilObserved(
+          () => controlMissing().length === 0,
+          SINKS_WATCHDOG_MS,
+          () => controlMissing().join(", "),
+        );
         await context.close();
       } finally {
         await browser.close();
       }
       const reached = (fragment: string) => observed.http.some((hit) => hit.includes(fragment));
-      for (const fragment of [
-        "/img ",
-        "/css",
-        "/fetch",
-        "/xhr",
-        "/beacon",
-        "/script",
-        "/iframe",
-        "/object",
-        "/form",
-        "/redirect",
-      ]) {
+      for (const fragment of CONTROL_FRAGMENTS) {
         expect(reached(fragment), `control did not reach ${fragment}`).toBe(true);
       }
       expect(observed.connections).toBeGreaterThan(0);
@@ -303,7 +442,8 @@ describe("credential isolation and resource escape", () => {
       expect(observed.app.some((hit) => hit.cookie.includes(CANARY.cookie))).toBe(true);
       expect(seenCanaries()).toContain(CANARY.cookie);
     },
-    60_000,
+    // Bounded by SINKS_WATCHDOG_MS; a hang watchdog.
+    300_000,
   );
 
   browserTest(
@@ -314,6 +454,7 @@ describe("credential isolation and resource escape", () => {
         isolation: "process",
         scratchRoot: previewTestScratchRoot(),
         allowProcessInteractive: true,
+        budgets: GENEROUS_BUDGETS,
       });
       try {
         expectContained(await runPreview(runner), "process");
@@ -321,7 +462,8 @@ describe("credential isolation and resource escape", () => {
         await runner.close();
       }
     },
-    90_000,
+    // Bounded by GENEROUS_BUDGETS; a hang watchdog.
+    240_000,
   );
 
   containerTest(
@@ -339,6 +481,7 @@ describe("credential isolation and resource escape", () => {
           seccompProfile: resolveSeccompProfile()!,
           user: PREVIEW_WORKER_USER,
         },
+        budgets: GENEROUS_BUDGETS,
       });
       try {
         expectContained(await runPreview(runner), "container");
@@ -347,6 +490,6 @@ describe("credential isolation and resource escape", () => {
         process.env.HOME = fakeHome;
       }
     },
-    120_000,
+    240_000,
   );
 });

@@ -29,3 +29,7 @@
   within the case's budget. Not confirmed; no assertion, timeout or skip
   changed. Compare [0471](0471-close-retention-fixture-startup.md), the Grok
   startup-control miss in the same file.
+
+## Triage note (2026-11-15)
+
+Not changed. The failure is the spec's own 120 s test budget expiring while waiting for the `Message Pi` composer at host load about 72. The wait is already a wait for the composer itself; whether the composer never mounted or mounted late is not known. Not reproduced or run. Stays `open`.

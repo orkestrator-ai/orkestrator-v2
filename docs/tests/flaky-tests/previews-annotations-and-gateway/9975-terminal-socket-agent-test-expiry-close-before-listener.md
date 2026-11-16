@@ -1,7 +1,7 @@
 # Gateway terminal socket: agent-test session expiry closed before the test listened
 
 - **ID:** 9975
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-11
 
 Test: `gateway terminal WebSocket > closes a cookie-authenticated terminal socket when its agent-test session expires`
@@ -77,3 +77,11 @@ and is now case
 - **Next evidence:** if it recurs, drive the highlight timer with
   `installControlledTimeout` (`tests/helpers/controlled-timeout.ts`) instead
   of fixed sleeps, as the `sleep-before-negative-assertion` guard advises.
+
+## Resolution (2026-11-15)
+
+- **Class:** the test's own deadline (B).
+- **Root cause:** confirmed by reading the code: the test set the session to expire at `Date.now() + 40` ms and only then opened, upgraded and authenticated the socket and attached its `close` listener after the `ready` frame. Any host slower than 40 ms there let the server's expiry timer close the socket first, so `once("close")` never settled.
+- **Fix:** `apps/backend/tests/gateway-events.test.ts` gives the session a one-hour deadline, captures the server's expiry `setTimeout` (scheduled inside that window) while the socket opens, attaches the `close` listener before awaiting `ready`, asserts exactly one expiry timer was armed, then expires the session and fires that timer by hand. The close code assertion is unchanged.
+- **Reproduced:** no — the unchanged test passed 30 of 30 under 10 pinned burners (`-t "agent-test session expires" --rerun-each=30`); the race is shown by the code, not by a forced failure.
+- **Stress:** `mise run test:logged -- --name gw-cont3 -- bun scripts/test-under-contention.ts --core 4 --burners 6 -- bash -c 'cd apps/backend && bun test tests/gateway-events.test.ts tests/gateway-proxy.test.ts tests/gateway-sse-gzip-routes.test.ts --preload ../../tests/setup-node.ts --parallel=1'` passed (65.9 s); each file also passed alone with `--rerun-each=2` (208, 66 and 190 tests).

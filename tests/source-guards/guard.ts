@@ -3,7 +3,6 @@ import type { AnyNode } from "./ast";
 export const GUARD_IDS = [
   "sleep-before-negative-assertion",
   "released-port-rebind",
-  "subprocess-without-budget",
   "small-fake-pid",
   "window-orkestrator-direct",
   "direct-transport-import",

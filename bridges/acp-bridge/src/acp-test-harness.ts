@@ -21,6 +21,7 @@
  * module is evaluated once per file exactly as the duplicated preambles were.
  */
 import { parseLogRecordLine } from "@orkestrator/protocol/logger";
+import { PARENT_PID_ENV } from "@orkestrator/protocol/parent-watchdog";
 import { afterAll, afterEach, beforeAll, jest } from "bun:test";
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -92,16 +93,19 @@ export const children = new Set<ChildProcessWithoutNullStreams>();
 export const temporaryDirectories = new Set<string>();
 
 /**
- * Bun's 5 s default per-test budget is smaller than what these tests actually
- * do. `spawnBridge` alone may spend up to `DEFAULT_WAIT_TIMEOUT_MS` waiting on
- * the child's health endpoint before a test body starts, and nearly every body
- * then polls with one or more further `waitFor` calls. Under aggregate-suite
- * spawn contention the health wait consumed the whole budget, which is the
- * flake recorded in `docs/tests/flaky-tests/agent-bridges/`. Raise it once for the file rather
- * than per test, so the next case to hit that contention does not need its own
- * one-off timeout to be discovered first.
+ * A hang watchdog for tests that drive real bridge children, not a performance
+ * assertion. `spawnBridge` waits for the child's own `server.listening` line
+ * and nearly every body then polls real product state with further `waitFor`
+ * calls; each of those waits ends on its signal, never on this number. Under
+ * aggregate-suite spawn contention (or a core shared with busy loops) a cold
+ * `bun index.ts` has been observed taking longer than the former 5 s test and
+ * 15 s startup budgets while making progress, which is the flake family in
+ * `docs/tests/flaky-tests/agent-bridges/`. The budget therefore sits above the
+ * sum of the waits it contains (a wait must stay below it so its bounded
+ * diagnostic prints instead of Bun's generic "test timed out"), and only a
+ * wait that never gets its signal reaches it.
  */
-export const BRIDGE_TEST_TIMEOUT_MS = 30_000;
+export const BRIDGE_TEST_TIMEOUT_MS = 180_000;
 
 jest.setTimeout(BRIDGE_TEST_TIMEOUT_MS);
 
@@ -172,18 +176,21 @@ export function isRetryableWaitError(error: unknown): boolean {
 }
 
 /**
+ * A hang watchdog on a wait for real product state, not a latency bound.
  * Deliberately below {@link BRIDGE_TEST_TIMEOUT_MS}. A wait that could outlast
  * the per-test budget loses the race to Bun's generic "test timed out", and the
  * bounded diagnostic below — the whole reason this helper exists — never prints.
  */
-export const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
+export const DEFAULT_WAIT_TIMEOUT_MS = 60_000;
 
 /**
  * Starting a fresh bridge is a process-readiness boundary, not an ordinary
- * state poll. Aggregate runs start many Bun children at once, so keep startup's
- * contention budget separate from the tighter product-state diagnostic above.
+ * state poll. It ends on the child's own `server.listening` line and a
+ * successful auth check; this is only the watchdog for a child that never
+ * announces. With six busy loops sharing the test's core, bridge-restart tests
+ * failed at the former 5 s / 15 s / 30 s budgets and passed with these.
  */
-export const BRIDGE_STARTUP_TIMEOUT_MS = 15_000;
+export const BRIDGE_STARTUP_TIMEOUT_MS = 90_000;
 
 export async function waitFor<T>(
   read: () => Promise<T>,
@@ -261,6 +268,16 @@ export async function spawnBridge(
   };
   delete env[BRIDGE_LOG_RELAY_ENV];
   delete env.ACP_MAX_SESSIONS;
+  // A suite run from inside an Orkestrator agent inherits that environment's
+  // control variables. The agent MCP credential changes what the fake agent is
+  // handed (it then never starts, so a `start:` wait never resolves), and the
+  // backend's parent PID would make every test bridge shut itself down the
+  // moment the real backend restarts. Watch this test process instead, which is
+  // the bridge's actual owner. A test that needs any of them passes it in
+  // `options.env`, applied below.
+  delete env.ORKESTRATOR_AGENT_MCP_URL;
+  delete env.ORKESTRATOR_AGENT_MCP_TOKEN;
+  env[PARENT_PID_ENV] = String(process.pid);
   // Grok fixtures run signed in. Without a login the bridge never starts Grok
   // (its `authenticate` would wait on an interactive sign-in), so a test that
   // means "signed out" points `GROK_AUTH_FILE` at a missing file instead.

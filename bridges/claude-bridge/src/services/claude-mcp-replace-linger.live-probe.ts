@@ -53,7 +53,9 @@ export interface ReplaceLingerResult {
 }
 
 const SELF = fileURLToPath(import.meta.url);
-const READY_TIMEOUT_MS = 20_000;
+// A hang watchdog on waits for a real state, not a speed assertion: a starved
+// host can need far longer than an idle one to start a CLI and its servers.
+const READY_TIMEOUT_MS = 120_000;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -229,12 +231,17 @@ async function runScenario(scenario: ReplaceScenario): Promise<ReplaceObservatio
     (await control.mcpServerStatus())
       .filter((server) => server.name === "alpha" && server.status === "connected")
       .map((server) => server.serverInfo?.version ?? "?");
-  const waitFor = async (what: string, ready: () => Promise<boolean>) => {
+  /** Resolves true once `ready` holds, false if the watchdog expires first. */
+  const reached = async (ready: () => Promise<boolean>) => {
     const deadline = Date.now() + READY_TIMEOUT_MS;
     while (!(await ready())) {
-      if (Date.now() > deadline) throw new Error(`${scenario}: ${what} did not happen`);
+      if (Date.now() > deadline) return false;
       await sleep(100);
     }
+    return true;
+  };
+  const waitFor = async (what: string, ready: () => Promise<boolean>) => {
+    if (!(await reached(ready))) throw new Error(`${scenario}: ${what} did not happen`);
   };
   try {
     if (scenario === "dynamic") {
@@ -245,8 +252,17 @@ async function runScenario(scenario: ReplaceScenario): Promise<ReplaceObservatio
     // Same name, changed configuration (another argument and env value).
     await control.setMcpServers({ alpha: alpha("2") });
     await waitFor("version 2 connecting", async () => (await connectedVersions()).includes("2"));
-    // Give a stopped process time to exit before looking.
-    await sleep(2_000);
+    // `dynamic` expects the CLI to stop the replaced process, so wait for its
+    // exit. The other scenarios expect it to keep running, so there is no exit
+    // to wait for; looking earlier can only report "running", which is the
+    // expectation, never a spurious "stopped".
+    if (scenario === "dynamic") {
+      await waitFor("version 1 stopping", async () =>
+        starts()
+          .filter((start) => start.version === "1")
+          .every((start) => !isAlive(start.pid)),
+      );
+    }
     const processes = starts().map((start) => ({
       version: start.version,
       alive: isAlive(start.pid),
@@ -255,7 +271,9 @@ async function runScenario(scenario: ReplaceScenario): Promise<ReplaceObservatio
     release();
     control.close();
     await exited;
-    await sleep(3_000);
+    // The CLI's exit takes its servers with it; wait for that to show. If the
+    // watchdog expires the survivors are reported below.
+    await reached(async () => starts().every((start) => !isAlive(start.pid)));
     return {
       scenario,
       connected,

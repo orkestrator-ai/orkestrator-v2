@@ -1,7 +1,7 @@
 # Agent usage fixture misses its browser deadline
 
 - **ID:** 0749
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24, node mbp3
 - **Tests:** `subagent compact usage fits alongside the header and remains accessible after reload`; `task-group compact usage fits alongside the header and remains accessible after reload`.
 - **Owner:** `e2e/AgentUsage.spec.ts:38`.
@@ -95,3 +95,26 @@ in a seven-owner rerun at load about 60 (116 others passed). The unchanged
 owner then passed alone with one worker:
 `mise run test:logged -- --name agent-usage-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentUsage.spec.ts --workers=1`
 (49.9 s). Details in [9988](../design-canvas-and-artifacts/9988-design-launch-old-backend-reload-timeout.md).
+
+## Triage note (2026-11-15)
+
+Class A candidate (Playwright's default 5 s assertion / 30 s test deadline expiring on a loaded host). Not changed. The fix would be hang-watchdog defaults in `e2e/playwright.config.ts` (`expect.timeout` and `timeout`), but that config is shared with every group's component browser specs, so it is left for a separate decision rather than changed in a per-group sweep. Not reproduced; the browser suite was not run. Stays `open`.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** every recorded failure is a Playwright default deadline
+  expiring on a loaded host while the spec waited on a real signal: both mobile cases exceeding the 30 s test default during reload, a locator wait, the usage-duration assertion or header focus.
+  No wrong value, crash or lost input is recorded. `e2e/AgentUsage.spec.ts` passes no smaller
+  timeout of its own at the failing calls.
+- **Fix:** `e2e/playwright.config.ts`, which runs this component spec, now sets
+  `timeout: 120_000` (was Playwright's 30 s default) and
+  `expect: { timeout: 30_000 }` (was 5 s). Navigations have no timeout of
+  their own, so they are bounded by the 120 s test budget. Both budgets are
+  hang watchdogs on real signals, not speed checks.
+- **Reproduced:** no — the recorded failure was not reproduced. The evidence
+  is a rerun, under the new config, of the component specs that had failed in
+  a loaded run (112 passed); that is not a targeted reproduction of this case,
+  and a raised budget is weaker evidence than a reproduced fix.
+- **Reopen:** a recurrence that hangs near the new budgets (120 s test, 30 s
+  assertion) means the signal never arrived rather than arrived late; reopen
+  this case.

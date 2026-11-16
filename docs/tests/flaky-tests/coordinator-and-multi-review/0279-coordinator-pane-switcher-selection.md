@@ -11,3 +11,7 @@
 - **Owning-file rerun:** `ORKESTRATOR_E2E_PORT=14827 mise run test:logged -- --name browser-coordinator-owner-clean -- bunx playwright test --config e2e/playwright.config.ts e2e/CoordinatorPaneTree.spec.ts --workers=1 --output=output/playwright/login-coordinator-owner` passed unchanged (six passed, six skipped, exit 0) in 20.4 seconds.
 - **Evidence:** `orkestrator-test-run.Q1quX1/login-browser.log.gz` in the host temporary directory. An earlier owning-file attempt overlapped another browser command's default output directory and failed during trace cleanup; the successful rerun used its own output directory.
 - **Assessment:** isolated pass establishes intermittence; the cause is unconfirmed. Device-login changes do not edit the coordinator panes. No assertion, timeout or skip was changed.
+
+## Triage note (2026-11-15)
+
+Not established. The failing step clicks the split-pane switcher tab straight after a mouse drop. Whether the drag library still swallows that click (post-drag click suppression) or the 5 s `expect` default simply ran out under load was not determined. The spec changed after the observation (d5294b2029). Nothing was changed: a longer wait would hide a lost click rather than fix it. Not reproduced, because the browser suite was not run. Stays `open`.

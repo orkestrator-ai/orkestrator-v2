@@ -45,3 +45,7 @@ changed for this record.
 If it recurs, add content-free phase markers (launch, new page, route,
 CDP session) to the hook to identify which step stalls before changing the
 budget.
+
+## Triage note (2026-11-15)
+
+Diagnostics only; stays `open`. In `apps/desktop/tests/browser-preview-shadow-text.integration.test.ts` each `beforeAll` step (launch, new page, route, CDP session) now runs under a 45 s watchdog that names the step that stalled, and the explicit 60 s hook and 30 s test arguments are removed (the 60 s default applies). The hook budget is unchanged at 60 s, so the recorded 60 s stall is not fixed; the next recurrence will say which step stalled. Passed alone on Linux with `/usr/bin/chromium`.

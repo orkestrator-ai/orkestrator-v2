@@ -180,10 +180,50 @@ describe("watching", () => {
     reader.forget("p1");
     await write("a.graph.json", sampleGraphTemplate("a"));
     ready();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The watch's own readiness handler was registered before this await, so
+    // it has run once `established` settles here. Any settle timer it armed
+    // (settleMs 0) fires before this zero-delay one, and a rescan's first act
+    // is a checkout read, so `reads` is the evidence that none started.
+    await established;
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(reads).toBe(1);
     expect(changes).toEqual([]);
     expect(reader.watchedProjects()).toEqual([]);
+  });
+
+  test("a rescan still in flight when the reader closes announces nothing", async () => {
+    reader.close();
+    const gate = Promise.withResolvers<void>();
+    let reads = 0;
+    reader = new GraphProjectTemplates({
+      checkoutOf: async () => {
+        reads++;
+        if (reads === 2) await gate.promise;
+        return checkout;
+      },
+      onChange: (id) => changes.push(id),
+      startWatch: watch.start,
+      settleMs: 0,
+    });
+    // Capture the rescan's own promise, so the test awaits its completion
+    // instead of sleeping and hoping the late announcement had time to arrive.
+    const rescans: Array<Promise<void>> = [];
+    const rescan = reader["rescan"].bind(reader);
+    reader["rescan"] = (...args) => {
+      const settled = rescan(...args);
+      rescans.push(settled);
+      return settled;
+    };
+    await reader.scan("p1");
+    await waitForGraphCondition(() => watch.open().length === 1);
+    await write("a.graph.json", sampleGraphTemplate("a"));
+    watch.fire();
+    await waitForGraphCondition(() => reads === 2);
+    reader.close();
+    gate.resolve();
+    await Promise.all(rescans);
+    expect(rescans).toHaveLength(1);
+    expect(changes).toEqual([]);
   });
 
   test("closing before readiness settles without retiring a replacement graph watch", async () => {

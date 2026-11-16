@@ -1,7 +1,7 @@
 # Local-server deletion aggregate timeout
 
 - **ID:** 0220
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `Electron backend command registry > deletes an environment only
   after all three local server kinds exit`
@@ -264,3 +264,11 @@ or skip changed.
 - **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts tests/commands-integration.test.ts` from `apps/backend`: 55 passed, 0 failed.
 - **Disposition:** recurrence confirmed by the isolated pass. No assertion,
   deadline or skip was changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** The deletion waits for three real local servers to start and exit; a one-worker subset under load exceeded Bun's 5 s default.
+- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup-node.ts`, `tests/setup.ts`), makes 60 s the default per-test and hook budget, a hang watchdog only. The file's own `setDefaultTimeout(30_000)`, which undercut the preload, now sets `DEFAULT_TEST_TIMEOUT_MS` (60 s) explicitly, because in a run without `--parallel`/`--isolate` Bun applies a preload's `setDefaultTimeout` to the first test file only.
+- **Reproduced:** no — the recorded deadline was Bun's default budget on a loaded host; the failing body is fast alone, and a 5 s exhaustion was not re-created per case here.
+- **Stress:** `mise run test:logged -- --name ec-stress-a -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --core 15 --burners 6 -- bun test --preload ../../tests/setup-node.ts <the twelve commands-* owners, this one included> --rerun-each=2 --parallel=1'` at host load about 80: 736 passed, 2 failed, both `serves the Files panel from the scan the badge already ran`, which stays open in [9854](9854-electron-diff-statistics-aggregate-timeout.md); no other case failed.
+- **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).

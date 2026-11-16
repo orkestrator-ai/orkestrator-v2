@@ -11,3 +11,7 @@
 - **Isolated rerun:** `ORKESTRATOR_AGENT_TEST_PROFILE=agent-session-import-review-fixes ORKESTRATOR_AGENT_TEST_RUN_ID=session-import-review-isolated-annotations mise run test:logged -- --name annotation-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts web-annotations-electron.spec.ts` passed the complete unchanged owner: 14 passed, 1 skipped, 78.1 seconds, one worker.
 - **Evidence:** original compressed log `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.tAculv/electron-preview-session-import.log.gz`; isolated results under `output/agent-testing/session-import-review-isolated-annotations/electron/`.
 - **Hypothesis:** target identity or geometry changed across the viewport comparison. The isolated pass establishes intermittent behavior; its cause is not established. No assertion, timeout or skip was changed.
+
+## Triage note (2026-11-15)
+
+Not changed. Recorded failure: an extra target difference in a viewport comparison, a value mismatch rather than an expired wait. Electron specs and their configs were not run or edited in this pass (shared with other groups, and unverifiable here); no spec-local explicit signal could be justified without a live reproduction. Stays `open`.

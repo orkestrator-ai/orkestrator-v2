@@ -49,7 +49,10 @@ export function deferred<T = void>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-export async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+// Polls for a condition some real event makes true. The deadline is only a hang
+// watchdog: it is long enough that a starved host never fails a bridge that is
+// still making progress, and it decides nothing about what the test asserts.
+export async function waitFor(condition: () => boolean, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!condition()) {
     if (Date.now() > deadline) throw new Error("Timed out waiting for the bridge to settle");

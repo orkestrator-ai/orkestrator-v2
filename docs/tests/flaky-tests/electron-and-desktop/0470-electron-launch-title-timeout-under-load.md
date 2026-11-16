@@ -137,3 +137,7 @@ e2e/agent-testing/terminal-input-resume-electron.spec.ts --workers=1`.
 This supports recurrence of the existing startup symptom; it does not establish
 a root cause or excuse the other Electron failures. No title assertion or
 startup timeout was changed.
+
+## Partial change, 2026-11-15 (unverified, case stays open)
+
+The first-title waits already use `startup.waitForTitle(..., 60_000)` (with the ERR_NETWORK_CHANGED reload). The remaining 120 s test-deadline and 60 s title failures were recorded at host load 132 and no test-side wait explains them, so no further assertion changed for this case. Launch and `firstWindow` now carry a 60 s watchdog in the owning specs (see 0157), and the nickname reload poll was fixed under [0515](0515-electron-nickname-reload-deadline.md). Nothing was run.

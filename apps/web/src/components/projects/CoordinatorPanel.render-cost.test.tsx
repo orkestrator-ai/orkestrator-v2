@@ -125,17 +125,19 @@ const snapshot: CoordinatorSnapshot = {
 
 let workerPrompts: HumanPromptEntry[] = [];
 const ensure = mock(async () => snapshot);
+const getProjectCoordinatorView = mock(async () => ({
+  status: "snapshot",
+  generation: "view-gen",
+  revision: 1,
+  snapshot,
+}));
+const getProjectGitStatus = mock(async () => gitStatus);
 
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   ensureProjectCoordinator: ensure,
-  getProjectCoordinatorView: mock(async () => ({
-    status: "snapshot",
-    generation: "view-gen",
-    revision: 1,
-    snapshot,
-  })),
-  getProjectGitStatus: mock(async () => gitStatus),
+  getProjectCoordinatorView,
+  getProjectGitStatus,
   fetchProjectGit: mock(async () => gitStatus),
   checkCoordinatorUpstreamMerge: mock(async () => null),
   selectCoordinatorConversation: mock(async () => snapshot),
@@ -161,6 +163,7 @@ mock.module("@/components/native-agent", () => ({
 import { CoordinatorPanel } from "./CoordinatorPanel";
 import { appCommandStore } from "@/test/app-command-store";
 
+import { useAsyncUtilHangWatchdog } from "@/test/async-util-hang-watchdog";
 const worker = { id: "worker-env", projectId: "project-1", name: "api-fix" } as Environment;
 const unrelated = {
   id: "unrelated-env",
@@ -176,12 +179,22 @@ function counts() {
 async function renderPanel() {
   renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
   await waitFor(() => expect(screen.getAllByTestId("native-agent")).toHaveLength(2));
-  // Let the first reads (git, prompts, the checkout turn) settle.
+  // The first reads (git, the coordinator view) have been asked for; their
+  // mocks answer at once, so their results and the renders they cause need only
+  // the event loop's turns, not wall time. Drain a bounded number of them.
+  await waitFor(() => {
+    expect(getProjectCoordinatorView).toHaveBeenCalled();
+    expect(getProjectGitStatus).toHaveBeenCalled();
+  });
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    for (let turn = 0; turn < 10; turn += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   });
   return counts();
 }
+
+useAsyncUtilHangWatchdog();
 
 describe("CoordinatorPanel render cost", () => {
   const previousEnvironments = appCommandStore(environmentStore).getState().environments;

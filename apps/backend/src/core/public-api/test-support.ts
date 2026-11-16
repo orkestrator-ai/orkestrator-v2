@@ -100,6 +100,29 @@ async function git(args: string[], cwd?: string): Promise<string> {
   return stdout.trim();
 }
 
+const TRANSIENT_REMOVE_CODES = new Set(["EPERM", "EBUSY", "ENOTEMPTY"]);
+
+/**
+ * Removes a fixture root, retrying the errors a recursive removal can lose to
+ * a file created or released inside the tree a moment earlier (macOS raises
+ * EPERM; cases 0261 and 0341). Retrying is the cleanup's own behaviour, not an
+ * assertion: a permanent failure still throws after the last attempt. Whether
+ * `fs.rm`'s own `maxRetries` covers these errors is not documented for Bun, so
+ * the loop is explicit.
+ */
+async function removeFixtureRoot(root: string): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rm(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= 10 || code === undefined || !TRANSIENT_REMOVE_CODES.has(code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+    }
+  }
+}
+
 export async function createPublicApiHarness(
   options: {
     root?: string;
@@ -192,7 +215,7 @@ export async function createPublicApiHarness(
       try {
         await dispose();
       } finally {
-        await fs.rm(root, { recursive: true, force: true });
+        await removeFixtureRoot(root);
       }
     },
   };

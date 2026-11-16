@@ -12,3 +12,7 @@
 - **Isolated reruns:** `ORKESTRATOR_AGENT_TEST_PAUSE_CASES=codex-approval` alone passed (43.4 s); `ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=claude,opencode` passed all four cases (41.1 s).
 - **Hypothesis:** not established. Both symptoms involve Codex cards when another Codex case shares the run: the hold clearing after a resume and the approval's continuation after the answer. Neither touches code the 2026-11-06 upgrade changed (the hold path is unchanged; the upgrade only added the optional `humanRequired` and `toolHints` fields). Reproduce with two Codex cases in one run before fixing.
 - **Related:** 1031 (retired 2026-11-14) task 9, `git show dc90609bf:docs/todo/agent-engines/1031-provider-upgrade-2026-11-06.md`; 1020 (retired 2026-11-13) "Review repair and signed-in evidence", `git show 17d28238c:docs/todo/agent-engines/1020-provider-upgrade-2026-10-30.md`.
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. Besides the 5 s `expect.poll` on `hold.heldAt`, the case records a Codex approval left `incomplete` after it was answered, a wrong state with an unestablished cause. The 2026-11-15 `expect: { timeout: 30_000 }` change inherited from `e2e/agent-testing/playwright.browser.config.ts` is not claimed as a fix.

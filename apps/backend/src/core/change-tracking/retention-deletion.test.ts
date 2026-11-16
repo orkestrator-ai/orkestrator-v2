@@ -1211,8 +1211,12 @@ describe("retirement regressions", () => {
     const seed = ledger.db.query("SELECT * FROM change_evidence LIMIT 1").get() as Parameters<
       typeof ledger.insertEvidence
     >[0];
-    for (let i = 1; i <= 600; i++)
-      ledger.insertEvidence({ ...seed, revision: i + 10, revision_key: `extra-${i}` });
+    // Seed atomically, as production callers do: 600 SQLite autocommits make
+    // setup, not the purge under test, dominate the time on a busy host.
+    ledger.transaction(() => {
+      for (let i = 1; i <= 600; i++)
+        ledger.insertEvidence({ ...seed, revision: i + 10, revision_key: `extra-${i}` });
+    });
     h.service.environmentDeleted("env-1");
     const purges = h.service.retention.purges;
     const original = purges.purgeEnvironmentBatch.bind(purges);
@@ -1246,20 +1250,22 @@ describe("retirement regressions", () => {
     const seed = ledger.db.query("SELECT * FROM change_evidence LIMIT 1").get() as Parameters<
       typeof ledger.insertEvidence
     >[0];
-    for (let i = 1; i <= 1000; i++) {
-      ledger.insertEvidence({ ...seed, revision: i + 10, revision_key: `extra-${i}` });
-      ledger.db
-        .query("INSERT INTO change_diff_identities VALUES (?, ?, ?, ?)")
-        .run(`identity-${i}`, measurementId, "{}", "2026-01-01");
-      ledger.db
-        .query("INSERT INTO change_evidence_chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(seed.evidence_id, seed.revision_key, "target", i, `chunk-${i}`, i, "body", 0);
-      ledger.db
-        .query(
-          "INSERT INTO change_selections (selection_key, measurement_id, selector, revision, updated_at) VALUES (?, ?, 'latest', 1, '2026-01-01')",
-        )
-        .run(`commit/environment/env-1%40${i}/pinned`, "missing");
-    }
+    ledger.transaction(() => {
+      for (let i = 1; i <= 1000; i++) {
+        ledger.insertEvidence({ ...seed, revision: i + 10, revision_key: `extra-${i}` });
+        ledger.db
+          .query("INSERT INTO change_diff_identities VALUES (?, ?, ?, ?)")
+          .run(`identity-${i}`, measurementId, "{}", "2026-01-01");
+        ledger.db
+          .query("INSERT INTO change_evidence_chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(seed.evidence_id, seed.revision_key, "target", i, `chunk-${i}`, i, "body", 0);
+        ledger.db
+          .query(
+            "INSERT INTO change_selections (selection_key, measurement_id, selector, revision, updated_at) VALUES (?, ?, 'latest', 1, '2026-01-01')",
+          )
+          .run(`commit/environment/env-1%40${i}/pinned`, "missing");
+      }
+    });
     let done = false;
     for (let i = 0; i < 500 && !done; i++) {
       const before = (ledger.db.query("SELECT total_changes() AS n").get() as { n: number }).n;

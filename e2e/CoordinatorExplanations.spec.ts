@@ -2,9 +2,6 @@ import { expect, test } from "@playwright/test";
 import path from "node:path";
 import { COORDINATOR_COMPOSER_PLACEHOLDER } from "../apps/web/src/components/projects/CoordinatorPanelNotices";
 
-// Includes a full renderer reload as well as scrolling and interacting with the dock.
-test.setTimeout(60_000);
-
 test("short panes keep onboarding, starter and sending reachable", async ({ page }, testInfo) => {
   await page.setViewportSize({
     width: testInfo.project.name === "mobile-chromium" ? 390 : 1024,

@@ -10,3 +10,7 @@
 - **Evidence:** run `qa-coordinator-2026-10-25T16-31-13-066Z`, profile `qa-coordinator-codex-8c649490`, `coordinator/codex-async.json` and its Playwright trace (local, ignored).
 - **Isolated rerun:** `mise run test:agent:coordinator --credential-source codex --scenario async --scenario status` (run `qa-coordinator-2026-10-25T17-24-05-562Z`) passed every check, `queued-before-mail` included ("busy with the report pending and the prompt queued true").
 - **Hypothesis:** on a loaded host the busy turn's three reads, or the reporter's turn end after the finish gate, can complete between two harness reads, so the three conditions are never sampled together. Codex passed the same check on 2026-10-18 and Claude, OpenCode, Cursor and Pi passed it on 2026-10-25. Nothing in the check or its timing was changed. If it recurs, lengthen the busy turn (more sequential reads) rather than loosen the check.
+
+## Triage note (2026-11-15)
+
+Not changed. `queued-before-mail` decides overlap by sampling the harness every two seconds, which is a timed check. A deterministic version would record the busy-turn, pending-report and queued-prompt transitions from an event log or the backend's own journal, rather than hoping one sample sees all three. That is a harness redesign for a live-agent spec this sweep cannot run. Stays `open`.

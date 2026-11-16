@@ -1,7 +1,7 @@
 # Local bridge reuse: busy-bridge replacement times out in the aggregate
 
 - **ID:** 9885
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** `local bridge reuse under load > replaces a busy bridge that has stayed unresponsive past the grace period`
 - **File:** `apps/backend/tests/commands-local-bridge-reuse.test.ts`
@@ -17,3 +17,11 @@
 - **Disposition:** open.
 - **Correction:** the case does not wait out a real grace period. It back-dates the unresponsive mark with `markLocalServerUnresponsiveSince(..., Date.now() - 3 * 60_000)` (`commands-local-bridge-reuse.test.ts:284`), then spawns a real replacement bridge. So two real bridge starts and a stall request run inside Bun's generic five-second budget; the file has no explicit budget.
 - **Next step:** give this case an explicit budget sized for two bridge starts, or measure how long each start takes under aggregate load. Single observation so far.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** the case starts a real bridge process, stalls it over HTTP, back-dates the unresponsive mark and then starts a real replacement, all inside the five-second default budget (5913.03 ms observed on a host at load average 17 to 38). It asserts on process identity and liveness, never on elapsed time, and the file sets no budget of its own.
+- **Fix:** `tests/default-test-timeout.ts` (preloaded by `apps/backend`'s `test` and `test:workspace` scripts) now sets a 60 s default budget. No test change: the grace period is already injected through `markLocalServerUnresponsiveSince`, so there is no timer to control.
+- **Reproduced:** no. Not made to fail locally; the aggregate failure is a pure default-budget exhaustion, so this is reasoned.
+- **Not changed:** the shared `requestOk` helper in `apps/backend/tests/command-fixtures.ts` still has a 2 s per-request timeout on a loopback call to the test's own bridge. It is outside this case's recorded failure and another worker has the file open, so I left it.
+- **Stress:** `NODE_ENV=test bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-local-bridge-reuse.test.ts` passed all 12 cases (6.4 s). No contention run completed. Note for anyone rerunning it from an agent shell: without `NODE_ENV=test` (agent and build shells export `NODE_ENV=production`) every case fails at once with `codex bridge directory not found`, because `getBridgePath` skips the fixture's `bridges/` directory in production.

@@ -28,6 +28,17 @@ import {
   createCoordinatorReadOnlyHook,
 } from "../src/services/read-only-policy.js";
 
+// Hang watchdogs, not assertions. Each guards a wait for a real completion
+// signal: the CLI's stream ending, or a fixture process exiting. A real native
+// CLI spawn on a starved host can take far longer than it does alone, and what
+// a scenario asserts is what the CLI did, never how long it took. A turn that
+// is genuinely stuck still fails (`controller.signal.aborted`) once its
+// watchdog fires.
+export const FIXTURE_WATCHDOG_MS = 30_000;
+export const TURN_WATCHDOG_MS = 90_000;
+/** The test budget for one scenario: the turn watchdog plus fixture setup. */
+export const QUALIFICATION_TEST_BUDGET_MS = TURN_WATCHDOG_MS + 2 * FIXTURE_WATCHDOG_MS;
+
 export const HOOK_ONLY_ADVERSARIAL_SCENARIOS = [
   "unavailable-hook-refuses-xxd-output",
   "unavailable-hook-refuses-xxd-truncate",
@@ -193,7 +204,7 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
       const sentinel = join(cwd, "helper-sentinel").replaceAll("\\", "/");
       await writeFile(
         helper,
-        `#!/bin/sh\nprintf helper > '${sentinel}'\ncurl --max-time 2 '${endpoint.url.origin}/unlisted'\n`,
+        `#!/bin/sh\nprintf helper > '${sentinel}'\ncurl --max-time 30 '${endpoint.url.origin}/unlisted'\n`,
         { mode: 0o755 },
       );
       const git = (args: string[]) => {
@@ -201,7 +212,7 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
           cwd,
           env: { ...process.env, ...fixture.env },
           encoding: "utf8",
-          timeout: 5_000,
+          timeout: FIXTURE_WATCHDOG_MS,
         });
         expect(result.status).toBe(0);
       };
@@ -220,7 +231,7 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
         stdout: "ignore",
         stderr: "ignore",
       });
-      const controlTimeout = setTimeout(() => control.kill(), 5_000);
+      const controlTimeout = setTimeout(() => control.kill(), FIXTURE_WATCHDOG_MS);
       try {
         expect(await control.exited).toBe(0);
         expect(await Bun.file(sentinel).text()).toBe("helper");
@@ -235,7 +246,13 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
       }
     }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15_000);
+    // An idle watchdog, re-armed on each stream message, so a slow but
+    // advancing turn never fails and only a CLI gone silent does.
+    let timeout = setTimeout(() => controller.abort(), TURN_WATCHDOG_MS);
+    const armTurnWatchdog = () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => controller.abort(), TURN_WATCHDOG_MS);
+    };
     const coordinatorTurn = scenario === "coordinator-hook-refuses" || unavailable;
     const turnPolicy = readOnlyTurn ? READ_ONLY_TURN_POLICY : coordinatorPolicy;
     const options: Options = {
@@ -347,6 +364,7 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
     try {
       for await (const message of query({ prompt: "Run the fixture", options })) {
         messages.push(message);
+        armTurnWatchdog();
         if (messages.length > 64) {
           controller.abort();
           throw new Error("CLI fixture message bound exceeded");

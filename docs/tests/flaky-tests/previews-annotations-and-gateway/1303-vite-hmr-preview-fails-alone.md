@@ -64,3 +64,7 @@ rerun alone again: it already fails alone on this host and on clean `main`
 - **Owning-file rerun:** `ORKESTRATOR_AGENT_TEST_RUN_ID=electron-4340-solo-service-preview-electron mise run test:logged -- --name solo-service-preview-electron -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts` failed the same way alone (16 passed, 1 failed, 7 skipped, 114.8 s; `orkestrator-test-run.gaZb1A/solo-service-preview-electron.log.gz`), so it still reproduces in the owner on macOS, as on 2026-10-28.
 - **Evidence:** `orkestrator-test-run.2kT16D/agent-electron.log.gz` below the host temporary directory; results and traces under `output/agent-testing/electron-4340/electron/`; rerun under `output/agent-testing/electron-4340-solo-service-preview-electron/electron/`.
 - **Changes:** evidence only; no HMR implementation, assertion, timeout or skip changed.
+
+## Triage note (2026-11-15)
+
+Not changed. Recorded failure: HMR not applied within 30 s, also failing alone and on clean `origin/main`, so a product or fixture defect rather than load. Electron specs and their configs were not run or edited in this pass (shared with other groups, and unverifiable here); no spec-local explicit signal could be justified without a live reproduction. Stays `open`.

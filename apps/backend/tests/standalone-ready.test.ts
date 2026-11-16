@@ -13,6 +13,9 @@ const encoder = new TextEncoder();
  */
 const HELD_KILL_GRACE_MS = 987_653;
 
+/** A ready deadline no other timer uses, held by hand where the test must not reach it. */
+const READY_DEADLINE_MS = 987_659;
+
 const hangingStream = (): ReadableStream<Uint8Array> =>
   new ReadableStream({
     start() {
@@ -182,13 +185,21 @@ describe("waitForStandaloneBackendReady", () => {
         throw new Error("must not kill a backend that already printed ready");
       },
     };
-    const startedAt = performance.now();
-    await expect(
-      waitForStandaloneBackendReady(child, {
-        readyTimeoutMs: 5_000,
-        readAuthFile: async () => JSON.stringify({}),
-      }),
-    ).rejects.toThrow("Backend auth file is missing its token");
-    expect(performance.now() - startedAt).toBeLessThan(500);
+    // Hold the ready deadline: it can never fire, so the rejection below can
+    // only have come from the missing token, however slow the host is. A
+    // wall-clock ceiling here only measured how busy the host was.
+    const deadline = installControlledTimeout(READY_DEADLINE_MS, { label: "ready deadline" });
+    try {
+      await expect(
+        waitForStandaloneBackendReady(child, {
+          readyTimeoutMs: READY_DEADLINE_MS,
+          readAuthFile: async () => JSON.stringify({}),
+        }),
+      ).rejects.toThrow("Backend auth file is missing its token");
+      // The deadline was cleared, not waited out.
+      expect(deadline.pendingCount()).toBe(0);
+    } finally {
+      deadline.restore();
+    }
   });
 });

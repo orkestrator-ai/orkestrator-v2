@@ -458,18 +458,49 @@ describe("gateway terminal WebSocket", () => {
         browserSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
       }
     ).browserSessions;
-    [...sessions.values()][0]!.expiresAt = Date.now() + 40;
-
-    const socket = await openTerminalSocket(info, {
-      authenticate: false,
-      headers: { Origin: new URL(info.url).origin, Cookie: cookie },
-    });
+    // The deadline is what the test controls, never a few milliseconds of wall
+    // time: the session stays valid through the upgrade and the `ready` frame,
+    // however slow the host is, and the server's expiry timer is captured and
+    // fired by hand once the socket is open and listened to.
+    const expiryWindowMs = 3_600_000;
+    const session = [...sessions.values()][0]!;
+    session.expiresAt = Date.now() + expiryWindowMs;
+    session.absoluteExpiresAt = Date.now() + expiryWindowMs;
+    const realSetTimeout = globalThis.setTimeout;
+    const expiryCallbacks: Array<() => void> = [];
+    globalThis.setTimeout = ((callback: TimerHandler, delay?: number, ...args: unknown[]) => {
+      if (
+        typeof callback === "function" &&
+        typeof delay === "number" &&
+        delay > expiryWindowMs - 60_000 &&
+        delay <= expiryWindowMs
+      ) {
+        expiryCallbacks.push(() => (callback as (...a: unknown[]) => void)(...args));
+        // A real, inert timer, so the server's `clearTimeout` and `unref` still work.
+        const inert = realSetTimeout(() => undefined, delay);
+        inert.unref?.();
+        return inert;
+      }
+      return realSetTimeout(callback, delay, ...args);
+    }) as typeof globalThis.setTimeout;
+    let socket: Awaited<ReturnType<typeof openTerminalSocket>>;
+    try {
+      socket = await openTerminalSocket(info, {
+        authenticate: false,
+        headers: { Origin: new URL(info.url).origin, Cookie: cookie },
+      });
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+    const closed = new Promise<number>((resolve) => socket.socket.once("close", resolve));
     expect(await nextTerminalControl(socket.inbox, "ready")).toMatchObject({
       type: "ready",
       version: 1,
     });
-    const closeCode = await new Promise<number>((resolve) => socket.socket.once("close", resolve));
-    expect(closeCode).toBe(TERMINAL_WEBSOCKET_CLOSE.authenticationRequired);
+    expect(expiryCallbacks).toHaveLength(1);
+    session.expiresAt = Date.now() - 1;
+    expiryCallbacks[0]!();
+    expect(await closed).toBe(TERMINAL_WEBSOCKET_CLOSE.authenticationRequired);
   });
 
   test("keeps a durable-token terminal socket open past every agent-test session deadline", async () => {

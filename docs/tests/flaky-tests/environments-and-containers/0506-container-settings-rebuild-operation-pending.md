@@ -81,3 +81,7 @@
 - **Cleanup:** `dev:stop` and `dev:reset` completed for
   `envfiles-settings-1d94`, removing two exact-owner containers, two volumes,
   one network and disposable profile state.
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. The first observation is an explicit 30 s wait in the spec that met `Another container operation is running`, a wrong state; the later 5 s Resources misses showed the section still on "Checking recovery copies…". The 2026-11-15 `expect: { timeout: 30_000 }` change in `e2e/agent-testing/playwright.browser.config.ts` may cover the latter but not the former.

@@ -251,3 +251,7 @@ Original failure evidence: `.orkestrator/review-artifacts/review-validation-2b4e
   than a slow start, because the next test's 2 s wait would also catch a slow start.
   Unconfirmed. The next recurrence should record whether the child process
   was still alive and whether `exit` fired without `close`.
+
+## Deadline change, still open (2026-11-15)
+
+`bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts`: the file's local `waitFor` default deadline (2 s, used by the app-server handshake case) is now a 30 s hang watchdog on a message the fake will send. The recorded failure (the first test, `runOnce` waiting for `close`, hitting the default 5 s budget) now gets the 60 s default from `tests/default-test-timeout.ts`. As with 0093 this does not help if the child's exit is genuinely never observed, and I did not reproduce it (the file passed, 2.4 s with its neighbours). Left open for the same recurrence evidence 0093 asks for.

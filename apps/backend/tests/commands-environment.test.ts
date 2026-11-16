@@ -7,6 +7,7 @@ import {
 } from "@orkestrator/protocol/review-evidence-frames";
 
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { eventSink } from "../src/core/backend-emit.js";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -15,6 +16,7 @@ const {
   commandTesting,
   createCommandRegistry,
   createContext,
+  createDeferred,
   createEnvironment,
   createGitRepoOnBranch,
   createGitWorktreeWithOrigin,
@@ -25,7 +27,6 @@ const {
   path,
   runGit,
   toClientEnvironment,
-  waitForCondition,
   withFakeCodex,
   withFakeGitSubcommandOutput,
 } = await createCommandFixtures();
@@ -228,8 +229,14 @@ describe("Electron backend command registry", () => {
         pendingRenamePrompt: "Please review the OAuth callback flow",
       });
       const { context, emitted } = createContext(environment);
+      const renamed = createDeferred();
+      context.emit = eventSink((event, payload) => {
+        emitted.push({ event, payload });
+        if (event === "environment-renamed") renamed.resolve();
+      });
       await isolateCodexBinaryLookup(context);
       const logs = captureLogs();
+      const failedRename = logs.waitForRecord((record) => record.event === "rename.failed");
       const renameEntries = () =>
         logs
           .records()
@@ -250,10 +257,9 @@ exit 1
               { environmentId: environment.id },
               context,
             );
-            await waitForCondition(
-              () => renameEntries().some(([event]) => event === "rename.failed"),
-              "failed pending rename to settle",
-            );
+            // The failure is logged once the rename has settled: wait for that
+            // record, not for a poll deadline a slow host could outrun.
+            await failedRename;
           },
         );
 
@@ -283,10 +289,7 @@ exit 1
             { environmentId: environment.id },
             context,
           );
-          await waitForCondition(
-            () => emitted.some(({ event }) => event === "environment-renamed"),
-            "retried pending environment rename",
-          );
+          await renamed.promise;
         });
 
         expect(environment.name).toBe("review-oauth-flow");

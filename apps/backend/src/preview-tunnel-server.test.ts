@@ -33,8 +33,15 @@ interface TunnelClient {
   nextControl(type?: string): Promise<Record<string, unknown>>;
 }
 
+// A hang watchdog for waits on a condition the tunnel will make true (a
+// relay child process, a paused socket, a drained queue). None of its callers
+// asserts that the condition stays false, so the deadline must be far beyond
+// what a loaded host needs; it only names a wait that never ends before the
+// test's own budget expires.
+const TUNNEL_WAIT_HANG_WATCHDOG_MS = 30_000;
+
 async function waitForTunnelCleanup(condition: () => boolean): Promise<void> {
-  const deadline = Date.now() + 2_000;
+  const deadline = Date.now() + TUNNEL_WAIT_HANG_WATCHDOG_MS;
   while (!condition()) {
     if (Date.now() >= deadline) throw new Error("Timed out waiting for tunnel cleanup");
     await Bun.sleep(5);

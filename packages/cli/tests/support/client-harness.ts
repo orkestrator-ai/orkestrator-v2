@@ -2,6 +2,9 @@ import { readLinuxProcessIdentity } from "../../src/client/process-start.js";
 import { mkdtemp, rm, writeFile, chmod, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+
+/** The route `src/client/transport.ts` posts every invocation to. */
+const INVOKE_PATH = "/__orkestrator/invoke";
 import {
   formatPublicNamespace,
   PUBLIC_ACTIONS,
@@ -164,6 +167,14 @@ export async function startFakeGateway(
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
+      // Only the client's own invoke route is the gateway. Port 0 can hand this
+      // server a port another suite's client still remembers (an OpenCode
+      // event stream reconnecting with `GET /api/event` has been seen); such
+      // a stray request is refused rather than parsed, so it can neither throw
+      // inside this handler nor appear among the recorded requests.
+      if (request.method !== "POST" || new URL(request.url).pathname !== INVOKE_PATH) {
+        return new Response("not the fake gateway's route", { status: 404 });
+      }
       const body = (await request.json()) as RecordedRequest["body"];
       const recorded = { authorization: request.headers.get("authorization"), body };
       requests.push(recorded);

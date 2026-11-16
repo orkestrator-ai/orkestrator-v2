@@ -235,3 +235,7 @@ No assertion, deadline, retry or skip was changed.
 - **Recurrence check:** `mise run flaky:recurrence 0252 --base a8b89f154` reported `open`.
 
 No assertion, deadline, retry or skip was changed.
+
+## Triage note (2026-11-15)
+
+Left `open` by the Playwright default-deadline triage. Every recorded failure is a route callback using a disposed request context or closed page during teardown, not a deadline, so the 2026-11-15 timeout change in `e2e/playwright.config.ts` does not address it.

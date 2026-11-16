@@ -1,7 +1,7 @@
 # User command concurrency test timeout
 
 - **ID:** 9910
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-09
 
 Test: `interactive commands > no more than four commands run at once in one tab`
@@ -44,3 +44,10 @@ mise run test:logged -- --name watcher-triage-user-commands -- bun test --cwd ap
 `mise run flaky:recurrence -- 9910 --base 08d3da4a23cfe2ecc34fba663ca27e765f7924a9 --registry-ref origin/main` reported the case open; this records a recurrence.
 
 Evidence: `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.dH765N/` (compressed group logs); JUnit under `/private/tmp/ork-watcher-failure-triage.0oarZv/`. [The complete report](../../../development/worktree-watcher-validation.md) contains the exact group outcomes, commands and non-green isolated owners. Passing alone establishes intermittence, not a cause or a fix. No related assertion, timeout, skip or implementation changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** the four-command cap test spawns five real PTY commands and terminates them; on a loaded host that exceeded Bun's 5 s default (8.5 s, 8.9 s). The file's `until` helper also had its own 5 s deadline.
+- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup.ts`, `tests/setup-node.ts`), raises Bun's default per-test and hook budget from 5 s to 60 s as a hang watchdog. `apps/backend/src/core/user-commands.test.ts`'s `until` now polls without a deadline of its own. No assertion changed.
+- **Reproduced:** no; passes under contention after the change (see Stress).
+- **Stress:** `f4-backend-cont2` (as in 1317) passed. Base `a8b89f154`.

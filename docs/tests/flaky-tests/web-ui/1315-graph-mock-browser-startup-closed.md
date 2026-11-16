@@ -24,3 +24,11 @@ and the same profile. Failure log: `orkestrator-test-run.Py4Ecz/graph-browser-ow
 under the host temporary directory; sanitized browser artifacts:
 `output/agent-testing/graphs-switch-off-regression/browser/artifacts/`.
 No assertion, timeout or skip changed for this startup failure.
+
+## Triage note (2026-11-15)
+
+Not changed. The owner is an `e2e/agent-testing` spec run through `playwright.browser.config.ts`, which this pass left alone because the config is shared with other groups' specs (a global assertion budget could loosen latency checks they rely on); no safe spec-local signal was identified without a live agent-testing profile. Stays `open`; Playwright agent-testing suites were not run.
+
+## Triage note (2026-11-15, after the config change)
+
+Follow-up: `playwright.browser.config.ts` now sets `expect: { timeout: 30_000 }` (its `timeout: 120_000` was already in place), but this case stays `open`: the recorded failure is a closed browser target, not an expired wait.

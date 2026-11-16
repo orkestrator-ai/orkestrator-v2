@@ -39,3 +39,7 @@ Each ran through `mise run test:logged` with `--parallel=1`, unless noted. Load 
 ## Fix
 
 None here. No assertion, deadline or fixture changed: the tests belong to other areas, and a longer deadline on this branch would only hide the condition. The triage false match is to-do 6601.
+
+## Triage (2026-11-15)
+
+Left open. Part of this case is the runner's 300 s no-output watchdog stopping a one-worker `portable-inputs-stamps` run that prints nothing until the file ends, and the hook-writer assertion failed alone at load above 70 (case 1102). Neither is a default test budget; the host load is a correlation, not an established cause.

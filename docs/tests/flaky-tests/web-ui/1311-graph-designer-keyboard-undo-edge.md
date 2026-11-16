@@ -99,3 +99,11 @@ a canvas edge gesture that silently has no effect. The branch changes no graph
 designer, canvas or graph compiler code. No assertion, timeout or skip was
 changed. Artifacts: `output/agent-testing/graph-ack-7571-b/browser/` (not
 committed).
+
+## Triage note (2026-11-15)
+
+Not changed. The owner is an `e2e/agent-testing` spec run through `playwright.browser.config.ts`, which this pass left alone because the config is shared with other groups' specs (a global assertion budget could loosen latency checks they rely on); no safe spec-local signal was identified without a live agent-testing profile. Stays `open`; Playwright agent-testing suites were not run.
+
+## Triage note (2026-11-15, after the config change)
+
+Follow-up: `playwright.browser.config.ts` now sets `expect: { timeout: 30_000 }` (its `timeout: 120_000` was already in place), but this case stays `open`: the failure is a value mismatch (edge count 2 instead of 1 after Control+Z), not an expired wait.

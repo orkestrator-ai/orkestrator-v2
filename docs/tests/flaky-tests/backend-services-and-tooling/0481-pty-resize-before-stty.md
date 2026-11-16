@@ -1,7 +1,7 @@
 # Bun PTY resize not yet applied when the shell runs stty
 
 - **ID:** 0481
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Test:** `Bun PTY adapter > supports terminal input and resize without crossing a native-addon fd boundary`
 - **File:** `apps/backend/src/core/pty.test.ts:106`
@@ -44,3 +44,10 @@ PTY implementation, assertion, timeout or skip changed.
 ## Mobile-title coverage review — 2026-10-27
 
 The repository suite repeated `24 80` instead of `31 93` (46.53 ms). `mise run test:logged -- --name pty-owner -- bun test --cwd apps/backend ./src/core/pty.test.ts --parallel=1 --only-failures` passed the complete unchanged owner in 0.1 seconds. Aggregate counts, commands and evidence are in [1155](../aggregate-validation-runs/1155-webkit-title-tooltip-0202-validation.md#coverage-review-validation--2026-10-27). No PTY implementation, assertion, timeout or skip changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** a race in the test. It wrote `stty size; …` straight after `terminal.resize(93, 31)`, and the resize reaches the pty asynchronously, so on a loaded host the shell could run `stty` first and print the spawn size `24 80`.
+- **Fix:** `apps/backend/src/core/pty.test.ts` has the shell wait on its own terminal (`until [ "$(stty size)" = '31 93' ]; do sleep 0.02; done`) before printing the size and the ready marker. The resize is still proved by the output (`/^31 93\r?$/m`, which ignores the echoed command line); the 3 s exit race became a 50 s hang watchdog and the test's own 5 s third argument was removed (the default 60 s budget applies).
+- **Reproduced:** no — the `24 80` answer was not re-created on demand.
+- **Stress:** `mise run test:logged -- --name f2-cont-pty -- bun scripts/test-under-contention.ts --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/pty.test.ts --rerun-each=3` passed.

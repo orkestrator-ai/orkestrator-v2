@@ -70,3 +70,7 @@ timeout or retry was changed for this record.
   the window closed.
 - If it recurs, run the spec alone on `windows-latest` with
   `--repeat-each=20` to measure the rate before changing the fixture.
+
+## Note, 2026-11-15 (no fix, case stays open)
+
+`application-menu-electron.spec.ts` now waits on the `devtools-closed` event instead of polling after `closeDevTools()` (see [9935](9935-linux-native-menu-devtools-open-poll.md)), but the recorded failure is the Electron process dying with a crashpad `not connected` line at the close call, which a different wait cannot address. It was seen only on `windows-latest` and cannot be reproduced or run on this Linux host. It stays open for the evidence listed under "Next evidence".

@@ -1111,12 +1111,21 @@ test("collapsing finished Notes preserves the reader's pan and panel position", 
   await expectOnScreen(page, "Notes");
   const overview = page.getByTestId("pipeline-flow-scroll");
   const viewport = page.locator("[data-flow-viewport]");
-  await viewport.evaluate((element) => {
-    element.scrollLeft = 0;
-  });
-  await overview.evaluate((element) => {
-    element.scrollTop = 40;
-  });
+  // The graph remembers the reader's pan from its scroll event, which the browser
+  // delivers a frame after the assignment. Collapsing before that frame (a loaded
+  // page delays it) unmounted the graph with the landing's 2503 px still saved
+  // (case 9946), so each pan resolves only once its scroll event has fired.
+  const scrollAndWait = (
+    element: Element,
+    [axis, value]: readonly ["scrollLeft" | "scrollTop", number],
+  ) =>
+    new Promise<void>((resolve) => {
+      if (element[axis] === value) return resolve();
+      element.addEventListener("scroll", () => resolve(), { once: true });
+      element[axis] = value;
+    });
+  await viewport.evaluate(scrollAndWait, ["scrollLeft", 0] as const);
+  await overview.evaluate(scrollAndWait, ["scrollTop", 40] as const);
   const toggle = page.getByRole("button", { name: "Pipeline", exact: true });
   // Programmatic activation keeps Playwright from scrolling the header into view.
   await toggle.evaluate((element) => (element as HTMLElement).click());

@@ -339,3 +339,7 @@ ORKESTRATOR_E2E_PORT=1532 mise run test:logged -- --name data-saving-alone -- bu
 ```
 
 No assertion, skip or timeout changed; root cause remains unconfirmed.
+
+## Triage note (2026-11-15)
+
+Partly addressed, not resolved. The test's `test.setTimeout` is now 120 s (was 60 s) and the disposable gateway's readiness-line wait 30 s (was 10 s), both hang watchdogs on real signals. The spec's cadence assertions (reads counted over a fixed 4.2 s window, event latency under 2 s and 3 s budgets, a 1.5 s hidden-tab window) measure the product's timing by design and still depend on the host being fast enough; making them deterministic needs a controllable clock in the fixture gateway, which this pass did not build. Not run. Stays `open`.

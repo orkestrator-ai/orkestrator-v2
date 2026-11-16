@@ -630,7 +630,11 @@ export async function runDesignCanvasJourney({
     await picker.getByLabel("Path", { exact: true }).fill(hostFile);
     await picker.getByLabel("Path", { exact: true }).press("Enter");
     const select = picker.getByRole("button", { name: "Select file", exact: true });
-    await expect(select).toBeEnabled();
+    // Enabled once the backend has resolved the typed path (`chosenPath`, no
+    // lookup in flight). That is a real signal a loaded host can delay past the
+    // 5 s default (case 2393), so the bound here is a hang watchdog, like the
+    // waits below it.
+    await expect(select).toBeEnabled({ timeout: 30_000 });
     await select.click();
     await expect(picker).toHaveCount(0);
     await expect(workspace).toHaveCount(0, { timeout: 30_000 });

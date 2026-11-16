@@ -208,51 +208,51 @@ describe("loopback wrapper failure and signal paths", () => {
   });
 
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    test.skipIf(process.platform === "win32")(
-      `forwards and re-raises ${signal}`,
-      async () => {
-        // This child is created by this test; readiness proves the forwarding handlers are installed.
-        const wrapper = spawn(
-          "bun",
-          [
-            script,
-            "--",
-            process.execPath,
-            "-e",
-            `process.on("${signal}", () => { console.log("forwarded"); process.removeAllListeners("${signal}"); process.kill(process.pid, "${signal}"); }); console.log("ready"); setInterval(() => {}, 1000);`,
-          ],
-          {
-            env: { ...process.env, [HOST_NETWORK_ENV]: "1" },
-            stdio: ["ignore", "pipe", "pipe"],
-          },
-        );
-        let output = "";
-        const exited = new Promise<{ code: number | null; signal: string | null }>(
-          (resolve, reject) => {
-            wrapper.on("error", reject);
-            wrapper.on("exit", (code, signal) => resolve({ code, signal }));
-          },
-        );
-        try {
-          await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error("child did not become ready")), 3000);
-            wrapper.stdout!.on("data", (chunk) => {
-              output += chunk.toString();
-              if (output.includes("ready")) {
-                clearTimeout(timer);
-                resolve();
-              }
-            });
+    test.skipIf(process.platform === "win32")(`forwards and re-raises ${signal}`, async () => {
+      // This child is created by this test; readiness proves the forwarding handlers are installed.
+      const wrapper = spawn(
+        "bun",
+        [
+          script,
+          "--",
+          process.execPath,
+          "-e",
+          // The handler writes synchronously: it re-raises the signal at once,
+          // so a buffered write could die with the process.
+          `process.on("${signal}", () => { require("node:fs").writeSync(1, "forwarded\\n"); process.removeAllListeners("${signal}"); process.kill(process.pid, "${signal}"); }); console.log("ready"); setInterval(() => {}, 1000);`,
+        ],
+        {
+          env: { ...process.env, [HOST_NETWORK_ENV]: "1" },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      let output = "";
+      // "close", not "exit": the child's `forwarded` line travels on the stdout
+      // pipe, which is read independently of the process exit. Only "close"
+      // follows the end of both, so the output is complete once it fires.
+      const exited = new Promise<{ code: number | null; signal: string | null }>(
+        (resolve, reject) => {
+          wrapper.on("error", reject);
+          wrapper.on("close", (code, signal) => resolve({ code, signal }));
+        },
+      );
+      try {
+        // Wait for the readiness line itself. An early wrapper exit fails the
+        // wait at once; otherwise the test's budget is only the hang watchdog.
+        await new Promise<void>((resolve, reject) => {
+          wrapper.stdout!.on("data", (chunk) => {
+            output += chunk.toString();
+            if (output.includes("ready")) resolve();
           });
-          wrapper.kill(signal);
-          const result = await exited;
-          expect(output).toContain("forwarded");
-          expect(result).toEqual({ code: null, signal });
-        } finally {
-          if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill("SIGTERM");
-        }
-      },
-      5000,
-    );
+          void exited.then(() => reject(new Error("wrapper exited before the child was ready")));
+        });
+        wrapper.kill(signal);
+        const result = await exited;
+        expect(output).toContain("forwarded");
+        expect(result).toEqual({ code: null, signal });
+      } finally {
+        if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill("SIGTERM");
+      }
+    });
   }
 });

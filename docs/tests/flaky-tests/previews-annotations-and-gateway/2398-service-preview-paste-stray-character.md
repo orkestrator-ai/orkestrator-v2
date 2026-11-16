@@ -26,3 +26,7 @@
   earlier and ends in the same letter, but it uses Playwright's `fill`, which
   sends no key for that text, and the rerun with that test present passed.
 - **How to reproduce:** not reproduced; it has been seen once.
+
+## Triage note (2026-11-15)
+
+Not changed. Recorded failure: a stray character in a pasted value (a real clipboard/focus interaction on a shared desktop), not a budget. Electron specs and their configs were not run or edited in this pass (shared with other groups, and unverifiable here); no spec-local explicit signal could be justified without a live reproduction. Stays `open`.

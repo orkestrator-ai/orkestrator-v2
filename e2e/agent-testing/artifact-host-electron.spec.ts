@@ -244,6 +244,8 @@ test("Run interactive opens a sandboxed host view that relays readiness, size an
     recordProcessOutput("vite", vite);
     await waitForUrl(rendererUrl);
     const app = await electron.launch({
+      // A watchdog on launch, not a startup budget: a loaded host can take longer than 30 s.
+      timeout: 60_000,
       executablePath: electronExecutable,
       args: [
         ...ELECTRON_TEST_SWITCHES,
@@ -260,7 +262,7 @@ test("Run interactive opens a sandboxed host view that relays readiness, size an
     launchedApp = app;
     const startup = watchElectronStartup(app);
     dismissStartupDialogs(app);
-    const window = await app.firstWindow();
+    const window = await app.firstWindow({ timeout: 60_000 });
     // index.html's title stays until Vite serves and runs renderer-entry; under
     // host load that startup takes longer than expect's 5 s default. A start
     // that lost its modules to ERR_NETWORK_CHANGED is reloaded (flake 2340).

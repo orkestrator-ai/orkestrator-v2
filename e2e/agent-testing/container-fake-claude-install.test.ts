@@ -8,6 +8,13 @@ import {
   REVIEW_QUALIFICATION_COMMIT,
 } from "./container-fake-claude-install";
 
+/**
+ * spawnSync blocks the event loop, so the test budget cannot interrupt it: this
+ * bound is what stops a hung snippet. It is a watchdog, not an expectation of
+ * speed, and stays below the shared 60 s test budget.
+ */
+const FIXTURE_SHELL_HANG_WATCHDOG_MS = 30_000;
+
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -43,7 +50,9 @@ function fixture() {
           env: { ...process.env, HOME: root },
           input,
           encoding: "utf8",
-          timeout: 5_000,
+          // Only a hang watchdog on the snippet's own exit (a few `cp`/`mv`
+          // calls); a starved host can spend seconds forking them (flake 9906).
+          timeout: FIXTURE_SHELL_HANG_WATCHDOG_MS,
         },
       );
       if (result.status !== 0) throw new Error("fixture shell failed");
@@ -203,7 +212,11 @@ test("qualification commit can run twice in the same fixture checkout", () => {
   const root = mkdtempSync(path.join(tmpdir(), "review-commit-"));
   roots.push(root);
   const run = (script: string) => {
-    const result = spawnSync("sh", ["-c", script], { cwd: root, encoding: "utf8", timeout: 5_000 });
+    const result = spawnSync("sh", ["-c", script], {
+      cwd: root,
+      encoding: "utf8",
+      timeout: FIXTURE_SHELL_HANG_WATCHDOG_MS,
+    });
     expect(result.status).toBe(0);
     return result.stdout;
   };

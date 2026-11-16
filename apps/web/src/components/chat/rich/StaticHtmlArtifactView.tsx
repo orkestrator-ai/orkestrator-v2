@@ -1,7 +1,7 @@
 import {
   useCallback,
   useContext,
-  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -263,8 +263,11 @@ export function StaticHtmlArtifactView({
     [artifactId, occurrenceKey, publicationId, revision],
   );
   // Text from an earlier visit is not a fallback for a read that now fails.
+  // A layout effect, so the document is withheld in the same commit that shows
+  // the failure: a passive effect ran a task later, and in that gap Find could
+  // still treat the failed card's stored text as displayed (case 9995).
   const readFailed = verified.status === "error";
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (readFailed) withholdText();
   }, [readFailed, withholdText]);
 

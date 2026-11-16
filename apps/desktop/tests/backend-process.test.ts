@@ -42,6 +42,7 @@ import {
   seedAgentTestDockerConfig,
 } from "../electron/backend-process";
 import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
+import { DEFAULT_TEST_TIMEOUT_MS } from "../../../tests/default-test-timeout";
 
 const directories: string[] = [];
 const processes: BackendProcess[] = [];
@@ -53,10 +54,18 @@ function stubFetch(
   globalThis.fetch = Object.assign(mock(implementation), { preconnect: originalFetch.preconnect });
 }
 
+/**
+ * The deadline of every wait below on a real signal (a status, a file, a line,
+ * an exit). It is a hang watchdog that sits inside the test's own budget, not
+ * a bound on how fast the host must be: a wait that is making progress on a
+ * slow host is not cut off, and a stuck one fails with its own message.
+ */
+const HANG_WATCHDOG_MS = 45_000;
+
 async function waitForWebClientStatus(
   client: BackendHttpClient,
   predicate: (status: Awaited<ReturnType<BackendHttpClient["getWebClientStatus"]>>) => boolean,
-  timeoutMs = 8_000,
+  timeoutMs = HANG_WATCHDOG_MS,
 ) {
   const deadline = Date.now() + timeoutMs;
   let status = await client.getWebClientStatus();
@@ -67,7 +76,15 @@ async function waitForWebClientStatus(
   return status;
 }
 
-async function waitForPath(target: string, timeoutMs = 2_000): Promise<void> {
+async function waitUntil(predicate: () => boolean, label: string, timeoutMs = HANG_WATCHDOG_MS) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${label}`);
+    await Bun.sleep(10);
+  }
+}
+
+async function waitForPath(target: string, timeoutMs = HANG_WATCHDOG_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (
@@ -88,7 +105,7 @@ async function waitForPath(target: string, timeoutMs = 2_000): Promise<void> {
 async function waitForCapturedLine(
   lines: string[],
   substring: string,
-  timeoutMs = 2_000,
+  timeoutMs = HANG_WATCHDOG_MS,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -110,7 +127,8 @@ afterEach(async () => {
       const exited = child
         ? new Promise<void>((resolve) => {
             child.once("exit", resolve);
-            setTimeout(resolve, 2_000);
+            // A hang watchdog on the child's exit, so a stuck one cannot stall teardown.
+            setTimeout(resolve, HANG_WATCHDOG_MS);
           })
         : Promise.resolve();
       backend.stop();
@@ -122,10 +140,10 @@ afterEach(async () => {
   );
 });
 
-// These tests spawn a real backend child process and wait for it to boot.
-// Bun's 5s default is not enough when the suite runs files in parallel on a
-// loaded machine, which showed up as an intermittent timeout here.
-const SPAWN_TIMEOUT_MS = 30_000;
+// These tests spawn a real backend child process and wait for it to boot. Their
+// budget is the suite-wide hang watchdog (tests/default-test-timeout.ts), not a
+// tighter one: a slow host must not fail a test that is still making progress.
+const SPAWN_TIMEOUT_MS = DEFAULT_TEST_TIMEOUT_MS;
 /** What the gateway sends first to a client that has no cursor yet. */
 const FRESH_CONNECTED_FRAME = `id: desktop1:0\ndata: ${JSON.stringify({
   event: "gateway.connected",
@@ -1190,8 +1208,8 @@ sleep 5
           onEvent: () => undefined,
         });
 
-        await waitForCapturedLine(logs, "[Backend] after-long-stdout", 10_000);
-        await waitForCapturedLine(errors, "[Backend] after-long-stderr", 10_000);
+        await waitForCapturedLine(logs, "[Backend] after-long-stdout");
+        await waitForCapturedLine(errors, "[Backend] after-long-stderr");
         for (const [captured, fill] of [
           [logs, "x"],
           [errors, "y"],
@@ -1453,7 +1471,10 @@ sleep 5
     const events: Array<{ event: string; payload: unknown }> = [];
     try {
       await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("large frame was not delivered")), 2_000);
+        const timeout = setTimeout(
+          () => reject(new Error("large frame was not delivered")),
+          HANG_WATCHDOG_MS,
+        );
         client.listen((event, payload) => {
           events.push({ event, payload });
           if (event === "large-snapshot") {
@@ -1714,17 +1735,19 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
     SPAWN_TIMEOUT_MS,
   );
 
-  test("reports backend readiness before slow managed Serve initialization finishes", async () => {
-    const root = path.resolve(import.meta.dir, "../../..");
-    const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
-    const toolsDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-tailscale-"));
-    directories.push(dataDir, toolsDir);
-    const executable = path.join(toolsDir, "tailscale");
-    const statusStarted = path.join(toolsDir, "status-started");
-    const releaseStatus = path.join(toolsDir, "release-status");
-    await writeFile(
-      executable,
-      `#!/bin/sh
+  test(
+    "reports backend readiness before slow managed Serve initialization finishes",
+    async () => {
+      const root = path.resolve(import.meta.dir, "../../..");
+      const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
+      const toolsDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-tailscale-"));
+      directories.push(dataDir, toolsDir);
+      const executable = path.join(toolsDir, "tailscale");
+      const statusStarted = path.join(toolsDir, "status-started");
+      const releaseStatus = path.join(toolsDir, "release-status");
+      await writeFile(
+        executable,
+        `#!/bin/sh
 if [ "$*" = "serve status --json" ]; then
   : > ${JSON.stringify(statusStarted)}
   while [ ! -f ${JSON.stringify(releaseStatus)} ]; do sleep 0.01; done
@@ -1736,32 +1759,34 @@ case " $* " in
 esac
 printf 'Available within your tailnet:\\nhttps://slow.example.ts.net\\n'
 `,
-    );
-    await chmod(executable, 0o755);
+      );
+      await chmod(executable, 0o755);
 
-    const backendProcess = new BackendProcess();
-    processes.push(backendProcess);
-    const client = await backendProcess.start({
-      isDev: true,
-      appRoot: root,
-      resourceRoot: root,
-      dataDir,
-      gatewayPort: 0,
-      desktopWebClient: true,
-      tailscaleExecutable: executable,
-      onEvent: () => undefined,
-    });
+      const backendProcess = new BackendProcess();
+      processes.push(backendProcess);
+      const client = await backendProcess.start({
+        isDev: true,
+        appRoot: root,
+        resourceRoot: root,
+        dataDir,
+        gatewayPort: 0,
+        desktopWebClient: true,
+        tailscaleExecutable: executable,
+        onEvent: () => undefined,
+      });
 
-    await waitForPath(statusStarted, 10_000);
-    await expect(client.invoke("greet", { name: "ready" })).resolves.toContain("Hello, ready!");
-    await writeFile(releaseStatus, "release\n");
-    await expect(waitForWebClientStatus(client, (status) => status.running)).resolves.toMatchObject(
-      {
+      await waitForPath(statusStarted);
+      await expect(client.invoke("greet", { name: "ready" })).resolves.toContain("Hello, ready!");
+      await writeFile(releaseStatus, "release\n");
+      await expect(
+        waitForWebClientStatus(client, (status) => status.running),
+      ).resolves.toMatchObject({
         running: true,
         url: "https://slow.example.ts.net/",
-      },
-    );
-  }, 30_000);
+      });
+    },
+    SPAWN_TIMEOUT_MS,
+  );
 
   test(
     "honors a persisted disabled setting without invoking Tailscale",
@@ -1900,8 +1925,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
 
       const child = (firstProcess as unknown as { child: { kill(signal: string): boolean } }).child;
       child.kill("SIGKILL");
-      const stoppedDeadline = Date.now() + 5_000;
-      while (firstProcess.getInfo() !== null && Date.now() < stoppedDeadline) await Bun.sleep(10);
+      await waitUntil(() => firstProcess.getInfo() === null, "the killed backend's exit");
       expect(firstProcess.getInfo()).toBeNull();
 
       const secondProcess = new BackendProcess();
@@ -1965,10 +1989,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
       const child = (backendProcess as unknown as { child: { kill(signal: string): boolean } })
         .child;
       child.kill("SIGTERM");
-      const deadline = Date.now() + 5_000;
-      while (backendProcess.getInfo() !== null && Date.now() < deadline) {
-        await Bun.sleep(10);
-      }
+      await waitUntil(() => backendProcess.getInfo() === null, "the terminated backend's exit");
       expect(backendProcess.getInfo()).toBeNull();
       expect(onUnexpectedExit).toHaveBeenCalledTimes(1);
       // The essential log keeps these fields and drops the message that also says them.
@@ -2100,7 +2121,7 @@ ${body}
     // Observed only through its rejection; the tests assert on it.
     started.catch(() => undefined);
     const pid = async () => {
-      await waitForPath(pidFile, 10_000);
+      await waitForPath(pidFile);
       return Number(await readFile(pidFile, "utf8"));
     };
     return { root, auth, backendProcess, started, onUnexpectedExit, pid };
@@ -2155,7 +2176,7 @@ while :; do sleep 0.05; done`);
     }
   });
 
-  async function waitForProcessGone(pid: number, timeoutMs = 5_000): Promise<void> {
+  async function waitForProcessGone(pid: number, timeoutMs = HANG_WATCHDOG_MS): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
@@ -2166,14 +2187,6 @@ while :; do sleep 0.05; done`);
       await Bun.sleep(10);
     }
     throw new Error(`Process ${pid} was still running`);
-  }
-
-  async function waitUntil(predicate: () => boolean, label: string, timeoutMs = 5_000) {
-    const deadline = Date.now() + timeoutMs;
-    while (!predicate()) {
-      if (Date.now() > deadline) throw new Error(`Timed out waiting for ${label}`);
-      await Bun.sleep(10);
-    }
   }
 
   test(

@@ -1,7 +1,7 @@
 # Coordinator tools list test times out under load
 
 - **ID:** 1651
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-01
 - **Test:** `what a coordinator is offered > the main coordinator has the tools and a side agent does not`
 - **File:** `apps/backend/src/core/control-mcp/coordinator-goals.test.ts`
@@ -23,3 +23,11 @@ mise run test:logged -- --name watcher-triage-coordinator-goals -- bun test --cw
 `mise run flaky:recurrence -- 1651 --base 08d3da4a23cfe2ecc34fba663ca27e765f7924a9 --registry-ref origin/main` reported the case open; this records a recurrence.
 
 Evidence: `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.dH765N/` (compressed group logs); JUnit under `/private/tmp/ork-watcher-failure-triage.0oarZv/`. [The complete report](../../../development/worktree-watcher-validation.md) contains the exact group outcomes, commands and non-green isolated owners. Passing alone establishes intermittence, not a cause or a fix. No related assertion, timeout, skip or implementation changed.
+
+## Resolution (2026-11-15)
+
+- **Class:** default test budget (A). `src/core/control-mcp/coordinator-goals.test.ts` sets no budget of its own: no `setDefaultTimeout`, no third-argument or hook timeout, and no wall-clock wait deadline in the test or the helpers it uses. The `ECONNRESET` between tests was the timed-out test's late `tools/list` reaching a server the fixture had already closed, a consequence of the timeout rather than a product race.
+- **Root cause:** the recorded failure was Bun's former 5 s default per-test/hook budget expiring while the host was loaded; the owner passes alone in a few seconds and nothing it asserts depends on elapsed time.
+- **Fix:** none in this file. It now runs under `tests/default-test-timeout.ts` (imported by `tests/setup.ts` and `tests/setup-node.ts`), which sets the default per-test and hook budget to 60 s as a hang watchdog.
+- **Reproduced:** no. Under contention with the old budget forced (`mise run test:logged -- --name a1651 -- bun scripts/test-under-contention.ts --core <n> --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/control-mcp/coordinator-goals.test.ts --timeout=5000`) the owner passed (26.3 s), so six burners on one core did not recreate the aggregate's load.
+- **Stress:** the same contention command with `--rerun-each=3` at the new default passed (54.2 s).

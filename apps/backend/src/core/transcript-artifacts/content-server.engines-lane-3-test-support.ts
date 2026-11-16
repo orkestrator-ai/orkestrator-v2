@@ -182,7 +182,10 @@ export function defineEngineLane3(engineName: EngineSpec["name"]): void {
                 await waitForMessages(page, `m.verdict === "ready"`);
                 // The handler ran (on a real click for the popup).
                 expect(await trigger(page, attack)).toBe(attack);
-                await waitUntil(() => reach() > 0, 5_000).catch(() => {});
+                // A positive observation ends on the hit itself; the bound is only a
+                // hang watchdog (a starved host can take well over 5 s to deliver it),
+                // and the assertion below still reports an attack that never arrived.
+                await waitUntil(() => reach() > 0, 30_000).catch(() => {});
                 observed[attack] = reach();
               }
               return { observed, disposed, total: 0 };

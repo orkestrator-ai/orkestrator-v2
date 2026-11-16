@@ -365,7 +365,16 @@ describe("NodeCoordination.onNodeConnected", () => {
         coordinatorId: world.coordinatorId,
         nodeId: "bk_leaf",
       });
-      const unsubscribe = connectCoordinatorNodeWakes(instance, world.coordinator);
+      // The wake's send awaits real storage, so a fixed number of microtask turns is
+      // not a completion signal. Keep each notice's promise and await it instead.
+      const notices: Promise<void>[] = [];
+      const unsubscribe = connectCoordinatorNodeWakes(instance, {
+        nodeConnected: (nodeId) => {
+          const notice = world.coordinator.nodeConnected(nodeId);
+          notices.push(notice);
+          return notice;
+        },
+      });
       const heard: string[] = [];
       instance.onNodeConnected((nodeId) => heard.push(nodeId));
       // A throwing listener does not stop the others.
@@ -386,6 +395,7 @@ describe("NodeCoordination.onNodeConnected", () => {
       await settle();
       expect(heard).toEqual(["bk_leaf", "bk_leaf"]);
       // The production subscription delivers to the real main-conversation mailbox.
+      await Promise.all(notices);
       await world.deliver();
       expect(world.received(main)).toHaveLength(1);
       expect(world.received(main)[0]).toContain("is connected again");

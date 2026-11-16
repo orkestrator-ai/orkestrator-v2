@@ -42,3 +42,7 @@ The `storage-writer-guards.test.ts` timeouts here are diagnosed in
 the test runs a CPU-bound scan of the whole backend source within the 5 s
 default budget, and the scan only finishes in time when the host is lightly
 loaded.
+
+## Triage (2026-11-15)
+
+Left open. The group ended on `test:logged`'s 1,800 s absolute deadline after a 989 s capacity wait for other worktrees' leases, which is a host-capacity condition, not a test budget. The `storage-writer-guards.test.ts` and `node-action-requests.test.tsx` timeouts failed alone on a clean `origin/main` too, and the Codex cards and native-commands failures are assertion mismatches.

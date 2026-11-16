@@ -48,7 +48,11 @@ export interface McpSyncObservation {
 }
 
 const FIXTURE = join(import.meta.dir, "session-manager-prompt-mcp-sync.live-fixture.ts");
-const READY_TIMEOUT_MS = 20_000;
+// A hang watchdog on waits for a real state (servers connected, a stopped
+// server's process gone), not a speed assertion: a starved host can need far
+// longer than an idle one to start a CLI and its servers. The live test's own
+// deadline sits above it, so a stuck wait reports which state it was waiting for.
+const READY_TIMEOUT_MS = 120_000;
 const open = new Set<Query>();
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -207,21 +211,41 @@ async function run(
       mcp: createClaudeRuntimeMcp(scenario.inline, scenario.declared, accountOnly),
     };
     await scenario.act(runtime, writeFile, bridge);
-    // Let a server the CLI stopped finish exiting.
-    await sleep(1_000);
-    const servers = (await control.mcpServerStatus())
-      .filter((server) => server.status !== "disabled")
-      .map((server) => server.name)
-      .sort();
+    const markerEvents = () =>
+      readFileSync(markers, "utf8")
+        .split("\n")
+        .map((line) => line.split(" "));
+    const aliveNames = () =>
+      markerEvents()
+        .filter(([event, , pid]) => event === "start" && isAlive(Number(pid)))
+        .map(([, name]) => name!)
+        .sort();
+    const loadedNames = async () =>
+      (await control.mcpServerStatus()).filter((server) => server.status !== "disabled");
+    // Settle on a state, not a delay: no server is still connecting, and every
+    // process still running belongs to a loaded server. A server the CLI
+    // stopped has then finished exiting. A replaced server that lingers still
+    // belongs to its name, so that expectation is unaffected. If the watchdog
+    // expires (a CLI that no longer stops an unloaded server), the observation
+    // is returned as it stands, so the test's assertion shows what differs.
+    const settleDeadline = Date.now() + READY_TIMEOUT_MS;
+    for (;;) {
+      const loaded = await loadedNames();
+      const names = new Set(loaded.map((server) => server.name));
+      if (
+        loaded.every((server) => server.status !== "pending") &&
+        aliveNames().every((name) => names.has(name))
+      ) {
+        break;
+      }
+      if (Date.now() > settleDeadline) break;
+      await sleep(50);
+    }
+    const servers = (await loadedNames()).map((server) => server.name).sort();
     const usage = await control.getContextUsage({ detail: "summary" });
     const tools = usage.mcpTools.map((tool) => tool.name).sort();
-    const events = readFileSync(markers, "utf8")
-      .split("\n")
-      .map((line) => line.split(" "));
-    const alive = events
-      .filter(([event, , pid]) => event === "start" && isAlive(Number(pid)))
-      .map(([, name]) => name!)
-      .sort();
+    const events = markerEvents();
+    const alive = aliveNames();
     return {
       servers,
       tools,

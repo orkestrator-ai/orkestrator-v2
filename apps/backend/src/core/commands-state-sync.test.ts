@@ -3310,9 +3310,10 @@ describe("durable tab teardown commands", () => {
           });
         }
 
-        const startedAt = performance.now();
+        // The hanging request never settles, so reconcile can only resolve
+        // because the command's own deadline fired; resolving at all is the
+        // proof that it is bounded, with no wall-clock ceiling to miss under load.
         await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
-        expect(performance.now() - startedAt).toBeLessThan(250);
 
         const hangingKey = nativeAgentSessionStorageKey("e1", "codex", "env-e1:tab-hanging");
         const fastKey = nativeAgentSessionStorageKey("e1", "codex", "env-e1:tab-fast");

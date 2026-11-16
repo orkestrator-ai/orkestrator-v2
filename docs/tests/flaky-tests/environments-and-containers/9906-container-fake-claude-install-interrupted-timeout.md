@@ -1,7 +1,7 @@
 # Container fake Claude install: interrupted install timed out on CI
 
 - **ID:** 9906
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-09
 - **Test:** `interrupted install followed by another install keeps the first backup`
 - **File:** `e2e/agent-testing/container-fake-claude-install.test.ts:78`
@@ -46,3 +46,11 @@ mise run test:logged -- --name watcher-triage-fake-claude-install -- bun test ./
 `mise run flaky:recurrence -- 9906 --base 08d3da4a23cfe2ecc34fba663ca27e765f7924a9 --registry-ref origin/main` reported the case open; this records a recurrence.
 
 Evidence: `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.dH765N/` (compressed group logs); JUnit under `/private/tmp/ork-watcher-failure-triage.0oarZv/`. [The complete report](../../../development/worktree-watcher-validation.md) contains the exact group outcomes, commands and non-green isolated owners. Passing alone establishes intermittence, not a cause or a fix. No related assertion, timeout, skip or implementation changed.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** The fixture's shell snippets ran through `spawnSync` with a 5 s `timeout`, under Bun's 5 s test budget; a starved host spent either bound forking a few `cp`/`mv` calls (`fixture shell failed`).
+- **Fix:** `e2e/agent-testing/container-fake-claude-install.test.ts` uses `FIXTURE_SHELL_HANG_WATCHDOG_MS` (30 s) for both `spawnSync` calls, documented as a watchdog; `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup-node.ts`, `tests/setup.ts`), makes 60 s the default per-test and hook budget, a hang watchdog only. The file needs no Docker.
+- **Reproduced:** no — not re-created; passed alone after the change.
+- **Stress:** `mise run test:logged -- --name ec-9906-stress -- bun scripts/test-under-contention.ts --core 11 --burners 6 -- bun test ./e2e/agent-testing/container-fake-claude-install.test.ts --rerun-each=20` passed (all six cases, 20 of 20).
+- **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).

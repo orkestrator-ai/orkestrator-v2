@@ -46,12 +46,14 @@ function world(options: { fail?: string } = {}) {
   return { service, prompts, announced, cwd };
 }
 
-async function until<T>(read: () => T, done: (value: T) => boolean, timeoutMs = 5_000): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
+// Polls a real PTY command's state until it reaches the expected one. There is
+// no wall-clock deadline of its own: how long a loaded host takes to run the
+// command is not what the tests assert, and the test's budget
+// (tests/default-test-timeout.ts) is the hang watchdog.
+async function until<T>(read: () => T, done: (value: T) => boolean): Promise<T> {
   for (;;) {
     const value = read();
     if (done(value)) return value;
-    if (Date.now() > deadline) throw new Error(`Timed out; last value: ${JSON.stringify(value)}`);
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }

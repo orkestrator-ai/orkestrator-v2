@@ -303,3 +303,28 @@ Branch `messages-history-recovery-8fd703ff5288-r1` at `319c6ff95`, base `a8b89f1
 Mobile and desktop `a live group crossing the fold threshold folds into its line with no-preference motion` (`e2e/ToolGroupFold.spec.ts:127`) failed in `mise run test:logged -- --name browser -- mise run test:browser` (mobile fold gap 9 px against the 2 px limit at line 170; 9 failed, 154 skipped, 1,741 passed in 22.7 m). The three failing owners rerun together, `mise run test:logged -- --name browser-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/HtmlPreview.spec.ts e2e/ToolGroupFold.spec.ts e2e/StreamingTranscript.spec.ts` (default workers), failed this case again on both projects (4 failed, 1 skipped, 67 passed in 54.9 s), as the one-worker owner did under load on 2026-11-15. `mise run flaky:recurrence -- 1012 --base f53768371` answered open.
 
 Branch `environment-files-1d94a340e118-r1` at `8dbbf2872`, base `f53768371`, Linux x86_64, Bun 1.4.4. The branch's only `apps/web` change is one Settings help string in `GlobalSettings.sections.tsx`; it changes no component spec and no Playwright config. No assertion, timeout or skip changed.
+
+## Triage note (2026-11-15)
+
+Not changed. The recorded failures are value mismatches in real scroll/layout measurements (scroll offsets, fold gaps, sampled frames), not expired waits, so a larger Playwright budget does not address them; each needs its own live reproduction (WebKit, CPU throttling) first. Stays `open`; nothing verified in this pass.
+
+## Recurrence (2026-11-15): reproduced at moderate load, left open
+
+- **Observed:** during this branch's flake sweep, at host load average 28 to
+  41 on Linux, `ToolGroupFold.spec.ts` › `a live group crossing the fold
+  threshold folds into its line with no-preference motion` failed at line 170
+  (the gap check after the reader reopens the group) on both projects:
+  received 10 (mobile) in the component suite, then 7 (desktop) and 9
+  (mobile) when the test ran alone.
+- **Not caused by the Playwright budget change:** the same test failed 2 of 2
+  with this branch's spec against `main`'s unchanged `e2e/playwright.config.ts`
+  (a temporary copy, `bunx playwright test --config <copy> e2e/ToolGroupFold.spec.ts:127`).
+  The failing check is a per-frame gap sample during a 500 ms animation, which
+  no timeout governs.
+- **Assessment:** the probe samples the bottom gap every rendered frame; on a
+  loaded host a frame is painted after the open animation grows the body but
+  before the bottom pin corrects the scroll position, and a reader on a slow
+  machine would see that gap too. That makes this a candidate product race
+  (the pin's correction should land in the same frame as the height change),
+  not a test-timing problem; fixing it needs work in the transcript's pin
+  logic, so it is left open here.

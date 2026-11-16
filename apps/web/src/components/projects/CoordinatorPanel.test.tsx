@@ -378,8 +378,13 @@ import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { ProjectWorkspace } from "./ProjectWorkspace";
 import { uiStore } from "@/stores";
 import { appCommandStore } from "@/test/app-command-store";
+import { useAsyncUtilHangWatchdog } from "@/test/async-util-hang-watchdog";
 
 describe("CoordinatorPanel", () => {
+  // Every `waitFor` here waits for a state the panel reaches (a select call, a
+  // store write); Testing Library's 1 s default made a starved host's delay a
+  // failure (case 1326), so it is only a hang watchdog now.
+  useAsyncUtilHangWatchdog();
   beforeEach(() => {
     useRealAgentTab = false;
     resetNativeAgentSyncCapabilityForTests();

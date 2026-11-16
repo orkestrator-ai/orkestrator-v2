@@ -1,7 +1,7 @@
 # Runtime environment wiring and test-all aggregate timeouts
 
 - **ID:** 0160
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-23
 - **Tests:** 19 cases in `container runtime environment wiring` (for example
   `Codex configuration copy helpers enforce file and directory bounds` and
@@ -106,3 +106,10 @@ or assertion changed. Full-run evidence and other unresolved failures are in
 Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. `Codex setup copies the complete allowlist, secures auth, and excludes plugin runtime state` timed out at 5043.80 ms. `mise run test:logged -- --name merge-owner-runtime-env -- bun test ./tests/unit/runtime-env-wiring.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (16.0 s).
 
 Full failure names, counts, evidence paths and unresolved limitations are in [9884](../aggregate-validation-runs/9884-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** process-spawning cases (dozens of short shells each) starved of CPU on a loaded host, against Bun's 5 s default or explicit 15 s/30 s budgets; nothing in the scripts under test waited wrongly. In `tests/unit/test-all.test.ts`, four waits also carried their own wall-clock deadlines (15 s and 5 s polls for group starts, the heartbeat, a `finished (` line, the grandchild pid and its exit).
+- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup.ts`, `tests/setup-node.ts`), raises Bun's default per-test and hook budget from 5 s to 60 s as a hang watchdog. `tests/unit/runtime-env-wiring.test.ts` drops its explicit `15_000` (two cases) and `30_000` budgets so every case inherits the 60 s watchdog. `tests/unit/test-all.test.ts` replaces the four deadline polls with `waitUntil(condition)`, which waits for the real signal (group starts, `STILL RUNNING`, `finished (`, the pid file, the grandchild's exit) with no deadline of its own, and drops two `30_000` budgets. No assertion changed.
+- **Reproduced:** yes, by accident. A first contention run without `--parallel` (in which Bun applies the preload's default only to the first file) failed six runtime-env-wiring cases, including `Codex setup copies the complete allowlist…` and `Codex configuration copy inspection failures…`, with `exitCode` `null` at 5,021–5,130 ms: the recorded symptom. Under the same contention with per-file isolation (60 s budget) they passed.
+- **Stress:** `mise run test:logged -- --name f4-rew-cont -- bun scripts/test-under-contention.ts --burners 6 -- bun test tests/unit/runtime-env-wiring.test.ts --parallel=1 -t "Claude setup block|Codex setup copies|Codex configuration copy|runtime helper creates a bash env"` passed (87.6 s); `f4-testall-cont` (test-all concurrency, heartbeat, completion and process-tree cases) passed (57.6 s). Base `a8b89f154`.

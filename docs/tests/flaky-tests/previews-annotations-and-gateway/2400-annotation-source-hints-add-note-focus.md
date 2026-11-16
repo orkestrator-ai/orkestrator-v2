@@ -11,3 +11,9 @@
 - **Isolated rerun:** `ORKESTRATOR_AGENT_TEST_PROFILE=agent-session-import-review-fixes ORKESTRATOR_AGENT_TEST_RUN_ID=session-import-review-isolated-annotations mise run test:logged -- --name annotation-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts web-annotations-electron.spec.ts` passed the complete unchanged owner: 14 passed, 1 skipped, 78.1 seconds, one worker.
 - **Evidence:** full-suite compressed log `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.4ofvtx/electron-preview-session-import.log.gz`; isolated results under `output/agent-testing/session-import-review-isolated-annotations/electron/`.
 - **Hypothesis:** native focus changed during the full Electron run. The isolated pass establishes intermittent behavior, but does not establish who moved focus. No assertion, timeout or skip was changed.
+
+## Triage note (2026-11-15)
+
+Not changed. Recorded failure: focus loss on an added note in the full Electron suite. Electron specs and their configs were not run or edited in this pass (shared with other groups, and unverifiable here); no spec-local explicit signal could be justified without a live reproduction. Stays `open`.
+
+Addendum (2026-11-15): the Electron config's new `expect: { timeout: 30_000 }` lengthens this `toBeFocused` wait, but the recorded symptom is focus having moved elsewhere (a wrong state, not a late signal), so the case stays `open`.

@@ -1,7 +1,7 @@
 # Object store byte-bound flush times out on a loaded host
 
 - **ID:** 6062
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-05
 - **Test:** `a batch > flushes at the compressed byte bound below the object-count bound`
 - **File:** `apps/backend/src/core/change-tracking/object-store-write-path.test.ts:236`
@@ -13,3 +13,11 @@
 - **Diagnostic rerun:** the same command with `--timeout=60000` passed the test filtered to its name in 8.4 s total at a load average of 37, and passed the whole file together with `measurement-file-cap.test.ts` in 34.0 s. The flag was used only on the command line to tell a stall from slowness; no deadline was changed.
 - **Scope:** the test stages 64 MiB of random data and fsyncs it. It runs no child process, so it does not reach the capture code the branch moved, and the branch changes nothing under `change-tracking/`.
 - **Hypothesis:** slow rather than stalled: compression and fsync of 64 MiB take close to the default deadline on this host under load. Unconfirmed: the test's duration on an idle host. No assertion, timeout or skip was changed.
+
+## Resolution (2026-11-15)
+
+- **Class:** default test budget (A), plus one deadline in the same file.
+- **Root cause:** the test stages four 256 KiB incompressible inputs and fsyncs them (the 64 MiB production bound was already replaced by a 1 MiB test bound), which takes close to Bun's former 5 s default on a loaded host; the recorded `ENOENT` from `object-store.ts` was cleanup removing the store under the timed-out test. The same file's `waitFor` helper also gave up after a fixed 5 s.
+- **Fix:** `waitFor` in `apps/backend/src/core/change-tracking/object-store-write-path.test.ts` no longer has a wall-clock deadline (the states it waits for are reached by the code under test, and a missing one is a hang the test budget reports). The case itself now runs under `tests/default-test-timeout.ts` (imported by `tests/setup.ts` and `tests/setup-node.ts`), which sets Bun's default per-test and hook budget to 60 s.
+- **Reproduced:** no. Under six burners on one core the unchanged-budget file passed (`--timeout=5000`, 23.3 s) and the file passed `--rerun-each=3` at the new default (57.8 s).
+- **Not changed:** the two `the event loop during a 16 MiB write` tests compare measured event-loop stalls with a synchronous baseline and retry four times; they are timing measurements of the product by design and were not part of this case.

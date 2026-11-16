@@ -1,7 +1,7 @@
 # Workspace realm journey fails at different startup points on a loaded host
 
 - **ID:** 1302
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-28
 - **Test:** `a leaf's workspace opens in the window's central region without moving or reloading the window`
 - **File:** `e2e/agent-testing/workspace-realm-electron.spec.ts:162`
@@ -101,3 +101,10 @@ failure, so they do not cause it. The step sends native input through
 `sendInputEvent`, and it was only run under headless Ozone here, so a display may
 behave differently; that was not tested. No other symptom in this case was
 retested, and the case stays open.
+
+## Resolution (2026-11-15)
+
+- **Root cause:** several unrelated causes were recorded: an Electron `SIGSEGV` in `node::async_context_frame::current` under the inspector, startup dialogs, and a stale leaf-project locator (a deterministic defect, found on 2026-11-04). None is established as a load race in product code.
+- **Fix:** the owning file `e2e/agent-testing/workspace-realm-electron.spec.ts` was deleted by `ad283290e` (#1983), which replaced the realm host with window scopes (`multi-node-window.spec.ts`, `scope-proof-electron.spec.ts`); `git merge-base --is-ancestor ad283290e HEAD` is true. The Electron crash is an Electron defect outside this repository and is not addressed.
+- **Reproduced:** no (the owning file no longer exists).
+- **Stress:** none.

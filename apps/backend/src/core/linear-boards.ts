@@ -100,7 +100,7 @@ const ISSUE_DETAIL_FIELDS = `
         project { id name }
         cycle { name }
         labels(first: 25) {
-          nodes { id name }
+          nodes { id name color }
         }`;
 
 function connectionNodes(value: unknown): unknown[] {

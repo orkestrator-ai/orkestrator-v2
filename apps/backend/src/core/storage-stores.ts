@@ -104,6 +104,7 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "linear-board-links": { kind: "array", key: "key" },
   "linear-sync": { kind: "document" },
   "linear-issue-creates": { kind: "array", key: "requestKey" },
+  "linear-merged-labels": { kind: "array", key: "key" },
   "github-completion-comments": { kind: "array", key: "pipelineId" },
   "preview-services": { kind: "envelope", collections: ["definitions"] },
   "preview-settings": { kind: "document" },

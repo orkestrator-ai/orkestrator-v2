@@ -25,6 +25,16 @@ export type LinearConnectionStatus = {
   connectedAt?: string;
 };
 
+/** A label on an issue, with Linear's colour (`#rrggbb`) for the board's chips. */
+export type LinearIssueLabel = {
+  id?: string;
+  name: string;
+  color?: string;
+};
+
+/** Labels a list or detail read asks Linear for per issue. */
+const ISSUE_LABEL_LIMIT = 25;
+
 export type LinearIssueListItem = {
   id: string;
   identifier: string;
@@ -42,6 +52,8 @@ export type LinearIssueListItem = {
   teamName?: string;
   assigneeName?: string;
   priorityLabel?: string;
+  /** The issue's labels with their colours, in Linear's order; absent from an older backend. */
+  issueLabels?: LinearIssueLabel[];
 };
 
 export type LinearIssueComment = {
@@ -188,6 +200,28 @@ function readViewer(value: unknown): LinearViewer | undefined {
   return { id, name, email: optionalString(value.email) };
 }
 
+const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+
+/** An issue's `labels { nodes { id name color } }`, or undefined when the read did not ask. */
+export function issueLabelsFromNode(value: unknown): LinearIssueLabel[] | undefined {
+  if (!isRecord(value) || !isRecord(value.labels)) return undefined;
+  const nodes = Array.isArray(value.labels.nodes) ? value.labels.nodes : [];
+  return nodes.flatMap((node) => {
+    if (!isRecord(node)) return [];
+    const name = optionalString(node.name);
+    if (!name) return [];
+    const id = optionalString(node.id);
+    const color = optionalString(node.color);
+    return [
+      {
+        ...(id ? { id } : {}),
+        name,
+        ...(color && HEX_COLOR.test(color) ? { color } : {}),
+      },
+    ];
+  });
+}
+
 export function issueFromNode(value: unknown): LinearIssueListItem | null {
   if (!isRecord(value)) return null;
 
@@ -200,6 +234,7 @@ export function issueFromNode(value: unknown): LinearIssueListItem | null {
   const title = asString(value.title);
   const updatedAt = asString(value.updatedAt);
   if (!id || !identifier || !title || !updatedAt) return null;
+  const issueLabels = issueLabelsFromNode(value);
 
   return {
     id,
@@ -218,6 +253,7 @@ export function issueFromNode(value: unknown): LinearIssueListItem | null {
     teamName: optionalString(team.name),
     assigneeName: optionalString(assignee.name),
     priorityLabel: optionalString(value.priorityLabel),
+    ...(issueLabels ? { issueLabels } : {}),
   };
 }
 
@@ -338,6 +374,9 @@ export async function listLinearIssues(
             state { name type position }
             team { key name }
             assignee { name }
+            labels(first: ${ISSUE_LABEL_LIMIT}) {
+              nodes { id name color }
+            }
           }
           pageInfo {
             hasNextPage
@@ -384,8 +423,8 @@ export async function getLinearIssue(apiKey: string, issueId: string): Promise<L
         creator { name }
         project { name }
         cycle { name }
-        labels(first: 25) {
-          nodes { name }
+        labels(first: ${ISSUE_LABEL_LIMIT}) {
+          nodes { id name color }
         }
       }
     }`,

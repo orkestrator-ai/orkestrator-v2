@@ -1,7 +1,8 @@
 /**
  * Linear boards (docs/architecture/tickets.md, "Linear"): which Linear board
- * each project uses, the disconnects other machines must apply, and the
- * issues `create_linear_issue` has already created. The sign-in itself stays
+ * each project uses, the disconnects other machines must apply, the
+ * issues `create_linear_issue` has already created, and the `merged` labels
+ * still owed to issues whose build's pull request merged. The sign-in itself stays
  * in `KanbanRepository` (`linear-auth`).
  *
  * A board link is keyed by the project's repository (`repo:<hint>`), so the
@@ -48,6 +49,36 @@ export type LinearIssueCreateRecord = {
   createdAt: string;
 };
 
+/**
+ * A Linear-sourced build whose pull request merged and whose issue must get
+ * the `merged` label (`linear-merged-label.ts`). Kept until the label lands,
+ * retried with backoff; one record per issue and pull request, so a replayed
+ * merge never labels twice.
+ */
+export type LinearMergedLabelRecord = {
+  key: string;
+  issueId: string;
+  issueIdentifier?: string;
+  pipelineId: string;
+  projectId: string;
+  prUrl: string;
+  status: "pending" | "applied";
+  attempts: number;
+  createdAt: string;
+  nextAttemptAt: string;
+  lastError?: string;
+  appliedAt?: string;
+  /** How it landed: the label was added, created then added, or already on the issue. */
+  outcome?: LinearMergedLabelOutcome;
+};
+
+export type LinearMergedLabelOutcome = "added" | "created" | "already-present";
+
+export type LinearMergedLabelInput = Pick<
+  LinearMergedLabelRecord,
+  "issueId" | "issueIdentifier" | "pipelineId" | "projectId" | "prUrl"
+>;
+
 /** Board links one machine keeps, tombstones included; the oldest tombstones go first. */
 export const MAX_LINEAR_BOARD_LINKS = 1_000;
 /** Disconnects kept for machines that were offline; the oldest go first. */
@@ -56,6 +87,13 @@ export const MAX_LINEAR_REVOCATIONS = 50;
 export const LINEAR_REVOCATION_TTL_MS = 180 * 24 * 60 * 60 * 1_000;
 /** Issue creations remembered for retries; the oldest go first. */
 export const MAX_LINEAR_ISSUE_CREATES = 500;
+/**
+ * Merged-label records kept: applied ones are dropped oldest first, and a new
+ * merge is refused (and logged) only when every kept record is still pending.
+ */
+export const MAX_LINEAR_MERGED_LABELS = 500;
+/** The longest stored failure reason. */
+const MAX_LINEAR_MERGED_LABEL_ERROR = 400;
 
 const MAX_FIELD_LENGTH = 400;
 
@@ -150,6 +188,49 @@ function supersededTombstone(link: LinearBoardLink, winner: string): LinearBoard
   };
 }
 
+/** The record key of an issue's merged-label job for one pull request. */
+export function linearMergedLabelKey(issueId: string, prUrl: string): string {
+  return `${issueId} ${prUrl}`;
+}
+
+const MERGED_LABEL_OUTCOMES: readonly string[] = ["added", "created", "already-present"];
+
+export function parseLinearMergedLabelRecord(value: unknown): LinearMergedLabelRecord | null {
+  if (!isRecord(value)) return null;
+  const issueId = boundedString(value.issueId);
+  const pipelineId = boundedString(value.pipelineId);
+  const projectId = boundedString(value.projectId);
+  const prUrl = boundedString(value.prUrl);
+  if (!issueId || !pipelineId || !projectId || !prUrl) return null;
+  if (value.key !== linearMergedLabelKey(issueId, prUrl)) return null;
+  if (value.status !== "pending" && value.status !== "applied") return null;
+  if (!isIsoDate(value.createdAt) || !isIsoDate(value.nextAttemptAt)) return null;
+  const attempts =
+    typeof value.attempts === "number" && Number.isInteger(value.attempts) && value.attempts >= 0
+      ? value.attempts
+      : 0;
+  const record: LinearMergedLabelRecord = {
+    key: value.key,
+    issueId,
+    pipelineId,
+    projectId,
+    prUrl,
+    status: value.status,
+    attempts,
+    createdAt: value.createdAt,
+    nextAttemptAt: value.nextAttemptAt,
+  };
+  const identifier = boundedString(value.issueIdentifier);
+  if (identifier) record.issueIdentifier = identifier;
+  const lastError = boundedString(value.lastError);
+  if (lastError) record.lastError = lastError;
+  if (isIsoDate(value.appliedAt)) record.appliedAt = value.appliedAt;
+  if (typeof value.outcome === "string" && MERGED_LABEL_OUTCOMES.includes(value.outcome)) {
+    record.outcome = value.outcome as LinearMergedLabelOutcome;
+  }
+  return record;
+}
+
 function boundLinks(links: LinearBoardLink[]): void {
   if (links.length <= MAX_LINEAR_BOARD_LINKS) return;
   const tombstones = links
@@ -194,6 +275,101 @@ export class LinearRepository {
 
   private createsFile(): string {
     return this.context.file("linear-issue-creates.json");
+  }
+
+  private mergedLabelsFile(): string {
+    return this.context.file("linear-merged-labels.json");
+  }
+
+  /** Every merged-label record, pending and applied. */
+  async listLinearMergedLabels(): Promise<LinearMergedLabelRecord[]> {
+    const records = await this.context.loadJson<unknown[]>(this.mergedLabelsFile(), () => []);
+    return (Array.isArray(records) ? records : [])
+      .map(parseLinearMergedLabelRecord)
+      .filter((record): record is LinearMergedLabelRecord => record !== null);
+  }
+
+  /**
+   * Queues the `merged` label for an issue whose build's pull request merged.
+   * `exists` when this issue and pull request were queued before (pending or
+   * applied), so replays never label twice; `full` when the store holds only
+   * pending records and has no room.
+   */
+  enqueueLinearMergedLabel(
+    input: LinearMergedLabelInput,
+    now: Date = new Date(),
+  ): "queued" | "exists" | "full" {
+    const at = now.toISOString();
+    const record = parseLinearMergedLabelRecord({
+      ...input,
+      key: linearMergedLabelKey(input.issueId, input.prUrl),
+      status: "pending",
+      attempts: 0,
+      createdAt: at,
+      nextAttemptAt: at,
+    });
+    if (!record) throw new Error("Expected a Linear issue, pipeline, project and pull request.");
+    return this.context.updateStore(
+      this.mergedLabelsFile(),
+      (): unknown[] => [],
+      (records) => {
+        if (records.some((entry) => isRecord(entry) && entry.key === record.key)) return "exists";
+        const kept = records.filter((entry) => parseLinearMergedLabelRecord(entry) !== null);
+        while (kept.length >= MAX_LINEAR_MERGED_LABELS) {
+          const applied = kept.findIndex((entry) => isRecord(entry) && entry.status === "applied");
+          if (applied < 0) return "full";
+          kept.splice(applied, 1);
+        }
+        kept.push(record);
+        records.splice(0, records.length, ...kept);
+        return "queued";
+      },
+    );
+  }
+
+  /** Marks a record applied. False when it is gone or already applied. */
+  settleLinearMergedLabel(
+    key: string,
+    outcome: LinearMergedLabelOutcome,
+    now: Date = new Date(),
+  ): boolean {
+    return this.updateMergedLabel(key, (record) => {
+      if (record.status === "applied") return false;
+      record.status = "applied";
+      record.outcome = outcome;
+      record.appliedAt = now.toISOString();
+      record.attempts += 1;
+      delete record.lastError;
+      return true;
+    });
+  }
+
+  /** Records a failed attempt and when to try again. False when the record is gone or applied. */
+  deferLinearMergedLabel(key: string, failure: { error: string; nextAttemptAt: Date }): boolean {
+    return this.updateMergedLabel(key, (record) => {
+      if (record.status === "applied") return false;
+      record.attempts += 1;
+      record.lastError = failure.error.slice(0, MAX_LINEAR_MERGED_LABEL_ERROR) || "Linear failed";
+      record.nextAttemptAt = failure.nextAttemptAt.toISOString();
+      return true;
+    });
+  }
+
+  private updateMergedLabel(
+    key: string,
+    change: (record: LinearMergedLabelRecord) => boolean,
+  ): boolean {
+    return this.context.updateStore(
+      this.mergedLabelsFile(),
+      (): unknown[] => [],
+      (records) => {
+        const index = records.findIndex((entry) => isRecord(entry) && entry.key === key);
+        const record = index >= 0 ? parseLinearMergedLabelRecord(records[index]) : null;
+        if (!record || !change(record)) return false;
+        records[index] = record;
+        return true;
+      },
+    );
   }
 
   /** Every link this machine keeps, tombstones included. */
@@ -427,4 +603,8 @@ export type LinearStorage = Pick<
   | "mergeLinearRevocations"
   | "findLinearIssueCreate"
   | "recordLinearIssueCreate"
+  | "listLinearMergedLabels"
+  | "enqueueLinearMergedLabel"
+  | "settleLinearMergedLabel"
+  | "deferLinearMergedLabel"
 >;

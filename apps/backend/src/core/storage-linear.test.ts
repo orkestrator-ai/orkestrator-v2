@@ -6,6 +6,7 @@ import { StorageService } from "./storage.js";
 import {
   linearBoardLinkKey,
   MAX_LINEAR_ISSUE_CREATES,
+  MAX_LINEAR_MERGED_LABELS,
   MAX_LINEAR_REVOCATIONS,
   parseLinearBoardLink,
   sameLinearBoard,
@@ -253,5 +254,59 @@ describe("LinearRepository", () => {
     expect(
       await service.linear.findLinearIssueCreate(`k${MAX_LINEAR_ISSUE_CREATES - 1}`),
     ).not.toBeNull();
+  });
+});
+
+describe("Linear merged-label records", () => {
+  const job = (n: number) => ({
+    issueId: `issue-${n}`,
+    issueIdentifier: `ENG-${n}`,
+    pipelineId: `pipeline-${n}`,
+    projectId: "project-1",
+    prUrl: `https://github.com/acme/web/pull/${n}`,
+  });
+
+  test("one record per issue and pull request, kept once applied so a replay is a no-op", async () => {
+    const store = await storage();
+    expect(store.linear.enqueueLinearMergedLabel(job(1))).toBe("queued");
+    expect(store.linear.enqueueLinearMergedLabel(job(1))).toBe("exists");
+    const [record] = await store.linear.listLinearMergedLabels();
+    expect(record).toMatchObject({ status: "pending", attempts: 0, issueIdentifier: "ENG-1" });
+
+    expect(
+      store.linear.deferLinearMergedLabel(record!.key, {
+        error: "Linear is down",
+        nextAttemptAt: new Date("2026-11-16T13:00:00Z"),
+      }),
+    ).toBe(true);
+    expect((await store.linear.listLinearMergedLabels())[0]).toMatchObject({
+      attempts: 1,
+      lastError: "Linear is down",
+      nextAttemptAt: "2026-11-16T13:00:00.000Z",
+    });
+
+    expect(store.linear.settleLinearMergedLabel(record!.key, "created")).toBe(true);
+    expect(store.linear.settleLinearMergedLabel(record!.key, "added")).toBe(false);
+    const settled = (await store.linear.listLinearMergedLabels())[0];
+    expect(settled).toMatchObject({ status: "applied", outcome: "created", attempts: 2 });
+    expect(settled?.lastError).toBeUndefined();
+    expect(store.linear.enqueueLinearMergedLabel(job(1))).toBe("exists");
+    expect(
+      store.linear.deferLinearMergedLabel(record!.key, { error: "x", nextAttemptAt: new Date() }),
+    ).toBe(false);
+  });
+
+  test("drops applied records first and refuses a new one only when every record is pending", async () => {
+    const store = await storage();
+    for (let n = 0; n < MAX_LINEAR_MERGED_LABELS; n += 1) {
+      expect(store.linear.enqueueLinearMergedLabel(job(n))).toBe("queued");
+    }
+    expect(store.linear.enqueueLinearMergedLabel(job(MAX_LINEAR_MERGED_LABELS))).toBe("full");
+    const first = (await store.linear.listLinearMergedLabels())[0]!;
+    store.linear.settleLinearMergedLabel(first.key, "added");
+    expect(store.linear.enqueueLinearMergedLabel(job(MAX_LINEAR_MERGED_LABELS))).toBe("queued");
+    const records = await store.linear.listLinearMergedLabels();
+    expect(records).toHaveLength(MAX_LINEAR_MERGED_LABELS);
+    expect(records.some((record) => record.key === first.key)).toBe(false);
   });
 });

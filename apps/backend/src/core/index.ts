@@ -1514,6 +1514,8 @@ export class OrkestratorBackend {
             environmentId,
           ),
         workspaceWriters,
+        onPullRequestMerged: (pipeline, prUrl) =>
+          context.runtime.linearMergedLabels.recordPipelineMerge(storage, pipeline, prUrl),
       },
     );
     context.buildPipelines = this.buildPipelines;

@@ -392,6 +392,9 @@ latest pull-request comment is the monitor's `🎉 PR merged: <url>`. A later
 leaves in-progress tickets alone, because a ticket being built again keeps its
 earlier pull request until the new build raises one.
 
+A merge of a build started from a Linear issue also queues the `merged`
+label for that issue ([Merged builds label their issue](#merged-builds-label-their-issue)).
+
 The closure happens once per pull request. The ticket records the merged pull
 request that closed it (`prMergeDoneUrl`), even if it was already done when the
 merge was observed. Recording that merge leaves a done ticket’s order alone.
@@ -757,7 +760,13 @@ state, like the Kanban board. Lanes come from the board's states
 failed read, falls back to the states the issues are in. The Lanes menu hides
 and shows individual lanes. The chosen view and hidden lanes are a renderer
 preference per project and node (`linearViewPreferencesStore`); they change
-nothing in Linear. Cards open the same issue detail as the list.
+nothing in Linear. Cards open the same issue detail as the list. Each card
+shows its issue's labels, in Linear's order, as a chip with a dot in the
+label's Linear colour (`issueLabels` on each issue from `get_linear_issues`,
+read with `color` from Linear; a colour that is not a hex value gets a neutral
+dot). Four are named and the rest fold into `+N`, whose tooltip names them;
+an issue with no labels, or one read from an older backend that does not send
+`issueLabels`, has no label row.
 
 **Moving a card.** Dragging a card to another lane moves the issue to that
 lane's workflow state in Linear (`update_linear_issue` with `stateId`, which
@@ -834,11 +843,65 @@ again.
   when it is cut off from the others.
 
 **Verification.** Every path has deterministic tests with real storage and a
-faked Linear API and node link (`linear-boards.test.ts`,
+faked Linear API and node link (`linear-boards.test.ts`, `linear.test.ts`,
+`linear-merged-label.test.ts`, `environment-delete-tickets.test.ts`,
 `commands-registry-linear.test.ts`, `nodes/node-linear-sync.test.ts`,
 `control-mcp/linear-tools*.test.ts`), and `linear-two-machines.test.ts` runs
 the whole two-machine sequence through the real command handlers and the
 command node's real sync: connect and link on a leaf, a sync pass, Use it
 here, a board read, disconnect everywhere and reconnect. The same sequence on
-two live profiles with a throwaway Linear key is in the
+two live profiles with a throwaway Linear key, and the board labels and the
+`merged` label in the user's real workspace, are in the
 [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+The board's labels are covered by `LinearIssueBoard.test.tsx` (an issue with
+labels, one with none and one with many).
+
+### Merged builds label their issue
+
+When a build started from a Linear issue (pipeline source `linear`) has its
+pull request merged, the issue gets a label named `merged` in Linear. The
+rule is in `apps/backend/src/core/linear-merged-label.ts` and the Linear calls
+in `linear-issue-labels.ts`.
+
+- **Which label.** The issue's labels are read first; if one is already named
+  `merged` in any case, nothing is written. Otherwise the label is looked up
+  by name, case-insensitively (`issueLabels` filtered with `eqIgnoreCase`),
+  among the labels the issue's team can use: a label of the issue's own team
+  first, then a workspace label. Other teams' labels and label groups (which
+  Linear refuses to apply) are skipped. When none exists, a team label
+  `merged` is created on the issue's team (`issueLabelCreate`) and then
+  applied.
+- **Existing labels are kept.** The label is added with `issueAddLabel`,
+  which adds one label without replacing the others, so a concurrent edit in
+  Linear is not overwritten either.
+- **Only on a merge, only for Linear builds.** A Kanban or GitHub-issue build
+  never reaches Linear, and neither does a pull request closed without
+  merging.
+- **Who notices the merge.** Every merge writer only queues the label: the PR
+  monitor's terminal follow-up for a confirmed merge
+  (`PrMonitorRuntime.resumeTerminalEffects`), the build finding its pull
+  request already merged (`persistPullRequest`, through the pipeline option
+  `onPullRequestMerged`), environment deletion when the environment recorded a
+  merge (`environment-delete.ts`, before the pipeline records go), and a sweep
+  once per backend process that queues merges recorded on environments that
+  still hold a Linear build and restarts the drain for records an earlier
+  process left pending.
+- **Linear failures never block.** Queueing is a local write
+  (`linear-merged-labels`, one record per issue and pull request, owned by
+  `BackendRuntime.linearMergedLabels`); nothing on the merge or deletion path
+  waits for Linear. A failed attempt (Linear down or refusing, the issue
+  gone, or no Linear connection on that machine) is logged as
+  `[linear] merged-label.failed` with the reason and retried after a minute,
+  doubling to at most an hour, until it lands; pending records survive a
+  restart and the environment's deletion. A landed label is logged as
+  `merged-label.applied` with how it landed (`added`, `created`,
+  `already-present`).
+- **Once per pull request.** The record stays after the label lands, so the
+  monitor, the build and the sweep reporting the same merge label the issue
+  once, and a label the user removes afterwards is not put back. At most 500
+  records are kept: applied ones go first, and a new merge is refused (and
+  logged as `merged-label.queue-full`) only when all 500 are still pending.
+- **Which machine.** The label is added by the machine where the build ran,
+  with that machine's Linear key; the records do not sync. A build on a
+  machine without a Linear connection keeps its label pending until that
+  machine is connected.

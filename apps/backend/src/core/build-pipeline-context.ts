@@ -145,6 +145,13 @@ export type BuildPipelineServiceOptions = {
    * the push session's own report is taken as it stands.
    */
   branchPushState?: (environmentId: string) => Promise<BranchPushState>;
+  /**
+   * The build found its pull request merged (`persistPullRequest`): queues the
+   * `merged` label for a Linear-sourced build's issue (`linear-merged-label.ts`).
+   * Must not throw or wait on Linear. Absent: the PR monitor and the startup
+   * sweep still queue it.
+   */
+  onPullRequestMerged?: (pipeline: BuildPipeline, prUrl: string) => void;
   /** The backend fence shared by file writes, commands and agent dispatch. */
   environmentFence?: EnvironmentMutationFence;
   /** Checks native/background writers while new work is excluded by the fence. */

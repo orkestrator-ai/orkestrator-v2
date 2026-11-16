@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { BackendRuntime } from "./backend-runtime.js";
+import { BackendRuntime, type BackendRuntimeOptions } from "./backend-runtime.js";
 import { BUILD_ENVIRONMENT_DELETED_COMMENT } from "./build-pipeline-kanban-environment-deleted.js";
 import { lifecycleMachine, PR_URL } from "./build-pipeline-kanban-transitions-test-support.js";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
@@ -28,7 +28,9 @@ async function withEnvironmentBuild(
     remove: () => Promise<void>;
     life: Awaited<ReturnType<typeof lifecycleMachine>>;
     pipeline: ReturnType<Awaited<ReturnType<typeof lifecycleMachine>>["pipeline"]>;
+    runtime: BackendRuntime;
   }) => Promise<void>,
+  runtimeOptions: Omit<BackendRuntimeOptions, "emit"> = {},
 ): Promise<void> {
   const dataDir = await fs.realpath(
     await fs.mkdtemp(path.join(tmpdir(), "orkestrator-delete-tickets-")),
@@ -62,7 +64,7 @@ async function withEnvironmentBuild(
     toolchainBinDir: "",
     worktreeDir: path.join(dataDir, "workspaces"),
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-    runtime: new BackendRuntime({ emit: () => undefined }),
+    runtime: new BackendRuntime({ ...runtimeOptions, emit: () => undefined }),
     emit: () => undefined,
   } as CommandContext;
   const remove = async () => {
@@ -71,7 +73,7 @@ async function withEnvironmentBuild(
     await command({ environmentId: "e1" }, context);
   };
   try {
-    await run({ storage, taskId, remove, life, pipeline });
+    await run({ storage, taskId, remove, life, pipeline, runtime: context.runtime });
   } finally {
     context.runtime.shutdown();
     await context.runtime.diffStats.settled();
@@ -108,5 +110,38 @@ describe("delete_environment", () => {
       });
       expect(await storage.getBuildPipeline(pipeline.id)).toBeNull();
     });
+  });
+
+  test("queues a merged Linear build's label and deletes even while Linear fails", async () => {
+    const addLabel = mock(async () => {
+      throw new Error("Linear is down");
+    });
+    await withEnvironmentBuild(
+      async ({ storage, remove, life, runtime }) => {
+        await storage.kanban.saveLinearAuth("lin_api_test_key");
+        const linear = life.pipeline("ENG-7", {
+          id: "pipeline-linear",
+          source: { type: "linear", issueId: "issue-7", issueIdentifier: "ENG-7" },
+        } as never);
+        await storage.saveBuildPipeline(linear.id, "p1", "e1", 1, linear);
+        await storage.updateEnvironment("e1", { prUrl: PR_URL, prState: "merged" });
+
+        await remove();
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(await storage.getBuildPipeline(linear.id)).toBeNull();
+
+        await runtime.linearMergedLabels.idle();
+        expect(addLabel).toHaveBeenCalledWith("lin_api_test_key", "issue-7", "merged");
+        // Only the Linear-sourced build is queued; the Kanban one is not.
+        const records = await storage.linear.listLinearMergedLabels();
+        expect(records).toHaveLength(1);
+        expect(records[0]).toMatchObject({
+          pipelineId: "pipeline-linear",
+          status: "pending",
+          lastError: "Linear is down",
+        });
+      },
+      { linearMergedLabels: { addLabel } },
+    );
   });
 });

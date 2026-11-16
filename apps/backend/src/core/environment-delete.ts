@@ -265,6 +265,21 @@ export async function deleteEnvironment(
       if (environment && typeof storage.listBuildPipelines === "function" && storage.kanban) {
         await settleTicketsOfDeletedEnvironment(storage, environment);
       }
+      // A merged pull request still owes its Linear-sourced builds' issues the
+      // `merged` label. Queued only, never awaited on Linear, so a Linear
+      // failure cannot block the deletion; the queue outlives the pipelines.
+      if (
+        environment?.prState === "merged" &&
+        environment.prUrl &&
+        storage.linear &&
+        typeof storage.listBuildPipelinesForEnvironment === "function"
+      ) {
+        await context.runtime.linearMergedLabels.recordEnvironmentMerge(
+          storage,
+          environment,
+          environment.prUrl,
+        );
+      }
       await storage.deleteBuildPipelinesByEnvironment(environmentId, environment?.buildPipelineId);
       // A graph run is scoped to one environment (D7) and its artifacts to the
       // run: both go with it, like a pipeline.

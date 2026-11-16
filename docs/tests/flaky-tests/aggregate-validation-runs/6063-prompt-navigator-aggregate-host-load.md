@@ -155,6 +155,28 @@ apps/backend ./src/core/diff-baseline.test.ts --parallel=1 --only-failures`
 (exit 0, 2.4 s). Passing raw output was removed. This establishes intermittence,
 not the cause of the incomplete aggregate. No assertion, skip or timeout changed.
 
+## CI repair review recurrence — 2026-11-16
+
+Preparation at `79dbb417884a2246ecae665bde6f9a68363abdcb`, based on
+`c1fcc573bc079b4d856d53e31c45d5ebf2485d11`, ran
+`mise run test:logged -- --name review-default-tests -- mise run test` with
+the default worker plan. `activity sweep bridge ownership > readiness timeout
+reaps the child and removes copied credentials (ignores TERM: %s)` failed after
+141.30 ms when cleanup's process-group signal at line 111 returned `EPERM`.
+The root group reported 4,903 passes, 18 failures and 29 skips; workspace
+failures were also recorded. The aggregate exited 1 after 579.173 s.
+
+The runner's existing one-worker retry of the complete unchanged owner passed
+(exit 0, 255 ms; command form `bun test ./tests/unit/activity-sweep-bridge.test.ts
+--parallel=1 --only-failures`). Evidence is retained in
+`.orkestrator/review-artifacts/review-validation-c7220a81-1f43-43da-bf9b-cc30bd83501d/validation-04.stderr.txt`
+and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.y1VCrc/rerun-tests-unit-activity-sweep-bridge-test-ts.log.gz`.
+
+`mise run flaky:recurrence -- 6063 --base c1fcc573bc079b4d856d53e31c45d5ebf2485d11`
+confirmed the case is open. The recorded failure triage remains `undetermined`
+(`dependency-graph-incomplete`): passing alone confirms intermittence, not an
+environmental cause or a repair. No assertion, timeout or skip changed.
+
 ## Fork-card review repair recurrence — 2026-11-16
 
 Observed on the branch based on `c1fcc573bc079b4d856d53e31c45d5ebf2485d11`,

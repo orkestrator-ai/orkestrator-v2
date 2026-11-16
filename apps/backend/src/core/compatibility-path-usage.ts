@@ -35,16 +35,6 @@ export const COMPATIBILITY_PATH_IDS = [
   "bridge-close.upgrade-required",
   /** A renderer that predates paged tmux transcripts read a whole transcript. */
   "tmux-transcript.whole-read",
-  /**
-   * A history page was served from the joined sync-v1 projection while the
-   * session's latest view carried a direct cursor, or no view was read: a
-   * caller paging with a v1 cursor it did not need (0232 item 3).
-   */
-  "history.joined-v1-page",
-  /** A joined page for a view whose source has no direct pages (no provider cursor). */
-  "history.joined-v1-page.unpaged-source",
-  /** A joined page for a view whose source pages directly but could name or wrap no cursor. */
-  "history.joined-v1-page.unnamed-cursor",
   /** A request used the legacy `/__orkestrator/browser/loopback/<port>/` preview route. */
   "preview.legacy-loopback-route",
   /** A desktop opened a v1 preview tunnel socket: it predates tunnel v2. */

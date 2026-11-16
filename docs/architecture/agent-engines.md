@@ -471,7 +471,7 @@ on the idle edge the backend reads the request's run boundary
 stays without one for `OPENCODE2_UNSETTLED_RUN_GRACE_MS` (60 s) while the
 server reads idle belonged to a server that died (killed, or replaced by the
 backend), and is recorded as cut short, so the bell rings "Agent stopped with
-an error" instead of the tab reading working for good (to-do 5160, measured
+an error" instead of the tab reading working for good (to-do 5160 (retired), measured
 live at 80 s from the kill). The verdict is kept for the request, so a later
 turn-outcome read (the CLI, a pipeline) gets the same answer at once rather
 than starting a second grace; a boundary row or a busy read replaces it.
@@ -592,7 +592,16 @@ running, and `launch_terminal_job` itself is not gated, so the live scripts that
 call it directly still work.
 
 Its chat tab reads the session's JSONL through `TmuxTranscriptReader`
-(`tmux-transcript-reader.ts`). A reopen reads one bounded page from the tail, and
+(`tmux-transcript-reader.ts`). The file is found under
+`<claudeHome>/projects/<slug>/`, where the slug is Claude Code's own name for the
+working directory: every character that is not an ASCII letter or digit becomes
+`-`, and a name over 200 characters is cut and given the path's hash
+(`claudeProjectSlug` in `claude-project-slug.ts`, which `encodeCwd` and the
+environment move both use). Until 2026-11-16 the tmux code replaced only `/`, so
+a host tab whose worktree path held a space, a dot or an underscore (every macOS
+worktree, under `Application Support`) never found its transcript: a failed turn
+rang "Agent stopped with an error" while the tab showed only "Waiting for
+Claude…" (to-do 5160 (retired) task 7). A reopen reads one bounded page from the tail, and
 earlier history pages in on request, in one `docker exec` per page in a container.
 The file is read from its start only by the poll loop's tail, once per session in
 each backend process; that pass keeps the task list current and records each task

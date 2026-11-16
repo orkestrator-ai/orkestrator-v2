@@ -9,7 +9,7 @@ import { StorageService } from "../src/core/storage";
 import { createCommandFixtures } from "./command-fixtures";
 
 /**
- * To-do 7767 task 10's two-machine walk-through, run deterministically: two
+ * To-do 7767 (retired) task 10's two-machine walk-through, run deterministically: two
  * machines, each with its own real storage and the real command handlers, a
  * node link that calls the leaf's handlers, the command node's real
  * `NodeLinearSync`, and a faked Linear API. The same steps against two live
@@ -193,7 +193,7 @@ async function linkedMachines() {
 /** Lets a later timestamp differ from an earlier one at millisecond resolution. */
 const tick = () => Bun.sleep(5);
 
-describe("Linear on two linked machines (to-do 7767 task 10)", () => {
+describe("Linear on two linked machines (to-do 7767 (retired) task 10)", () => {
   test("a board linked on the leaf reaches the command node, which copies the key once; a disconnect there clears the leaf", async () => {
     const requests = fakeLinear();
     const { leaf, command, sync, linkCalls } = await linkedMachines();

@@ -31,15 +31,15 @@ one list, the sweep will miss paths or two workers will remove the same one.
 names every path with its owner and removal condition, and its Retired table
 records what went. `apps/backend/src/core/compatibility-path-usage.ts` names
 about fifty counted paths (for example `bridge-close.upgrade-required`,
-`tmux-transcript.whole-read`, `history.joined-v1-page`,
-`preview.legacy-loopback-route`, `preview.tunnel-v1`, `machine-load.older-node`,
+`tmux-transcript.whole-read`, `history.joined-v1-page` (removed on
+2026-11-16 with 0232 task 4), `preview.legacy-loopback-route`, `preview.tunnel-v1`, `machine-load.older-node`,
 the `retired-command.*` names and `relayed-node-event.legacy-stream`). Domain
 contracts keep client adapters for older domain versions
 (`packages/protocol/src/contract/client-adapters.ts`; see
 [Client adapters](../../architecture/version-compatibility.md#client-adapters)).
 To-dos that already own a removal and were unblocked on 2026-11-14:
 0050 (task 1 done and the file retired on 2026-11-15),
-[0232](../transcripts-and-observation/0232-direct-history-cursor-minting.md),
+0232 (task 4 done and the file retired on 2026-11-16),
 [7570](7570-compatibility-paths-waiting-on-the-floor.md),
 [0078](0078-legacy-prompt-queue-claim-state.md),
 6080 task 7 (done 2026-11-16 and the to-do retired; see the

@@ -20,7 +20,7 @@ import { publicSiteDistDirectory } from "./public-site-dist";
  * bootstrap and the frame would never report `ready`.
  *
  * Only a real deployment proves Vercel applies the rules this way (7568, 4650
- * task 1); this proves the built document and the rules work together.
+ * (retired) task 1); this proves the built document and the rules work together.
  */
 
 const framePath = `/${STATIC_HTML_FRAME_DOCUMENT}`;

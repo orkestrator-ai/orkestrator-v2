@@ -534,7 +534,8 @@ describe.skipIf(!realHost)("local preview service discovery on this host", () =>
   ): Promise<{ shell: ChildProcess; port: number }> {
     // Report the bound address after a beat: Bun calls the listen callback of a
     // bind that then fails with EADDRINUSE. The script goes to the shell inside
-    // single quotes, so it (its comments included) must not contain one.
+    // single quotes, so it (its comments included) must not contain one. The
+    // default-tier local-discovery-fixture.test.ts checks this without a server.
     const script = `const net=require("node:net");
 let port=${port};let attempts=0;
 const listen=()=>{
@@ -552,6 +553,7 @@ const listen=()=>{
     if(address)console.log("port "+address.port);
   },150));
 };listen();`;
+    expect(script).not.toContain("'");
     // "; true" keeps the shell as the server's parent instead of exec'ing it.
     const shell = spawn("/bin/sh", ["-c", `"${process.execPath}" -e '${script}'; true`], {
       detached: true,

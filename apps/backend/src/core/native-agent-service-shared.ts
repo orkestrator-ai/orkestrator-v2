@@ -438,7 +438,7 @@ export interface NativeAgentObservationInvalidation {
   logicalSessionKey: string;
   owner: "environment" | "coordinator";
   observation: ViewRevisionStamp;
-  /** Which observer path announced it; content-free (todo 0049 task 4). */
+  /** Which observer path announced it; content-free (#1659). */
   cause: Extract<
     NativeSessionInvalidationCause,
     "content-revision" | "session-content" | "runtime-stopped"
@@ -689,7 +689,7 @@ export const PARKED_DISPATCH_CONFLICT_MESSAGE =
 
 /**
  * Whether a refused dispatch was a temporary provider refusal with nothing
- * sent, so the same prompt may succeed under a new request id (7260).
+ * sent, so the same prompt may succeed under a new request id (#2060).
  *
  * Only a `ProviderUnavailableError` that is not ambiguous qualifies: a bridge's
  * 503 before dispatch, an unreachable bridge, a failed attach. The caller must

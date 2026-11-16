@@ -1,6 +1,6 @@
 /**
  * One GraphQL query for the open pull requests that share a `gh` host and
- * credential (to-do 1202 task 9, BG-6).
+ * credential (#1661, BG-6).
  *
  * Each monitored PR used to cost a `gh pr view` every 20 s, plus a separate
  * rollup read every minute. Local environments all run the host's `gh` with

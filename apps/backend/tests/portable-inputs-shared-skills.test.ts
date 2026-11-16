@@ -1,6 +1,6 @@
 /**
  * The shared user skills root (`~/.agents/skills`) and skills linked into a
- * provider's skill root reach a container (to-do 2170): staged from a fixture
+ * provider's skill root reach a container (#1589): staged from a fixture
  * home, then imported by the entrypoint's own copy into a fixture container
  * home. Never reads the real `~/.agents`, `~/.claude`, `~/.grok` or `~/.pi`.
  */

@@ -1,6 +1,6 @@
 /**
  * Coordinator-to-coordinator node mail between two real `dev:test` profiles
- * on one host, with a scripted loopback model (to-do 2900 tasks 1 and 2). Run
+ * on one host, with a scripted loopback model (#2075). Run
  * it with `mise run test:agent:coordinator:node-mail-fake`, which starts two
  * disposable credential-free profiles that offer only Pi, runs this file and
  * resets both.

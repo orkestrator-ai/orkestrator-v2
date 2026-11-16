@@ -5,7 +5,7 @@
  * would run the Linux boot-time container reachability probe for a Docker
  * owner that never runs again. A backend that dies mid-probe leaks that
  * owner's `ork-<owner>-reach-probe-net`, which holds one of the daemon's
- * address pools and that no backend's own reaper revisits (todo 7470, 7041).
+ * address pools and that no backend's own reaper revisits (#2024, 7041).
  * On a host whose firewall drops Docker's traffic to the host, the probe's
  * "Docker containers can't reach Orkestrator" modal also opens over whatever
  * step is running (flake 4250).

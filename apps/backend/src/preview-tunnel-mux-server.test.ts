@@ -29,7 +29,7 @@ import {
   type PreviewFixture,
 } from "../../../test-fixtures/preview-app/server.ts";
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
-import { createPreviewHarness, type PreviewHarness } from "./core/preview-test-support.js";
+import { createPreviewHarness, type PreviewHarness } from "./core/previews/test-support.js";
 import { PreviewTunnelServer } from "./preview-tunnel-server.js";
 
 type PreviewTunnelServerLimits = PreviewHarness["runtime"]["limits"];

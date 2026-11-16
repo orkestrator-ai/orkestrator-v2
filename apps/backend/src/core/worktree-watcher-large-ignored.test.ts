@@ -165,7 +165,7 @@ test("leaving a tree out withdraws coverage, and putting it back reports it agai
   expect(context.watches()).toContain("recursive /wt/output");
 });
 
-// To-do 8171: distrust in delivery is a separate gap from a tree left out, so
+// #2305: distrust in delivery is a separate gap from a tree left out, so
 // trust returning while a tree is still left out must not announce coverage.
 test("a tree left out while the watcher is distrusted keeps coverage withdrawn when trust returns", async () => {
   const grace = installControlledTimeout(37, { label: "missed-change grace" });
@@ -175,12 +175,14 @@ test("a tree left out while the watcher is distrusted keeps coverage withdrawn w
     const { watcher, coverage, replan, settled } = open(context, true, () => clock, 37);
     await until(() => watcher.qualified === true);
     expect(coverage()).toBe(1);
-    // The new watches report the gap before them, and a burst still settling
-    // forgives a miss (no grace timer is armed). Report the owner's scan until
-    // the watcher holds it against delivery: the armed grace timer is the
-    // product's own signal that no burst was settling when the miss arrived.
+    // The new watches report the gap before them; a burst still settling would
+    // forgive the miss below. onChange runs after the watcher clears its
+    // settle timer, so this callback is the completion signal.
     await until(() => settled() > 0);
+
     // The owner's scan found a change no event announced: distrusted.
+    // Report it until the grace timer is armed, proving the watcher held it
+    // against delivery rather than forgiving it during a settling burst.
     await until(() => {
       watcher.unannouncedChange?.();
       return grace.pendingCount() === 1;

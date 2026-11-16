@@ -35,7 +35,7 @@ const CHECKLIST_ITEM =
   /^- \[[ xX]\] \*\*(?:\[\d{4}\]\([^)]+\)|\d{4} \(retired\)) [^:*\s][^:*]*: [^\s*].*?\*\* \S.{9,}$/;
 
 // Numbers already shared by more than one todo file when the uniqueness check
-// was added (todo 0732). They keep their numbers, because a todo number is a
+// was added (retired todo 0732). They keep their numbers, because a todo number is a
 // permanent ID (docs/README.md). Finished files are deleted, so an entry may
 // shrink, but no number here may gain a file that is not listed.
 const ALLOWED_DUPLICATES: Record<string, string[]> = {

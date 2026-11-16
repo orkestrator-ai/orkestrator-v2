@@ -345,7 +345,7 @@ describe("buildPipelineConfiguredDefaults", () => {
     expect(defaults.steps.verify).toEqual({ agent: "claude" });
   });
 
-  // To-do 7546: a pinned row is an explicit choice and skips the swap a new
+  // #2046: a pinned row is an explicit choice and skips the swap a new
   // session gets, so an inherited default must stay a default.
   test("leaves an inherited platform model unpinned on every row", () => {
     const defaults = buildPipelineConfiguredDefaults(

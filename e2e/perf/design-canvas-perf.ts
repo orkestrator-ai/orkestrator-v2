@@ -648,7 +648,7 @@ const INIT_SCRIPT = `(() => {
 })();`;
 
 /**
- * `--listener-census` only (to-do 7440's diagnostic, retired 2026-11-11; see
+ * `--listener-census` only (#2174's diagnostic, retired 2026-11-11; see
  * docs/architecture/design-canvas.md, "Tests"): counts the page's live
  * `addEventListener` registrations by target, type and the adding call site,
  * so the two values the leak check's `jsEventListeners` samples take can be

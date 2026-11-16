@@ -3,7 +3,7 @@ import { metadataMessage, type PersistedAgentMailStore } from "./storage-agent-m
 /**
  * What deleting an environment does to the agent mail store, as the rows it
  * changes rather than a new whole store, so the change commits without
- * cloning or reserializing anyone else's mail (todo 6120 task 6):
+ * cloning or reserializing anyone else's mail (#2029):
  *
  * - the environment's own mailboxes are removed, and each of their messages
  *   leaves a body-free counterpart marked undeliverable, so its sender still

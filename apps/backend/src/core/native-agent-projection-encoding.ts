@@ -222,7 +222,7 @@ export function isSpliceableResult(value: unknown): boolean {
  * straight into one buffer sized from their memoized byte counts. An earlier
  * version walked the whole value in JavaScript and joined strings, which made
  * a first snapshot slower than `JSON.stringify` plus `Buffer.from`; this one
- * is faster on every row shape the changed-read benchmark has (to-do 7553,
+ * is faster on every row shape the changed-read benchmark has (#2141,
  * retired; figures in `docs/architecture/native-transcripts.md`, "Response
  * encoding").
  *

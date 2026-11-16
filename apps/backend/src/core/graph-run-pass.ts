@@ -107,7 +107,7 @@ export function graphRunLockedWorkspace(run: Pick<GraphRun, "environmentId" | "m
 export const GRAPH_RUN_OBSERVATION_MS = 3_000;
 /**
  * Cadence while an accepted result waits for the turn that submitted it to
- * end (todo 7564; Multi Review's is todo 7557). The model submits through a
+ * end (#2131; Multi Review's is #2079). The model submits through a
  * tool call inside its turn, so the acceptance's wake can find the turn still
  * running, and nothing announces the turn's end: workflow sessions are not
  * native agent sessions. Bounded to one observation interval from the

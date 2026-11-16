@@ -47,7 +47,7 @@ describe("NativeAgentService projection lifecycle", () => {
 
   test.each([
     ["the current bridge", defaultModeQuestion],
-    // Bridges before todo 0161 passed Codex's `isBlocking: false` through.
+    // Bridges before #1326 passed Codex's `isBlocking: false` through.
     ["an older bridge", { ...defaultModeQuestion, isBlocking: false }],
   ])(
     "a Default-mode Codex RPC question from %s publishes waiting and resumes after an answer",

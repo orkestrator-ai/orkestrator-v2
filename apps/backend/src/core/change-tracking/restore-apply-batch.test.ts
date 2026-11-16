@@ -32,7 +32,7 @@ import { turnIdFor } from "./turn-boundaries.js";
 
 /**
  * Restore apply writes through one helper process per batch of groups
- * (todo 7555) instead of one per file. These pin that the batch keeps every
+ * (#2085) instead of one per file. These pin that the batch keeps every
  * per-file check, that a rename's two ends stay one unit inside a batch, and
  * that a helper which dies part-way reports exactly what it wrote.
  */

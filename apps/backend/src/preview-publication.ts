@@ -21,8 +21,7 @@ import {
 import { previewErrorFromUnknown } from "@orkestrator/protocol/preview-services";
 
 import { hostsShareSite } from "./core/host-site.js";
-import type { PreviewPublicationPort } from "./core/preview-access.js";
-import type { PreviewRuntime } from "./core/preview-runtime.js";
+import type { PreviewPublicationPort, PreviewRuntime } from "./core/previews/index.js";
 import type { PreviewSettings } from "./core/storage-preview-services.js";
 import { isLoopbackAddress, isTailscaleAddress } from "./gateway-internals.js";
 import { PreviewHttpProxy, type PreviewHttpProxyOptions } from "./preview-http-proxy.js";

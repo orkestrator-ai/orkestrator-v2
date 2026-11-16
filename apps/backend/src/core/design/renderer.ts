@@ -77,7 +77,7 @@ export type DesignBrowserLauncher = (
 /**
  * Starts Chromium as a Playwright browser server on loopback and connects to
  * it, so the renderer owns the process: a `close()` that hangs is followed by
- * a kill. A browser from `chromium.launch()` exposes no process (0037), and a
+ * a kill. A browser from `chromium.launch()` exposes no process (#1179), and a
  * hung close left it running.
  */
 export async function launchDesignBrowser(

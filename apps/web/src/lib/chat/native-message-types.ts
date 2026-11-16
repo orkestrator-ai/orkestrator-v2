@@ -37,7 +37,13 @@ export interface NativeToolDiffMetadata {
 }
 
 export type NativeToolState = "success" | "failure" | "pending";
-export type NativeAgentState = "active" | "finished" | "failed";
+/**
+ * A child's lifecycle. `ended` is a child nothing vouches for any more: its
+ * launch never reported a result and no live task backs it, yet the turn that
+ * could still be running it has stopped. Its outcome is unknown, so it is
+ * neither live nor claimed as finished (agent-engines.md, "Sub-agent card states").
+ */
+export type NativeAgentState = "active" | "finished" | "failed" | "ended";
 export type NativeBackgroundTaskStatus =
   "pending" | "running" | "completed" | "failed" | "killed" | "paused";
 

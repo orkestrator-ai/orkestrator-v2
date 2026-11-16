@@ -3,9 +3,9 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
-import { LocalServerRuntime } from "./local-server-runtime.js";
-import type { PtyProcess } from "./pty.js";
-import { TerminalRuntime } from "./terminal-runtime.js";
+import { LocalServerRuntime } from "../local-server-runtime.js";
+import type { PtyProcess } from "../pty.js";
+import { TerminalRuntime } from "../terminal-runtime.js";
 
 /**
  * The processes preview ownership treats as "started by this backend for an

@@ -249,7 +249,7 @@ describe("PromptQueueDrainer", () => {
     }
   });
 
-  test("mail presence uses the environment row its caller already read (todo 7567 task 2)", async () => {
+  test("mail presence uses the environment row its caller already read (#2131)", async () => {
     const context = await harness();
     const getEnvironment = spyOn(context.storage, "getEnvironment");
     const target = { environmentId: ENVIRONMENT_ID, tabId: TAB_ID };

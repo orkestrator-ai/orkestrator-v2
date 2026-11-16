@@ -6,7 +6,7 @@ import { SUPERVISED_FLAG, ownerAbortSignal, runUnderSupervisor } from "./dev/own
 /**
  * `mise run test:agent:coordinator-slow-remote`
  *
- * Coordinator checkout sync against a slow remote (to-do 4720): one disposable
+ * Coordinator checkout sync against a slow remote (#2050): one disposable
  * `dev:test --fixture` profile with no agent credentials and only Pi enabled,
  * whose Pi is pointed at a loopback fake model by the spec. It runs
  * `coordinator-slow-remote-live.spec.ts`, which adds two disposable projects

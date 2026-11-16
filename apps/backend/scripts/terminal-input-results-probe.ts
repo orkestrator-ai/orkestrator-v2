@@ -53,7 +53,7 @@ import type { ProbePageCounts, ProbePageStart } from "./terminal-input-results-p
 const ENGINES: Record<string, BrowserType> = { chromium, webkit, firefox };
 const SESSION = "input-results-probe";
 const LEAF_NODE = "bk_leaf";
-/** The same counts as the Chromium run in 1202 task 11: 52 typed keys, 316 with no delay. */
+/** The same counts as the Chromium run in #1765: 52 typed keys, 316 with no delay. */
 const TYPED_KEYS = 52;
 const BURST_KEYS = 316;
 const RELOAD_KEYS = 12;

@@ -73,7 +73,7 @@ step: `expect(locator).toHaveText("QA design bake-off")` on
 passed in the other six full runs of the suite that night (runs 1 to 5 and 7). It was not
 rerun alone. The cause remains unconfirmed.
 
-## Recurrence, dead-code removal review (7571), 2026-11-13
+## Recurrence, dead-code removal review (7571, retired), 2026-11-13
 
 Branch `remove-dead-bridge-be98778b92d1-r1` (base `17d28238c`, head
 `c89a22b10`) failed the case at a new step in review preparation's

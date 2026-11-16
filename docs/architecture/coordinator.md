@@ -2363,8 +2363,10 @@ clears it even if the content carried over. An agent's reasoning cannot be trace
 to specific input, so tracking provenance per message would only look more
 precise. One limit: a message the user approved
 (`send_approved_project_home_message`) is not marked, since they read it. Mail
-to another node's worker carries the mark too: `turnOrigin` is sent to every
-leaf.
+to another node's worker carries the mark too on the version-1 `node-mail`
+contract. The still-present version-0 adapter omits `turnOrigin` because strict
+pre-contract leaves reject it; those leaves retain their original framing until
+the adapter retires under to-do 8108. No hello capability gates the mark.
 
 `coordinatorCallTurnOrigin` (`@orkestrator/protocol/coordinator`) is the one
 rule every path reads: only a turn the user started is unmarked, and an unknown

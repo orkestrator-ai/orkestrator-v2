@@ -297,7 +297,7 @@ describe("node-mail client", () => {
       attachmentMail: true,
     });
     // coordinatorNotices and attachmentMail are unknown to it: left out.
-    // turnOrigin is no longer gated (to-do 6080 (retired) task 7): it is sent as it is.
+    // Adapter 0 omits turnOrigin for strict pre-contract receivers.
     expect(node.sent).toEqual([
       {
         command: "deliver_node_mail",
@@ -307,7 +307,6 @@ describe("node-mail client", () => {
           toEnvironmentId: "env-1",
           body: "Stop.",
           steer: true,
-          turnOrigin: "mail",
         },
         envelope: undefined,
       },
@@ -321,6 +320,38 @@ describe("node-mail client", () => {
       ["node-mail", 0],
       ["node-mail", 0],
     ]);
+  });
+
+  it("version 0 delivers mail to a strict stable leaf without origin support", async () => {
+    const node = fakeNode(undefined, []);
+    const call = node.options.call;
+    node.options.call = async (def, args, envelope) => {
+      if (def.name === "deliver_node_mail") {
+        // Stable v2.36.1 rejects unknown keys before storing anything.
+        const allowed = new Set([
+          "controllerId",
+          "coordinatorEnvironmentId",
+          "coordinatorTabId",
+          "requestId",
+          "toEnvironmentId",
+          "toTabId",
+          "subject",
+          "body",
+          "steer",
+          "nodeParent",
+          "projectId",
+        ]);
+        for (const key of Object.keys(args as object)) {
+          if (!allowed.has(key)) throw new Error(`Unexpected key: ${key}`);
+        }
+      }
+      return call(def, args, envelope);
+    };
+    const mail = createDomainClient(nodeMailClient, node.options).api();
+    const { steer: _steer, ...plain } = delivery;
+    await expect(mail.deliver(plain)).resolves.toBeDefined();
+    expect(node.sent[0]!.args).not.toHaveProperty("turnOrigin");
+    expect(plain.turnOrigin).toBe("mail");
   });
 
   it("version 0 refuses what such a leaf would drop, with the typed errors, and sends nothing", async () => {

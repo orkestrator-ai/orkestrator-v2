@@ -12,8 +12,8 @@
  *   instead of silently ignoring it.
  * - **Version 0** (a pre-contract node, §11.4): today's capability gating,
  *   from the hello's `capabilities`. A pre-contract leaf refuses any key it
- *   does not know, so the adapter removes the outbox flags it does not
- *   advertise, and refuses `steer`, `attachments` or a
+ *   does not know, so the adapter omits `turnOrigin` and removes the outbox
+ *   flags it does not advertise, and refuses `steer`, `attachments` or a
  *   `return_node_outbox_mail` without their capability with the same typed
  *   errors a contract node would answer, rather than dropping them;
  *   `prepare_node_mail_attachments` without `node-mail-attachments` is
@@ -132,7 +132,11 @@ function legacyApi(call: CommandCall, context: DomainAdapterContext): NodeMailAp
       if (present(args, "attachments") && !supports(BACKEND_CAPABILITIES.nodeMailAttachments)) {
         refuse("attachments");
       }
-      return call(deliverNodeMailCommand, args);
+      // Adapter 0 still serves releases whose strict key list predates origin
+      // framing. Keep this omission until the whole adapter retires (8108).
+      // Version 1 above always preserves the origin; no hello capability remains.
+      const { turnOrigin: _turnOrigin, ...legacyArgs } = args;
+      return call(deliverNodeMailCommand, legacyArgs);
     },
     projectCoordinator: (args) => call(getNodeProjectCoordinatorCommand, args),
     collectOutbox: (args) =>

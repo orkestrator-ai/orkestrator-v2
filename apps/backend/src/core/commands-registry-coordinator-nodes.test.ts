@@ -586,11 +586,10 @@ describe("send_coordinator_node_mail", () => {
     await send(contract, "from-mail");
     expect(delivered(contract).turnOrigin).toBe("mail");
 
-    // No capability gates the key any more (to-do 6080 (retired) task 7): even a leaf
-    // reached through the version-0 adapter is sent it.
+    // The still-supported version-0 adapter omits the key for strict old leaves.
     const precontract = await setup({ answers });
     await send(precontract, "precontract");
-    expect(delivered(precontract).turnOrigin).toBe("mail");
+    expect(delivered(precontract)).not.toHaveProperty("turnOrigin");
   });
 
   test("without deliverNow a capable leaf is not asked to steer, and drops any outcome", async () => {

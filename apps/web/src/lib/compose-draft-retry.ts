@@ -40,6 +40,7 @@ interface PendingWrite {
   attempts: number;
   timer: unknown;
   exhausted: boolean;
+  queued: boolean;
 }
 
 /** Live instances, so tests can cancel every timer between cases. */
@@ -121,7 +122,14 @@ export class DraftWriteRetries {
         });
       }
     }
-    const entry: PendingWrite = { seq, run, attempts: 1, timer: null, exhausted: false };
+    const entry: PendingWrite = {
+      seq,
+      run,
+      attempts: 1,
+      timer: null,
+      exhausted: false,
+      queued: false,
+    };
     this.pending.set(draftKey, entry);
     this.armTimer(draftKey, entry);
   }
@@ -141,18 +149,26 @@ export class DraftWriteRetries {
   retryNow(): void {
     if (this.disposed) return;
     for (const [draftKey, entry] of Array.from(this.pending)) {
+      // The queued/in-flight attempt already covers this signal. Leave its
+      // fallback alone if it has just failed and armed the next timer.
+      if (entry.queued) continue;
       this.clearTimer(entry);
       entry.attempts = 0;
       entry.exhausted = false;
-      void this.options
-        .enqueue(draftKey, () => this.attempt(draftKey, entry))
-        .catch(() => undefined);
+      this.retryEntry(draftKey, entry);
     }
   }
 
   /** Keys with a write awaiting retry. */
   pendingKeys(): string[] {
     return Array.from(this.pending.keys());
+  }
+
+  /** A read-modify-write supersedes the pending intent for this key. */
+  cancel(draftKey: string): void {
+    const entry = this.pending.get(draftKey);
+    this.cancelPending(draftKey);
+    if (entry && this.latest.get(draftKey) === entry.seq) this.latest.delete(draftKey);
   }
 
   /** Forget every pending write and timer; the instance stays usable. */
@@ -196,7 +212,7 @@ export class DraftWriteRetries {
     });
   }
 
-  private armTimer(draftKey: string, entry: PendingWrite): void {
+  private armTimer(draftKey: string, entry: PendingWrite, offline = false): void {
     if (this.disposed) return;
     this.clearTimer(entry);
     if (entry.attempts > DRAFT_RETRY_TIMER_ATTEMPTS) {
@@ -210,10 +226,12 @@ export class DraftWriteRetries {
       }
       return;
     }
-    const delayMs = Math.min(
-      DRAFT_RETRY_CEILING_MS,
-      DRAFT_RETRY_BASE_MS * 2 ** Math.min(entry.attempts - 1, 8),
-    );
+    const delayMs = offline
+      ? DRAFT_RETRY_CEILING_MS
+      : Math.min(
+          DRAFT_RETRY_CEILING_MS,
+          DRAFT_RETRY_BASE_MS * 2 ** Math.min(entry.attempts - 1, 8),
+        );
     entry.timer = this.clock.setTimeout(() => {
       entry.timer = null;
       if (this.pending.get(draftKey) !== entry) return;
@@ -221,10 +239,7 @@ export class DraftWriteRetries {
         // An attempt now would only fail. Wait for the reconnect, which
         // retries at once, without spending the budget; the timer stays as a
         // fallback in case that signal never arrives.
-        entry.timer = this.clock.setTimeout(() => {
-          entry.timer = null;
-          this.retryEntry(draftKey, entry);
-        }, DRAFT_RETRY_CEILING_MS);
+        this.armTimer(draftKey, entry, true);
         return;
       }
       this.retryEntry(draftKey, entry);
@@ -232,8 +247,18 @@ export class DraftWriteRetries {
   }
 
   private retryEntry(draftKey: string, entry: PendingWrite): void {
-    if (this.pending.get(draftKey) !== entry) return;
-    void this.options.enqueue(draftKey, () => this.attempt(draftKey, entry)).catch(() => undefined);
+    if (this.pending.get(draftKey) !== entry || entry.queued) return;
+    entry.queued = true;
+    void this.options
+      .enqueue(draftKey, () => this.attempt(draftKey, entry))
+      .then(
+        () => {
+          entry.queued = false;
+        },
+        () => {
+          entry.queued = false;
+        },
+      );
   }
 
   private cancelPending(draftKey: string): void {

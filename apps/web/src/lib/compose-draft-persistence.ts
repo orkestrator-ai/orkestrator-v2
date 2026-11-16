@@ -1,3 +1,4 @@
+import { parseWebAnnotationError } from "@orkestrator/protocol/web-annotations";
 import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 // The factory from its own module: suites replace the barrel with partial mocks.
@@ -33,7 +34,20 @@ interface ComposeDraftWrites {
 }
 
 function isRetryableDraftWriteError(error: unknown): boolean {
-  return !(error instanceof DraftRevisionConflictError) && !isDraftRevisionConflict(error);
+  if (isDraftRevisionConflict(error)) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  // These payloads need reconciliation or correction, even if their message
+  // also mentions an unavailable backend. Never replay the original payload.
+  if (parseWebAnnotationError(message).detail) return false;
+  if (error && typeof error === "object" && "status" in error) {
+    const status = error.status;
+    if (typeof status === "number") return status === 408 || status === 429 || status >= 500;
+  }
+  // IPC and the gateway both transport backend errors as message strings.
+  // Unknown application failures are permanent until the caller changes them.
+  return /network|failed to fetch|fetch failed|load failed|offline|unreachable|unavailable|timed? ?out|timeout|connection (?:closed|lost|refused|reset)|socket|ECONNRESET|ECONNREFUSED|ETIMEDOUT|HTTP 5\d\d/i.test(
+    message,
+  );
 }
 
 const composeDraftWrites = defineScopedSlot<ComposeDraftWrites>("compose-draft-writes", (scope) => {
@@ -212,7 +226,11 @@ export function persistComposeDraft<T>(
 ): Promise<SavedComposeDraft<T> | undefined> {
   const writes = composeDraftWrites(scope);
   const state = revisionStateFor(writes, draftKey, revisionState);
+  // Capture when the first attempt reaches the chain, after earlier hydration
+  // or writes, and retain that CAS fence even if a later read moves the cursor.
+  let expectedRevision: number | undefined;
   return enqueueRetriedWrite(writes, draftKey, async () => {
+    expectedRevision ??= state.revision;
     if (state.conflictRevision !== null) {
       throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
     }
@@ -222,7 +240,7 @@ export function persistComposeDraft<T>(
         ownerType,
         ownerId,
         value,
-        state.revision,
+        expectedRevision,
       );
       if (saved && typeof saved.revision === "number") {
         state.revision = saved.revision;
@@ -244,12 +262,16 @@ export function discardComposeDraft(
 ): Promise<void> {
   const writes = composeDraftWrites(scope);
   const state = revisionStateFor(writes, draftKey, revisionState);
+  // Capture when the first attempt reaches the chain, after earlier hydration
+  // or writes, and retain that CAS fence even if a later read moves the cursor.
+  let expectedRevision: number | undefined;
   return enqueueRetriedWrite(writes, draftKey, async () => {
+    expectedRevision ??= state.revision;
     if (state.conflictRevision !== null) {
       throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
     }
     try {
-      await writes.api.deleteComposeDraft(draftKey, state.revision);
+      await writes.api.deleteComposeDraft(draftKey, expectedRevision);
       state.revision = 0;
     } catch (error) {
       await recordComposeConflict(writes, draftKey, state, error);
@@ -299,6 +321,9 @@ export function updateSavedComposeDraft<T>(
     if (!saved) return;
     const value = update(saved.value);
     if (value === saved.value) return;
+    // This read-modify-write supersedes any failed inline attempt. A queued
+    // timer or reconnect must not replay the older intent after this update.
+    writes.retries.cancel(draftKey);
     const state = revisionStateFor(writes, draftKey);
     try {
       const result = await writes.api.saveComposeDraft(

@@ -190,10 +190,12 @@ describe("DraftWriteRetries", () => {
       calls += 1;
     });
 
-    timers.fire();
-    await settle();
-    expect(calls).toBe(0);
-    expect(timers.delays()).toEqual([DRAFT_RETRY_CEILING_MS]);
+    for (let i = 0; i < DRAFT_RETRY_TIMER_ATTEMPTS * 3; i += 1) {
+      timers.fire();
+      await settle();
+      expect(calls).toBe(0);
+      expect(timers.delays()).toEqual([DRAFT_RETRY_CEILING_MS]);
+    }
 
     disconnected = false;
     retries.retryNow();
@@ -201,6 +203,79 @@ describe("DraftWriteRetries", () => {
     expect(calls).toBe(1);
     expect(timers.size()).toBe(0);
   });
+
+  test("the offline fallback recovers without a reconnect signal and retains its budget", async () => {
+    let disconnected = true;
+    const { retries, timers } = setup({ disconnected: () => disconnected });
+    let calls = 0;
+    const seq = retries.begin("k:env:tab");
+    retries.settled("k:env:tab", seq, { error: new Error("offline") }, async () => {
+      calls += 1;
+      if (calls < DRAFT_RETRY_TIMER_ATTEMPTS) throw new Error("unavailable");
+    });
+    for (let i = 0; i < DRAFT_RETRY_TIMER_ATTEMPTS * 3; i += 1) {
+      timers.fire();
+      await settle();
+      expect(calls).toBe(0);
+      expect(timers.delays()).toEqual([DRAFT_RETRY_CEILING_MS]);
+    }
+    disconnected = false;
+    for (let i = 0; i < DRAFT_RETRY_TIMER_ATTEMPTS; i += 1) {
+      expect(timers.size()).toBe(1);
+      timers.fire();
+      await settle();
+    }
+    expect(calls).toBe(DRAFT_RETRY_TIMER_ATTEMPTS);
+    expect(retries.pendingKeys()).toEqual([]);
+    expect(timers.size()).toBe(0);
+  });
+
+  test.each([false, true])("coalesces a timer and reconnect retry (fails: %s)", async (fails) => {
+    const { retries, timers } = setup();
+    let calls = 0;
+    const seq = retries.begin("k:env:tab");
+    retries.settled("k:env:tab", seq, { error: new Error("offline") }, async () => {
+      calls += 1;
+      if (fails) throw new Error("unavailable");
+    });
+    timers.fire();
+    retries.retryNow();
+    await settle();
+    expect(calls).toBe(1);
+    expect(timers.size()).toBe(fails ? 1 : 0);
+    expect(retries.pendingKeys()).toEqual(fails ? ["k:env:tab"] : []);
+  });
+
+  test.each([false, true])(
+    "an in-flight retry cannot settle a newer write (fails: %s)",
+    async (fails) => {
+      const { retries, timers } = setup();
+      const started = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const first = retries.begin("k:env:tab");
+      retries.settled("k:env:tab", first, { error: new Error("offline") }, async () => {
+        started.resolve();
+        await release.promise;
+      });
+      timers.fire();
+      await started.promise;
+      const newer = retries.begin("k:env:tab");
+      if (fails) release.reject(new Error("unavailable"));
+      else release.resolve();
+      await settle();
+      let newerCalls = 0;
+      retries.settled("k:env:tab", newer, { error: new Error("offline") }, async () => {
+        newerCalls += 1;
+      });
+      expect(retries.pendingKeys()).toEqual(["k:env:tab"]);
+      expect(timers.size()).toBe(1);
+      timers.fire();
+      await settle();
+      expect(newerCalls).toBe(1);
+      expect(retries.pendingKeys()).toEqual([]);
+      expect(timers.size()).toBe(0);
+    },
+  );
 
   test("flushInline runs the pending write and keeps it pending if it fails again", async () => {
     const { retries, timers } = setup();

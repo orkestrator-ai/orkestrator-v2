@@ -12,9 +12,9 @@
  *   instead of silently ignoring it.
  * - **Version 0** (a pre-contract node, §11.4): today's capability gating,
  *   from the hello's `capabilities`. A pre-contract leaf refuses any key it
- *   does not know, so the adapter removes the outbox flags it does not
- *   advertise and `turnOrigin` (an older leaf frames mail as it always did,
- *   so nothing is weakened), and refuses `steer`, `attachments` or a
+ *   does not know, so the adapter omits `turnOrigin` without its legacy
+ *   capability and removes the outbox
+ *   flags it does not advertise, and refuses `steer`, `attachments` or a
  *   `return_node_outbox_mail` without their capability with the same typed
  *   errors a contract node would answer, rather than dropping them;
  *   `prepare_node_mail_attachments` without `node-mail-attachments` is
@@ -52,7 +52,6 @@ import { nodeMailDomain } from "./domain.js";
  */
 export const NODE_MAIL_FEATURES = [
   BACKEND_CAPABILITIES.nodeMailSteer,
-  BACKEND_CAPABILITIES.nodeMailTurnOrigin,
   BACKEND_CAPABILITIES.nodeCoordinatorMail,
   BACKEND_CAPABILITIES.coordinatorNotices,
   BACKEND_CAPABILITIES.nodeMailAttachments,
@@ -134,10 +133,14 @@ function legacyApi(call: CommandCall, context: DomainAdapterContext): NodeMailAp
       if (present(args, "attachments") && !supports(BACKEND_CAPABILITIES.nodeMailAttachments)) {
         refuse("attachments");
       }
-      return call(
-        deliverNodeMailCommand,
-        withoutUnsupported(args, { turnOrigin: BACKEND_CAPABILITIES.nodeMailTurnOrigin }, supports),
-      );
+      // v2.36.5/6-beta advertise origin framing without a node-mail domain.
+      // Keep this legacy read until adapter 0 retires (8108); current hellos
+      // no longer advertise it. Older strict receivers must not see the key.
+      if (context.capabilities?.has("node-mail-turn-origin")) {
+        return call(deliverNodeMailCommand, args);
+      }
+      const { turnOrigin: _turnOrigin, ...legacyArgs } = args;
+      return call(deliverNodeMailCommand, legacyArgs);
     },
     projectCoordinator: (args) => call(getNodeProjectCoordinatorCommand, args),
     collectOutbox: (args) =>

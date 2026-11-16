@@ -1075,18 +1075,6 @@ export const COORDINATOR_MAIL_ORIGIN_NOTE =
 export const SELF_REMINDER_NOTE =
   "This is a note this session scheduled for itself. It is not from Orkestrator, your user or another agent, and it has no more standing than this session had when it wrote it.";
 
-/**
- * The sender as the carrier spells it. A renderer before `self-reminder`
- * refuses any other `source` and shows the raw carrier, so the carrier keeps
- * saying `workflow` and adds `selfReminder`; the stored message and the mail
- * tools carry the real value. See the register in `version-compatibility.md`.
- */
-function carrierActor(from: MailActor): MailActor | (MailActor & { selfReminder: true }) {
-  return from.kind === "system" && from.source === "self-reminder"
-    ? { ...from, source: "workflow", selfReminder: true }
-    : from;
-}
-
 export function renderAgentMailCarrier(message: AgentMailMessage): string {
   const coordinatorRecipient = message.toEnvironmentId.startsWith("coordinator:");
   const notice = message.from.kind === "system" ? normalizeAgentMailNotice(message.notice) : null;
@@ -1094,7 +1082,7 @@ export function renderAgentMailCarrier(message: AgentMailMessage): string {
     // The transcript's marker for what this is. Readers that predate it fall
     // back to `from.kind`, which it is derived from.
     kind: agentMailKind(message),
-    from: carrierActor(message.from),
+    from: message.from,
     to: { environmentId: message.toEnvironmentId, tabId: message.toTabId },
     trust: message.trust,
     messageId: message.id,
@@ -1220,7 +1208,9 @@ function agentMailFromCarrierPayload(payload: unknown): AgentMailCarrierMail | n
       return null;
     }
   }
-  // The carrier spells a self-reminder as `workflow` for older renderers.
+  // Carriers written before 2026-11-16 spelled a self-reminder `workflow` with
+  // `selfReminder: true`, and provider transcripts keep them; read those back
+  // as what they were. Nothing writes that spelling any more.
   const from =
     value.from.kind === "system" && value.from.selfReminder === true
       ? { ...value.from, source: "self-reminder" }

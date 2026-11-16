@@ -62,6 +62,7 @@ import {
   AgentPlatformSchema,
   ContainerResourceLimitsSchema,
   EnvironmentTypeSchema,
+  NetworkAccessModeSchema,
   PortMappingSchema,
 } from "../environments/models.js";
 
@@ -243,6 +244,12 @@ export const RepositoryConfigSchema = openRecord({
   defaultBranch: Schema.String,
   prBaseBranch: Schema.String,
   lastEnvironmentType: Schema.optional(EnvironmentTypeSchema),
+  /**
+   * The network access last chosen when launching a containerized build for
+   * this project. Backend-owned, recorded by `launch_build_pipeline`; the
+   * build launcher opens on it.
+   */
+  lastBuildNetworkAccessMode: Schema.optional(NetworkAccessModeSchema),
   /** @deprecated Legacy last-create state retained for older clients. */
   lastEnvironmentAgentSelection: Schema.optional(
     Schema.Struct({ platform: AgentPlatformSchema, mode: AgentLaunchModeSchema }),

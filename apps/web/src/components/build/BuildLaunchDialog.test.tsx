@@ -281,24 +281,53 @@ describe("BuildLaunchDialog", () => {
   describe("Network access", () => {
     const network = () => screen.getByRole("radiogroup", { name: "Network access" });
 
-    test("a container asks, opening on restricted and saying root setup steps need full", () => {
-      const { onConfirm } = renderDialog();
-      const restricted = within(network()).getByRole("radio", { name: /^Restricted/ });
-      expect((restricted as HTMLInputElement).checked).toBe(true);
-      expect(network().textContent).toContain("Root setup steps");
-      submit();
-      expect(onConfirm.mock.calls[0]![0].networkAccessMode).toBe("restricted");
-    });
+    const checked = (name: RegExp) =>
+      (within(network()).getByRole("radio", { name }) as HTMLInputElement).checked;
 
-    test("submits full access when chosen", () => {
+    test("a container asks, opening on full access and saying root setup steps need full", () => {
       const { onConfirm } = renderDialog();
-      fireEvent.click(within(network()).getByRole("radio", { name: /^Full access/ }));
+      expect(checked(/^Full access/)).toBe(true);
+      expect(checked(/^Restricted/)).toBe(false);
+      expect(network().textContent).toContain("Root setup steps");
       submit();
       expect(onConfirm.mock.calls[0]![0].networkAccessMode).toBe("full");
     });
 
+    test("opens on the project's last build choice", () => {
+      const { onConfirm } = renderDialog({ defaultNetworkAccessMode: "restricted" });
+      expect(checked(/^Restricted/)).toBe(true);
+      submit();
+      expect(onConfirm.mock.calls[0]![0].networkAccessMode).toBe("restricted");
+    });
+
+    test("submits restricted when chosen", () => {
+      const { onConfirm } = renderDialog();
+      fireEvent.click(within(network()).getByRole("radio", { name: /^Restricted/ }));
+      submit();
+      expect(onConfirm.mock.calls[0]![0].networkAccessMode).toBe("restricted");
+    });
+
+    test("a last choice that arrives while open applies until the user picks", () => {
+      const props = {
+        open: true,
+        onOpenChange: () => undefined,
+        catalog,
+        defaultAgent: "claude" as const,
+        defaultEnvironmentType: "containerized" as const,
+        onConfirm: () => undefined,
+      };
+      const { rerender } = renderInAppCommandScope(<BuildLaunchDialog {...props} />);
+      expect(checked(/^Full access/)).toBe(true);
+      rerender(<BuildLaunchDialog {...props} defaultNetworkAccessMode="restricted" />);
+      expect(checked(/^Restricted/)).toBe(true);
+      fireEvent.click(within(network()).getByRole("radio", { name: /^Full access/ }));
+      rerender(<BuildLaunchDialog {...props} defaultNetworkAccessMode="full" />);
+      rerender(<BuildLaunchDialog {...props} defaultNetworkAccessMode="restricted" />);
+      expect(checked(/^Full access/)).toBe(true);
+    });
+
     test("warns under restricted when the project's setup has root steps", () => {
-      renderDialog({ rootSetupSteps: 1 });
+      renderDialog({ rootSetupSteps: 1, defaultNetworkAccessMode: "restricted" });
       const warning = screen.getByRole("status");
       expect(warning.textContent).toContain(
         "has a root setup step. Root steps run only with Full access, because a command running as root could get round the restriction",
@@ -308,22 +337,28 @@ describe("BuildLaunchDialog", () => {
     });
 
     test("counts several root steps in the warning", () => {
-      renderDialog({ rootSetupSteps: 3 });
+      renderDialog({ rootSetupSteps: 3, defaultNetworkAccessMode: "restricted" });
       expect(screen.getByRole("status").textContent).toContain(
         "has 3 root setup steps. Root steps run only with Full access",
       );
     });
 
     test("no warning when the project has no root steps or the machine cannot tell", () => {
-      const { unmount } = renderDialog({ rootSetupSteps: 0 });
+      const { unmount } = renderDialog({
+        rootSetupSteps: 0,
+        defaultNetworkAccessMode: "restricted",
+      });
       expect(screen.queryByText(/root setup step/) === null).toBe(true);
       unmount();
-      renderDialog({ rootSetupSteps: null });
+      renderDialog({ rootSetupSteps: null, defaultNetworkAccessMode: "restricted" });
       expect(screen.queryByText(/root setup step/) === null).toBe(true);
     });
 
     test("names the project's Debian packages and the archive Restricted then reaches", () => {
-      renderDialog({ aptPackages: { packages: ["libvips-dev"], refused: [], invalid: false } });
+      renderDialog({
+        aptPackages: { packages: ["libvips-dev"], refused: [], invalid: false },
+        defaultNetworkAccessMode: "restricted",
+      });
       expect(screen.getByRole("status").textContent).toBe(
         "Setup installs a Debian package from Debian's archive (libvips-dev), so this environment can also reach deb.debian.org.",
       );
@@ -346,9 +381,9 @@ describe("BuildLaunchDialog", () => {
       );
     });
 
-    test("reopening the launcher asks again from restricted", () => {
+    test("reopening the launcher starts again from the project's last choice", () => {
       const { rerender } = renderDialog();
-      fireEvent.click(within(network()).getByRole("radio", { name: /^Full access/ }));
+      fireEvent.click(within(network()).getByRole("radio", { name: /^Restricted/ }));
       const props = {
         onOpenChange: () => undefined,
         catalog,
@@ -358,8 +393,7 @@ describe("BuildLaunchDialog", () => {
       };
       rerender(<BuildLaunchDialog {...props} open={false} />);
       rerender(<BuildLaunchDialog {...props} open />);
-      const restricted = within(network()).getByRole("radio", { name: /^Restricted/ });
-      expect((restricted as HTMLInputElement).checked).toBe(true);
+      expect(checked(/^Full access/)).toBe(true);
     });
   });
 
@@ -378,7 +412,7 @@ describe("BuildLaunchDialog", () => {
     };
     expect(onConfirm).toHaveBeenCalledWith({
       environmentType: "containerized",
-      networkAccessMode: "restricted",
+      networkAccessMode: "full",
       deliveryPolicy: "open-pr",
       steps: {
         build: shared,

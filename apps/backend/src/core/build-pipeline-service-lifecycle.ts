@@ -444,6 +444,33 @@ export class BuildPipelineLifecycle {
     return ticket?.sections?.delivery?.policy ?? input.deliveryPolicy;
   }
 
+  /**
+   * Records the network access a launcher chose for a new container, so the
+   * next build launched on this project opens on the same choice
+   * (`lastBuildNetworkAccessMode`). Only an explicit choice counts: a launch
+   * that sent none takes the backend's default, which nobody selected. A
+   * preference that fails to save never fails the admitted build.
+   */
+  private async rememberNetworkAccessMode(
+    pipeline: BuildPipeline,
+    existingEnvironment: Environment | null,
+  ): Promise<void> {
+    const networkAccessMode = pipeline.environmentOptions?.networkAccessMode;
+    if (existingEnvironment || pipeline.environmentType !== "containerized" || !networkAccessMode) {
+      return;
+    }
+    try {
+      await this.ctx.storage.patchRepositoryConfig(pipeline.projectId, {
+        lastBuildNetworkAccessMode: networkAccessMode,
+      });
+    } catch (error) {
+      log.warn("network-preference.save-failed", {
+        pipelineId: pipeline.id,
+        error: formatLogError(error),
+      });
+    }
+  }
+
   async start(
     input: StartBuildPipelineInput,
     coordinatorLaunchId?: string,
@@ -582,6 +609,7 @@ export class BuildPipelineLifecycle {
       this.ctx.provisioningPrompts.delete(pipeline.id);
       throw error;
     }
+    await this.rememberNetworkAccessMode(pipeline, existingEnvironment);
     // Provisioning is performed by the same per-pipeline supervisor lock used
     // by timer ticks. A tick that observes the just-persisted reservation joins
     // this pass instead of racing a second create_environment call.

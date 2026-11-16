@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
@@ -22,6 +22,8 @@ import type {
 } from "@/types/linear";
 import { appCommandStore } from "@/test/app-command-store";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
+import type { NodeSummary } from "@orkestrator/protocol/node-summaries";
+import { portalStore } from "@/lib/portal/portal-store";
 
 const realBackendSnapshot = { ...realBackend };
 
@@ -892,7 +894,7 @@ describe("LinearTicketsView", () => {
 
     expect(await screen.findByRole("heading", { name: "Configure build" })).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: /^Container/ }));
-    fireEvent.click(screen.getByRole("radio", { name: /^Full access/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /^Restricted/ }));
     fireEvent.click(screen.getByRole("button", { name: "Start build" }));
 
     await waitFor(() => {
@@ -900,9 +902,86 @@ describe("LinearTicketsView", () => {
         issueDetail,
         "project-1",
         "containerized",
-        expect.objectContaining({ networkAccessMode: "full" }),
+        expect.objectContaining({ networkAccessMode: "restricted" }),
       );
     });
+  });
+
+  test("starts the build on the machine picked in the launcher", async () => {
+    // Another machine holding the same repository, with a checkout there.
+    const builder = {
+      nodeId: "node-builder",
+      available: true,
+      view: { displayName: "Builder" },
+      projects: [
+        {
+          ref: { backendId: "node-builder", projectId: "builder-web" },
+          key: "node-builder:builder-web",
+          name: "web",
+          order: 0,
+          repositoryHint: "github.com/acme/web",
+          pathName: "web",
+        },
+      ],
+      environments: [],
+    } as unknown as NodeSummary;
+    const initialPortal = portalStore.store.getState();
+    const routed = spyOn(portalStore, "invokeOnNode").mockImplementation((async (
+      _nodeId: unknown,
+      command: string,
+    ) =>
+      command === "check_docker"
+        ? { available: true }
+        : undefined) as unknown as typeof portalStore.invokeOnNode);
+    try {
+      portalStore.store.setState({ nodes: [builder] });
+      appCommandStore(projectStore).setState({
+        projects: [
+          {
+            id: "project-1",
+            name: "Web",
+            gitUrl: "https://github.com/acme/web.git",
+            localPath: "/work/web",
+            addedAt: "2026-08-11T00:00:00.000Z",
+            order: 0,
+          },
+        ],
+      });
+      renderLinearTicketsView();
+      fireEvent.click(await screen.findByText("Add Linear integration"));
+      await screen.findByText("Build Linear support");
+      fireEvent.click(screen.getByRole("button", { name: /^build/i }));
+
+      const machines = await screen.findByRole("radiogroup", { name: "Machine" });
+      fireEvent.click(within(machines).getByRole("radio", { name: /Builder/ }));
+      const container = () =>
+        within(screen.getByRole("radiogroup", { name: "Where it runs" })).getByRole("radio", {
+          name: /^Container/,
+        }) as HTMLInputElement;
+      await waitFor(() => expect(container().disabled).toBe(false));
+      fireEvent.click(container());
+      fireEvent.click(screen.getByRole("button", { name: "Start build" }));
+
+      await waitFor(() => {
+        expect(startBuildFromLinearIssueMock).toHaveBeenCalledWith(
+          issueDetail,
+          "project-1",
+          "containerized",
+          expect.objectContaining({
+            networkAccessMode: "full",
+            machine: {
+              machine: "node-builder",
+              nodeId: "node-builder",
+              projectId: "builder-web",
+              name: "Builder",
+            },
+          }),
+        );
+      });
+    } finally {
+      routed.mockRestore();
+      portalStore.store.setState(initialPortal, true);
+    }
   });
 
   test("redirects an open launcher when a build becomes active in the background", async () => {

@@ -332,6 +332,11 @@ interface BuildLaunchDialogProps {
   catalog: AgentModelCatalog;
   defaultAgent: LaunchAgent;
   defaultEnvironmentType: EnvironmentType;
+  /**
+   * The container network access the dialog opens on: the project's last
+   * build choice (`buildLaunchDefaults`). Full access when absent.
+   */
+  defaultNetworkAccessMode?: NetworkAccessMode;
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
   preferredFastModes?: Partial<Record<LaunchAgent, boolean>>;
@@ -801,6 +806,7 @@ export function BuildLaunchDialog({
   catalog,
   defaultAgent,
   defaultEnvironmentType,
+  defaultNetworkAccessMode = "full",
   preferredModels,
   preferredReasoningEfforts,
   preferredFastModes,
@@ -852,9 +858,10 @@ export function BuildLaunchDialog({
     ? pickedMachine?.hasCheckout === true
     : ownLocalEnvironmentAvailable;
   const [environmentType, setEnvironmentType] = useState(defaultEnvironmentType);
-  // Pipelines have always created restricted containers; the launcher now
-  // shows that choice instead of making it silently.
-  const [networkAccessMode, setNetworkAccessMode] = useState<NetworkAccessMode>("restricted");
+  // Opens on the project's last build choice; the backend records each
+  // launch's choice (`lastBuildNetworkAccessMode`).
+  const [networkAccessMode, setNetworkAccessMode] =
+    useState<NetworkAccessMode>(defaultNetworkAccessMode);
   const [steps, setSteps] = useState(() =>
     initialSteps(
       defaultAgent,
@@ -958,7 +965,7 @@ export function BuildLaunchDialog({
         }
         return defaultEnvironmentType;
       });
-      setNetworkAccessMode("restricted");
+      setNetworkAccessMode(defaultNetworkAccessMode);
       setIncludeComments(commentContext?.defaultIncluded ?? true);
       setDeliveryChoice(effectiveDeliveryPolicy(deliveryPolicy));
       setInstructions({});
@@ -969,6 +976,9 @@ export function BuildLaunchDialog({
     if (!open) return;
     if (!touchedRef.current.has("deliveryPolicy")) {
       setDeliveryChoice(effectiveDeliveryPolicy(deliveryPolicy));
+    }
+    if (!touchedRef.current.has("networkAccessMode")) {
+      setNetworkAccessMode(defaultNetworkAccessMode);
     }
     const nextSteps = initialSteps(
       defaultAgent,
@@ -1016,6 +1026,7 @@ export function BuildLaunchDialog({
     commentContext?.defaultIncluded,
     defaultAgent,
     defaultEnvironmentType,
+    defaultNetworkAccessMode,
     deliveryPolicy,
     dockerAvailable,
     localEnvironmentAvailable,
@@ -1319,7 +1330,10 @@ export function BuildLaunchDialog({
                             type="radio"
                             name={`${networkGroupId}-network`}
                             checked={selected}
-                            onChange={() => setNetworkAccessMode(option.value)}
+                            onChange={() => {
+                              touchedRef.current.add("networkAccessMode");
+                              setNetworkAccessMode(option.value);
+                            }}
                             className="peer sr-only"
                           />
                           <label

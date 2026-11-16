@@ -280,6 +280,26 @@ describe("buildLaunchDefaults", () => {
       "containerized",
     );
   });
+
+  test("opens on the project's last build network access, else full access", () => {
+    expect(
+      buildLaunchDefaults(
+        makeConfig({ lastBuildNetworkAccessMode: "restricted" }),
+        "project-1",
+        false,
+      ).defaultNetworkAccessMode,
+    ).toBe("restricted");
+    expect(
+      buildLaunchDefaults(makeConfig({ lastBuildNetworkAccessMode: "full" }), "project-1", false)
+        .defaultNetworkAccessMode,
+    ).toBe("full");
+    expect(buildLaunchDefaults(makeConfig(), "project-1", false).defaultNetworkAccessMode).toBe(
+      "full",
+    );
+    expect(
+      buildLaunchDefaults(makeConfig(), "unknown-project", false).defaultNetworkAccessMode,
+    ).toBe("full");
+  });
 });
 
 describe("buildPipelineConfiguredDefaults", () => {

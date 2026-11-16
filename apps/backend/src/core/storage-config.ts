@@ -620,11 +620,15 @@ export class ConfigRepository {
       const userSettings = { ...repoConfig };
       delete userSettings.lastEnvironmentType;
       delete userSettings.lastEnvironmentAgentSelection;
+      delete userSettings.lastBuildNetworkAccessMode;
       config.repositories[projectId] = {
         ...defaultRepositoryConfig(),
         ...userSettings,
         ...(current.lastEnvironmentType !== undefined
           ? { lastEnvironmentType: current.lastEnvironmentType }
+          : {}),
+        ...(current.lastBuildNetworkAccessMode !== undefined
+          ? { lastBuildNetworkAccessMode: current.lastBuildNetworkAccessMode }
           : {}),
         ...(current.lastEnvironmentAgentSelection !== undefined
           ? {
@@ -653,7 +657,11 @@ export class ConfigRepository {
       const config = await this.loadOwnConfig();
       const current = config.repositories[projectId] ?? defaultRepositoryConfig();
       const userUpdates = { ...updates } as Record<string, unknown>;
-      const backendOwned = new Set(["lastEnvironmentType", "lastEnvironmentAgentSelection"]);
+      const backendOwned = new Set([
+        "lastEnvironmentType",
+        "lastEnvironmentAgentSelection",
+        "lastBuildNetworkAccessMode",
+      ]);
       for (const key of backendOwned) delete userUpdates[key];
       const next = { ...current, ...userUpdates } as Record<string, unknown>;
       for (const key of unset) if (!backendOwned.has(key)) delete next[key];

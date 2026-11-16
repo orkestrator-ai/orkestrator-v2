@@ -44,6 +44,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { BuildLaunchDialog, type BuildLaunchSelection } from "@/components/build/BuildLaunchDialog";
+import { useBuildLaunchMachines } from "@/components/build/build-machines";
 import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
@@ -262,6 +263,8 @@ export function LinearTicketsViewContent({
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
   const pipelineStore = useNodeScope().store(buildPipelineStore);
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
+  // Every connected machine holding a project for this repository can run the build.
+  const buildMachines = useBuildLaunchMachines(projectId);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const { startBuildFromLinearIssue, navigateToPipeline } = buildPipeline;
   const { catalog: launchCatalog, defaults: launchDefaults } = useBuildLaunchOptions(
@@ -572,6 +575,7 @@ export function LinearTicketsViewContent({
         includeComments: selection.includeComments ?? true,
         deliveryPolicy: selection.deliveryPolicy,
         networkAccessMode: selection.networkAccessMode,
+        machine: selection.machine,
       });
     } finally {
       setIsBuildStarting(false);
@@ -907,6 +911,7 @@ export function LinearTicketsViewContent({
           onOpenChange={setBuildDialogOpen}
           catalog={launchCatalog}
           busy={isBuildStarting}
+          machines={buildMachines}
           localEnvironmentAvailable={localEnvironmentAvailable}
           returnFocusRef={buildLaunchTriggerRef}
           commentContext={

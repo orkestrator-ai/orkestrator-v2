@@ -60,6 +60,7 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
   create_kanban_label: ["projectId", "name", "color", "description"],
   set_kanban_task_label: ["taskId", "name", "present", "projectId"],
   delete_kanban_task: ["taskId"],
+  delete_idle_kanban_task: ["taskId", "projectId"],
   add_kanban_comment: ["requestId", "taskId", "text", "projectId"],
   delete_kanban_comment: ["taskId", "commentId"],
   add_kanban_image: ["taskId", "filename", "data"],
@@ -161,9 +162,9 @@ function argsError(def: AnyCommandDef, raw: unknown): string {
 }
 
 describe("kanban definitions", () => {
-  it("cover the 41 commands once, the Linear board ones since version 2", () => {
-    expect(ALL).toHaveLength(41);
-    expect(new Set(ALL.map((def) => def.name)).size).toBe(41);
+  it("cover the 42 commands once, the Linear board ones since version 2", () => {
+    expect(ALL).toHaveLength(42);
+    expect(new Set(ALL.map((def) => def.name)).size).toBe(42);
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(HANDLER_KEYS).sort());
     for (const def of ALL) {
       expect({ name: def.name, since: def.since, domain: def.domain.name }).toEqual({
@@ -208,6 +209,7 @@ describe("kanban definitions", () => {
       ALL.filter((def) => def.critical.length).map((def) => [def.name, [...def.critical]]),
     );
     expect(critical).toEqual({
+      delete_idle_kanban_task: ["projectId"],
       add_kanban_task: ["requestId", "markdown", "sections", "labels"],
       update_kanban_task: ["markdown", "sections", "labels", "preserveDoneStatus"],
       set_kanban_task_label: ["projectId"],

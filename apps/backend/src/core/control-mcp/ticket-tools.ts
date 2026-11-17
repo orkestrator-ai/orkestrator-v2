@@ -389,9 +389,6 @@ export function registerTicketTools(
   if (!operator) registerDeleteTicketTool(server, invoke);
 }
 
-/** Statuses in which a ticket's linked environment or build may still be working on it. */
-const ACTIVE_TICKET_STATUSES = new Set(["in-progress", "review"]);
-
 /**
  * `delete_ticket`: removes a ticket from this board, which syncs the deletion
  * to every machine with the project. A ticket with work still attached is
@@ -405,7 +402,7 @@ function registerDeleteTicketTool(server: McpServer, invoke: ControlMcpToolConte
       title: "Delete a Kanban ticket",
       description:
         "Permanently delete a ticket, with its comments and images, from every machine with this project. Only for a ticket the user asked to remove, or one you made by mistake or merged into another. " +
-        "Refused while it is in progress or in review with a build or environment attached. Not found means it is not on this project's board.",
+        "Refused while work is attached or a pipeline is active. Not found means it is not on this project's board.",
       inputSchema: toolInput(
         Schema.Struct({
           projectId: str({ trim: true, min: 1, max: 200 }),
@@ -415,13 +412,13 @@ function registerDeleteTicketTool(server: McpServer, invoke: ControlMcpToolConte
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
-        idempotentHint: true,
+        idempotentHint: false,
         openWorldHint: false,
       },
     },
     async ({ projectId, ticketId }) => {
       // Reading through the project first is what scopes the delete: the
-      // delete command itself takes only the ticket id.
+      // storage also rechecks project membership under its mutation lease.
       const existing = asArray(await invoke("get_kanban_tasks", { projectId })).find(
         (candidate) => candidate.id === ticketId,
       );
@@ -430,10 +427,10 @@ function registerDeleteTicketTool(server: McpServer, invoke: ControlMcpToolConte
       if (activeWork) {
         throw new Error(
           `Ticket ${ticketId} is ${String(existing.status)} with ${activeWork} attached, so it was not deleted. ` +
-            "Finish or cancel that work, and move the ticket to backlog or done, before deleting it.",
+            "Finish or cancel that work before deleting it.",
         );
       }
-      await invoke("delete_kanban_task", { taskId: ticketId });
+      await invoke("delete_idle_kanban_task", { taskId: ticketId, projectId });
       return toolResult({
         deleted: true,
         ticket: { id: existing.id, projectId, title: existing.title, status: existing.status },
@@ -444,12 +441,17 @@ function registerDeleteTicketTool(server: McpServer, invoke: ControlMcpToolConte
 
 /** What still works on a ticket, worded for a refusal; null when nothing does. */
 function activeTicketWork(task: JsonRecord): string | null {
-  if (typeof task.status !== "string" || !ACTIVE_TICKET_STATUSES.has(task.status)) return null;
-  if (typeof task.buildPipelineId === "string" && task.buildPipelineId) {
-    return `build pipeline ${task.buildPipelineId}`;
-  }
-  if (typeof task.environmentId === "string" && task.environmentId) {
-    return `environment ${task.environmentId}`;
+  if (task.status === "done") return null;
+  const sync = isRecord(task.sync) && isRecord(task.sync.work) ? task.sync.work : null;
+  for (const work of [task, sync]) {
+    if (!work) continue;
+    const node = typeof work.nodeId === "string" ? ` on node ${work.nodeId}` : "";
+    if (typeof work.buildPipelineId === "string" && work.buildPipelineId) {
+      return `build pipeline ${work.buildPipelineId}${node}`;
+    }
+    if (typeof work.environmentId === "string" && work.environmentId) {
+      return `environment ${work.environmentId}${node}`;
+    }
   }
   return null;
 }

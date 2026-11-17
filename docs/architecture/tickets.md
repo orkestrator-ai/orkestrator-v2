@@ -194,16 +194,18 @@ set). A command node coordinator's ticket tools also take a
 
 Coordinators delete a ticket with `delete_ticket` (`projectId`, `ticketId`;
 `control-mcp/ticket-tools.ts`), for a ticket the user asked to remove or one
-the coordinator made by mistake or merged into another. It reads the ticket
-through the project first, because the `delete_kanban_task` command behind it
-takes only the ticket id, then deletes it the way the board's Delete button
-does: comments and images go with it, and the deletion syncs to every machine
-with the project. The tool refuses a ticket that is `in-progress` or `review`
-with a build pipeline or environment attached, so a running build never loses
-its ticket; the coordinator finishes or cancels that work first. It takes no
+the coordinator made by mistake or merged into another. It scopes the initial read to the project, then uses
+`delete_idle_kanban_task` to recheck project membership and work under the
+board and pipeline-admission leases before removal. Comments and images go
+with it, and the deletion syncs to every machine with the project. Local and
+remote `sync.work` links block non-done tickets, including backlog setup work.
+Any nonterminal pipeline reservation for the ticket blocks deletion regardless
+of column or source-link timing. Done tickets with historical links can be
+removed once their pipeline is terminal. Admission refuses deleted tickets so
+a pending launch cannot start after removal. It takes no
 `nodeId` (a ticket made only on a leaf cannot be deleted from here) and no
 `requestId`: deleting is keyed by the ticket id, and a retry after the ticket
-is gone answers "not found". Worker agent tools, graph activations and
+is gone answers "not found"; its idempotency hint is false. Worker agent tools, graph activations and
 operator credentials have no delete tool; operators' ticket tools are adapters
 over public actions, and there is no `ticket.delete` action.
 

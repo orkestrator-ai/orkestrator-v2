@@ -26,6 +26,7 @@ import {
   deleteKanbanCommentCommand,
   deleteKanbanImageCommand,
   deleteKanbanTaskCommand,
+  deleteIdleKanbanTaskCommand,
   getFeaturePlansCommand,
   getKanbanImageDataCommand,
   getKanbanLabelsCommand,
@@ -227,6 +228,9 @@ export function registerKanbanCommands(
       args.projectId === undefined ? undefined : asNonBlankString(args.projectId, "projectId"),
     );
   });
+  register(deleteIdleKanbanTaskCommand, ({ taskId, projectId }, { storage }) =>
+    storage.kanban.deleteKanbanTask(taskId, projectId),
+  );
   register(deleteKanbanTaskCommand, ({ taskId }, { storage }) =>
     storage.kanban.deleteKanbanTask(asString(taskId, "taskId")),
   );

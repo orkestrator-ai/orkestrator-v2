@@ -1,5 +1,5 @@
-import { PhysicalKeyResolver } from "./change-tracking/index.js";
-import type { WorktreeLookup } from "./worktree-adhoc-reads.js";
+import { PhysicalKeyResolver } from "../change-tracking/index.js";
+import type { WorktreeLookup } from "./adhoc-reads.js";
 
 /** Owns readers independently of the ad hoc join cache, which invalidation can drop. */
 export class WorktreeRemovalReads {

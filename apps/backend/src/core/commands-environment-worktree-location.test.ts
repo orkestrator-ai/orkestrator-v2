@@ -11,7 +11,7 @@ import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 import { createProject, StorageService } from "./storage.js";
 import { coordinatorAttachmentsRoot } from "./storage-coordinators.js";
-import { updateWorktreeLocations } from "./worktree-locations.js";
+import { updateWorktreeLocations } from "./worktrees/index.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { CoordinatorService } from "./coordinator-service.js";
 

@@ -11,7 +11,7 @@ are relative to `apps/backend/src/core/`.
 | `commands-files.ts` | `enableGitScanCaches` (new worktrees), `getLocalGitStatusDetailed` (diff stats), `buildContainerGitStatusScript` |
 | `git-diff-summary.ts` | The `git diff --raw --numstat -z` parser every scan uses |
 | `local-git-scan-caches.ts` | Per-worktree untracked line counts and the exclude-file memo |
-| `worktree-watcher.ts`, `worktree-watch-plan.ts` | The hints that start a scan, and which subtrees they leave out |
+| `worktrees/watcher.ts`, `worktrees/watch-plan.ts` | The hints that start a scan, and which subtrees they leave out |
 | `git-fsmonitor.ts` | Daemon stop, removal of the legacy setting, timeout fallback |
 | `review-validation-worker.ts`, `review-worktree-fingerprint.ts` | Environment-side status reads with their own fallback |
 
@@ -118,7 +118,7 @@ invalidates the first scan (to-do 8112, retired 2026-11-16):
 
 Delaying the first scan until coverage is qualified would save the scan, but
 the badge would then wait for the plan's Git reads and any large-tree
-measurement. `worktree-watcher-split.test.ts` ("the first plan reports the
+measurement. `worktrees/watcher-split.test.ts` ("the first plan reports the
 interval before its subdirectory watches existed") and
 `diff-stats-service.test.ts` ("the establishing watcher's hint during the
 track scan buys the first qualified list") pin this behaviour.
@@ -187,7 +187,7 @@ other than `node_modules` once its subtree holds more than
   rename or removal of a large tree replans before the plan moves.
 
 macOS keeps one recursive root with no per-directory cost and measures nothing.
-`worktree-watcher-large-ignored.test.ts` covers the watcher with a fake plan, and
+`worktrees/watcher-large-ignored.test.ts` covers the watcher with a fake plan, and
 `worktree-watcher-real.test.ts` with real Git and real watches (2,001 ignored
 directories, the per-directory plan forced on macOS). The live check on a loaded
 Linux host is to-do
@@ -227,7 +227,7 @@ about 11 GB resident after seven days, and the first event took 3 to 35 s to arr
 callback counts are not usable: before was 54 and 6, after was 6 and 12. What holds
 there is the behaviour: `worktree-watcher-real.test.ts` shows the same write under
 `node_modules` reported with the plan off and not with it on, and
-`worktree-snapshots-git.test.ts` shows it through the real service, where an explicitly delivered
+`worktrees/snapshots-git.test.ts` shows it through the real service, where an explicitly delivered
 ignored-path event starts no scan and a later source-path event is detected.
 That assertion withholds native callbacks so unrelated late delivery cannot
 contaminate its counters; separate detection cases retain native coverage. That host also

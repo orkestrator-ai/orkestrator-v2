@@ -4,7 +4,7 @@
 
 The review of `fddcaab5869bdc0c426a1794f35ad76c953e4418` reported no code
 defects, but lacked recorded evidence of ten consecutive passing executions of
-`apps/backend/src/core/worktree-watcher-large-ignored.test.ts`. The following
+`apps/backend/src/core/worktrees/watcher-large-ignored.test.ts`. The following
 ten fresh-process executions ran sequentially at that exact commit, with a clean
 working tree, on 2026-11-16. All exited 0. No test or production source changed
 during these runs.
@@ -12,7 +12,7 @@ during these runs.
 ```bash
 for i in {1..10}; do
   mise run test:logged -- --name watcher-stability-${i} -- \
-    bun test --cwd apps/backend ./src/core/worktree-watcher-large-ignored.test.ts \
+    bun test --cwd apps/backend ./src/core/worktrees/watcher-large-ignored.test.ts \
     --parallel=1 --only-failures || exit $?
 done
 ```
@@ -96,7 +96,7 @@ These are the primary worker's observed results; the snapshot limitations are in
 
 | Command / label | Actual snapshot and result |
 | --- | --- |
-| `mise run test:logged -- --name watcher-budget-contract -- bun test --cwd apps/backend ./tests/diff-stats-service.test.ts ./src/core/worktree-snapshots.test.ts ./src/core/worktree-watcher-split.test.ts --parallel=1 --only-failures` | Passed 6.2 s in the isolated checkout while HEAD was `33faa9c5` and the retry-test correction was uncommitted. The source bytes became 894; this is **not immutable-894 evidence**. |
+| `mise run test:logged -- --name watcher-budget-contract -- bun test --cwd apps/backend ./tests/diff-stats-service.test.ts ./src/core/worktrees/snapshots.test.ts ./src/core/worktrees/watcher-split.test.ts --parallel=1 --only-failures` | Passed 6.2 s in the isolated checkout while HEAD was `33faa9c5` and the retry-test correction was uncommitted. The source bytes became 894; this is **not immutable-894 evidence**. |
 | `mise run test:logged -- --name watcher-retry-final-check -- mise run check` | Passed 26.5 s after 894 committed, in the isolated checkout. Format, lint and typechecking; passing raw logs removed. |
 | `mise run test:logged -- --name watcher-retry-final-build -- mise run build` | Passed 8.7 s after 894 committed, in the isolated checkout. Passing raw logs removed. |
 | `watcher-final-linux` | Passed 8.4 s at `33faa9c5`: Bun 1.4.4, Docker dev image `56a1f7a4d5a2`, uid 1000, network disabled/capabilities dropped, no credentials. Real-watcher source/dependencies stayed identical through 894. Exact canonical invocation/result remains pending below. |
@@ -404,8 +404,8 @@ These ran at clean ccf46a4d4 before the coverage follow-up. They are historical 
 | `mise run test:logged -- --name review-typecheck -- mise run typecheck` | Pass, 8.6 s |
 | `mise run test:logged -- --name review-build -- mise run build` | Pass, 4.5 s |
 | `mise run test:logged -- --name review-tests -- mise run test` | Exit 1, 1800.2 s; outer absolute deadline after about 1779 s capacity wait, lockfile passed and remaining groups interrupted |
-| `mise run test:logged -- --name review-watcher-slow -- bun test --cwd apps/backend ./src/core/worktree-snapshots-git.test.ts ./tests/worktree-watcher-real.test.ts ./tests/worktree-watcher.test.ts --parallel=1 --only-failures` | Pass, 42.1 s on macOS; does not qualify Linux permission behavior |
-| `mise run test:logged -- --name review-changed-owners -- bun test --cwd apps/backend ./src/core/worktree-watcher-split.test.ts ./src/core/worktree-snapshots.test.ts --parallel=1 --only-failures` | Pass, 1.6 s |
+| `mise run test:logged -- --name review-watcher-slow -- bun test --cwd apps/backend ./src/core/worktrees/snapshots-git.test.ts ./tests/worktree-watcher-real.test.ts ./tests/worktree-watcher.test.ts --parallel=1 --only-failures` | Pass, 42.1 s on macOS; does not qualify Linux permission behavior |
+| `mise run test:logged -- --name review-changed-owners -- bun test --cwd apps/backend ./src/core/worktrees/watcher-split.test.ts ./src/core/worktrees/snapshots.test.ts --parallel=1 --only-failures` | Pass, 1.6 s |
 
 Earlier failure evidence: `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.VagsX4/review-tests.log.gz`; inner partial group logs were preserved under `orkestrator-test-run.JHl54l/*.log.gz`.
 

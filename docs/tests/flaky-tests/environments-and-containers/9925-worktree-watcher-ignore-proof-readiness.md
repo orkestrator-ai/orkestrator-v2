@@ -11,7 +11,7 @@
 
 ## Observation
 
-`mise run test:logged -- --name coverage-real-final -- bun test --cwd apps/backend ./tests/worktree-watcher-real.test.ts ./tests/worktree-watcher.test.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`
+`mise run test:logged -- --name coverage-real-final -- bun test --cwd apps/backend ./tests/worktree-watcher-real.test.ts ./tests/worktree-watcher.test.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures`
 failed with 54 pass, 3 skip and 2 fail across three files in 50.52 s.
 The ignored-write test collected both `node_modules/pkg-1/lib/installed.js`
 and `packages/app/node_modules/pkg-1/lib/installed.js` instead of an empty

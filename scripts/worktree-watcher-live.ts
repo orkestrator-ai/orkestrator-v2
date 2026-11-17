@@ -25,8 +25,8 @@ import {
   WATCH_SETTLE_MS,
   type WorktreeChangeHint,
   type WorktreeWatcher,
-} from "../apps/backend/src/core/worktree-watcher";
-import { worktreeWatchPlanIo } from "../apps/backend/src/core/worktree-watch-plan";
+} from "../apps/backend/src/core/worktrees/watcher";
+import { worktreeWatchPlanIo } from "../apps/backend/src/core/worktrees/watch-plan";
 
 interface Options {
   saves: number;

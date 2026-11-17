@@ -9,8 +9,8 @@ import {
   type StartWatch,
   WATCH_BURST_OVERFLOW_EVENTS,
   WATCH_SETTLE_MS,
-} from "../src/core/worktree-watcher";
-import { relevantRefPaths, resolveWorktreeGitPaths } from "../src/core/worktree-git-paths";
+} from "../src/core/worktrees/watcher";
+import { relevantRefPaths, resolveWorktreeGitPaths } from "../src/core/worktrees/git-paths";
 
 const cleanups: Array<() => void | Promise<void>> = [];
 

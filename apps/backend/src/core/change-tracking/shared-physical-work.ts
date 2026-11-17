@@ -22,7 +22,7 @@ import type {
   WorktreeChangeHint,
   WorktreeWatcher,
   WorktreeWatcherOptions,
-} from "../worktree-watcher.js";
+} from "../worktrees/index.js";
 
 /** Canonical physical key for a host path or container (cached per input). */
 export class PhysicalKeyResolver {

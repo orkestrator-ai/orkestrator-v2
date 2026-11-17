@@ -11,7 +11,7 @@ function open(name = "Download Home") {
 describe("DesignFrameDownloadMenu", () => {
   afterEach(cleanup);
 
-  test("one selected frame offers PNG, WEBP and PDF, plus every frame on the canvas", async () => {
+  test("one selected frame offers copy PNG/WEBP and download PNG/WEBP/PDF, plus every frame", async () => {
     const onDownload = mock(() => Promise.resolve());
     render(
       <DesignFrameDownloadMenu
@@ -20,6 +20,8 @@ describe("DesignFrameDownloadMenu", () => {
         selectedCount={1}
         frameCount={3}
         onDownload={onDownload}
+        onCopy={() => Promise.resolve()}
+        copyFormats={new Set(["png", "webp"])}
       />,
     );
     const menu = await open();
@@ -32,7 +34,7 @@ describe("DesignFrameDownloadMenu", () => {
       within(groups[0]!)
         .getAllByRole("menuitem")
         .map((item) => item.textContent),
-    ).toEqual(["PNG image", "WEBP image", "PDF document"]);
+    ).toEqual(["Copy PNG", "Copy WEBP", "Download PNG", "Download WEBP", "Download PDF"]);
     expect(
       within(groups[1]!)
         .getAllByRole("menuitem")
@@ -41,7 +43,7 @@ describe("DesignFrameDownloadMenu", () => {
     expect(within(menu).queryByRole("group", { name: /Selected frames/ }) === null).toBe(true);
 
     await act(async () => {
-      fireEvent.click(within(groups[0]!).getByRole("menuitem", { name: "WEBP image" }));
+      fireEvent.click(within(groups[0]!).getByRole("menuitem", { name: "Download WEBP" }));
     });
     expect(onDownload).toHaveBeenCalledWith("frame", "webp");
   });
@@ -55,6 +57,7 @@ describe("DesignFrameDownloadMenu", () => {
         selectedCount={2}
         frameCount={4}
         onDownload={onDownload}
+        onCopy={() => Promise.resolve()}
       />,
     );
     const menu = await open();
@@ -79,6 +82,7 @@ describe("DesignFrameDownloadMenu", () => {
         selectedCount={1}
         frameCount={1}
         onDownload={() => Promise.resolve()}
+        onCopy={() => Promise.resolve()}
       />,
     );
     const menu = await open();
@@ -96,15 +100,69 @@ describe("DesignFrameDownloadMenu", () => {
         selectedCount={1}
         frameCount={2}
         onDownload={onDownload}
+        onCopy={() => Promise.resolve()}
       />,
     );
     const menu = await open();
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "PDF document" }));
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Download PDF" }));
     const trigger = screen.getByRole("button", { name: "Download Home" });
     await waitFor(() => expect(trigger.hasAttribute("disabled")).toBe(true));
     expect(trigger.getAttribute("aria-busy")).toBe("true");
     await act(async () => finish());
     await waitFor(() => expect(trigger.hasAttribute("disabled")).toBe(false));
+  });
+
+  test("copy items copy this frame and only offer formats the clipboard accepts", async () => {
+    const onCopy = mock(() => Promise.resolve());
+    render(
+      <DesignFrameDownloadMenu
+        frameName="Home"
+        frameSelected
+        selectedCount={2}
+        frameCount={3}
+        onDownload={() => Promise.resolve()}
+        onCopy={onCopy}
+        copyFormats={new Set(["png"])}
+      />,
+    );
+    const menu = await open();
+    const items = (name: string) =>
+      within(within(menu).getByRole("group", { name }))
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent);
+    expect(items("This frame")).toEqual([
+      "Copy PNG",
+      "Download PNG",
+      "Download WEBP",
+      "Download PDF",
+    ]);
+    // Several frames cannot share one clipboard image.
+    expect(items("Selected frames (2)").some((label) => label?.startsWith("Copy"))).toBe(false);
+    expect(items("All frames (3)").some((label) => label?.startsWith("Copy"))).toBe(false);
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy PNG" }));
+    });
+    expect(onCopy).toHaveBeenCalledWith("png");
+  });
+
+  test("a client that cannot copy images offers downloads only", async () => {
+    render(
+      <DesignFrameDownloadMenu
+        frameName="Home"
+        frameSelected
+        selectedCount={1}
+        frameCount={1}
+        onDownload={() => Promise.resolve()}
+        onCopy={() => Promise.resolve()}
+        copyFormats={new Set()}
+      />,
+    );
+    const menu = await open();
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Download PNG", "Download WEBP", "Download PDF"]);
   });
 
   test("blue while the frame is selected, grey while only an element inside it is", () => {
@@ -115,6 +173,7 @@ describe("DesignFrameDownloadMenu", () => {
         selectedCount={1}
         frameCount={2}
         onDownload={() => Promise.resolve()}
+        onCopy={() => Promise.resolve()}
       />,
     );
     const trigger = () => screen.getByRole("button", { name: "Download Home" });
@@ -129,6 +188,7 @@ describe("DesignFrameDownloadMenu", () => {
         selectedCount={0}
         frameCount={2}
         onDownload={() => Promise.resolve()}
+        onCopy={() => Promise.resolve()}
       />,
     );
     expect(trigger().hasAttribute("data-frame-selected")).toBe(false);
@@ -145,6 +205,7 @@ describe("DesignFrameDownloadMenu", () => {
         selectedCount={0}
         frameCount={2}
         onDownload={onDownload}
+        onCopy={() => Promise.resolve()}
       />,
     );
     const menu = await open();
@@ -154,7 +215,7 @@ describe("DesignFrameDownloadMenu", () => {
         .map((group) => group.getAttribute("aria-label")),
     ).toEqual(["This frame", "All frames (2)"]);
     await act(async () => {
-      fireEvent.click(within(menu).getByRole("menuitem", { name: "PNG image" }));
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Download PNG" }));
     });
     expect(onDownload).toHaveBeenCalledWith("frame", "png");
   });

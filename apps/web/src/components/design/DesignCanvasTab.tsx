@@ -28,6 +28,7 @@ import {
   type GeometryPatch,
 } from "./design-canvas-context";
 import { downloadBlob } from "@/lib/chat/artifact-download";
+import { writeImage as writeClipboardImage } from "@/lib/clipboard-image-write";
 import { failureOf, importDesignDocument } from "@/lib/design-client";
 import { useDesignApi, useDesignScope } from "./design-scope";
 import { useDesignCanvas } from "./design-controller";
@@ -57,7 +58,9 @@ import { DesignExportDialog } from "./DesignExportDialog";
 import { DesignFrameInspector } from "./DesignFrameInspector";
 import { DesignFrameView } from "./DesignFrameView";
 import {
+  copyFrame,
   downloadFrames,
+  type DesignCopyFormat,
   type DesignDownloadScope,
   type DesignImageFormat,
 } from "./design-frame-download";
@@ -710,6 +713,7 @@ export function DesignCanvasTab({
       },
       downloadFrames: (frameId, scope, format) =>
         downloadFrameImagesRef.current(frameId, scope, format),
+      copyFrame: (frameId, format) => copyFrameImageRef.current(frameId, format),
       ...frameActions,
     }),
     [
@@ -912,6 +916,34 @@ export function DesignCanvasTab({
   const downloadFrameImagesRef = useRef(downloadFrameImages);
   useLayoutEffect(() => {
     downloadFrameImagesRef.current = downloadFrameImages;
+  });
+  // Not async: the clipboard write has to start inside the click (see copyFrame).
+  const copyFrameImage = useCallback(
+    (frameId: string, format: DesignCopyFormat): Promise<void> => {
+      const frame = projectionRef.current?.canvas?.frames.find((entry) => entry.id === frameId);
+      if (!frame) return Promise.resolve();
+      setAnnouncement(`Copying ${frame.name} as ${format.toUpperCase()}`);
+      return copyFrame({
+        frame,
+        format,
+        capture: (id) => nodeDesign.capture(environmentId, canvasId, id, "interactive"),
+        writeClipboard: writeClipboardImage,
+      }).then(
+        () => {
+          setLocalError(null);
+          setAnnouncement(`Copied ${frame.name} as ${format.toUpperCase()}`);
+        },
+        (reason: unknown) => {
+          setAnnouncement(`Could not copy ${frame.name} as ${format.toUpperCase()}`);
+          reportError(reason);
+        },
+      );
+    },
+    [canvasId, environmentId, nodeDesign, reportError],
+  );
+  const copyFrameImageRef = useRef(copyFrameImage);
+  useLayoutEffect(() => {
+    copyFrameImageRef.current = copyFrameImage;
   });
   const restoreDeleted = useCallback(async () => {
     const tombstone = projectionRef.current?.tombstone;

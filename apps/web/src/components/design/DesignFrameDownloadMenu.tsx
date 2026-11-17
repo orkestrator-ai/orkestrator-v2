@@ -9,13 +9,31 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { DesignDownloadScope, DesignImageFormat } from "./design-frame-download";
+import { canWriteImage, canWriteWebpImage } from "@/lib/clipboard-image-write";
+import type {
+  DesignCopyFormat,
+  DesignDownloadScope,
+  DesignImageFormat,
+} from "./design-frame-download";
 
 const FORMATS: ReadonlyArray<{ format: DesignImageFormat; single: string; many: string }> = [
-  { format: "png", single: "PNG image", many: "PNG images (.zip)" },
-  { format: "webp", single: "WEBP image", many: "WEBP images (.zip)" },
-  { format: "pdf", single: "PDF document", many: "PDF (one page per frame)" },
+  { format: "png", single: "Download PNG", many: "PNG images (.zip)" },
+  { format: "webp", single: "Download WEBP", many: "WEBP images (.zip)" },
+  { format: "pdf", single: "Download PDF", many: "PDF (one page per frame)" },
 ];
+
+const COPY_FORMATS: ReadonlyArray<{ format: DesignCopyFormat; label: string }> = [
+  { format: "png", label: "Copy PNG" },
+  { format: "webp", label: "Copy WEBP" },
+];
+
+/** Which copy formats this client's clipboard can take. */
+function copyFormatsAvailable(): ReadonlySet<DesignCopyFormat> {
+  const formats = new Set<DesignCopyFormat>();
+  if (canWriteImage()) formats.add("png");
+  if (canWriteWebpImage()) formats.add("webp");
+  return formats;
+}
 
 /** Multi-frame groups lead with PDF, the format a slide deck is usually shared in. */
 const MANY_ORDER: readonly DesignImageFormat[] = ["pdf", "png", "webp"];
@@ -23,8 +41,9 @@ const MANY_ORDER: readonly DesignImageFormat[] = ["pdf", "png", "webp"];
 /**
  * The download button above a frame's top-right corner, shown while the frame
  * or an element inside it is selected. It is blue like the selection when the
- * frame itself is selected and grey otherwise. One frame:
- * PNG, WEBP or PDF. With several frames selected a second group downloads the
+ * frame itself is selected and grey otherwise. One frame: copy PNG or WEBP
+ * where the clipboard accepts it, or download PNG, WEBP or PDF. With several
+ * frames selected a second group downloads the
  * selection, and a last group every frame on the canvas, as a multi-page PDF
  * or a ZIP of images.
  */
@@ -34,6 +53,8 @@ export function DesignFrameDownloadMenu({
   selectedCount,
   frameCount,
   onDownload,
+  onCopy,
+  copyFormats = copyFormatsAvailable(),
 }: {
   frameName: string;
   /** The frame itself (board) is selected, not just an element inside it. */
@@ -43,17 +64,29 @@ export function DesignFrameDownloadMenu({
   /** Committed frames on the canvas. */
   frameCount: number;
   onDownload(scope: DesignDownloadScope, format: DesignImageFormat): Promise<void>;
+  /** Starts the clipboard write synchronously: it is called from the click. */
+  onCopy(format: DesignCopyFormat): Promise<void>;
+  /** Copy formats to offer; defaults to what this client's clipboard accepts. */
+  copyFormats?: ReadonlySet<DesignCopyFormat>;
 }) {
   const [busy, setBusy] = useState(false);
-  const run = (scope: DesignDownloadScope, format: DesignImageFormat) => {
+  const track = (work: Promise<void>) => {
     setBusy(true);
-    void onDownload(scope, format).finally(() => setBusy(false));
+    void work.finally(() => setBusy(false));
   };
+  const run = (scope: DesignDownloadScope, format: DesignImageFormat) =>
+    track(onDownload(scope, format));
   const group = (scope: DesignDownloadScope, label: string, count: number) => (
     <DropdownMenuGroup aria-label={label}>
       <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">
         {label}
       </DropdownMenuLabel>
+      {scope === "frame" &&
+        COPY_FORMATS.filter(({ format }) => copyFormats.has(format)).map(({ format, label }) => (
+          <DropdownMenuItem key={`copy-${format}`} onSelect={() => track(onCopy(format))}>
+            {label}
+          </DropdownMenuItem>
+        ))}
       {count === 1
         ? FORMATS.map(({ format, single }) => (
             <DropdownMenuItem key={format} onSelect={() => run(scope, format)}>

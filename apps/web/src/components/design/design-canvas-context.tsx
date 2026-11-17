@@ -3,7 +3,11 @@ import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
 import type { DesignCanvasController } from "./design-controller";
 import type { DesignSelection } from "./design-selection";
 import type { DesignFrameBridge } from "./frame-bridge";
-import type { DesignDownloadScope, DesignImageFormat } from "./design-frame-download";
+import type {
+  DesignCopyFormat,
+  DesignDownloadScope,
+  DesignImageFormat,
+} from "./design-frame-download";
 
 export type DesignFrameAction =
   | "rename"
@@ -81,6 +85,12 @@ export interface DesignCanvasActions {
     scope: DesignDownloadScope,
     format: DesignImageFormat,
   ): Promise<void>;
+  /**
+   * Copies one frame to the clipboard as PNG, or as WEBP with a PNG alongside.
+   * Starts the clipboard write before its first await, so call it from the
+   * click itself. Failures are reported on the canvas, never rejected.
+   */
+  copyFrame(frameId: string, format: DesignCopyFormat): Promise<void>;
 }
 
 export const DesignCanvasContext = createContext<DesignCanvasActions | null>(null);

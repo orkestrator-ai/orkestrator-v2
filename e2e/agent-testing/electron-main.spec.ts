@@ -359,6 +359,59 @@ async function testIndependentWindows(
         expect(image).toMatchObject({ width: 3, height: 2 });
         expect(image?.dataUrl).toMatch(/^data:image\/png;base64,/);
       });
+    if (!failure && !nicknamesOnly) {
+      // Exercise the real preload, main handler and OS pasteboard. In-memory
+      // ClipboardItem mocks cannot prove raw formats survive a native write.
+      const images = await window.evaluate(async () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 3;
+        canvas.height = 2;
+        const png = canvas.toDataURL("image/png");
+        const webp = canvas.toDataURL("image/webp");
+        const api = (globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi })
+          .orkestrator;
+        await api.clipboard.writeImage(png, { webpDataUrl: webp });
+        return { png, webp };
+      });
+      const format =
+        process.platform === "darwin"
+          ? 'electron application/osclipboard;format="org.webmproject.webp"'
+          : 'electron application/osclipboard;format="image/webp"';
+      const contents = await app.evaluate(async ({ clipboard, nativeImage }, rawFormat) => {
+        const items = await clipboard.read();
+        const entry = items.find(
+          (item) => item.types.includes(rawFormat) && item.types.includes("image/png"),
+        );
+        if (!entry) throw new Error("PNG and raw WebP were not in the same clipboard entry");
+        const png = Buffer.from(await (await entry.getType("image/png")).arrayBuffer());
+        return {
+          hasWebp: await clipboard.has(rawFormat),
+          webp: Buffer.from(await (await entry.getType(rawFormat)).arrayBuffer()).toString(
+            "base64",
+          ),
+          size: nativeImage.createFromBuffer(png).getSize(),
+        };
+      }, format);
+      expect(contents).toEqual({
+        hasWebp: true,
+        webp: images.webp.split(",")[1],
+        size: { width: 3, height: 2 },
+      });
+      await window.evaluate(async (png) => {
+        const api = (globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi })
+          .orkestrator;
+        await api.clipboard.writeImage(png);
+      }, images.png);
+      expect(
+        await app.evaluate(
+          async ({ clipboard }, rawFormat) => ({
+            png: await clipboard.has("image/png"),
+            webp: await clipboard.has(rawFormat),
+          }),
+          format,
+        ),
+      ).toEqual({ png: true, webp: false });
+    }
     if (process.platform === "darwin") {
       // Native apps commonly put only public.tiff on NSPasteboard. Seed the
       // actual OS format, not an Electron ClipboardItem that might also add PNG.

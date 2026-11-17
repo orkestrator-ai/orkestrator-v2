@@ -1,6 +1,6 @@
 /**
  * Downloads frames as PNG, WEBP or PDF: one file for one frame, a ZIP of
- * images or a multi-page PDF for several. Every image is the backend
+ * images or a multi-page PDF for several; copies one frame to the clipboard. Every image is the backend
  * renderer's capture (`design_capture`) of the committed frame, so the file
  * shows exactly what the canvas saved, independent of zoom or of whether the
  * frame is on screen. Encoders live in `design-frame-files.ts`.
@@ -18,6 +18,9 @@ import {
 } from "./design-frame-files";
 
 export type { DesignImageFormat } from "./design-frame-files";
+
+/** The formats one frame can be copied to the clipboard as. */
+export type DesignCopyFormat = "png" | "webp";
 
 /** Which frames a download covers. */
 export type DesignDownloadScope = "frame" | "selected" | "all";
@@ -166,4 +169,37 @@ export async function downloadFrames({
   }
   deps.save(file, fileName);
   return fileName;
+}
+
+/**
+ * Copies one frame to the clipboard: always as PNG, and for `webp` with a WEBP
+ * of the same capture alongside, so an app that cannot read WEBP still pastes
+ * the image. Hands `writeClipboard` the images before capturing, so a browser
+ * still counts the write as part of the click that asked for it.
+ */
+export function copyFrame({
+  frame,
+  format,
+  capture,
+  writeClipboard,
+  codec = browserImageCodec,
+}: {
+  frame: DesignDownloadFrame;
+  format: DesignCopyFormat;
+  capture: DesignDownloadDeps["capture"];
+  writeClipboard(images: { png: Promise<Blob>; webp?: Promise<Blob> }): Promise<void>;
+  codec?: Pick<DesignImageCodec, "toWebp">;
+}): Promise<void> {
+  const png = capture(frame.id).then((result) => {
+    if (result.mimeType !== "image/png") throw new Error(`Unexpected capture of ${frame.name}`);
+    return base64ToBytes(result.data);
+  });
+  const webp =
+    format === "webp"
+      ? png.then(async (bytes) => new Blob([await codec.toWebp(bytes)], { type: MIME.webp }))
+      : undefined;
+  return writeClipboard({
+    png: png.then((bytes) => new Blob([bytes], { type: MIME.png })),
+    ...(webp ? { webp } : {}),
+  });
 }

@@ -448,7 +448,8 @@ authoritative snapshot arrives; loading or stale snapshots keep the selection.
 A frame shows a download button at its top right while the frame or an
 element inside it is selected (`DesignFrameDownloadMenu.tsx`): in the
 selection blue when the frame itself is selected, grey when only an element
-inside it is. Its menu offers **This frame** as PNG, WEBP or PDF; with several frames selected, a separated
+inside it is. Its menu offers **This frame**: Copy PNG and Copy WEBP, then
+Download PNG, WEBP or PDF; with several frames selected, a separated
 **Selected frames** group; and, when the canvas has more than one frame, an
 **All frames** group. A group of several frames saves one PDF with a page per
 frame or a ZIP of PNG or WEBP images, numbered in canvas order.
@@ -462,8 +463,21 @@ in the browser (`design-frame-download.ts`): WEBP through a canvas at quality
 PNG under a WEBP name), PDF pages as lossless zlib-compressed RGB composited
 onto white, sized at 72/96 pt per CSS pixel, and ZIP entries stored without
 compression (`design-frame-files.ts`). The file is saved through the same
-download path as the design download above. `e2e/DesignFrameDownload.spec.ts`
-checks the real bytes in Chromium.
+download path as the design download above.
+
+Copying puts the same capture on the clipboard (`copyFrame`,
+`lib/clipboard-image-write.ts`). The clipboard entry is created inside the
+click, with the images as promises, because a browser accepts a clipboard
+write only during the gesture and a capture can take longer than that. Copy
+PNG writes the PNG. Copy WEBP writes the PNG and, in the same entry, a WEBP
+encoded as for a download, so an app that cannot read WEBP still pastes the
+image. No desktop clipboard has a standard WebP type: the desktop app offers it
+as a raw platform format (`org.webmproject.webp` on macOS, `image/webp`
+elsewhere; `apps/desktop/electron/clipboard.ts`), and a browser only when
+`ClipboardItem.supports("image/webp")`, which no current browser reports, so
+the browser client shows Copy PNG only. Copy is offered for **This frame**
+only: the clipboard holds one image. `e2e/DesignFrameDownload.spec.ts` checks
+the real bytes in Chromium, the copied PNG included.
 
 ## MCP
 

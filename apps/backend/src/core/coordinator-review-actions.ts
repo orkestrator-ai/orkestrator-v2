@@ -1,3 +1,4 @@
+import { coordinatorMultiReviewLaunchHash } from "./coordinator-action-scope.js";
 import {
   addressCoordinatorMultiReviewActionCommand,
   customFixCoordinatorMultiReviewActionCommand,
@@ -26,7 +27,6 @@ import type { CommandContext } from "./commands-context.js";
 import { conciseError } from "./commands-error-text.js";
 import { asNonBlankString, stripWorkflowSnapshotSecrets } from "./commands-helpers.js";
 import {
-  actionHash,
   requireCoordinatorConversation,
   withCoordinatorReceipt,
 } from "./coordinator-action-scope.js";
@@ -341,7 +341,7 @@ export function registerCoordinatorReviewActions(
         input,
       );
       const reservedId = `action-${createHash("sha256").update(`${caller.coordinatorId}\0${input.requestId}`).digest("hex").slice(0, 32)}`;
-      const payloadHash = actionHash({ action: "launch-multi-review", input });
+      const payloadHash = coordinatorMultiReviewLaunchHash(input);
       const associations = await context.storage.coordinators.listCoordinatorWorkflowAssociations(
         caller.projectId,
       );

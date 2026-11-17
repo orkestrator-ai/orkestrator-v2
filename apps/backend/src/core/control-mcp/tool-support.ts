@@ -195,14 +195,20 @@ export function buildPipelineSelection(
   return {
     agentType: record.agentType ?? null,
     steps: Object.fromEntries(
-      Object.entries(steps).map(([key, step]) => [key, selectedStep(step)]),
+      Object.entries(steps).map(([key, step]) => [
+        key === "address-findings" ? "address" : key,
+        selectedStep(step),
+      ]),
     ),
     reviewers: Array.isArray(record.reviewers) ? record.reviewers.map(selectedStep) : [],
     reviewPreparation: selectedStep(record.reviewPreparation ?? null),
     source: {
       agentType: source(input.agentType !== undefined || input.steps?.build !== undefined),
       steps: Object.fromEntries(
-        Object.keys(steps).map((key) => [key, source(input.steps?.[key] !== undefined)]),
+        Object.keys(steps).map((key) => [
+          key === "address-findings" ? "address" : key,
+          source(input.steps?.[key] !== undefined),
+        ]),
       ),
       reviewers: source(input.reviewers !== undefined),
       reviewPreparation: source(input.reviewPreparation !== undefined),

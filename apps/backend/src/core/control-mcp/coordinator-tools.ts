@@ -485,7 +485,7 @@ export function registerCoordinatorWorkflowTools(
         ...coordinatorReplayFields(workflow),
         ...(await workflowStatusWakeResult(invoke)),
 
-        selection: buildPipelineSelection(record, input),
+        selection: buildPipelineSelection(record, scoped),
       });
     },
   );

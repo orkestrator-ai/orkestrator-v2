@@ -1,4 +1,5 @@
-import { readStoredValue, seedStore } from "./storage-test-support.js";
+import { actionHash } from "./coordinator-action-scope.js";
+import { readStoredValue, seedStore, upgradedLaunchReceipt } from "./storage-test-support.js";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
 import { BackendRuntime } from "./backend-runtime.js";
@@ -1080,5 +1081,39 @@ for (const custom of [false, true]) {
         : { workflow: { phase: "interactive" } },
     );
     expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+}
+
+for (const alias of [false, true]) {
+  test(`pre-upgrade public launch ${alias ? "alias" : "pending receipt"} replays after migration`, async () => {
+    const first = await launch({ autoAddressFindings: false });
+    const records = await storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId);
+    const requestId = alias ? "old-alias" : "button-1";
+    const publicInput = {
+      environmentId,
+      requestId,
+      reviewers: [selection],
+      fixModel: selection,
+      autoFix: false,
+    };
+    const payloadHash = actionHash({ action: "launch-multi-review", input: publicInput });
+    const old = {
+      ...records[0]!,
+      pending: !alias,
+      ...(alias ? { requestAliases: [{ requestId, payloadHash }] } : { payloadHash }),
+    };
+    const upgraded = upgradedLaunchReceipt(path.join(root, "upgrade"), old);
+    expect(upgraded).toEqual(old);
+    const store = readStoredValue<Record<string, unknown>>(
+      storage.getDataDir(),
+      "coordinators.json",
+    )!;
+    seedStore(storage.getDataDir(), "coordinators.json", { ...store, workflows: [upgraded] });
+    const replay = await launch({ requestId, autoAddressFindings: false });
+    expect(replay.workflow.id).toBe(first.workflow.id);
+    expect(start).toHaveBeenCalledTimes(1);
+    await expect(launch({ requestId, autoAddressFindings: true })).rejects.toThrow(
+      "different payload",
+    );
   });
 }

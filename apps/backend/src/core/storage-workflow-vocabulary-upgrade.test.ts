@@ -242,6 +242,64 @@ describe("workflow vocabulary upgrade", () => {
     expect(isMultiReviewWorkflow(renamed)).toBe(true);
   });
 
+  test("renames paused and queued build controls and rewind phases", () => {
+    expect(
+      renameFormerBuildPipelineNames({
+        pausedFromPhase: "fixing",
+        restartRequest: { phase: "fix" },
+        skipRequest: { phase: "address" },
+        failure: { phase: "addressing" },
+        rewinds: [{ step: { phase: "fix" } }],
+      }),
+    ).toEqual({
+      pausedFromPhase: "reworking",
+      restartRequest: { phase: "rework" },
+      skipRequest: { phase: "address-findings" },
+      failure: { phase: "addressing-findings" },
+      rewinds: [{ step: { phase: "rework" } }],
+    });
+  });
+
+  test("renames custom Address Findings, launch, restart and rewind state", () => {
+    expect(
+      renameFormerMultiReviewNames({
+        customFixInstruction: "fix this exact text",
+        customFixModel: { agent: "codex", model: "default" },
+        fixLaunch: { state: "pending", requestId: "fix-1" },
+        restartFixAfterConsolidation: true,
+        pendingCodeRewind: { step: "fix" },
+      }),
+    ).toEqual({
+      customAddressFindingsInstruction: "fix this exact text",
+      customAddressFindingsModel: { agent: "codex", model: "default" },
+      addressFindingsLaunch: { state: "pending", requestId: "fix-1" },
+      restartAddressFindingsAfterConsolidation: true,
+      pendingCodeRewind: { step: "address-findings" },
+    });
+  });
+
+  test("current fields win conflicts regardless of property order", () => {
+    for (const reverse of [false, true]) {
+      const fields = [
+        ["fixModel", { model: "old" }],
+        ["addressFindingsModel", { model: "current" }],
+      ] as const;
+      const review = Object.fromEntries(reverse ? [...fields].reverse() : fields);
+      expect(renameFormerMultiReviewNames(review)).toEqual({
+        addressFindingsModel: { model: "current" },
+      });
+      const steps = [
+        ["address", { model: "old" }],
+        ["address-findings", { model: "current" }],
+      ] as const;
+      expect(
+        renameFormerBuildPipelineNames({
+          steps: Object.fromEntries(reverse ? [...steps].reverse() : steps),
+        }),
+      ).toEqual({ steps: { "address-findings": { model: "current" } } });
+    }
+  });
+
   test("leaves current records, unreadable records and unreadable stores untouched", () => {
     const current = {
       "pipeline-1": { snapshot: renameFormerBuildPipelineNames(formerPipeline()) },

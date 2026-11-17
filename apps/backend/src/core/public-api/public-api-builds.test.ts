@@ -50,6 +50,7 @@ function launchInput(build: BuildHarness): Record<string, unknown> {
     environmentId: "env-1",
     steps: {
       build: { instructions: TEXT.build },
+      address: { instructions: "Address the reported findings" },
       verify: {
         agent: "codex",
         model: "gpt-5.5",
@@ -107,6 +108,16 @@ describe("build.launch", () => {
     expectContentFree(launched);
 
     const pipeline = await stored(build, launched.result.pipelineId);
+    expect(pipeline.steps?.["address-findings"]?.instructions).toBe(
+      "Address the reported findings",
+    );
+    expect(pipeline.steps).not.toHaveProperty("address");
+    const detail = await build.harness.call<PublicBuildPipelineDetail>("build.get", {
+      pipelineId: pipeline.id,
+    });
+    if (!detail.ok) throw new Error(detail.error.message);
+    expect(detail.result.steps.address).toBeDefined();
+    expect(detail.result.steps).not.toHaveProperty("address-findings");
     expect(pipeline.source).toEqual({ type: "kanban", taskId: build.ticketId });
     expect(pipeline.taskSnapshot.title).toBe("Add a --verbose flag");
     expect(pipeline.maxIterations).toBe(2);

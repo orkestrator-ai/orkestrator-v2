@@ -366,11 +366,11 @@ export class AgentAccountAutoSwitcher {
   private readonly held = new Map<string, HeldLogin>();
   /**
    * The weekly resets fresh readings of each login named lately, keyed by
-   * `heldLoginKey`. A login's week ends once; readings that name resets hours
-   * apart cannot all be its own, so neither is trusted to move the machine
+   * `heldLoginKey`. Forward advancement is valid; a regression or disagreeing
+   * twins makes the login disputed, so neither claim is trusted to move it
    * ("Disputed resets").
    */
-  private readonly resetClaims = new Map<string, ResetClaim[]>();
+  private readonly resetClaims = new Map<string, { claims: ResetClaim[]; disputed: boolean }>();
   /** When each reading `readings` took was fetched, so a hold can tell newer news from older. */
   private readonly readAt = new WeakMap<UsageLimitReading, number>();
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -953,6 +953,8 @@ export class AgentAccountAutoSwitcher {
    * changed sides (`soonest-reset` both ways). A disputed login is judged on
    * every reset it was given, which leaves the machine where it is.
    *
+   * Forward advancement alone is valid; a regression or disagreeing twins
+   * establishes a dispute, retained while conflicting claims remain.
    * A reset is remembered until it passes or for {@link RESET_CLAIM_MEMORY_MS}
    * after a reading last named it. In memory and bounded, like the hold.
    */
@@ -976,9 +978,20 @@ export class AgentAccountAutoSwitcher {
     }
     const disputed = new Map<string, { earliest: number; latest: number }>();
     for (const [key, resets] of named) {
-      const before = (this.resetClaims.get(key) ?? []).filter(
+      const previous = this.resetClaims.get(key);
+      const before = (previous?.claims ?? []).filter(
         (claim) => claim.resetsAt > now && now - claim.seenAt < RESET_CLAIM_MEMORY_MS,
       );
+      // A later reset can be a spent reset grant. Keep its predecessor as
+      // evidence, but only dispute a regression or simultaneous disagreement.
+      const wasDisputed = !!previous?.disputed && !!spreadBeyondTolerance(before);
+      const regressed = resets.some((reset) =>
+        before.some((claim) => claim.resetsAt - reset > AUTO_SWITCH_RESET_TOLERANCE_MS),
+      );
+      const simultaneous = spreadBeyondTolerance(
+        resets.map((resetsAt) => ({ resetsAt, seenAt: now })),
+      );
+      const isDisputed = wasDisputed || regressed || !!simultaneous;
       const claims = before.map((claim) => ({ ...claim }));
       for (const resetsAt of resets) {
         let nearest: ResetClaim | undefined;
@@ -1008,12 +1021,12 @@ export class AgentAccountAutoSwitcher {
       if (!this.resetClaims.has(key) && this.resetClaims.size >= MAX_TRACKED_STOPS) {
         this.resetClaims.clear();
       }
-      this.resetClaims.set(key, kept);
+      this.resetClaims.set(key, { claims: kept, disputed: isDisputed });
       const range = spreadBeyondTolerance(kept);
-      if (!range) continue;
+      if (!isDisputed || !range) continue;
       disputed.set(key, range);
       const { earliest, latest } = range;
-      if (!spreadBeyondTolerance(before)) {
+      if (!wasDisputed) {
         log.warn("auto-switch.reset-disputed", {
           provider: platform,
           spreadMinutes: Math.round((latest - earliest) / 60_000),

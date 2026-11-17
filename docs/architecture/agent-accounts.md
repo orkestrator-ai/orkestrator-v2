@@ -1273,12 +1273,15 @@ or the weekly reset still lets the login back.
 ### Disputed resets
 
 A login's general weekly limit ends at one time, and that time only ever moves
-later: the week ends and the next begins, or a limit reset is spent. So fresh
-readings of one login that name weekly resets more than the reset tolerance
-apart (an hour, `AUTO_SWITCH_RESET_TOLERANCE_MS`), each still ahead, cannot all
-be that login's. The switcher remembers, per login, the weekly resets fresh
+later: the week ends and the next begins, or a limit reset is spent. A forward
+advance alone is valid, even while the old reset is still ahead.
+A dispute begins only when a later reading regresses by more than the reset
+tolerance (an hour, `AUTO_SWITCH_RESET_TOLERANCE_MS`) to an earlier still-future
+reset, or when twin entries of one login disagree within the same check. The
+switcher remembers, per login, the weekly resets fresh
 readings named, whichever machine took them (`disputedResets` in
-`agent-accounts-auto-switch.ts`). While they disagree, each entry of the login
+`agent-accounts-auto-switch.ts`). Once disputed, while conflicting claims remain,
+each entry of the login
 carries the earliest and latest of them (`resetRange` on its reading), and a
 `soonest-reset` move goes only where it is better on every one: the active
 account's earliest reset against the destination's latest

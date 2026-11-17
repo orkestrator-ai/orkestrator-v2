@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { isEssentialLabel } from "./log-essential-labels.js";
 import { hasEssentialEvents, isEssentialEntry, projectEssentialRecord } from "./log-essential.js";
 import { LOG_VOCABULARY, type LogAreaSpec } from "./log-vocabulary/index.js";
 import { formatLogError, type LogLevel, type LogRecord, type LogWireValue } from "./logger.js";
@@ -432,4 +433,31 @@ describe("renderer error entries", () => {
     );
     expect(projected?.fields).toEqual({ count: 1, droppedFields: 4 });
   });
+});
+
+test("automatic switch events preserve only supported provider and reason labels", () => {
+  for (const event of ["auto-switch.moved", "auto-switch.reset-disputed"]) {
+    for (const provider of ["claude", "codex"]) {
+      expect(isEssentialLabel("agent-accounts", event, "provider", provider)).toBe(true);
+    }
+    expect(isEssentialLabel("agent-accounts", event, "provider", "private@example.com")).toBe(
+      false,
+    );
+  }
+  expect(isEssentialLabel("agent-accounts", "auto-switch.moved", "reason", "soonest-reset")).toBe(
+    true,
+  );
+  expect(
+    isEssentialLabel("agent-accounts", "auto-switch.moved", "reason", "private@example.com"),
+  ).toBe(false);
+  expect(
+    projectEssentialRecord(
+      record("agent-accounts", "auto-switch.moved", "info", {
+        provider: "claude",
+        reason: "soonest-reset",
+        email: "private@example.com",
+      }),
+      TS,
+    )?.fields,
+  ).toEqual({ provider: "claude", reason: "soonest-reset" });
 });

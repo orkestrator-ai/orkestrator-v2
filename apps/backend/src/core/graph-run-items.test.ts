@@ -242,7 +242,7 @@ describe("inside an inlined sub-graph (item 402)", () => {
         { key: "fixer", multiplicity: "one" },
       ],
       inputs: [
-        { name: "plan", type: "validation-plan@1" },
+        { name: "plan", type: "validation-plan@2" },
         { name: "target", type: "workspace@1" },
       ],
       outputs: [
@@ -260,7 +260,7 @@ describe("inside an inlined sub-graph (item 402)", () => {
           template: { scope: "user", id: "repair-loop" },
           roles: { diagnoser: "diagnoser", fixer: "fixer" },
           inputs: [
-            { name: "plan", type: "validation-plan@1" },
+            { name: "plan", type: "validation-plan@2" },
             { name: "target", type: "workspace@1" },
           ],
           outputs: [{ name: "results", type: "validation-results@1" }],

@@ -329,6 +329,7 @@ describe("published MCP tool schemas are provider-portable", () => {
         {
           id: "format",
           command: "mise run format:check",
+          scope: "general",
           cwd: ".",
           dependsOn: [],
           resources: ["workspace:repo"],

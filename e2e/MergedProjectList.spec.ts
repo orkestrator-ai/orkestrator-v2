@@ -83,9 +83,9 @@ for (const activation of ["click", "Enter"] as const) {
       if (fallback) {
         await expect(page.getByTestId("opened")).toHaveText('{"nodeId":"bk_remote"}');
         // With no copy on the command node, the heading opens the leaf's
-        // coordinator (#1624).
+        // coordinator by default; a remembered tab still wins (#1624).
         await expect(page.getByTestId("intent")).toHaveText(
-          '{"projectId":"p","boardTab":"coordinator"}',
+          '{"projectId":"p","landingTab":"coordinator"}',
         );
       } else {
         await expect(page.getByTestId("selected")).toHaveText("local");

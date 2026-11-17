@@ -95,7 +95,7 @@ const ISSUE_DETAIL_FIELDS = `
         estimate
         state { id name type position }
         team { id key name }
-        assignee { id name }
+        assignee { id name avatarUrl avatarBackgroundColor }
         creator { name }
         project { id name }
         cycle { name }

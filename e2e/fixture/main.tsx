@@ -1,4 +1,5 @@
 import { LinearBoardDragFixture } from "./LinearBoardDragFixture";
+import { LinearBoardAssigneesFixture } from "./LinearBoardAssigneesFixture";
 import { LinearBoardLabelsFixture } from "./LinearBoardLabelsFixture";
 import { EndedAgentFixture } from "./EndedAgentFixture";
 import { SessionHistoryControlsFixture } from "./SessionHistoryControlsFixture";
@@ -456,6 +457,7 @@ function SortableFolderProjectRow({ project }: { project: Project }) {
       selectedEnvironmentId={null}
       onToggleCollapse={() => {}}
       onSelectProject={() => {}}
+      onOpenBoard={() => {}}
       onSelectEnvironment={() => {}}
       onDeleteProject={() => {}}
       onOpenSettings={() => {}}
@@ -2204,6 +2206,8 @@ function fixtureForPath() {
   if (window.location.pathname === "/delivery-policy") return <DeliveryPolicyFixture />;
   if (window.location.pathname === "/linear-board-drag") return <LinearBoardDragFixture />;
   if (window.location.pathname === "/linear-board-labels") return <LinearBoardLabelsFixture />;
+  if (window.location.pathname === "/linear-board-assignees")
+    return <LinearBoardAssigneesFixture />;
   if (window.location.pathname === "/ticket-view") return <TicketViewFixture />;
   if (window.location.pathname === "/agent-launch") return <AgentLaunchDialogFixture />;
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;

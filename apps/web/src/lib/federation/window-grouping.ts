@@ -50,9 +50,10 @@ export function projectLandingTab(
 }
 
 /**
- * What a sidebar project entry asks the node to show, as board navigation:
- * the coordinator where it lands there, nothing where it lands on the home,
- * which is where another node's workspace opens a project by default.
+ * The landing tab a sidebar project entry asks the node for
+ * (`WorkspaceRequest.landingTab`), used only by a project with no last tab of
+ * its own: the coordinator where it lands there, nothing where it lands on the
+ * home, which is where another node's workspace opens a project by default.
  */
 export function projectLandingBoardTab(
   grouping: WindowGrouping,

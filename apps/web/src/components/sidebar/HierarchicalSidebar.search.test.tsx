@@ -148,11 +148,12 @@ for (const { mode, offline } of [
     const request = useRemoteWorkspaceStore.getState().requests.bk_mbp3?.request;
     expect(request).toBeDefined();
     if (mode === "repository" && !offline) {
-      // Repository grouping lands on Home, so it must not send a board tab override.
+      // Repository grouping lands on Home, so it must not send a landing tab.
       expect(request).toEqual({ projectId: "tg" });
       expect(request).not.toHaveProperty("boardTab");
     } else {
-      expect(request).toEqual({ projectId: "tg", boardTab: "coordinator" });
+      // The coordinator is only the landing tab: the project's last tab wins.
+      expect(request).toEqual({ projectId: "tg", landingTab: "coordinator" });
     }
   });
 }

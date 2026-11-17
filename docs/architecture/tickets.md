@@ -768,6 +768,19 @@ dot). Four are named and the rest fold into `+N`, whose tooltip names them;
 an issue with no labels, or one read from an older backend that does not send
 `issueLabels`, has no label row.
 
+An assigned card shows its assignee's avatar in the top-right corner, as
+Linear's own board does (`LinearAssigneeAvatar`). The issue reads carry the
+assignee's Linear `avatarUrl` and `avatarBackgroundColor` as
+`assigneeAvatarUrl` and `assigneeAvatarColor`. The backend keeps only an
+`https:` image URL and a hex colour. Without an image, or when it fails to
+load, the avatar is the assignee's initials on that colour (neutral when there
+is none). The image loads directly from Linear's host, which the renderer's
+`img-src` allows, with no referrer. The avatar's tooltip and accessible name
+give the assignee, so the card no longer repeats the name as text; the list
+and detail views show a small avatar beside it. An unassigned issue shows no avatar;
+one read from an older backend, which sends only the name, shows neutral
+initials.
+
 **Moving a card.** Dragging a card to another lane moves the issue to that
 lane's workflow state in Linear (`update_linear_issue` with `stateId`, which
 the backend refuses for an issue not on the project's board). The card moves

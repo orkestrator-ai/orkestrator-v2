@@ -17,7 +17,10 @@ export interface MachineWorkspaceSpec {
   /** Empty: the node's project launcher (to add a project there). */
   projectId: string;
   environmentId?: string;
+  /** Board navigation: always shown, whatever tab the project was last left on. */
   boardTab?: WorkspaceBoardTab;
+  /** The tab for a project with no last tab of its own (`WorkspaceRequest.landingTab`). */
+  landingTab?: WorkspaceBoardTab;
   workTarget?: WorkspaceWorkTarget;
   /** Open the New Environment dialog for `projectId` instead of selecting it. */
   createEnvironment?: boolean;
@@ -66,11 +69,13 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
     if (!spec.projectId) return;
     if (spec.createEnvironment) requestCreateEnvironment(spec.projectId);
     else if (spec.environmentId) {
-      ui.selectProjectAndEnvironment(spec.projectId, spec.environmentId);
+      ui.selectProjectAndEnvironment(spec.projectId, spec.environmentId, {
+        landingTab: spec.landingTab,
+      });
       // A project home opens on its Home tab, as its own sidebar opens it.
       if (spec.boardTab) ui.setProjectBoardTab(spec.boardTab);
     } else {
-      ui.selectProject(spec.projectId);
+      ui.selectProject(spec.projectId, { landingTab: spec.landingTab });
       if (spec.boardTab) ui.setProjectBoardTab(spec.boardTab);
     }
     if (spec.dialog) openDialog(spec.dialog, spec.projectId, spec.environmentId);
@@ -86,6 +91,7 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
             projectId: spec.projectId,
             ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
             ...(spec.boardTab ? { boardTab: spec.boardTab } : {}),
+            ...(spec.landingTab ? { landingTab: spec.landingTab } : {}),
             ...(spec.workTarget ? { workTarget: spec.workTarget } : {}),
             ...(spec.dialog ? { dialog: spec.dialog } : {}),
           },
@@ -93,10 +99,12 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
 }
 
 /**
- * Opens a repository from its heading: its coordinator, on the command node's
- * copy of the project, else (none here) a leaf's, whose workspace then opens
- * its own coordinator directly. A window whose own node is in leaf mode lands on
- * its home, since its coordinator is gated.
+ * Opens a repository from its heading: the command node's copy of the
+ * project, else (none here) a leaf's, on the tab that project was last left
+ * on. A project with none opens on its coordinator, which a leaf's workspace
+ * opens directly; a window whose own node is in leaf mode lands on its home,
+ * since its coordinator is gated. With `coordinator` (the Open Coordinator
+ * menu item) it always opens the coordinator.
  */
 export function openRepository(spec: {
   /** The repository's identity, which also names its group. */
@@ -106,12 +114,18 @@ export function openRepository(spec: {
   connectionId: string;
   projectId: string;
   coordinatorGated: boolean;
+  /** Always open the coordinator rather than the project's last tab. */
+  coordinator?: boolean;
   title: string;
 }): void {
   openMachineWorkspace({
     connectionId: spec.connectionId,
     projectId: spec.projectId,
-    ...(spec.coordinatorGated ? {} : { boardTab: "coordinator" as const }),
+    ...(spec.coordinatorGated
+      ? {}
+      : spec.coordinator
+        ? { boardTab: "coordinator" as const }
+        : { landingTab: "coordinator" as const }),
     title: spec.title,
   });
   useMachineViewStore

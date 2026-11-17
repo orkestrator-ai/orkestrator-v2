@@ -448,7 +448,7 @@ describe("multi review protocol", () => {
     expect(
       isMultiReviewWorkflow({
         ...workflow,
-        stepRuntimes: { fix: { startedAt: timestamp, tokenCount: 1.5 } },
+        stepRuntimes: { "address-findings": { startedAt: timestamp, tokenCount: 1.5 } },
       }),
     ).toBe(false);
     // Consolidation's read-only turn ran without the command sandbox (todo 0190 (retired)).

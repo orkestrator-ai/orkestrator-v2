@@ -14,7 +14,7 @@
  * | `package` | `reviewPackage` (the sealed `review-package@2` descriptor) |
  * | `review` (panel branch N) | `reviewers[N-1]`: status, session, report, provisional findings |
  * | `consolidate` | `reviewSession`, `stepRuntimes.consolidate`, `consolidatedReport`, `consolidationOverlap` |
- * | `fix` | `addressFindingsSession`, `stepRuntimes.fix`, `addressFindingsResult` |
+ * | `fix` | `addressFindingsSession`, `stepRuntimes["address-findings"]`, `addressFindingsResult` |
  * | `describe-pr`, `pr` | `autoPrLaunch` |
  *
  * The consolidated report cites graph item ids (`review/panel.2/issue-3`,

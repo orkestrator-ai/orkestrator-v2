@@ -42,6 +42,9 @@ test("project header highlights Home selection, counts worker rows, and opens th
       selectedEnvironmentId={home.id}
       onToggleCollapse={noop}
       onSelectProject={() => appCommandStore(uiStore).getState().selectProject(project.id)}
+      onOpenBoard={() =>
+        appCommandStore(uiStore).getState().selectProject(project.id, { resetTab: true })
+      }
       onSelectEnvironment={noop}
       onDeleteProject={noop}
       onOpenSettings={noop}
@@ -74,6 +77,7 @@ test("project header highlights Home selection, counts worker rows, and opens th
       selectedEnvironmentId="worker"
       onToggleCollapse={noop}
       onSelectProject={noop}
+      onOpenBoard={() => {}}
       onSelectEnvironment={noop}
       onDeleteProject={noop}
       onOpenSettings={noop}
@@ -105,6 +109,7 @@ test.each(["This computer", "This computer · Checkout"])(
       selectedEnvironmentId: null,
       onToggleCollapse,
       onSelectProject,
+      onOpenBoard: () => {},
       onSelectEnvironment: noop,
       onDeleteProject: noop,
       onOpenSettings: noop,
@@ -157,6 +162,7 @@ test("a working coordinator rings the project's icon, and shows its own icon whe
     selectedEnvironmentId: null,
     onToggleCollapse: noop,
     onSelectProject: noop,
+    onOpenBoard: () => {},
     onSelectEnvironment: noop,
     onDeleteProject: noop,
     onOpenSettings: noop,
@@ -218,6 +224,7 @@ test("a waiting coordinator's halo stays on the project's icon", async () => {
       selectedEnvironmentId={null}
       onToggleCollapse={noop}
       onSelectProject={noop}
+      onOpenBoard={() => {}}
       onSelectEnvironment={noop}
       onDeleteProject={noop}
       onOpenSettings={noop}

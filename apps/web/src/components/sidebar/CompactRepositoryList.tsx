@@ -290,11 +290,11 @@ export function CompactRepositoryList({
     } else if (opens.machine.bound) {
       selectProject(projectId);
     } else {
-      const boardTab = projectLandingBoardTab("repository", false);
+      const landingTab = projectLandingBoardTab("repository", false);
       openMachineWorkspace({
         connectionId: opens.machine.connectionId,
         projectId,
-        ...(boardTab ? { boardTab } : {}),
+        ...(landingTab ? { landingTab } : {}),
         title: opens.name,
       });
     }

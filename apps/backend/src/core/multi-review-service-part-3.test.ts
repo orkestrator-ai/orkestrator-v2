@@ -3588,7 +3588,7 @@ test("MultiReviewService restarts the Address Findings handoff with a fresh dura
       expect(await snapshot(started.id)).toMatchObject({
         phase: "interactive",
         addressFindingsSession: { providerSessionId: firstSessionId },
-        stepRuntimes: { fix: { startedAt: expect.any(String) } },
+        stepRuntimes: { "address-findings": { startedAt: expect.any(String) } },
       });
     },
     {

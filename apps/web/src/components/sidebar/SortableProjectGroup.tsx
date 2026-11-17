@@ -24,7 +24,10 @@ interface SortableProjectGroupProps {
   isSelected: boolean;
   onToggleCollapse: () => void;
   selectedEnvironmentId: string | null;
+  /** The project's heading: its page, on the tab it was last left on. */
   onSelectProject: () => void;
+  /** Open Board: the project's page on its landing tab. */
+  onOpenBoard: () => void;
   onSelectEnvironment: (
     environmentId: string,
     modifiers?: { shiftKey?: boolean; metaKey?: boolean },
@@ -68,6 +71,7 @@ export function SortableProjectGroup({
   onToggleCollapse,
   selectedEnvironmentId,
   onSelectProject,
+  onOpenBoard,
   onSelectEnvironment,
   onDeleteProject,
   onOpenSettings,
@@ -149,7 +153,7 @@ export function SortableProjectGroup({
             onOpen={onSelectProject}
             writable
             menu={{
-              openBoard: onSelectProject,
+              openBoard: onOpenBoard,
               ...(githubRepositoryUrl
                 ? {
                     openGithub: () => {

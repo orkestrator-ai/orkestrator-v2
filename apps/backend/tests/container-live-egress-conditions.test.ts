@@ -797,9 +797,8 @@ describe("Docker daemon restart", () => {
       await restartDaemon();
       if (liveRestore && rootless) {
         // A rootless restart replaces RootlessKit, its user and network
-        // namespaces, containerd and the shims (to-do 7390 task 1,
-        // 2026-11-11). The new daemon finds no shim and reports both
-        // containers exited, while their processes can outlive it in the old
+        // namespaces, containerd and the shims (#2142, 2026-11-11). The new
+        // daemon finds no shim and reports both containers exited, while their processes can outlive it in the old
         // namespace with nothing but loopback. Those are reaped before the
         // backend starts the containers again, as a daemon with live-restore
         // off would have left them.

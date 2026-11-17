@@ -623,7 +623,7 @@ the user rebuilds it.
 | --- | --- | --- | --- |
 | `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` | Permanent | New rebuilds and migrations refused; recovery unaffected | Container lifecycle. Kept: it only ever refuses new work |
 | `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` | Removed 2026-10-25 | Ignored | It kept new runtimes on the writable layer as a fallback until volume storage passed on every platform; the rootless Linux run on 2026-10-25 was the last ([container qualification](../development/container-qualification.md#rootless-linux-host-2026-10-25)). A backend up to 2.30.0-beta still honours it and reports `disabled-by-configuration`, which the protocol and the rebuild section keep for that reason. `scripts/qualify-backend-upgrade-rollback.ts` sets it on its old release (v2.21.0) |
-| `ORKESTRATOR_EGRESS=in-container` | Removed 2026-11-04 | Ignored; a gateway-capable image's restricted runtime always gets a gateway | It kept the firewall inside the runtime, with `NET_ADMIN`, where a root terminal can change it. There is no longer a switch back if the gateway fails on a host. Its Linux Engine and rootless qualification is summarised in [container qualification](../development/container-qualification.md#egress-gateway-on-linux-engine-qualification-closed-2026-11-11); what is still unproved on rootless is [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md). The runtime's own `ORKESTRATOR_EGRESS=gateway` value, which its root entrypoint records, is a different thing and stays |
+| `ORKESTRATOR_EGRESS=in-container` | Removed 2026-11-04 | Ignored; a gateway-capable image's restricted runtime always gets a gateway | It kept the firewall inside the runtime, with `NET_ADMIN`, where a root terminal can change it. There is no longer a switch back if the gateway fails on a host. Its Linux Engine and rootless qualification is summarised in [container qualification](../development/container-qualification.md#egress-gateway-on-linux-engine-qualification-closed-2026-11-11); the rootless daemon restart has since passed on every RootlessKit network driver ([pasta and VPNKit, 2026-11-17](../development/container-qualification.md#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17)), and rootless arm64 is in the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md). The runtime's own `ORKESTRATOR_EGRESS=gateway` value, which its root entrypoint records, is a different thing and stays |
 | `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([environment networks](#environment-networks-network-policy2)) |
 | `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` | Removed 2026-10-25 | Ignored | It bound whole host agent homes read-only and put the Anthropic key in `docker inspect` |
 | `ORKESTRATOR_NETWORK_POLICY=1` | Removed 2026-10-25 | Ignored; a capable image gets at least policy 2 | It joined the shared bridge, where the legacy firewall allows the whole gateway `/24`, siblings included. Exhausted address pools are fixed by widening Docker's `default-address-pools`, as the error says |
@@ -1386,6 +1386,15 @@ process when a rootless daemon reports `live-restore` on (`docker`
 `container-resources.ts`); the remedy is `"live-restore": false` in that
 daemon's `daemon.json`.
 
+With `live-restore` off, a rootless daemon restart is qualified on all four
+RootlessKit network drivers: Docker starts neither the gateway nor its
+runtime, refuses a bare start of the runtime while its gateway is stopped,
+and the backend's start path brings both up in order with the policy
+enforced (slirp4netns on 2026-11-06, gvisor-tap-vsock on 2026-11-11, pasta and
+VPNKit on 2026-11-17,
+[evidence](../development/container-qualification.md#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17);
+to-do 7390, retired 2026-11-17).
+
 In restricted mode `init-firewall.sh` then allows the host only on those ports
 (gateway and `host.docker.internal` addresses) instead of the gateway `/24`,
 accepts new inbound connections only on the published ports, drops IPv6 except
@@ -1789,11 +1798,16 @@ every container of that daemon reach every host loopback service, a security
 trade only the user can make. Publishing the service back through a
 container's forwarded port would need a multiplexing relay in every
 container for one path, and the host's LAN address was tried live and
-refused. `10.0.2.2` is the slirp4netns and VPNKit address; on the
+refused. `10.0.2.2` is the slirp4netns and pasta address; on the
 gvisor-tap-vsock driver host loopback is `10.0.2.1`, which the check probes
 and reports `reachable` (to-do 7548, retired 2026-11-10;
 [evidence](../development/container-qualification.md#gvisor-tap-vsock-host-loopback-7548)),
-and other drivers stay `blocked` with the same remediation.
+and other drivers stay `blocked` with the same remediation. VPNKit's is
+`192.168.65.2` (observed 2026-11-17,
+[evidence](../development/container-qualification.md#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17)),
+which the check does not probe yet, so a VPNKit daemon with host loopback
+enabled is reported `blocked`
+([8305](../todo/containers-and-environments/8305-vpnkit-host-loopback-address.md)).
 
 ### Port selection and the loopback address (`agent-tools-listen.ts`)
 

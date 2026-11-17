@@ -1,6 +1,6 @@
 /**
- * A Pi recipient opens a mailed image with Pi's own `read` tool (to-do 4420
- * task 3, the Pi part).
+ * A Pi recipient opens a mailed image with Pi's own `read` tool (#2238,
+ * from to-do 4420 (retired) task 3, the Pi part).
  *
  * The bridge, its approval gate and read boundary, the SDK's agent loop and
  * its `read` tool are all real. The model is a loopback server speaking the

@@ -1808,9 +1808,63 @@ How it is verified, with no provider turn:
   there only because the bridge approves `Read` up front for every session,
   read-only coordinators included (`session-manager-prompt-query.ts`). No
   provider is called.
-- Not covered: Cursor, Pi and Grok recipients, and an agent reading inside a
-  container
-  ([todo 4420](../todo/coordinator-and-multi-review/4420-coordinator-image-mail-live-qualification.md)).
+- `bridges/pi-bridge/src/mailed-image-read.test.ts` (default suite) runs the
+  real Pi bridge, its approval gate and Pi's own `read` against a loopback
+  model, for a worker (copy in its worktree) and a coordinator (copy in its
+  attachment directory). A `read` of `control-mcp.json` beside that directory
+  is refused (`PI_READ_BOUNDARY_REFUSAL`), so the pass is the boundary's
+  carve-out, not a missing boundary. With a model declared text-only
+  (`input: ["text"]`) Pi's `read` returns no image, so a Pi coordinator on such
+  a model gets the mail and the path but cannot see the picture.
+- `bridges/codex-bridge/src/app-server/live-mailed-image-read.test.ts` (gated
+  by `RUN_LIVE_CODEX_APP_SERVER=1`, binary named by `CODEX_PROTOCOL_BINARY`)
+  runs the bridge's own app-server engine and coordinator permission profile
+  against a scripted Responses WebSocket. `view_image` returns the PNG for a
+  worker and for a coordinator (copy in `ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT`);
+  a file beside that directory is refused, so the grant covers it alone. Run
+  on macOS on 2026-11-14 with Codex 0.167.0.
+- `coordinator-mail-attachments-docker-read-live.test.ts` (slow tier; opt-in:
+  `ORKESTRATOR_TEST_DOCKER_IMAGE=<image>`, `--network none`) has a
+  containerized worker's own agent open the file inside a real container. The
+  real send writes the copy with `docker exec`, the real drain delivers the
+  prompt, and the image's own `claude` CLI, run as `node` in `/workspace`,
+  takes that prompt against a scripted Messages endpoint on the container's
+  loopback (`coordinator-mail-attachments-container-model-test-support.ts`,
+  started with the image's `bun`). The model asks for `Read` on the path it
+  found in the prompt, and the test checks the CLI returned the same bytes as
+  image content. Passed on beelink on 2026-11-17 with Claude Code 2.1.319, on
+  an image built from `main` at `0265e7882` inside a disposable rootless
+  daemon (`mise run docker:disposable`).
+- Not covered: Cursor and Grok recipients. Cursor's model is hosted and Grok
+  needs a login, so their signed-in runs are on the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+  (from to-do 4420, retired 2026-11-17). If a provider cannot read the
+  directory, the recommended fix is to grant the attachment root in that
+  bridge's read-only configuration, as Codex's permission profile does; the
+  alternative, delivering mailed images as prompt attachments on the mail
+  turn, would need mail turns to carry more than text.
+
+Decisions behind the verification (from to-do 4420, retired 2026-11-17; read
+it with `git show 0265e7882:docs/todo/coordinator-and-multi-review/4420-coordinator-image-mail-live-qualification.md`):
+
+- **Recipients run on scripted loopback models, not billed turns.** The
+  agent's own tool still opens the real file and returns its bytes; only the
+  model's choice of call is scripted. Each coordinator case keeps a refused
+  read beside the granted one, so a pass cannot mean the boundary was never
+  applied.
+- **The container cases use a plain container of the image with
+  `--network none`,** not an Orkestrator-created environment, so they touch no
+  Docker network or firewall. Its entrypoint and egress gateway are therefore
+  not involved; the scripted model runs on the container's own loopback.
+- **The two-node run is a script, not two `dev:test` profiles.** It needs no
+  Electron or browser, uses no fixed port or real data directory, and hides
+  each node's files from the other with an unprivileged mount namespace. It
+  does not show a slow or SSH-forwarded link, a reconnect mid-transfer or two
+  kernels.
+- **Project home images live in the data directory,** removed with the
+  project home and after mail retention, so nothing is ever written into the
+  user's checkout; the recipient reads a path outside its checkout, which
+  Claude and Codex were shown to do.
 
 ## Repository toolbar
 

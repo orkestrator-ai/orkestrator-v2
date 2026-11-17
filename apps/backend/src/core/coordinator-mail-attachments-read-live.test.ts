@@ -16,7 +16,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { deflateSync } from "node:zlib";
 
 import {
   policyQualificationCli,
@@ -30,6 +29,7 @@ import {
 import { MailWorld, type MailActor } from "./agent-mail-world-test-support.js";
 import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
+import { realPng } from "./mail-attachment-png-test-support.js";
 import { runCommand } from "./shell.js";
 
 const CLIS = {
@@ -37,33 +37,6 @@ const CLIS = {
   codex: policyQualificationCli("codex"),
 } as const;
 type Agent = keyof typeof CLIS;
-
-/** A real 4x4 RGB PNG, so the CLI's image reader accepts it. */
-function realPng(): Buffer {
-  const chunk = (type: string, data: Buffer) => {
-    const length = Buffer.alloc(4);
-    length.writeUInt32BE(data.length);
-    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
-    const crc = Buffer.alloc(4);
-    crc.writeUInt32BE(Bun.hash.crc32(body) >>> 0);
-    return Buffer.concat([length, body, crc]);
-  };
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(4, 0);
-  header.writeUInt32BE(4, 4);
-  header.set([8, 2, 0, 0, 0], 8);
-  const rows = Buffer.concat(
-    Array.from({ length: 4 }, (_, row) =>
-      Buffer.from([0, ...Array.from({ length: 4 }, (_, col) => [row * 60, col * 60, 200]).flat()]),
-    ),
-  );
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk("IHDR", header),
-    chunk("IDAT", deflateSync(rows)),
-    chunk("IEND", Buffer.alloc(0)),
-  ]);
-}
 
 const PNG = realPng();
 

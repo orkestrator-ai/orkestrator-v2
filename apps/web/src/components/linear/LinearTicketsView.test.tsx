@@ -24,6 +24,8 @@ import { appCommandStore } from "@/test/app-command-store";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import type { NodeSummary } from "@orkestrator/protocol/node-summaries";
 import { portalStore } from "@/lib/portal/portal-store";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { forgetLinearBoardSnapshot } from "./linear-board-refresh";
 
 const realBackendSnapshot = { ...realBackend };
 
@@ -246,6 +248,8 @@ afterAll(() => {
 describe("LinearTicketsView", () => {
   beforeEach(() => {
     cleanup();
+    // Each test starts from a first visit, not from the board the last one read.
+    forgetLinearBoardSnapshot(appCommandScope());
     connectLinearMock.mockClear();
     getLinearConnectionMock.mockReset();
     getLinearConnectionMock.mockResolvedValue({

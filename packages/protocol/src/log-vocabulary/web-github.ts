@@ -16,6 +16,10 @@ export const WEB_GITHUB_LOG_AREAS = defineLogAreas({
     description: "The Linear tickets view.",
     events: {
       "comment-draft.clear-failed": "A posted comment's draft could not be cleared.",
+      "connection.refresh-failed":
+        "A background refresh could not verify the Linear connection; the shown board stays.",
+      "issues.refresh-failed":
+        "A background refresh could not read the Linear board; the shown tickets stay.",
     },
   },
 });

@@ -9,6 +9,7 @@ import { designStore } from "@/stores/designStore";
 import { designController, resetDesignControllers } from "./design-controller";
 import { resetCapabilities } from "@/lib/design-client";
 import { FakeBackend, canvasId, deferred, frameA, frameB } from "./design-test-backend";
+import { browserImageCodec } from "./design-frame-download";
 import { DesignFrameBridge } from "./frame-bridge";
 import { appCommandStore } from "@/test/app-command-store";
 
@@ -324,7 +325,12 @@ describe("DesignCanvasTab", () => {
 
       // Several selected frames are a download selection: Delete removes none
       // (checked once the download's own backend round trips have finished).
-      fireEvent.keyDown(titleB, { key: "Delete" });
+      expect(fireEvent.keyDown(titleB, { key: "Delete" })).toBe(false);
+      expect(
+        screen.getByText(
+          "Select a single frame to delete. Multiple frames can be downloaded together.",
+        ),
+      ).toBeTruthy();
 
       fireEvent.pointerDown(download, { button: 0, ctrlKey: false });
       const menu = await screen.findByRole("menu");
@@ -358,6 +364,121 @@ describe("DesignCanvasTab", () => {
       createUrl.mockRestore();
     }
   });
+
+  test("external removal reconciles selection only from a current snapshot", async () => {
+    renderInAppCommandScope(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    const titleA = await screen.findByRole("button", { name: "Move frame A" });
+    const titleB = screen.getByRole("button", { name: "Move frame B" });
+    fireEvent.click(titleA);
+    fireEvent.click(titleB, { shiftKey: true });
+    const controller = designController("env-1", canvasId);
+    const store = appCommandStore(designStore).getState();
+    const fullCanvas = store.projections.get(controller.key)!.canvas!;
+    for (const snapshot of ["loading", "stale"] as const) {
+      act(() =>
+        store.update(controller.key, (projection) => ({
+          ...projection,
+          snapshot,
+          canvas: {
+            ...fullCanvas,
+            frames: fullCanvas.frames.filter((frame) => frame.id !== frameA),
+          },
+        })),
+      );
+      act(() =>
+        store.update(controller.key, (projection) => ({
+          ...projection,
+          snapshot: "current",
+          canvas: fullCanvas,
+        })),
+      );
+      expect(
+        screen.getByRole("button", { name: "Move frame A" }).getAttribute("aria-pressed"),
+      ).toBe("true");
+    }
+    act(() =>
+      store.update(controller.key, (projection) => ({
+        ...projection,
+        canvas: { ...fullCanvas, frames: fullCanvas.frames.filter((frame) => frame.id !== frameA) },
+      })),
+    );
+    expect(titleB.getAttribute("aria-pressed")).toBe("true");
+    const download = screen.getByRole("button", { name: "Download B" });
+    fireEvent.pointerDown(download, { button: 0 });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getAllByRole("group")).toHaveLength(1);
+    expect(within(menu).getByRole("group", { name: "This frame" })).toBeTruthy();
+    fireEvent.keyDown(menu, { key: "Escape" });
+    act(() => titleB.focus());
+    fireEvent.keyDown(titleB, { key: "Delete" });
+    await waitFor(() => expect(prepared("delete_frame")).toHaveLength(1));
+    expect(prepared("delete_frame")[0]!.args.descriptor.input).toEqual({
+      kind: "delete_frame",
+      frameId: frameB,
+    });
+  });
+
+  test.each(["capture", "encoder"] as const)(
+    "a failed %s reports the error, saves nothing and permits retry",
+    async (failure) => {
+      const click = spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+      const createUrl = spyOn(URL, "createObjectURL").mockImplementation(() => "blob:retry");
+      const gate = deferred<never>();
+      const encoder =
+        failure === "encoder"
+          ? spyOn(browserImageCodec, "toWebp")
+              .mockImplementationOnce(() => gate.promise)
+              .mockResolvedValue(new Uint8Array([1, 2, 3]))
+          : undefined;
+      let captures = 0;
+      invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+        if (command === "design_capture" && failure === "capture" && captures++ === 0)
+          return gate.promise;
+        return backend.handle(command, args ?? {});
+      });
+      try {
+        renderInAppCommandScope(
+          <DesignCanvasTab
+            canvasId={canvasId}
+            environmentId="env-1"
+            isActive
+            ownsGlobalShortcuts
+          />,
+        );
+        fireEvent.click(await screen.findByRole("button", { name: "Move frame A" }));
+        const download = screen.getByRole("button", { name: "Download A" });
+        const choose = async () => {
+          fireEvent.pointerDown(download, { button: 0 });
+          const menu = await screen.findByRole("menu");
+          fireEvent.click(
+            within(within(menu).getByRole("group", { name: "This frame" })).getByRole("menuitem", {
+              name: failure === "capture" ? "PNG image" : "WEBP image",
+            }),
+          );
+        };
+        await choose();
+        await waitFor(() => expect(download.hasAttribute("disabled")).toBe(true));
+        if (encoder) await waitFor(() => expect(encoder).toHaveBeenCalledTimes(1));
+        await act(async () => gate.reject(new Error(`${failure} unavailable`)));
+        expect((await screen.findByRole("alert")).textContent).toContain(`${failure} unavailable`);
+        await waitFor(() => expect(download.hasAttribute("disabled")).toBe(false));
+        expect(click).toHaveBeenCalledTimes(0);
+        await choose();
+        await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+        expect(download.hasAttribute("disabled")).toBe(false);
+        expect(
+          await screen.findByText(`Downloaded A.${failure === "capture" ? "png" : "webp"}`),
+        ).toBeTruthy();
+        expect(screen.queryByRole("alert") === null).toBe(true);
+      } finally {
+        encoder?.mockRestore();
+        click.mockRestore();
+        createUrl.mockRestore();
+      }
+    },
+  );
 
   test("focusing another title or a Layers row cannot delete the previously selected frame", async () => {
     renderInAppCommandScope(

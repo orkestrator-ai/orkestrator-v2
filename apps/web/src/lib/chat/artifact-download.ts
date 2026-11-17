@@ -33,7 +33,7 @@ export function downloadText(text: string, filename: string, mimeType: string): 
   downloadBlob(new Blob([text], { type: mimeType }), filename);
 }
 
-export function base64ToBytes(base64: string): Uint8Array {
+export function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);

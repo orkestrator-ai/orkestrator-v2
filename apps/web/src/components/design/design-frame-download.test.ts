@@ -1,3 +1,4 @@
+import { base64ToBytes } from "@/lib/chat/artifact-download";
 import { describe, expect, mock, test } from "bun:test";
 import {
   browserImageCodec,
@@ -6,7 +7,6 @@ import {
   type DesignDownloadDeps,
   type DesignImageCodec,
 } from "./design-frame-download";
-import { base64ToBytes } from "./design-frame-files";
 import { TINY_PNG_BASE64 } from "./design-test-backend";
 
 const frames = [

@@ -27,6 +27,7 @@ import {
   type DesignFrameAction,
   type GeometryPatch,
 } from "./design-canvas-context";
+import { downloadBlob } from "@/lib/chat/artifact-download";
 import { failureOf, importDesignDocument } from "@/lib/design-client";
 import { useDesignApi, useDesignScope } from "./design-scope";
 import { useDesignCanvas } from "./design-controller";
@@ -50,7 +51,6 @@ import { DesignFrameInspector } from "./DesignFrameInspector";
 import { DesignFrameView } from "./DesignFrameView";
 import {
   downloadFrames,
-  saveFile,
   type DesignDownloadScope,
   type DesignImageFormat,
 } from "./design-frame-download";
@@ -856,7 +856,7 @@ export function DesignCanvasTab({
           canvasName: current.name,
           deps: {
             capture: (id) => nodeDesign.capture(environmentId, canvasId, id, "interactive"),
-            save: saveFile,
+            save: downloadBlob,
           },
         });
         setLocalError(null);
@@ -913,6 +913,13 @@ export function DesignCanvasTab({
     if (notice) setAnnouncement(notice.text);
   }
 
+  // Only a current snapshot proves that a frame disappeared. Loading/stale
+  // projections must not discard selection while authoritative state is absent.
+  if (projection?.snapshot === "current" && canvas) {
+    const surviving = selectedFrameIds.filter((id) => committedById.has(id));
+    if (surviving.length !== selectedFrameIds.length) setSelectedFrameIds(surviving);
+  }
+
   // Settle deletes as the projection reports them.
   const [deletesSeen, setDeletesSeen] = useState({ pendingDeletes, projection });
   if (deletesSeen.pendingDeletes !== pendingDeletes || deletesSeen.projection !== projection) {
@@ -936,7 +943,7 @@ export function DesignCanvasTab({
         if (intent?.outcome !== "committed" && intent !== undefined) continue;
         if (frameSelection.includes(frameId)) {
           frameSelection = frameSelection.filter((id) => id !== frameId);
-          setSelectedFrameIds(frameSelection);
+          setSelectedFrameIds((ids) => ids.filter((id) => id !== frameId));
         }
         if (elementSelectionFrame === frameId) {
           elementSelectionFrame = undefined;
@@ -998,6 +1005,19 @@ export function DesignCanvasTab({
         // download selection, and one delete per frame would race on the
         // canvas revision.
         const chosen = selectedFrameRef.current;
+        if (
+          chosen.length > 1 &&
+          !selectionRef.current &&
+          editableRef.current &&
+          document.activeElement instanceof Element &&
+          chosen.includes(document.activeElement.getAttribute("data-frame-title-id") ?? "")
+        ) {
+          event.preventDefault();
+          setAnnouncement(
+            "Select a single frame to delete. Multiple frames can be downloaded together.",
+          );
+          return;
+        }
         const target =
           chosen.length === 1
             ? current?.canvas?.frames.find((frame) => frame.id === chosen[0])

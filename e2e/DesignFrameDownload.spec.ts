@@ -43,9 +43,17 @@ test("selected frames download as PNG, WEBP, a multi-page PDF and a ZIP", async 
       height: 180,
       html: slide("Outro", "#047857"),
     });
-    await page.exposeFunction("designInvoke", (command: string, args: Record<string, unknown>) =>
-      service.invoke(command, args),
-    );
+    let failCapture = false;
+    let rejectCapture: ((error: Error) => void) | undefined;
+    await page.exposeFunction("designInvoke", (command: string, args: Record<string, unknown>) => {
+      if (command === "design_capture" && failCapture) {
+        failCapture = false;
+        return new Promise((_, reject) => {
+          rejectCapture = reject;
+        });
+      }
+      return service.invoke(command, args);
+    });
     await page.goto(`/design-canvas?canvasId=${canvas.id}`);
     const intro = page.getByRole("button", { name: "Move frame Intro slide" });
     const outro = page.getByRole("button", { name: "Move frame Outro slide" });
@@ -65,13 +73,35 @@ test("selected frames download as PNG, WEBP, a multi-page PDF and a ZIP", async 
       await outline.evaluate((node) => getComputedStyle(node).borderTopColor),
     );
 
+    await outro.press("Delete");
+    await expect(
+      page.getByRole("status").filter({ hasText: "Select a single frame to delete" }),
+    ).toBeAttached();
     const menu = page.getByRole("menu");
     const choose = async (group: string, item: string) => {
       await download.click();
       await menu.getByRole("group", { name: group }).getByRole("menuitem", { name: item }).click();
     };
 
+    // A rejected capture reaches the canvas error banner, releases busy state,
+    // saves no file, and the next selection of the same action can succeed.
+    const downloads: Download[] = [];
+    page.on("download", (value) => downloads.push(value));
+    failCapture = true;
+    await choose("This frame", "PNG image");
+    await expect(download).toBeDisabled();
+    await expect.poll(() => Boolean(rejectCapture)).toBe(true);
+    rejectCapture!(new Error("Capture temporarily unavailable"));
+    await expect(page.getByRole("alert")).toContainText("Capture temporarily unavailable");
+    await expect(download).toBeEnabled();
+    expect(downloads).toHaveLength(0);
+    await mkdir("output/visual-previews", { recursive: true });
+    await page.screenshot({
+      path: "output/visual-previews/frame-download-capture-error-after.png",
+    });
+
     const png = await saved(page, () => choose("This frame", "PNG image"));
+    await expect(page.getByRole("alert")).toHaveCount(0);
     expect(png.name).toBe("Outro-slide.png");
     expect(png.bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
     expect(png.bytes.readUInt32BE(16)).toBe(320);
@@ -95,6 +125,32 @@ test("selected frames download as PNG, WEBP, a multi-page PDF and a ZIP", async 
     const zipText = zip.bytes.toString("latin1");
     expect(zipText).toContain("01-Intro-slide.webp");
     expect(zipText).toContain("02-Outro-slide.webp");
+
+    // An agent removes one selected frame while this view is inactive. On
+    // return the current backend snapshot must repair both count and Delete.
+    await page.getByRole("button", { name: "Switch tab" }).click();
+    const current = await service.get(canvas.id, "design-fixture");
+    const removed = await service.action("submit_operation", {
+      canvasId: canvas.id,
+      input: { kind: "delete_frame", frameId: first.frame.id },
+      preconditions: { canvasRevision: current.revision, frameRevision: first.frame.revision },
+      correlationId: "download-external-removal",
+    });
+    expect(removed).toMatchObject({ state: "committed" });
+    await page.getByRole("button", { name: "Switch tab" }).click();
+    await expect(intro).toHaveCount(0);
+    await expect(outro).toHaveAttribute("aria-pressed", "true");
+    await download.click();
+    await expect(menu.getByRole("group")).toHaveCount(1);
+    await expect(menu.getByRole("group", { name: "This frame" })).toBeVisible();
+    await page.screenshot({
+      path: "output/visual-previews/frame-download-external-removal-after.png",
+    });
+    await page.keyboard.press("Escape");
+    await outro.press("Delete");
+    await expect(outro).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole("button", { name: /Move frame/ })).toHaveCount(0);
   } finally {
     await service.close();
     await rm(dir, { recursive: true, force: true });

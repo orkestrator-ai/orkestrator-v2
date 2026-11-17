@@ -5,9 +5,9 @@
  * shows exactly what the canvas saved, independent of zoom or of whether the
  * frame is on screen. Encoders live in `design-frame-files.ts`.
  */
+import { base64ToBytes } from "@/lib/chat/artifact-download";
 import {
   PX_TO_PT,
-  base64ToBytes,
   buildPdf,
   buildZip,
   frameFileNames,
@@ -84,16 +84,6 @@ export const browserImageCodec: DesignImageCodec = {
     return bytesOf(new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate")));
   },
 };
-
-/** Saves a file through the browser's download path (Electron's Save dialog in the app). */
-export function saveFile(file: Blob, fileName: string) {
-  const url = URL.createObjectURL(file);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 const MIME: Record<DesignImageFormat, string> = {
   png: "image/png",

@@ -360,8 +360,8 @@ Navigation: Fit all (Shift+1), Zoom to selection (Shift+2), 100% (Ctrl/⌘+0),
 pointer-anchored wheel/pinch zoom, Shift+wheel and middle-drag pan, keyboard
 move/resize of frames (Arrow, Alt+Arrow, Shift for 10 px), numeric frame
 fields and device presets, frame selection (clicking a frame title outlines
-the frame in blue; Delete/Backspace deletes it — undoable; a canvas-background
-click or Escape deselects), Escape
+the frame in blue; Delete/Backspace deletes a single selected frame — undoable;
+a canvas-background click or Escape deselects), Escape
 priority (gesture → preview → element selection → frame selection → drawers),
 design undo only when the canvas owns the shortcut. Narrow panes use
 Layers/Inspector drawers. Short panes (under 400 px, about 400% zoom) keep the
@@ -418,7 +418,10 @@ Clicking a frame's title selects the frame (board); Shift-, Ctrl- or
 ⌘-click adds a frame to the board selection or removes it. Delete removes a
 board only when it is the only one selected: several selected frames are a
 download selection, and one delete per frame would race on the canvas
-revision. Every selected frame shows a download button at its top right, in
+revision. Pressing Delete with several frames selected announces that a single
+selection is required. Removed frames leave the selection when a current
+authoritative snapshot arrives; loading or stale snapshots keep the selection.
+Every selected frame shows a download button at its top right, in
 the selection blue (`DesignFrameDownloadMenu.tsx`). Its menu offers **This
 frame** as PNG, WEBP or PDF; with several frames selected, a separated
 **Selected frames** group; and, when the canvas has more than one frame, an

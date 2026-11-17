@@ -161,3 +161,23 @@ bun --cwd=apps/backend test src/core/previews/listener-ownership.test.ts
 --parallel=1 --only-failures`. Evidence: `orkestrator-test-run.vVypqX/`
 under the host temporary directory. No assertion, timeout, skip or
 implementation changed.
+
+## Frame download review preparation — 2026-11-17
+
+Base `fb545b2c486f872806cc6a795885fa38dac3c5f1`; reviewed head `8c922dbc19f1b1307735d01c218f2cff0f368cc1`,
+which changes design-download renderer code and neither affected owner.
+`mise run flaky:recurrence -- 4843 --base fb545b2c486f872806cc6a795885fa38dac3c5f1` answered `open`.
+
+The captured preparation command `mise run test:logged -- --name review-default-tests -- mise run test`
+failed in `apps/backend/src/core/previews/listener-ownership.test.ts` on both
+`LoopbackListenerOwnership on this host > attributes a real 127.0.0.1 listener and refuses another environment`
+(4,486.73 ms: expected `none`, received `unchecked`, line 455) and the `::` variant
+(3,838.50 ms: expected `other-environment`, received `unchecked`, line 452).
+The runner's complete-owner isolated retry passed in 2.0 s (23 passed, zero failed).
+This records existing evidence, not a new execution. Backend totals were
+not retained in this note; the workspace group failed and the overall run used
+bounded concurrent workspace/root/bridge pools.
+
+Evidence: `orkestrator-test-run.GH3c7x/{workspace-web-backend-desktop-web-public-cli-protocol-toolchain,rerun-apps-backend-src-core-previews-listener-ownership-test-ts}.log.gz`
+under the host temporary root. No implementation, assertion, timeout or skip changed.
+The retry proves intermittence, not a cause or repair.

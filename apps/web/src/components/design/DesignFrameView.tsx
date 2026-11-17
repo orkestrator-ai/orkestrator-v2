@@ -367,7 +367,7 @@ export const DesignFrameView = memo(function DesignFrameView({
           aria-label={`Move frame ${frame.name}`}
           data-frame-title-id={frame.id}
           aria-pressed={frameSelected}
-          aria-description="Shift-click adds to the selection. Arrow keys move, Alt+Arrow keys resize, Shift for larger steps, Delete removes a selected frame"
+          aria-description="Shift-click adds to the selection. Arrow keys move, Alt+Arrow keys resize, Shift for larger steps, Delete requires a single selected frame"
         >
           {frame.name} · {Math.round(shown.width)} × {Math.round(shown.height)}
           {pending && <span className="ml-1 text-[10px] text-primary">· saving</span>}

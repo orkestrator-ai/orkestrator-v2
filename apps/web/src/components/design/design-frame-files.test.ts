@@ -1,7 +1,7 @@
+import { base64ToBytes } from "@/lib/chat/artifact-download";
 import { describe, expect, test } from "bun:test";
 import {
   PX_TO_PT,
-  base64ToBytes,
   buildPdf,
   buildZip,
   crc32,
@@ -146,6 +146,17 @@ describe("design frame files", () => {
     expect(Array.from(await pipe(stream, new DecompressionStream("deflate")))).toEqual(
       Array.from(rgb),
     );
+  });
+
+  test("PDF titles truncate by code point and preserve an astral character at the boundary", () => {
+    const title = `${"a".repeat(199)}😀discarded`;
+    const pdf = buildPdf(
+      [{ width: 1, height: 1, pixelWidth: 1, pixelHeight: 1, rgbDeflated: new Uint8Array() }],
+      title,
+    );
+    const hex = /\/Title <([A-F0-9]+)>/.exec(text(pdf))![1]!;
+    const bytes = Uint8Array.from(hex.match(/../g)!, (byte) => Number.parseInt(byte, 16));
+    expect(new TextDecoder("utf-16be", { fatal: true }).decode(bytes)).toBe(`${"a".repeat(199)}😀`);
   });
 
   test("a PDF needs at least one page", () => {

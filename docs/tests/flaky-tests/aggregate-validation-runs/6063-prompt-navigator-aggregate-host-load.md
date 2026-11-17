@@ -248,3 +248,22 @@ All group evidence is now compressed under `orkestrator-test-run.0s0ejx`:
 `root-and-agent-support-tests.log.gz`, and each `rerun-*.log.gz`.
 The outer command's failure log is
 `orkestrator-test-run.v2cwL4/fix-default-runtime.log.gz`.
+
+## Frame download review preparation — 2026-11-17
+
+Base `fb545b2c486f872806cc6a795885fa38dac3c5f1`; reviewed head `8c922dbc19f1b1307735d01c218f2cff0f368cc1`,
+which changes design-download renderer code and neither affected owner.
+`mise run flaky:recurrence -- 6063 --base fb545b2c486f872806cc6a795885fa38dac3c5f1` answered `open`.
+
+The captured preparation command `mise run test:logged -- --name review-default-tests -- mise run test`
+failed on `activity sweep bridge ownership > readiness timeout reaps the child and removes copied
+credentials (ignores TERM: %s)` in `tests/unit/activity-sweep-bridge.test.ts:111`:
+cleanup raised `kill() failed: EPERM` after 207.80 ms. Root/support totals were
+4,890 passed, 29 skipped and 18 failed across 288 files (348.71 s).
+The runner's complete-owner isolated retry passed in 813 ms; its log reports
+five passed, zero failed (486 ms of test execution). This records existing evidence, not a new execution.
+
+Evidence: the pinned review package's `validation-04.stderr.txt`, and
+`orkestrator-test-run.GH3c7x/{root-and-agent-support-tests,rerun-tests-unit-activity-sweep-bridge-test-ts}.log.gz`
+under the host temporary root. No implementation, assertion, timeout or skip changed.
+Attribution remains undetermined; the retry proves intermittence, not a fix.

@@ -35,13 +35,6 @@ export function frameFileNames(names: readonly string[], extension: string): str
   });
 }
 
-export function base64ToBytes(data: string): Uint8Array<ArrayBuffer> {
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
-
 // ---------------------------------------------------------------------------
 // ZIP (store only: PNG and WEBP are already compressed)
 
@@ -199,7 +192,8 @@ export function buildPdf(pages: readonly DesignPdfPage[], title?: string): Uint8
   object(3, () => {
     // Title as UTF-16BE hex so any name survives.
     const titleHex = title
-      ? `/Title <FEFF${Array.from(title.slice(0, 200))
+      ? `/Title <FEFF${Array.from(title)
+          .slice(0, 200)
           .map((char) => {
             const code = char.codePointAt(0)!;
             const units =

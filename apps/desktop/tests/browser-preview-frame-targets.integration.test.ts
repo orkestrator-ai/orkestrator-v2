@@ -453,7 +453,7 @@ describe.skipIf(!CHROMIUM)("element targets inside iframes, in Chromium", () => 
       [900, 480],
       [480, 0],
       [480, 900],
-    ]) {
+    ] as const) {
       await isolated.page.evaluate(
         ({ x, y }) =>
           (document.getElementById("editor") as HTMLIFrameElement).contentWindow!.scrollTo(x, y),

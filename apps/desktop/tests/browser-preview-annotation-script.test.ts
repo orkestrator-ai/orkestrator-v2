@@ -450,18 +450,13 @@ describe("page-side anchor resolver", () => {
   test("matches a unique stable id and draws a numbered pin only for matched targets", () => {
     const harness = page(`<button data-testid="save">Save</button><button>Other</button>`);
     // happy-dom has no layout; visible pins require a non-empty rendered box.
-    harness.document.querySelector("button")!.getBoundingClientRect = () =>
-      ({
-        x: 10,
-        y: 10,
-        left: 10,
-        top: 10,
-        right: 90,
-        bottom: 40,
-        width: 80,
-        height: 30,
-        toJSON: () => ({}),
-      }) as DOMRect;
+    const button = harness.document.querySelector("button")!;
+    const renderedBox = button.getBoundingClientRect();
+    renderedBox.x = 10;
+    renderedBox.y = 10;
+    renderedBox.width = 80;
+    renderedBox.height = 30;
+    button.getBoundingClientRect = () => renderedBox;
     const target = captureElement(harness, harness.document.querySelector("button")!);
     const results = harness.pins([
       { annotationId: "annotation-1", number: 7, target },

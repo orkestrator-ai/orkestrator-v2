@@ -244,7 +244,7 @@ export function NodeWorkspaceHost() {
       // A project's dialog reads the project from the node's loaded list.
       if (!hydrated) return;
       applied();
-      ui.selectProject(request.projectId);
+      ui.selectProject(request.projectId, { landingTab: request.landingTab });
       if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
       if (request.dialog) openDialog(request.dialog, request.projectId, undefined, scope.nodeId);
       return;
@@ -254,7 +254,7 @@ export function NodeWorkspaceHost() {
       // Gone since the window listed it: show its project instead.
       if (environmentsReady) {
         applied();
-        ui.selectProject(request.projectId);
+        ui.selectProject(request.projectId, { landingTab: request.landingTab });
         if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
       }
       return;

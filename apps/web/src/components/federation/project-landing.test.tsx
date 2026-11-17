@@ -189,22 +189,30 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         );
         await waitFor(() => expect(portalStore.getState().status?.mode).toBe(mode));
         const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
-        for (let click = 0; click < 2; click++) {
-          act(() => appCommandStore(uiStore).getState().setProjectBoardTab("kanban"));
-          fireEvent.click(heading);
-          await waitFor(() =>
-            expect(appCommandStore(uiStore).getState().projectBoardTab).toBe(
-              mode === "leaf" ? "home" : "coordinator",
-            ),
-          );
-          expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
-          expect(
-            screen.getByText(mode === "leaf" ? "Project Home" : "Project Coordinator"),
-          ).toBeTruthy();
-          expect(screen.queryByTestId("leaf-mode-coordinator-gate") === null).toBe(true);
-          expect(useRemoteWorkspaceStore.getState().active).toBeNull();
-          expect(heading.getAttribute("aria-current")).toBe("page");
-        }
+        // Another project's tab is not this one's: it opens on its landing tab.
+        act(() => appCommandStore(uiStore).getState().setProjectBoardTab("kanban"));
+        fireEvent.click(heading);
+        await waitFor(() =>
+          expect(appCommandStore(uiStore).getState().projectBoardTab).toBe(
+            mode === "leaf" ? "home" : "coordinator",
+          ),
+        );
+        expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
+        expect(
+          screen.getByText(mode === "leaf" ? "Project Home" : "Project Coordinator"),
+        ).toBeTruthy();
+        expect(screen.queryByTestId("leaf-mode-coordinator-gate") === null).toBe(true);
+        expect(useRemoteWorkspaceStore.getState().active).toBeNull();
+        expect(heading.getAttribute("aria-current")).toBe("page");
+        // Left on Kanban, the heading returns the project to Kanban.
+        act(() => appCommandStore(uiStore).getState().setProjectBoardTab("kanban"));
+        act(() => appCommandStore(uiStore).getState().selectProject(null));
+        fireEvent.click(heading);
+        await waitFor(() =>
+          expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1"),
+        );
+        expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("kanban");
+        expect(heading.getAttribute("aria-current")).toBe("page");
       } finally {
         cleanup();
         appCommandStore(uiStore).setState(initialUI, true);
@@ -291,7 +299,7 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
       await waitFor(() =>
         expect(request()).toEqual({
           projectId: "project-1",
-          ...(coordinator ? { boardTab: "coordinator" } : {}),
+          ...(coordinator ? { landingTab: "coordinator" } : {}),
         }),
       );
 
@@ -321,7 +329,7 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         await waitFor(() =>
           expect(request()).toEqual({
             projectId: "project-1",
-            boardTab: "coordinator",
+            landingTab: "coordinator",
           }),
         );
         expect(repository.getAttribute("aria-current")).toBe("page");
@@ -338,7 +346,7 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         );
         expect(repository.getAttribute("aria-current")).toBe("page");
         expect(member.getAttribute("aria-current")).toBeNull();
-        expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request.boardTab).toBe(
+        expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request.landingTab).toBe(
           "coordinator",
         );
 

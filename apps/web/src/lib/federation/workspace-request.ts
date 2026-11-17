@@ -39,6 +39,12 @@ export interface WorkspaceRequest {
   projectId?: string;
   environmentId?: string;
   boardTab?: WorkspaceBoardTab;
+  /**
+   * The tab a project with no last tab of its own opens on, where a sidebar
+   * entry's grouping calls for one. Unlike `boardTab` it never overrides the
+   * tab the project was last left on.
+   */
+  landingTab?: WorkspaceBoardTab;
   /** Work in the selected environment. */
   workTarget?: WorkspaceWorkTarget;
   /** Open the node's Add Project dialog. */

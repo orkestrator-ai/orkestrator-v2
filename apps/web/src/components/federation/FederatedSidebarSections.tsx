@@ -681,13 +681,14 @@ export function MergedProjectList({
       mode === "repository" ? repositoryOpenTarget(entry.projects, portalState.selfId) : null;
     const coordinatorGated = opens?.machine.bound === true && portalState.status?.mode === "leaf";
     const openOpens = opens
-      ? () =>
+      ? (coordinator = false) =>
           openRepository({
             repository: entry.name,
             projectKey: opens.id,
             connectionId: opens.machine.connectionId,
             projectId: opens.project.ref.projectId,
             coordinatorGated,
+            coordinator,
             title: opens.name,
           })
       : undefined;
@@ -714,14 +715,16 @@ export function MergedProjectList({
         isCollapsed={isFolderCollapsed(entry.name)}
         onToggleCollapse={() => setFolderKeyCollapsed(folderCollapseKey(entry.name))}
         selected={opens !== null && openedRepository?.name === entry.name}
-        onOpen={openOpens}
+        onOpen={openOpens ? () => openOpens() : undefined}
         openMachineName={opens?.machine.name}
         {...(opens
           ? {
               repositoryMenu: repositoryMenuActions(
                 entry.name,
                 opens,
-                coordinatorGated ? undefined : openOpens,
+                // The menu item always opens the coordinator; the heading
+                // returns to the project's last tab.
+                coordinatorGated || !openOpens ? undefined : () => openOpens(true),
               ),
             }
           : {})}

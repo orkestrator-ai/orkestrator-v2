@@ -256,6 +256,29 @@ test("a later request from the window is applied as a sidebar click would", asyn
   expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("kanban");
 });
 
+test("a landing tab opens a project with no last tab, and never overrides the one it was left on", async () => {
+  open({}, <NodeWorkspaceHost />);
+  await act(async () => resolveProjects([project]));
+  await settle();
+  ask({ projectId: project.id, landingTab: "coordinator" });
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(project.id),
+  );
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
+  act(() => appCommandStore(uiStore).getState().setProjectBoardTab("linear"));
+  act(() => appCommandStore(uiStore).getState().selectProject(null));
+  ask({ projectId: project.id, landingTab: "coordinator" });
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(project.id),
+  );
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("linear");
+  // Board navigation still opens the tab it names.
+  ask({ projectId: project.id, boardTab: "coordinator" });
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator"),
+  );
+});
+
 test("the window's own document visibility stands: a hidden node is its scope's tier, not a hidden page", async () => {
   open({}, <NodeWorkspaceHost />);
   await settle();
@@ -378,7 +401,7 @@ for (const [grouping, board] of [
     const request = useRemoteWorkspaceStore.getState().requests[leafId]!.request;
     expect(request).toEqual({
       projectId: project.id,
-      ...(coordinator ? { boardTab: "coordinator" } : {}),
+      ...(board ? { boardTab: "coordinator" } : coordinator ? { landingTab: "coordinator" } : {}),
     });
     tree.unmount();
     asLeaf();

@@ -234,7 +234,7 @@ describe("ProjectSearchBar across machines", () => {
     });
     expect(useRemoteWorkspaceStore.getState().requests.bk_mbp3?.request).toMatchObject({
       projectId: "tg",
-      boardTab: "coordinator",
+      landingTab: "coordinator",
     });
   });
 

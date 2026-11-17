@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { uiStore } from "./uiStore";
+import { PROJECT_BOARD_TAB_MEMORY_LIMIT, uiStore } from "./uiStore";
 import { createUIChromeStore } from "./uiChromeStore";
 import {
   COMMAND_STORAGE_NODE,
@@ -77,6 +77,109 @@ test("a command node's project opens on its coordinator", () => {
   command.getState().setProjectBoardTab("kanban");
   command.getState().selectProject("command-project");
   expect(command.getState().projectBoardTab).toBe("coordinator");
+});
+
+test("a project reopens on the board tab it was last left on", () => {
+  window.orkestrator = undefined;
+  localStorage.clear();
+  const ui = commandUI();
+  ui.getState().selectProject("project-a");
+  expect(ui.getState().projectBoardTab).toBe("coordinator");
+  ui.getState().setProjectBoardTab("kanban");
+  // A project not opened before still lands on its default tab.
+  ui.getState().selectProject("project-b");
+  expect(ui.getState().projectBoardTab).toBe("coordinator");
+  ui.getState().setProjectBoardTab("linear");
+  ui.getState().selectProject("project-a");
+  expect(ui.getState().projectBoardTab).toBe("kanban");
+  // Reselecting the project shown keeps its tab.
+  ui.getState().selectProject("project-a");
+  expect(ui.getState().projectBoardTab).toBe("kanban");
+  ui.getState().selectProject("project-b");
+  expect(ui.getState().projectBoardTab).toBe("linear");
+  // Leaving the project page does not forget it.
+  ui.getState().selectProject(null);
+  ui.getState().selectProject("project-a");
+  expect(ui.getState().projectBoardTab).toBe("kanban");
+});
+
+test("a project's last board tab survives a reload", () => {
+  window.orkestrator = undefined;
+  localStorage.clear();
+  const first = commandUI();
+  first.getState().selectProject("project-a");
+  first.getState().setProjectBoardTab("home");
+  first.getState().selectProject("project-b");
+  first.getState().setProjectBoardTab("notes");
+  const reloaded = commandUI();
+  reloaded.getState().selectProject("project-a");
+  expect(reloaded.getState().projectBoardTab).toBe("home");
+  reloaded.getState().selectProject("project-b");
+  expect(reloaded.getState().projectBoardTab).toBe("notes");
+  // Another node's projects keep their own memory.
+  const leaf = leafUI("bk_a");
+  leaf.getState().selectProject("project-b");
+  expect(leaf.getState().projectBoardTab).toBe("home");
+});
+
+test("a stored board tab memory keeps only well-formed entries", () => {
+  window.orkestrator = undefined;
+  localStorage.clear();
+  const key = desktopConnectionStorageKey("ui-project-storage", COMMAND_STORAGE_NODE);
+  localStorage.setItem(
+    key,
+    JSON.stringify({
+      state: {
+        projectBoardTabs: [
+          ["project-a", "github"],
+          ["project-a", "notes"],
+          ["project-b", "not-a-tab"],
+          ["project-c"],
+          "project-d",
+          [42, "kanban"],
+        ],
+      },
+      version: 0,
+    }),
+  );
+  const ui = commandUI();
+  expect(ui.getState().projectBoardTabs).toEqual([["project-a", "github"]]);
+  ui.getState().selectProject("project-a");
+  expect(ui.getState().projectBoardTab).toBe("github");
+  ui.getState().selectProject("project-b");
+  expect(ui.getState().projectBoardTab).toBe("coordinator");
+});
+
+test("the board tab memory is bounded, dropping the least recently used project", () => {
+  window.orkestrator = undefined;
+  localStorage.clear();
+  const ui = commandUI();
+  for (let index = 0; index <= PROJECT_BOARD_TAB_MEMORY_LIMIT; index += 1) {
+    ui.getState().selectProject(`project-${index}`);
+    ui.getState().setProjectBoardTab("kanban");
+  }
+  expect(ui.getState().projectBoardTabs).toHaveLength(PROJECT_BOARD_TAB_MEMORY_LIMIT);
+  // The oldest kept project still remembers its tab; the one before it does not.
+  ui.getState().selectProject("project-1");
+  expect(ui.getState().projectBoardTab).toBe("kanban");
+  ui.getState().selectProject("project-0");
+  expect(ui.getState().projectBoardTab).toBe("coordinator");
+  expect(ui.getState().projectBoardTabs).toHaveLength(PROJECT_BOARD_TAB_MEMORY_LIMIT);
+});
+
+test("a project reached through the window's selection opens on its last tab", () => {
+  window.orkestrator = undefined;
+  localStorage.clear();
+  const windowScope = new WindowScope();
+  windows.push(windowScope);
+  const scope = windowScope.open({ role: "command", client: new FakeNodeClient() });
+  const ui = scope.store(uiStore);
+  ui.getState().selectProject("project-a");
+  ui.getState().setProjectBoardTab("features");
+  ui.getState().selectProject("project-b");
+  windowScope.select({ nodeId: scope.nodeId, projectId: "project-a", environmentId: null });
+  expect(ui.getState().selectedProjectId).toBe("project-a");
+  expect(ui.getState().projectBoardTab).toBe("features");
 });
 
 test("a leaf scope's projects open on their home by its role, whatever the page is", () => {

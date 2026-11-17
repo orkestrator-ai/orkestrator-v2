@@ -2987,19 +2987,31 @@ describe("HierarchicalSidebar", () => {
     ]);
   });
 
-  test("project row and Open Board reset Home for both same and different projects", () => {
+  test("project row returns to the project's last tab; Open Board opens its coordinator", () => {
     projectsValue = [project, { ...project, id: "project-2", name: "Project Two", order: 1 }];
+    act(() => appCommandStore(uiStore).setState({ projectBoardTabs: [] }));
     renderInAppCommandScope(<HierarchicalSidebar />);
     for (const name of ["Project One", "Project Two"]) {
       act(() => appCommandStore(uiStore).setState({ projectBoardTab: "home" }));
       const row = screen.getByRole("button", { name });
+      // A project not left on any tab yet opens on its coordinator.
       fireEvent.click(row);
       expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
-      act(() => appCommandStore(uiStore).setState({ projectBoardTab: "home" }));
+      act(() => appCommandStore(uiStore).getState().setProjectBoardTab("kanban"));
+      fireEvent.click(row);
+      expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("kanban");
       fireEvent.contextMenu(row);
       fireEvent.click(screen.getByText("Open Board"));
       expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
     }
+    // Each project kept its own last tab.
+    fireEvent.click(screen.getByRole("button", { name: "Project One" }));
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
+    act(() => appCommandStore(uiStore).getState().setProjectBoardTab("notes"));
+    fireEvent.click(screen.getByRole("button", { name: "Project Two" }));
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
+    fireEvent.click(screen.getByRole("button", { name: "Project One" }));
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("notes");
   });
 
   test("deletes a project only after every environment succeeds", async () => {

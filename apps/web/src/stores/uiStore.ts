@@ -13,6 +13,8 @@ import { selectionOnScope } from "./windowSelectionStore";
 export type { ActivitySortOrder, EnvironmentSortMode } from "./uiChromeStore";
 
 const RECENT_PROJECT_LIMIT = 5;
+/** How many projects' last board tab a node remembers; the least recent is dropped. */
+export const PROJECT_BOARD_TAB_MEMORY_LIMIT = 200;
 
 const isFolderCollapsed = (collapsed: string[], folder: string): boolean =>
   collapsed.some((name) => projectFolderKey(name) === projectFolderKey(folder));
@@ -38,12 +40,83 @@ export type ProjectBoardTab =
   | "notes"
   | "pull-requests";
 
+const PROJECT_BOARD_TABS: ReadonlySet<string> = new Set<ProjectBoardTab>([
+  "home",
+  "coordinator",
+  "schedules",
+  "kanban",
+  "github",
+  "linear",
+  "features",
+  "notes",
+  "pull-requests",
+]);
+
+export const isProjectBoardTab = (value: unknown): value is ProjectBoardTab =>
+  typeof value === "string" && PROJECT_BOARD_TABS.has(value);
+
+/** A project's last board tab, newest first: `[projectId, tab]`. */
+export type ProjectBoardTabMemory = Array<[projectId: string, tab: ProjectBoardTab]>;
+
 /**
  * A project opens on its coordinator, except on a leaf node: coordination
  * happens on the command node, so a leaf's project opens on its home.
  */
 const projectLandingBoardTab = (scope: NodeScope): ProjectBoardTab =>
   scopeNodeIsLeaf(scope) ? "home" : "coordinator";
+
+/** How `selectProject` picks the tab a project opens on. */
+export interface SelectProjectOptions {
+  /** The tab for a project with none remembered; the node's landing tab when omitted. */
+  landingTab?: ProjectBoardTab;
+  /** Open the landing tab even when the project was left on another. */
+  resetTab?: boolean;
+}
+
+/**
+ * The tab a project opens on: the one it was last left on, or else
+ * `landingTab` when the caller names one, or else the node's landing tab. A
+ * remembered tab the project can no longer show (Home without a checkout) is
+ * corrected by `useProjectHomeActivation`.
+ */
+const projectOpeningBoardTab = (
+  scope: NodeScope,
+  memory: ProjectBoardTabMemory,
+  projectId: string | null,
+  options: SelectProjectOptions = {},
+): ProjectBoardTab =>
+  (projectId && !options.resetTab ? memory.find(([id]) => id === projectId)?.[1] : undefined) ??
+  options.landingTab ??
+  projectLandingBoardTab(scope);
+
+const rememberProjectBoardTab = (
+  memory: ProjectBoardTabMemory,
+  projectId: string,
+  tab: ProjectBoardTab,
+): ProjectBoardTabMemory => {
+  if (memory[0]?.[0] === projectId && memory[0][1] === tab) return memory;
+  return [
+    [projectId, tab] as [string, ProjectBoardTab],
+    ...memory.filter(([id]) => id !== projectId),
+  ].slice(0, PROJECT_BOARD_TAB_MEMORY_LIMIT);
+};
+
+/** Keeps only well-formed entries of a stored memory, first occurrence of each project. */
+const parseProjectBoardTabMemory = (stored: unknown): ProjectBoardTabMemory | undefined => {
+  if (!Array.isArray(stored)) return undefined;
+  const seen = new Set<string>();
+  const memory: ProjectBoardTabMemory = [];
+  for (const entry of stored) {
+    if (!Array.isArray(entry) || entry.length !== 2) continue;
+    const [projectId, tab] = entry as unknown[];
+    if (typeof projectId !== "string" || !projectId || seen.has(projectId)) continue;
+    if (!isProjectBoardTab(tab)) continue;
+    seen.add(projectId);
+    memory.push([projectId, tab]);
+    if (memory.length >= PROJECT_BOARD_TAB_MEMORY_LIMIT) break;
+  }
+  return memory;
+};
 
 /**
  * One node's UI state (report §7.1 class (d), plan item 3006). Project and
@@ -64,6 +137,11 @@ export interface UIState {
   /** Most recently opened project IDs, newest first. */
   recentProjectIds: string[];
   projectBoardTab: ProjectBoardTab;
+  /**
+   * The board tab each project was last left on, newest first, so selecting a
+   * project returns to it rather than to the landing tab. Persisted per node.
+   */
+  projectBoardTabs: ProjectBoardTabMemory;
   /** Project IDs that are collapsed in the hierarchical sidebar */
   collapsedProjects: string[];
   /** Projects with an explicit collapse choice; defaults may still apply to the others. */
@@ -85,7 +163,12 @@ export interface UIState {
   openedLeafCoordinators: string[];
 
   // Actions
-  selectProject: (projectId: string | null) => void;
+  /**
+   * Opens a project's page on the tab it was last left on (see
+   * `SelectProjectOptions`); a caller that must show a particular tab sets it
+   * afterwards with `setProjectBoardTab`.
+   */
+  selectProject: (projectId: string | null, options?: SelectProjectOptions) => void;
   selectEnvironment: (environmentId: string | null) => void;
   setProjectBoardTab: (tab: ProjectBoardTab) => void;
   /** Select both project and environment at once (for hierarchical sidebar) */
@@ -150,7 +233,16 @@ function bindWindowSelection(
     projecting = true;
     try {
       if (here) {
-        set({ selectedProjectId: projectId, selectedEnvironmentId: environmentId });
+        set((current) => ({
+          selectedProjectId: projectId,
+          selectedEnvironmentId: environmentId,
+          // Arriving at another project returns to the tab it was left on.
+          ...(projectId !== null && projectId !== current.selectedProjectId
+            ? {
+                projectBoardTab: projectOpeningBoardTab(scope, current.projectBoardTabs, projectId),
+              }
+            : {}),
+        }));
       } else {
         // The window moved to another node: this node's workspace shows
         // nothing behind it, as `selectProject(null)` left it before.
@@ -216,7 +308,12 @@ export function mergePersistedUIState(persisted: unknown, current: UIState): UIS
   >;
   const restored: Partial<PersistedUIState> = {};
   for (const field of UI_NODE_PERSISTED_FIELDS) {
-    if (Array.isArray(stored[field])) restored[field] = stored[field] as string[];
+    if (field === "projectBoardTabs") {
+      const memory = parseProjectBoardTabMemory(stored[field]);
+      if (memory) restored[field] = memory;
+    } else if (Array.isArray(stored[field])) {
+      restored[field] = stored[field] as string[];
+    }
   }
   return { ...current, ...restored };
 }
@@ -228,6 +325,7 @@ export const uiStore = defineScopedStore<UIState>("ui", (scope) => {
       projectSelectionRevision: 0,
       recentProjectIds: [],
       projectBoardTab: projectLandingBoardTab(scope),
+      projectBoardTabs: [],
       collapsedProjects: [],
       projectCollapseChoices: [],
       collapsedProjectFolders: [],
@@ -236,21 +334,34 @@ export const uiStore = defineScopedStore<UIState>("ui", (scope) => {
       openedLeafCoordinators: [],
 
       // Actions
-      selectProject: (projectId) =>
-        set((state) => ({
-          selectedProjectId: projectId,
-          projectSelectionRevision: state.projectSelectionRevision + 1,
-          projectBoardTab: projectLandingBoardTab(scope),
-          selectedEnvironmentId: null,
-          selectedEnvironmentIds: [],
-          recentProjectIds: projectId
-            ? addRecentProject(state.recentProjectIds, projectId)
-            : state.recentProjectIds,
-        })),
+      selectProject: (projectId, options) =>
+        set((state) => {
+          const tab = projectOpeningBoardTab(scope, state.projectBoardTabs, projectId, options);
+          return {
+            selectedProjectId: projectId,
+            projectSelectionRevision: state.projectSelectionRevision + 1,
+            projectBoardTab: tab,
+            // The tab it opened on is now the one it was last shown on.
+            projectBoardTabs: projectId
+              ? rememberProjectBoardTab(state.projectBoardTabs, projectId, tab)
+              : state.projectBoardTabs,
+            selectedEnvironmentId: null,
+            selectedEnvironmentIds: [],
+            recentProjectIds: projectId
+              ? addRecentProject(state.recentProjectIds, projectId)
+              : state.recentProjectIds,
+          };
+        }),
 
       selectEnvironment: (environmentId) => set({ selectedEnvironmentId: environmentId }),
 
-      setProjectBoardTab: (tab) => set({ projectBoardTab: tab }),
+      setProjectBoardTab: (tab) =>
+        set((state) => ({
+          projectBoardTab: tab,
+          projectBoardTabs: state.selectedProjectId
+            ? rememberProjectBoardTab(state.projectBoardTabs, state.selectedProjectId, tab)
+            : state.projectBoardTabs,
+        })),
 
       selectProjectAndEnvironment: (projectId, environmentId) =>
         set((state) => ({
@@ -347,6 +458,7 @@ export const uiStore = defineScopedStore<UIState>("ui", (scope) => {
         projectCollapseChoices: state.projectCollapseChoices,
         collapsedProjectFolders: state.collapsedProjectFolders,
         recentProjectIds: state.recentProjectIds,
+        projectBoardTabs: state.projectBoardTabs,
       }),
     },
   );

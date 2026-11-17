@@ -34,7 +34,7 @@
 import type { Page, TestInfo } from "@playwright/test";
 import { closeElectronWithin } from "./design-electron-cleanup";
 import { focusedWebContentsUrls, trackWebContentsFocus } from "./webcontents-focus";
-import { explainLostFocus } from "./window-focus-loss";
+import { explainLostFocus, readFrontApplication, readWindowFocus } from "./window-focus-loss";
 import { expect, test } from "./electron-fixtures";
 import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
@@ -2393,7 +2393,94 @@ async function expectNoCodexLaunch(): Promise<void> {
   expect(await readFile(path.join(s().profile.dataDir, "codex-launches"), "utf8")).toBe("");
 }
 
+test("focus-loss diagnostics preserve the keyboard failure using real Electron window facts", async () => {
+  const original = new Error("controlled keyboard failure");
+  let explained: unknown;
+  try {
+    await keyboardAnnotationCase(async () => {
+      await s().app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.blur());
+      const facts = await readWindowFocus(s().app);
+      expect(facts.electronPid).toBe(await s().app.evaluate(() => process.pid));
+      expect(facts.electronPid).not.toBe(s().app.process().pid);
+      expect(facts.windowFocused).toBe(false);
+      throw original;
+    });
+  } catch (error) {
+    explained = error;
+  }
+  expect(explained).toBeInstanceOf(Error);
+  expect((explained as Error).cause).toBe(original);
+  expect((explained as Error).message).toMatch(/^(Lost|No) window focus:/);
+  expect((explained as Error).message).toContain(original.message);
+  expect((explained as Error).stack).toContain("web-annotations-electron.spec.ts");
+});
+
+test("focus-loss diagnostics recognise another window in the same Electron main process", async () => {
+  test.skip(headlessElectronRequested(), "Requires native window focus");
+  const front = readFrontApplication();
+  test.skip(
+    front.kind === "front" && front.application.name === "loginwindow",
+    "The macOS desktop is locked; native focus cannot be acquired",
+  );
+  const app = s().app;
+  const host = await app.browserWindow(s().window);
+  const mainPid = await app.evaluate(() => process.pid);
+  // Launching through .bin/electron must exercise the wrapper/main distinction.
+  expect(app.process().pid).not.toBe(mainPid);
+  const other = await app.evaluateHandle(
+    ({ BrowserWindow }) => new BrowserWindow({ width: 320, height: 180, show: false }),
+  );
+  try {
+    await other.evaluate((window) =>
+      window.loadURL("data:text/html,<title>Focus regression</title>"),
+    );
+    await app.evaluate(({ app }, window) => {
+      window.show();
+      if (process.platform === "darwin") app.focus({ steal: true });
+      window.focus();
+    }, other);
+    await expect.poll(() => other.evaluate((window) => window.isFocused())).toBe(true);
+    const facts = await readWindowFocus(app);
+    expect(facts).toMatchObject({
+      electronPid: mainPid,
+      windowFocused: false,
+      appHasFocusedWindow: true,
+    });
+    if (process.platform === "darwin") {
+      expect(facts.front).toMatchObject({ kind: "front", application: { pid: mainPid } });
+    }
+    let explained: unknown;
+    try {
+      expect(await host.evaluate((window) => window.isFocused()), "host lost the key window").toBe(
+        true,
+      );
+    } catch (error) {
+      explained = await explainLostFocus(error, app, true);
+      expect((explained as Error).cause).toBe(error);
+    }
+    expect(explained).toBeInstanceOf(Error);
+    expect((explained as Error).message.startsWith("Lost window focus:")).toBe(true);
+    expect((explained as Error).message).toContain("another of the app's windows is focused");
+    expect((explained as Error).message).not.toContain("another application took the key window");
+    if (process.platform === "darwin") {
+      expect((explained as Error).message).toContain(
+        `macOS still has this Electron app (pid ${mainPid}) in front`,
+      );
+    }
+  } finally {
+    await other.evaluate((window) => window.destroy());
+    await other.dispose();
+    await host.evaluate((window) => window.focus());
+    await host.dispose();
+  }
+});
+
 test("keyboard alone creates a note and sends it, with focus handed to the native view and back", async () => {
+  await keyboardAnnotationCase();
+});
+
+/** Optional failure injection exercises this case's real catch and cleanup path. */
+async function keyboardAnnotationCase(afterFocusRead?: () => Promise<void>): Promise<void> {
   const testInfo = test.info();
   testInfo.setTimeout(180_000);
   const agentTabId = "annotation-ui-codex";
@@ -2445,6 +2532,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
       return host.isFocused();
     });
     record(testInfo, "window-focused", String(windowFocused));
+    await afterFocusRead?.();
 
     await tabActivate(s().window.getByRole("button", { name: /^Annotations, / }));
     // Start in the native page, then reach its target with real Tab events.
@@ -2602,7 +2690,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
       await restoreDirectPreview();
     }
   }
-});
+}
 
 /** The pin query `showPins`/`showOnPage` take, built from the saved capture. */
 async function pinQuery(annotationId: string, number = 1) {

@@ -81,11 +81,14 @@ export async function readWindowFocus(
   const windows = await app.evaluate(({ BrowserWindow }) => {
     const host = BrowserWindow.getAllWindows()[0];
     return {
+      // The .bin/electron launcher is a separate Node process. macOS names
+      // this main process, so sample its identity alongside the window facts.
+      electronPid: process.pid,
       windowFocused: host !== undefined && !host.isDestroyed() && host.isFocused(),
       appHasFocusedWindow: BrowserWindow.getFocusedWindow() !== null,
     };
   });
-  return { ...windows, electronPid: app.process().pid, front: readFront() };
+  return { ...windows, front: readFront() };
 }
 
 function describeFront(facts: WindowFocusFacts): string {

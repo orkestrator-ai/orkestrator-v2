@@ -5,6 +5,7 @@ import {
   explainLostFocus,
   parseLsappinfoInfo,
   readFrontApplication,
+  readWindowFocus,
   type WindowFocusFacts,
 } from "./window-focus-loss";
 
@@ -25,10 +26,13 @@ function facts(overrides: Partial<WindowFocusFacts> = {}): WindowFocusFacts {
 }
 
 /** An Electron app whose main process answers `readWindowFocus` with these windows. */
-function fakeApp(windows: { windowFocused: boolean; appHasFocusedWindow: boolean }) {
+function fakeApp(
+  windows: { windowFocused: boolean; appHasFocusedWindow: boolean },
+  mainPid = 1000,
+) {
   return {
-    evaluate: async () => windows,
-    process: () => ({ pid: 1000 }),
+    evaluate: async () => ({ ...windows, electronPid: mainPid }),
+    process: () => ({ pid: 999 }),
   } as unknown as ElectronApplication;
 }
 
@@ -88,6 +92,19 @@ describe("window focus loss", () => {
     );
     expect(note).toContain("(another of the app's windows is focused)");
     expect(note).toContain("macOS still has this Electron app (pid 1000) in front");
+  });
+
+  test("compares the front application with the main process instead of its launcher", async () => {
+    const app = fakeApp({ windowFocused: false, appHasFocusedWindow: true }, 1000);
+    expect(app.process().pid).toBe(999);
+    const front = () => ({ kind: "front", application: { name: "Electron", pid: 1000 } }) as const;
+    expect((await readWindowFocus(app, front)).electronPid).toBe(1000);
+    const explained = await explainLostFocus(new Error("inactive"), app, true, front);
+    expect(explained).toBeInstanceOf(Error);
+    const message = (explained as Error).message;
+    expect(message).toContain("macOS still has this Electron app (pid 1000) in front");
+    expect(message).not.toContain("another application took the key window");
+    expect(message).not.toContain("pid 999");
   });
 
   test("off macOS, names the loss without a front application", () => {

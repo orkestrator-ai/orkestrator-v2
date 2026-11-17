@@ -70,6 +70,22 @@ export interface OpenCode2BackgroundWorkDependencies {
 export class OpenCode2BackgroundWork {
   /** Session id → its parent's id, `null` for a root session. */
   private readonly parents = new Map<string, string | null>();
+  private readonly stops = new Map<string, object>();
+
+  dispose(): void {
+    this.stops.clear();
+    this.parents.clear();
+  }
+
+  beginStop(sessionId: string): object {
+    const token = {};
+    this.stops.set(sessionId, token);
+    return token;
+  }
+
+  cancelStop(sessionId: string): void {
+    this.stops.delete(sessionId);
+  }
 
   constructor(
     private readonly client: OpenCode2Client,
@@ -111,7 +127,7 @@ export class OpenCode2BackgroundWork {
    * Whether `sessionId` has background work that will report to it: a
    * running descendant, a report waiting in its inbox, a child admitted but
    * not yet started, or a child that settled so recently its report may still
-   * be on its way. A read that fails answers false, as before 2.3.0.
+   * be on its way. An unreadable state stays pending until a read proves completion.
    */
   async live(sessionId: string): Promise<boolean> {
     try {
@@ -130,7 +146,7 @@ export class OpenCode2BackgroundWork {
       if (!(error instanceof OpenCode2RequestError && error.status === 404)) {
         log.debug("background.unreadable", { error: formatLogError(error, { message: false }) });
       }
-      return false;
+      return true;
     }
   }
 
@@ -140,42 +156,51 @@ export class OpenCode2BackgroundWork {
    * those interruptions send have been delivered, interrupt any run they wake
    * in `sessionId`. Bounded by {@link OPENCODE2_STOP_SETTLE_MS}; best-effort.
    */
-  async stop(sessionId: string): Promise<void> {
-    const descendants = await this.descendants(sessionId).catch(() => []);
-    if (descendants.length === 0) return;
-    const running = await this.deps.running(true).catch(() => new Set<string>());
-    const live = descendants.filter((id) => running.has(id));
-    if (live.length === 0) return;
-    await Promise.all(
-      live.map((id) =>
-        this.client.interrupt(id, { resume: false }).catch((error: unknown) => {
-          log.debug("background.stop-failed", {
-            error: formatLogError(error, { message: false }),
-          });
-        }),
-      ),
-    );
+  async stop(sessionId: string, token = this.beginStop(sessionId)): Promise<void> {
+    const current = () => this.stops.get(sessionId) === token;
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
-    const deadline = this.deps.now() + OPENCODE2_STOP_SETTLE_MS;
-    let quiet = 0;
-    while (this.deps.now() < deadline && quiet < 2) {
-      await sleep(STOP_POLL_MS);
-      const now = await this.deps.running(true).catch(() => undefined);
-      if (!now) break;
-      if (now.has(sessionId)) {
-        quiet = 0;
-        await this.client.interrupt(sessionId, { resume: false }).catch(() => false);
-        continue;
+    try {
+      const inputHead = async () => {
+        const page = await this.client.listMessages(sessionId, { limit: 199, order: "desc" });
+        return page.messages.find(
+          (row) =>
+            row.type === "user" || (row.type === "synthetic" && !openCode2SubagentReport(row)),
+        )?.id;
+      };
+      const initialInput = await inputHead();
+      const descendants = await this.descendants(sessionId);
+      if (!current()) return;
+      if (descendants.length === 0) {
+        const inbox = await this.client.listInbox(sessionId);
+        if (!inbox.some((item) => openCode2SubagentReport({ ...item.payload, type: item.type })))
+          return;
       }
-      const pending =
-        live.some((id) => now.has(id)) ||
-        (await this.client
-          .listInbox(sessionId)
-          .then((inbox) =>
-            inbox.some((item) => openCode2SubagentReport({ ...item.payload, type: item.type })),
-          )
-          .catch(() => false));
-      quiet = pending ? 0 : quiet + 1;
+      // Poll the whole bounded phase, including quiet snapshots: admission and
+      // report delivery can occur after an initially empty running set.
+      const deadline = this.deps.now() + OPENCODE2_STOP_SETTLE_MS;
+      for (let poll = 0; poll <= OPENCODE2_STOP_SETTLE_MS / STOP_POLL_MS; poll += 1) {
+        const running = await this.deps.running(true);
+        if (!current()) return;
+        for (const id of [...descendants, sessionId]) {
+          if (!current()) return;
+          if (running.has(id)) {
+            // Another provider instance (pipeline or mail) can dispatch too.
+            // A new external input owns the parent; only report continuations
+            // of the stopped work may be interrupted here.
+            if (id === sessionId && (await inputHead()) !== initialInput) return;
+            if (!current()) return;
+            await this.client.interrupt(id, { resume: false });
+          }
+        }
+        if (this.deps.now() >= deadline) break;
+        await sleep(STOP_POLL_MS);
+        if (!current()) return;
+        const refreshed = await this.descendants(sessionId);
+        if (!current()) return;
+        descendants.splice(0, descendants.length, ...refreshed);
+      }
+    } finally {
+      if (current()) this.stops.delete(sessionId);
     }
   }
 
@@ -210,7 +235,7 @@ export class OpenCode2BackgroundWork {
         this.remember(sessionId, null);
         return null;
       }
-      return undefined;
+      throw error;
     }
   }
 

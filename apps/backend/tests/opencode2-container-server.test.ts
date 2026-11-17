@@ -238,6 +238,7 @@ async function serveAfterLaunch(
     },
   ],
   pluginPolls = 2,
+  pluginStatus = warmStatus,
 ) {
   let launched = false;
   const server = createHttpServer(async (request, response) => {
@@ -262,6 +263,7 @@ async function serveAfterLaunch(
     response.statusCode = warmStatus;
     if (url.pathname === "/api/agent") return response.end(JSON.stringify({ data: [] }));
     if (url.pathname === "/api/plugin") {
+      response.statusCode = pluginStatus;
       return response.end(JSON.stringify({ data: pluginPolls-- > 0 ? [] : plugins }));
     }
     response.statusCode = 404;
@@ -312,6 +314,22 @@ describe("startContainerOpenCode2Server on an opencode2-launch image", () => {
       expect(raw.match(/HTTP:\/api\/plugin/g)?.length).toBe(3);
       expect(loaded).toBeGreaterThan(warmed);
       expect(recorded).toBeGreaterThan(loaded);
+    });
+  });
+
+  test("required warm refuses a failing plugin route even when activation succeeds", async () => {
+    let logFile = "";
+    const holder = await serveAfterLaunch(() => logFile, 200, 0, [], 0, 500);
+    held.push(holder);
+    setEnv({ FAKE_DOCKER_PORT: String(holder.port), FAKE_ROOT_TOKEN: "", FAKE_LISTENER: "" });
+    const { context } = createContext(containerEnvironment());
+    await withFakeDocker(FAKE_DOCKER_LAUNCHER, async (logs) => {
+      logFile = logs.exec;
+      await expect(
+        startContainerOpenCode2Server(context, "container-1", async () => "opencode2-launcher"),
+      ).rejects.toThrow();
+      const { argv } = await readLog(logs.exec);
+      expect(argv).not.toContain(`mv "$tmp" ${OPENCODE2_LISTENER_RECORD}`);
     });
   });
 

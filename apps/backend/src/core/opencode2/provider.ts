@@ -295,6 +295,7 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   }
 
   async send(sessionId: string, prompt: string, requested: ProviderSendOptions): Promise<void> {
+    this.background.cancelStop(sessionId);
     // A coordinator turn runs as `plan`, with its own tools and no command.
     const shaped = this.coordinator ? this.coordinator.sendOptions(requested) : requested;
     // Artifact grant, worker and tab mail as connections (`turn-connections.ts`).
@@ -569,9 +570,11 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   }
 
   async abort(sessionId: string): Promise<void> {
+    const stopToken = this.background.beginStop(sessionId);
     try {
       await this.client.interrupt(sessionId, { resume: false });
     } catch (error) {
+      this.background.cancelStop(sessionId);
       if (error instanceof OpenCode2RequestError && error.status === 404) return;
       throw new ProviderUnavailableError("OpenCode 2.x interrupt failed", { cause: error });
     } finally {
@@ -588,7 +591,7 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
       // 2.3.0 leaves a parent's background sub-agents running when the
       // parent is interrupted, and their reports would wake it again; a stop
       // ends them and any run they wake (`background-subagents.ts`).
-      await this.background.stop(sessionId).finally(() => this.markDirty(sessionId));
+      await this.background.stop(sessionId, stopToken).finally(() => this.markDirty(sessionId));
       await this.rejectPendingRequests(sessionId);
     }
   }
@@ -853,6 +856,7 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    this.background.dispose();
     this.monitor.abort();
     await this.monitorTask?.catch(() => undefined);
     this.sessions.clear();

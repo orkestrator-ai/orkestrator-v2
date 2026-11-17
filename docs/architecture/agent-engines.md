@@ -999,12 +999,17 @@ Claude turn released to background agents, and is reported the same way
 - Workflows: `observeSession` adds `backgroundWorkLive` while a descendant
   runs, a report waits in the inbox, a child was just admitted, or one settled
   within 3 s; `settleTurn` keeps the turn's grant and `structured` answers
-  nothing meanwhile. A run a report wakes belongs to the same request
+  nothing meanwhile. Unreadable background state also stays pending until a
+  successful read proves completion. A run a report wakes belongs to the same request
   (`openCode2RequestRun`, `openCode2TurnTerminalError`).
 - Stop: 2.3.0 no longer stops a parent's children when the parent is
   interrupted, and a stopped child's `cancelled` report wakes the parent. A
   stop (and so a close) interrupts the running descendants and then, for up
-  to 3 s, any run their reports wake.
+  to 3 s, any run their reports wake, refreshing descendants even after a quiet
+  snapshot. New external input cancels the stop phase; another provider
+  instance is detected through the parent's input history. Disposal cancels
+  the phase too. Revised launch cards retain folded results after reports
+  leave the head window, and older launches still consult live child state.
 
 A child's own permission or question cards are not shown in the parent's tab
 (as on 2.2.6, where the parent waited on the child instead).

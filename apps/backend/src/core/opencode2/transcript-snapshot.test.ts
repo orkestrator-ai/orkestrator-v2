@@ -397,3 +397,106 @@ test("staged Undo hides an off-window boundary, expires retained pages and resto
     }),
   ).toEqual({ status: "expired" });
 });
+
+function launchRow(id: string, callId: string, childId: string, completedAt = 1_000) {
+  return {
+    id,
+    type: "assistant",
+    content: [
+      {
+        type: "tool",
+        id: callId,
+        name: "subagent",
+        state: {
+          status: "completed",
+          input: { agent: "general", description: "probe child", prompt: "Look" },
+          content: [
+            {
+              type: "text",
+              text: `The subagent is working in the background (sessionID: ${childId}).`,
+            },
+          ],
+          metadata: { sessionID: childId, status: "running", truncated: false },
+        },
+        time: { created: completedAt - 10, ran: completedAt - 5, completed: completedAt },
+      },
+    ],
+    time: { created: completedAt - 20 },
+  };
+}
+
+/** The `<subagent>` report 2.3.0 delivers to the parent each time the child goes idle. */
+function reportRow(id: string, childId: string, state: string, body: string) {
+  return {
+    id,
+    type: "synthetic",
+    description: "probe child",
+    metadata: { source: "subagent", childID: childId, agent: "General", state },
+    text: `<subagent sessionID="${childId}" state="${state}" description="probe child">\n${body}\n</subagent>`,
+    time: { created: 5_000 },
+  };
+}
+
+for (const outcome of ["completed", "error"] as const) {
+  test(`revised launch retains ${outcome} after the report leaves the head`, async () => {
+    const { server, client, state, sessionId } = await setup(0);
+    const launch = server.pushRow(sessionId, launchRow("msg_launch", "call", "ses_child"));
+    state.observe(sessionId, {
+      type: "session.tool.success",
+      data: { sessionID: sessionId, assistantMessageID: launch },
+    });
+    server.pushRow(sessionId, reportRow("msg_report", "ses_child", outcome, "retained result"));
+    const options = { limit: 2, targetBytes: 1_000_000 };
+    await openCode2TranscriptSnapshot(client, state, sessionId, options);
+    for (let i = 0; i < 4; i++)
+      server.pushRow(sessionId, { type: "user", text: "later", time: { created: 9_000 } });
+    const result = snapshot(await openCode2TranscriptSnapshot(client, state, sessionId, options));
+    expect(result.revisedMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: launch,
+          parts: expect.arrayContaining([
+            expect.objectContaining({
+              agentState: outcome === "completed" ? "finished" : "failed",
+              [outcome === "completed" ? "toolOutput" : "toolError"]: "retained result",
+            }),
+          ]),
+        }),
+      ]),
+    );
+  });
+}
+
+test("an older revised launch consults live sessions outside the window", async () => {
+  const { server, client, state, sessionId } = await setup(0);
+  const launch = server.pushRow(sessionId, launchRow("msg_launch", "call", "ses_child"));
+  state.observe(sessionId, {
+    type: "session.tool.success",
+    data: { sessionID: sessionId, assistantMessageID: launch },
+  });
+  for (let i = 0; i < 4; i++)
+    server.pushRow(sessionId, { type: "user", text: "later", time: { created: 9_000 } });
+  let reads = 0;
+  const result = snapshot(
+    await openCode2TranscriptSnapshot(
+      client,
+      state,
+      sessionId,
+      { limit: 2, targetBytes: 1_000_000 },
+      undefined,
+      async () => {
+        reads++;
+        return new Set(["ses_child"]);
+      },
+    ),
+  );
+  expect(reads).toBeGreaterThan(0);
+  expect(result.revisedMessages).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: launch,
+        parts: expect.arrayContaining([expect.objectContaining({ agentState: "active" })]),
+      }),
+    ]),
+  );
+});

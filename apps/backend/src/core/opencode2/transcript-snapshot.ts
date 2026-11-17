@@ -440,14 +440,40 @@ export async function openCode2TranscriptSnapshot(
   const window = page.messages.slice(0, count).reverse();
   // The window ends at the newest row (or the staged revert's), so a
   // background sub-agent with no report reads by the running sessions.
-  const context = await openCode2HeadContext(window, liveSessions);
+  let runningRead: Promise<ReadonlySet<string>> | undefined;
+  const readLive = liveSessions ? () => (runningRead ??= liveSessions()) : undefined;
+  const context = await openCode2HeadContext(window, readLive);
   const groups = normalizeOpenCode2Groups(window, onUnknown, context);
   const start = newestGroups(groups, { rows: count, targetBytes: options.targetBytes });
   const olderHistory = more || start > 0;
   const kept = window.slice(start);
   // Normalized again when rows were cut: a report folded onto a launch the
   // cut dropped must keep a row of its own.
-  const keptGroups = start > 0 ? normalizeOpenCode2Groups(kept, onUnknown, context) : groups;
+  const rawKeptGroups = start > 0 ? normalizeOpenCode2Groups(kept, onUnknown, context) : groups;
+  const keptGroups = applyOpenCode2SubagentReports(
+    kept,
+    rawKeptGroups.map((group, index) => {
+      const id = rowId(kept[index]);
+      return id
+        ? (state.cachedRevised(sessionId, id, state.rowVersion(sessionId, id))?.rows ?? group)
+        : group;
+    }),
+    context,
+  );
+  // Retain folded results while the launch is still in the head too.
+  const revisedIds = new Set(state.revisedIds(sessionId));
+  kept.forEach((message, index) => {
+    const id = rowId(message);
+    if (id && revisedIds.has(id)) {
+      state.cacheRevised(
+        sessionId,
+        id,
+        state.rowVersion(sessionId, id),
+        message,
+        keptGroups[index] ?? [],
+      );
+    }
+  });
   const firstKept = rowId(kept[0]);
   const historyCursor =
     olderHistory && firstKept ? openCode2HistoryCursor(firstKept, historyEpoch) : undefined;
@@ -458,7 +484,7 @@ export async function openCode2TranscriptSnapshot(
   const shown = new Set(window.map(rowId));
   const revised = revert
     ? { rows: [], ids: new Set<string>() }
-    : await revisedRows(client, state, sessionId, window, kept, context, onUnknown);
+    : await revisedRows(client, state, sessionId, window, kept, context, onUnknown, readLive);
   const omitted = state
     .revisedIds(sessionId)
     .filter((id) => !shown.has(id) && !revised.ids.has(id));
@@ -525,6 +551,7 @@ async function revisedRows(
   kept: readonly OpenCode2Message[],
   context: OpenCode2TranscriptContext,
   onUnknown?: (type: string) => void,
+  liveSessions?: () => Promise<ReadonlySet<string>>,
 ): Promise<{ rows: Record<string, unknown>[]; ids: Set<string> }> {
   const keptIds = new Set(kept.map(rowId));
   const wanted = state
@@ -555,12 +582,14 @@ async function revisedRows(
     }
     // A launch before the window takes its child's report from the window,
     // which is newer than the launch whenever the report exists.
+    const revisedContext = await openCode2HeadContext([cached.message, ...window], liveSessions);
     const group =
       applyOpenCode2SubagentReports(
         [cached.message, ...window],
         [cached.rows, ...window.map(() => [])],
-        context,
+        { ...context, ...revisedContext },
       )[0] ?? cached.rows;
+    state.cacheRevised(sessionId, id, version, cached.message, group);
     if (rows.length + group.length > BRIDGE_REVISED_MESSAGES_MAX) break;
     const size = group.reduce((total, row) => total + openCodeDisplayBytes(row), 0);
     if (bytes + size > BRIDGE_REVISED_MESSAGES_MAX_BYTES) continue;

@@ -157,3 +157,40 @@ describe("readBoundedJson", () => {
     await expect(readBoundedJson(new Response("{nope"), "read")).rejects.toThrow("malformed");
   });
 });
+
+test("plugin polling activates the location before accepting its plugin list", async () => {
+  let activated = false;
+  let polls = 0;
+  const { client, seen } = serve(({ path }) => {
+    if (path === "/api/agent") {
+      activated = true;
+      return json({ data: [] });
+    }
+    expect(activated).toBe(true);
+    return json({ data: ++polls < 3 ? [] : [{ id: "current", state: { status: "active" } }] });
+  });
+  expect(await client.awaitPlugins({ timeoutMs: 1000, intervalMs: 1 })).toBe("loaded");
+  expect(seen.map((s) => s.path)).toEqual([
+    "/api/agent",
+    "/api/plugin",
+    "/api/plugin",
+    "/api/plugin",
+  ]);
+});
+
+test("plugin-route errors cannot confirm readiness", async () => {
+  const { client } = serve(({ path }) =>
+    path === "/api/agent" ? json({ data: [] }) : json({}, 500),
+  );
+  await expect(
+    client.awaitPlugins({ timeoutMs: 1000, pluginId: "orkestrator-credential" }),
+  ).rejects.toThrow();
+});
+
+test("a stale nonempty plugin list has no reload-generation proof", async () => {
+  const previous = [{ id: "previous-location", state: { status: "active" } }];
+  const { client } = serve(({ path }) => json({ data: path === "/api/plugin" ? previous : [] }));
+  // The stable plugin route exposes no generation. This test records the
+  // boundary: activation alone cannot prove a location reload completed.
+  expect(await client.awaitPlugins({ timeoutMs: 1000 })).toBe("loaded");
+});

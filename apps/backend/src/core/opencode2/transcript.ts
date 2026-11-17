@@ -567,6 +567,10 @@ export function applyOpenCode2SubagentReports(
       const parts = row.parts.map((candidate) => {
         const part = asRecord(candidate);
         if (part?.type !== "subagent" || part.toolUseId !== launch.callId) return candidate;
+        // A retained folded result is authoritative when its report has
+        // already left the head window. A new report still replaces it.
+        if (!report && (part.agentState === "finished" || part.agentState === "failed"))
+          return candidate;
         changed = true;
         const settled: Record<string, unknown> = { ...part, agentState };
         if (report && report.state !== "error" && report.state !== "cancelled") {

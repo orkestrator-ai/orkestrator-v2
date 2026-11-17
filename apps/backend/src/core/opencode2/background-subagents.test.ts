@@ -159,3 +159,95 @@ describe("openCode2RequestRun", () => {
     expect(openCode2RequestRun([...rows.slice(0, 3), shell], "r")?.idle?.id).toBe("i1");
   });
 });
+
+// Use the real client with deterministic lifecycle reads; no wall-clock races.
+describe("background work read failures and stop races", () => {
+  test("unreadable activity, child lists and inboxes remain pending", async () => {
+    const { server, parent } = await launched();
+    const client = server.client();
+    const { OpenCode2BackgroundWork } = await import("./background-subagents.js");
+    const work = new OpenCode2BackgroundWork(client, {
+      running: async () => {
+        throw new Error("offline");
+      },
+      now: () => clock,
+    });
+    expect(await work.live(parent)).toBe(true);
+    const work2 = new OpenCode2BackgroundWork(client, {
+      running: async () => new Set(),
+      now: () => clock,
+    });
+    client.listInbox = async () => {
+      throw new Error("offline");
+    };
+    expect(await work2.live(parent)).toBe(true);
+    client.listInbox = async () => [];
+    client.listChildSessions = async () => {
+      throw new Error("offline");
+    };
+    expect(await work2.live(parent)).toBe(true);
+  });
+
+  test("a failed inbox read keeps observation pending and suppresses the launch result", async () => {
+    server = new FakeOpenCode2Server();
+    const client = server.client();
+    provider = new OpenCode2Provider(client, { monitorEvents: false, now: () => clock });
+    const parent = await provider.createSession("plan", "p");
+    await provider.send(parent, "plan", { requestId: "read-failure", schema: { type: "object" } });
+    const child = server.addChildSession(parent, { running: false });
+    server.finishRun(parent, "succeeded", '{"launch":true}');
+    const readInbox = client.listInbox.bind(client);
+    client.listInbox = async () => {
+      throw new Error("transient inbox failure");
+    };
+    expect(await provider.observeSession(parent)).toMatchObject({ backgroundWorkLive: true });
+    expect(await provider.structured(parent, "read-failure")).toBeNull();
+    client.listInbox = readInbox;
+    server.reportChild(child);
+    server.finishRun(parent, "succeeded", '{"done":true}');
+    clock += 20_000;
+    expect(await provider.structured(parent, "read-failure")).toMatchObject({
+      ok: true,
+      value: { done: true },
+    });
+  });
+
+  for (const kind of ["late-child", "late-report", "inbox", "new-prompt"] as const) {
+    test(`stop handles ${kind}`, async () => {
+      const { server, parent, child } = await launched();
+      const client = server.client();
+      const { OpenCode2BackgroundWork } = await import("./background-subagents.js");
+      server.sessions.get(child)!.running = kind === "new-prompt";
+      if (kind === "inbox") {
+        server.sessions.get(parent)!.inbox.push({
+          id: "report-inbox",
+          type: "synthetic",
+          payload: {
+            text: '<subagent sessionID="' + child + '" state="completed">done</subagent>',
+            metadata: { source: "subagent", childID: child, state: "completed" },
+          },
+        });
+      }
+      let polls = 0;
+      const work = new OpenCode2BackgroundWork(client, {
+        now: () => clock,
+        running: async () =>
+          new Set([...server.sessions.values()].filter((s) => s.running).map((s) => s.id)),
+        sleep: async (ms) => {
+          clock += ms;
+          if (++polls !== 3) return;
+          if (kind === "late-child") server.sessions.get(child)!.running = true;
+          else if (kind === "new-prompt") {
+            await provider!.send(parent, "next", { requestId: "next" });
+          } else {
+            server.sessions.get(parent)!.inbox.length = 0;
+            server.reportChild(child);
+          }
+        },
+      });
+      await work.stop(parent);
+      expect(server.sessions.get(child)!.running).toBe(false);
+      expect(server.sessions.get(parent)!.running).toBe(kind === "new-prompt");
+    });
+  }
+});

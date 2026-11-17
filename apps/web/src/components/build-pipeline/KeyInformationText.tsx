@@ -109,15 +109,100 @@ export function keyInformationSegments(text: string): Segment[] {
   return segments;
 }
 
-/** Brief text with code and file paths highlighted as in the transcript. */
+/** A span of brief text after inline Markdown: code, prose, or emphasis around more spans. */
+export type KeyInformationInline =
+  Segment | { kind: "strong" | "em" | "strike"; children: KeyInformationInline[] };
+
+/**
+ * A delimiter opens only at the start, after whitespace or after opening
+ * punctuation, and closes only before the end, whitespace or punctuation.
+ * That is stricter than CommonMark, so globs (`src/**`), arithmetic
+ * (`2 * 3 * 4`, `2**10`) and identifiers (`snake_case_name`) stay prose.
+ */
+const OPEN = String.raw`(?<=^|[\s(\[{"'])`;
+const CLOSE = String.raw`(?=$|[\s)\]}"'.,;:!?/-])`;
+
+/**
+ * The inline Markdown agents write in a brief, leftmost first. A code span
+ * wins over emphasis, as in CommonMark, so `` `**x**` `` stays literal.
+ * Groups: 1 code, 2 `**strong**`, 3 `__strong__`, 4 `*em*`, 5 `_em_`,
+ * 6 `~~strike~~`.
+ */
+const INLINE_MARKDOWN = new RegExp(
+  [
+    "`([^`\\n]+)`",
+    String.raw`${OPEN}\*\*(?=[^\s*])([^\n]*?[^\s*\\])\*\*${CLOSE}`,
+    String.raw`${OPEN}__(?=[^\s_])([^\n]*?[^\s_\\])__${CLOSE}`,
+    String.raw`${OPEN}\*(?=[^\s*])([^\n*]*?[^\s*\\])\*${CLOSE}`,
+    String.raw`${OPEN}_(?=[^\s_])([^\n_]*?[^\s_\\])_${CLOSE}`,
+    String.raw`${OPEN}~~(?=\S)([^\n]*?\S)~~${CLOSE}`,
+  ].join("|"),
+  "g",
+);
+
+/**
+ * Splits brief text into the inline Markdown it uses: code spans, bold,
+ * italic and strikethrough, nested as written. Prose between them goes
+ * through {@link keyInformationSegments}, so bare file paths are still shown
+ * as code.
+ */
+export function keyInformationInline(text: string): KeyInformationInline[] {
+  const nodes: KeyInformationInline[] = [];
+  const push = (node: KeyInformationInline) => {
+    const last = nodes.at(-1);
+    if (node.kind === "text" && last?.kind === "text") last.value += node.value;
+    else nodes.push(node);
+  };
+  const pushProse = (value: string) => {
+    for (const segment of keyInformationSegments(value)) push(segment);
+  };
+  let index = 0;
+  for (const match of text.matchAll(INLINE_MARKDOWN)) {
+    pushProse(text.slice(index, match.index));
+    index = match.index + match[0].length;
+    const [, code, strong, underscoreStrong, em, underscoreEm, strike] = match;
+    if (code !== undefined) push({ kind: "code", value: code });
+    else if (strong !== undefined || underscoreStrong !== undefined) {
+      push({ kind: "strong", children: keyInformationInline(strong ?? underscoreStrong ?? "") });
+    } else if (em !== undefined || underscoreEm !== undefined) {
+      push({ kind: "em", children: keyInformationInline(em ?? underscoreEm ?? "") });
+    } else {
+      push({ kind: "strike", children: keyInformationInline(strike ?? "") });
+    }
+  }
+  pushProse(text.slice(index));
+  return nodes;
+}
+
+function renderInline(nodes: KeyInformationInline[]): ReactNode[] {
+  return nodes.map((node, index) => {
+    switch (node.kind) {
+      case "text":
+        return node.value;
+      case "code":
+        return (
+          <code key={index} className={KEY_INFORMATION_CODE_CLASS}>
+            {node.value}
+          </code>
+        );
+      case "strong":
+        return (
+          <strong key={index} className="font-semibold text-foreground">
+            {renderInline(node.children)}
+          </strong>
+        );
+      case "em":
+        return <em key={index}>{renderInline(node.children)}</em>;
+      case "strike":
+        return <del key={index}>{renderInline(node.children)}</del>;
+    }
+  });
+}
+
+/**
+ * Brief text with its inline Markdown rendered (code, bold, italic,
+ * strikethrough) and bare file paths highlighted, as in the transcript.
+ */
 export function KeyInformationText({ text }: { text: string }): ReactNode {
-  return keyInformationSegments(text).map((segment, index) =>
-    segment.kind === "code" ? (
-      <code key={index} className={KEY_INFORMATION_CODE_CLASS}>
-        {segment.value}
-      </code>
-    ) : (
-      segment.value
-    ),
-  );
+  return renderInline(keyInformationInline(text));
 }

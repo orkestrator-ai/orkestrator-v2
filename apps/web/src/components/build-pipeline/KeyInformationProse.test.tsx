@@ -97,6 +97,31 @@ describe("Key information summary layout", () => {
     expect(within(summary).getByText("bun fmt").closest("li")).not.toBeNull();
   });
 
+  test("the key information tab renders inline Markdown in prose and lists", () => {
+    render(
+      <KeyInformationDocument
+        keyInformation={{
+          ...info,
+          solution: "- **backup-ts** Compose service on `:1055`\n- **Docs**: see the guide",
+          workDone: ["Verified **pinned** restic honours `HTTP_PROXY`"],
+          notDone: ["Run the _live_ suite"],
+        }}
+        scrollRef={createRef()}
+      />,
+    );
+    const solution = screen.getByRole("region", { name: "Solution" });
+    expect(solution.textContent).not.toContain("**");
+    expect(solution.textContent).not.toContain("`");
+    expect(within(solution).getByText("backup-ts").tagName).toBe("STRONG");
+    expect(within(solution).getByText(":1055").tagName).toBe("CODE");
+    expect(within(solution).getByText("backup-ts").closest("li")).not.toBeNull();
+    const workDone = screen.getByRole("region", { name: "What was done" });
+    expect(within(workDone).getByText("pinned").tagName).toBe("STRONG");
+    expect(within(workDone).getByText("HTTP_PROXY").tagName).toBe("CODE");
+    const notDone = screen.getByRole("region", { name: "Not done or needs further work" });
+    expect(within(notDone).getByText("live").tagName).toBe("EM");
+  });
+
   test("the key information tab shows the summary as paragraphs and bullets", () => {
     render(<KeyInformationDocument keyInformation={info} scrollRef={createRef()} />);
     const summary = screen.getByRole("region", { name: "Summary" });

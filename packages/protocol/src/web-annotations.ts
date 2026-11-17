@@ -233,7 +233,7 @@ export const WEB_ANNOTATION_FRAME_DOCUMENT_PATH_CHARS = 500;
  * when captured: the path of its http(s) URL (no origin, query or fragment;
  * opaque segments of 32 or more token characters read `:opaque`), or
  * `about:srcdoc` / `about:blank`. Resolution needs a unique frame element
- * whose document is still same-origin and still has that path, so a frame
+ * whose document is still same-origin and matches that path and URL digest, so a frame
  * that navigated elsewhere is never mistaken for the one annotated.
  */
 export interface WebAnnotationFrameStep {
@@ -244,6 +244,8 @@ export interface WebAnnotationFrameStep {
   /** Structural path within the containing root. */
   cssPath: string;
   documentPath: string;
+  /** SHA-256 of the full document URL; raw query values never leave the page. */
+  documentIdentity?: string;
 }
 
 /** A step of a `frame` scope's root path: an open shadow root's host or a frame. */

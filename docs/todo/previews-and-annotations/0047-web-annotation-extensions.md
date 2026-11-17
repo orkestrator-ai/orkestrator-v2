@@ -572,15 +572,15 @@ which an older backend would accept but misread as hosts; and separate
 the frame's tag, a stable id unique in its containing root, a CSS path there,
 and the frame document's `documentPath`.
 
-### Task 5: the frame's document path is its navigation identity
+### Task 5: a URL digest separates navigation identity from the display path
 
 The to-do asked for a per-frame navigation generation, because a frame index
 alone does not name the same document after replacement. A counter cannot
 survive a reload or travel in a stored anchor, so the step records the
-document's identity instead: the path of its http(s) URL (no origin, query or
+document's sanitized display path instead: the path of its http(s) URL (no origin, query or
 fragment; token-like segments of 32 or more characters read `:opaque`), or
 `about:srcdoc` / `about:blank`. Resolution requires a unique frame element
-whose document is still same-origin and has that path; a frame that navigated
+whose document is still same-origin and has that path and the captured SHA-256 URL digest (`documentIdentity`); a frame that navigated
 elsewhere, or has not loaded yet, is `missing`, so a page with the same
 structure at another path never stands in (tested by navigating the frame to
 a copy of its page). A frame that became unreadable is `unsupported`. Live
@@ -614,11 +614,11 @@ unsupported, as before. Main rebuilds the scope from known fields
 
 ### Task 5: what the agent receives
 
-The brief names each frame step as `{ frame, documentPath, stableId? }` and
-each host as `{ shadowHost }`, outermost first, with a note that `cssPath`
+The brief names each frame step as `{ frame, cssPath, documentPath, stableId? }` and
+each host as `{ shadowHost, cssPath, stableId? }`, outermost first, with a note that `cssPath`
 and `stableId` are scoped to the innermost document or root. The document
 path is what an agent can find in the code (a route or a static file); frame
-and host selectors stay out, as host selectors already did. The brief's
+and host selectors remain available to resolve the ordered root path. The brief's
 same-target conflict check now keys a frame target by its path too, so a
 frame button and a top-level button that share an id are not reported as
 conflicting instructions.
@@ -660,8 +660,10 @@ padded frame, a scaled frame, a nested `srcdoc` frame, an open root inside a
 frame, a frame navigation and a reload, masking inside a frame, and
 cross-origin and sandboxed frames whose content never reaches the selection.
 The protocol, main-side parse, renderer downgrade and backend brief have
-default-tier tests. Not run: the desktop's own preview view (Electron) with a
-framed page, which needs no new code path but has not been exercised.
+default-tier tests. The Electron fixture now checks a readable frame host, an inner
+button and the sandboxed fallback. The original Electron run exercised the host
+and failed on its obsolete unsupported/iframe expectation; the repair rerun is
+recorded in the pipeline validation result.
 
 ### Task 2: not started on 2026-11-17
 
@@ -703,7 +705,7 @@ comes from) are recommendations without a design. It stays `open`.
 - Element targets inside same-origin iframes (up to four deep, mixed with open
   shadow roots) anchor to the element itself with
   `scope: { kind: "frame", path }`; each frame step records the frame
-  document's `documentPath`, and resolution requires the frame to still show
+  document's `documentPath` and URL digest, and resolution requires the frame to still show
   that document (task 5, 2026-11-17; `browser-preview-frame-kit.ts`). Desktop
   clients send that scope only to a backend advertising
   `operations.frameTargets`, and the older `unsupported` (`iframe`) scope
@@ -826,3 +828,12 @@ comes from) are recommendations without a design. It stays `open`.
   (pixel diffs, overlay, automatic capture, source hints)
 - `docs/improvements/web-page-annotations/plan/13-capture-modes-and-client-support.md`
   (frame and shadow boundaries, non-desktop capture)
+
+### Task 5: review repairs (2026-11-17)
+
+Frame steps now carry a SHA-256 digest of the full URL, separating query and
+opaque-segment navigation without storing raw URLs. Identical URL reloads
+remain resolvable. Legacy anchors without a digest fail closed for query or
+opaque paths. Pins hide fully clipped rectangles and subscribe to each frame's
+resize, font events and layout sizes, removing those subscriptions on navigation
+or destruction. Regression tests cover these paths, including real font loading.

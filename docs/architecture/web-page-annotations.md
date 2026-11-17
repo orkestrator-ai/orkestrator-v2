@@ -323,7 +323,9 @@ anchor (`anchorFor` in `browser-preview-anchor-script.ts`) records:
   root, a CSS path within that root, and the frame document's `documentPath`:
   the path of its http(s) URL with no origin, query or fragment (token-like
   segments of 32 or more characters read `:opaque`), or `about:srcdoc` /
-  `about:blank`. Targets inside closed roots, detached trees or deeper paths
+  `about:blank`. New steps also carry `documentIdentity`, a SHA-256 digest of the
+  full URL, to distinguish query and opaque-segment changes without storing raw
+  query values. Legacy steps without a digest cannot resolve query or opaque paths. Targets inside closed roots, detached trees or deeper paths
   are recorded as `unsupported`, never as a top-level selector. A frame page
   script cannot read (cross-origin, or sandboxed without `allow-same-origin`)
   is itself the target, `unsupported` with the reason `cross-origin`; nothing
@@ -361,9 +363,9 @@ own selection, which Text mode does not read. The backend advertises
 `operations.frameTargets` with authoring; a desktop client sends a `frame`
 scope only to a backend that advertises it and otherwise sends the older
 `{ kind: "unsupported", reason: "iframe" }`. The brief gives the agent each
-frame's `documentPath` (and stable id) and each host's tag, outermost first,
+frame's `documentPath`, CSS selector and stable id, and each host's tag, CSS selector and stable id, outermost first,
 with a note that `cssPath` and `stableId` are scoped to the innermost document
-or root; frame and host selectors stay out of it.
+or root. Each root step retains its selector so sibling frames can be distinguished.
 
 A text range stores its quote with context plus the anchor of its containing
 element, whose scope says which tree the quote is in. Text mode reads a selection
@@ -410,7 +412,7 @@ identity.
    same id or name is never a candidate. A `frame` scope resolves its path the
    same way, step by step: a host step as above, and a frame step must match
    exactly one `iframe` or `frame` element that still shows a same-origin
-   document whose `documentPath` equals the recorded one. A frame that
+   document whose `documentPath` and URL digest equal the recorded ones. A frame that
    navigated to another path (or has not loaded yet) is `missing`, so a
    different document with the same structure never stands in; a frame whose
    document became unreadable is `unsupported`. Rules 2 to 5 then run inside
@@ -457,7 +459,10 @@ document, so each open root (at most 64) and each frame document (at most 16
 frames) a pass resolves into is observed as well. A frame's `load` (a
 navigation or reload inside it) schedules a pass, because it replaces the
 document the observer and the matched element belonged to, and scrolling a
-frame redraws the pins. A host that exists
+frame redraws the pins. Each watched frame also subscribes to its window's
+resize and document's font events, and observes the frame, document and body
+sizes; navigation and destruction remove these subscriptions. Fully clipped
+targets have no visible pin until they return into view. A host that exists
 before its custom element is defined has no root yet, and attaching one fires
 no mutation, so the layer schedules one pass when that tag is defined
 (`customElements.whenDefined`). The preview's isolated world has no

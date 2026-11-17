@@ -230,7 +230,7 @@ function installBrowserPreviewPins(
         connected &&
         rect &&
         rendered &&
-        (!pin.range || rect.width > 0 || rect.height > 0)
+        (pin.range ? rect.width > 0 || rect.height > 0 : rect.width > 0 && rect.height > 0)
           ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
           : null;
       if (!sameRect(pin.result.rect, nextRect)) changed = true;
@@ -336,7 +336,11 @@ function installBrowserPreviewPins(
   // A frame on a pin's root path replaces its document on every navigation:
   // its `load` re-resolves, the document it shows is observed for mutations,
   // and scrolling it redraws. Bounded by the kit's 16 seen frames.
-  const watchedFrames: Array<{ frame: Element; doc: Document | null }> = [];
+  const watchedFrames: Array<{
+    frame: Element;
+    doc: Document | null;
+    resize: ResizeObserver | null;
+  }> = [];
   // Wrappers: the first pass runs before the scheduling helpers below exist.
   const onFrameLoad = (): void => {
     if (destroyed) return;
@@ -344,7 +348,15 @@ function installBrowserPreviewPins(
     schedulePass();
   };
   const onFrameScroll = (): void => schedulePlace();
-  const unwatchFrame = (entry: { frame: Element; doc: Document | null }): void => {
+  const unwatchFrame = (entry: {
+    frame: Element;
+    doc: Document | null;
+    resize: ResizeObserver | null;
+  }): void => {
+    entry.resize?.disconnect();
+    entry.doc?.defaultView?.removeEventListener("resize", onFrameScroll);
+    entry.doc?.fonts?.removeEventListener("loadingdone", onFrameScroll);
+    entry.doc?.fonts?.removeEventListener("loadingerror", onFrameScroll);
     entry.frame.removeEventListener("load", onFrameLoad);
     entry.doc?.removeEventListener("scroll", onFrameScroll, true);
   };
@@ -365,7 +377,15 @@ function installBrowserPreviewPins(
       const doc = kit.frameDocument(frameElement);
       frameElement.addEventListener("load", onFrameLoad);
       doc?.addEventListener("scroll", onFrameScroll, true);
-      watchedFrames.push({ frame: frameElement, doc });
+      doc?.defaultView?.addEventListener("resize", onFrameScroll);
+      doc?.fonts?.addEventListener("loadingdone", onFrameScroll);
+      doc?.fonts?.addEventListener("loadingerror", onFrameScroll);
+      const resize =
+        typeof ResizeObserver === "function" ? new ResizeObserver(onFrameScroll) : null;
+      resize?.observe(frameElement);
+      if (doc?.documentElement) resize?.observe(doc.documentElement);
+      if (doc?.body) resize?.observe(doc.body);
+      watchedFrames.push({ frame: frameElement, doc, resize });
     }
   };
 

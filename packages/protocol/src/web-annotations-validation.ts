@@ -164,7 +164,9 @@ function isRootStep(value: unknown): value is WebAnnotationRootStep {
     isStableId(value.stableId) &&
     isBoundedString(value.cssPath, 4_000) &&
     value.cssPath.length > 0 &&
-    isFrameDocumentPath(value.documentPath)
+    isFrameDocumentPath(value.documentPath) &&
+    (value.documentIdentity === undefined ||
+      (typeof value.documentIdentity === "string" && /^[a-f0-9]{64}$/.test(value.documentIdentity)))
   );
 }
 

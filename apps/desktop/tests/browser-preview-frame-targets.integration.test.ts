@@ -7,7 +7,7 @@
  * cross-origin and sandboxed frames prove that nothing inside them is read.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { chromium, type Browser, type CDPSession, type Page } from "playwright";
 import { WEB_ANNOTATION_MAX_FRAME_DEPTH } from "@orkestrator/protocol/web-annotations";
 import { isWebAnnotationTarget } from "@orkestrator/protocol/web-annotations-validation";
@@ -263,7 +263,9 @@ describe.skipIf(!CHROMIUM)("element targets inside iframes, in Chromium", () => 
     await phase(
       "route",
       page.context().route("**/*", (route) => {
-        const body = BODIES[route.request().url()];
+        const body =
+          BODIES[route.request().url()] ??
+          (route.request().url().startsWith(`${ORIGIN}/embed/`) ? EDITOR : undefined);
         return body === undefined
           ? route.fulfill({ status: 404, body: "" })
           : route.fulfill({ contentType: "text/html", body });
@@ -314,6 +316,7 @@ describe.skipIf(!CHROMIUM)("element targets inside iframes, in Chromium", () => 
           stableId: { kind: "id", value: "editor" },
           cssPath: "iframe#editor",
           documentPath: "/embed/editor.html",
+          documentIdentity: expect.stringMatching(/^[a-f0-9]{64}$/),
         },
       ],
     });
@@ -412,6 +415,116 @@ describe.skipIf(!CHROMIUM)("element targets inside iframes, in Chromium", () => 
     const back = await isolated.pinState("matched");
     expect(back.state).toBe("matched");
     expectNear(back.rect, expected);
+    await isolated.run(BROWSER_PREVIEW_PINS_CLEAR_SCRIPT);
+  });
+
+  test("query and redacted-path navigation invalidate pins; exact URL reload recovers", async () => {
+    for (const [first, second] of [
+      ["/embed/editor.html?record=1", "/embed/editor.html?record=2"],
+      [`/embed/${"a".repeat(40)}`, `/embed/${"b".repeat(40)}`],
+    ]) {
+      await isolated.load();
+      await isolated.navigateEditor(first!);
+      const { target } = await isolated.capture(await topRect(isolated.page, ["editor"], "save"));
+      expect((await isolated.showPins(target)).state).toBe("matched");
+      await isolated.navigateEditor(second!);
+      expect((await isolated.pinState("missing")).state).toBe("missing");
+      await isolated.navigateEditor(first!);
+      expect((await isolated.pinState("matched")).state).toBe("matched");
+      await isolated.run(BROWSER_PREVIEW_PINS_CLEAR_SCRIPT);
+    }
+  });
+
+  test("fully clipped pins hide on each edge and recover, with frame layout redraws", async () => {
+    await isolated.load();
+    const { target } = await isolated.capture(await topRect(isolated.page, ["editor"], "save"));
+    await isolated.showPins(target);
+    const display = () =>
+      isolated.run(`document.querySelector('[data-orkestrator-pins] [role=img]')?.style.display`);
+    for (const [left, top] of [
+      [-500, 40],
+      [500, 40],
+      [10, -500],
+      [10, 500],
+    ]) {
+      await isolated.page.evaluate(
+        ({ left, top }) => {
+          const doc = (document.getElementById("editor") as HTMLIFrameElement).contentDocument!;
+          const button = doc.getElementById("save")!;
+          button.style.cssText = `position:fixed;left:${left}px;top:${top}px;width:140px;height:30px`;
+          doc.dispatchEvent(new Event("scroll"));
+        },
+        { left, top },
+      );
+      await isolated.page.waitForTimeout(80);
+      expect(await display()).toBe("none");
+    }
+    await isolated.page.evaluate(() => {
+      const doc = (document.getElementById("editor") as HTMLIFrameElement).contentDocument!;
+      doc.getElementById("save")!.style.cssText =
+        "position:fixed;left:10px;top:40px;width:140px;height:30px";
+      doc.dispatchEvent(new Event("scroll"));
+    });
+    await isolated.page.waitForTimeout(80);
+    expect(await display()).toBe("block");
+    // Attribute edits do not trigger the mutation observer. Font completion
+    // and frame-window resize must independently schedule placement.
+    for (const event of ["font", "resize"]) {
+      await isolated.page.evaluate((event) => {
+        const frame = document.getElementById("editor") as HTMLIFrameElement;
+        frame.contentDocument!.getElementById("save")!.style.top =
+          event === "font" ? "80px" : "120px";
+        if (event === "font") frame.contentDocument!.fonts.dispatchEvent(new Event("loadingdone"));
+        else frame.contentWindow!.dispatchEvent(new Event("resize"));
+      }, event);
+      await isolated.page.waitForTimeout(80);
+      expectNear(
+        (await isolated.pinSnapshot()).rect,
+        await topRect(isolated.page, ["editor"], "save"),
+      );
+    }
+    await isolated.page.evaluate(() => {
+      const f = document.getElementById("editor") as HTMLIFrameElement;
+      f.contentDocument!.getElementById("save")!.style.cssText =
+        "position:fixed;bottom:10px;left:10px;width:140px;height:30px";
+      f.style.height = "220px";
+    });
+    await isolated.page.waitForTimeout(100);
+    expectNear(
+      (await isolated.pinSnapshot()).rect,
+      await topRect(isolated.page, ["editor"], "save"),
+    );
+    mkdirSync("output/visual-previews", { recursive: true });
+    await isolated.page.screenshot({
+      path: "output/visual-previews/frame-pin-visible-desktop.png",
+    });
+    const font = readFileSync("apps/web/src/assets/fonts/FiraCodeNerdFont-Regular.woff2").toString(
+      "base64",
+    );
+    await isolated.page.evaluate(async (font) => {
+      const doc = (document.getElementById("editor") as HTMLIFrameElement).contentDocument!;
+      const button = doc.getElementById("save")!;
+      button.style.cssText = "position:fixed;left:10px;top:40px;font:32px LateFrame, sans-serif";
+      const face = new FontFace("LateFrame", `url(data:font/woff2;base64,${font})`);
+      doc.fonts.add(face);
+      await face.load();
+      await doc.fonts.ready;
+    }, font);
+    await isolated.page.waitForTimeout(100);
+    expectNear(
+      (await isolated.pinSnapshot()).rect,
+      await topRect(isolated.page, ["editor"], "save"),
+    );
+    await isolated.page.setViewportSize({ width: 600, height: 700 });
+    await isolated.page.screenshot({ path: "output/visual-previews/frame-pin-visible-narrow.png" });
+    await isolated.page.evaluate(() => {
+      const doc = (document.getElementById("editor") as HTMLIFrameElement).contentDocument!;
+      doc.getElementById("save")!.style.top = "-500px";
+      doc.dispatchEvent(new Event("scroll"));
+    });
+    await isolated.page.waitForTimeout(80);
+    await isolated.page.screenshot({ path: "output/visual-previews/frame-pin-clipped-narrow.png" });
+    await isolated.page.setViewportSize({ width: 1000, height: 700 });
     await isolated.run(BROWSER_PREVIEW_PINS_CLEAR_SCRIPT);
   });
 

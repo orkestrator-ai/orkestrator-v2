@@ -5,6 +5,7 @@
  * browser and is covered in browser-preview-frame-targets.integration.test.ts.
  */
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { Window } from "happy-dom";
 import {
   WEB_ANNOTATION_FRAME_DOCUMENT_PATH_CHARS,
@@ -26,6 +27,24 @@ const documentAt = (href: string) =>
   ({ defaultView: { location: { href } } }) as unknown as Document;
 
 describe("frame document paths", () => {
+  test("document identities match SHA-256 and distinguish private URL components", () => {
+    const frames = kit();
+    for (const href of [
+      "about:srcdoc",
+      "https://local.test/editor?record=1",
+      "https://local.test/editor?record=2",
+      `https://local.test/${"a".repeat(200)}`,
+    ]) {
+      expect(frames.documentIdentityOf(documentAt(href))).toBe(
+        createHash("sha256").update(href).digest("hex"),
+      );
+    }
+    const doc = documentAt("https://local.test/editor?record=1");
+    const first = frames.documentIdentityOf(doc);
+    Object.assign(doc.defaultView!.location, { href: "https://local.test/editor?record=2" });
+    expect(frames.documentIdentityOf(doc)).not.toBe(first);
+  });
+
   test("keep only the path of an http(s) URL", () => {
     const frames = kit();
     expect(

@@ -145,14 +145,30 @@ describe("frame targets in the brief", () => {
         body: "Pad it.",
       },
     ]);
-    expect(brief.body).toContain(
-      '"scope":{"kind":"frame","path":[{"frame":"iframe","documentPath":"/embed/editor.html","stableId":{"kind":"id","value":"editor"}},{"shadowHost":"rich-editor"}]',
+    expect(brief.body).toContain('"cssPath":"iframe#editor"');
+    expect(brief.body).toContain('"cssPath":"html \\u003e body \\u003e rich-editor"');
+    expect(brief.body).toContain('"stableId":{"kind":"id","value":"editor"}');
+  });
+
+  test("ID-less sibling frames retain distinct selectors in briefs", () => {
+    const brief = briefFor(
+      [1, 2].map((index) => ({
+        capture: scopedCapture(`capture-annotation-${index}`, {
+          kind: "frame",
+          path: [
+            {
+              boundary: "frame",
+              tagName: "iframe",
+              cssPath: `iframe:nth-of-type(${index})`,
+              documentPath: "about:srcdoc",
+            },
+          ],
+        }),
+        body: "Change this button.",
+      })),
     );
-    // The selector the agent resolves inside the frame stays in the hierarchy.
-    expect(brief.body).toContain('"cssPath"');
-    // The frame and host selectors stay out.
-    expect(brief.body).not.toContain("html > body > rich-editor");
-    expect(brief.body).not.toContain("iframe#editor");
+    expect(brief.body).toContain("iframe:nth-of-type(1)");
+    expect(brief.body).toContain("iframe:nth-of-type(2)");
   });
 
   test("do not conflict with a top-level target that shares their id", () => {

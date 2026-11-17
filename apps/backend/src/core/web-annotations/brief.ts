@@ -276,7 +276,7 @@ function sectionValues(
                 }
               : {}),
             // Inside same-origin frames: each frame's document path (the
-            // route or file the agent can find) and each host's tag, outermost
+            // route or file the agent can find) and each root's selector, outermost
             // first. `cssPath` and `stableId` resolve inside the innermost
             // document or root, never from the top document.
             ...(anchor.scope.kind === "frame"
@@ -287,10 +287,15 @@ function sectionValues(
                       step.boundary === "frame"
                         ? {
                             frame: step.tagName,
+                            cssPath: step.cssPath,
                             documentPath: step.documentPath,
                             ...(step.stableId ? { stableId: step.stableId } : {}),
                           }
-                        : { shadowHost: step.tagName },
+                        : {
+                            shadowHost: step.tagName,
+                            cssPath: step.cssPath,
+                            ...(step.stableId ? { stableId: step.stableId } : {}),
+                          },
                     ),
                     note: "cssPath and stableId are scoped to the innermost frame document or shadow root",
                   },

@@ -128,6 +128,7 @@ function pickRootStep(value: unknown): unknown {
       ...pickStableId(value.stableId),
       cssPath: value.cssPath,
       documentPath: value.documentPath,
+      ...(value.documentIdentity !== undefined ? { documentIdentity: value.documentIdentity } : {}),
     };
   }
   return { boundary: value.boundary, ...(pickShadowHost(value) as Record<string, unknown>) };

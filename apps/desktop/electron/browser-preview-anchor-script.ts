@@ -191,6 +191,7 @@ export function browserPreviewAnchorKit(frameKitFactory: () => BrowserPreviewFra
         stableId?: StableId;
         cssPath: string;
         documentPath: string;
+        documentIdentity?: string;
       };
   type Anchor = {
     stableId?: StableId;
@@ -875,6 +876,7 @@ export function browserPreviewAnchorKit(frameKitFactory: () => BrowserPreviewFra
           ...(stableId ? { stableId } : {}),
           cssPath: cssPathFor(frame),
           documentPath,
+          documentIdentity: frames.documentIdentityOf(root as Document),
         });
         root = frame.getRootNode();
         continue;
@@ -1660,7 +1662,12 @@ export function browserPreviewAnchorKit(frameKitFactory: () => BrowserPreviewFra
         frames.noteFrame(match);
         const frameDocument = frames.reachableDocument(match);
         if (!frameDocument) return { failed: result("unsupported", "none", 0) };
-        if (frames.documentPathOf(frameDocument) !== step.documentPath) {
+        if (
+          frames.documentPathOf(frameDocument) !== step.documentPath ||
+          (step.documentIdentity !== undefined
+            ? frames.documentIdentityOf(frameDocument) !== step.documentIdentity
+            : frameDocument.URL.includes("?") || step.documentPath.includes(":opaque"))
+        ) {
           return { failed: result("missing", "none", 0) };
         }
         root = frameDocument;

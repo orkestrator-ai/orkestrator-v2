@@ -210,6 +210,7 @@ describe("web annotation capture validation", () => {
     for (const path of [
       [frame],
       [{ ...frame, documentPath: "about:srcdoc" }],
+      [{ ...frame, documentIdentity: "a".repeat(64) }],
       [{ ...frame, tagName: "frame", documentPath: "about:blank" }],
       [shadowStep, frame, shadowStep],
       [{ ...frame, stableId: { kind: "id", value: "editor" } }],
@@ -226,6 +227,8 @@ describe("web annotation capture validation", () => {
       [{ ...frame, tagName: "object" }],
       [{ ...frame, cssPath: "" }],
       [{ ...frame, documentPath: "" }],
+      [{ ...frame, documentIdentity: "raw query" }],
+      [{ ...frame, documentIdentity: "a".repeat(65) }],
       [{ ...frame, documentPath: "https://other.test/embed" }],
       [{ ...frame, documentPath: "/embed?token=1" }],
       [{ ...frame, documentPath: "/embed#x" }],

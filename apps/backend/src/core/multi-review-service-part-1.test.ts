@@ -443,7 +443,7 @@ test("MultiReviewService settles the interactive Address Findings card in the ba
       expect(running).toMatchObject({
         phase: "interactive",
         addressFindingsSession: { status: "running" },
-        stepRuntimes: { fix: { tokenBaseline: 0 } },
+        stepRuntimes: { "address-findings": { tokenBaseline: 0 } },
       });
 
       provider.statusValue = "idle";
@@ -464,7 +464,7 @@ test("MultiReviewService settles the interactive Address Findings card in the ba
           completedAt: expect.any(String),
         },
         stepRuntimes: {
-          fix: {
+          "address-findings": {
             tokenBaseline: 0,
             tokenCount: 23_456,
             completedAt: expect.any(String),

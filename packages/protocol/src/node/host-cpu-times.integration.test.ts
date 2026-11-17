@@ -10,7 +10,8 @@ test("real host counters advance at wall-clock rate while the process waits", as
   await Bun.sleep(1_000);
   const after = readHostCpuTimes();
   const elapsed = performance.now() - start;
-  expect(after).not.toBeNull();
+  // A positive check: the wait is the measurement, not a window for something to not happen.
+  expect(after).toBeArray();
   expect(after!.length).toBe(before!.length);
   const advances = after!.map((time, index) => time - before![index]!);
   expect(advances.every((advance) => Number.isFinite(advance) && advance >= 0)).toBe(true);

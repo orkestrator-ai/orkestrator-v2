@@ -1,4 +1,4 @@
-import { describe, expect, test, mock } from "bun:test";
+import { afterEach, describe, expect, test, mock } from "bun:test";
 import type { WebAnnotationTarget } from "@orkestrator/protocol/web-annotations";
 import type { HTMLElement, Element } from "happy-dom";
 import {
@@ -35,6 +35,42 @@ function snapshot(harness: Harness): Json {
   return JSON.parse(harness.window.eval(BROWSER_PREVIEW_PINS_SNAPSHOT_SCRIPT) as string) as Json;
 }
 
+/**
+ * happy-dom lays nothing out, so every element measures 0x0, and a pin whose
+ * element has no area is not drawn (a fully clipped frame target measures the
+ * same). Give this page's buttons a box, including ones a test inserts later,
+ * so a matched pin is drawn.
+ */
+const laidOut: Array<() => void> = [];
+function layOutButtons<T extends Harness>(harness: T): T {
+  // happy-dom may share element classes between windows; restore after the test.
+  const prototype = harness.window.HTMLButtonElement.prototype;
+  const own = Object.getOwnPropertyDescriptor(prototype, "getBoundingClientRect");
+  Object.defineProperty(prototype, "getBoundingClientRect", {
+    configurable: true,
+    writable: true,
+    value: () => ({
+      x: 10,
+      y: 40,
+      width: 80,
+      height: 24,
+      left: 10,
+      top: 40,
+      right: 90,
+      bottom: 64,
+    }),
+  });
+  laidOut.push(() => {
+    if (own) Object.defineProperty(prototype, "getBoundingClientRect", own);
+    else delete (prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+  });
+  return harness;
+}
+
+afterEach(() => {
+  for (const restore of laidOut.splice(0)) restore();
+});
+
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function badges(harness: Harness): HTMLElement[] {
@@ -45,7 +81,7 @@ function badges(harness: Harness): HTMLElement[] {
 
 describe("live pin layer", () => {
   test("pins have target-specific accessible names and stay out of the tab order", () => {
-    const harness = page(`<button data-testid="save">Save</button>`);
+    const harness = layOutButtons(page(`<button data-testid="save">Save</button>`));
     const target = captureElement(harness, harness.document.querySelector("button")!);
     show(harness, [{ annotationId: "annotation-1", number: 7, label: target.label, target }]);
     const layer = harness.document.querySelector("[data-orkestrator-pins]")!;
@@ -60,7 +96,9 @@ describe("live pin layer", () => {
   });
 
   test("a matched target that renders no box (a closed dialog) gets no pin", () => {
-    const harness = page(`<dialog><button data-testid="confirm">Save</button></dialog>`);
+    const harness = layOutButtons(
+      page(`<dialog><button data-testid="confirm">Save</button></dialog>`),
+    );
     const button = harness.document.querySelector("button")!;
     const target = captureElement(harness, button);
     // Chromium's answer for an element inside a closed <dialog>.
@@ -189,7 +227,7 @@ describe("live pin layer", () => {
 
   test("a replaced element (hot reload) is re-resolved and the pin follows the new node", async () => {
     const markup = `<main><h2>Settings</h2><button data-testid="save">Save</button></main>`;
-    const harness = page(markup);
+    const harness = layOutButtons(page(markup));
     const target = captureElement(harness, harness.document.querySelector("button")!);
     const initial = show(harness, [
       { annotationId: "annotation-1", number: 1, label: target.label, target },
@@ -209,7 +247,7 @@ describe("live pin layer", () => {
   });
 
   test("a target that renders late is matched once it appears; a removed one is hidden", async () => {
-    const harness = page(`<main><button data-testid="save">Save</button></main>`);
+    const harness = layOutButtons(page(`<main><button data-testid="save">Save</button></main>`));
     const target = captureElement(harness, harness.document.querySelector("button")!);
     harness.document.body.innerHTML = `<main></main>`;
     const initial = show(harness, [

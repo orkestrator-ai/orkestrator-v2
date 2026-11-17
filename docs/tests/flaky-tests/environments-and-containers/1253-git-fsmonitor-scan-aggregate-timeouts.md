@@ -1,7 +1,7 @@
 # Git fsmonitor scans exceed the aggregate test deadline
 
 - **ID:** 1253
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-28
 - **File:** `apps/backend/src/core/git-fsmonitor.test.ts`
 - **Original command:** `mise run test` during review preparation at `05737aff0133f4d7a377ec30d1cfb37f514b71de`.
@@ -545,3 +545,35 @@ reported `open`: record it as a recurrence.
 - **Reproduced:** no — the recorded deadline was Bun's default budget on a loaded host; the failing body is fast alone, and a 5 s exhaustion was not re-created per case here.
 - **Stress:** `mise run test:logged -- --name ec-stress-b -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --core 13 --burners 6 -- bun test --preload ../../tests/setup-node.ts <seventeen container, pipeline, move, worktree and native-agent owners, this one included> --rerun-each=2 --parallel=1'` at host load about 80: 1,139 passed, 1 failed — `git fsmonitor > fixture repositories inherit fsmonitor off from the test preload` on its second rerun, which fails the same way without contention and with the unchanged file (`git-fsmonitor.test.ts` is not rerun-safe). Fresh processes instead: `mise run test:logged -- --name ec-fsmon-stress -- bash -c 'cd apps/backend && for i in 1 2 3; do bun ../../scripts/test-under-contention.ts --core 13 --burners 6 -- bun test --preload ../../tests/setup-node.ts ./src/core/git-fsmonitor.test.ts --parallel=1 || exit 1; done'` passed 3 of 3.
 - **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).
+
+## CI repair review preparation recurrence — 2026-11-17
+
+`mise run flaky:recurrence 1253 --base b5af3c2b55ec75b56436746511ce3ca7d4a6c7cb`
+confirmed that the base contains the recorded fix: reopen this case. This
+observation uses preparation's existing artifacts; no fsmonitor test was rerun
+in the address-findings stage.
+
+- **Branch / base:** `fix-ci-failures-1ff35fad9dfc-r1`, validated commit
+  `81d21e4f85b8c359d216d75fdc1eb5e8c9cc1397`, merge base
+  `b5af3c2b55ec75b56436746511ce3ca7d4a6c7cb`.
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run test`.
+  Default concurrent groups; backend used four Bun workers.
+- **Failure:** `git fsmonitor > project-home status auto-starts and preserves
+  the configured daemon`, 11,862.50 ms. The `git fsmonitor--daemon status`
+  promise rejected at `git-fsmonitor.test.ts:286`; this was not Bun's test
+  deadline. Backend totals: 18,698 pass, 206 skip, 5 fail across 1,339 files
+  (660.51 s). The other four failures are not fsmonitor failures.
+- **Isolated rerun:** preparation's automatic one-worker rerun of the unchanged
+  owner passed: 25 pass, 0 fail, 65 assertions (11.56 s; runner wall time
+  11.729 s). It used `bun test ./src/core/git-fsmonitor.test.ts --preload
+  ../../tests/setup-node.ts --only-failures --parallel=1` from `apps/backend`.
+- **Evidence:** `validation-04.stderr.txt` under
+  `.orkestrator/review-artifacts/review-validation-18e46bcf-68f8-4afa-bb15-44eaa0371d75/`;
+  detailed aggregate and isolated logs are
+  `workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and `rerun-apps-backend-src-core-git-fsmonitor-test-ts.log.gz` under
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.jYuj30/`.
+- **Hypothesis (unconfirmed):** the daemon readiness race described in the
+  November recurrences remains possible. Increasing Bun's deadline did not
+  prevent this rejection. No fsmonitor implementation, assertion, timeout or
+  skip changed; the default suite remains failed.

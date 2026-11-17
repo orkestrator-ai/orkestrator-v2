@@ -27,6 +27,12 @@ import {
   type KeyInformationAuthor,
   type KeyInformationPatch,
 } from "@orkestrator/protocol/build-pipeline-key-information";
+import {
+  pipelineBuildOutcomeFromInput,
+  type PipelineBuildOutcome,
+  type PipelineBuildOutcomeInput,
+} from "@orkestrator/protocol/build-pipeline-build-outcome";
+import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { PHASE_ORDER, restartStepOrder } from "./build-pipeline-rewind.js";
 import type { PersistedBuildPipeline } from "./models.js";
@@ -37,6 +43,9 @@ export const KEY_INFORMATION_UPDATE_TIMEOUT_MS = 30_000;
 export interface KeyInformationScope {
   environmentId: string;
   projectId: string;
+  /** Backend-authenticated caller identity, never taken from tool input. */
+  tabId?: string;
+  workflowResultKey?: string;
 }
 
 /** What a stage agent sees: the pipeline it works for and the brief so far. */
@@ -50,13 +59,27 @@ export interface KeyInformationView {
   /** The stage an update from this caller is recorded as. */
   author: KeyInformationAuthor;
   keyInformation: BuildPipelineKeyInformation | null;
+  /**
+   * What the running Build turn reported about continuing to review, when it
+   * reported anything. Absent outside a Build turn.
+   */
+  buildOutcome?: Pick<PipelineBuildOutcome, "continueReview" | "stopKind" | "stopReason">;
 }
 
 /** What the agent tools need from the build pipeline service. */
 export interface BuildPipelineKeyInformationHost {
   /** The view of the pipeline that owns the environment, or null when none does. */
   read(scope: KeyInformationScope): Promise<KeyInformationView | null>;
-  update(scope: KeyInformationScope, patch: KeyInformationPatch): Promise<KeyInformationView>;
+  /**
+   * Applies `patch` and, from a Build turn only, records `outcome`: whether
+   * review and the stages after it should run. Nothing is written when either
+   * is refused.
+   */
+  update(
+    scope: KeyInformationScope,
+    patch: KeyInformationPatch,
+    outcome?: PipelineBuildOutcomeInput,
+  ): Promise<KeyInformationView>;
 }
 
 const AUTHOR_BY_PHASE: Partial<Record<BuildPipeline["phase"], KeyInformationAuthor>> = {
@@ -83,6 +106,7 @@ export function keyInformationAuthor(pipeline: BuildPipeline): KeyInformationAut
 }
 
 export function keyInformationView(pipeline: BuildPipeline): KeyInformationView {
+  const outcome = runningBuildSession(pipeline)?.buildOutcome;
   return {
     pipelineId: pipeline.id,
     taskTitle: pipeline.taskTitle,
@@ -91,7 +115,49 @@ export function keyInformationView(pipeline: BuildPipeline): KeyInformationView 
     maxRounds: pipeline.maxIterations,
     author: keyInformationAuthor(pipeline),
     keyInformation: pipeline.keyInformation ?? null,
+    ...(outcome
+      ? {
+          buildOutcome: {
+            continueReview: outcome.continueReview,
+            ...(outcome.stopKind ? { stopKind: outcome.stopKind } : {}),
+            ...(outcome.stopReason ? { stopReason: outcome.stopReason } : {}),
+          },
+        }
+      : {}),
   };
+}
+
+/**
+ * The Build session whose turn is running now, or undefined. Only that turn
+ * may decide whether review runs: a later stage cannot stop the pipeline
+ * through this channel, and a finished Build's decision was already acted on.
+ */
+function runningBuildSession(pipeline: BuildPipeline): PipelineSession | undefined {
+  if (pipeline.phase !== "building") return undefined;
+  const session = pipeline.sessions[pipeline.currentSessionIndex];
+  return session && session.phase === "build" && !isSupersededPipelineSession(session)
+    ? session
+    : undefined;
+}
+
+/**
+ * Records a Build turn's decision on its session. Throws, writing nothing,
+ * when the caller is not a running Build turn or the report is incomplete.
+ */
+export function applyBuildOutcomeReport(
+  pipeline: BuildPipeline,
+  input: PipelineBuildOutcomeInput,
+  at = new Date().toISOString(),
+): void {
+  const session = runningBuildSession(pipeline);
+  if (!session) {
+    throw new Error(
+      "Only the Build stage, while its turn runs, can decide whether review continues. Leave `continueReview`, `stopKind` and `stopReason` out.",
+    );
+  }
+  const outcome = pipelineBuildOutcomeFromInput(input, at);
+  if ("error" in outcome) throw new Error(outcome.error);
+  session.buildOutcome = outcome;
 }
 
 /**
@@ -247,7 +313,7 @@ export function createBuildPipelineKeyInformationHost(deps: {
       const pipeline = await owner(scope);
       return pipeline ? keyInformationView(pipeline) : null;
     },
-    async update(scope, patch) {
+    async update(scope, patch, outcome) {
       const pipeline = await owner(scope);
       if (!pipeline) {
         throw new Error("No build pipeline owns this environment, so it has no key information.");
@@ -272,7 +338,27 @@ export function createBuildPipelineKeyInformationHost(deps: {
             // await the write's actual result so a committed update cannot be
             // reported as abandoned. Promise.race observes late rejections too.
             clearTimeout(timer);
-            applyAgentKeyInformationUpdate(candidate, patch);
+            // The outcome first: it is the half that can be refused, and a
+            // refusal must leave the brief unchanged too.
+            if (outcome) {
+              const session = runningBuildSession(candidate);
+              const request = candidate.activePromptContext;
+              const ownsWorker = session && scope.tabId === pipelineWorkerTabId(session.sessionKey);
+              const ownsDispatch =
+                session &&
+                scope.workflowResultKey &&
+                request?.sessionId === session.sdkSessionId &&
+                request.requestId === scope.workflowResultKey;
+              if (!ownsWorker && !ownsDispatch) {
+                throw new Error(
+                  "Only the Build stage's authenticated active worker can report an outcome.",
+                );
+              }
+              applyBuildOutcomeReport(candidate, outcome);
+            }
+            if (Object.values(patch).some((value) => value !== undefined)) {
+              applyAgentKeyInformationUpdate(candidate, patch);
+            }
           }),
           timeout,
         ]);

@@ -464,6 +464,47 @@ describe("BuildCompletionStatus", () => {
     });
   });
 
+  test("says why review and the pull request never ran when Build found no work", () => {
+    const stopped = (id: string, phase: "complete" | "paused") =>
+      buildPipelineFixture({
+        id,
+        phase,
+        ...(phase === "paused" ? { pausedFromPhase: "building" as const } : {}),
+        sessions: [
+          {
+            phase: "build",
+            iteration: 0,
+            sessionKey: `${id}:build:0:a`,
+            sdkSessionId: "sdk-build",
+            status: "idle",
+            startedAt: "2026-11-17T10:00:00.000Z",
+            label: "Build Session",
+            buildOutcome: {
+              continueReview: false,
+              stopKind: phase === "complete" ? "no-work-needed" : "blocked",
+              stopReason: "The export button already exists.",
+              reportedAt: "2026-11-17T10:00:00.000Z",
+              appliedAt: "2026-11-17T10:00:00.000Z",
+            },
+          },
+        ],
+      });
+    const view = renderInAppCommandScope(
+      <BuildCompletionStatus pipeline={stopped("no-work", "complete")} />,
+    );
+    expect(screen.getByRole("status").textContent).toBe(
+      "Build found no further work, so review, fixes and the pull request were skipped: The export button already exists.",
+    );
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+    view.unmount();
+
+    // A blocked stop pauses the run; its reason is already the pipeline error.
+    const { container } = renderInAppCommandScope(
+      <BuildCompletionStatus pipeline={stopped("blocked", "paused")} />,
+    );
+    expect(container.childElementCount).toBe(0);
+  });
+
   test("renders nothing for a pipeline that has no source", () => {
     appCommandStore(buildPipelineStore)
       .getState()

@@ -804,6 +804,18 @@ with `MachinesFilter`:
   the coordinator is gated), Open Board, Open Repo on GitHub, Repository
   Settings, New Environment and Expand/Collapse. Settings and New Environment
   are disabled while that machine is not writable, as on a project header.
+- A project's page reopens on the tab it was last left on (Home, Coordinator,
+  Kanban, Linear and so on). Each node's `uiStore` keeps the last tab per
+  project (`projectBoardTabs`, newest first, at most 200, persisted with its
+  collapsed projects). Both project selection and environment-targeted project
+  selection restore it; environment opens carry the same `landingTab` fallback.
+  On a directly connected leaf, a remembered Coordinator falls back to Home
+  until that project's coordinator gate has been explicitly opened. A project heading, a
+  repository heading, a compact icon and a project search hit therefore send
+  only a `landingTab` (`WorkspaceRequest.landingTab`): the tab for a project
+  with none remembered. Explicit navigation still sends `boardTab`, which
+  always wins: Open Coordinator, Open Board, a ticket opened on its board, a
+  project home opened on Home.
 - Activity order offers **Priority order** (the default for both local and
   federated lists), **Newest first**, and **Oldest first**. Every order keeps
   merged environments below unmerged ones and, within each, working environments

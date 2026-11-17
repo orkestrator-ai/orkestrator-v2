@@ -76,7 +76,6 @@ import { LinearBoardPicker, linearBoardName } from "./LinearBoardPicker";
 import { LinearConnectDialog } from "./LinearConnectDialog";
 import { LinearUseConnectionNotice } from "./LinearUseConnectionNotice";
 import {
-  type LinearLane,
   buildLinearLanes,
   buildStatusOrder,
   compareIssueOrder,
@@ -84,7 +83,7 @@ import {
   type IssueOrder,
 } from "./linear-issue-order";
 import { LinearAssigneeAvatar } from "./LinearAssigneeAvatar";
-import { LinearIssueBoard, LinearLanesMenu } from "./LinearIssueBoard";
+import { LinearIssueBoard, LinearLanesMenu, type LinearBoardMove } from "./LinearIssueBoard";
 import {
   type LinearBoardState,
   forgetLinearBoardSnapshot,
@@ -100,6 +99,9 @@ import {
 } from "@/stores/linearViewPreferencesStore";
 
 const log = createLogger("web.linear");
+
+/** How many issues of one board drop are sent to Linear at once. */
+const MOVE_CONCURRENCY = 4;
 
 interface LinearTicketsViewProps {
   projectId: string;
@@ -562,67 +564,154 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
   );
 
   /**
-   * A card dropped on another lane: show it there at once, move the issue to
-   * that lane's workflow state in Linear, and put it back if Linear refuses.
+   * Cards dropped on the board: show them where they landed at once, move
+   * each issue in Linear (to the lane's workflow state, and to its new board
+   * position when the drop placed it), and put back any Linear refuses.
    *
-   * One move per issue at a time: the card cannot be dragged again until its
+   * One move per issue at a time: a card cannot be dragged again until its
    * move settles, so an earlier answer can never land after a later one. A
    * load that lands meanwhile read Linear after the move began, so it wins
    * over the rollback (the move may have been applied even though its answer
    * failed). Linear's answer to a successful move is applied unless the issue
-   * has since been read with a newer `updatedAt`.
+   * has since been read with a newer `updatedAt`. Several cards are sent a
+   * few at a time, each settling on its own.
    */
-  const handleMoveIssue = useCallback(
-    async (issue: LinearIssueListItem, to: LinearLane) => {
-      if (!to.stateId || movingIssuesRef.current.has(issue.id)) return;
-      const setMoving = (moving: boolean) => {
-        if (moving) movingIssuesRef.current.add(issue.id);
-        else movingIssuesRef.current.delete(issue.id);
+  const handleMoveIssues = useCallback(
+    async ({ issues: dropped, to, sortOrders }: LinearBoardMove) => {
+      const stateId = to.stateId;
+      if (!stateId) return;
+      const moves = dropped
+        .filter((issue) => !movingIssuesRef.current.has(issue.id))
+        .map((issue) => ({
+          issue,
+          changesLane: issue.status !== to.status,
+          sortOrder: sortOrders.get(issue.id),
+        }))
+        .filter((move) => move.changesLane || move.sortOrder !== undefined);
+      if (moves.length === 0) return;
+
+      const setMoving = (issueId: string, moving: boolean) => {
+        if (moving) movingIssuesRef.current.add(issueId);
+        else movingIssuesRef.current.delete(issueId);
         setMovingIssueIds(new Set(movingIssuesRef.current));
       };
-      setMoving(true);
+      for (const { issue } of moves) movingIssuesRef.current.add(issue.id);
+      setMovingIssueIds(new Set(movingIssuesRef.current));
       movesStartedRef.current += 1;
       const loadedAtStart = issuesLoadedRef.current;
-      const before = {
-        status: issue.status,
-        statusType: issue.statusType,
-        statusPosition: issue.statusPosition,
-      };
       const patch = (
+        issueId: string,
         fields: Partial<LinearIssueListItem>,
         applies: (candidate: LinearIssueListItem) => boolean = () => true,
       ) =>
         setIssues((current) =>
           current.map((candidate) =>
-            candidate.id === issue.id && applies(candidate)
+            candidate.id === issueId && applies(candidate)
               ? { ...candidate, ...fields }
               : candidate,
           ),
         );
-      patch({ status: to.status, statusType: to.type, statusPosition: to.position });
-      try {
-        const updated = await nodeBackend.updateLinearIssue(projectId, issue.id, {
-          stateId: to.stateId,
-        });
-        patch(
-          {
-            status: updated.status ?? to.status,
-            statusType: updated.statusType ?? to.type,
-            statusPosition: updated.statusPosition ?? to.position,
-            ...(updated.updatedAt ? { updatedAt: updated.updatedAt } : {}),
-          },
-          (candidate) => !readAfter(candidate.updatedAt, updated.updatedAt),
-        );
-        toast.success(`${issue.identifier} moved to ${to.status}`);
-      } catch (error) {
-        if (issuesLoadedRef.current === loadedAtStart) {
-          patch(before, (candidate) => candidate.status === to.status);
+      const planned = new Map(moves.map((move) => [move.issue.id, move]));
+      setIssues((current) =>
+        current.map((candidate) => {
+          const move = planned.get(candidate.id);
+          if (!move) return candidate;
+          return {
+            ...candidate,
+            ...(move.changesLane
+              ? { status: to.status, statusType: to.type, statusPosition: to.position }
+              : {}),
+            ...(move.sortOrder !== undefined ? { sortOrder: move.sortOrder } : {}),
+          };
+        }),
+      );
+
+      const moveOne = async ({
+        issue,
+        changesLane,
+        sortOrder,
+      }: (typeof moves)[number]): Promise<unknown> => {
+        try {
+          const updated = await nodeBackend.updateLinearIssue(projectId, issue.id, {
+            ...(changesLane ? { stateId } : {}),
+            ...(sortOrder !== undefined ? { sortOrder } : {}),
+          });
+          const nextSortOrder = updated.sortOrder ?? sortOrder;
+          patch(
+            issue.id,
+            {
+              status: updated.status ?? to.status,
+              statusType: updated.statusType ?? to.type,
+              statusPosition: updated.statusPosition ?? to.position,
+              ...(nextSortOrder !== undefined ? { sortOrder: nextSortOrder } : {}),
+              ...(updated.updatedAt ? { updatedAt: updated.updatedAt } : {}),
+            },
+            (candidate) => !readAfter(candidate.updatedAt, updated.updatedAt),
+          );
+          return null;
+        } catch (error) {
+          if (issuesLoadedRef.current === loadedAtStart) {
+            patch(
+              issue.id,
+              {
+                status: issue.status,
+                statusType: issue.statusType,
+                statusPosition: issue.statusPosition,
+                sortOrder: issue.sortOrder,
+              },
+              (candidate) =>
+                candidate.status === to.status &&
+                (sortOrder === undefined || candidate.sortOrder === sortOrder),
+            );
+          }
+          return error ?? new Error("The move failed");
+        } finally {
+          setMoving(issue.id, false);
         }
-        toast.error(`Could not move ${issue.identifier} to ${to.status}`, {
-          description: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        setMoving(false);
+      };
+
+      // A few requests at a time: a large selection must not burst Linear's rate limit.
+      const errors: unknown[] = Array.from({ length: moves.length }, () => null);
+      let next = 0;
+      const worker = async () => {
+        while (next < moves.length) {
+          const index = next++;
+          errors[index] = await moveOne(moves[index]!);
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(MOVE_CONCURRENCY, moves.length) }, () => worker()),
+      );
+
+      const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
+      const failed = moves.filter((_, index) => errors[index] !== null);
+      const firstError = errors.find((error) => error !== null);
+      const changesLanes = moves.some((move) => move.changesLane);
+      if (moves.length === 1) {
+        const [{ issue, changesLane }] = moves as [(typeof moves)[number]];
+        if (failed.length > 0) {
+          toast.error(
+            changesLane
+              ? `Could not move ${issue.identifier} to ${to.status}`
+              : `Could not reorder ${issue.identifier}`,
+            { description: describe(firstError) },
+          );
+        } else if (changesLane) {
+          toast.success(`${issue.identifier} moved to ${to.status}`);
+        }
+        return;
+      }
+      const moved = moves.length - failed.length;
+      if (moved > 0 && changesLanes) {
+        toast.success(`${moved} ${moved === 1 ? "issue" : "issues"} moved to ${to.status}`);
+      }
+      if (failed.length > 0) {
+        toast.error(
+          `Could not move ${failed.map((move) => move.issue.identifier).join(", ")}${
+            changesLanes ? ` to ${to.status}` : ""
+          }`,
+          { description: describe(firstError) },
+        );
       }
     },
     [nodeBackend, projectId],
@@ -1377,9 +1466,12 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
               onSelectIssue={handleSelectIssue}
               pipelinePhase={(issueId) => getIssuePipeline(pipelines, issueId)?.phase}
               // Moves need the project's board: an older node lists issues unscoped.
-              onMoveIssue={
-                boardState === "linked" ? (issue, to) => void handleMoveIssue(issue, to) : undefined
+              onMoveIssues={
+                boardState === "linked" ? (move) => void handleMoveIssues(move) : undefined
               }
+              // Dropping a card beside another sets Linear's board order, so
+              // only that ticket order places cards.
+              reorderable={issueOrder === "manual"}
               movingIssueIds={movingIssueIds}
             />
           ) : (

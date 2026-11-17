@@ -529,6 +529,44 @@ stays off that list until the support window's floor reads it: `summary` is
 stored and shown but not named in update history, so an older renderer or a
 downgraded backend ignores the field and keeps the pipeline.
 
+### Build decides whether review runs
+
+Not every build ends in a change worth reviewing: an investigation can show
+the ticket needs no work, or the build can hit something only the user can
+settle. The Build stage says which through the same `update_key_information`
+call it writes its brief with: `continueReview` (`true` to go on), and, when
+it is `false`, `stopKind` and a required `stopReason`
+(`@orkestrator/protocol/build-pipeline-build-outcome`). Only a running Build
+turn may pass them; any other stage, or a Build whose turn has ended, is
+refused and nothing in that call is written. The report is kept on the Build
+session (`PipelineSession.buildOutcome`); a later call replaces it. The caller
+must authenticate as that worker's mailbox or the active dispatch's workflow
+credential. Shared connections supply the signed workflow or worker-mail
+`capability` from their turn instructions. Ordinary tabs and stale workflow
+credentials cannot report outcomes. Stop details alongside `continueReview: true`
+are refused.
+
+A queued user message, worker-mail turn, live steer or Resume invalidates the
+old outcome: further implementation must report a fresh stop before it can
+skip review.
+
+When the Build turn ends, the supervisor reads the report before package
+preparation starts (`build-pipeline-build-stop.ts`), so no preparation,
+validation, review, Address, Verify or Ship session is opened:
+
+- `no-work-needed` (the default kind) completes the pipeline. The ticket moves
+  to review with a comment giving the reason, as a GitHub or Linear source's
+  completion comment does, the build tab shows the reason in a muted status
+  line (`BuildCompletionStatus`), and a coordinator's completion notice
+  carries it.
+- `blocked` pauses the pipeline from Build with the reason as its message.
+  Resume gives the same Build session another turn; the stop is marked
+  applied, so only a new report from that turn stops the pipeline again, and
+  a turn that reports nothing goes on to review.
+
+No report, or `continueReview: true`, continues exactly as before: a missing
+report is never read as a stop.
+
 ## Inspector and actions
 
 `PipelineFlowView` owns selection, which follows the running step (or the last

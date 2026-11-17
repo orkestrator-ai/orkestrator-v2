@@ -807,6 +807,35 @@ than showing an error, and one that a card move overtook is dropped, since it
 may have read Linear before the move. The Refresh button's icon spins while a
 background read is in flight; pressing it still does a full load.
 
+**Reordering.** Under the "Linear board" ticket order (the default), lanes are
+sorted by Linear's own manual order (`sortOrder`; issues without one last), and
+a card dropped above or below another card lands there, in its own lane or
+another. A line shows where it will land while it is held. The move sends the
+new `sortOrder` with `update_linear_issue` (with `stateId` too when the lane
+changes): a value spread evenly between the new neighbours, or one unit past
+the lane's first or last card. Empty lanes get fresh increasing positions;
+tied or exhausted gaps assign fresh positions to the destination lane as well.
+Dropping on the header places cards first, gaps use the next card, and dropping below a lane's cards puts the card at
+the end. A reorder within a lane is not announced unless it fails, when the
+card goes back and the error names it. Under the priority or date orders a
+drop only changes the lane, as before. An older backend ignores `sortOrder`
+(a new optional field, so no domain version change). A lane change still works
+and its answer restores Linear's real order. A same-lane reorder has no known
+fields on that backend: it fails with “Nothing to change”, rolls back, and
+shows the reorder error.
+
+**Moving several cards.** Cmd- or Ctrl-click toggles a card's selection, and
+Shift-click selects the run of cards in a lane from the last one picked. A
+pill at the foot of the board counts the selection and offers Clear; Escape
+or a plain click (which opens the issue) clears it too. Dragging a selected
+card carries the whole selection, in board order, and the drag preview shows
+a stack with the count; dragging any other card carries only that card and
+drops the selection. Each issue is its own `update_linear_issue`, sent four
+at a time so a large selection does not burst Linear's rate limit, and each
+settles and rolls back on its own (including neighbours assigned fresh positions): one toast reports how many moved, another
+names the ones Linear refused. A card with a move in flight cannot be
+selected.
+
 **Sync.** `NodeLinearSync` (`nodes/node-linear-sync.ts`) runs on the command
 node beside Kanban sync, at the same moments: a (re)connect, a leaf's project
 list being read, shortly after a change here, and the minute reconcile. For

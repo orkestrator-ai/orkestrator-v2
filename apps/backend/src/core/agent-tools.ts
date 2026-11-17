@@ -706,6 +706,28 @@ async function createAgentToolServer(
   } = {},
 ): Promise<McpServer> {
   const pipelineScope = { environmentId: scope.environmentId, projectId: scope.projectId };
+  const outcomeScope = async (capability: string | undefined) => {
+    if (scope.workflowResultKey)
+      return { ...pipelineScope, workflowResultKey: scope.workflowResultKey };
+    if (scope.tabId) return { ...pipelineScope, tabId: scope.tabId };
+    if (capability && workflowResults) {
+      const grant = await workflowResults.authenticateCapability(capability);
+      if (
+        grant &&
+        grant.environmentId === scope.environmentId &&
+        grant.projectId === scope.projectId
+      )
+        return { ...pipelineScope, workflowResultKey: grant.workflowResultKey };
+      const worker = authenticatePipelineWorkerMailCapability(workflowResults, capability);
+      if (
+        worker &&
+        worker.environmentId === scope.environmentId &&
+        worker.projectId === scope.projectId
+      )
+        return worker;
+    }
+    throw new Error("Build outcome capability denied");
+  };
   if (scope.workflowResultBroker) {
     const server = new McpServer(
       { name: WORKFLOW_RESULT_MCP_SERVER_NAME, version: "1.0.0" },
@@ -765,7 +787,8 @@ async function createAgentToolServer(
           : null;
       },
     );
-    if (keyInformation) await registerKeyInformationTools(server, keyInformation, pipelineScope);
+    if (keyInformation)
+      await registerKeyInformationTools(server, keyInformation, pipelineScope, outcomeScope);
     return server;
   }
   if (scope.workflowResultKey) {
@@ -808,7 +831,7 @@ async function createAgentToolServer(
     // A Build Pipeline stage turn runs on this server alone, so it carries the
     // key information tools the stage prompts ask for.
     if (keyInformation && binding.kind !== "graph-output" && binding.kind !== SUBORK_RESULT_KIND) {
-      await registerKeyInformationTools(server, keyInformation, pipelineScope);
+      await registerKeyInformationTools(server, keyInformation, pipelineScope, outcomeScope);
     }
     if (workerTabId) {
       registerAgentMessagingTools(
@@ -982,7 +1005,8 @@ async function createAgentToolServer(
 
   if (suborkTools) registerSuborkTools(server, storage, callerScope, suborkTools, consumeRateLimit);
 
-  if (keyInformation) await registerKeyInformationTools(server, keyInformation, pipelineScope);
+  if (keyInformation)
+    await registerKeyInformationTools(server, keyInformation, pipelineScope, outcomeScope);
 
   return server;
 }

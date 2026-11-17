@@ -147,3 +147,37 @@ describe("a cancelled Multi Review's coordinator notice", () => {
     expect(status.tools.join(" ")).not.toMatch(/launch_multi_review|start_multi_review/);
   });
 });
+
+describe("a build that Build stopped before review", () => {
+  test("completes with the reason, so the coordinator does not read it as lost work", () => {
+    const status = buildPipelineStatus(
+      {
+        phase: "complete",
+        taskTitle: "Add an export button",
+        sessions: [
+          {
+            phase: "build",
+            iteration: 0,
+            sessionKey: "pipeline-1:build:0:a",
+            sdkSessionId: "sdk-build",
+            status: "idle",
+            startedAt: CANCELLED_AT,
+            label: "Build Session",
+            buildOutcome: {
+              continueReview: false,
+              stopKind: "no-work-needed",
+              stopReason: "The export button already exists.",
+              reportedAt: CANCELLED_AT,
+              appliedAt: CANCELLED_AT,
+            },
+          },
+        ],
+      } satisfies Partial<BuildPipeline>,
+      "pipeline-1",
+    )!;
+    expect(status).toMatchObject({ state: "completed", headline: "completed" });
+    expect(status.details).toContain(
+      "Build found no further work, so review, fixes and the pull request were skipped: The export button already exists.",
+    );
+  });
+});

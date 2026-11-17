@@ -19,6 +19,11 @@ import {
   KEY_INFORMATION_TOOL_NAMES,
   type KeyInformationPatch,
 } from "@orkestrator/protocol/build-pipeline-key-information";
+import {
+  MAX_PIPELINE_BUILD_STOP_REASON_LENGTH,
+  PIPELINE_BUILD_STOP_KINDS,
+  type PipelineBuildOutcomeInput,
+} from "@orkestrator/protocol/build-pipeline-build-outcome";
 import type {
   BuildPipelineKeyInformationHost,
   KeyInformationScope,
@@ -153,7 +158,63 @@ function updateInputSchema() {
         "The current round's verification: each check and whether it passed, and what failed. Replaces this round's entry only.",
       ),
     ),
+    capability: Schema.optionalKey(
+      describe(
+        str({ max: 4096 }),
+        "Signed worker or workflow capability, required on a shared connection when reporting a Build outcome.",
+      ),
+    ),
+    continueReview: Schema.optionalKey(
+      describe(
+        Schema.Boolean,
+        "Build stage only. `true` when the work is ready for the rest of the pipeline (package preparation, validation, review, fixes, verification and the pull request). `false` when none of that should run: no work was needed, or the build had to stop. Omitting it continues the pipeline.",
+      ),
+    ),
+    stopKind: Schema.optionalKey(
+      describe(
+        Schema.Literals(PIPELINE_BUILD_STOP_KINDS),
+        "Build stage only, with `continueReview: false`. `no-work-needed` completes the pipeline without review or a pull request (the default); `blocked` pauses it for the user, who can resume the Build.",
+      ),
+    ),
+    stopReason: Schema.optionalKey(
+      describe(
+        str({ max: MAX_PIPELINE_BUILD_STOP_REASON_LENGTH * INPUT_SLACK }),
+        "Required with `continueReview: false`: why the pipeline stops, in a sentence or two the user can act on.",
+      ),
+    ),
   });
+}
+
+type UpdateInput = KeyInformationPatch & {
+  capability?: string;
+  continueReview?: boolean;
+  stopKind?: PipelineBuildOutcomeInput["stopKind"];
+  stopReason?: string;
+};
+
+/** Splits the tool input into the brief's patch and the Build outcome, if any. */
+export function splitKeyInformationUpdate(input: UpdateInput): {
+  patch: KeyInformationPatch;
+  outcome?: PipelineBuildOutcomeInput;
+} {
+  const { continueReview, stopKind, stopReason, capability: _capability, ...patch } = input;
+  if (continueReview === true && (stopKind !== undefined || stopReason !== undefined)) {
+    throw new Error("`stopKind` and `stopReason` need `continueReview: false`.");
+  }
+  if (continueReview === undefined) {
+    if (stopKind !== undefined || stopReason !== undefined) {
+      throw new Error("`stopKind` and `stopReason` need `continueReview: false`.");
+    }
+    return { patch };
+  }
+  return {
+    patch,
+    outcome: {
+      continueReview,
+      ...(stopKind !== undefined ? { stopKind } : {}),
+      ...(stopReason !== undefined ? { stopReason } : {}),
+    },
+  };
 }
 
 function viewResult(view: KeyInformationView) {
@@ -172,6 +233,7 @@ export async function registerKeyInformationTools(
   server: McpServer,
   host: BuildPipelineKeyInformationHost,
   scope: KeyInformationScope,
+  resolveOutcomeScope?: (capability: string | undefined) => Promise<KeyInformationScope>,
 ): Promise<boolean> {
   const owner = await host.read(scope).catch(() => null);
   if (!owner) return false;
@@ -200,7 +262,7 @@ export async function registerKeyInformationTools(
     {
       title: "Update the pipeline's key information",
       description:
-        "Update the key information the user reads in the build pipeline header. Each field you pass replaces that whole section, so include the entries you want to keep; omitted fields are left unchanged. `issues` and `verification` apply to the current round only. Write for a reader who has not seen the transcript: short, specific and accurate. Record observable work and concise engineering decision summaries only. Do not perform reasoning extraction: do not disclose, reconstruct or request private internal reasoning, hidden deliberations or chain of thought.",
+        "Update the key information the user reads in the build pipeline header. Each field you pass replaces that whole section, so include the entries you want to keep; omitted fields are left unchanged. `issues` and `verification` apply to the current round only. The Build stage also says here whether the rest of the pipeline should run (`continueReview`, with `stopKind` and `stopReason` when it should not). Write for a reader who has not seen the transcript: short, specific and accurate. Record observable work and concise engineering decision summaries only. Do not perform reasoning extraction: do not disclose, reconstruct or request private internal reasoning, hidden deliberations or chain of thought.",
       inputSchema: toolInput(updateInputSchema()),
       annotations: {
         readOnlyHint: false,
@@ -210,11 +272,15 @@ export async function registerKeyInformationTools(
       },
     },
     async (input) => {
-      const patch = input as KeyInformationPatch;
-      if (Object.values(patch).every((value) => value === undefined)) {
+      const { patch, outcome } = splitKeyInformationUpdate(input as UpdateInput);
+      if (!outcome && Object.values(patch).every((value) => value === undefined)) {
         throw new Error("Provide at least one key information section to update.");
       }
-      return viewResult(await host.update(scope, patch));
+      const caller =
+        outcome && resolveOutcomeScope
+          ? await resolveOutcomeScope((input as UpdateInput).capability)
+          : scope;
+      return viewResult(await host.update(caller, patch, outcome));
     },
   );
   return true;

@@ -540,8 +540,9 @@ test("project Home retains background work and unread attention beneath the boar
             .hasUnreadWork,
       )
       .toBe(false);
+    // Heading navigation restores Home, the tab just opened for attention.
     await projectRow.click();
-    await expect(page.getByRole("tab", { name: "Coordinator", exact: true })).toHaveAttribute(
+    await expect(page.getByRole("tab", { name: "Home", exact: true })).toHaveAttribute(
       "aria-selected",
       "true",
     );

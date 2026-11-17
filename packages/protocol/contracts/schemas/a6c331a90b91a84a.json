@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:a6c331a90b91a84a6a56b4a8db6e7f17f57eb50372d7e7ca66bb5a2307f127f3",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "addedLabelIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "assigneeId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "estimate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issueId": {
+          "type": "string"
+        },
+        "priority": {
+          "maximum": 4,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "removedLabelIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sortOrder": {
+          "type": "number"
+        },
+        "stateId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": ["issueId", "projectId"],
+      "type": "object"
+    }
+  }
+}

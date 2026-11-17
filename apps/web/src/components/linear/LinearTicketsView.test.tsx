@@ -83,7 +83,7 @@ const updateLinearIssueMock = mock(
   async (
     _projectId: string,
     _issueId: string,
-    _fields: { stateId?: string },
+    _fields: { stateId?: string; sortOrder?: number },
   ): Promise<LinearIssueDetail> => issueDetail,
 );
 const getLinearBoardOptionsMock = mock(async (_projectId: string): Promise<LinearBoardOptions> => ({
@@ -1828,6 +1828,7 @@ describe("LinearTicketsView", () => {
       await waitFor(() => {
         expect(updateLinearIssueMock).toHaveBeenCalledWith("project-1", "issue-1", {
           stateId: "s-review",
+          sortOrder: 1,
         });
         expect(toastSuccessMock).toHaveBeenCalledWith("ENG-123 moved to In Review");
       });
@@ -1889,7 +1890,13 @@ describe("LinearTicketsView", () => {
       }));
       await openBoardAndDrag("Add Linear integration", "Done");
       await waitFor(() => expect(laneOf("Add Linear integration")).toBe("Done lane"));
-      expect(updateLinearIssueMock).toHaveBeenCalledTimes(2);
+      // The destination card has no order, so the second drop also assigns
+      // it a position. The dragged issue itself is written once per drop.
+      expect(updateLinearIssueMock.mock.calls).toEqual([
+        ["project-1", "issue-1", { stateId: "s-review", sortOrder: 1 }],
+        ["project-1", "issue-1", { stateId: "s-done", sortOrder: 2 }],
+        ["project-1", "issue-2", { sortOrder: 1 }],
+      ]);
     });
 
     test("a failed move after a successful one puts the card back where the first left it", async () => {

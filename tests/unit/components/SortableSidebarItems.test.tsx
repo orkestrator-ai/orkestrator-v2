@@ -218,6 +218,7 @@ describe("sortable sidebar items", () => {
         onToggleCollapse={() => {}}
         selectedEnvironmentId="env-1"
         onSelectProject={onSelectProject}
+        onOpenBoard={() => {}}
         onSelectEnvironment={() => {}}
         onDeleteProject={() => {}}
         onOpenSettings={() => {}}
@@ -260,6 +261,7 @@ describe("sortable sidebar items", () => {
       onToggleCollapse: () => {},
       selectedEnvironmentId: null,
       onSelectProject: () => {},
+      onOpenBoard: () => {},
       onSelectEnvironment: () => {},
       onDeleteProject: () => {},
       onOpenSettings: () => {},
@@ -341,6 +343,7 @@ describe("sortable sidebar items", () => {
         onToggleCollapse={() => {}}
         selectedEnvironmentId={null}
         onSelectProject={() => {}}
+        onOpenBoard={() => {}}
         onSelectEnvironment={() => {}}
         onDeleteProject={() => {}}
         onOpenSettings={() => {}}
@@ -366,6 +369,7 @@ describe("sortable sidebar items", () => {
         onToggleCollapse={() => {}}
         selectedEnvironmentId={null}
         onSelectProject={() => {}}
+        onOpenBoard={() => {}}
         onSelectEnvironment={() => {}}
         onDeleteProject={() => {}}
         onOpenSettings={() => {}}
@@ -392,6 +396,7 @@ describe("sortable sidebar items", () => {
         onToggleCollapse={() => {}}
         selectedEnvironmentId={null}
         onSelectProject={() => {}}
+        onOpenBoard={() => {}}
         onSelectEnvironment={() => {}}
         onDeleteProject={() => {}}
         onOpenSettings={() => {}}
@@ -434,6 +439,7 @@ describe("sortable sidebar items", () => {
         onToggleCollapse={() => {}}
         selectedEnvironmentId="env-1"
         onSelectProject={() => {}}
+        onOpenBoard={() => {}}
         onSelectEnvironment={() => {}}
         onDeleteProject={() => {}}
         onOpenSettings={() => {}}
@@ -597,6 +603,7 @@ describe("sortable sidebar items", () => {
         onToggleCollapse={onToggleCollapse}
         selectedEnvironmentId={null}
         onSelectProject={() => {}}
+        onOpenBoard={() => {}}
         onSelectEnvironment={() => {}}
         onDeleteProject={() => {}}
         onOpenSettings={() => {}}

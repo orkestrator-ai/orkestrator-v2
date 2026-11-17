@@ -89,6 +89,7 @@ const reviewIssue: LinearIssueListItem = {
   identifier: "ENG-1",
   title: "Record a relationship",
   status: "In Review",
+  sortOrder: 1,
   updatedAt: "2026-11-17T10:00:00.000Z",
   issueLabels: [{ id: "l-feature", name: "Feature", color: "#4ea7fc" }],
 };
@@ -97,6 +98,7 @@ const todoIssue: LinearIssueListItem = {
   identifier: "ENG-2",
   title: "Book calls",
   status: "Todo",
+  sortOrder: 2,
   updatedAt: "2026-11-17T09:00:00.000Z",
 };
 const mergedReviewIssue: LinearIssueListItem = {
@@ -311,8 +313,8 @@ describe("LinearTicketsView background refresh", () => {
       await waitFor(() => expect(getLinearIssuesMock).toHaveBeenCalledTimes(2));
       expect(spinning()).toBe(true);
       if (cancellation === "unlink") {
-        fireEvent.click(screen.getByRole("button", { name: "Unlink", exact: true }));
-        fireEvent.click(screen.getByRole("button", { name: "Unlink board", exact: true }));
+        fireEvent.click(screen.getByRole("button", { name: "Unlink" }));
+        fireEvent.click(screen.getByRole("button", { name: "Unlink board" }));
         await screen.findByText("No Linear board linked");
       } else {
         fireEvent.click(screen.getByRole("button", { name: "Test disconnected connection" }));

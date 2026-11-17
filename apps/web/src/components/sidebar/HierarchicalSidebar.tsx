@@ -904,6 +904,7 @@ export function HierarchicalSidebar() {
       onToggleCollapse={() => toggleProjectCollapse(project.id)}
       selectedEnvironmentId={selectedEnvironmentId}
       onSelectProject={() => selectProject(project.id)}
+      onOpenBoard={() => selectProject(project.id, { resetTab: true })}
       onSelectEnvironment={handleSelectEnvironment}
       onDeleteProject={handleDeleteProject}
       onOpenSettings={() => handleOpenSettings(project.id)}

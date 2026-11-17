@@ -135,3 +135,31 @@ test("remote opens and the shown node's selections clear a different reveal but 
   });
   expect(useMachineViewStore.getState().revealedProject).toBeNull();
 });
+
+for (const remote of [false, true]) {
+  test(`environment navigation carries its landing tab (${remote ? "remote" : "local"})`, () => {
+    portalStore.store.setState({ selfId: "bk_self" as BackendId });
+    const spec = {
+      connectionId: remote ? "bk_other" : "bk_self",
+      projectId: "fresh",
+      environmentId: "env",
+      landingTab: "kanban" as const,
+      title: "Project",
+    };
+    openMachineWorkspace(spec);
+    if (remote) {
+      expect(useRemoteWorkspaceStore.getState().requests.bk_other?.request).toMatchObject({
+        environmentId: "env",
+        landingTab: "kanban",
+      });
+    } else {
+      expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("kanban");
+      appCommandStore(uiStore).getState().setProjectBoardTab("kanban");
+      appCommandStore(uiStore).getState().selectProject("elsewhere");
+      openMachineWorkspace(spec);
+      expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("kanban");
+      openMachineWorkspace({ ...spec, boardTab: "home" });
+      expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
+    }
+  });
+}

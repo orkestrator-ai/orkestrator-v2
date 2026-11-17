@@ -385,6 +385,8 @@ export type LinearIssueUpdateInput = {
   addedLabelIds?: readonly string[];
   removedLabelIds?: readonly string[];
   estimate?: number | null;
+  /** Linear's manual board position: where the issue sits among its lane's issues. */
+  sortOrder?: number;
 };
 
 /** The `IssueUpdateInput` for the fields given; empty when nothing would change. */
@@ -398,6 +400,9 @@ export function linearIssueUpdateFields(input: LinearIssueUpdateInput): Record<s
     ...(input.addedLabelIds?.length ? { addedLabelIds: [...input.addedLabelIds] } : {}),
     ...(input.removedLabelIds?.length ? { removedLabelIds: [...input.removedLabelIds] } : {}),
     ...(input.estimate !== undefined ? { estimate: input.estimate } : {}),
+    ...(input.sortOrder !== undefined && Number.isFinite(input.sortOrder)
+      ? { sortOrder: input.sortOrder }
+      : {}),
   };
 }
 

@@ -1,4 +1,8 @@
-import { AlertCircle, RefreshCw } from "lucide-react";
+import { AlertCircle, CircleCheck, RefreshCw } from "lucide-react";
+import {
+  pipelineBuildStop,
+  pipelineBuildStopSummary,
+} from "@orkestrator/protocol/build-pipeline-build-outcome";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -60,7 +64,10 @@ export function BuildCompletionStatus({ pipeline }: BuildCompletionStatusProps) 
     pipeline.phase === "failed" && pipeline.failureContext?.kind === "interactive-request";
   const completionFailure = Boolean(source && pipeline.completionCommentStatus === "failed");
   const autoDeclines = pipeline.autoDeclineCount ?? 0;
-  if (!interactionFailure && !completionFailure && autoDeclines === 0) {
+  // A blocked stop pauses the build and is already the pipeline's error; only
+  // a completed run needs saying why review and the pull request never ran.
+  const buildStop = pipeline.phase === "complete" ? pipelineBuildStop(pipeline) : undefined;
+  if (!interactionFailure && !completionFailure && autoDeclines === 0 && !buildStop) {
     return null;
   }
   const copy = source ? FAILURE_COPY[source.type] : undefined;
@@ -104,6 +111,18 @@ export function BuildCompletionStatus({ pipeline }: BuildCompletionStatusProps) 
 
   return (
     <>
+      {buildStop && (
+        <div
+          className="flex items-start gap-2 border-b border-border/40 bg-muted/30 px-4 py-2"
+          role="status"
+          data-testid="build-pipeline-build-stop"
+        >
+          <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 text-xs text-muted-foreground">
+            {pipelineBuildStopSummary(buildStop)}
+          </span>
+        </div>
+      )}
       {autoDeclines > 0 && (
         <div className="border-b border-border/40 bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
           {autoDeclines} unattended input request{autoDeclines === 1 ? " was" : "s were"}{" "}

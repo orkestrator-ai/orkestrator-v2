@@ -8,6 +8,7 @@ export const UI_NODE_PERSISTED_FIELDS = [
   "projectCollapseChoices",
   "collapsedProjectFolders",
   "recentProjectIds",
+  "projectBoardTabs",
 ] as const;
 
 type Persisted = { state?: Record<string, unknown>; version?: number } | null;
@@ -52,7 +53,7 @@ export function createUIWindowStateStorage(): StateStorage {
 }
 
 /**
- * `node`'s collapsed projects, folders and recents (the scoped `uiStore`),
+ * `node`'s collapsed projects, folders, recents and last board tabs (the scoped `uiStore`),
  * under `nodeStorageKey("ui-project-storage", node)`.
  *
  * With no record there yet it adopts what an earlier release stored for this

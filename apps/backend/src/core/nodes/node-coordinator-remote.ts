@@ -43,8 +43,8 @@ export interface NodeCoordinatorRemoteDeps {
     args: Record<string, unknown>;
   }): Promise<{ outcome: string; result?: unknown }>;
   summaries(nodeIds?: string[]): Promise<NodeSummariesResult>;
-  /** Collect a node's outbox now (the mail collector). */
-  collectMail?(nodeId: string): Promise<boolean>;
+  /** Collect a node's outbox now (the mail collector); see `CoordinatorRemoteAccess.collectMail`. */
+  collectMail?(nodeId: string, from?: { environmentId: string; tabId: string }): Promise<boolean>;
   /** The node registry's controlled node ids (`NodeService.registeredNodeIds`). */
   registeredNodeIds?(): Promise<ReadonlySet<string>>;
 }
@@ -120,8 +120,12 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
     };
   }
 
-  async collectMail(nodeId: string): Promise<boolean> {
-    return this.deps.collectMail ? this.deps.collectMail(nodeId) : false;
+  async collectMail(
+    nodeId: string,
+    from?: { environmentId: string; tabId: string },
+  ): Promise<boolean> {
+    if (!this.deps.collectMail) return false;
+    return from ? this.deps.collectMail(nodeId, from) : this.deps.collectMail(nodeId);
   }
 
   async lastAssistantExcerpt(

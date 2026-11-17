@@ -74,8 +74,24 @@ export interface CollectorDeps {
   };
 }
 
+/** What one collection learned about a node's outbox. */
+interface CollectionResult {
+  /** Every item was delivered or handed back, across every pass of the run. */
+  complete: boolean;
+  /** The last pass read the outbox to its end, so every item still in it was seen. */
+  drained: boolean;
+  /** Senders (`senderKey`) with an item the last pass failed to deliver. */
+  failedSenders: ReadonlySet<string>;
+}
+
+const NOT_DRAINED: CollectionResult = { complete: false, drained: false, failedSenders: new Set() };
+
+function senderKey(environmentId: string, tabId: string): string {
+  return `${environmentId}\0${tabId}`;
+}
+
 export class NodeMailCollector {
-  private readonly running = new Map<BackendId, Promise<boolean>>();
+  private readonly running = new Map<BackendId, Promise<CollectionResult>>();
   private readonly again = new Set<BackendId>();
   private disposed = false;
 
@@ -127,22 +143,52 @@ export class NodeMailCollector {
 
   /** Collect and acknowledge all queued mail. False means a failed or bounded partial drain. */
   collect(nodeId: BackendId): Promise<boolean> {
-    if (this.disposed) return Promise.resolve(false);
+    return this.run(nodeId).then((result) => result.complete);
+  }
+
+  /**
+   * Collect, and say whether nothing this one sender queued is still waiting:
+   * the outbox was read to its end and none of its items failed to deliver.
+   *
+   * A delegation on this node waits only for its own worker's mail. Asking
+   * for a complete drain instead let any other item that keeps failing, such
+   * as a notice for a coordinator whose mailbox is full, hold every worker on
+   * that node open for good.
+   */
+  collectFrom(
+    nodeId: BackendId,
+    sender: { environmentId: string; tabId: string },
+  ): Promise<boolean> {
+    return this.run(nodeId).then(
+      (result) =>
+        result.drained && !result.failedSenders.has(senderKey(sender.environmentId, sender.tabId)),
+    );
+  }
+
+  private run(nodeId: BackendId): Promise<CollectionResult> {
+    if (this.disposed) return Promise.resolve(NOT_DRAINED);
     const running = this.running.get(nodeId);
     if (running) {
       this.again.add(nodeId);
       return running;
     }
-    const run = (async () => {
+    const run = (async (): Promise<CollectionResult> => {
       let complete = true;
+      let last = NOT_DRAINED;
       for (let pass = 0; pass < 20; pass++) {
         this.again.delete(nodeId);
-        complete = (await this.collectOnce(nodeId).catch(() => false)) && complete;
+        last = await this.collectOnce(nodeId).catch(() => NOT_DRAINED);
+        complete = last.complete && complete;
         if (!this.again.has(nodeId) || this.disposed) break;
       }
-      if (this.again.delete(nodeId)) complete = false;
+      // A caller joined after the last pass read the outbox: its mail may be unread.
+      if (this.again.delete(nodeId)) {
+        complete = false;
+        last = NOT_DRAINED;
+      }
       if (!complete) this.retry(nodeId);
-      return complete && !this.disposed;
+      if (this.disposed) return NOT_DRAINED;
+      return { ...last, complete };
     })().finally(() => {
       this.running.delete(nodeId);
     });
@@ -150,9 +196,9 @@ export class NodeMailCollector {
     return run;
   }
 
-  private async collectOnce(nodeId: BackendId): Promise<boolean> {
+  private async collectOnce(nodeId: BackendId): Promise<CollectionResult> {
     const link = this.deps.link(nodeId);
-    if (!link?.connected) return false;
+    if (!link?.connected) return NOT_DRAINED;
     const mail = linkDomainApi(link, nodeMailClient);
     const controllerId = await this.deps.selfId();
     const name = await this.deps.nodeName(nodeId);
@@ -160,6 +206,7 @@ export class NodeMailCollector {
     let failed = false;
     let deliveredPrefix = 0;
     let deferred = false;
+    const failedSenders = new Set<string>();
     const notices = this.deps.notices;
     const repositoryHints = notices ? await notices.repositoryHints() : [];
     for (let round = 0; round < 20; round += 1) {
@@ -170,7 +217,10 @@ export class NodeMailCollector {
         ...(notices ? { coordinatorNotices: { repositoryHints } } : {}),
         attachmentMail: true,
       })) as { items?: OutboxItem[]; more?: boolean };
-      if (!batch?.items?.length) return !batch?.more && !failed;
+      if (!batch?.items?.length) {
+        const drained = !batch?.more;
+        return { complete: drained && !failed, drained, failedSenders };
+      }
       const delivered: number[] = [];
       const declined: number[] = [];
       for (const item of batch.items) {
@@ -223,6 +273,7 @@ export class NodeMailCollector {
           }
           log.warn("mail.delivery-deferred", { error: formatLogError(error, { message: false }) });
           failed = true;
+          failedSenders.add(senderKey(item.fromEnvironmentId, item.fromTabId));
         }
       }
       if (delivered.length || declined.length) {
@@ -241,11 +292,11 @@ export class NodeMailCollector {
       if (failed) this.retry(nodeId);
       if (!batch.more) {
         if (!failed && !deferred) this.delays.delete(nodeId);
-        return !failed;
+        return { complete: !failed, drained: true, failedSenders };
       }
     }
     this.retry(nodeId);
-    return false;
+    return NOT_DRAINED;
   }
 
   /**

@@ -397,3 +397,100 @@ describe("a notice that rides along", () => {
     }
   });
 });
+
+/** A tab with no agent yet, as a coordinator before its first prompt: mail to it is stored. */
+async function unassignRecipient(storage: StorageService) {
+  const layout = (await storage.getPaneLayout("recipient"))!;
+  await storage.savePaneLayout(
+    "recipient",
+    {
+      ...layout,
+      root: {
+        kind: "leaf",
+        id: "pane",
+        tabs: [
+          { id: "agent", type: "agent-native", nativeAgentData: { environmentId: "recipient" } },
+        ],
+        activeTabId: "agent",
+      },
+    },
+    layout.revision,
+  );
+  await storage.synchronizeAgentMailboxes();
+}
+
+/** An account-switch notice as builds before ride-along filed it: no rider flag, no notice. */
+function legacySwitchNoticeTo(storage: StorageService, requestId: string) {
+  return storage.sendAgentMail(
+    { ...WORKFLOW, resourceId: `account-auto-switch:${requestId}` },
+    {
+      requestId,
+      toEnvironmentId: "recipient",
+      toTabId: "agent",
+      subject: "Claude Code moved to b@example.com on mini",
+      body: "Automatic account switching moved Claude Code.",
+    },
+  );
+}
+
+describe("awareness a recipient cannot take yet", () => {
+  test("is stored, then expires after a day, while other stored mail stays", async () => {
+    const { storage, dataDir } = await fixture();
+    const prompts: string[] = [];
+    const mail = service(storage, prompts);
+    try {
+      await unassignRecipient(storage);
+      const rider = await riderTo(storage, "stored-rider");
+      const legacy = await legacySwitchNoticeTo(storage, "stored-legacy");
+      const work = await ordinaryTo(storage, "recipient", "stored-work");
+      for (const sent of [rider, legacy, work]) {
+        expect(sent).toMatchObject({
+          placement: "stored",
+          placementReason: "recipient-cannot-inject",
+        });
+      }
+      later(RIDE_ALONG_MAX_AGE_MS + 60_000);
+      await mail.init();
+      await mail.drainInjects();
+      for (const id of [rider.id, legacy.id]) {
+        expect(await storage.getAgentMailMessage("recipient", "agent", id)).toMatchObject({
+          placement: "expired",
+        });
+      }
+      expect(await storage.getAgentMailMessage("recipient", "agent", work.id)).toMatchObject({
+        placement: "stored",
+      });
+      expect(prompts).toEqual([]);
+    } finally {
+      await mail.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("gives way in a full mailbox instead of refusing new mail", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      await unassignRecipient(storage);
+      const first = await legacySwitchNoticeTo(storage, "full-0");
+      for (let index = 1; index < 200; index += 1) {
+        await legacySwitchNoticeTo(storage, `full-${index}`);
+      }
+      const work = await ordinaryTo(storage, "recipient", "full-work");
+      expect(work.placement).toBe("stored");
+      const rider = await riderTo(storage, "full-rider");
+      expect(rider.placement).toBe("stored");
+      const pages = await Promise.all(
+        [0, 100].map((offset) =>
+          storage.getAgentMailMailbox("recipient", "agent", { offset, limit: 100 }),
+        ),
+      );
+      const ids = pages.flatMap((page) => page.messages.map((message) => message.id));
+      expect(new Set(ids).size).toBe(200);
+      expect(ids).not.toContain(first.id);
+      expect(ids).toContain(work.id);
+      expect(ids).toContain(rider.id);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+});

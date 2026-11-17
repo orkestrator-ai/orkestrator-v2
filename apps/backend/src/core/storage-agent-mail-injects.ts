@@ -11,6 +11,7 @@ import {
   type MailboxDescriptor,
 } from "@orkestrator/protocol/agent-mail";
 import { COORDINATOR_DELEGATION_HOLD_REASON } from "@orkestrator/protocol/coordinator";
+import { ACCOUNT_AUTO_SWITCH_NOTICE_RESOURCE_PREFIX } from "@orkestrator/protocol/agent-account-auto-switch";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 import {
@@ -76,14 +77,87 @@ function rideAlongExpired(createdAt: string | undefined, now: number): boolean {
 }
 
 /**
+ * Awareness nobody has to answer: a ride-along notice, or an automatic
+ * account switch's notice that an older build filed before such notices rode
+ * along (the same sender). Only retention reads this; delivery still goes by
+ * `isRideAlongMessage`.
+ */
+export function isAwarenessOnlyMessage(
+  message: Pick<AgentMailMessage, "rideAlong" | "userReleasedAt" | "from">,
+): boolean {
+  if (message.userReleasedAt) return false;
+  if (message.rideAlong === true) return true;
+  return (
+    message.from.kind === "system" &&
+    message.from.resourceId.startsWith(ACCOUNT_AUTO_SWITCH_NOTICE_RESOURCE_PREFIX)
+  );
+}
+
+/**
+ * Awareness filed as `stored` that outlived the ride-along wait. A coordinator
+ * that has never started cannot take mail, so its notices are stored rather
+ * than queued, and they once collected until the mailbox refused every new
+ * message (`mailbox-backlog-full`).
+ */
+function isStaleStoredAwareness(message: AgentMailMessage, now: number): boolean {
+  return (
+    message.placement === "stored" &&
+    !message.ackedAt &&
+    !message.discardedAt &&
+    isAwarenessOnlyMessage(message) &&
+    rideAlongExpired(message.createdAt, now)
+  );
+}
+
+/**
+ * Where in a full mailbox to make room for new mail when nothing in it is
+ * settled: its oldest awareness notice still waiting, or -1. A notice whose
+ * dispatch is being confirmed stays, as `expireStaleRiders` keeps it.
+ */
+export function oldestEvictableAwareness(
+  store: PersistedAgentMailStore,
+  mailbox: PersistedMailbox,
+): number {
+  let found = -1;
+  mailbox.messages.forEach((message, index) => {
+    if (message.ackedAt || message.discardedAt || !isAwarenessOnlyMessage(message)) return;
+    if (message.placement !== "stored" && message.placement !== "pending-inject") return;
+    const verifying = store.pendingInject.some(
+      (entry) =>
+        entry.mailboxId === mailbox.mailboxId &&
+        entry.messageId === message.id &&
+        entry.verifyRequestId,
+    );
+    if (verifying) return;
+    if (found < 0 || message.createdAt.localeCompare(mailbox.messages[found]!.createdAt) < 0)
+      found = index;
+  });
+  return found;
+}
+
+/**
  * Drop ride-along notices that outlived their wait, as `expired`: this
  * mailbox's, or every mailbox's when `mailboxId` is omitted. A notice whose
- * dispatch is still being confirmed stays until its journal answers. Returns
- * the mailboxes that changed.
+ * dispatch is still being confirmed stays until its journal answers. Stored
+ * awareness that outlived the same wait goes too. Returns the mailboxes that
+ * changed.
  */
 export function expireStaleRiders(store: PersistedAgentMailStore, mailboxId?: string): string[] {
   const now = Date.now();
   const changed = new Set<string>();
+  const mailboxes =
+    mailboxId === undefined ? Object.values(store.mailboxes) : [store.mailboxes[mailboxId]];
+  for (const mailbox of mailboxes) {
+    if (!mailbox) continue;
+    for (const message of mailbox.messages) {
+      if (!isStaleStoredAwareness(message, now)) continue;
+      message.placement = "expired";
+      message.discardedAt = new Date(now).toISOString();
+      message.revision += 1;
+      changed.add(mailbox.mailboxId);
+    }
+  }
+  for (const id of changed) store.mailboxes[id]!.revision += 1;
   store.pendingInject = store.pendingInject.filter((entry) => {
     if (mailboxId !== undefined && entry.mailboxId !== mailboxId) return true;
     if (entry.verifyRequestId) return true;
@@ -644,22 +718,27 @@ export class AgentMailInjects {
   /**
    * Expire every ride-along notice that waited longer than
    * `RIDE_ALONG_MAX_AGE_MS`, so a lapsed one stops counting as pending even
-   * when no later notice arrives to sweep it. Writes only when one lapsed.
+   * when no later notice arrives to sweep it, and stored awareness as old
+   * (`expireStaleRiders`). Writes only when one lapsed.
    */
   async expireStaleAgentMailRiders(): Promise<number> {
     const snapshot = await this.store.snapshot();
     const now = Date.now();
-    const stale = snapshot.pendingInject.some((entry) => {
-      if (entry.verifyRequestId) return false;
-      const message = snapshot.mailboxes[entry.mailboxId]?.messages.find(
-        (candidate) => candidate.id === entry.messageId,
+    const stale =
+      snapshot.pendingInject.some((entry) => {
+        if (entry.verifyRequestId) return false;
+        const message = snapshot.mailboxes[entry.mailboxId]?.messages.find(
+          (candidate) => candidate.id === entry.messageId,
+        );
+        return (
+          message?.placement === "pending-inject" &&
+          isRideAlongMessage(message) &&
+          rideAlongExpired(message.createdAt, now)
+        );
+      }) ||
+      Object.values(snapshot.mailboxes).some((mailbox) =>
+        mailbox.messages.some((message) => isStaleStoredAwareness(message, now)),
       );
-      return (
-        message?.placement === "pending-inject" &&
-        isRideAlongMessage(message) &&
-        rideAlongExpired(message.createdAt, now)
-      );
-    });
     if (!stale) return 0;
     return this.store.enqueue(async () => {
       const store = await this.store.load();

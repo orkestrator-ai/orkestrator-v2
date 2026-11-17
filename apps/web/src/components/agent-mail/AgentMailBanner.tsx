@@ -77,7 +77,21 @@ export function AgentMailBanner({
   const messages = mailbox?.messages ?? [];
   const failed = messages.find((message) => message.placement === "inject_failed");
   const paused = messages.find(isAgentMailBudgetHeld);
-  const pending = messages.find((message) => message.placement === "pending-inject");
+  // Awareness notices (an account switch) wait to ride along with the next
+  // turn something else starts, and the transcript already lists them. They
+  // are not mail the person is waiting on, so they never speak for the card or
+  // take its Deliver now: on a coordinator holding a worker's report, they
+  // used to name the switch and release it instead of the report.
+  const riders = messages.filter(
+    (message) =>
+      message.placement === "pending-inject" &&
+      message.rideAlong === true &&
+      !message.userReleasedAt,
+  );
+  const pending = messages.find(
+    (message) => message.placement === "pending-inject" && !riders.includes(message),
+  );
+  const pendingCount = Math.max(0, entry.pendingInjectCount - riders.length);
   const delegationHeld = messages.find(
     (message) =>
       message.placement === "inject-held" &&
@@ -112,7 +126,7 @@ export function AgentMailBanner({
     !pending &&
     inInbox.length === 0 &&
     awaitingAgent.length === 0 &&
-    entry.pendingInjectCount === 0 &&
+    pendingCount === 0 &&
     entry.failedInjectCount === 0
   )
     return null;
@@ -199,7 +213,7 @@ export function AgentMailBanner({
   else if (descriptor?.presence === "draft")
     text = "Delivery waiting: you have unsent text in the composer";
   else if (pending)
-    text = `${entry.pendingInjectCount} message${entry.pendingInjectCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
+    text = `${pendingCount} message${pendingCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
   else if (releasable.length > 0) {
     const count = releasable.length;
     text = `${count} message${count === 1 ? "" : "s"} in inbox · pull only`;
@@ -207,7 +221,7 @@ export function AgentMailBanner({
   } else if (blockedCount > 0)
     text = `${blockedCount} message${blockedCount === 1 ? "" : "s"} in inbox · ${refusalOf(inInbox[0]!)}`;
   else
-    text = `${entry.pendingInjectCount} message${entry.pendingInjectCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
+    text = `${pendingCount} message${pendingCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
 
   if (deliveryHeldReason && (failed || paused)) text += ` · ${deliveryHeldReason}`;
 
@@ -218,7 +232,7 @@ export function AgentMailBanner({
       : "info";
   const count = Math.max(
     1,
-    awaitingAgent.length || inInbox.length || entry.pendingInjectCount + entry.failedInjectCount,
+    awaitingAgent.length || inInbox.length || pendingCount + entry.failedInjectCount,
   );
   const newest =
     failed ??

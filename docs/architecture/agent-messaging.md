@@ -109,7 +109,10 @@ The UI counts them separately (`userUnseenCount` vs `agentUnackedCount`).
 **Limits** (`packages/protocol/src/agent-mail.ts`):
 
 - Body 32 KiB UTF-8, subject 200 characters, `requestId` 256
-- 200 messages per mailbox, 2 000 mailboxes, 2 000 pending injects
+- 200 messages per mailbox, 2 000 mailboxes, 2 000 pending injects. A full
+  mailbox makes room by dropping its oldest settled message, else its oldest
+  waiting awareness notice (the ride-along notices under [Node mail](#node-mail)),
+  and refuses new mail (`mailbox-backlog-full`) only when neither exists
 - Store 32 MiB, measured as the stored (compact) JSON of the envelope and its rows
 - Thread hop limit 8 for unrouted mail; routed mail uses the budgets below
   (default 16 per budget, 40 per pair per hour)
@@ -267,6 +270,14 @@ worker's report, a usage-limit stop) carries it. A person's Deliver now
 (`userReleasedAt`) turns it into an ordinary delivery. A rider that finds no batch lapses
 after `RIDE_ALONG_MAX_AGE_MS` (24 hours): the drain's periodic sweep, or the next rider for
 that mailbox, marks it `expired`. A person's own prompt does not carry it.
+
+The same 24 hours applies to awareness filed `stored`, which is what a coordinator that
+has never started receives: it cannot take mail yet. Awareness means a rider, or an
+automatic switch's notice from an older build that predates the flag (a `system` sender
+whose `resourceId` starts `account-auto-switch:`; `isAwarenessOnlyMessage`). Without this
+those notices piled up in unused coordinators' mailboxes until each refused all new mail,
+and a leaf's switch notice, which must reach every coordinator, then failed on every
+collect. That mailbox refusal is also never raised to the leaf as a failure to retry.
 
 The transcript does not wait for that delivery. A coordinator tab reads its own mailbox
 (`usePendingAccountSwitchRows`) and draws each account-switch notice not yet delivered as

@@ -44,7 +44,10 @@ class FakeRemote implements CoordinatorRemoteAccess {
     };
   }
 
-  async collectMail(nodeId: string): Promise<boolean> {
+  async collectMail(
+    nodeId: string,
+    _from?: { environmentId: string; tabId: string },
+  ): Promise<boolean> {
     this.collected.push(nodeId);
     return true;
   }
@@ -410,7 +413,8 @@ describe("remote delegations", () => {
           );
         },
       });
-      remote.collectMail = (id) => collector.collect(id as never);
+      remote.collectMail = (id, from) =>
+        from ? collector.collectFrom(id as never, from) : collector.collect(id as never);
       try {
         await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
         remote.tab = "idle";
@@ -431,6 +435,72 @@ describe("remote delegations", () => {
       }
     });
   }
+
+  test("another sender's undeliverable outbox item does not hold the worker's report", async () => {
+    const { world, remote, main, association } = await remoteWorld();
+    const outbox = [
+      {
+        seq: 1,
+        requestId: "switch-notice",
+        createdAt: "",
+        fromEnvironmentId: "machine",
+        fromTabId: "auto-switch",
+        body: "Claude Code moved to another account.",
+        bytes: 37,
+      },
+      {
+        seq: 2,
+        requestId: "report",
+        createdAt: "",
+        fromEnvironmentId: "leaf-env",
+        fromTabId: "startup-agent",
+        body: "Tests pass.",
+        bytes: 11,
+      },
+    ];
+    let pending = outbox;
+    const collector = new NodeMailCollector({
+      retryDelayMs: 60_000,
+      selfId: async () => "bk_cmd" as never,
+      nodeName: async () => "Build box",
+      link: () => ({
+        connected: true,
+        invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
+          if (command === "collect_node_outbox") return { items: pending, more: false } as T;
+          const acked = (args.sequences as number[] | undefined) ?? [];
+          pending = pending.filter((entry) => !acked.includes(entry.seq));
+          return {} as T;
+        },
+      }),
+      deliver: async (input) => {
+        // A mailbox that refuses this item every time, as a full one did.
+        if (input.from.environmentId === "machine") throw new Error("mailbox-backlog-full");
+        await world.storage.sendAgentMail(
+          { kind: "node", ...input.from, role: "agent", projectId: world.projectId, title: "w" },
+          {
+            requestId: input.requestId,
+            toEnvironmentId: main.environmentId,
+            toTabId: main.tabId,
+            body: input.body,
+          },
+        );
+      },
+    });
+    remote.collectMail = (id, from) =>
+      from ? collector.collectFrom(id as never, from) : collector.collect(id as never);
+    try {
+      await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+      remote.tab = "idle";
+      await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+      await world.deliver();
+      expect(pending.map((entry) => entry.seq)).toEqual([1]);
+      expect((await delegationState(world, association.id))?.wakeKind).toBe("report");
+      expect(world.wakes(main)).toBe(1);
+      expect(world.received(main).join(" ")).toContain("Tests pass.");
+    } finally {
+      collector.dispose();
+    }
+  });
 
   test("a follow-up admitted while collecting outbox mail invalidates the idle outcome", async () => {
     const { world, remote, main, association } = await remoteWorld();

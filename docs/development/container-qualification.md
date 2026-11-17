@@ -316,6 +316,140 @@ daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
 
+## Rootless name checks and restarts on pasta and VPNKit (2026-11-17)
+
+To-dos [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
+task 4 and 7390 (retired 2026-11-17) task 2: the gateway's name checks
+(`egress-filter=1`) and the rootless daemon restart on the two RootlessKit
+network drivers that need host binaries. Run in worktree
+`orkestrator-v2-20261117-004600-d3e61f366d91` from `main` at `0265e7882`.
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8-arch1-3, x86_64, cgroup v2).
+  The user installed the binaries on 2026-11-17: the `passt` package
+  `2026_10_02.cba3570-1` (pacman, 00:40 UTC; `pasta --version` prints
+  `pasta 2026_10_02.cba3570`) and a static `vpnkit` at `~/.local/bin/vpnkit`
+  (`vpnkit --version` prints `7f0eff0dd99b576c5474de53b4454a157c642834`).
+  `command -v pasta vpnkit` printed `/usr/bin/pasta` and
+  `/home/arkaydeus/.local/bin/vpnkit`: both were already on `PATH`, so
+  nothing was prepended. The host's rootful daemon was only read, for the
+  images; its firewall and network were not touched.
+- **Daemons:** disposable host rootless daemons from `mise run
+  docker:disposable` (Engine 29.9.2, containerd v2.4.2, runc 1.5.2,
+  RootlessKit 3.3.0 with `--detach-netns`, systemd cgroup driver,
+  containerd image store, pool `172.30.0.0/16` as /24s, `live-restore` off):
+  - `p6101`: `start --net pasta` (host loopback refused). RootlessKit ran
+    pasta with `--address=10.0.2.100 --gateway=10.0.2.2 --no-map-gw
+    --host-lo-to-ns-lo` and the `implicit` port driver.
+  - `v7390`: `start --net vpnkit` (host loopback refused), builtin port
+    driver, MTU 1500. VPNKit gave the namespace `192.168.65.3/24` with
+    gateway and resolver `192.168.65.1`, not RootlessKit's `10.0.2.0/24`.
+  - For the host-address check only: `h7390` (VPNKit, `--host-loopback`),
+    `d7390` (VPNKit, refused), `hp6101` (pasta, `--host-loopback`) and
+    `dp6101` (pasta, refused).
+- **Image:** `orkestrator-v2:dev-b6bcc43399ac`
+  (`sha256:0d36497ca3d2dd4b3cf8f511bdca86211c239fffe4887be8b347006c605e66d0`,
+  5.27 GB, built 2026-11-16), already on the host and copied in with
+  `--image`. Capabilities include `egress-gateway=1`, `egress-filter=1`,
+  `network-policy=3` and `network-refresh=1`. Its `init-firewall.sh`,
+  `update-firewall.sh`, `orkestrator-egress-gateway`,
+  `orkestrator-egress-filter`, `firewall-domains.sh`, `entrypoint.sh` and
+  `network-policy-entrypoint.sh` match the checkout byte for byte (SHA-256,
+  read in a `--network none` container on `p6101`). Older image, on `p6101`
+  only: `ghcr.io/orkestrator-ai/orkestrator-v2:2.34.4-beta`.
+
+Each suite ran through `test:logged` with the variables from
+`docker:disposable -- env`, `RUN_LIVE_DOCKER_TESTS=1`, the image above,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, the `docker-qualification-bin`
+shim first on `PATH`, `--parallel=1`, a JUnit report,
+`ORKESTRATOR_QUALIFICATION_EVIDENCE` naming a local JSON-lines file and
+`TMPDIR` on a directory on the home filesystem (btrfs), not the
+`nosuid,nodev` `/tmp` ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)).
+The restart case was selected with `-t "Docker daemon restart"`, as on
+gvisor-tap-vsock on 2026-11-11.
+
+| Daemon | Suite | Result |
+| --- | --- | --- |
+| pasta | Live egress name checks (M12), with the older image | **6/6, 124 assertions**, 59.7 s |
+| pasta | Docker daemon restart case | **1 pass, 32 assertions** (2 other cases filtered out), 14.0 s |
+| pasta | Live egress conditions, `ORKESTRATOR_LIVE_IPV6_NETWORK=1` | **3/3, 69 assertions**, 47.4 s: IPv6 4.7 s, DNS rotation 17.2 s, daemon restart 23.4 s |
+| VPNKit | Docker daemon restart case | **1 pass, 32 assertions** (2 other cases filtered out), 13.8 s |
+| VPNKit | Live egress name checks (M12) | **5 pass, 1 skip** (older image not loaded there), 109 assertions, 49.6 s |
+
+- **Name checks on pasta (6101 task 4).** Every M12 case passed with the
+  same counts as slirp4netns on 2026-11-10: an allowed name answered 200, a
+  foreign SNI on its address got `access denied`, the HTTP Host check
+  refused a request before the fixture, names off the list were `REFUSED`
+  over UDP, over TCP and sent to an outside resolver, a live edit applied, a
+  killed daemon failed closed and came back on refresh, the controlled
+  addressed upstreams failed over, the firewall report counted refusals,
+  a full-mode runtime was not filtered, the rollback switch held, and the
+  older image kept address-only enforcement. The suite's topology line:
+
+  ```json
+  {"daemonRootless":true,
+   "resolvers":["nameserver 127.0.0.11","# ExtServers: [host(127.0.0.53)]"],
+   "nat":["-A OUTPUT -p tcp -m tcp ! --dport 53 -m mark ! --mark 0x6f726b -m set --match-set allowed-domains dst,dst -j DNAT --to-destination 172.30.1.3:31443",
+          "-A OUTPUT -d 127.0.0.11/32 -p tcp -m tcp --dport 53 -m mark ! --mark 0x6f726b -j REDIRECT --to-ports 31453",
+          "-A OUTPUT ! -d 127.0.0.0/8 -p tcp -m tcp --dport 53 -m mark ! --mark 0x6f726b -j DNAT --to-destination 172.30.1.3:31453",
+          "-A OUTPUT -d 127.0.0.11/32 -p udp -m udp --dport 53 -m mark ! --mark 0x6f726b -j REDIRECT --to-ports 31453",
+          "-A OUTPUT ! -d 127.0.0.0/8 -p udp -m udp --dport 53 -m mark ! --mark 0x6f726b -j DNAT --to-destination 172.30.1.3:31453",
+          "-A DOCKER_OUTPUT -d 127.0.0.11/32 -p tcp -m tcp --dport 53 -j DNAT --to-destination 127.0.0.11:39431",
+          "-A DOCKER_OUTPUT -d 127.0.0.11/32 -p udp -m udp --dport 53 -j DNAT --to-destination 127.0.0.11:53594"]}
+  ```
+
+  It is the 2026-11-10 line apart from Docker's embedded resolver ports. On
+  VPNKit the line was the same again (ports `40753` and `60509`). With
+  `--detach-netns` the daemon stays in the host's network namespace and
+  names the host's stub resolver as `host(...)`, whatever driver RootlessKit
+  uses, so the driver's own DNS forwarder (pasta's `10.0.2.3`, VPNKit's
+  `192.168.65.1`) is never on the name checks' path.
+- **Restart on pasta and VPNKit (7390 task 2).** Both passed on the
+  `stopped` branch with the same 32 assertions as slirp4netns (2026-11-06)
+  and gvisor-tap-vsock (2026-11-11): after each restart Docker started
+  neither container and refused a bare start of the runtime while its
+  gateway was stopped, and the backend's start path brought both up with
+  the policy enforced. Each restart replaced RootlessKit (pid `1937680` to
+  `2040932` on pasta, `2084283` to `2103368` on VPNKit) and its pasta or
+  VPNKit process. The evidence lines: `"liveRestore":false,"rootless":true,
+  "backendHostPorts":6,"branch":"stopped","passed":true` on both.
+- **RootlessKit's host address on VPNKit.** A host listener on
+  `127.0.0.1:<ephemeral>` was probed with `curl -m 5` from a container on the
+  default bridge and on a labelled custom network:
+
+  | Daemon | `10.0.2.2` | `10.0.2.1` | `192.168.65.2` | `host-gateway` |
+  | --- | --- | --- | --- | --- |
+  | VPNKit, host loopback refused | timeout | timeout | refused (curl 7) | refused |
+  | VPNKit, `--host-loopback` | timeout | timeout | **answered** | refused |
+  | pasta, host loopback refused | timeout | not probed | not probed | not probed |
+  | pasta, `--host-loopback` | **answered** | timeout | timeout | refused |
+
+  So `10.0.2.2` does not answer on VPNKit, as on 2026-11-04, because
+  VPNKit's network is `192.168.65.0/24` and its host loopback is
+  `192.168.65.2`. The backend's reachability check probes only `10.0.2.2`
+  and `10.0.2.1`, so on a VPNKit daemon with host loopback enabled it
+  reports `blocked` although the host answers. That is a new defect,
+  [8305](../todo/containers-and-environments/8305-vpnkit-host-loopback-address.md);
+  the backend's check itself was not run in this session. Refusing host
+  loopback on VPNKit does block `192.168.65.2`, so nothing is open by
+  default. On pasta, `10.0.2.2` is the host loopback address when it is
+  enabled, which the check already probes.
+- **Not a defect: a start after a stop in the same shell.** Two `start
+  --image` runs failed within two seconds because the shell still exported
+  the stopped daemon's `DOCKER_HOST`, from which `--image` reads the image.
+  Unsetting the suite variables before the next `start` fixed it.
+- **Cleanup.** Every suite's `afterAll` removed its labelled resources;
+  before each `stop` the daemon held no container, custom network or volume;
+  the probe network and containers were removed by the probe script. All
+  six daemons were stopped with `docker:disposable -- stop` (about 4 s each),
+  leaving no instance, runtime directory or `docker-*` user scope. The run's
+  `TMPDIR`, the logged runner's summaries inside it and the checkout's
+  disposable-daemon state root (its tools cache) were removed afterwards.
+- **Not covered:** arm64, `live-restore` on with pasta or VPNKit, a real
+  addressed upstream on rootless (Docker named its upstream through
+  `host(...)` on both drivers), and the backend's reachability check on
+  VPNKit with host loopback (8305). No provider turns, credentials or app
+  profile were used.
+
 ## GitHub ranges seed directory bind on beelink (2026-11-15)
 
 To-do [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
@@ -1079,7 +1213,8 @@ a labelled port on the same port after a pause.
 
 ## Rootless daemon restart with `live-restore` and on gvisor-tap-vsock, and the 7549 re-checks (2026-11-11)
 
-To-dos [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md)
+To-dos 7390 (retired 2026-11-17; its pasta and VPNKit runs are
+[below](#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17))
 tasks 1 and 2 and [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
 tasks 1 to 3, run in worktree `orkestrator-v2-20261111-021109-288b6a679fea`
 (branch `rootless-docker-fixes-288b6a679fea-r1`, from `main` at `498b68766`).
@@ -1449,8 +1584,11 @@ evidence already recorded in this guide, with no new run:
   rootless daemon
   ([Rootless daemon restart on a disposable daemon](#rootless-daemon-restart-on-a-disposable-daemon-2026-11-06),
   [Rollout-cap retirement review qualification](#rollout-cap-retirement-review-qualification-2026-11-04));
-  the remaining rootless settings and rootless arm64 are
-  [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md).
+  the remaining rootless settings ran on 2026-11-17
+  ([pasta and VPNKit](#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17));
+  rootless arm64 is in the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+  (7390 (retired) task 3).
 
 Decision: the hosted arm64 runner counts as the arm64 Linux Engine
 qualification. It runs the same suites, against an image built from the
@@ -1550,8 +1688,9 @@ GitHub's anonymous allowance stayed above 40 throughout.
 - **Not covered:** pasta (not installed on beelink; 6101 task 4), VPNKit,
   arm64, host loopback enabled, `live-restore` on, a real addressed upstream
   on rootless (the daemon here named its upstream through `host(...)`), and
-  a rootless daemon restart on gvisor-tap-vsock
-  ([7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md)).
+  a rootless daemon restart on gvisor-tap-vsock (to-do 7390, retired: it
+  ran on gvisor-tap-vsock on 2026-11-11, and on pasta and VPNKit on
+  [2026-11-17](#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17)).
   No provider turns, credentials or app profile were used.
 
 ## Agent-tools peer gate on nested rootful Linux Engine (2026-11-10)
@@ -2377,8 +2516,8 @@ mise run test:logged -- --name rootless-default-loopback -- bun test --cwd apps/
   namespace the containers live in, so the rootful result does not carry
   over), VPNKit, pasta and gvisor-tap-vsock, arm64, and the firewall,
   network and readiness suites on this daemon (they passed on the
-  2026-11-04 hand-built rootless daemon). Tracked in
-  [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md).
+  2026-11-04 hand-built rootless daemon). Tracked in to-do 7390 (retired
+  2026-11-17; [the last runs](#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17)).
 
 ## Claude preference lock with a reused pid, Docker Desktop (2026-11-06)
 

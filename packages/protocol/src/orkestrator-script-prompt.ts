@@ -52,6 +52,7 @@ Compatibility requirements (strict):
 Environment-specific guidance:
 ${environmentGuidance}
 - If both local and container workflows are relevant, it is valid to include both \`setupLocal\` and \`setupContainer\`.
+- Local environments share the host with every other worktree of this project. Orkestrator gives each one its own Docker Compose project (\`COMPOSE_PROJECT_NAME\`) and reserves host ports \`$ORKESTRATOR_PORT_BASE\` through \`$ORKESTRATOR_PORT_MAX\` (20 ports) for it alone. When the project needs a local environment file, make \`setupLocal\` create it from the committed example only if it does not exist yet (never overwrite one), and when its services or dev servers publish fixed host ports (a database on 5432, a compose \`ports:\` entry), set the variables those ports are read from to ports in that range, so two worktrees never share a database or collide on a port.
 - Only add \`aptPackages\` when the repository needs a system package the image lacks (for example a native build dependency named in its README, Dockerfile, CI workflow or an existing \`root\` step). Move an existing \`root\` step that only runs \`apt-get install\` into \`aptPackages\` and drop the step.
 
 Workflow:

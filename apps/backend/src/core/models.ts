@@ -204,6 +204,12 @@ export interface Environment extends Omit<
   initialPromptAttachments?: InitialPromptImageAttachment[];
   /** Prompt awaiting a backend-owned rename after the environment starts. */
   pendingRenamePrompt?: string;
+  /**
+   * First port of the host port block reserved for this local environment
+   * (`environment-isolation.ts`). Assigned on first use and kept until the
+   * environment is deleted, so restarts keep the same ports.
+   */
+  isolationPortBase?: number;
 }
 
 /** Version 2 makes pane and tab selection authoritative in this record. */

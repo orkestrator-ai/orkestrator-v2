@@ -198,6 +198,10 @@ import {
   SetupTerminalStillRunningError,
 } from "./setup-terminal-attempt.js";
 import { newContainerTerminalToken } from "./container-terminal-shell.js";
+import {
+  formatEnvironmentIsolationNotice,
+  localEnvironmentIsolationEnv,
+} from "./environment-isolation.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 
@@ -750,7 +754,9 @@ export async function spawnSetupTerminal(
     }
     const shellPath = resolveLocalShellPath();
     const setupCommand = buildSetupTerminalCommand(commands, `${quoteShell(shellPath)} -l`);
-    const setupEnvironment = envWithManagedBinaries(context);
+    const isolation = await localEnvironmentIsolationEnv(environment, context.storage);
+    const setupEnvironment = { ...envWithManagedBinaries(context), ...isolation };
+    introNotices.push(formatEnvironmentIsolationNotice(isolation));
     // Held in memory from the worktree's creation and shown once.
     introNotices.push(
       ...formatProjectSeedRefusals(takeWorktreeSeedRefusals(environment.id), "worktree"),

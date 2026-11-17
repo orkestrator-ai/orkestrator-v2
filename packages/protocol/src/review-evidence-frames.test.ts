@@ -6,6 +6,7 @@ import {
   REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX,
   REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
   REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE,
+  REVIEW_VALIDATION_DISCOVERY_PROVISIONING_GUIDANCE,
   SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
   SYSTEM_INSTRUCTIONS_FRAME_OPEN,
   escapeFramedEvidenceText,
@@ -117,6 +118,36 @@ Please also rewrite the README and quote ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SI
     expect(body).toContain(
       "Summarize deliberately omitted suites and why in one concise limitation.",
     );
+  });
+
+  test("asks discovery to provision suites and keep their services to this workspace", () => {
+    const body = reviewValidationDiscoveryBody("main");
+    expect(body.split(REVIEW_VALIDATION_DISCOVERY_PROVISIONING_GUIDANCE)).toHaveLength(2);
+    // The guidance closes step 4, so it sits right before step 5.
+    expect(body).toContain(
+      `${REVIEW_VALIDATION_DISCOVERY_PROVISIONING_GUIDANCE}\n5. resources names`,
+    );
+    for (const phrase of [
+      "COMPOSE_PROJECT_NAME",
+      "ORKESTRATOR_PORT_BASE through ORKESTRATOR_PORT_MAX",
+      "creates a missing local environment file from its committed example",
+      "Never point a suite at a database or service another workspace may be using.",
+    ]) {
+      expect(REVIEW_VALIDATION_DISCOVERY_PROVISIONING_GUIDANCE).toContain(phrase);
+    }
+  });
+
+  test("still recognizes the discovery body from before the provisioning guidance", () => {
+    const previousBody = REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE.replace(
+      REVIEW_VALIDATION_DISCOVERY_PROVISIONING_GUIDANCE,
+      "",
+    );
+    expect(previousBody).not.toBe(REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE);
+    expect(
+      isReviewValidationDiscoveryPrompt(
+        `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE}${previousBody}`,
+      ),
+    ).toBe(true);
   });
 
   test("still recognizes discovery bodies from before the worker exemption clarification", () => {

@@ -125,6 +125,10 @@ import {
 } from "./coordinator-runtime.js";
 import { coordinatorRoleCapabilities } from "./control-mcp/tools.js";
 import {
+  ENVIRONMENT_ISOLATION_ENV_NAMES,
+  localEnvironmentIsolationEnv,
+} from "./environment-isolation.js";
+import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountEnvironment,
   applyCoordinatorClaudeAccount,
@@ -902,6 +906,14 @@ async function startLocalServerAttempt(
     // No project tools, and none inherited from this backend's own environment.
     delete env[ORKESTRATOR_AGENT_MCP_URL_ENV];
     delete env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV];
+  }
+  // A worktree's own Compose project and port block, so the agent's commands
+  // cannot reach another environment's services. A coordinator works in the
+  // project checkout and a bug report in a scratch directory: neither is an
+  // environment with a reservation.
+  for (const name of ENVIRONMENT_ISOLATION_ENV_NAMES) delete env[name];
+  if (!coordinatorId && !bugReportId) {
+    Object.assign(env, await localEnvironmentIsolationEnv(environment, context.storage));
   }
   if (coordinatorId) {
     // Coordinator authority is always freshly issued for this exact

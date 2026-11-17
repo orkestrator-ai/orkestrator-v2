@@ -46,6 +46,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     controlRequestFingerprint: _controlRequestFingerprint,
     branchRevision: _branchRevision,
     containerLifecycle: _containerLifecycle,
+    isolationPortBase: _isolationPortBase,
     ...client
   } = environment;
   if (!client.pendingAgentLaunch && client.startupAgentSession?.status !== "starting") {

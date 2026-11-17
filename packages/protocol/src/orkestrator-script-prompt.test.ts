@@ -25,6 +25,15 @@ describe("createOrkestratorScriptPrompt", () => {
     expect(prompt).toContain("task runner");
   });
 
+  test("has local setup give each worktree its own environment file and ports", () => {
+    for (const local of [true, false]) {
+      const prompt = createOrkestratorScriptPrompt(local);
+      expect(prompt).toContain("`COMPOSE_PROJECT_NAME`");
+      expect(prompt).toContain("`$ORKESTRATOR_PORT_BASE` through `$ORKESTRATOR_PORT_MAX`");
+      expect(prompt).toContain("only if it does not exist yet (never overwrite one)");
+    }
+  });
+
   test("includes container-environment guidance", () => {
     const prompt = createOrkestratorScriptPrompt(false);
 

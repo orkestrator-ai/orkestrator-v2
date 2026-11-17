@@ -1204,6 +1204,9 @@ sudo ufw allow proto tcp from 172.16.0.0/12 to any port 31500:31509 comment 'Ork
 ```
 
 Changing the host firewall is the host owner's decision; agents never run it.
+beelink has carried this rule since 2026-11-17; a profile there on a port in
+the range had both container signals `confirmed`
+([evidence](container-qualification.md#container-state-signals-on-a-firewalled-linux-engine-host-2026-11-17)).
 A profile whose environment network was allocated from a `192.168.0.0/16` pool
 needs that network's subnet admitted as well (`docker network inspect` shows
 it), as the installed app's own rule on such a host does. The rule is removed
@@ -1498,8 +1501,10 @@ cases that way (`missed-final`, `approval`, `reconnect`, `hidden`,
 `no-renderer`, `steer` and `rebuild`; start the profile with
 `--fixture --fixture-environments local,container --no-agent-credentials
 --agent-platforms opencode --headless`). On a host whose
-firewall drops container traffic to the profile (beelink's ufw, to-do
-[7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)),
+firewall drops container traffic to the profile (beelink's ufw, for any
+agent tools port outside 31500–31509; start the profile with
+`--agent-tools-port` in that range instead, see
+[Containers behind a host firewall](#containers-behind-a-host-firewall---agent-tools-port)),
 run that profile and the spec on `mise run docker:disposable -- start
 --host-loopback` with its `DOCKER_HOST` exported for both, and build the
 image inside that daemon. OpenCode's `shell` can background a command, so

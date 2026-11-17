@@ -1,7 +1,7 @@
 /**
  * QA stand-in for the Anthropic Messages API, run inside a disposable fixture
  * container on its loopback so the image's real `claude` CLI can take a turn
- * with no login and no billed request (todo 0020, task 2). The spec copies
+ * with no login and no billed request (#1895). The spec copies
  * this file into the container, starts it with the container's own `bun`, and
  * points Claude Code at it through `~/.claude/settings.json` `env`
  * (`ANTHROPIC_BASE_URL`, a fixture `ANTHROPIC_AUTH_TOKEN`).

@@ -2,24 +2,24 @@ import { afterEach, expect, test } from "bun:test";
 import {
   installControlledTimeout,
   type ControlledTimeout,
-} from "../../../../tests/helpers/controlled-timeout.js";
-import { eventSink } from "./backend-emit.js";
-import { SharedWatcherRegistry } from "./change-tracking/shared-physical-work.js";
+} from "../../../../../tests/helpers/controlled-timeout.js";
+import { eventSink } from "../backend-emit.js";
+import { SharedWatcherRegistry } from "../change-tracking/shared-physical-work.js";
 import {
   DIFF_POLL_INTERVAL_MS,
   DIFF_SAFETY_NET_INTERVAL_MS,
   DiffStatsService,
-} from "./diff-stats-service.js";
-import { ManualTime } from "./recurring-test-support.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
-import type { WatchHandle } from "./watch-host.js";
+} from "../diff-stats-service.js";
+import { ManualTime } from "../recurring-test-support.js";
+import { RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import type { WatchHandle } from "../watch-host.js";
 import {
   startWorktreeWatcher,
   WATCH_DISTRUST_MS,
   type StartWatch,
   type WorktreeChangeHint,
   type WorktreeWatcher,
-} from "./worktree-watcher.js";
+} from "./watcher.js";
 
 /**
  * A safety scan that finds a change no hint announced (#2305). On a Mac

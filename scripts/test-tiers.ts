@@ -126,7 +126,7 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "src/core/root-changes.test.ts",
     "src/core/shell.test.ts",
     "src/core/terminal-history-part-*.test.ts",
-    "src/core/worktree-snapshots-git.test.ts",
+    "src/core/worktrees/snapshots-git.test.ts",
     "src/preview-publication.test.ts",
     "src/remote-bandwidth-baseline.test.ts",
     "tests/gateway-proxy-idle-timers.test.ts",

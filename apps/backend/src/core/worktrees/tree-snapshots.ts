@@ -1,7 +1,7 @@
 import type { RecurringPriorityClass } from "@orkestrator/protocol/recurring-work";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
-import { measuredResponseDigest } from "./worktree-snapshot-digest.js";
-import type { WorkAdmissionPool } from "./work-admission.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { measuredResponseDigest } from "./snapshot-digest.js";
+import type { WorkAdmissionPool } from "../work-admission.js";
 
 /**
  * Owns the Files panel's workspace tree for each tracked environment.

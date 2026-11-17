@@ -1236,18 +1236,38 @@ can say less than the one that moved the machine off it: an earlier, lower last
 known reading, or nothing at all. So the switcher remembers each login a fresh
 reading put at or past 98% on either limit, and until that limit resets
 (its reset time, or the window's length from the reading when none was given)
-every idle entry of the login reads as held past 98% with that reset ahead,
-wherever no fresh reading of it says otherwise (`holdPastThreshold` in
-`agent-accounts-auto-switch.ts`). It becomes a place to go again as soon as a
-fresh reading puts it below 98% or the limit resets. The active entry keeps its
-own reading, because only a fresh one moves the machine. The memory is in the
-backend process and bounded; after a restart the next fresh reading rebuilds it.
+every idle entry of the login reads as held past 98% with that reset ahead
+(`holdPastThreshold` in `agent-accounts-auto-switch.ts`). The `soonest-reset`
+move ranks only accounts with room, so a held login is never where it goes,
+however soon its week ends. The hold is lifted by exactly two things:
+
+- **A later fresh reading below 98% of that same limit**, on any entry of the
+  login. It needs a percentage: a fresh reading that names the window and its
+  reset but no percentage says nothing about room, and the login stays held. A
+  Claude `rate_limit_event` can carry a reset time without utilization, and the
+  windows a session reports are kept as the login's newest reading and
+  [shared](#shared-readings), so such readings do reach idle entries. It must
+  also be newer than the reading that put the login past 98%: a twin's cached
+  reading taken earlier is older news, not room.
+- **The limit resetting.**
+
+A fresh reading at or past 98% keeps an entry out by itself, so it is left as it
+is. The active entry keeps its own reading, because only a fresh one moves the
+machine. The memory is in the backend process and bounded; after a restart the
+next fresh reading rebuilds it.
 
 On 2026-11-16 two machines moved between two logins every few minutes: a fresh
 98% weekly reading moved each off one login (`threshold`), and the next check,
 reading it idle from an earlier, lower reading, moved back because its week ended
 sooner (`soonest-reset`). `agent-accounts-auto-switch-flap.test.ts` replays that
-for both limits on Claude and Codex.
+for both limits on Claude and Codex. On 2.39.2-beta, with that hold in place,
+beelink2 and omarchy-hp (where the other login was the host login) still cycled
+the same way: the hold skipped any idle entry whose reading was fresh, and a
+fresh weekly window with no percentage counted as room, so the login came back
+first in the order. `agent-accounts-auto-switch-flap-replay.test.ts` replays both
+machines' sequences, with the reset-only reading, a failed read, an older reading
+below 98% and a stale lower one, and checks that a later fresh reading below 98%
+or the weekly reset still lets the login back.
 
 ### Paid overage
 

@@ -9,6 +9,25 @@ import { closeElectronWithin } from "./design-electron-cleanup";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { electronSpecEnvironment } from "./electron-spec-environment";
 
+const STEP_BUDGET_MS = 20_000;
+
+async function settleWithin<T>(name: string, work: Promise<T>, budgetMs: number): Promise<T> {
+  // The step keeps running after its budget; its late rejection is not news.
+  work.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`In-page step "${name}" did not settle within ${budgetMs} ms`)),
+      budgetMs,
+    );
+  });
+  try {
+    return await Promise.race([work, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // No backend or production profile: two isolated renderer sessions (an in-memory
 // one and a window slot's persistent partition) using the real installer.
 test("real renderer sessions grant writes/fullscreen and deny other permissions and subframes", async () => {
@@ -58,29 +77,50 @@ test("real renderer sessions grant writes/fullscreen and deny other permissions 
     for (const page of app.windows()) {
       await page.waitForLoadState();
       const contents = await app.browserWindow(page);
-      const result = await contents.evaluate(async (window) =>
-        window.webContents.executeJavaScript(
-          `(async () => {
-        await navigator.clipboard.writeText("permission-regression");
-        await document.documentElement.requestFullscreen();
-        const fullscreen = !!document.fullscreenElement;
-        // Leaving fullscreen is only cleanup, so it is bounded. Under Playwright on a
-        // MacBook Pro with external displays (macOS 27.2, Electron 45.2.3) the native
-        // window never entered fullscreen, and exitFullscreen() waited for good for a
-        // transition that never came (to-do 2181, 2026-11-15).
-        await Promise.race([document.exitFullscreen(), new Promise((done) => setTimeout(done, 3000))]);
+      // One executeJavaScript per await, each with its own budget, so a step
+      // that never settles is named in the failure rather than hitting the
+      // test's 120 s timeout inside one opaque script (to-do 8301, retired).
+      const step = (name: string, source: string) =>
+        settleWithin(
+          name,
+          contents.evaluate(
+            (window, code) => window.webContents.executeJavaScript(code, true),
+            source,
+          ),
+          STEP_BUDGET_MS,
+        );
+      await step(
+        "clipboard write",
+        `navigator.clipboard.writeText("permission-regression").then(() => true)`,
+      );
+      const fullscreen = await step(
+        "enter fullscreen",
+        `document.documentElement.requestFullscreen().then(() => !!document.fullscreenElement)`,
+      );
+      // Leaving fullscreen is only cleanup, so it is bounded. On a real macOS
+      // display requestFullscreen() resolves while the window is still animating
+      // into its own Space, and an exitFullscreen() issued during that animation
+      // never settles. On mbp3 (macOS 27.2, Electron 45.2.3, 2026-11-17) it hung
+      // 3 of 3 runs when called at once and settled 2 of 2 after a 5 s wait
+      // (to-do 8301, retired; first bounded for to-do 2181). The app never calls
+      // exitFullscreen(), so this is a test-only stall.
+      await step(
+        "leave fullscreen",
+        `Promise.race([document.exitFullscreen(), new Promise((done) => setTimeout(done, 3000))]).then(() => true)`,
+      );
+      const result = await step(
+        "permission queries and subframe write",
+        `(async () => {
         const geo = await navigator.permissions.query({ name: "geolocation" });
         const notifications = await navigator.permissions.query({ name: "notifications" });
         const child = document.querySelector("iframe").contentWindow;
         const childNotifications = await child.navigator.permissions.query({ name: "notifications" });
         let childWrite = true;
         try { await child.navigator.clipboard.writeText("forbidden"); } catch { childWrite = false; }
-        return { fullscreen, geo: geo.state, notifications: notifications.state, childNotifications: childNotifications.state, childWrite };
+        return { geo: geo.state, notifications: notifications.state, childNotifications: childNotifications.state, childWrite };
       })()`,
-          true,
-        ),
       );
-      expect(result).toEqual({
+      expect({ fullscreen, ...(result as object) }).toEqual({
         fullscreen: true,
         geo: "denied",
         notifications: "granted",

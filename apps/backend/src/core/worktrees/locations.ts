@@ -13,9 +13,9 @@ import {
 } from "@orkestrator/protocol/disk-usage";
 import { defaultRuntimeProfileRoots } from "@orkestrator/protocol/node/runtime-profile-status";
 
-import type { CommandContext } from "./commands-context.js";
-import { APP_SLUG } from "./constants.js";
-import type { AppConfig } from "./models.js";
+import type { CommandContext } from "../commands-context.js";
+import { APP_SLUG } from "../constants.js";
+import type { AppConfig } from "../models.js";
 
 type LocationContext = Pick<CommandContext, "storage" | "worktreeDir" | "runtimeFlavor">;
 

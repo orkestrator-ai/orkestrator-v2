@@ -12,7 +12,7 @@ import {
   getWorktreeBaseDir,
   resolveEnvironmentWorktreeRoot,
   validateWorktreeLocation,
-} from "./worktree-locations.js";
+} from "./worktrees/index.js";
 import { withContainerAdmission } from "./container-admission.js";
 import {
   ContainerLifecycleError,

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { WorktreeWatcher, WorktreeWatcherOptions } from "../worktree-watcher.js";
+import type { WorktreeWatcher, WorktreeWatcherOptions } from "../worktrees/index.js";
 import { SharedScanQueue, SharedWatcherRegistry } from "./shared-physical-work.js";
 
 test("shared watcher releases only the last listener and closes once", () => {

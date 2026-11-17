@@ -16,6 +16,10 @@ import {
   type BuildPipeline,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
+import {
+  pipelineBuildStop,
+  pipelineBuildStopSummary,
+} from "@orkestrator/protocol/build-pipeline-build-outcome";
 import { isDeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { sessionPhaseForBuildPhase } from "./build-pipeline-stages.js";
 import {
@@ -75,6 +79,12 @@ export function buildPipelineStatus(
             }),
           ].filter((line): line is string => Boolean(line))
         : [];
+    // Build reported there was nothing to review: no verification ran and
+    // nothing was delivered, which the coordinator should not read as lost work.
+    const buildStop = Array.isArray(snapshot.sessions)
+      ? pipelineBuildStop(snapshot as unknown as BuildPipeline)
+      : undefined;
+    if (buildStop) delivery.push(boundedLine(pipelineBuildStopSummary(buildStop)));
     const used = task.length + verification.length + delivery.length;
     const criteria = criteriaNoticeLines(buildPipelineCriteriaReport(snapshot), MAX_DETAILS - used);
     return {

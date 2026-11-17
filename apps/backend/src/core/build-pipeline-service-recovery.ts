@@ -3,6 +3,10 @@
  * repair, verification and pull-request outcomes, terminal reconciliation with
  * the Kanban task or issue, and the durable interaction-resolution journal.
  */
+import {
+  pipelineBuildStop,
+  pipelineBuildStopSummary,
+} from "@orkestrator/protocol/build-pipeline-build-outcome";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { randomUUID } from "node:crypto";
 import {
@@ -582,7 +586,7 @@ export class BuildPipelineRecovery {
     if (pipeline.completionCommentStatus === "posted") return;
     pipeline.completionCommentStatus = "posting";
     await this.ctx.save(pipeline, pipeline.backendRevision);
-    const delivered = pipeline.delivery && pipelineDeliverySummary(pipeline.delivery);
+    const delivered = completionDeliveryNote(pipeline);
     const body =
       pipeline.phase === "complete"
         ? `✅ Orkestrator build completed for **${pipeline.taskTitle}**.${delivered ? ` ${delivered}` : ""}`
@@ -628,9 +632,7 @@ export class BuildPipelineRecovery {
         pipeline.completionCommentStatus = "posting";
         await this.ctx.save(pipeline, pipeline.backendRevision);
         const delivered =
-          pipeline.phase === "complete" && pipeline.delivery
-            ? pipelineDeliverySummary(pipeline.delivery)
-            : undefined;
+          pipeline.phase === "complete" ? completionDeliveryNote(pipeline) : undefined;
         await this.updateKanbanLifecycle(
           pipeline,
           {
@@ -1208,4 +1210,14 @@ function feedbackWithUnmetCriteria(
     return `- ${result.id}: ${criterion}${result.evidence ? ` (${result.evidence})` : ""}`;
   });
   return `${rationale}\n\nUnmet acceptance criteria:\n${lines.join("\n")}`;
+}
+
+/**
+ * What the completion comment adds about what was delivered: the delivery
+ * policy's note, or why Build stopped the pipeline before review.
+ */
+function completionDeliveryNote(pipeline: BuildPipeline): string | undefined {
+  const stop = pipelineBuildStop(pipeline);
+  if (stop) return pipelineBuildStopSummary(stop);
+  return pipeline.delivery ? pipelineDeliverySummary(pipeline.delivery) : undefined;
 }

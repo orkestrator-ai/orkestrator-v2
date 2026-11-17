@@ -148,6 +148,7 @@ import {
   readsReviewPackage,
 } from "./build-pipeline-prompt-dispatch.js";
 import { WorkspaceBusyError } from "./workspace-writers.js";
+import { stopAfterBuild } from "./build-pipeline-build-stop.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("build-pipeline");
@@ -991,6 +992,16 @@ export class BuildPipelineSupervisor {
     switch (pipeline.phase) {
       case "building":
       case "reworking":
+        // The Build turn said review should not run: no work was needed, or
+        // it had to stop. Checked before package preparation so none of the
+        // later stages' sessions start.
+        if (
+          await stopAfterBuild(pipeline, session, {
+            complete: (target) => this.recovery.complete(target),
+            save: (target) => this.ctx.save(target, target.backendRevision),
+          })
+        )
+          return;
         if (await this.pauseUnchangedRework(pipeline, session)) return;
         if (
           usesPackagePreparationSession(pipeline) &&

@@ -487,7 +487,7 @@ export function resumePromptFor(
 ): string | null {
   switch (phase) {
     case "building":
-      return `Resume the build pipeline from where you left off. Continue implementing the original ticket, incorporate any messages sent while the pipeline was paused, validate the work as appropriate, and stop when the implementation is ready for review. ${REVIEW_PREPARATION_OUTPUT_CONTRACT} Do not ask questions; make sensible assumptions.`;
+      return `Resume the build pipeline from where you left off. Continue implementing the original ticket, incorporate any messages sent while the pipeline was paused, validate the work as appropriate, and stop when the implementation is ready for review. If review should still not run (no work is needed, or you remain blocked), say so again with \`update_key_information\` (\`continueReview: false\`, \`stopKind\` and \`stopReason\`); otherwise the pipeline continues to review. ${REVIEW_PREPARATION_OUTPUT_CONTRACT} Do not ask questions; make sensible assumptions.`;
     case "reviewing":
       return "Resume the build pipeline review from where you left off. Continue reviewing the current changes against the original ticket and target branch, incorporate any messages sent while the pipeline was paused, and finish with the required structured review result. Use ordinary prose for interim progress and make the final assistant message the only structured report. Do not ask questions; make sensible assumptions.";
     case "addressing-findings":

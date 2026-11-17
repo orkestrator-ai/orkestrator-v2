@@ -79,13 +79,17 @@ export function isPipelineBuildOutcome(value: unknown): value is PipelineBuildOu
 /**
  * The stored outcome for an agent's report, or an error message the tool
  * returns to the agent. A stop needs a reason the user can act on; a stop kind
- * defaults to `no-work-needed`, and is dropped when the review continues.
+ * defaults to `no-work-needed`. Stop details are refused when review continues.
  */
 export function pipelineBuildOutcomeFromInput(
   input: PipelineBuildOutcomeInput,
   reportedAt: string,
 ): PipelineBuildOutcome | { error: string } {
-  if (input.continueReview) return { continueReview: true, reportedAt };
+  if (input.continueReview) {
+    if (input.stopKind !== undefined || input.stopReason !== undefined)
+      return { error: "`stopKind` and `stopReason` need `continueReview: false`." };
+    return { continueReview: true, reportedAt };
+  }
   const reason = input.stopReason?.trim();
   if (!reason) {
     return {

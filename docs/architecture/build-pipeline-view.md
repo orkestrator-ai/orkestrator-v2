@@ -539,7 +539,16 @@ it is `false`, `stopKind` and a required `stopReason`
 (`@orkestrator/protocol/build-pipeline-build-outcome`). Only a running Build
 turn may pass them; any other stage, or a Build whose turn has ended, is
 refused and nothing in that call is written. The report is kept on the Build
-session (`PipelineSession.buildOutcome`); a later call replaces it.
+session (`PipelineSession.buildOutcome`); a later call replaces it. The caller
+must authenticate as that worker's mailbox or the active dispatch's workflow
+credential. Shared connections supply the signed workflow or worker-mail
+`capability` from their turn instructions. Ordinary tabs and stale workflow
+credentials cannot report outcomes. Stop details alongside `continueReview: true`
+are refused.
+
+A queued user message, worker-mail turn, live steer or Resume invalidates the
+old outcome: further implementation must report a fresh stop before it can
+skip review.
 
 When the Build turn ends, the supervisor reads the report before package
 preparation starts (`build-pipeline-build-stop.ts`), so no preparation,

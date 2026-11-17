@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { BuildPipeline, PipelineSession } from "@orkestrator/protocol/build-pipeline";
+import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
+import { discardPreparationResult } from "./build-pipeline-service-helpers.js";
 import { stopAfterBuild } from "./build-pipeline-build-stop.js";
 import {
   applyBuildOutcomeReport,
@@ -24,7 +26,11 @@ import {
 } from "./build-pipeline-service-test-support.js";
 
 const AT = "2026-11-17T10:00:00.000Z";
-const SCOPE = { environmentId: "env-1", projectId: "project-1" };
+const SCOPE = {
+  environmentId: "env-1",
+  projectId: "project-1",
+  tabId: pipelineWorkerTabId("pipeline-1:build:0:a"),
+};
 
 function buildSession(overrides: Partial<PipelineSession> = {}): PipelineSession {
   return {
@@ -208,12 +214,59 @@ describe("reporting the Build outcome", () => {
     expect(store.get("pipeline-1")!.keyInformation).toBeUndefined();
 
     store.set("pipeline-1", pipeline());
+    for (const caller of [
+      { ...SCOPE, tabId: "ordinary-tab" },
+      { ...SCOPE, tabId: pipelineWorkerTabId("old-build") },
+      { ...SCOPE, tabId: pipelineWorkerTabId("other-worker") },
+      { ...SCOPE, tabId: undefined, workflowResultKey: "stale-request" },
+    ]) {
+      const factory = async () => {
+        const server = new McpServer({ name: "identity-test", version: "1" });
+        await registerKeyInformationTools(server, keyHost, caller);
+        return server;
+      };
+      expect(
+        (
+          await callToolInProcess(factory, "update_key_information", {
+            summary: "must not write",
+            continueReview: false,
+            stopReason: "x",
+          })
+        ).isError,
+      ).toBe(true);
+      expect(store.get("pipeline-1")!.keyInformation).toBeUndefined();
+      expect(store.get("pipeline-1")!.sessions[0]!.buildOutcome).toBeUndefined();
+    }
     const view = await keyHost.update(
       SCOPE,
       {},
       { continueReview: false, stopReason: "The behaviour already exists." },
     );
     expect(view.buildOutcome).toMatchObject({ continueReview: false, stopKind: "no-work-needed" });
+    store.get("pipeline-1")!.activePromptContext = {
+      kind: "prompt-dispatch",
+      phase: "building",
+      sessionId: "sdk-build",
+      requestId: "current-request",
+      prompt: "Build",
+      useTaskImages: false,
+    };
+    const workflowFactory = async () => {
+      const server = new McpServer({ name: "workflow-test", version: "1" });
+      await registerKeyInformationTools(server, keyHost, {
+        ...SCOPE,
+        tabId: undefined,
+        workflowResultKey: "current-request",
+      });
+      return server;
+    };
+    expect(
+      (
+        await callToolInProcess(workflowFactory, "update_key_information", {
+          continueReview: true,
+        })
+      ).isError,
+    ).toBe(false);
     expect(store.get("pipeline-1")!.keyInformation).toBeUndefined();
   });
 });
@@ -268,6 +321,16 @@ describe("the update_key_information tool", () => {
       stopReason: "Why?",
     });
     expect(orphanReason.isError).toBe(true);
+    for (const detail of [{ stopReason: "x" }, { stopKind: "blocked" }]) {
+      expect(
+        (
+          await callToolInProcess(factory, "update_key_information", {
+            continueReview: true,
+            ...detail,
+          })
+        ).isError,
+      ).toBe(true);
+    }
     const badKind = await callToolInProcess(factory, "update_key_information", {
       continueReview: false,
       stopKind: "later",
@@ -297,12 +360,12 @@ describe("the Build prompts", () => {
 describe("the pipeline after a Build turn that stops it", () => {
   test("no work needed: completes without opening review, and tells the ticket why", async () => {
     await withService(async (service, storage, provider, _invocations, controls) => {
-      const { started } = await startBuilding(service, storage, {
+      const { started, session } = await startBuilding(service, storage, {
         taskId: "task-1",
         source: { type: "kanban", taskId: "task-1" },
       });
       await service.keyInformationHost().update(
-        SCOPE,
+        { ...SCOPE, tabId: pipelineWorkerTabId(session.sessionKey) },
         { summary: "The ticket's behaviour already exists." },
         {
           continueReview: false,
@@ -329,7 +392,7 @@ describe("the pipeline after a Build turn that stops it", () => {
     await withService(async (service, storage, provider) => {
       const { started, session } = await startBuilding(service, storage);
       await service.keyInformationHost().update(
-        SCOPE,
+        { ...SCOPE, tabId: pipelineWorkerTabId(session.sessionKey) },
         {},
         {
           continueReview: false,
@@ -367,8 +430,14 @@ describe("the pipeline after a Build turn that stops it", () => {
 
   test("a Build that continues, or says nothing, goes on to review as before", async () => {
     await withService(async (service, storage) => {
-      const { started } = await startBuilding(service, storage);
-      await service.keyInformationHost().update(SCOPE, {}, { continueReview: true });
+      const { started, session } = await startBuilding(service, storage);
+      await service
+        .keyInformationHost()
+        .update(
+          { ...SCOPE, tabId: pipelineWorkerTabId(session.sessionKey) },
+          {},
+          { continueReview: true },
+        );
       await service.advanceNow(started.id);
       const next = await stored(storage, started.id);
       expect(["building", "reworking", "reviewing"]).toContain(next.phase);
@@ -376,3 +445,81 @@ describe("the pipeline after a Build turn that stops it", () => {
     });
   });
 });
+
+for (const route of ["queued", "resume", "mail"] as const) {
+  test(`a stop expires before a ${route} follow-up that reports nothing`, async () => {
+    await withService(async (service, storage, provider) => {
+      const { started, session } = await startBuilding(service, storage);
+      await service
+        .keyInformationHost()
+        .update(
+          { ...SCOPE, tabId: pipelineWorkerTabId(session.sessionKey) },
+          {},
+          { continueReview: false, stopReason: "Previously no work." },
+        );
+      if (route === "resume") await service.pause(started.id);
+      if (route === "mail") {
+        let queued = true;
+        service.setWorkerMailbox({
+          claim: async () => {
+            if (!queued) return null;
+            queued = false;
+            return { text: "Implement the new requirement.", messageIds: ["mail-1"] };
+          },
+          settle: async () => {},
+        });
+      } else await service.sendMessage(started.id, "Implement the new requirement.");
+      if (route === "resume") await service.resume(started.id);
+      for (let pass = 0; pass < 4; pass++) await service.advanceNow(started.id);
+      const next = await stored(storage, started.id);
+      expect(next.phase).not.toBe("complete");
+      expect(next.phase).not.toBe("paused");
+      expect(next.sessions[0]!.buildOutcome).toBeUndefined();
+      expect(provider.created.length).toBeGreaterThan(1);
+    });
+  });
+}
+
+test("implementation invalidation used by live steers and worker mail clears stops", () => {
+  const session = buildSession({
+    buildOutcome: {
+      continueReview: false,
+      stopKind: "no-work-needed",
+      stopReason: "Old",
+      reportedAt: AT,
+    },
+  });
+  discardPreparationResult(session);
+  expect(session.buildOutcome).toBeUndefined();
+});
+
+for (const source of [
+  {
+    type: "github",
+    repositoryOwner: "owner",
+    repositoryName: "repo",
+    issueNumber: 1,
+    issueUrl: "https://github.com/owner/repo/issues/1",
+    status: "open",
+  },
+  { type: "linear", issueId: "issue-1", issueIdentifier: "TEST-1" },
+] as const) {
+  test(`${source.type} completion comment includes the Build stop reason`, async () => {
+    await withService(async (service, storage, _provider, invocations) => {
+      const { started, session } = await startBuilding(service, storage, { source });
+      await service
+        .keyInformationHost()
+        .update(
+          { ...SCOPE, tabId: pipelineWorkerTabId(session.sessionKey) },
+          {},
+          { continueReview: false, stopReason: "The export button already exists." },
+        );
+      await service.advanceNow(started.id);
+      expect((await stored(storage, started.id)).phase).toBe("complete");
+      const comment = invocations.find(
+        (x) => x.command === `post_${source.type}_completion_comment`,
+      );
+      expect(comment?.args.body).toContain("The export button already exists.");
+    });
+  });
+}

@@ -767,6 +767,7 @@ export class BuildPipelineLifecycle {
           resultTransport,
           startedAt,
         };
+        delete session.buildOutcome;
         session.turnStartedAt = startedAt;
         delete session.completedAt;
         delete session.usageFinalizationPolls;

@@ -158,6 +158,12 @@ function updateInputSchema() {
         "The current round's verification: each check and whether it passed, and what failed. Replaces this round's entry only.",
       ),
     ),
+    capability: Schema.optionalKey(
+      describe(
+        str({ max: 4096 }),
+        "Signed worker or workflow capability, required on a shared connection when reporting a Build outcome.",
+      ),
+    ),
     continueReview: Schema.optionalKey(
       describe(
         Schema.Boolean,
@@ -180,6 +186,7 @@ function updateInputSchema() {
 }
 
 type UpdateInput = KeyInformationPatch & {
+  capability?: string;
   continueReview?: boolean;
   stopKind?: PipelineBuildOutcomeInput["stopKind"];
   stopReason?: string;
@@ -190,7 +197,10 @@ export function splitKeyInformationUpdate(input: UpdateInput): {
   patch: KeyInformationPatch;
   outcome?: PipelineBuildOutcomeInput;
 } {
-  const { continueReview, stopKind, stopReason, ...patch } = input;
+  const { continueReview, stopKind, stopReason, capability: _capability, ...patch } = input;
+  if (continueReview === true && (stopKind !== undefined || stopReason !== undefined)) {
+    throw new Error("`stopKind` and `stopReason` need `continueReview: false`.");
+  }
   if (continueReview === undefined) {
     if (stopKind !== undefined || stopReason !== undefined) {
       throw new Error("`stopKind` and `stopReason` need `continueReview: false`.");
@@ -223,6 +233,7 @@ export async function registerKeyInformationTools(
   server: McpServer,
   host: BuildPipelineKeyInformationHost,
   scope: KeyInformationScope,
+  resolveOutcomeScope?: (capability: string | undefined) => Promise<KeyInformationScope>,
 ): Promise<boolean> {
   const owner = await host.read(scope).catch(() => null);
   if (!owner) return false;
@@ -265,7 +276,11 @@ export async function registerKeyInformationTools(
       if (!outcome && Object.values(patch).every((value) => value === undefined)) {
         throw new Error("Provide at least one key information section to update.");
       }
-      return viewResult(await host.update(scope, patch, outcome));
+      const caller =
+        outcome && resolveOutcomeScope
+          ? await resolveOutcomeScope((input as UpdateInput).capability)
+          : scope;
+      return viewResult(await host.update(caller, patch, outcome));
     },
   );
   return true;

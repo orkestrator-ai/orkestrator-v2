@@ -191,6 +191,8 @@ export function stageAfterReview(
  * renderer keys redaction on the sticky fact.
  */
 export function discardPreparationResult(session: PipelineSession): void {
+  // Further implementation invalidates the earlier decision to skip review too.
+  delete session.buildOutcome;
   delete session.structuredRequestId;
   delete session.structuredResultStatus;
   delete session.structuredWaitStartedAt;

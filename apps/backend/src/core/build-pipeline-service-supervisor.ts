@@ -1165,6 +1165,7 @@ export class BuildPipelineSupervisor {
         : "structured-output-v1";
       session.resultSubmission = session.resultTransport === "tool-v1" ? "preparing" : undefined;
       session.structuredResultStatus = "pending";
+      delete session.buildOutcome;
       session.turnStartedAt = startedAt;
       delete session.completedAt;
       delete session.usageFinalizationPolls;
@@ -1456,6 +1457,7 @@ export class BuildPipelineSupervisor {
       useTaskImages: false,
       startedAt,
     };
+    delete session.buildOutcome;
     session.turnStartedAt = startedAt;
     delete session.completedAt;
     delete session.usageFinalizationPolls;
@@ -2096,6 +2098,7 @@ export class BuildPipelineSupervisor {
     const requestId = randomUUID();
     const startedAt = new Date().toISOString();
     if (followUp.spend) session[followUp.spend] = true;
+    delete session.buildOutcome;
     session.turnStartedAt = startedAt;
     delete session.completedAt;
     delete session.usageFinalizationPolls;

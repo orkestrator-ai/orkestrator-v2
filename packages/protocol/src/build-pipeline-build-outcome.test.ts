@@ -101,7 +101,12 @@ describe("isPipelineBuildOutcome", () => {
 });
 
 describe("pipelineBuildOutcomeFromInput", () => {
-  test("a continue drops any stop detail", () => {
+  test("a continue refuses stop details", () => {
+    for (const detail of [{ stopKind: "blocked" as const }, { stopReason: "x" }]) {
+      expect(pipelineBuildOutcomeFromInput({ continueReview: true, ...detail }, AT)).toHaveProperty(
+        "error",
+      );
+    }
     expect(pipelineBuildOutcomeFromInput({ continueReview: true }, AT)).toEqual({
       continueReview: true,
       reportedAt: AT,

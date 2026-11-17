@@ -32,6 +32,7 @@ import {
   type PipelineBuildOutcome,
   type PipelineBuildOutcomeInput,
 } from "@orkestrator/protocol/build-pipeline-build-outcome";
+import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { PHASE_ORDER, restartStepOrder } from "./build-pipeline-rewind.js";
 import type { PersistedBuildPipeline } from "./models.js";
@@ -42,6 +43,9 @@ export const KEY_INFORMATION_UPDATE_TIMEOUT_MS = 30_000;
 export interface KeyInformationScope {
   environmentId: string;
   projectId: string;
+  /** Backend-authenticated caller identity, never taken from tool input. */
+  tabId?: string;
+  workflowResultKey?: string;
 }
 
 /** What a stage agent sees: the pipeline it works for and the brief so far. */
@@ -336,7 +340,22 @@ export function createBuildPipelineKeyInformationHost(deps: {
             clearTimeout(timer);
             // The outcome first: it is the half that can be refused, and a
             // refusal must leave the brief unchanged too.
-            if (outcome) applyBuildOutcomeReport(candidate, outcome);
+            if (outcome) {
+              const session = runningBuildSession(candidate);
+              const request = candidate.activePromptContext;
+              const ownsWorker = session && scope.tabId === pipelineWorkerTabId(session.sessionKey);
+              const ownsDispatch =
+                session &&
+                scope.workflowResultKey &&
+                request?.sessionId === session.sdkSessionId &&
+                request.requestId === scope.workflowResultKey;
+              if (!ownsWorker && !ownsDispatch) {
+                throw new Error(
+                  "Only the Build stage's authenticated active worker can report an outcome.",
+                );
+              }
+              applyBuildOutcomeReport(candidate, outcome);
+            }
             if (Object.values(patch).some((value) => value !== undefined)) {
               applyAgentKeyInformationUpdate(candidate, patch);
             }

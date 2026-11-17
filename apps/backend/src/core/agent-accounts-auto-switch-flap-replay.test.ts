@@ -37,6 +37,8 @@ interface Reading {
   /** Absent: the weekly window is reported with a reset time and no percentage. */
   weekly?: number;
   weeklyResetsAt?: number;
+  fiveHour?: number;
+  fiveHourResetsAt?: number;
   /** Absolute epoch ms the reading was taken; defaults to the read itself. */
   fetchedAt?: number;
   /** How long before the read it was taken; past five minutes it is stale. */
@@ -52,10 +54,19 @@ function snapshot(
 ): PlanUsageSnapshot {
   const resetsAt = reading.weeklyResetsAt === undefined ? undefined : at(reading.weeklyResetsAt);
   const percent = reading.weekly === undefined ? {} : { usedPercent: reading.weekly };
-  const windows =
+  const windows: PlanUsageSnapshot["windows"] =
     platform === "claude"
       ? [{ window: "seven_day", label: "Weekly", ...percent, resetsAt }]
       : [{ window: "secondary", label: "Weekly", ...percent, resetsAt, windowMinutes: 10_080 }];
+  if (reading.fiveHour !== undefined) {
+    windows.push({
+      window: platform === "claude" ? "five_hour" : "primary",
+      label: "Five hours",
+      usedPercent: reading.fiveHour,
+      resetsAt: reading.fiveHourResetsAt === undefined ? undefined : at(reading.fiveHourResetsAt),
+      windowMinutes: 300,
+    });
+  }
   return {
     platform,
     status: "ok",
@@ -162,6 +173,49 @@ const MACHINES = [
 ] as const;
 
 describe.each(["claude", "codex"] as const)("the 2.39.2-beta flap on %s", (platform) => {
+  test.each([
+    ["older", NOW - 2 * MINUTE],
+    ["same-time", NOW],
+  ] as const)(
+    "%s low five-hour reading keeps the hold until newer evidence arrives",
+    async (_age, fetchedAt) => {
+      let release = false;
+      const h = harness(platform, [...MACHINES[0].entries], "acct-a", (id, active, now) => {
+        if (id === "acct-a") {
+          return {
+            // Weekly usage has room throughout; only the five-hour hold blocks A.
+            weekly: 40,
+            weeklyResetsAt: A_WEEK_RESET,
+            fiveHour: active === id ? 98 : 96,
+            fiveHourResetsAt: NOW + 4 * HOUR,
+            fetchedAt: active === id || release ? now : fetchedAt,
+          };
+        }
+        return {
+          weekly: 40,
+          weeklyResetsAt: B_WEEK_RESET,
+          fiveHour: 40,
+          fiveHourResetsAt: NOW + 5 * HOUR,
+          minutesOld: active === id ? 0 : 40,
+        };
+      });
+
+      await h.evaluateEvery(1, MINUTE);
+      expect(h.state.active).toBe("acct-b");
+      expect(h.reasons()).toEqual(["five-hour"]);
+
+      await h.evaluateEvery(2, MINUTE);
+      expect(h.state.active).toBe("acct-b");
+      expect(h.reasons()).toEqual(["five-hour"]);
+
+      // Before either limit resets, a strictly newer low reading releases A.
+      release = true;
+      await h.evaluateEvery(1, MINUTE);
+      expect(h.state.active).toBe("acct-a");
+      expect(h.reasons()).toEqual(["five-hour", "soonest-reset"]);
+    },
+  );
+
   for (const machine of MACHINES) {
     describe(machine.name, () => {
       const make = (idleA: (now: number) => Reading, bReading?: (active: string) => Reading) =>

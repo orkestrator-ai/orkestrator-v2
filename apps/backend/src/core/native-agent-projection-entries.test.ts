@@ -27,7 +27,8 @@ import { collaborators } from "./native-agent-service-test-collaborators.js";
 
 type PromptPresentation = { kind: "coordinator-delegation"; frame: string } | undefined;
 
-interface ProjectionInternals {
+/** The shared-cache owner's row projection steps these tests drive. */
+interface PartsInternals {
   projectionMessages(
     sessionKey: string,
     messages: unknown[],
@@ -40,8 +41,11 @@ interface ProjectionInternals {
   projectionPart(...args: unknown[]): unknown;
   toolDetailCache: Map<string, { sessionKey: string }>;
   projectedMessages: ProjectedMessageCache;
+}
+
+interface ProjectionInternals {
+  parts: PartsInternals;
   invalidateProjection(key: string): void;
-  getProjectionToolDetails(input: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
 
 const createdAt = "2026-09-27T00:00:00.000Z";
@@ -70,9 +74,10 @@ const fresh = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 /** Count top-level part normalizations (nested children are part of one visit). */
 function countVisits(view: ProjectionInternals): { readonly count: number; reset(): void } {
-  const original = view.projectionPart.bind(view);
+  const parts = view.parts;
+  const original = parts.projectionPart.bind(parts);
   let count = 0;
-  view.projectionPart = (...args: unknown[]) => {
+  parts.projectionPart = (...args: unknown[]) => {
     if (typeof args[3] === "string" && !args[3].includes("/")) count += 1;
     return original(...args);
   };
@@ -86,7 +91,7 @@ function countVisits(view: ProjectionInternals): { readonly count: number; reset
   };
 }
 
-/** The service's projection collaborator, with the private steps these tests drive. */
+/** The service's projection collaborator, with the shared-cache owner these tests drive. */
 const view = (service: NativeAgentService) =>
   collaborators(service).projections as unknown as ProjectionInternals;
 
@@ -117,7 +122,7 @@ const project = (
     remote?: { providerSessionId: string };
   } = {},
 ) =>
-  target.projectionMessages(
+  target.parts.projectionMessages(
     sessionKey,
     rows,
     rows.length,
@@ -276,15 +281,15 @@ describe("projected row reuse", () => {
       const first = project(cached, sessionKey, fresh(history));
       const detailRef = (first.messages[3] as { parts: Array<{ detailRef?: string }> }).parts[1]!
         .detailRef!;
-      expect(cached.toolDetailCache.has(detailRef)).toBe(true);
+      expect(cached.parts.toolDetailCache.has(detailRef)).toBe(true);
 
       // Evict the inline body: only a fresh normalization of that row can
       // register it again, so the row is projected rather than reused.
-      cached.toolDetailCache.delete(detailRef);
+      cached.parts.toolDetailCache.delete(detailRef);
       const visits = countVisits(cached);
       const second = project(cached, sessionKey, fresh(history));
       expect(visits.count).toBe(2);
-      expect(cached.toolDetailCache.has(detailRef)).toBe(true);
+      expect(cached.parts.toolDetailCache.has(detailRef)).toBe(true);
       expect(json(second)).toBe(json(first));
 
       // A provider-held (summary) detail needs no body: it is re-registered
@@ -312,12 +317,12 @@ describe("projected row reuse", () => {
       const withRemote = project(cached, sessionKey, fresh(summary), { remote });
       const remoteRef = (withRemote.messages[0] as { parts: Array<{ detailRef: string }> })
         .parts[0]!.detailRef;
-      cached.toolDetailCache.delete(remoteRef);
+      cached.parts.toolDetailCache.delete(remoteRef);
       visits.reset();
       const again = project(cached, sessionKey, fresh(summary), { remote });
       expect(visits.count).toBe(0);
       expect(again.messages[0]).toBe(withRemote.messages[0]);
-      expect(cached.toolDetailCache.get(remoteRef)?.sessionKey).toBe(sessionKey);
+      expect(cached.parts.toolDetailCache.get(remoteRef)?.sessionKey).toBe(sessionKey);
     });
   });
 
@@ -326,12 +331,12 @@ describe("projected row reuse", () => {
       const sessionKey = "session-rewind";
       const history = Array.from({ length: 20 }, (_, index) => row(index));
       project(cached, sessionKey, fresh(history));
-      expect(cached.projectedMessages.size).toBe(20);
+      expect(cached.parts.projectedMessages.size).toBe(20);
 
       // A rewind (a session action) invalidates the session: every row is
       // normalized again even though its content is unchanged.
       cached.invalidateProjection(sessionKey);
-      expect(cached.projectedMessages.size).toBe(0);
+      expect(cached.parts.projectedMessages.size).toBe(0);
       const visits = countVisits(cached);
       project(cached, sessionKey, fresh(history));
       expect(visits.count).toBe(40);
@@ -467,7 +472,7 @@ describe("projected row reuse through transcript reads", () => {
               if (update.status !== "snapshot") throw new Error("expected a snapshot");
               outputs.push(json(update.value.messages));
             }
-            const cache = view(service).projectedMessages;
+            const cache = view(service).parts.projectedMessages;
             expect(cache.size).toBeLessThanOrEqual(limits.maxEntries);
             if (limits.maxBytes !== undefined) {
               expect(cache.bytes).toBeLessThanOrEqual(limits.maxBytes);

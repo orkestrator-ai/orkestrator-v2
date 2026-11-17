@@ -63,7 +63,7 @@ env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
 
 ### 3. Projection maps with no eviction
 
-**Problem.** Three maps of `NativeAgentTranscriptProjection` (`native-agent-transcript-projection.ts`) have no bound and are emptied only by `invalidateProjection`, `forgetEnvironment` or shutdown, so sessions that are read and then go quiet without an invalidation accumulate.
+**Problem.** Three maps of `NativeAgentTranscriptProjection` (`native-agent-transcript-projection.ts`; since 0057 split it on 2026-11-17 they live in `native-agent-progressive-reads.ts` and `native-agent-progressive-transcript.ts`) have no bound and are emptied only by `invalidateProjection`, `forgetEnvironment` or shutdown, so sessions that are read and then go quiet without an invalidation accumulate.
 
 **Context.** Their gauges were zero throughout both soaks (task 4): no client read a transcript through the progressive path. `forgetEnvironment` (task 1) clears them for a deleted environment's cached sessions.
 
@@ -122,7 +122,7 @@ after the session records go). Live: see 0048's
 ### Task 3: each map follows its owner (2026-11-11)
 
 Chose the recommended option, after checking the snapshot share's callers.
-In `NativeAgentTranscriptProjection` (`native-agent-transcript-projection.ts`):
+In `NativeAgentTranscriptProjection` (`native-agent-transcript-projection.ts`; since 2026-11-17 `progressiveReadEpochs` and `interactiveSnapshotShares` are in `native-agent-progressive-reads.ts` and `progressiveSourceTokens` in `native-agent-progressive-transcript.ts`):
 
 - `progressiveReadEpochs`: a read's starting epoch is deleted when the read
   settles. Only `progressiveReadCovering`, which lets a caller join a read in

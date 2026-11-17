@@ -20,7 +20,10 @@ native transcript windows keep the contract below instead.
 | `packages/protocol/src/node/revised-rows.ts` | `RecentlyRevisedRows`: changed rows outside the live window |
 | `apps/backend/src/core/http-bridge/transcript-v2.ts` | Backend side of v2: capability learning, bounded reads |
 | `apps/backend/src/core/http-bridge/progressive.ts` | Snapshot reads, with the v1 fallback; a `/transcript` 404 is a missing session |
-| `apps/backend/src/core/native-agent-transcript-projection.ts` | Projection, conditional reads, deltas, history pages |
+| `apps/backend/src/core/native-agent-transcript-projection.ts` | Owner of the projection read models and their session lifecycle |
+| `apps/backend/src/core/native-agent-progressive-transcript.ts` | Transcript view: conditional reads, deltas, preview recovery |
+| `apps/backend/src/core/native-agent-history-pages.ts` | Direct history pages |
+| `apps/backend/src/core/native-agent-projection-parts.ts` | Shared row, tool-detail and page caches |
 | `apps/backend/src/core/native-terminal-messages.ts`, `packages/protocol/src/native-terminal-rows.ts` | Terminal-state rows and where they are placed |
 | `apps/backend/src/core/native-agent-direct-history.ts` | v2 history cursors and `DirectHistoryPageCache` |
 | `packages/protocol/src/native-agent-transcript-patch.ts` | Part-level patches inside a delta |
@@ -489,7 +492,7 @@ until its 30 s backstop, and that read found the MCP section dropped
 (`loading`, no value) and kept the old row for another round (todo 7221).
 
 So the action then re-reads the session's MCP list once
-(`refreshMcpAfterAction` in `native-agent-transcript-projection.ts`), stores
+(`refreshMcpAfterAction` in `native-agent-progressive-discovery.ts`), stores
 it as a `ready` section, and announces `mcp-action`, a cause that names
 discovery. The open view reads discovery on that announcement and gets the
 acted-on row straight away. Claude's bridge stores the probe's or the live

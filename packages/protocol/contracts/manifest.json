@@ -9361,7 +9361,7 @@
       "family": true,
       "prefix": "terminal-output-",
       "key": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$",
-      "payloadDigest": "sha256:4a7d70f3ead73055146126181bde71bb5204ff0272d73c8a8c9c23703ff0975e"
+      "payloadDigest": "sha256:77e7e8ff109193955bd1453f90da8a36d8dd52fc84fde16ce43feccf3c980f02"
     },
     "ticket-sync-outbox-ready": {
       "domain": "ticket-sync",

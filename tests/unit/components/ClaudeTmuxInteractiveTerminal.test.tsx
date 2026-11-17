@@ -1,3 +1,5 @@
+import { mockWriteText } from "../../mocks/clipboard";
+import { MAX_OSC_52_BASE64_LENGTH, suppressOsc52Clipboard } from "@/lib/terminal-osc52";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { CLAUDE_TMUX_INTERACTIVE_RENEW_MS } from "@orkestrator/protocol/contract/domains/claude-tmux";
@@ -71,9 +73,22 @@ class MockTerminal {
     terminalInstances.push(this);
   }
 
-  loadAddon() {}
+  addons: Array<{ dispose?: () => void }> = [];
+  gestureHandlers = new Map<string, (event: Event) => void>();
+  oscHandler: ((data: string) => boolean) | null = null;
+  loadAddon(addon: { dispose?: () => void }) {
+    this.addons.push(addon);
+  }
+  gesture(type = "keydown", isTrusted = true) {
+    this.gestureHandlers.get(type)?.({ isTrusted } as Event);
+  }
 
   open(parent: HTMLElement) {
+    const add = parent.addEventListener.bind(parent);
+    parent.addEventListener = ((type: string, listener: EventListener, options?: boolean) => {
+      this.gestureHandlers.set(type, listener);
+      add(type, listener, options);
+    }) as typeof parent.addEventListener;
     this.textarea = document.createElement("textarea");
     parent.appendChild(this.textarea);
   }
@@ -92,7 +107,14 @@ class MockTerminal {
   }
 
   parser = {
-    registerOscHandler: () => ({ dispose: () => {} }),
+    registerOscHandler: (_id: number, handler: (data: string) => boolean) => {
+      this.oscHandler = handler;
+      return {
+        dispose: () => {
+          this.oscHandler = null;
+        },
+      };
+    },
   };
 
   attachCustomKeyEventHandler(handler: KeyHandler) {
@@ -113,6 +135,9 @@ class MockTerminal {
 
   write(data: Uint8Array) {
     this.writes.push(data);
+    const text = new TextDecoder().decode(data);
+    const match = /\x1b\]52;([^\x07]*)\x07/.exec(text);
+    if (match) this.oscHandler?.(match[1]!);
   }
 
   focus() {
@@ -121,6 +146,7 @@ class MockTerminal {
   }
 
   dispose() {
+    for (const addon of this.addons) addon.dispose?.();
     this.disposed = true;
     this.textarea?.remove();
   }
@@ -214,6 +240,8 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   beforeEach(() => {
     setMobileViewport(false);
     cleanup();
+    mockWriteText.mockReset();
+    mockWriteText.mockImplementation(async () => {});
     terminalInstances.length = 0;
     fitInstances.length = 0;
     outputHandler = null;
@@ -284,6 +312,47 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     expect(unlistenMock).toHaveBeenCalledTimes(1);
     expect(detachInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
     expect(terminalInstances[0]!.disposed).toBe(true);
+  });
+
+  test("live tmux clipboard output is gated, bounded, read-only and reports failures", async () => {
+    const logs = captureLogs();
+    const { unmount } = renderInAppCommandScope(
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+    );
+    try {
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+      const terminal = terminalInstances[0]!;
+      const emit = (data: string) =>
+        outputHandler?.({ payload: Array.from(new TextEncoder().encode(`\x1b]52;${data}\x07`)) });
+      emit("c;Y29weQ==");
+      terminal.emitData("\x1b[0n");
+      terminal.gesture("keydown", false);
+      emit("c;Y29weQ==");
+      expect(mockWriteText).not.toHaveBeenCalled();
+      terminal.gesture("pointerup");
+      emit("c;?");
+      emit(`c;${"A".repeat(MAX_OSC_52_BASE64_LENGTH + 4)}`);
+      expect(mockWriteText).not.toHaveBeenCalled();
+      await act(async () => emit("c;Y29weQ=="));
+      expect(mockWriteText).toHaveBeenCalledWith("copy");
+      const release = suppressOsc52Clipboard(terminal);
+      terminal.gesture();
+      emit("c;Y29weQ==");
+      release();
+      expect(mockWriteText).toHaveBeenCalledTimes(1);
+      mockWriteText.mockImplementation(async () => {
+        throw new Error("clipboard unavailable");
+      });
+      terminal.gesture();
+      await act(async () => emit("c;Y29weQ=="));
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({ area: "web.claude-tmux", event: "clipboard.osc52-copy-failed" }),
+      );
+      unmount();
+      expect(terminal.oscHandler).toBeNull();
+    } finally {
+      logs.restore();
+    }
   });
 
   test.each([{ ctrlKey: true }, { metaKey: true }])(
@@ -715,6 +784,8 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
 
     writeInteractiveTerminalMock.mockClear();
     cleanup();
+    mockWriteText.mockReset();
+    mockWriteText.mockImplementation(async () => {});
     terminalInstances.length = 0;
     capturedImagePasteOptions = null;
 

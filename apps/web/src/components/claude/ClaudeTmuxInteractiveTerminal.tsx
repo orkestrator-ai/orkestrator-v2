@@ -13,7 +13,7 @@ import { backendForScope } from "@/lib/backend/scope-backend";
 import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import { cn } from "@/lib/utils";
 import { writeText } from "@/lib/native/clipboard";
-import { installOsc52ClipboardHandler } from "@/lib/terminal-osc52";
+import { bindOsc52ClipboardGestures, installOsc52ClipboardHandler } from "@/lib/terminal-osc52";
 import { useConfigStore } from "@/stores";
 import {
   DEFAULT_TERMINAL_APPEARANCE,
@@ -207,14 +207,14 @@ export function ClaudeTmuxInteractiveTerminal({
     const fitAddon = new FitAddon();
 
     terminal.loadAddon(fitAddon);
-    // Claude Code's fullscreen renderer owns the mouse and copies through
-    // OSC 52, which reaches here when tmux forwards it; disposed with the terminal.
+    // The backend forwards live clipboard escapes separately from pane snapshots.
     installOsc52ClipboardHandler(terminal, {
       writeText,
       onError: (error) =>
         log.error("clipboard.osc52-copy-failed", { error: formatLogError(error) }),
     });
     terminal.open(host);
+    const clipboardGestures = bindOsc52ClipboardGestures(terminal, host);
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
@@ -457,6 +457,7 @@ export function ClaudeTmuxInteractiveTerminal({
       document.removeEventListener("visibilitychange", onVisibleReattach);
       cleanupCreatedSession();
       setConnected(false);
+      clipboardGestures.dispose();
       dataDisposable.dispose();
       resizeObserver.disconnect();
       window.removeEventListener("focus", fit);

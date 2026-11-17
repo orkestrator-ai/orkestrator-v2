@@ -61,31 +61,95 @@ export interface Osc52ClipboardOptions {
   now?: () => number;
 }
 
-type Osc52Terminal = Pick<Terminal, "parser" | "onData" | "onBinary">;
+type Osc52Terminal = Pick<Terminal, "parser" | "loadAddon">;
+type ClipboardGate = {
+  lastInputAt: number;
+  replayDepth: number;
+  mark: (event: Event) => void;
+  cleanups: Set<() => void>;
+  host?: HTMLElement;
+};
+const gates = new WeakMap<object, ClipboardGate>();
+
+/** Bind after open; xterm's onData/onBinary include program-generated replies. */
+export function bindOsc52ClipboardGestures(terminal: object, host: HTMLElement): IDisposable {
+  const gate = gates.get(terminal);
+  if (!gate) return { dispose() {} };
+  gate.host = host;
+  const events = [
+    "keydown",
+    "pointerdown",
+    "pointerup",
+    "mousedown",
+    "mouseup",
+    "paste",
+    "beforeinput",
+    "compositionend",
+  ];
+  for (const type of events) host.addEventListener(type, gate.mark, true);
+  const dispose = () => {
+    for (const type of events) host.removeEventListener(type, gate.mark, true);
+    gate.lastInputAt = Number.NEGATIVE_INFINITY;
+    gate.cleanups.delete(dispose);
+  };
+  gate.cleanups.add(dispose);
+  return { dispose };
+}
+
+/** Keep authorization disabled until xterm has parsed every replayed byte. */
+export function suppressOsc52Clipboard(terminal: object): () => void {
+  const gate = gates.get(terminal);
+  if (!gate) return () => {};
+  gate.replayDepth += 1;
+  gate.lastInputAt = Number.NEGATIVE_INFINITY;
+  return () => {
+    gate.replayDepth -= 1;
+    gate.lastInputAt = Number.NEGATIVE_INFINITY;
+  };
+}
 
 /** Route OSC 52 clipboard writes from programs in `terminal` to the system clipboard. */
 export function installOsc52ClipboardHandler(
   terminal: Osc52Terminal,
-  { writeText, onError, now = Date.now }: Osc52ClipboardOptions,
+  { writeText, onError, now = () => performance.now() }: Osc52ClipboardOptions,
 ): IDisposable {
-  let lastInputAt = Number.NEGATIVE_INFINITY;
-  const markInput = () => {
-    lastInputAt = now();
-  };
-  const disposables: IDisposable[] = [
-    terminal.onData(markInput),
-    terminal.onBinary(markInput),
-    terminal.parser.registerOscHandler(OSC_52, (data) => {
-      if (now() - lastInputAt > OSC_52_INPUT_WINDOW_MS) return true;
-      const text = decodeOsc52Write(data);
-      if (text === null) return true;
-      void writeText(text).catch((error: unknown) => onError?.(error));
-      return true;
-    }),
-  ];
-  return {
-    dispose: () => {
-      for (const disposable of disposables.splice(0)) disposable.dispose();
+  const gate: ClipboardGate = {
+    lastInputAt: Number.NEGATIVE_INFINITY,
+    replayDepth: 0,
+    cleanups: new Set(),
+    mark: (event) => {
+      if (event.isTrusted && gate.replayDepth === 0) gate.lastInputAt = now();
     },
   };
+  gates.set(terminal, gate);
+  const parser = terminal.parser.registerOscHandler(OSC_52, (data) => {
+    if (gate.replayDepth > 0 || now() - gate.lastInputAt > OSC_52_INPUT_WINDOW_MS) return true;
+    // Persistent terminals remain mounted when inactive. A gesture must still
+    // belong to the focused terminal when its asynchronous response arrives.
+    if (
+      gate.host?.ownerDocument &&
+      (!gate.host.isConnected ||
+        !gate.host.contains(gate.host.ownerDocument.activeElement) ||
+        gate.host.ownerDocument.visibilityState === "hidden")
+    )
+      return true;
+    const text = decodeOsc52Write(data);
+    if (text === null) return true;
+    try {
+      void writeText(text).catch((error: unknown) => onError?.(error));
+    } catch (error) {
+      onError?.(error);
+    }
+    return true;
+  });
+  const addon = {
+    activate() {},
+    dispose() {
+      for (const cleanup of Array.from(gate.cleanups)) cleanup();
+      parser.dispose();
+      gates.delete(terminal);
+    },
+  };
+  terminal.loadAddon(addon);
+  return addon;
 }

@@ -1,3 +1,4 @@
+import { attachTmuxClipboard } from "./tmux-clipboard.js";
 import { terminalOutputEvents } from "@orkestrator/protocol/contract/domains/events";
 import { CLAUDE_TMUX_INTERACTIVE_LEASE_MS } from "@orkestrator/protocol/contract/domains/claude-tmux";
 import * as shared from "./tmux-shared.js";
@@ -98,6 +99,8 @@ export type InteractiveTerminalSession = {
   id: string;
   tmux: TmuxSession;
   timer?: unknown;
+  clipboard?: { dispose(): void };
+  clipboardStarting?: Promise<void>;
   lastSnapshot?: string;
   /**
    * Invalidates captures that began before a forced restart or resize. A
@@ -134,6 +137,7 @@ export type InteractiveTmuxTerminalManagerOptions = {
   /** How long a lease lasts after a renewal; tests shorten it. */
   leaseMs?: number;
   metrics?: RecurringWorkMetrics;
+  attachClipboard?: typeof attachTmuxClipboard;
 };
 
 export type CreateInteractiveTerminalOptions = {
@@ -148,6 +152,7 @@ export class InteractiveTmuxTerminalManager {
   private readonly now: () => number;
   private readonly leaseMs: number;
   private readonly metrics: RecurringWorkMetrics;
+  private readonly attachClipboard: typeof attachTmuxClipboard;
 
   constructor(options: InteractiveTmuxTerminalManagerOptions = {}) {
     this.scheduleTimeout =
@@ -156,6 +161,7 @@ export class InteractiveTmuxTerminalManager {
     this.now = options.now ?? Date.now;
     this.leaseMs = options.leaseMs ?? CLAUDE_TMUX_INTERACTIVE_LEASE_MS;
     this.metrics = options.metrics ?? recurringWorkMetrics;
+    this.attachClipboard = options.attachClipboard ?? attachTmuxClipboard;
   }
 
   create(
@@ -210,6 +216,31 @@ export class InteractiveTmuxTerminalManager {
     const release = context.runtime.environments.fence.beginAgentWork(terminal.tmux.environmentId);
     try {
       terminal.context = context;
+      if (!terminal.clipboardStarting && !terminal.clipboard) {
+        terminal.clipboardStarting = this.attachClipboard(
+          terminal.tmux,
+          terminal.cols,
+          terminal.rows,
+          (sequence) => {
+            if (this.terminals.get(id) === terminal) {
+              context.emit(terminalOutputEvents.at(id), bytesPayload(sequence, false));
+            }
+          },
+          () => {
+            if (this.terminals.get(id) !== terminal) return;
+            terminal.clipboard = undefined;
+            context.emit(terminalOutputEvents.at(id), { text: "", desynced: true });
+          },
+        )
+          .then((client) => {
+            if (this.terminals.get(id) !== terminal) client.dispose();
+            else terminal.clipboard = client;
+          })
+          .finally(() => {
+            terminal.clipboardStarting = undefined;
+          });
+      }
+      await terminal.clipboardStarting;
       await this.changeGeometry(terminal, terminal.cols, terminal.rows);
       await this.emitSnapshot(terminal, context, true);
       this.schedule(terminal);
@@ -243,6 +274,7 @@ export class InteractiveTmuxTerminalManager {
     if (!terminal) return;
     if (terminal.timer !== undefined) this.cancelTimeout(terminal.timer);
     terminal.timer = undefined;
+    terminal.clipboard?.dispose();
     this.terminals.delete(id);
   }
 
@@ -251,6 +283,7 @@ export class InteractiveTmuxTerminalManager {
       if (terminal.tmux.environmentId !== environmentId) continue;
       if (terminal.timer !== undefined) this.cancelTimeout(terminal.timer);
       terminal.timer = undefined;
+      terminal.clipboard?.dispose();
       this.terminals.delete(id);
     }
   }

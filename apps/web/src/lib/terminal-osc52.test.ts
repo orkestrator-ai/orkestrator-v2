@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import { Terminal } from "@xterm/xterm";
 import {
+  bindOsc52ClipboardGestures,
+  suppressOsc52Clipboard,
   decodeOsc52Write,
   installOsc52ClipboardHandler,
   MAX_OSC_52_BASE64_LENGTH,
@@ -17,7 +19,7 @@ function base64(text: string): string {
 
 function fakeTerminal() {
   let oscHandler: ((data: string) => boolean | Promise<boolean>) | null = null;
-  const dataHandlers: Array<() => void> = [];
+  const gestures = new Map<string, (event: Event) => void>();
   const disposed: string[] = [];
   const terminal = {
     parser: {
@@ -27,20 +29,20 @@ function fakeTerminal() {
         return { dispose: () => disposed.push("osc") };
       }),
     },
-    onData: (handler: () => void) => {
-      dataHandlers.push(handler);
-      return { dispose: () => disposed.push("data") };
-    },
-    onBinary: (handler: () => void) => {
-      dataHandlers.push(handler);
-      return { dispose: () => disposed.push("binary") };
-    },
+    loadAddon: () => {},
   };
   return {
-    terminal: terminal as unknown as Pick<Terminal, "parser" | "onData" | "onBinary">,
+    terminal: terminal as unknown as Pick<Terminal, "parser" | "loadAddon">,
     sendOsc: (data: string) => oscHandler?.(data),
-    input: () => dataHandlers[0]?.(),
-    binaryInput: () => dataHandlers[1]?.(),
+    host: {
+      addEventListener: (type: string, listener: (event: Event) => void) =>
+        gestures.set(type, listener),
+      removeEventListener: (type: string) => {
+        gestures.delete(type);
+      },
+    } as unknown as HTMLElement,
+    input: (isTrusted = true) => gestures.get("keydown")?.({ isTrusted } as Event),
+    binaryInput: () => gestures.get("pointerup")?.({ isTrusted: true } as Event),
     disposed,
   };
 }
@@ -78,6 +80,7 @@ describe("installOsc52ClipboardHandler", () => {
     const fake = fakeTerminal();
     installOsc52ClipboardHandler(fake.terminal, { writeText, now: () => now });
 
+    bindOsc52ClipboardGestures(fake.terminal, fake.host);
     fake.input();
     now += OSC_52_INPUT_WINDOW_MS;
     expect(fake.sendOsc(`c;${base64("copied")}`)).toBe(true);
@@ -96,6 +99,7 @@ describe("installOsc52ClipboardHandler", () => {
     installOsc52ClipboardHandler(fake.terminal, { writeText, now: () => now });
 
     expect(fake.sendOsc(`c;${base64("replayed")}`)).toBe(true);
+    bindOsc52ClipboardGestures(fake.terminal, fake.host);
     fake.input();
     now += OSC_52_INPUT_WINDOW_MS + 1;
     fake.sendOsc(`c;${base64("background")}`);
@@ -106,6 +110,7 @@ describe("installOsc52ClipboardHandler", () => {
     const writeText = mock(async (_text: string) => {});
     const fake = fakeTerminal();
     installOsc52ClipboardHandler(fake.terminal, { writeText, now: () => 0 });
+    bindOsc52ClipboardGestures(fake.terminal, fake.host);
     fake.input();
     expect(fake.sendOsc("c;?")).toBe(true);
     expect(writeText).not.toHaveBeenCalled();
@@ -122,6 +127,7 @@ describe("installOsc52ClipboardHandler", () => {
       onError,
       now: () => 0,
     });
+    bindOsc52ClipboardGestures(fake.terminal, fake.host);
     fake.input();
     fake.sendOsc(`c;${base64("x")}`);
     await Promise.resolve();
@@ -133,18 +139,51 @@ describe("installOsc52ClipboardHandler", () => {
     const fake = fakeTerminal();
     const handle = installOsc52ClipboardHandler(fake.terminal, { writeText: async () => {} });
     handle.dispose();
-    expect(fake.disposed.sort()).toEqual(["binary", "data", "osc"]);
+    expect(fake.disposed).toEqual(["osc"]);
   });
 
   test("a real xterm terminal hands the sequence to the handler", async () => {
     const terminal = new Terminal({ allowProposedApi: false });
     const writeText = mock(async (_text: string) => {});
     installOsc52ClipboardHandler(terminal, { writeText, now: () => 0 });
-    terminal.input("x");
+    const fake = fakeTerminal();
+    bindOsc52ClipboardGestures(terminal, fake.host);
+    fake.input();
     await new Promise<void>((resolve) =>
       terminal.write(`\x1b]52;c;${base64("from claude")}\x07`, resolve),
     );
     expect(writeText).toHaveBeenCalledWith("from claude");
+    terminal.dispose();
+  });
+  test("real xterm replies and synthetic input cannot authorize clipboard writes", async () => {
+    const terminal = new Terminal();
+    const fake = fakeTerminal();
+    let now = 0;
+    const writeText = mock(async (_text: string) => {});
+    installOsc52ClipboardHandler(terminal, { writeText, now: () => now });
+    bindOsc52ClipboardGestures(terminal, fake.host);
+    const output = async (prefix: string) =>
+      new Promise<void>((resolve) => terminal.write(`${prefix}\x1b]52;c;eA==\x07`, resolve));
+    for (const query of ["\x1b[c", "\x1b[>c", "\x1b[5n", "\x1b[6n"]) {
+      await output(query);
+      terminal.input("synthetic");
+      fake.input(false);
+      await output(query);
+      expect(writeText).not.toHaveBeenCalled();
+      fake.input();
+      now += OSC_52_INPUT_WINDOW_MS + 1;
+      await output(query);
+      expect(writeText).not.toHaveBeenCalled();
+    }
+    fake.binaryInput();
+    await output("");
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const release = suppressOsc52Clipboard(terminal);
+    fake.input();
+    await output("\x1b[5n");
+    release();
+    await output("");
+    expect(writeText).toHaveBeenCalledTimes(1);
     terminal.dispose();
   });
 });

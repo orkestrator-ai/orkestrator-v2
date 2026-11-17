@@ -43,6 +43,7 @@ function actions(): DesignCanvasActions {
     frameAction: noop,
     focusFrame: noop,
     selectFrame: noop,
+    downloadFrames: () => Promise.resolve(),
   };
 }
 

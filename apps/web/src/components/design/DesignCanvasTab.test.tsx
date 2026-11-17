@@ -294,6 +294,71 @@ describe("DesignCanvasTab", () => {
     await waitFor(() => expect(frame() === null).toBe(true));
   });
 
+  test("Shift-click selects several frames, each offering a download of the selection", async () => {
+    const click = spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const createUrl = spyOn(URL, "createObjectURL").mockImplementation(() => "blob:frames");
+    try {
+      renderInAppCommandScope(
+        <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+      );
+      const titleA = await screen.findByRole("button", { name: "Move frame A" });
+      const titleB = screen.getByRole("button", { name: "Move frame B" });
+      const selected = (id: string) =>
+        document.querySelector(`[data-frame-id="${id}"]`)?.hasAttribute("data-selected");
+      expect(screen.queryByRole("button", { name: "Download A" }) === null).toBe(true);
+
+      fireEvent.pointerDown(titleA, { button: 0, pointerId: 1 });
+      fireEvent.pointerUp(titleA, { button: 0, pointerId: 1 });
+      fireEvent.click(titleA, { detail: 1 });
+      await waitFor(() => expect(selected(frameA)).toBe(true));
+      expect(screen.getByRole("button", { name: "Download A" })).toBeTruthy();
+
+      fireEvent.pointerDown(titleB, { button: 0, pointerId: 1, shiftKey: true });
+      fireEvent.pointerUp(titleB, { button: 0, pointerId: 1, shiftKey: true });
+      fireEvent.click(titleB, { detail: 1, shiftKey: true });
+      await waitFor(() => expect(selected(frameB)).toBe(true));
+      expect(selected(frameA)).toBe(true);
+      expect(document.activeElement).toBe(titleB);
+      expect(screen.getByRole("button", { name: "Download A" })).toBeTruthy();
+      const download = screen.getByRole("button", { name: "Download B" });
+
+      // Several selected frames are a download selection: Delete removes none
+      // (checked once the download's own backend round trips have finished).
+      fireEvent.keyDown(titleB, { key: "Delete" });
+
+      fireEvent.pointerDown(download, { button: 0, ctrlKey: false });
+      const menu = await screen.findByRole("menu");
+      expect(within(menu).getByRole("group", { name: "Selected frames (2)" })).toBeTruthy();
+      fireEvent.click(
+        within(within(menu).getByRole("group", { name: "All frames (2)" })).getByRole("menuitem", {
+          name: "PNG images (.zip)",
+        }),
+      );
+      await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+      expect(prepared("delete_frame")).toHaveLength(0);
+      expect(selected(frameA)).toBe(true);
+      const captures = backend.calls.filter((call) => call.command === "design_capture");
+      expect(captures.map((call) => call.args.frameId)).toEqual([frameA, frameB]);
+      const saved = click.mock.contexts[0] as unknown as HTMLAnchorElement;
+      expect(saved.download).toBe("Fake.zip");
+      expect(await screen.findByText("Downloaded Fake.zip")).toBeTruthy();
+
+      // Shift-clicking a selected frame removes it from the selection.
+      fireEvent.pointerDown(titleA, { button: 0, pointerId: 1, metaKey: true });
+      fireEvent.click(titleA, { detail: 1, metaKey: true });
+      await waitFor(() => expect(selected(frameA)).toBe(false));
+      expect(selected(frameB)).toBe(true);
+      // A plain click replaces the selection.
+      fireEvent.pointerDown(titleA, { button: 0, pointerId: 1 });
+      fireEvent.click(titleA, { detail: 1 });
+      await waitFor(() => expect(selected(frameB)).toBe(false));
+      expect(selected(frameA)).toBe(true);
+    } finally {
+      click.mockRestore();
+      createUrl.mockRestore();
+    }
+  });
+
   test("focusing another title or a Layers row cannot delete the previously selected frame", async () => {
     renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,

@@ -412,6 +412,31 @@ session (the artifact host's isolated session has one, and it cancels
 downloads). The Electron design journey asserts that, so a handler added
 later has to bring a test of the dialog it changes.
 
+### Frame images and PDF
+
+Clicking a frame's title selects the frame (board); Shift-, Ctrl- or
+⌘-click adds a frame to the board selection or removes it. Delete removes a
+board only when it is the only one selected: several selected frames are a
+download selection, and one delete per frame would race on the canvas
+revision. Every selected frame shows a download button at its top right, in
+the selection blue (`DesignFrameDownloadMenu.tsx`). Its menu offers **This
+frame** as PNG, WEBP or PDF; with several frames selected, a separated
+**Selected frames** group; and, when the canvas has more than one frame, an
+**All frames** group. A group of several frames saves one PDF with a page per
+frame or a ZIP of PNG or WEBP images, numbered in canvas order.
+
+Every image is the backend renderer's `design_capture` of the committed frame
+(one at a time, interactive priority, at the frame's own size and a device
+scale of 1), so the file never depends on zoom, culling or whether the frame
+is on screen, and uncommitted edits are not in it. The renderer re-encodes it
+in the browser (`design-frame-download.ts`): WEBP through a canvas at quality
+0.95 (a browser that cannot encode WEBP fails the download rather than saving
+PNG under a WEBP name), PDF pages as lossless zlib-compressed RGB composited
+onto white, sized at 72/96 pt per CSS pixel, and ZIP entries stored without
+compression (`design-frame-files.ts`). The file is saved through the same
+download path as the design download above. `e2e/DesignFrameDownload.spec.ts`
+checks the real bytes in Chromium.
+
 ## MCP
 
 `orkestrator-design` is a separate MCP server at `/design-mcp` on the

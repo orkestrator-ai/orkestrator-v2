@@ -48,6 +48,12 @@ import { DesignAgentDialog } from "./DesignAgentDialog";
 import { DesignExportDialog } from "./DesignExportDialog";
 import { DesignFrameInspector } from "./DesignFrameInspector";
 import { DesignFrameView } from "./DesignFrameView";
+import {
+  downloadFrames,
+  saveFile,
+  type DesignDownloadScope,
+  type DesignImageFormat,
+} from "./design-frame-download";
 import { DesignHistoryPanel } from "./DesignHistoryPanel";
 import { DesignInspector } from "./DesignInspector";
 import { DesignLayerTree } from "./DesignLayerTree";
@@ -64,6 +70,7 @@ import type { DesignFrameBridge } from "./frame-bridge";
 const NEW_FRAME_HTML =
   "<!doctype html><html><head><style>body{margin:0;font-family:system-ui;padding:48px;background:#fff;color:#18181b}</style></head><body><h1>Your next idea</h1><p>Ask your agent to design here.</p></body></html>";
 const NARROW_WIDTH = 640;
+const NO_FRAMES: readonly string[] = [];
 /**
  * Below this height (about 400% zoom) the wrapped toolbar would take half the
  * pane and squeeze Layers and the inspector to a sliver (WCAG 1.4.10), so the
@@ -117,8 +124,11 @@ export function DesignCanvasTab({
   const compact = workspaceHeight > 0 && workspaceHeight < SHORT_HEIGHT;
   const narrowRef = useRef(narrow);
   const [selection, setSelection] = useState<DesignSelection | null>(null);
-  /** A whole frame (board) selected from its title; exclusive with an element selection. */
-  const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
+  /**
+   * Whole frames (boards) selected from their titles, in selection order;
+   * exclusive with an element selection. Shift/Ctrl/⌘-click adds or removes one.
+   */
+  const [selectedFrameIds, setSelectedFrameIds] = useState<readonly string[]>(NO_FRAMES);
   const selectionGeneration = useRef(0);
   const [pendingDeletes, setPendingDeletes] = useState<
     Array<{ intentId: string; frameId: string; name: string }>
@@ -152,7 +162,7 @@ export function DesignCanvasTab({
   const layersResize = useRef<{ x: number; width: number } | null>(null);
   const panStart = useRef<{ x: number; y: number; origin: DesignViewport } | null>(null);
   const selectionRef = useRef(selection);
-  const selectedFrameRef = useRef(selectedFrameId);
+  const selectedFrameRef = useRef(selectedFrameIds);
   const projectionRef = useRef(projection);
 
   const canvas = projection?.canvas ?? null;
@@ -518,7 +528,7 @@ export function DesignCanvasTab({
     viewportRef.current = viewport;
     narrowRef.current = narrow;
     selectionRef.current = selection;
-    selectedFrameRef.current = selectedFrameId;
+    selectedFrameRef.current = selectedFrameIds;
     projectionRef.current = projection;
     editableRef.current = editable;
     frameActionRef.current = frameAction;
@@ -581,8 +591,8 @@ export function DesignCanvasTab({
         selectionGeneration.current++;
         cancelPendingElement();
         setSelection(next);
-        selectedFrameRef.current = null;
-        setSelectedFrameId(null);
+        selectedFrameRef.current = NO_FRAMES;
+        setSelectedFrameIds(NO_FRAMES);
         if (next) {
           setFocusedFrame(next.frameId);
           setPropertiesFrame(null);
@@ -632,25 +642,34 @@ export function DesignCanvasTab({
       exitPreview: () => setMode("inspect"),
       // Through a ref so viewport/frame changes don't give every frame new props.
       frameAction: (frameId, action) => frameActionRef.current(frameId, action),
-      focusFrame: (frameId) => {
+      focusFrame: (frameId, options) => {
         if (pendingElement.current?.frameId !== frameId) {
           selectionGeneration.current++;
           cancelPendingElement();
         }
         setFocusedFrame(frameId);
-        if (selectedFrameRef.current && selectedFrameRef.current !== frameId) {
-          selectedFrameRef.current = null;
-          setSelectedFrameId(null);
+        const chosen = selectedFrameRef.current;
+        if (!options?.keepSelection && chosen.length > 0 && !chosen.includes(frameId)) {
+          selectedFrameRef.current = NO_FRAMES;
+          setSelectedFrameIds(NO_FRAMES);
         }
       },
-      selectFrame: (frameId) => {
+      selectFrame: (frameId, options) => {
         selectionGeneration.current++;
         cancelPendingElement();
-        selectedFrameRef.current = frameId;
-        setSelectedFrameId(frameId);
+        const chosen = selectedFrameRef.current;
+        const next = !options?.additive
+          ? [frameId]
+          : chosen.includes(frameId)
+            ? chosen.filter((id) => id !== frameId)
+            : [...chosen, frameId];
+        selectedFrameRef.current = next;
+        setSelectedFrameIds(next);
         setFocusedFrame(frameId);
         setSelection(null);
       },
+      downloadFrames: (frameId, scope, format) =>
+        downloadFrameImagesRef.current(frameId, scope, format),
     }),
     [
       applyStyles,
@@ -814,6 +833,44 @@ export function DesignCanvasTab({
       reportError(reason);
     }
   }, [controller, reportError]);
+  const downloadFrameImages = useCallback(
+    async (frameId: string, scope: DesignDownloadScope, format: DesignImageFormat) => {
+      const current = projectionRef.current?.canvas;
+      if (!current) return;
+      // Canvas order, so pages and archive entries follow the layout.
+      const wanted =
+        scope === "frame"
+          ? [frameId]
+          : scope === "selected"
+            ? selectedFrameRef.current
+            : current.frames.map((frame) => frame.id);
+      const chosen = current.frames.filter((frame) => wanted.includes(frame.id));
+      try {
+        setAnnouncement(
+          `Preparing ${chosen.length === 1 ? "1 frame" : `${chosen.length} frames`} as ${format.toUpperCase()}`,
+        );
+        const fileName = await downloadFrames({
+          scope,
+          frames: chosen,
+          format,
+          canvasName: current.name,
+          deps: {
+            capture: (id) => nodeDesign.capture(environmentId, canvasId, id, "interactive"),
+            save: saveFile,
+          },
+        });
+        setLocalError(null);
+        setAnnouncement(`Downloaded ${fileName}`);
+      } catch (reason) {
+        reportError(reason);
+      }
+    },
+    [canvasId, environmentId, nodeDesign, reportError],
+  );
+  const downloadFrameImagesRef = useRef(downloadFrameImages);
+  useLayoutEffect(() => {
+    downloadFrameImagesRef.current = downloadFrameImages;
+  });
   const restoreDeleted = useCallback(async () => {
     const tombstone = projectionRef.current?.tombstone;
     if (!tombstone) return;
@@ -872,14 +929,14 @@ export function DesignCanvasTab({
         })
       : [];
     if (projection && resolved.length > 0) {
-      let frameSelection = selectedFrameId;
+      let frameSelection = selectedFrameIds;
       let elementSelectionFrame = selection?.frameId;
       for (const { intentId, frameId, name } of resolved) {
         const intent = projection.intents.find((candidate) => candidate.id === intentId);
         if (intent?.outcome !== "committed" && intent !== undefined) continue;
-        if (frameSelection === frameId) {
-          frameSelection = null;
-          setSelectedFrameId(null);
+        if (frameSelection.includes(frameId)) {
+          frameSelection = frameSelection.filter((id) => id !== frameId);
+          setSelectedFrameIds(frameSelection);
         }
         if (elementSelectionFrame === frameId) {
           elementSelectionFrame = undefined;
@@ -915,7 +972,11 @@ export function DesignCanvasTab({
       if (!inside || editing || modifier) return;
       if (event.key === "Escape") {
         if (mode === "preview") setMode("inspect");
-        else if (selectionRef.current || selectedFrameRef.current || pendingElement.current) {
+        else if (
+          selectionRef.current ||
+          selectedFrameRef.current.length > 0 ||
+          pendingElement.current
+        ) {
           const pendingLayer = pendingElement.current !== null;
           actions.select(null);
           if (pendingLayer && narrow) {
@@ -933,9 +994,14 @@ export function DesignCanvasTab({
         event.preventDefault();
       } else if (event.key === "Delete" || event.key === "Backspace") {
         const current = projectionRef.current;
-        const target = selectedFrameRef.current
-          ? current?.canvas?.frames.find((frame) => frame.id === selectedFrameRef.current)
-          : undefined;
+        // Delete removes one board at a time: several selected frames are a
+        // download selection, and one delete per frame would race on the
+        // canvas revision.
+        const chosen = selectedFrameRef.current;
+        const target =
+          chosen.length === 1
+            ? current?.canvas?.frames.find((frame) => frame.id === chosen[0])
+            : undefined;
         if (
           !target ||
           selectionRef.current ||
@@ -1336,7 +1402,9 @@ export function DesignCanvasTab({
                       failure={failureForLane(projection?.intents ?? [], frame.id)}
                       canRestorePrevious
                       focused={focusedFrame === frame.id}
-                      frameSelected={selectedFrameId === frame.id}
+                      frameSelected={selectedFrameIds.includes(frame.id)}
+                      selectedFrameCount={selectedFrameIds.length}
+                      frameCount={canvas?.frames.length ?? 0}
                     />
                   );
                 })}

@@ -468,7 +468,7 @@ describe("AgentMailBanner", () => {
       ...[1, 2].map((index) => ({
         ...message("pending-inject"),
         id: `rider-${index}`,
-        rideAlong: true,
+        rideAlong: true as const,
       })),
     );
     snapshot.total = 3;
@@ -496,7 +496,7 @@ describe("AgentMailBanner", () => {
       const riders = Array.from({ length: 120 }, (_, index) => ({
         ...message("pending-inject"),
         id: `rider-${index}`,
-        rideAlong: true,
+        rideAlong: true as const,
         createdAt: new Date((120 - index) * 60_000).toISOString(),
       }));
       const report = {

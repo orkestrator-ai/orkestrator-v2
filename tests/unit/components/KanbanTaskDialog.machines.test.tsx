@@ -96,8 +96,8 @@ function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
 /** Opens the launcher, picks Builder, waits for its Docker answer, starts in a container. */
 async function launchOnBuilder() {
   fireEvent.click(screen.getByRole("button", { name: "Build…" }));
-  const machines = screen.getByRole("radiogroup", { name: "Machine" });
-  fireEvent.click(within(machines).getByRole("radio", { name: /Builder/ }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Machine" }));
+  fireEvent.click(await screen.findByRole("option", { name: /Builder/ }));
   const container = () =>
     within(screen.getByRole("radiogroup", { name: "Where it runs" })).getByRole("radio", {
       name: /^Container/,
@@ -243,7 +243,7 @@ describe("KanbanTaskDialog machine choice", () => {
     const task = makeTask();
     renderInAppCommandScope(<KanbanTaskDialog task={task} open onOpenChange={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Build…" }));
-    expect(screen.getByRole("radiogroup", { name: "Machine" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Machine" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start build" }));
 
     await waitFor(() => expect(startBuildMock).toHaveBeenCalled());

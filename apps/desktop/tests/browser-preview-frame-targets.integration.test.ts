@@ -8,6 +8,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { chromium, type Browser, type CDPSession, type Page } from "playwright";
 import { WEB_ANNOTATION_MAX_FRAME_DEPTH } from "@orkestrator/protocol/web-annotations";
 import { isWebAnnotationTarget } from "@orkestrator/protocol/web-annotations-validation";
@@ -98,6 +99,29 @@ function topRect(page: Page, path: string[], id: string): Promise<Rect> {
   })()`);
 }
 
+// Anchored to this file, not the working directory: the workspace suite runs
+// from apps/desktop, a focused run from the repository root.
+const REPO_ROOT = resolve(import.meta.dir, "../../..");
+const PREVIEWS = resolve(REPO_ROOT, "output/visual-previews");
+
+/**
+ * Read `probe` until `done` accepts its value. A check that a pin went away
+ * waits for the redraw that removes it rather than for a fixed delay, which
+ * a loaded host does not guarantee is long enough.
+ */
+async function until<T>(
+  probe: () => Promise<T>,
+  done: (value: T) => boolean,
+  timeoutMs = 5_000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await probe();
+    if (done(value) || Date.now() >= deadline) return value;
+    await new Promise((settle) => setTimeout(settle, 20));
+  }
+}
+
 function expectNear(actual: Rect, expected: Rect): void {
   for (const key of ["x", "y", "width", "height"] as const) {
     expect(Math.abs(actual[key] - expected[key])).toBeLessThanOrEqual(1);
@@ -153,17 +177,24 @@ class IsolatedPage {
     const y = rect.y + rect.height / 2;
     await this.page.mouse.move(x, y, { steps: 3 });
     await this.page.mouse.click(x, y);
-    await this.page.waitForTimeout(30);
   }
 
-  /** The selection as Electron main accepts it, through the same parser. */
+  /**
+   * The selection as Electron main accepts it, through the same parser. The
+   * click's handler runs after `mouse.click` resolves, so the status is read
+   * until the capture leaves `selecting` rather than after a fixed delay.
+   */
   async selected(captureId: string, cancel = true): Promise<Json> {
-    const encoded = await this.run(BROWSER_PREVIEW_CAPTURE_STATUS_SCRIPT);
-    const parsed = parseCaptureRuntimeStatus(encoded, {
-      captureId,
-      nonce: "nonce-1",
-      mode: "element",
-    });
+    const read = async () => {
+      const encoded = await this.run(BROWSER_PREVIEW_CAPTURE_STATUS_SCRIPT);
+      const parsed = parseCaptureRuntimeStatus(encoded, {
+        captureId,
+        nonce: "nonce-1",
+        mode: "element",
+      });
+      return { encoded, parsed };
+    };
+    const { encoded, parsed } = await until(read, ({ parsed }) => parsed.kind === "selected");
     if (parsed.kind !== "selected") throw new Error(`not selected: ${encoded}`);
     if (cancel) await this.run(BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT);
     return parsed.selection as Json;
@@ -459,8 +490,11 @@ describe.skipIf(!CHROMIUM)("element targets inside iframes, in Chromium", () => 
           (document.getElementById("editor") as HTMLIFrameElement).contentWindow!.scrollTo(x, y),
         { x, y },
       );
-      await isolated.page.waitForTimeout(80);
-      expect((await isolated.pinSnapshot()).rect).toBeNull();
+      const clipped = await until(
+        async () => (await isolated.pinSnapshot()).rect,
+        (rect) => rect === null,
+      );
+      expect(clipped).toBeNull();
       await isolated.page.evaluate(() =>
         (document.getElementById("editor") as HTMLIFrameElement).contentWindow!.scrollTo(480, 480),
       );
@@ -494,8 +528,7 @@ describe.skipIf(!CHROMIUM)("element targets inside iframes, in Chromium", () => 
         },
         { left, top },
       );
-      await isolated.page.waitForTimeout(80);
-      expect(await display()).toBe("none");
+      expect(await until(display, (value) => value === "none")).toBe("none");
     }
     await isolated.page.evaluate(() => {
       const doc = (document.getElementById("editor") as HTMLIFrameElement).contentDocument!;
@@ -532,13 +565,13 @@ describe.skipIf(!CHROMIUM)("element targets inside iframes, in Chromium", () => 
       (await isolated.pinSnapshot()).rect,
       await topRect(isolated.page, ["editor"], "save"),
     );
-    mkdirSync("output/visual-previews", { recursive: true });
+    mkdirSync(PREVIEWS, { recursive: true });
     await isolated.page.screenshot({
-      path: "output/visual-previews/frame-pin-visible-desktop.png",
+      path: resolve(PREVIEWS, "frame-pin-visible-desktop.png"),
     });
-    const font = readFileSync("apps/web/src/assets/fonts/FiraCodeNerdFont-Regular.woff2").toString(
-      "base64",
-    );
+    const font = readFileSync(
+      resolve(REPO_ROOT, "apps/web/src/assets/fonts/FiraCodeNerdFont-Regular.woff2"),
+    ).toString("base64");
     await isolated.page.evaluate(async (font) => {
       const doc = (document.getElementById("editor") as HTMLIFrameElement).contentDocument!;
       const button = doc.getElementById("save")!;
@@ -554,14 +587,14 @@ describe.skipIf(!CHROMIUM)("element targets inside iframes, in Chromium", () => 
       await topRect(isolated.page, ["editor"], "save"),
     );
     await isolated.page.setViewportSize({ width: 600, height: 700 });
-    await isolated.page.screenshot({ path: "output/visual-previews/frame-pin-visible-narrow.png" });
+    await isolated.page.screenshot({ path: resolve(PREVIEWS, "frame-pin-visible-narrow.png") });
     await isolated.page.evaluate(() => {
       const doc = (document.getElementById("editor") as HTMLIFrameElement).contentDocument!;
       doc.getElementById("save")!.style.top = "-500px";
       doc.dispatchEvent(new Event("scroll"));
     });
     await isolated.page.waitForTimeout(80);
-    await isolated.page.screenshot({ path: "output/visual-previews/frame-pin-clipped-narrow.png" });
+    await isolated.page.screenshot({ path: resolve(PREVIEWS, "frame-pin-clipped-narrow.png") });
     await isolated.page.setViewportSize({ width: 1000, height: 700 });
     await isolated.run(BROWSER_PREVIEW_PINS_CLEAR_SCRIPT);
   });

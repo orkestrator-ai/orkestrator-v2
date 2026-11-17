@@ -2,9 +2,10 @@
 
 - **ID:** 9967
 - **Status:** open
-- **Date observed:** 2026-11-16
+- **Date observed:** 2026-11-16; recurred 2026-11-17
 - **Test:** `automatic switching on the pinned codex > a planning turn stays a planning turn when it is resent`;
-  `automatic switching on the pinned codex > two reviewers on one bridge each continue once, still read-only`
+  `automatic switching on the pinned codex > two reviewers on one bridge each continue once, still read-only`;
+  `automatic switching on the pinned codex > another limit moves nothing and resends nothing`
 - **File:** `apps/backend/tests/account-switch-codex-live.test.ts` (scenarios in
   `apps/backend/tests/account-switch-resend-suite.ts:70`, runner
   `apps/backend/tests/account-switch-resend-runner.ts:89`)
@@ -32,6 +33,32 @@ times out with `Timed out waiting for both reviewers' resends: []`.
 The aggregate runner then reran `account-switch-codex-live.test.ts` alone on
 the same runner and it passed both times (62.1 s and 63.9 s), so it is
 classified as a load flake.
+
+### Recurrence: 2026-11-17, the bridge could not bind its port
+
+- CI pull-request run 44066977649 (#2370, `73e0ff7a9`, base `20824e14b`),
+  job "Tests (backend)" 133983063644:
+  `automatic switching on the pinned codex > another limit moves nothing and
+  resends nothing` failed after 21,629.01 ms; 22,311 passed, 3 failed (the
+  other two were the Multi Review `stepRuntimes.fix` assertions fixed on
+  branch `fix-ci-failures-1ff35fad9dfc-r1`). Rerun alone on the same runner,
+  `account-switch-codex-live.test.ts` passed in 51.2 s.
+  `mise run flaky:recurrence -- 9967 --base 20824e14b` answered "open. Record
+  the failure as a recurrence".
+- This time the bridge did print: `error: Failed to start server. Is port
+  37729 in use?`, then `codex server exited before becoming healthy (code 1)`
+  from `start_local_codex_server_cmd` after 8.6 s. So in this recurrence the
+  bridge never bound its port, which answers the open question above for at
+  least one failure.
+- Evidence-backed hypothesis for this failure: `allocateLocalPort()`
+  (`apps/backend/src/core/commands-servers.ts`) binds port 0, reads the
+  port, closes the listener and only then spawns the bridge on it. Another
+  process on the host (a parallel test worker's server) can take the port in
+  that gap. The same time-of-check race was fixed in the OpenCode 2 live tests
+  (case 9974) with an OS-chosen port and `retryOnAddressInUse`. A user starting
+  several local servers at once could hit it too, so the fix belongs in the
+  product: retry the bridge start once on a fresh port when it exits with the
+  port-in-use line, before the health wait.
 
 ## Investigation so far
 

@@ -70,6 +70,8 @@ export function createAgentMailApi(client: BackendClient) {
       environmentId,
       tabId,
       unreadOnly,
+      // Banner counts and previews need every message, including older held
+      // reports behind a default page of awareness notices.
       limit: AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX,
     });
   }

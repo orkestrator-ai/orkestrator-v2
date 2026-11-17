@@ -448,6 +448,99 @@ describe("AgentMailBanner", () => {
     expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
   });
 
+  test("counts and previews use one mailbox snapshot while a newer summary is hydrating", () => {
+    install("pending-inject", { policy: "idle" });
+    const state = appCommandStore(agentMailStore).getState();
+    const snapshot = state.mailboxes.get(mailboxId)!;
+    snapshot.messages[0] = { ...snapshot.messages[0]!, rideAlong: true };
+    state.summary.get(mailboxId)!.pendingInjectCount = 120;
+    state.summary.get(mailboxId)!.failedInjectCount = 1;
+    state.summary.get(mailboxId)!.revision = snapshot.revision + 1;
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    expect(screen.queryByRole("region", { name: "Agent mail" }) === null).toBe(true);
+  });
+
+  test("one ordinary pending message and two riders count as one waiting message", async () => {
+    install("pending-inject", { policy: "idle" });
+    const state = appCommandStore(agentMailStore).getState();
+    const snapshot = state.mailboxes.get(mailboxId)!;
+    snapshot.messages.push(
+      ...[1, 2].map((index) => ({
+        ...message("pending-inject"),
+        id: `rider-${index}`,
+        rideAlong: true,
+      })),
+    );
+    snapshot.total = 3;
+    state.summary.get(mailboxId)!.pendingInjectCount = 3;
+    const deliver = spyOn(backend, "deliverAgentMailNow").mockResolvedValue({
+      ...message("injected"),
+      body: "hello",
+    });
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    expect(screen.getByText("1 message waiting · delivers when this agent is idle")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
+    await waitFor(() =>
+      expect(deliver).toHaveBeenCalledWith("env-1", "tab-1", "message-pending-inject"),
+    );
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([false, true])(
+    "rehydrates 120 riders from a default page before showing a card (older report: %s)",
+    async (withReport) => {
+      install("pending-inject", { policy: "idle" });
+      const store = appCommandStore(agentMailStore);
+      const state = store.getState();
+      const snapshot = state.mailboxes.get(mailboxId)!;
+      const riders = Array.from({ length: 120 }, (_, index) => ({
+        ...message("pending-inject"),
+        id: `rider-${index}`,
+        rideAlong: true,
+        createdAt: new Date((120 - index) * 60_000).toISOString(),
+      }));
+      const report = {
+        ...message("inject-held", COORDINATOR_DELEGATION_HOLD_REASON),
+        subject: "Older worker report",
+      };
+      const complete = {
+        ...snapshot,
+        messages: withReport ? [...riders, report] : riders,
+        total: withReport ? 121 : 120,
+        limit: 200,
+      };
+      snapshot.messages = riders.slice(0, 100);
+      snapshot.total = complete.total;
+      state.summary.get(mailboxId)!.pendingInjectCount = complete.total;
+      let finish!: () => void;
+      const refreshMailbox = mock(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = () => {
+              store.getState().setMailbox(complete);
+              resolve();
+            };
+          }),
+      );
+      store.setState({ refreshMailbox });
+      renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+      expect(screen.queryByRole("region", { name: "Agent mail" }) === null).toBe(true);
+      expect(refreshMailbox).toHaveBeenCalledWith("env-1", "tab-1");
+      finish();
+      await waitFor(() => expect(store.getState().mailboxes.get(mailboxId)).toBe(complete));
+      if (withReport) {
+        await waitFor(() => expect(screen.getByText("Older worker report")).toBeTruthy());
+        expect(
+          screen.getByText("Worker report waiting · delivers when the worker turn ends"),
+        ).toBeTruthy();
+      } else {
+        expect(screen.queryByRole("region", { name: "Agent mail" }) === null).toBe(true);
+      }
+      expect(screen.queryByText(/20 messages waiting/) === null).toBe(true);
+      expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
+    },
+  );
+
   test("rehydrates its authoritative summary even when cached state has a revision", async () => {
     install("stored", { policy: "off" });
     const refreshSummary = mock(async () => undefined);

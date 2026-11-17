@@ -89,6 +89,90 @@ for (const failure of ["collect", "deliver", "ack"])
   });
 
 describe("collectFrom", () => {
+  test.each([false, true])(
+    "a joined caller waits for the final pass (worker still failing: %s) and can retry later",
+    async (stillFailing) => {
+      const firstRead = Promise.withResolvers<void>();
+      const releaseFirst = Promise.withResolvers<void>();
+      const finalRead = Promise.withResolvers<void>();
+      const releaseFinal = Promise.withResolvers<void>();
+      let reads = 0;
+      let workerFails = true;
+      // Two tabs in the same environment must have independent outcomes.
+      let pending = [item(1), { ...item(2), fromTabId: "unrelated-tab" }];
+      const collector = new NodeMailCollector({
+        retryDelayMs: 60_000,
+        selfId: async () => "bk_cmd" as never,
+        nodeName: async () => "Leaf",
+        link: () => ({
+          connected: true,
+          invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
+            if (command === "collect_node_outbox") {
+              reads++;
+              if (reads === 1) {
+                firstRead.resolve();
+                await releaseFirst.promise;
+              } else if (reads === 2) {
+                finalRead.resolve();
+                await releaseFinal.promise;
+                workerFails = stillFailing;
+              }
+              return { items: pending, more: false } as T;
+            }
+            const sequences = args.sequences as number[];
+            pending = pending.filter((entry) => !sequences.includes(entry.seq));
+            return {} as T;
+          },
+        }),
+        deliver: async ({ from }) => {
+          if (from.tabId === "unrelated-tab" || workerFails) throw new Error("mailbox full");
+        },
+      });
+      try {
+        const background = collector.collect("bk_leaf" as never);
+        await firstRead.promise;
+        let settled = false;
+        const joined = collector
+          .collectFrom("bk_leaf" as never, {
+            environmentId: "e",
+            tabId: "t",
+          })
+          .then((result) => {
+            settled = true;
+            return result;
+          });
+        releaseFirst.resolve();
+        await finalRead.promise;
+        expect(settled).toBe(false);
+        expect(reads).toBe(2);
+        releaseFinal.resolve();
+        expect(await joined).toBe(!stillFailing);
+        // collect retains the earlier failure, while collectFrom uses the final pass.
+        expect(await background).toBe(false);
+        expect(pending.map((entry) => entry.seq)).toEqual(stillFailing ? [1, 2] : [2]);
+
+        workerFails = false;
+        expect(
+          await collector.collectFrom("bk_leaf" as never, {
+            environmentId: "e",
+            tabId: "t",
+          }),
+        ).toBe(true);
+        expect(pending.map((entry) => entry.seq)).toEqual([2]);
+        expect(
+          await collector.collectFrom("bk_leaf" as never, {
+            environmentId: "e",
+            tabId: "unrelated-tab",
+          }),
+        ).toBe(false);
+      } finally {
+        releaseFirst.resolve();
+        releaseFinal.resolve();
+        collector.dispose();
+      }
+    },
+  );
+
   const from = (seq: number, environmentId: string): OutboxItem => ({
     ...item(seq),
     fromEnvironmentId: environmentId,

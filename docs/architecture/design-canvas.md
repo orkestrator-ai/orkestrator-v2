@@ -376,7 +376,9 @@ and network stay blocked; Escape inside the frame returns to Inspect.
 Pointer gestures (`design-canvas-gestures.tsx`, geometry in
 `design-snapping.ts`): the background dots sit on a canvas-space grid whose
 step is a multiple of the 10 px snap pitch (never denser than 12 screen px),
-and grid lines show while a frame is held. Dragging a frame title snaps the
+and grid lines show while a frame is held (both read the theme's
+`--color-muted-foreground`; the dots used an undefined `--muted-foreground`
+before and never showed). Dragging a frame title snaps the
 frame's corner to that grid; an edge within 6 screen px of another frame's
 edge (top/bottom on one axis, left/right on the other) snaps to it instead and
 draws a red guide running between the two frames, two guides when a

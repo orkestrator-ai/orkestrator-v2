@@ -70,7 +70,10 @@ interface MarqueeGesture {
 const NO_OFFSET = { dx: 0, dy: 0 };
 /** The smallest frame side `clampDimension` allows. */
 const MIN_FRAME_SIZE = 32;
-const GRID_LINE_COLOR = "color-mix(in oklab, var(--muted-foreground) 22%, transparent)";
+// The theme's token is `--color-muted-foreground` (Tailwind v4); `--muted-foreground`
+// is not defined, which is why the canvas dots never showed before.
+const GRID_LINE_COLOR = "color-mix(in srgb, var(--color-muted-foreground) 20%, transparent)";
+const GRID_DOT_COLOR = "color-mix(in srgb, var(--color-muted-foreground) 55%, transparent)";
 
 function sameIds(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((id, index) => id === b[index]);
@@ -321,7 +324,7 @@ export function useDesignCanvasGestures(deps: DesignCanvasGestureDeps) {
 export function gridBackground(viewport: DesignViewport) {
   const cell = gridStep(viewport.zoom) * viewport.zoom;
   return {
-    backgroundImage: "radial-gradient(var(--muted-foreground) .6px, transparent .6px)",
+    backgroundImage: `radial-gradient(${GRID_DOT_COLOR} 0.8px, transparent 0.8px)`,
     backgroundSize: `${cell}px ${cell}px`,
     // A radial gradient centres in its cell; shift by half a cell onto the grid points.
     backgroundPosition: `${viewport.panX - cell / 2}px ${viewport.panY - cell / 2}px`,
@@ -345,9 +348,9 @@ export function DesignSnapGrid({ viewport }: { viewport: DesignViewport }) {
   );
 }
 
-/** Red alignment guides in canvas coordinates; one screen pixel thick at any zoom. */
+/** Red alignment guides in canvas coordinates; 1.5 screen pixels thick at any zoom. */
 export function DesignSnapGuides({ guides, zoom }: { guides: readonly SnapGuide[]; zoom: number }) {
-  const thickness = 1 / zoom;
+  const thickness = 1.5 / zoom;
   return guides.map((guide) => (
     <div
       key={`${guide.axis}:${guide.position}:${guide.start}:${guide.end}`}

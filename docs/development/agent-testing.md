@@ -381,7 +381,12 @@ the tab must find the CLI's transcript and show its error ("Not logged in ·
 Please run /login", the CLI's wording for a 401). It then submits one more
 prompt and records, for up to 120 s, whether it reaches the model and the tab
 settles (the gap 8092 (retired) recorded for the container CLI, now settled
-from the CLI's notice; see [container-lifecycle.md](../architecture/container-lifecycle.md#turns-no-hook-ends)). It writes
+from the CLI's notice; see [container-lifecycle.md](../architecture/container-lifecycle.md#turns-no-hook-ends)).
+A claude-tmux tab has no such settle and needs none with the pinned CLI,
+which fires `StopFailure` for a prompt it refuses locally; the offline
+`apps/backend/tests/claude-tmux-local-refusal-live.test.ts` checks that
+against the bundled pinned CLI (to-do 8094, retired;
+[claude-tmux tabs and a refused prompt](../architecture/container-lifecycle.md#claude-tmux-tabs-and-a-refused-prompt)). It writes
 `output/agent-testing/<run>/failed-turn-bell/claude-tmux.json` and
 `output/visual-previews/5160-bell-claude-tmux-*.png`.
 

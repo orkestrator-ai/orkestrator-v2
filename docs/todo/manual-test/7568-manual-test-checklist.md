@@ -46,6 +46,12 @@ now cite it as retired, link the section of `coordinator.md` that describes
 the behaviour, record results under the item and say what an agent builds from
 each result. The old file is in Git history at `c1fcc573b`.
 
+Updated 2026-11-16: 8094 was retired once its one task (whether a claude-tmux
+tab reads working after a prompt the CLI refuses locally) was established on
+the host with the pinned CLI and a fake model: it does not, because the CLI
+fires `StopFailure`. Its live container run came in under Containers and
+environments.
+
 Updated 2026-11-16: 8092 was retired once its one task (settling a container
 Claude CLI prompt the CLI refuses locally, and a turn whose last terminal
 closed) was built; its live spec run came in under Containers and
@@ -105,7 +111,7 @@ its run on omarchy-hp came in under Cross-cutting.
 
 ### Tasks
 
-1. **Manual tests and live checks** (363 items): run each check under
+1. **Manual tests and live checks** (364 items): run each check under
 
 
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
@@ -286,14 +292,14 @@ agent can apply it.
 | --- | --- | --- |
 | Agent engines and provider SDKs | 71 | 3 |
 | CLI and slash commands | 6 | 0 |
-| Containers and environments | 33 | 6 |
+| Containers and environments | 34 | 6 |
 | Coordinator and Multi Review | 87 | 3 |
 | Cross-cutting | 102 | 9 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 18 | 1 |
 | Transcripts, observation and bandwidth | 31 | 2 |
-| **Total** | 363 | 25 |
+| **Total** | 364 | 25 |
 
 
 
@@ -552,6 +558,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[7549](../containers-and-environments/7549-rootless-docker-cp-refusals.md) task 2: the GitHub ranges seed bind on Docker Desktop.** (Background: [GitHub ranges seed directory bind on beelink](../../development/container-qualification.md#github-ranges-seed-directory-bind-on-beelink-2026-11-15); it passed on rootful and rootless Linux Engine.) Needs a Mac with Docker Desktop, which agents may not use: the seed directory is bound from the data directory, whose macOS path (`~/Library/Application Support/...`) has a space and goes through Desktop's file sharing. From a checkout of this repository, with any current environment image, run `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-github-seed.test.ts --parallel=1` (it makes one anonymous request to `api.github.com/meta` unless `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED` names a seed file). Expect 1 pass. Record: the Desktop version, architecture and the pass/fail count, as a dated line in that section of [container qualification](../../development/container-qualification.md) or a reply to the coordinator.
 - [ ] **8093 (retired) task 1 and 8101 (retired) task 1: a crashed backend's servers are reaped under `systemd --user`.** (Background: the reaper's rule in the header of `apps/backend/src/core/local-server-reaper.ts`; a real-process test, `local-server-reaper-subreaper.integration.test.ts`, passes with a stand-in subreaper, backend and bridge, but no run has yet killed a real backend on a desktop session.) On a Linux desktop logged in through a systemd user session (beelink or beelink2), start a throwaway profile, `mise run dev:test --profile reaper-subreaper-qa --fixture --headless` (left running in its own terminal), and in its fixture project start a local OpenCode environment and a local Codex (or Claude) environment, each with one tab open; let the OpenCode one stay idle (no turn). Note the two server PIDs (`ps -o pid,ppid,args` filtered to the profile's toolchain and `bridges/*/dist/index.js`). SIGKILL only that profile's backend, by the PID its `dev:status --json` liveness block names, then `mise run dev:stop` and start the same profile again. Check with `ps -o pid,ppid,args -p <pid>` that both old PIDs are gone, and that the backend log under the profile's `logDir` has `reaper.server-reaping` with `adoptedBySubreaper` true for any server still alive at startup. Finish with `dev:stop` and `dev:reset`. Record: for each server, whether it was gone, its parent before the restart (`systemd --user` or PID 1), and the reaper log line, in a reply to the coordinator; a survivor whose parent was `systemd --user` or PID 1 opens a new to-do (one under any other live parent is left alone by design: the reaper treats only `systemd` as positive evidence of adoption).
 - [ ] **8092 (retired) task 1: a container Claude CLI prompt refused after a refused login settles and rings.** (Background: [Turns no hook ends](../../architecture/container-lifecycle.md#turns-no-hook-ends).) On beelink, start `mise run docker:disposable -- start --host-loopback`, build a dev image of current `main` with `mise run docker:build:dev` against its `DOCKER_HOST`, start a `dev:test` profile with `--fixture-environments local,container --no-agent-credentials --no-host-seed --agent-platforms claude` on that daemon, and run `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_DOCKER=1 ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1 ORKESTRATOR_AGENT_TEST_CLAUDE_TERMINAL_FAILED_TURN=1 mise run test:agent:docker` (`container-claude-terminal-signal.spec.ts`; fake Messages API, nothing billed). The follow-up prompt in the fixture’s fresh signed-out CLI (settings token removed and StopFailure omitted to qualify recovery; same container) must answer "Not logged in" and now read idle in the backend and the sidebar within its 15 s and ring `agent_failed`; the spec asserts it. Then run the spec a second time on the same container without resetting the profile: the environment must not read working before its first turn. Then `dev:stop` and `dev:reset` the profile and stop the disposable daemon. Record: pass or fail of both runs, the follow-up prompt's `followingTurn`, `followingTurnBackendState` and `followingTurnUnreadReason` from the spec's report, and any `terminal-claude.settled` or `terminal-claude.settle-failed` lines in the profile's backend log.
+- [ ] **8094 (retired) task 1: a container claude-tmux tab leaves working after a refused prompt.** (Background: [claude-tmux tabs and a refused prompt](../../architecture/container-lifecycle.md#claude-tmux-tabs-and-a-refused-prompt).) Agents established on the host on 2026-11-16 that the pinned CLI (2.1.319, the image's pin too) fires `StopFailure` for a prompt it refuses locally, so a claude-tmux tab settles through its own hooks; no container claude-tmux tab was run. On beelink, start `mise run docker:disposable -- start --host-loopback`, build a dev image of current `main` with `mise run docker:build:dev` against its `DOCKER_HOST`, and start a `dev:test` profile with `--fixture-environments local,container --no-agent-credentials --no-host-seed --agent-platforms claude` on that daemon. In the fixture container, make sure `~/.claude/settings.json` has no `ANTHROPIC_AUTH_TOKEN` and the CLI has no login (nothing is billed: the CLI refuses the prompt without a model request), open a claude-tmux tab, submit a prompt, switch to another environment and wait 15 s. The prompt must answer "Not logged in · Please run /login", and the backend and the sidebar must read idle (not working) with the environment ringing `agent_failed`. Then `dev:stop` and `dev:reset` the profile and stop the disposable daemon. Record: pass or fail, the backend activity state and unread reason 15 s after the prompt, and whether the tab's info events list a `StopFailure`.
 
 - [ ] **8172 (retired) task 1: a container Claude Multi Review when the agent tools port is unreachable.** (Background: [Agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts), the paragraph on structured-output turns.) On a Linux host whose firewall drops the profile's agent tools port from containers (beelink's ufw without the 7080 task 1 rule, or a profile started so containers cannot reach it), start an isolated profile with a container fixture and the fake Claude review API, no credentials and no host seed (`--fixture --fixture-environments local,container --no-host-seed --no-agent-credentials`). On both the bespoke and graph engines, start a Claude Multi Review in the container environment, once on the default tool transport and once on structured output (global config `workflowResultTools.enabled` set to `false`).
   1. Each review fails at its first stage before any turn: the error names the agent tools URL and the fix, the transcript shows no prompt, and the tab offers "Retry failed stage" and "Abandon".

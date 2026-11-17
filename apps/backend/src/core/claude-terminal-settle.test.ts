@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { PINNED_TOOLCHAIN_VERSIONS } from "@orkestrator/toolchain/manifest";
+import { join } from "node:path";
+import { bundledPinnedClaudeCli } from "../../tests/bundled-claude-cli.js";
 import {
   CLAUDE_SIGN_IN_NOTICES,
   CLAUDE_SIGN_IN_NOTICE_QUIET_MS,
@@ -239,29 +238,6 @@ describe.skipIf(!hasFlock)("the settle script against the hook's own files", () 
   });
 });
 
-/**
- * The notices are the CLI's own fixed text. Read them out of the CLI binary
- * the Claude bridge's Agent SDK bundles when it is the pinned build, so a CLI
- * bump that rewords them fails here instead of silently disabling the settle.
- */
-function bundledPinnedCli(): string | undefined {
-  try {
-    const bridge = createRequire(
-      join(import.meta.dir, "../../../../bridges/claude-bridge/package.json"),
-    );
-    const sdkManifest = bridge.resolve("@anthropic-ai/claude-agent-sdk/package.json");
-    const sdk = JSON.parse(readFileSync(sdkManifest, "utf8")) as { claudeCodeVersion?: string };
-    if (sdk.claudeCodeVersion !== PINNED_TOOLCHAIN_VERSIONS.claude) return undefined;
-    const platform = createRequire(sdkManifest).resolve(
-      `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/package.json`,
-    );
-    const binary = join(dirname(platform), process.platform === "win32" ? "claude.exe" : "claude");
-    return existsSync(binary) ? binary : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Streams the file so a 300 MB binary is never held whole; a match may span chunks. */
 async function fileContainsAny(path: string, needles: Buffer[]): Promise<boolean[]> {
   const found = needles.map(() => false);
@@ -278,7 +254,12 @@ async function fileContainsAny(path: string, needles: Buffer[]): Promise<boolean
   return found;
 }
 
-const pinnedCli = bundledPinnedCli();
+/**
+ * The notices are the CLI's own fixed text. Read them out of the CLI binary
+ * the Claude bridge's Agent SDK bundles when it is the pinned build, so a CLI
+ * bump that rewords them fails here instead of silently disabling the settle.
+ */
+const pinnedCli = bundledPinnedClaudeCli();
 
 test.skipIf(!pinnedCli)("the pinned CLI still prints both sign-in notices", async () => {
   // The bundle keeps its JavaScript source; the middle dot is written escaped.

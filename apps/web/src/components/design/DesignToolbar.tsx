@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactElement, type Ref } from "react";
+import { cloneElement, useId, useRef, useState, type ReactElement, type Ref } from "react";
 import {
   Download,
   Eye,
@@ -71,8 +71,9 @@ export interface DesignToolbarProps {
 /**
  * The design toolbar's hover tooltip: the app's shared tooltip (same delay and
  * look as every other toolbar), opened by hover or keyboard focus. The trigger
- * is a wrapper rather than the button itself because a disabled button takes
- * no pointer events, and a disabled tool still says what it is.
+ * is a wrapper so disabled buttons still explain themselves on hover. A stable
+ * description on the button reaches keyboard users without replacing the button
+ * when it becomes disabled (dialogs must be able to restore focus to it).
  */
 function ToolbarTooltip({
   label,
@@ -83,15 +84,21 @@ function ToolbarTooltip({
   label: string;
   shortcut?: string;
   className?: string;
-  children: ReactElement;
+  children: ReactElement<{ "aria-describedby"?: string }>;
 }) {
+  const descriptionId = useId();
+  const describedBy = [children.props["aria-describedby"], descriptionId].filter(Boolean).join(" ");
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <span className={cn("inline-flex", className)} data-design-tooltip-trigger="">
-          {children}
+          {cloneElement(children, { "aria-describedby": describedBy })}
         </span>
       </TooltipTrigger>
+      <span id={descriptionId} className="sr-only">
+        {label}
+        {shortcut ? ` ${shortcut}` : ""}
+      </span>
       <TooltipContent side="bottom" sideOffset={4}>
         {label}
         {shortcut && <span className="ml-2 text-muted-foreground">{shortcut}</span>}

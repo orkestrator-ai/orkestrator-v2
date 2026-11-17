@@ -421,9 +421,10 @@ download selection, and one delete per frame would race on the canvas
 revision. Pressing Delete with several frames selected announces that a single
 selection is required. Removed frames leave the selection when a current
 authoritative snapshot arrives; loading or stale snapshots keep the selection.
-Every selected frame shows a download button at its top right, in
-the selection blue (`DesignFrameDownloadMenu.tsx`). Its menu offers **This
-frame** as PNG, WEBP or PDF; with several frames selected, a separated
+A frame shows a download button at its top right while the frame or an
+element inside it is selected (`DesignFrameDownloadMenu.tsx`): in the
+selection blue when the frame itself is selected, grey when only an element
+inside it is. Its menu offers **This frame** as PNG, WEBP or PDF; with several frames selected, a separated
 **Selected frames** group; and, when the canvas has more than one frame, an
 **All frames** group. A group of several frames saves one PDF with a page per
 frame or a ZIP of PNG or WEBP images, numbered in canvas order.

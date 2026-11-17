@@ -180,7 +180,9 @@ export function clampDimension(value: number): number {
   return Math.max(32, Math.min(4096, Math.round(value)));
 }
 
+export const FRAME_COORDINATE_LIMIT = 100_000;
+
 export function clampCoordinate(value: number): number {
   if (!Number.isFinite(value)) return 0;
-  return Math.max(-100_000, Math.min(100_000, Math.round(value)));
+  return Math.max(-FRAME_COORDINATE_LIMIT, Math.min(FRAME_COORDINATE_LIMIT, Math.round(value)));
 }

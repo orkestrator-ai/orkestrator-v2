@@ -78,6 +78,7 @@ export const DesignFrameView = memo(function DesignFrameView({
   frameSelected = false,
   selectedFrameCount = 0,
   frameCount = 0,
+  dragOffset,
 }: {
   /** Frame with optimistic previews applied. */
   frame: DesignFrame;
@@ -98,6 +99,8 @@ export const DesignFrameView = memo(function DesignFrameView({
   selectedFrameCount?: number;
   /** Committed frames on the canvas; several offer "download all". */
   frameCount?: number;
+  /** Set while another selected frame is dragged: this one moves with it. */
+  dragOffset?: { dx: number; dy: number };
 }) {
   const actions = useDesignCanvasActions();
   // Effects read actions through a ref: the bridge's lifetime must follow the
@@ -125,8 +128,18 @@ export const DesignFrameView = memo(function DesignFrameView({
   const invalid = meta?.validation.state === "invalid";
   /** Set while an additive click focuses the title, so focus keeps the selection. */
   const additiveFocus = useRef(false);
-  /** The click that follows an additive pointerdown was already handled by it. */
-  const additiveClick = useRef(false);
+  /**
+   * The click that follows a title pointerdown was already handled by it. An
+   * additive press always swallows it (a second toggle would undo the first);
+   * a plain one only swallows a pointer click, so a keyboard click (detail 0)
+   * after a press that produced no click still selects.
+   */
+  const pointerClick = useRef<"plain" | "additive" | null>(null);
+  /**
+   * A plain press on a frame that is one of several selected keeps the group
+   * so it can be dragged together; releasing without moving selects only it.
+   */
+  const collapseOnRelease = useRef(false);
 
   useEffect(() => {
     if (!live) setBridge(null);
@@ -179,7 +192,9 @@ export const DesignFrameView = memo(function DesignFrameView({
     [],
   );
 
-  const shown = { ...frame, ...gesture };
+  const shown = dragOffset
+    ? { ...frame, x: frame.x + dragOffset.dx, y: frame.y + dragOffset.dy }
+    : { ...frame, ...gesture };
   const ready = Boolean(bridge) && rendered === contentKey;
 
   const scheduleGesture = () => {
@@ -203,6 +218,7 @@ export const DesignFrameView = memo(function DesignFrameView({
       current: {},
     };
     actions.pin(frame.id, true);
+    actions.beginFrameGesture(frame.id, dragMode);
   };
   const moveDrag = (event: PointerEvent<HTMLElement>) => {
     const start = drag.current;
@@ -210,13 +226,18 @@ export const DesignFrameView = memo(function DesignFrameView({
     const dx = (event.clientX - start.startX) / zoom;
     const dy = (event.clientY - start.startY) / zoom;
     // Refs hold the latest sample so pointerup commits it even before a render.
+    // The canvas snaps it to the grid or to the other frames' edges.
+    const snapped = actions.updateFrameGesture(frame.id, { dx, dy }, { free: event.altKey });
     start.current =
       start.mode === "resize"
         ? {
-            width: clampDimension(start.origin.width + dx),
-            height: clampDimension(start.origin.height + dy),
+            width: clampDimension(snapped.width ?? start.origin.width + dx),
+            height: clampDimension(snapped.height ?? start.origin.height + dy),
           }
-        : { x: clampCoordinate(start.origin.x + dx), y: clampCoordinate(start.origin.y + dy) };
+        : {
+            x: clampCoordinate(snapped.x ?? start.origin.x + dx),
+            y: clampCoordinate(snapped.y ?? start.origin.y + dy),
+          };
     scheduleGesture();
   };
   const settleDrag = (commit: boolean) => {
@@ -224,9 +245,12 @@ export const DesignFrameView = memo(function DesignFrameView({
     drag.current = null;
     cancelAnimationFrame(raf.current);
     raf.current = 0;
+    const collapse = collapseOnRelease.current;
+    collapseOnRelease.current = false;
+    let changed = false;
     if (start && commit) {
       const patch = start.current;
-      const changed =
+      changed =
         start.mode === "resize"
           ? patch.width !== undefined &&
             (patch.width !== start.origin.width || patch.height !== start.origin.height)
@@ -240,7 +264,12 @@ export const DesignFrameView = memo(function DesignFrameView({
         );
     }
     setGesture(null);
-    if (start) actions.pin(frame.id, false);
+    if (start) {
+      actions.endFrameGesture(frame.id, commit && changed, start.gestureId);
+      actions.pin(frame.id, false);
+    }
+    // A press that did not move the group was a plain click on one of them.
+    if (start && commit && !changed && collapse) actions.selectFrame(frame.id);
   };
   /** Abandons an element-resize drag (Escape, cancel, lost capture) and unpins the frame. */
   const cancelElementDrag = () => {
@@ -252,6 +281,8 @@ export const DesignFrameView = memo(function DesignFrameView({
     actions.pin(frame.id, false);
   };
   const onFrameKey = (event: KeyboardEvent<HTMLButtonElement>) => {
+    // Keyboard activation clicks without a pointerdown: let that click select.
+    if (event.key === "Enter" || event.key === " ") pointerClick.current = null;
     if (event.key === "Escape" && drag.current) {
       event.preventDefault();
       settleDrag(false);
@@ -339,19 +370,21 @@ export const DesignFrameView = memo(function DesignFrameView({
           onPointerDown={(event) => {
             if (event.button !== 0) return;
             const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+            // Pressing one of several selected frames keeps the group for a drag.
+            const keepGroup = !additive && frameSelected && selectedFrameCount > 1;
             // WebKit does not focus buttons on click; canvas keys (Delete) need focus inside.
-            additiveFocus.current = additive;
+            additiveFocus.current = additive || keepGroup;
             event.currentTarget.focus({ preventScroll: true });
             additiveFocus.current = false;
-            additiveClick.current = additive;
-            actions.selectFrame(frame.id, { additive });
+            pointerClick.current = additive ? "additive" : "plain";
+            collapseOnRelease.current = keepGroup;
+            if (!keepGroup) actions.selectFrame(frame.id, { additive });
             startDrag(event, "move");
           }}
           onClick={(event) => {
-            if (additiveClick.current) {
-              additiveClick.current = false;
-              return;
-            }
+            const press = pointerClick.current;
+            pointerClick.current = null;
+            if (press === "additive" || (press === "plain" && event.detail > 0)) return;
             actions.selectFrame(frame.id, {
               additive: event.shiftKey || event.metaKey || event.ctrlKey,
             });
@@ -367,7 +400,7 @@ export const DesignFrameView = memo(function DesignFrameView({
           aria-label={`Move frame ${frame.name}`}
           data-frame-title-id={frame.id}
           aria-pressed={frameSelected}
-          aria-description="Shift-click adds to the selection. Arrow keys move, Alt+Arrow keys resize, Shift for larger steps, Delete requires a single selected frame"
+          aria-description="Drag to move: snaps to the grid and to other frames' edges, Alt moves freely, and a selected group moves together. Shift-click adds to the selection. Arrow keys move, Alt+Arrow keys resize, Shift for larger steps, Delete requires a single selected frame"
         >
           {frame.name} · {Math.round(shown.width)} × {Math.round(shown.height)}
           {pending && <span className="ml-1 text-[10px] text-primary">· saving</span>}
@@ -442,6 +475,7 @@ export const DesignFrameView = memo(function DesignFrameView({
           type="button"
           tabIndex={-1}
           aria-label={`Show ${frame.name}`}
+          data-marquee-surface
           className="grid h-full w-full place-content-center bg-white/80 text-center text-xs text-muted-foreground shadow-xl"
           onClick={() => actions.frameAction(frame.id, "fit")}
         >
@@ -461,6 +495,7 @@ export const DesignFrameView = memo(function DesignFrameView({
           type="button"
           aria-label={`Select element in ${frame.name}`}
           tabIndex={-1}
+          data-marquee-surface
           className="absolute inset-0 cursor-crosshair bg-transparent"
           onClick={(event) =>
             hitTest(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect())
@@ -637,6 +672,11 @@ export const DesignFrameView = memo(function DesignFrameView({
           if (drag.current) settleDrag(false);
         }}
         onKeyDown={(event) => {
+          if (event.key === "Escape" && drag.current) {
+            event.preventDefault();
+            settleDrag(false);
+            return;
+          }
           const delta = keyboardDelta(event.key, event.shiftKey);
           if (!delta) return;
           event.preventDefault();

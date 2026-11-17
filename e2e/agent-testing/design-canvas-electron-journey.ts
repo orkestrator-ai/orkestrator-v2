@@ -365,8 +365,11 @@ export async function runDesignCanvasJourney({
     await window.mouse.up();
     await expect.poll(async () => (await geometry())!.x, { timeout: 15_000 }).not.toBe(before.x);
     const after = (await geometry())!;
-    expect(Math.abs(after.x - (before.x + Math.round(120 / zoom)))).toBeLessThanOrEqual(2);
-    expect(Math.abs(after.y - (before.y + Math.round(80 / zoom)))).toBeLessThanOrEqual(2);
+    // A drag snaps the frame's corner to the canvas grid (10 px; the only
+    // frame has no neighbours to align with), so it lands within half a cell.
+    expect(Math.abs(after.x - (before.x + 120 / zoom))).toBeLessThanOrEqual(7);
+    expect(Math.abs(after.y - (before.y + 80 / zoom))).toBeLessThanOrEqual(7);
+    expect([Math.abs(after.x % 10), Math.abs(after.y % 10)]).toEqual([0, 0]);
     expect({ width: after.width, height: after.height }).toEqual({
       width: before.width,
       height: before.height,

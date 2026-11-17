@@ -127,6 +127,28 @@ export const DESIGN_KEYBOARD_SHORTCUTS: readonly KeyboardShortcut[] = [
     other: ["Click a frame title"],
   },
   {
+    id: "design-marquee",
+    description: "Select every frame inside a box (adds to the selection)",
+    mac: ["⇧", "Drag the canvas"],
+    other: ["Shift", "Drag the canvas"],
+    keywords: ["marquee", "box", "multiple", "select"],
+  },
+  {
+    id: "design-drag",
+    description:
+      "Move frames; a selected group moves together and snaps to the grid and other frames",
+    mac: ["Drag a frame title"],
+    other: ["Drag a frame title"],
+    keywords: ["snap", "grid", "guides", "align"],
+  },
+  {
+    id: "design-drag-free",
+    description: "Move or resize a frame without snapping",
+    mac: ["⌥", "Drag"],
+    other: ["Alt", "Drag"],
+    keywords: ["snap", "grid", "precise"],
+  },
+  {
     id: "design-zoom-pointer",
     description: "Zoom at the pointer",
     mac: ["⌘ / Ctrl", "Scroll / Pinch"],

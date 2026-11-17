@@ -543,7 +543,7 @@ describe("DesignCanvasTab", () => {
         await choose();
         await waitFor(() => expect(announcement()).toBe(`Copied A as ${format.toUpperCase()}`));
         expect(download.hasAttribute("disabled")).toBe(false);
-      expect(screen.queryByRole("alert") === null).toBe(true);
+        expect(screen.queryByRole("alert") === null).toBe(true);
         expect(write).toHaveBeenCalledTimes(failure === "clipboard" ? 2 : 1);
       } finally {
         encoder?.mockRestore();

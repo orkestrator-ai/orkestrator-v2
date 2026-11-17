@@ -1,4 +1,4 @@
-import { useRef, useState, type Ref } from "react";
+import { cloneElement, useId, useRef, useState, type ReactElement, type Ref } from "react";
 import {
   BotMessageSquare,
   Download,
@@ -32,6 +32,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import type { DesignProjection } from "@/stores/designStore";
 
 export interface DesignToolbarProps {
@@ -70,6 +72,45 @@ export interface DesignToolbarProps {
   onToggleAgentPanel?: () => void;
 }
 
+/**
+ * The design toolbar's hover tooltip: the app's shared tooltip (same delay and
+ * look as every other toolbar), opened by hover or keyboard focus. The trigger
+ * is a wrapper so disabled buttons still explain themselves on hover. A stable
+ * description on the button reaches keyboard users without replacing the button
+ * when it becomes disabled (dialogs must be able to restore focus to it).
+ */
+function ToolbarTooltip({
+  label,
+  shortcut,
+  className,
+  children,
+}: {
+  label: string;
+  shortcut?: string;
+  className?: string;
+  children: ReactElement<{ "aria-describedby"?: string }>;
+}) {
+  const descriptionId = useId();
+  const describedBy = [children.props["aria-describedby"], descriptionId].filter(Boolean).join(" ");
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className={cn("inline-flex", className)} data-design-tooltip-trigger="">
+          {cloneElement(children, { "aria-describedby": describedBy })}
+        </span>
+      </TooltipTrigger>
+      <span id={descriptionId} className="sr-only">
+        {label}
+        {shortcut ? ` ${shortcut}` : ""}
+      </span>
+      <TooltipContent side="bottom" sideOffset={4}>
+        {label}
+        {shortcut && <span className="ml-2 text-muted-foreground">{shortcut}</span>}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function RenameField({
   name,
   disabled,
@@ -85,19 +126,20 @@ function RenameField({
   const valid = trimmed.length > 0 && trimmed.length <= 120;
   if (!editing)
     return (
-      <button
-        type="button"
-        className="mr-auto min-w-0 truncate rounded-sm px-1 text-left text-sm font-medium hover:bg-muted focus-hairline disabled:hover:bg-transparent"
-        disabled={disabled}
-        title={disabled ? name : "Rename design"}
-        aria-label={`Design name: ${name}. Rename`}
-        onClick={() => {
-          setValue(name);
-          setEditing(true);
-        }}
-      >
-        {name}
-      </button>
+      <ToolbarTooltip label={disabled ? name : "Rename design"} className="mr-auto min-w-0">
+        <button
+          type="button"
+          className="min-w-0 truncate rounded-sm px-1 text-left text-sm font-medium hover:bg-muted focus-hairline disabled:pointer-events-none disabled:hover:bg-transparent"
+          disabled={disabled}
+          aria-label={`Design name: ${name}. Rename`}
+          onClick={() => {
+            setValue(name);
+            setEditing(true);
+          }}
+        >
+          {name}
+        </button>
+      </ToolbarTooltip>
     );
   return (
     <form
@@ -139,12 +181,21 @@ interface DesignTool {
   /** Shown inline instead of the icon. */
   text?: string;
   onSelect: () => void;
-  title?: string;
+  /** The tooltip text; the label when omitted. */
+  tooltip?: string;
+  /** The keyboard shortcut, shown dimmed after the tooltip text. */
+  shortcut?: string;
   disabled?: boolean;
   /** A toggle: aria-pressed inline, a checkbox item in the menu. */
   pressed?: boolean;
   /** Keeps the overflow menu open so the step can be repeated (zoom). */
   repeat?: boolean;
+}
+
+/** A tool's tooltip with its shortcut, for the overflow menu's native title. */
+function toolTitle(tool: DesignTool): string {
+  const text = tool.tooltip ?? tool.label;
+  return tool.shortcut ? `${text} (${tool.shortcut})` : text;
 }
 
 function toolsOf(props: DesignToolbarProps): DesignTool[] {
@@ -154,22 +205,37 @@ function toolsOf(props: DesignToolbarProps): DesignTool[] {
   const busyExport = projection?.busy.export ?? false;
   const preview = props.mode === "preview";
   return [
-    { id: "zoom-out", label: "Zoom out", icon: Minus, onSelect: props.onZoomOut, repeat: true },
+    {
+      id: "zoom-out",
+      label: "Zoom out",
+      icon: Minus,
+      shortcut: "-",
+      onSelect: props.onZoomOut,
+      repeat: true,
+    },
     {
       id: "zoom-100",
       label: `Zoom ${Math.round(props.zoom * 100)}%. Reset to 100%`,
       icon: Percent,
       text: `${Math.round(props.zoom * 100)}%`,
-      title: "Zoom to 100% (Ctrl/⌘+0)",
+      tooltip: "Zoom to 100%",
+      shortcut: "Ctrl/⌘+0",
       onSelect: props.onZoom100,
       repeat: true,
     },
-    { id: "zoom-in", label: "Zoom in", icon: Plus, onSelect: props.onZoomIn, repeat: true },
+    {
+      id: "zoom-in",
+      label: "Zoom in",
+      icon: Plus,
+      shortcut: "+",
+      onSelect: props.onZoomIn,
+      repeat: true,
+    },
     {
       id: "fit-all",
       label: "Fit all frames",
       icon: Maximize,
-      title: "Fit all (Shift+1)",
+      shortcut: "Shift+1",
       onSelect: props.onFitAll,
     },
     {
@@ -177,7 +243,8 @@ function toolsOf(props: DesignToolbarProps): DesignTool[] {
       label: "Zoom to selection",
       // Fit all is the bare frame corners; this one has a target inside them.
       icon: Focus,
-      title: "Zoom to selection (Shift+2)",
+      tooltip: props.hasSelection ? undefined : "Zoom to selection (select a frame first)",
+      shortcut: "Shift+2",
       disabled: !props.hasSelection,
       onSelect: props.onFitSelection,
     },
@@ -185,7 +252,8 @@ function toolsOf(props: DesignToolbarProps): DesignTool[] {
       id: "preview",
       label: preview ? "Exit preview mode" : "Preview mode",
       icon: preview ? MousePointer2 : Eye,
-      title: preview ? "Back to inspect (P or Esc)" : "Preview: scroll and hover the mockup (P)",
+      tooltip: preview ? "Back to inspect" : "Preview: scroll and hover the mockup",
+      shortcut: preview ? "P or Esc" : "P",
       pressed: preview,
       onSelect: props.onToggleMode,
     },
@@ -200,9 +268,10 @@ function toolsOf(props: DesignToolbarProps): DesignTool[] {
       id: "undo",
       label: "Undo design change",
       icon: Undo2,
-      title: history?.undoLabel
-        ? `Undo ${history.undoLabel} (Ctrl/⌘+Z)`
-        : (history?.undoBlockedReason ?? "Undo (Ctrl/⌘+Z)"),
+      tooltip: history?.undoLabel
+        ? `Undo ${history.undoLabel}`
+        : (history?.undoBlockedReason ?? "Undo"),
+      shortcut: "Ctrl/⌘+Z",
       disabled: !canvas || !props.canEdit || !history?.canUndo,
       onSelect: props.onUndo,
     },
@@ -210,9 +279,10 @@ function toolsOf(props: DesignToolbarProps): DesignTool[] {
       id: "redo",
       label: "Redo design change",
       icon: Redo2,
-      title: history?.redoLabel
-        ? `Redo ${history.redoLabel} (Ctrl/⌘+Shift+Z)`
-        : (history?.redoBlockedReason ?? "Redo (Ctrl/⌘+Shift+Z)"),
+      tooltip: history?.redoLabel
+        ? `Redo ${history.redoLabel}`
+        : (history?.redoBlockedReason ?? "Redo"),
+      shortcut: "Ctrl/⌘+Shift+Z",
       disabled: !canvas || !props.canEdit || !history?.canRedo,
       onSelect: props.onRedo,
     },
@@ -220,7 +290,7 @@ function toolsOf(props: DesignToolbarProps): DesignTool[] {
       id: "export",
       label: "Export design to repository",
       icon: Save,
-      title: "Export a revision to the repository (Save As)",
+      tooltip: "Export a revision to the repository (Save As)",
       disabled: !canvas || busyExport,
       onSelect: props.onExport,
     },
@@ -228,6 +298,7 @@ function toolsOf(props: DesignToolbarProps): DesignTool[] {
       id: "download",
       label: "Download orkdes",
       icon: Download,
+      tooltip: "Download the design as an .orkdes file",
       disabled: !canvas,
       onSelect: props.onDownload,
     },
@@ -267,7 +338,7 @@ function DesignToolsMenu({ tools, shortcuts }: { tools: DesignTool[]; shortcuts:
     return tool.pressed === undefined ? (
       <DropdownMenuItem
         key={tool.id}
-        title={tool.title}
+        title={toolTitle(tool)}
         disabled={tool.disabled}
         onSelect={onSelect}
       >
@@ -277,7 +348,7 @@ function DesignToolsMenu({ tools, shortcuts }: { tools: DesignTool[]; shortcuts:
     ) : (
       <DropdownMenuCheckboxItem
         key={tool.id}
-        title={tool.title}
+        title={toolTitle(tool)}
         checked={tool.pressed}
         disabled={tool.disabled}
         onSelect={onSelect}
@@ -288,11 +359,13 @@ function DesignToolsMenu({ tools, shortcuts }: { tools: DesignTool[]; shortcuts:
   };
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="size-8" aria-label="More design tools">
-          <MoreHorizontal className="size-4" />
-        </Button>
-      </DropdownMenuTrigger>
+      <ToolbarTooltip label="More design tools">
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" className="size-8" aria-label="More design tools">
+            <MoreHorizontal className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+      </ToolbarTooltip>
       <DropdownMenuContent
         align="end"
         onCloseAutoFocus={() => {
@@ -317,24 +390,25 @@ export function DesignToolbar(props: DesignToolbarProps) {
     id: "shortcuts",
     label: "Keyboard shortcuts",
     icon: Keyboard,
+    shortcut: "?",
     onSelect: props.onShortcuts,
   };
   const iconClass = props.compact ? "size-8" : undefined;
   const iconButton = (tool: DesignTool) => {
     const Icon = tool.icon;
     return (
-      <Button
-        key={tool.id}
-        variant="ghost"
-        size="icon"
-        aria-label={tool.label}
-        aria-pressed={tool.pressed}
-        title={tool.title}
-        disabled={tool.disabled}
-        onClick={tool.onSelect}
-      >
-        <Icon className="size-4" />
-      </Button>
+      <ToolbarTooltip key={tool.id} label={tool.tooltip ?? tool.label} shortcut={tool.shortcut}>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={tool.label}
+          aria-pressed={tool.pressed}
+          disabled={tool.disabled}
+          onClick={tool.onSelect}
+        >
+          <Icon className="size-4" />
+        </Button>
+      </ToolbarTooltip>
     );
   };
   return (
@@ -346,29 +420,35 @@ export function DesignToolbar(props: DesignToolbarProps) {
       aria-label="Design tools"
       data-compact={props.compact || undefined}
     >
-      <Button
-        ref={layersButtonRef}
-        variant="ghost"
-        size="icon"
-        className={iconClass}
-        aria-label="Toggle layers"
-        aria-pressed={props.layersOpen}
-        onClick={props.onToggleLayers}
-      >
-        <Layers className="size-4" />
-      </Button>
-      {props.onToggleAgentPanel && (
+      <ToolbarTooltip label={props.layersOpen ? "Hide layers" : "Show layers"}>
         <Button
+          ref={layersButtonRef}
           variant="ghost"
           size="icon"
           className={iconClass}
-          aria-label={props.agentPanelOpen ? "Hide agent panel" : "Show agent panel"}
-          aria-pressed={props.agentPanelOpen}
-          title={`${props.agentPanelOpen ? "Hide" : "Show"} agent panel (Ctrl/⌘+.)`}
-          onClick={props.onToggleAgentPanel}
+          aria-label="Toggle layers"
+          aria-pressed={props.layersOpen}
+          onClick={props.onToggleLayers}
         >
-          <BotMessageSquare className="size-4" />
+          <Layers className="size-4" />
         </Button>
+      </ToolbarTooltip>
+      {props.onToggleAgentPanel && (
+        <ToolbarTooltip
+          label={props.agentPanelOpen ? "Hide agent panel" : "Show agent panel"}
+          shortcut="Ctrl/⌘+."
+        >
+          <Button
+            variant="ghost"
+            size="icon"
+            className={iconClass}
+            aria-label={props.agentPanelOpen ? "Hide agent panel" : "Show agent panel"}
+            aria-pressed={props.agentPanelOpen}
+            onClick={props.onToggleAgentPanel}
+          >
+            <BotMessageSquare className="size-4" />
+          </Button>
+        </ToolbarTooltip>
       )}
       {canvas ? (
         <RenameField
@@ -383,31 +463,37 @@ export function DesignToolbar(props: DesignToolbarProps) {
       {!props.compact &&
         tools.map((tool) =>
           tool.text ? (
-            <button
+            <ToolbarTooltip
               key={tool.id}
-              type="button"
-              className="min-w-11 rounded-sm px-1 text-xs tabular-nums hover:bg-muted focus-hairline"
-              aria-label={tool.label}
-              title={tool.title}
-              onClick={tool.onSelect}
+              label={tool.tooltip ?? tool.label}
+              shortcut={tool.shortcut}
             >
-              {tool.text}
-            </button>
+              <button
+                type="button"
+                className="min-w-11 rounded-sm px-1 text-xs tabular-nums hover:bg-muted focus-hairline"
+                aria-label={tool.label}
+                onClick={tool.onSelect}
+              >
+                {tool.text}
+              </button>
+            </ToolbarTooltip>
           ) : (
             iconButton(tool)
           ),
         )}
       {props.narrow && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className={iconClass}
-          aria-label="Toggle inspector"
-          aria-pressed={props.inspectorOpen}
-          onClick={props.onToggleInspector}
-        >
-          <PanelRight className="size-4" />
-        </Button>
+        <ToolbarTooltip label={props.inspectorOpen ? "Hide inspector" : "Show inspector"}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className={iconClass}
+            aria-label="Toggle inspector"
+            aria-pressed={props.inspectorOpen}
+            onClick={props.onToggleInspector}
+          >
+            <PanelRight className="size-4" />
+          </Button>
+        </ToolbarTooltip>
       )}
       {props.compact ? (
         <DesignToolsMenu tools={tools} shortcuts={shortcuts} />

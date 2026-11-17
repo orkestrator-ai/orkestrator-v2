@@ -36,7 +36,8 @@ alone after rebasing onto `47110af03`:
 passed. Recorded with the rest of that run in to-do
 [2181](../../todo/cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md)
 ("Real-display run on mbp3") and
-[8300](../../todo/cross-cutting/8300-electron-suite-on-a-shared-mac-desktop.md).
+to-do 8300 (retired 2026-11-17), which filed that run's other flakes as
+9938 to 9942 and 9949.
 Cause not established; the case stays open.
 
 ## Triage note (2026-11-15)

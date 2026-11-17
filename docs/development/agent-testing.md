@@ -4651,7 +4651,14 @@ both fixed and Notes-offset views, at natural DPR and forced DPR 1 and 2 with
 `--force-device-scale-factor`. Views stay small enough to assert native image
 scale without reduction. The Window-menu test always checks the selected label;
 its OS-focus predicate runs only when the host exposes a key window (and an
-active app on macOS).
+active app on macOS). The keyboard create-and-send case asserts OS focus only
+when its window got the key window at the start. If it fails while the window
+no longer has it (on a shared desktop another application, or another
+worktree's Electron run, can take it mid-case), the failure starts with
+`Lost window focus` (or `No window focus`) and names the application macOS has
+in front (`window-focus-loss.ts`), instead of only Playwright's bare
+`inactive`. It still fails: a skip would hide a handoff that really drops
+focus.
 The annotation spec also checks pins and Show on page for an offscreen target,
 a target in an open and a closed modal, and a late web font (fixture routes
 `/dialogs` and `/fonts`), result-capture stability and comparison labels

@@ -34,6 +34,7 @@
 import type { Page, TestInfo } from "@playwright/test";
 import { closeElectronWithin } from "./design-electron-cleanup";
 import { focusedWebContentsUrls, trackWebContentsFocus } from "./webcontents-focus";
+import { explainLostFocus } from "./window-focus-loss";
 import { expect, test } from "./electron-fixtures";
 import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
@@ -2407,6 +2408,9 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
   let annotationId: string | null = null;
   let sent = false;
   let requestId: string | null = null;
+  // Read after the window is brought forward; a failure then names a lost
+  // window focus (explainLostFocus) instead of a bare "inactive".
+  let windowFocused: boolean | undefined;
   try {
     // Hold the destination's queue with an unsent chat draft (as the gateway
     // suite does), so the send is durable and observable but never executed.
@@ -2433,7 +2437,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
       (await focusedWebContentsUrls(s().app)).map((url) =>
         url.startsWith(fixtureOrigin()) ? "preview" : url === s().window.url() ? "host" : url,
       );
-    const windowFocused = await s().app.evaluate(async ({ app, BrowserWindow }) => {
+    windowFocused = await s().app.evaluate(async ({ app, BrowserWindow }) => {
       const host = BrowserWindow.getAllWindows()[0]!;
       if (process.platform === "darwin") app.focus({ steal: true });
       host.focus();
@@ -2550,6 +2554,10 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
         return got.requests.map((request) => `${request.operation}:${request.state}`);
       })
       .toEqual(["discuss:queued"]);
+  } catch (error) {
+    // Another application can take the key window mid-case on a shared
+    // desktop. Still fail, but say so rather than report a bare "inactive".
+    throw await explainLostFocus(error, s().app, windowFocused);
   } finally {
     try {
       if (draftKey) {

@@ -261,7 +261,9 @@ export function NodeWorkspaceHost() {
     }
     applied();
     ui.setProjectCollapsed(environment.projectId, false);
-    ui.selectProjectAndEnvironment(environment.projectId, environment.id);
+    ui.selectProjectAndEnvironment(environment.projectId, environment.id, {
+      landingTab: request.landingTab,
+    });
     // A project home opens on its Home tab, as its own sidebar opens it.
     if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
     if (request.workTarget) openCoordinatorWorkTarget(request.workTarget, undefined, scope);

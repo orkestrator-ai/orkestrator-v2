@@ -189,6 +189,12 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         );
         await waitFor(() => expect(portalStore.getState().status?.mode).toBe(mode));
         const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
+        // A previous command-mode Coordinator memory must not reopen the leaf gate.
+        if (mode === "leaf") {
+          act(() =>
+            appCommandStore(uiStore).setState({ projectBoardTabs: [["project-1", "coordinator"]] }),
+          );
+        }
         // Another project's tab is not this one's: it opens on its landing tab.
         act(() => appCommandStore(uiStore).getState().setProjectBoardTab("kanban"));
         fireEvent.click(heading);
@@ -213,6 +219,13 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         );
         expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("kanban");
         expect(heading.getAttribute("aria-current")).toBe("page");
+        if (mode === "command") {
+          fireEvent.contextMenu(heading);
+          fireEvent.click(screen.getByText("Open Coordinator"));
+          await waitFor(() =>
+            expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator"),
+          );
+        }
       } finally {
         cleanup();
         appCommandStore(uiStore).setState(initialUI, true);

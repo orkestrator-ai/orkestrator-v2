@@ -69,7 +69,9 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
     if (!spec.projectId) return;
     if (spec.createEnvironment) requestCreateEnvironment(spec.projectId);
     else if (spec.environmentId) {
-      ui.selectProjectAndEnvironment(spec.projectId, spec.environmentId);
+      ui.selectProjectAndEnvironment(spec.projectId, spec.environmentId, {
+        landingTab: spec.landingTab,
+      });
       // A project home opens on its Home tab, as its own sidebar opens it.
       if (spec.boardTab) ui.setProjectBoardTab(spec.boardTab);
     } else {
@@ -89,7 +91,7 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
             projectId: spec.projectId,
             ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
             ...(spec.boardTab ? { boardTab: spec.boardTab } : {}),
-            ...(spec.landingTab && !spec.environmentId ? { landingTab: spec.landingTab } : {}),
+            ...(spec.landingTab ? { landingTab: spec.landingTab } : {}),
             ...(spec.workTarget ? { workTarget: spec.workTarget } : {}),
             ...(spec.dialog ? { dialog: spec.dialog } : {}),
           },

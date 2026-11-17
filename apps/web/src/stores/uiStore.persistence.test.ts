@@ -303,3 +303,38 @@ test("an earlier release's project fields in the window record move to the node'
   expect("collapsedProjects" in windowRecord.state).toBe(false);
   expect(windowRecord.state.zoomLevel).toBe(130);
 });
+
+test("environment switches restore each project's tab and remember new landings", () => {
+  localStorage.clear();
+  const ui = commandUI();
+  ui.getState().selectProject("a");
+  ui.getState().setProjectBoardTab("linear");
+  ui.getState().selectProject("b");
+  ui.getState().setProjectBoardTab("kanban");
+  ui.getState().selectProjectAndEnvironment("a", "env-a");
+  expect(ui.getState().projectBoardTab).toBe("linear");
+  expect(ui.getState().projectBoardTabs[0]).toEqual(["a", "linear"]);
+  ui.getState().selectProjectAndEnvironment("b", "env-b");
+  expect(ui.getState().projectBoardTab).toBe("kanban");
+  ui.getState().selectProjectAndEnvironment("new", "env-new", { landingTab: "notes" });
+  expect(ui.getState().projectBoardTab).toBe("notes");
+  expect(ui.getState().projectBoardTabs[0]).toEqual(["new", "notes"]);
+});
+
+test("a remembered coordinator falls back to Home after a direct node becomes a leaf", () => {
+  localStorage.clear();
+  resetWindowScopeForTests();
+  portalStore.store.setState({ status: { mode: "command" } as never });
+  const ui = getWindowScope().commandScope().store(uiStore);
+  ui.getState().selectProject("project");
+  expect(ui.getState().projectBoardTab).toBe("coordinator");
+  portalStore.store.setState({ status: { mode: "leaf" } as never });
+  ui.getState().selectProject("project");
+  expect(ui.getState().projectBoardTab).toBe("home");
+  // Explicit navigation still reaches Coordinator, and opting through its gate
+  // allows it to be remembered on later heading navigation.
+  ui.getState().setProjectBoardTab("coordinator");
+  ui.getState().openLeafCoordinator("local:project");
+  ui.getState().selectProject("project");
+  expect(ui.getState().projectBoardTab).toBe("coordinator");
+});

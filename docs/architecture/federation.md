@@ -807,7 +807,10 @@ with `MachinesFilter`:
 - A project's page reopens on the tab it was last left on (Home, Coordinator,
   Kanban, Linear and so on). Each node's `uiStore` keeps the last tab per
   project (`projectBoardTabs`, newest first, at most 200, persisted with its
-  collapsed projects), and `selectProject` reads it. A project heading, a
+  collapsed projects). Both project selection and environment-targeted project
+  selection restore it; environment opens carry the same `landingTab` fallback.
+  On a directly connected leaf, a remembered Coordinator falls back to Home
+  until that project's coordinator gate has been explicitly opened. A project heading, a
   repository heading, a compact icon and a project search hit therefore send
   only a `landingTab` (`WorkspaceRequest.landingTab`): the tab for a project
   with none remembered. Explicit navigation still sends `boardTab`, which

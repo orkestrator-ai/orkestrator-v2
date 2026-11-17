@@ -84,10 +84,20 @@ const projectOpeningBoardTab = (
   memory: ProjectBoardTabMemory,
   projectId: string | null,
   options: SelectProjectOptions = {},
-): ProjectBoardTab =>
-  (projectId && !options.resetTab ? memory.find(([id]) => id === projectId)?.[1] : undefined) ??
-  options.landingTab ??
-  projectLandingBoardTab(scope);
+  openedLeafCoordinators: string[] = [],
+): ProjectBoardTab => {
+  const remembered =
+    projectId && !options.resetTab ? memory.find(([id]) => id === projectId)?.[1] : undefined;
+  const tab = remembered ?? options.landingTab ?? projectLandingBoardTab(scope);
+  // A directly connected leaf gates Coordinator until explicitly opened.
+  // Remote leaf workspaces retain their grouping-specific coordinator landing.
+  return remembered === "coordinator" &&
+    scope.role === "command" &&
+    scopeNodeIsLeaf(scope) &&
+    !openedLeafCoordinators.includes(`local:${projectId}`)
+    ? "home"
+    : tab;
+};
 
 const rememberProjectBoardTab = (
   memory: ProjectBoardTabMemory,
@@ -172,7 +182,11 @@ export interface UIState {
   selectEnvironment: (environmentId: string | null) => void;
   setProjectBoardTab: (tab: ProjectBoardTab) => void;
   /** Select both project and environment at once (for hierarchical sidebar) */
-  selectProjectAndEnvironment: (projectId: string, environmentId: string) => void;
+  selectProjectAndEnvironment: (
+    projectId: string,
+    environmentId: string,
+    options?: SelectProjectOptions,
+  ) => void;
   /** Toggle the collapsed state of a project */
   toggleProjectCollapse: (projectId: string) => void;
   /** Set the collapsed state of a project */
@@ -239,7 +253,13 @@ function bindWindowSelection(
           // Arriving at another project returns to the tab it was left on.
           ...(projectId !== null && projectId !== current.selectedProjectId
             ? {
-                projectBoardTab: projectOpeningBoardTab(scope, current.projectBoardTabs, projectId),
+                projectBoardTab: projectOpeningBoardTab(
+                  scope,
+                  current.projectBoardTabs,
+                  projectId,
+                  {},
+                  current.openedLeafCoordinators,
+                ),
               }
             : {}),
         }));
@@ -336,7 +356,13 @@ export const uiStore = defineScopedStore<UIState>("ui", (scope) => {
       // Actions
       selectProject: (projectId, options) =>
         set((state) => {
-          const tab = projectOpeningBoardTab(scope, state.projectBoardTabs, projectId, options);
+          const tab = projectOpeningBoardTab(
+            scope,
+            state.projectBoardTabs,
+            projectId,
+            options,
+            state.openedLeafCoordinators,
+          );
           return {
             selectedProjectId: projectId,
             projectSelectionRevision: state.projectSelectionRevision + 1,
@@ -363,13 +389,27 @@ export const uiStore = defineScopedStore<UIState>("ui", (scope) => {
             : state.projectBoardTabs,
         })),
 
-      selectProjectAndEnvironment: (projectId, environmentId) =>
-        set((state) => ({
-          selectedProjectId: projectId,
-          projectSelectionRevision: state.projectSelectionRevision + 1,
-          selectedEnvironmentId: environmentId,
-          recentProjectIds: addRecentProject(state.recentProjectIds, projectId),
-        })),
+      selectProjectAndEnvironment: (projectId, environmentId, options) =>
+        set((state) => {
+          const tab =
+            projectId === state.selectedProjectId && !options
+              ? state.projectBoardTab
+              : projectOpeningBoardTab(
+                  scope,
+                  state.projectBoardTabs,
+                  projectId,
+                  options,
+                  state.openedLeafCoordinators,
+                );
+          return {
+            selectedProjectId: projectId,
+            projectSelectionRevision: state.projectSelectionRevision + 1,
+            selectedEnvironmentId: environmentId,
+            projectBoardTab: tab,
+            projectBoardTabs: rememberProjectBoardTab(state.projectBoardTabs, projectId, tab),
+            recentProjectIds: addRecentProject(state.recentProjectIds, projectId),
+          };
+        }),
 
       toggleProjectCollapse: (projectId) =>
         set((state) => ({

@@ -102,6 +102,7 @@ export function CoordinatorActivityFixture() {
                 selectedEnvironmentId={null}
                 onToggleCollapse={noop}
                 onSelectProject={noop}
+                onOpenBoard={noop}
                 onSelectEnvironment={noop}
                 onDeleteProject={noop}
                 onOpenSettings={noop}

@@ -155,6 +155,30 @@ afterEach(() => {
   resetWindowScopeForTests();
 });
 
+for (const remembered of [false, true]) {
+  test(`environment request uses ${remembered ? "remembered" : "landing"} tab`, async () => {
+    nativeInvoke.mockImplementation(async (command: string) => {
+      if (command === "get_projects") return [project];
+      if (command === "get_environments" || command === "get_environment_snapshots")
+        return [environment];
+      return undefined;
+    });
+    appCommandStore(uiStore).setState({
+      projectBoardTabs: remembered ? [[project.id, "linear"]] : [],
+    });
+    open(
+      { projectId: project.id, environmentId: environment.id, landingTab: "kanban" },
+      <NodeWorkspaceHost />,
+    );
+    await waitFor(() =>
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(environment.id),
+    );
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe(
+      remembered ? "linear" : "kanban",
+    );
+  });
+}
+
 test("opens on the window's request; the selection is the window's own", async () => {
   nativeInvoke.mockImplementation(async (command: string) => {
     if (command === "get_projects") return [project];

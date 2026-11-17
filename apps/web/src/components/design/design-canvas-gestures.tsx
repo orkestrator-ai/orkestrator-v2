@@ -30,8 +30,8 @@ import {
   type SnapGuide,
 } from "./design-snapping";
 import {
-  clampCoordinate,
   clampDimension,
+  FRAME_COORDINATE_LIMIT,
   toCanvas,
   type DesignViewport,
   type Rect,
@@ -50,6 +50,9 @@ interface FrameGestureState {
   mode: "move" | "resize";
   /** Geometry of every moving frame when the gesture began. */
   origins: Map<string, DesignFrame>;
+  /** Committed revisions captured before any other writer can change a member. */
+  bases: Map<string, DesignFrame>;
+  active: boolean;
   /** Frames that stay put: the snapping targets. */
   others: DesignFrame[];
   members: string[];
@@ -113,7 +116,7 @@ export function useDesignCanvasGestures(deps: DesignCanvasGestureDeps) {
   >(
     () => ({
       beginFrameGesture: (frameId, mode) => {
-        const { frames, selectedFrames, setPinned } = depsRef.current;
+        const { frames, committedFrames, selectedFrames, setPinned } = depsRef.current;
         const chosen = selectedFrames();
         // A move of one of several selected frames carries the whole selection.
         const ids =
@@ -127,6 +130,12 @@ export function useDesignCanvasGestures(deps: DesignCanvasGestureDeps) {
           frameId,
           mode,
           origins,
+          bases: new Map(
+            committedFrames()
+              .filter((frame) => origins.has(frame.id))
+              .map((frame) => [frame.id, frame]),
+          ),
+          active: false,
           others: frames.filter((frame) => !origins.has(frame.id)),
           members,
           offset: NO_OFFSET,
@@ -140,7 +149,14 @@ export function useDesignCanvasGestures(deps: DesignCanvasGestureDeps) {
         const gesture = gestureRef.current;
         if (!gesture || gesture.frameId !== frameId) return {};
         const primary = gesture.origins.get(frameId)!;
-        const threshold = SNAP_THRESHOLD_PX / depsRef.current.viewport().zoom;
+        const zoom = depsRef.current.viewport().zoom;
+        // A click (including pointer jitter on an off-grid frame) never snaps.
+        if (!gesture.active && Math.hypot(delta.dx, delta.dy) * zoom < MARQUEE_START_PX)
+          return gesture.mode === "move"
+            ? { x: primary.x, y: primary.y }
+            : { width: primary.width, height: primary.height };
+        gesture.active = true;
+        const threshold = SNAP_THRESHOLD_PX / zoom;
         const free = options?.free ?? false;
         let patch: GeometryPatch;
         let placed: Rect;
@@ -149,9 +165,24 @@ export function useDesignCanvasGestures(deps: DesignCanvasGestureDeps) {
           const bounds = unionRect(Array.from(gesture.origins.values()))!;
           const proposed = { ...bounds, x: bounds.x + delta.dx, y: bounds.y + delta.dy };
           const snapped = free ? proposed : snapMove(proposed, gesture.others, { threshold }).rect;
-          const x = clampCoordinate(primary.x + snapped.x - bounds.x);
-          const y = clampCoordinate(primary.y + snapped.y - bounds.y);
-          gesture.offset = { dx: x - primary.x, dy: y - primary.y };
+          const origins = Array.from(gesture.origins.values());
+          // Clamp one translation to every member's allowed range. Previews and
+          // submissions must use the same offset to preserve the group's spacing.
+          let dx = Math.round(snapped.x - bounds.x);
+          let dy = Math.round(snapped.y - bounds.y);
+          for (const origin of origins) {
+            dx = Math.max(
+              -FRAME_COORDINATE_LIMIT - origin.x,
+              Math.min(FRAME_COORDINATE_LIMIT - origin.x, dx),
+            );
+            dy = Math.max(
+              -FRAME_COORDINATE_LIMIT - origin.y,
+              Math.min(FRAME_COORDINATE_LIMIT - origin.y, dy),
+            );
+          }
+          const x = primary.x + dx;
+          const y = primary.y + dy;
+          gesture.offset = { dx, dy };
           patch = { x, y };
           placed = { ...bounds, x: bounds.x + gesture.offset.dx, y: bounds.y + gesture.offset.dy };
         } else {
@@ -190,19 +221,18 @@ export function useDesignCanvasGestures(deps: DesignCanvasGestureDeps) {
         cancelAnimationFrame(raf.current);
         raf.current = 0;
         const { offset, members } = gesture;
-        const { committedFrames, submitGeometry, setPinned } = depsRef.current;
+        const { submitGeometry, setPinned } = depsRef.current;
         if (commit && gesture.mode === "move" && (offset.dx !== 0 || offset.dy !== 0)) {
           // The dragged frame submits its own patch; the rest follow with the same offset.
-          const committed = committedFrames();
           for (const id of members) {
             const origin = gesture.origins.get(id)!;
-            const base = committed.find((frame) => frame.id === id);
+            const base = gesture.bases.get(id);
             if (!base) continue;
             submitGeometry(
               base,
               {
-                x: clampCoordinate(origin.x + offset.dx),
-                y: clampCoordinate(origin.y + offset.dy),
+                x: origin.x + offset.dx,
+                y: origin.y + offset.dy,
               },
               gestureId,
               `Move ${origin.name}`,

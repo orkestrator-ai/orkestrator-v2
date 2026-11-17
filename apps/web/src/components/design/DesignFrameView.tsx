@@ -671,6 +671,11 @@ export const DesignFrameView = memo(function DesignFrameView({
           if (drag.current) settleDrag(false);
         }}
         onKeyDown={(event) => {
+          if (event.key === "Escape" && drag.current) {
+            event.preventDefault();
+            settleDrag(false);
+            return;
+          }
           const delta = keyboardDelta(event.key, event.shiftKey);
           if (!delta) return;
           event.preventDefault();

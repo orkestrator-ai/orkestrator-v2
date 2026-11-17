@@ -379,7 +379,8 @@ step is a multiple of the 10 px snap pitch (never denser than 12 screen px),
 and grid lines show while a frame is held (both read the theme's
 `--color-muted-foreground`; the dots used an undefined `--muted-foreground`
 before and never showed). Dragging a frame title snaps the
-frame's corner to that grid; an edge within 6 screen px of another frame's
+frame's corner to that grid after 3 screen px of pointer travel (click jitter never
+changes geometry); an edge within 6 screen px of another frame's
 edge (top/bottom on one axis, left/right on the other) snaps to it instead and
 draws a red guide running between the two frames, two guides when a
 neighbour of the same height matches top and bottom. Resizing from the corner
@@ -389,7 +390,11 @@ that adds every frame it touches to the board selection (a Shift-click
 without a drag still inspects the element; Escape restores the earlier
 selection). Dragging one frame of a several-frame board selection moves them
 all by the same snapped offset, one `update_frame` per frame (each its own
-undo step); pressing one of them without dragging selects only it. Keyboard
+undo step). The shared offset is constrained by every member's coordinate limits,
+so previews and commits preserve spacing. Companion edits use their gesture-start
+committed revisions; concurrent writes conflict, while the controller still rebases
+over its own earlier commits. Pressing one member without dragging selects only it.
+Escape cancels a title drag or corner resize without submitting geometry. Keyboard
 nudges never snap.
 
 Inspector fields are named by their visible label ("Fill", "Align items"),

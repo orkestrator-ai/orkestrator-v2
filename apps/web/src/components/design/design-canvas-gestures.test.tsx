@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { DesignOperationDescriptor } from "@orkestrator/protocol/design-operations";
 import { invoke } from "@/lib/native/backend";
-import { resetDesignControllers } from "./design-controller";
+import { designController, resetDesignControllers } from "./design-controller";
 import { resetCapabilities } from "@/lib/design-client";
-import { FakeBackend, canvasId, frameA, frameB } from "./design-test-backend";
+import { FakeBackend, canvasId, deferred, frameA, frameB } from "./design-test-backend";
 
 const { DesignCanvasTab } = await import("./DesignCanvasTab");
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
@@ -191,6 +191,162 @@ describe("design canvas gestures", () => {
     await waitFor(() => expect(selected(frameB)).toBe(false));
     expect(selected(frameA)).toBe(true);
   });
+
+  test.each([0, 1, 2.9])(
+    "off-grid selection clicks with %s screen px of travel do not move a group",
+    async (travel) => {
+      const a = backend.frames.get(frameA)!;
+      a.frame = { ...a.frame, x: 13, y: 7 };
+      renderInAppCommandScope(
+        <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+      );
+      const title = await screen.findByRole("button", { name: "Move frame A" });
+      fireEvent.click(title);
+      // Single-frame click, including an explicit zero-length pointermove.
+      fireEvent.pointerDown(title, { button: 0, pointerId: 11, clientX: 20, clientY: 20 });
+      fireEvent.pointerMove(title, { pointerId: 11, clientX: 20 + travel, clientY: 20 });
+      fireEvent.pointerUp(title, { pointerId: 11 });
+      expect(frameMoves()).toHaveLength(0);
+      expect(frameSection(frameA).style.left).toBe("13px");
+      fireEvent.click(screen.getByRole("button", { name: "Move frame B" }), { shiftKey: true });
+      expect(selected(frameA) && selected(frameB)).toBe(true);
+      fireEvent.pointerDown(title, { button: 0, pointerId: 12, clientX: 20, clientY: 20 });
+      fireEvent.pointerMove(title, { pointerId: 12, clientX: 20 + travel, clientY: 20 });
+      fireEvent.pointerUp(title, { pointerId: 12 });
+      expect(frameMoves()).toHaveLength(0);
+      expect(selected(frameA)).toBe(true);
+      expect(selected(frameB)).toBe(false);
+      expect(frameSection(frameA).style.left).toBe("13px");
+      expect(frameSection(frameB).style.left).toBe("600px");
+    },
+  );
+
+  test("a real off-grid drag snaps after activation, and Escape reverts every group member", async () => {
+    const a = backend.frames.get(frameA)!;
+    a.frame = { ...a.frame, x: 13 };
+    renderInAppCommandScope(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    const title = await screen.findByRole("button", { name: "Move frame A" });
+    fireEvent.click(title);
+    fireEvent.click(screen.getByRole("button", { name: "Move frame B" }), { shiftKey: true });
+    fireEvent.pointerDown(title, { button: 0, pointerId: 13, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(title, { pointerId: 13, clientX: screenDelta(21), clientY: 0 });
+    await waitFor(() => expect(frameSection(frameA).style.left).toBe("30px"));
+    expect(frameSection(frameB).style.left).toBe("617px");
+    fireEvent.keyDown(title, { key: "Escape" });
+    fireEvent.pointerUp(title, { pointerId: 13 });
+    await waitFor(() => expect(frameSection(frameA).style.left).toBe("13px"));
+    expect(frameSection(frameB).style.left).toBe("600px");
+    expect(frameMoves()).toHaveLength(0);
+    expect(selected(frameA) && selected(frameB)).toBe(true);
+  });
+
+  test("a refreshed companion move during a held drag conflicts instead of being overwritten", async () => {
+    renderInAppCommandScope(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    const title = await screen.findByRole("button", { name: "Move frame A" });
+    fireEvent.click(title);
+    fireEvent.click(screen.getByRole("button", { name: "Move frame B" }), { shiftKey: true });
+    fireEvent.pointerDown(title, { button: 0, pointerId: 14, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(title, { pointerId: 14, clientX: screenDelta(20), clientY: 0 });
+    const b = backend.frames.get(frameB)!;
+    b.frame = { ...b.frame, x: 900, revision: b.frame.revision + 1 };
+    backend.revision++;
+    await act(() => designController("env-1", canvasId).refresh());
+    fireEvent.pointerUp(title, { pointerId: 14 });
+    await waitFor(() => expect(frameMoves()).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.getAllByText(/revision conflict/i).length).toBeGreaterThan(0),
+    );
+    expect(backend.frames.get(frameB)!.frame.x).toBe(900);
+    const companion = backend.calls
+      .filter((call) => call.command === "design_intent_run")
+      .map((call) => (call.args.intent as { descriptor: DesignOperationDescriptor }).descriptor)
+      .find(
+        (descriptor) =>
+          descriptor.input.kind === "update_frame" && descriptor.input.frameId === frameB,
+      )!;
+    expect(companion.preconditions.frameRevision).toBe(1);
+  });
+
+  test("a companion's own pending move can acknowledge during the drag and still rebase", async () => {
+    const gate = deferred();
+    backend.executeBarrier = async (descriptor) => {
+      if (descriptor.input.kind === "update_frame" && descriptor.input.patch.x === 610)
+        await gate.promise;
+    };
+    renderInAppCommandScope(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    const titleA = await screen.findByRole("button", { name: "Move frame A" });
+    const titleB = screen.getByRole("button", { name: "Move frame B" });
+    fireEvent.keyDown(titleB, { key: "ArrowRight", shiftKey: true });
+    await waitFor(() => expect(frameSection(frameB).style.left).toBe("610px"));
+    fireEvent.click(titleA);
+    fireEvent.click(titleB, { shiftKey: true });
+    fireEvent.pointerDown(titleA, { button: 0, pointerId: 15, clientX: 0, clientY: 0 });
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(backend.frames.get(frameB)!.frame.x).toBe(610));
+    await act(() => designController("env-1", canvasId).refresh());
+    fireEvent.pointerMove(titleA, { pointerId: 15, clientX: screenDelta(20), clientY: 0 });
+    fireEvent.pointerUp(titleA, { pointerId: 15 });
+    await waitFor(() => expect(backend.frames.get(frameB)!.frame.x).toBe(630));
+    expect(backend.frames.get(frameB)!.frame.revision).toBe(3);
+    expect(backend.frames.get(frameA)!.frame.x).toBe(20);
+  });
+
+  test.each([
+    { dx: 17, dy: 13, free: false, width: 420, height: 310 },
+    { dx: 17, dy: 13, free: true, width: 417, height: 313 },
+    { dx: 199, dy: 99, free: false, width: 600, height: 400 },
+    { dx: -1000, dy: -1000, free: false, width: 32, height: 32 },
+    { dx: 10000, dy: 10000, free: false, width: 4096, height: 4096 },
+  ])(
+    "the resize handle snaps or bypasses and clamps dimensions: %j",
+    async ({ dx, dy, free, width, height }) => {
+      renderInAppCommandScope(
+        <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+      );
+      const handle = await screen.findByRole("button", { name: "Resize frame A" });
+      fireEvent.pointerDown(handle, { button: 0, pointerId: 15, clientX: 0, clientY: 0 });
+      fireEvent.pointerMove(handle, {
+        pointerId: 15,
+        clientX: screenDelta(dx),
+        clientY: screenDelta(dy),
+        altKey: free,
+      });
+      await waitFor(() => expect(frameSection(frameA).style.width).toBe(`${width}px`));
+      expect(frameSection(frameA).style.height).toBe(`${height}px`);
+      fireEvent.pointerUp(handle, { pointerId: 15 });
+      await waitFor(() => expect(frameMoves()).toHaveLength(1));
+      expect(frameMoves()[0]!.patch).toEqual({ width, height });
+    },
+  );
+
+  test.each(["Escape", "pointerCancel", "lostPointerCapture"])(
+    "resize cancellation by %s submits nothing",
+    async (cancel) => {
+      renderInAppCommandScope(
+        <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+      );
+      const handle = await screen.findByRole("button", { name: "Resize frame A" });
+      fireEvent.pointerDown(handle, { button: 0, pointerId: 16, clientX: 0, clientY: 0 });
+      fireEvent.pointerMove(handle, {
+        pointerId: 16,
+        clientX: screenDelta(50),
+        clientY: screenDelta(50),
+      });
+      await waitFor(() => expect(frameSection(frameA).style.width).toBe("450px"));
+      if (cancel === "Escape") fireEvent.keyDown(handle, { key: "Escape" });
+      else if (cancel === "pointerCancel") fireEvent.pointerCancel(handle, { pointerId: 16 });
+      else fireEvent.lostPointerCapture(handle, { pointerId: 16 });
+      fireEvent.pointerUp(handle, { pointerId: 16 });
+      await waitFor(() => expect(frameSection(frameA).style.width).toBe("400px"));
+      expect(frameMoves()).toHaveLength(0);
+    },
+  );
 
   test("Escape drops a selection box and restores the selection it started from", async () => {
     renderInAppCommandScope(

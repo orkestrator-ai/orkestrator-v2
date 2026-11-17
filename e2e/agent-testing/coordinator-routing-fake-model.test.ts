@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { routingBuildPrompt } from "../../apps/desktop/scripts/dev/coordinator-live-routing";
+import {
+  routingBuildPrompt,
+  routingReviewPrompt,
+} from "../../apps/desktop/scripts/dev/coordinator-live-routing";
 import {
   FAKE_BUILD_REPLY,
+  FAKE_REVIEW_REPLY,
   FAKE_WAKE_REPLY,
   offeredName,
   scriptedTurn,
@@ -95,6 +99,52 @@ describe("coordinator routing fake model", () => {
       noRebuild: false,
       offersRestart: false,
     });
+  });
+
+  test("the review request lists environments, reads the named one's change, then answers", () => {
+    const reviewTools = tools(
+      ...COORDINATOR_TOOLS.map((item) => item.function.name),
+      "mcp_orkestrator_list_environments",
+      "mcp_orkestrator_get_worker_changes",
+    );
+    const prompt = routingReviewPrompt({
+      environmentId: "env-7",
+      name: "routing-review-abc123",
+      branch: "routing-review-abc123",
+    });
+    const base = [system, user(prompt)];
+    expect(scriptedTurn({ messages: base, tools: reviewTools }).step).toEqual({
+      kind: "tool",
+      name: "mcp_orkestrator_list_environments",
+      input: { projectId: "project-123" },
+    });
+    const listed = result({
+      environments: [
+        { id: "fixture-home", name: "fixture" },
+        { id: "env-7", name: "routing-review-abc123" },
+      ],
+      total: 2,
+    });
+    expect(
+      scriptedTurn({ messages: [...base, call("list"), listed], tools: reviewTools }).step,
+    ).toEqual({
+      kind: "tool",
+      name: "mcp_orkestrator_get_worker_changes",
+      input: { environmentId: "env-7" },
+    });
+    expect(
+      scriptedTurn({
+        messages: [...base, call("list"), listed, call("changes"), result({ files: [] })],
+        tools: reviewTools,
+      }).step,
+    ).toEqual({ kind: "text", text: FAKE_REVIEW_REPLY });
+    // An environment that is not listed stops in text rather than reading another.
+    expect(
+      scriptedTurn({
+        messages: [...base, call("list"), result({ environments: [{ id: "x", name: "other" }] })],
+        tools: reviewTools,
+      }).step,
+    ).toEqual({ kind: "text", text: "The named environment is not listed." });
   });
 
   test("the build's own session is parked; an unreadable base or ticket stops in text", () => {

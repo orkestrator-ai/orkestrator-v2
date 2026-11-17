@@ -1,6 +1,7 @@
 /**
- * The routing scenario's `build` case on a real `dev:test --fixture` profile
- * with a scripted loopback model (to-do 7545 task 4). Run it with
+ * The routing scenario's `build` and `review` cases on a real `dev:test
+ * --fixture` profile with a scripted loopback model (to-do 7545 (retired) tasks 4 and
+ * 3). Run it with
  * `mise run test:agent:coordinator:routing-fake`, which starts a disposable
  * credential-free profile that offers only Pi, runs this file and resets the
  * profile.
@@ -12,22 +13,27 @@
  * backend, coordinator policy and context, Control MCP, Pi bridge and SDK,
  * build pipeline, status wakes and agent mail all run.
  *
- * The case is the live suite's own (`runRoutingScenario` with `cases:
- * ["build"]`, judged by the same evaluators): the coordinator turns the
- * request into a ticket and a build, the harness cancels the build as the
- * user's Cancel does, and the coordinator's status wake must carry a
- * `cancelled` notice and make no restart, resume or new build
+ * The cases are the live suite's own (`runRoutingScenario` with `cases:
+ * ["build", "review"]`, judged by the same evaluators). In `build` the
+ * coordinator turns the request into a ticket and a build, the harness cancels
+ * the build as the user's Cancel does, and the coordinator's status wake must
+ * carry a `cancelled` notice and make no restart, resume or new build
  * (`build-cancel-notice`, `build-cancel-respected`). The fake also counts what
  * that wake said, so the spec proves the notice reached the model's prompt
- * saying the cancel is the user's decision and offering no restart.
+ * saying the cancel is the user's decision and offering no restart. In
+ * `review` the fake reviews the harness's one-file change itself
+ * (`list_environments`, `get_worker_changes`, a written answer) instead of
+ * launching a Multi Review, the path the user's 2026-11-14 decision allows for
+ * a small diff; the case must pass and record `review-path:own-review`.
  *
  * What it cannot prove: the fake answers a wake with one line whatever it
- * says, so whether a real model obeys the notice needs the billed routing run
+ * says, and always reviews by itself, so whether a real model obeys the notice
+ * or which review path it picks needs the billed routing run
  * (`mise run test:agent:coordinator --credential-source <platform> --scenario
  * routing`).
  *
  * Writes a content-free summary to
- * `output/agent-testing/<run>/coordinator-routing-fake/pi-routing-build.json`.
+ * `output/agent-testing/<run>/coordinator-routing-fake/pi-routing.json`.
  */
 import { expect, test } from "./browser-test";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -171,7 +177,7 @@ function writeSummary(summary: CoordinatorLivePlatformSummary, fake: Calls | und
   );
   mkdirSync(directory, { recursive: true });
   writeFileSync(
-    path.join(directory, "pi-routing-build.json"),
+    path.join(directory, "pi-routing.json"),
     `${JSON.stringify({ ...summary, fakeModel: fake ?? null }, null, 2)}\n`,
   );
 }
@@ -183,7 +189,7 @@ test.describe("coordinator routing on a fake model", () => {
   );
   test.setTimeout(20 * 60_000);
 
-  test("a build the user cancelled wakes the coordinator as a cancel, and nothing restarts it", async ({
+  test("a build the user cancelled is not restarted, and a coordinator's own review of a small change passes", async ({
     page,
   }) => {
     page.setDefaultTimeout(30_000);
@@ -283,16 +289,27 @@ test.describe("coordinator routing on a fake model", () => {
         coordinator,
         summary,
         cleanup,
-        cases: ["build"],
+        cases: ["build", "review"],
       });
       fake = await calls(model.origin);
       summary.checks = checks;
       summary.observed = observed;
       const failures = checks.filter((item) => !item.passed).map((item) => item.name);
       summary.verdict = failures.length === 0 ? "passed" : "failed";
-      expect(failures, "routing build case on a fake model").toEqual([]);
+      expect(failures, "routing build and review cases on a fake model").toEqual([]);
       expect(checks.map((item) => item.name)).toEqual(
-        expect.arrayContaining(["build-cancel-notice", "build-cancel-respected"]),
+        expect.arrayContaining([
+          "build-cancel-notice",
+          "build-cancel-respected",
+          "review-handled",
+          "review-finished",
+        ]),
+      );
+      // The review case passed on the coordinator's own review, and said so.
+      expect(observed["review-path:own-review"]).toBe(1);
+      expect(observed["review:own-reads"]).toBe(1);
+      expect(checks.find((item) => item.name === "review-handled")?.detail).toMatch(
+        /^path own-review:/,
       );
 
       // The wake reached the model saying it was the user's cancel, and
@@ -305,6 +322,14 @@ test.describe("coordinator routing on a fake model", () => {
           .filter(([name]) => name.endsWith("start_build_pipeline"))
           .map(([, count]) => count),
       ).toEqual([1]);
+      expect(
+        Object.entries(fake.toolCalls)
+          .filter(([name]) => name.endsWith("get_worker_changes"))
+          .map(([, count]) => count),
+      ).toEqual([1]);
+      expect(
+        Object.keys(fake.toolCalls).filter((name) => name.endsWith("launch_multi_review")),
+      ).toEqual([]);
       expect(fake.refused).toBe(0);
     } catch (error) {
       summary.reason ??= error instanceof Error ? error.message.slice(0, 2_000) : String(error);

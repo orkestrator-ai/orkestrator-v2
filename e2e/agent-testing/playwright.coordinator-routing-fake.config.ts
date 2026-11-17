@@ -6,7 +6,7 @@ process.once("exit", enterPrivateTestTmpdir());
 
 /**
  * The coordinator routing fake-model suite
- * (`mise run test:agent:coordinator:routing-fake`, to-do 7545 task 4).
+ * (`mise run test:agent:coordinator:routing-fake`, to-do 7545 (retired) tasks 3 and 4).
  * Separate from the coordinator config so it runs only on a profile set up
  * for it: Pi only, no credentials, a loopback fake model.
  */

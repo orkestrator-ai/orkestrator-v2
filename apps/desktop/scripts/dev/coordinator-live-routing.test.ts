@@ -12,6 +12,7 @@ import {
   routingBuildPrompt,
   routingDeliveryPrompt,
   routingInvestigatePrompt,
+  routingReviewPath,
   routingReviewPrompt,
   routingToolCalls,
   toolArgsRecord,
@@ -319,7 +320,7 @@ describe("review case", () => {
           review: { id: "r1", environmentId: "env-2" },
         }),
       ),
-    ).toEqual(["review-launched"]);
+    ).toEqual(["review-handled"]);
     expect(
       failedNames(
         evaluateRoutingReview({
@@ -330,7 +331,165 @@ describe("review case", () => {
           messages: [row("create_ticket", {}), row("start_build_pipeline", {})],
         }),
       ),
-    ).toEqual(["review-launched", "review-auto-actions-off", "review-no-other-workflow"]);
+    ).toEqual(["review-handled", "review-no-other-workflow"]);
+  });
+
+  describe("the coordinator's own review (to-do 7545 (retired) task 3)", () => {
+    const own = { ...base, newReviewIds: [] };
+    const text = (content: string): CoordinatorTranscriptMessage => ({
+      role: "assistant",
+      parts: [{ type: "text", content }],
+    });
+    const read = (environmentId: string, toolState = "success"): CoordinatorTranscriptMessage => ({
+      role: "assistant",
+      parts: [
+        {
+          toolName: "mcp__orkestrator__get_worker_changes",
+          toolArgs: { environmentId },
+          toolState,
+        },
+      ],
+    });
+
+    test("a read of the named environment's changes and a written answer passes as own-review", () => {
+      const input = {
+        ...own,
+        messages: [row("list_environments", {}), read("env-1"), text("One thing to fix.")],
+      };
+      const checks = evaluateRoutingReview(input);
+      expect(failedNames(checks)).toEqual([]);
+      expect(checks.map((item) => item.name)).toEqual([
+        "review-handled",
+        "review-no-other-workflow",
+      ]);
+      expect(checks[0]?.detail).toBe(
+        "path own-review: no Multi Review launched; 1 reads of the named environment's changes, then a written answer",
+      );
+      expect(routingReviewPath(input)).toEqual({ path: "own-review", reads: 1, answered: true });
+    });
+
+    test.each([{ includeDiff: false }, { maxDiffFiles: 0 }])(
+      "a metadata-only read does not qualify: %j",
+      (options) => {
+        const metadata = row("get_worker_changes", { environmentId: "env-1", ...options });
+        const input = { ...own, messages: [metadata, text("Looks fine.")] };
+        expect(failedNames(evaluateRoutingReview(input))).toEqual(["review-handled"]);
+        expect(routingReviewPath(input)).toEqual({ path: "none", reads: 0, answered: false });
+        // The metadata read must not anchor an answer before a later qualifying read.
+        expect(routingReviewPath({ ...own, messages: [...input.messages, read("env-1")] })).toEqual(
+          { path: "none", reads: 1, answered: false },
+        );
+      },
+    );
+
+    test("plain string assistant content counts only after a qualifying read", () => {
+      const answer: CoordinatorTranscriptMessage = { role: "assistant", content: "Looks fine." };
+      const input = { ...own, messages: [read("env-1"), answer] };
+      expect(failedNames(evaluateRoutingReview(input))).toEqual([]);
+      expect(routingReviewPath(input)).toEqual({ path: "own-review", reads: 1, answered: true });
+      for (const messages of [
+        [answer, read("env-1")],
+        [read("env-1"), { role: "assistant", content: "  \n " }],
+        [read("env-1"), { role: "user", content: "Looks fine." }],
+      ]) {
+        expect(failedNames(evaluateRoutingReview({ ...own, messages }))).toEqual([
+          "review-handled",
+        ]);
+      }
+    });
+
+    test("an answer in the read's own row counts only when it follows the read", () => {
+      const after: CoordinatorTranscriptMessage = {
+        role: "assistant",
+        parts: [
+          {
+            toolName: "get_worker_changes",
+            toolArgs: { environmentId: "env-1" },
+            toolState: "success",
+          },
+          { type: "text", content: "Fine." },
+        ],
+      };
+      expect(routingReviewPath({ ...own, messages: [after] }).path).toBe("own-review");
+      const before: CoordinatorTranscriptMessage = {
+        role: "assistant",
+        parts: [
+          { type: "text", content: "Reading it." },
+          ...(after.parts as unknown[]).slice(0, 1),
+        ],
+      };
+      expect(routingReviewPath({ ...own, messages: [before] }).path).toBe("none");
+    });
+
+    test("a read inside a sub-agent call counts at its parent part", () => {
+      const grouped: CoordinatorTranscriptMessage = {
+        role: "assistant",
+        parts: [
+          {
+            toolName: "Task",
+            toolState: "success",
+            childTools: [
+              {
+                toolName: "mcp__orkestrator__get_worker_changes",
+                toolArgs: { environmentId: "env-1" },
+                toolState: "success",
+              },
+            ],
+          },
+        ],
+      };
+      expect(routingReviewPath({ ...own, messages: [grouped, text("Done.")] })).toEqual({
+        path: "own-review",
+        reads: 1,
+        answered: true,
+      });
+    });
+
+    test("doing neither fails: no read, a failed read, another environment, or no answer", () => {
+      for (const messages of [
+        [row("list_environments", {}), text("Nothing to review.")],
+        [read("env-1", "error"), text("Could not read it.")],
+        [read("env-2"), text("Looks fine.")],
+        [text("Will do."), read("env-1")],
+      ]) {
+        const checks = evaluateRoutingReview({ ...own, messages });
+        expect(failedNames(checks)).toEqual(["review-handled"]);
+        expect(checks[0]?.detail).toStartWith("path none:");
+      }
+    });
+
+    test("a Multi Review after a read is the multi-review path and is judged as one", () => {
+      const input = {
+        ...base,
+        messages: [read("env-1"), row("launch_multi_review", { environmentId: "env-1" })],
+        review: { id: "r1", environmentId: "env-1" },
+      };
+      expect(routingReviewPath(input).path).toBe("multi-review");
+      expect(evaluateRoutingReview(input).map((item) => item.name)).toEqual([
+        "review-handled",
+        "review-auto-actions-off",
+        "review-no-other-workflow",
+      ]);
+    });
+
+    test("an own review that also launches a worker or a build still fails no-other-workflow", () => {
+      expect(
+        failedNames(
+          evaluateRoutingReview({
+            ...own,
+            messages: [read("env-1"), row("launch_job", { environmentId: "env-1" }), text("Ok.")],
+          }),
+        ),
+      ).toEqual(["review-no-other-workflow"]);
+    });
+
+    test("a review association with no readable launch is not an own review", () => {
+      const checks = evaluateRoutingReview({
+        ...base,
+        messages: [read("env-1"), text("Fine.")],
+      });
+      expect(failedNames(checks)).toEqual(["review-handled", "review-auto-actions-off"]);
+    });
   });
 });
 
@@ -420,7 +579,7 @@ test("a backend request cannot excuse a failed worker tool or a mismatched reuse
   ).toContain("investigate-delegated");
 });
 
-describe("cancel verdict (to-do 7545 task 4)", () => {
+describe("cancel verdict (to-do 7545 (retired) task 4)", () => {
   const cancelled = { id: "p1", taskId: "t1", phase: "failed", cancelledAt: "now" };
   const notice = (placement: string) => ({
     id: "n1",

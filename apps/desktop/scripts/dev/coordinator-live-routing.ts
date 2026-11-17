@@ -9,7 +9,7 @@ import type { DelegationMailMessage } from "./coordinator-live-delegation.js";
 import { carrierRowIndex, statusReviewAgentSettings } from "./coordinator-live-status.js";
 
 /**
- * The live coordinator suite's `routing` scenario (todo 7545): plain user
+ * The live coordinator suite's `routing` scenario (to-do 7545 (retired), #2001): plain user
  * requests that name no workflow, each checked for the workflow the
  * coordinator chose.
  *
@@ -25,9 +25,13 @@ import { carrierRowIndex, statusReviewAgentSettings } from "./coordinator-live-s
  *    anything". Expected: a worker (`launch_environment`, `launch_job` or
  *    `send_prompt_to_tab`) and no ticket, build or Multi Review. The worker's
  *    report is let through, so its wake cannot land in a later case.
- * 3. `review`: "review the work on this branch". Expected: `launch_multi_review`
- *    on that environment with `autoFix` and `autoPr` absent or false, which the
- *    backend's workflow record must confirm. The harness cancels the review.
+ * 3. `review`: "review the work on this branch". The coordinator chooses by
+ *    the change's size (the user's decision of 2026-11-14), so either path
+ *    passes: `launch_multi_review` on that environment with `autoFix` and
+ *    `autoPr` absent or false, which the backend's workflow record must
+ *    confirm (the harness cancels the review), or its own review, a
+ *    successful `get_worker_changes` on that environment with diff output enabled,
+ *    followed by a written answer. Doing neither fails, and the path taken is recorded.
  * 4. `delivery`: case 1 again, with the harness setting the new ticket's
  *    delivery to `commit-only` once the build has started. Expected: the same
  *    routing as case 1, then the build runs to `complete` with no PR stage.
@@ -106,7 +110,7 @@ export function routingDeliveryPrompt(probe: RoutingProbe): string {
  * Saved defaults for the case: every step, reviewer and Multi Review row on
  * this platform with the fewest reviewers a panel allows (as `status` does),
  * and the Multi Review auto-actions explicitly off, so the review workflow's
- * `autoFix` and `autoPr` record what the coordinator asked for.
+ * `autoAddressFindings` and `autoPr` record what the coordinator asked for.
  */
 export function routingAgentSettings(
   current: unknown,
@@ -355,7 +359,7 @@ export function evaluateRoutingBuild(input: RoutingBuildInput): CoordinatorLiveC
   return checks;
 }
 
-/** Calls that would carry on a build the user cancelled (to-do 7545 task 4). */
+/** Calls that would carry on a build the user cancelled (to-do 7545 (retired) task 4, #2057). */
 const RESTART_TOOLS = [
   "start_build_pipeline",
   "restart_build_pipeline_step",
@@ -385,7 +389,7 @@ export interface RoutingCancelInput {
 }
 
 /**
- * Case 1's end (to-do 7545 task 4): the harness cancels the build as the
+ * Case 1's end (to-do 7545 (retired) task 4, #2057): the harness cancels the build as the
  * user's Cancel does; the coordinator hears it as a cancel and, woken by it,
  * neither restarts, resumes nor rebuilds it.
  */
@@ -514,7 +518,104 @@ export interface RoutingReviewInput {
   newPipelines: number;
 }
 
-/** Case 3: one Multi Review on the named environment, auto-fix and auto-PR off. */
+/**
+ * How the coordinator handled the review request (to-do 7545 (retired) task 3):
+ * `multi-review` when it launched one (whether or not it also read the change
+ * first), `own-review` when it read the named environment's changes and
+ * answered without launching one, `none` otherwise.
+ */
+export type RoutingReviewPath = "multi-review" | "own-review" | "none";
+
+/** The coordinator's own read of a worker's change. */
+const OWN_REVIEW_TOOLS = ["get_worker_changes"];
+
+/**
+ * Whether the assistant wrote text after a part matched by `after`, reading
+ * the rows' parts in order. Plain string content counts as text after any
+ * earlier row.
+ */
+function textAfter(
+  messages: readonly CoordinatorTranscriptMessage[],
+  after: (part: Record<string, unknown>) => boolean,
+): boolean {
+  let seen = false;
+  for (const message of messages) {
+    if (seen && message.role === "assistant" && typeof message.content === "string") {
+      if (message.content.trim()) return true;
+    }
+    for (const part of Array.isArray(message.parts) ? message.parts : []) {
+      if (!part || typeof part !== "object") continue;
+      const record = part as Record<string, unknown>;
+      if (!seen) {
+        seen = after(record);
+        continue;
+      }
+      if (
+        message.role === "assistant" &&
+        record.type === "text" &&
+        typeof record.content === "string" &&
+        record.content.trim()
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** The path a review case took, read from its calls and records. */
+export function routingReviewPath(input: RoutingReviewInput): {
+  path: RoutingReviewPath;
+  /** Successful reads of the named environment's changes with diff output enabled. */
+  reads: number;
+  /** Whether a written answer followed the first of those reads. */
+  answered: boolean;
+} {
+  const calls = routingToolCalls(input.messages);
+  const qualifies = (state: unknown, args: Record<string, unknown> | undefined): boolean =>
+    state === "success" &&
+    args?.environmentId === input.target.environmentId &&
+    args.includeDiff !== false &&
+    args.maxDiffFiles !== 0;
+  const reads = named(calls, OWN_REVIEW_TOOLS).filter((call) => qualifies(call.state, call.args));
+  // A read inside a grouped or sub-agent call counts at its parent part.
+  const isRead = (part: Record<string, unknown>, depth: number): boolean => {
+    if (depth > 8) return false;
+    if (
+      typeof part.toolName === "string" &&
+      OWN_REVIEW_TOOLS.includes(toolBaseName(part.toolName)) &&
+      qualifies(part.toolState, toolArgsRecord(part.toolArgs))
+    ) {
+      return true;
+    }
+    return ["childTools", "subagentActions"].some(
+      (field) =>
+        Array.isArray(part[field]) &&
+        (part[field] as unknown[]).some(
+          (child) =>
+            !!child &&
+            typeof child === "object" &&
+            isRead(child as Record<string, unknown>, depth + 1),
+        ),
+    );
+  };
+  const answered = reads.length > 0 && textAfter(input.messages, (part) => isRead(part, 0));
+  const launched = named(calls, REVIEW_TOOLS).length > 0 || input.newReviewIds.length > 0;
+  const path: RoutingReviewPath = launched
+    ? "multi-review"
+    : reads.length > 0 && answered
+      ? "own-review"
+      : "none";
+  return { path, reads: reads.length, answered };
+}
+
+/**
+ * Case 3: the coordinator either launches one Multi Review on the named
+ * environment with auto-fix and auto-PR off, or reviews the change itself
+ * (to-do 7545 (retired) task 3: it chooses by size). `review-handled` names the path;
+ * `review-auto-actions-off` is judged only when a Multi Review was launched.
+ * Doing neither, or starting any other workflow, fails.
+ */
 export function evaluateRoutingReview(input: RoutingReviewInput): CoordinatorLiveCheck[] {
   const calls = routingToolCalls(input.messages);
   const counts = workflowCallCounts(calls);
@@ -531,34 +632,52 @@ export function evaluateRoutingReview(input: RoutingReviewInput): CoordinatorLiv
     ...WORKER_TOOLS,
     ...OTHER_WORKFLOW_TOOLS,
   ]);
-  return [
-    check(
-      "review-launched",
-      launches.length === 1 &&
-        onTarget.length === 1 &&
-        input.newReviewIds.length === 1 &&
-        input.review?.id === input.newReviewIds[0] &&
-        input.review?.environmentId === input.target.environmentId,
-      `${launches.length} Multi Review launches, ${onTarget.length} on the named environment, ${input.newReviewIds.length} new review associations`,
-    ),
-    check(
-      "review-auto-actions-off",
-      launches.length > 0 &&
-        launches.every((call) => call.args !== undefined) &&
-        askedAutomation.length === 0 &&
-        input.review !== undefined &&
-        input.review.autoAddressFindings !== true &&
-        input.review.autoPr !== true,
-      launches.some((call) => call.args === undefined)
-        ? "a launch's arguments were unreadable"
-        : `requested ${askedAutomation.join(", ") || "neither"}; workflow autoAddressFindings ${input.review?.autoAddressFindings ?? "absent"}, autoPr ${input.review?.autoPr ?? "absent"}`,
-    ),
+  const { path, reads, answered } = routingReviewPath(input);
+  const ownReviewDetail = `${reads} reads of the named environment's changes, ${
+    answered ? "then a written answer" : "no written answer after them"
+  }`;
+  const checks: CoordinatorLiveCheck[] = [];
+  if (path === "multi-review") {
+    checks.push(
+      check(
+        "review-handled",
+        launches.length === 1 &&
+          onTarget.length === 1 &&
+          input.newReviewIds.length === 1 &&
+          input.review?.id === input.newReviewIds[0] &&
+          input.review?.environmentId === input.target.environmentId,
+        `path multi-review: ${launches.length} Multi Review launches, ${onTarget.length} on the named environment, ${input.newReviewIds.length} new review associations`,
+      ),
+      check(
+        "review-auto-actions-off",
+        launches.length > 0 &&
+          launches.every((call) => call.args !== undefined) &&
+          askedAutomation.length === 0 &&
+          input.review !== undefined &&
+          input.review.autoAddressFindings !== true &&
+          input.review.autoPr !== true,
+        launches.some((call) => call.args === undefined)
+          ? "a launch's arguments were unreadable"
+          : `requested ${askedAutomation.join(", ") || "neither"}; workflow autoAddressFindings ${input.review?.autoAddressFindings ?? "absent"}, autoPr ${input.review?.autoPr ?? "absent"}`,
+      ),
+    );
+  } else {
+    checks.push(
+      check(
+        "review-handled",
+        path === "own-review",
+        `path ${path}: no Multi Review launched; ${ownReviewDetail}`,
+      ),
+    );
+  }
+  checks.push(
     check(
       "review-no-other-workflow",
       others.length === 0 && input.newTickets === 0 && input.newPipelines === 0,
       `${describeCounts(counts)}; ${input.newTickets} new tickets, ${input.newPipelines} new builds`,
     ),
-  ];
+  );
+  return checks;
 }
 
 /** Whole-scenario checks: nobody was asked anything. */

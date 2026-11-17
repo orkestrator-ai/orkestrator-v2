@@ -172,7 +172,7 @@ export function failedStepTarget(candidate: BuildPipeline): RestartTarget {
  * Why a coordinator may not restart this pipeline at all, or `undefined`.
  * The cancelled refusal must not invite a new build: a coordinator told
  * "start a new build if the work is still wanted" did exactly that after the
- * user cancelled (to-do 7545 task 4).
+ * user cancelled (to-do 7545 (retired) task 4, #2057).
  */
 export function coordinatorRestartRefusal(
   candidate: BuildPipeline,

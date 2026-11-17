@@ -2236,7 +2236,13 @@ project's work done through workers and never alters the checkout itself.
 Whether a real model follows the table is checked by the live coordinator
 suite's `routing` scenario (`mise run test:agent:coordinator --scenario
 routing`; see "Live coordinator suite" in
-[`agent-testing.md`](../development/agent-testing.md)).
+[`agent-testing.md`](../development/agent-testing.md)). No rule makes a user's
+request to review a branch a Multi Review: the user decided on 2026-11-14 that
+the coordinator chooses by the change's size, so the scenario's `review` case
+accepts either a Multi Review or the coordinator's own read of the change
+(`get_worker_changes`) and answer, and records which it was. Evidence and
+decisions:
+[coordinator-live-conformance.md](../development/coordinator-live-conformance.md#routing-scenario-evidence-and-decisions).
 
 ### The context block
 
@@ -2967,7 +2973,7 @@ lock).
   user's decision unless the coordinator made it, and not to start another
   build for the ticket unasked; it used to say "start a new build if the work
   is still wanted", which a Codex coordinator followed after the user
-  cancelled (to-do 7545 task 4). `get_build_pipeline` shows `cancelledAt`
+  cancelled (to-do 7545 (retired) task 4, #2057). `get_build_pipeline` shows `cancelledAt`
   on a cancelled build, whose phase reads `failed`. A
   refused request leaves no receipt, so the same `requestId` can be sent
   again once the cause is fixed.
@@ -3135,7 +3141,7 @@ stable key; a key is sent once, recorded on the association
 | Build pipeline | `paused` by the supervisor on an error (a requested pause is not news) | `settled` |
 | Build pipeline | a stage `stalled` (`stallWarning`) | `settled` |
 | Build pipeline | `completed` (task, last verification, acceptance criteria, delivery), `failed` (error, acceptance criteria) | always |
-| Build pipeline | `cancelled` (task; the error only when stopping every agent could not be confirmed), keyed per cancel. Never reported as `failed`: it says the build was stopped on purpose, that a cancel the coordinator did not make itself is the user's decision, and not to restart, resume or rebuild it or start another build for the ticket unless the user asks. It offers only `get_build_pipeline` (to-do 7545 task 4) | always |
+| Build pipeline | `cancelled` (task; the error only when stopping every agent could not be confirmed), keyed per cancel. Never reported as `failed`: it says the build was stopped on purpose, that a cancel the coordinator did not make itself is the user's decision, and not to restart, resume or rebuild it or start another build for the ticket unless the user asks. It offers only `get_build_pipeline` (to-do 7545 (retired) task 4, #2057) | always |
 | Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
 | Graph run | waiting for a person (`waiting`): an open human-node wait or an agent's `ask_human` question (`graphRunPendingInteractions`), keyed by the newest open wait, describing up to six waits by node and form, never the question's text | `settled` |
 | Graph run | ended: `completed` (agent sessions and tokens), `failed` (the run's error), `cancelled`, keyed `complete`, `failed` or `cancelled` | always |

@@ -1,5 +1,5 @@
 /**
- * A loopback model for `coordinator-routing-fake.spec.ts` (to-do 7545 task
+ * A loopback model for `coordinator-routing-fake.spec.ts` (to-do 7545 (retired) task
  * 4), so a Pi coordinator and the build it starts run on the profile's real
  * Pi bridge and SDK with no login and nothing billed. Run with Bun (specs run
  * under Node): `bun coordinator-routing-fake-model.ts`. It prints its origin

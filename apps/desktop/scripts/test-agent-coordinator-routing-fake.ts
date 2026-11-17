@@ -6,13 +6,15 @@ import { SUPERVISED_FLAG, ownerAbortSignal, runUnderSupervisor } from "./dev/own
 /**
  * `mise run test:agent:coordinator:routing-fake`
  *
- * The live coordinator suite's routing `build` case on a loopback fake model
- * (to-do 7545 task 4): one disposable `dev:test --fixture` profile with no
- * agent credentials and only Pi enabled, whose Pi is pointed at
- * `coordinator-routing-fake-model.ts` by the spec. A Pi coordinator turns the
- * request into a ticket and a build, the harness cancels the build as the
- * user's Cancel does, and the coordinator's wake must be a `cancelled` notice
- * that restarts nothing. It runs `coordinator-routing-fake.spec.ts`, then the
+ * The live coordinator suite's routing `build` and `review` cases on a
+ * loopback fake model (to-do 7545 (retired) tasks 4 and 3): one disposable
+ * `dev:test --fixture` profile with no agent credentials and only Pi enabled,
+ * whose Pi is pointed at `coordinator-routing-fake-model.ts` by the spec. A Pi
+ * coordinator turns the build request into a ticket and a build, the harness
+ * cancels the build as the user's Cancel does, and the coordinator's wake must
+ * be a `cancelled` notice that restarts nothing. It then reviews the
+ * harness's one-file change itself, which the review case must accept and
+ * record. It runs `coordinator-routing-fake.spec.ts`, then the
  * profile is stopped and reset. Nothing logs in and nothing is billed; it is
  * still not part of `mise run test`, because it boots a whole profile.
  */
@@ -35,7 +37,7 @@ if (supervised) {
       profileArgs: ["--no-agent-credentials", "--agent-platforms", "pi"],
       env: { ...process.env, ORKESTRATOR_HOST_REACHABILITY_CHECK: "off" },
       suite: {
-        label: "Coordinator routing fake-model build case",
+        label: "Coordinator routing fake-model build and review cases",
         config: "e2e/agent-testing/playwright.coordinator-routing-fake.config.ts",
         env: { ORKESTRATOR_AGENT_TEST_COORDINATOR_ROUTING_FAKE: "1" },
       },

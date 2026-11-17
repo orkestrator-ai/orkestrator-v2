@@ -3489,11 +3489,13 @@ on `0bd214ee` and 2 times after BG-11; the second read is the pass's own,
 outside the fan-out, which the line does not count). No live before side was
 taken: `0bd214ee` predates the Auto-pipeline flow this driver uses.
 
-### Coordinator routing cancel (fake model)
+### Coordinator routing (fake model)
 
 `mise run test:agent:coordinator:routing-fake` runs the live coordinator
-suite's routing `build` case (above, under the live coordinator suite) on a
-loopback fake model, with no login and nothing billed (to-do 7545 task 4). It
+suite's routing `build` and `review` cases (above, under the live coordinator
+suite) on a loopback fake model, with no login and nothing billed (to-do 7545,
+retired 2026-11-17; evidence in
+[coordinator-live-conformance.md](coordinator-live-conformance.md#routing-scenario-evidence-and-decisions)). It
 starts a disposable `dev:test --fixture --headless --no-agent-credentials
 --agent-platforms pi` profile, runs
 `e2e/agent-testing/coordinator-routing-fake.spec.ts`, then stops and resets the
@@ -3507,16 +3509,21 @@ mail run; only the model is fake.
 The fake coordinator reads the launch base, creates the ticket and starts the
 build on the saved defaults, as the case expects. The build's own Pi session is
 parked until its request is aborted, so the build is still running when the
-harness cancels it. The case is `runRoutingScenario` with `cases: ["build"]`,
-judged by the live suite's own evaluators, so `build-cancel-notice` and
-`build-cancel-respected` run on a real stack. The fake also counts what the
+harness cancels it. The cases are `runRoutingScenario` with
+`cases: ["build", "review"]`, judged by the live suite's own evaluators, so
+`build-cancel-notice` and `build-cancel-respected` run on a real stack. In the
+`review` case the fake reviews the harness's one-file change itself
+(`list_environments`, `get_worker_changes` on the named environment, then a
+written answer) and launches no Multi Review; the spec requires the case to
+pass and record `review-path:own-review`. The fake also counts what the
 wake said (never its text): the spec requires exactly one wake that names the
 build as cancelled, says a cancel the coordinator did not make is the user's
 decision, says not to start another build for the ticket, and offers no
 restart. The fake answers a wake with one line whatever it says, so a pass
 proves the plumbing and the wording the model receives, not that a real model
-obeys it; that needs the billed `routing` run. The content-free summary is
-`output/agent-testing/<profile>/coordinator-routing-fake/pi-routing-build.json`.
+obeys it, or which review path a real model picks; that needs the billed
+`routing` run. The content-free summary is
+`output/agent-testing/<profile>/coordinator-routing-fake/pi-routing.json`.
 
 ### Coordinator worker surfaces (fake model)
 
@@ -4260,7 +4267,9 @@ prompts and verdict are in `coordinator-live-goal.ts`;
 `coordinator-live-goal-orchestration.test.ts` runs the orchestration over a scripted
 command transport.
 
-The `routing` case (todo 7545) checks that the routing rules
+The `routing` case (to-do 7545, retired 2026-11-17; evidence and decisions in
+[coordinator-live-conformance.md](coordinator-live-conformance.md#routing-scenario-evidence-and-decisions))
+checks that the routing rules
 (`COORDINATOR_ROUTING_RULE`, `COORDINATOR_ENVIRONMENT_CHOICE_RULE`,
 `COORDINATOR_LAUNCH_DEFAULTS_RULE`) are followed by a real model. It sends four
 plain requests in turn on one conversation, none naming a workflow, and judges
@@ -4283,7 +4292,7 @@ mise run test:agent:coordinator --credential-source codex --scenario routing
    `build-cancel-respected` when the rows after the cancel hold no
    `start_build_pipeline`, `restart_build_pipeline_step` or
    `resume_build_pipeline` call, the conversation gained no build, and the build
-   is still cancelled (to-do 7545 task 4). The summary counts the wake's
+   is still cancelled (#2001, #2057). The summary counts the wake's
    workflow calls as `build-after-cancel:<tool>`.
 2. `investigate`: "does the test suite pass", with "don't change anything". It
    passes on one `launch_environment`, `launch_job` or `send_prompt_to_tab` and
@@ -4291,11 +4300,19 @@ mise run test:agent:coordinator --credential-source codex --scenario routing
    cannot land in a later case.
 3. `review`: "review the work on branch …" for an environment the harness made
    (the `status` case's uncommitted defect, with the project's
-   `coordinatorOtherEnvironments` opt-in on for the run). It passes on one Multi
-   Review of that environment whose call does not set `autoFix` or `autoPr` to
-   true and whose workflow record has both off; the run's saved Multi Review
-   defaults are set to off, so the record shows what the coordinator asked for.
-   The harness then cancels the review.
+   `coordinatorOtherEnvironments` opt-in on for the run). The coordinator
+   chooses by the change's size (the user's decision of 2026-11-14), so
+   `review-handled` passes on either path and names it. `multi-review`: one
+   Multi Review of that environment, and `review-auto-actions-off` then also
+   requires that the call does not set `autoFix` or `autoPr` to true and the
+   workflow record has both off (the run's saved Multi Review defaults are off,
+   so the record shows what the coordinator asked for); the harness cancels the
+   review. `own-review`: no Multi Review, a successful `get_worker_changes` on
+   that environment with diff output enabled (neither `includeDiff: false` nor
+   `maxDiffFiles: 0`), and a written answer after it. Doing neither fails, and
+   on either path `review-no-other-workflow` fails any ticket, build, worker
+   or job. The summary records `review-path:<multi-review|own-review|none>`
+   and `review:own-reads`.
 4. `delivery`: case 1 again with other files. Once the build has started the
    harness sets the new ticket's delivery to `commit-only`, and the build runs to
    its end (`ORKESTRATOR_AGENT_TEST_COORDINATOR_BUILD_TIMEOUT_MS`, default

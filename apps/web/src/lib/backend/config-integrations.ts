@@ -601,7 +601,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   async function updateLinearIssue(
     projectId: string,
     issueId: string,
-    fields: { stateId?: string },
+    fields: { stateId?: string; sortOrder?: number },
   ): Promise<LinearIssueDetail> {
     return asKanbanModel<LinearIssueDetail>(
       kanban(client).update_linear_issue({ projectId, issueId, ...fields }),

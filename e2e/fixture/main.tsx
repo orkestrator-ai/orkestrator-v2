@@ -1,3 +1,4 @@
+import { LinearBoardDragFixture } from "./LinearBoardDragFixture";
 import { LinearBoardAssigneesFixture } from "./LinearBoardAssigneesFixture";
 import { LinearBoardLabelsFixture } from "./LinearBoardLabelsFixture";
 import { EndedAgentFixture } from "./EndedAgentFixture";
@@ -2203,6 +2204,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/multi-review-flow") return <MultiReviewFlowFixture />;
   if (window.location.pathname === "/pipeline-flow") return <PipelineFlowFixture />;
   if (window.location.pathname === "/delivery-policy") return <DeliveryPolicyFixture />;
+  if (window.location.pathname === "/linear-board-drag") return <LinearBoardDragFixture />;
   if (window.location.pathname === "/linear-board-labels") return <LinearBoardLabelsFixture />;
   if (window.location.pathname === "/linear-board-assignees")
     return <LinearBoardAssigneesFixture />;

@@ -479,6 +479,15 @@ export function registerMainIpc({
     readClipboardImage(clipboardApi, nativeImageApi),
   );
   handle("orkestrator:clipboard:write-image", (_event, dataUrl: unknown, options: unknown) => {
+    if (
+      options !== undefined &&
+      (typeof options !== "object" || options === null || Array.isArray(options))
+    ) {
+      throw new Error("Expected clipboard image options");
+    }
+    if (options && "webpDataUrl" in options && typeof options.webpDataUrl !== "string") {
+      throw new Error("Expected a WebP data URL");
+    }
     const webpDataUrl =
       typeof options === "object" && options !== null && "webpDataUrl" in options
         ? options.webpDataUrl

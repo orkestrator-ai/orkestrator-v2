@@ -120,12 +120,49 @@ const WEBP_DATA_URL_PREFIX = "data:image/webp;base64,";
 function webpBytes(dataUrl: string): Uint8Array<ArrayBuffer> {
   if (!dataUrl.startsWith(WEBP_DATA_URL_PREFIX)) throw new Error("Expected a WebP data URL");
   const encoded = dataUrl.slice(WEBP_DATA_URL_PREFIX.length);
-  if (encoded.length > (MAX_CLIPBOARD_IMAGE_BYTES / 3) * 4) {
+  if (encoded.length > Math.ceil(MAX_CLIPBOARD_IMAGE_BYTES / 3) * 4) {
     throw new Error("Clipboard image is too large to transfer");
   }
-  const bytes = new Uint8Array(Buffer.from(encoded, "base64"));
-  if (bytes.length === 0) throw new Error("Expected a WebP data URL");
-  return bytes;
+  // Buffer's base64 decoder ignores invalid characters and trailing junk.
+  // Data URLs produced by FileReader are canonical, padded base64.
+  if (!encoded || encoded.length % 4 !== 0) {
+    throw new Error("Expected a WebP data URL");
+  }
+  const bytes = Buffer.from(encoded, "base64");
+  if (bytes.length > MAX_CLIPBOARD_IMAGE_BYTES) {
+    throw new Error("Clipboard image is too large to transfer");
+  }
+  if (bytes.toString("base64") !== encoded) throw new Error("Expected a WebP data URL");
+  // Validate the complete still-image RIFF container, including chunk lengths
+  // and padding. Merely recognizing RIFF/WEBP also accepts truncated files.
+  // https://developers.google.com/speed/webp/docs/riff_container
+  if (
+    bytes.length < 20 ||
+    bytes.toString("latin1", 0, 4) !== "RIFF" ||
+    bytes.toString("latin1", 8, 12) !== "WEBP" ||
+    bytes.readUInt32LE(4) !== bytes.length - 8
+  )
+    throw new Error("Expected a WebP data URL");
+  let hasImage = false;
+  for (let offset = 12; offset < bytes.length;) {
+    if (offset + 8 > bytes.length) throw new Error("Expected a WebP data URL");
+    const kind = bytes.toString("latin1", offset, offset + 4);
+    const size = bytes.readUInt32LE(offset + 4);
+    const start = offset + 8;
+    const end = start + size;
+    const next = end + (size % 2);
+    if (next > bytes.length || (size % 2 && bytes[end] !== 0)) {
+      throw new Error("Expected a WebP data URL");
+    }
+    if (kind === "VP8 " || kind === "VP8L") {
+      if (hasImage || size < (kind === "VP8 " ? 10 : 5))
+        throw new Error("Expected a WebP data URL");
+      hasImage = true;
+    }
+    offset = next;
+  }
+  if (!hasImage) throw new Error("Expected a WebP data URL");
+  return new Uint8Array(bytes);
 }
 
 /**

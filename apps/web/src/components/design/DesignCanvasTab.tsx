@@ -891,7 +891,10 @@ export function DesignCanvasTab({
           setLocalError(null);
           setAnnouncement(`Copied ${frame.name} as ${format.toUpperCase()}`);
         },
-        (reason: unknown) => reportError(reason),
+        (reason: unknown) => {
+          setAnnouncement(`Could not copy ${frame.name} as ${format.toUpperCase()}`);
+          reportError(reason);
+        },
       );
     },
     [canvasId, environmentId, nodeDesign, reportError],

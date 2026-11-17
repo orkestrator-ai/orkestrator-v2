@@ -480,6 +480,78 @@ describe("DesignCanvasTab", () => {
     },
   );
 
+  test.each([
+    ["png", "capture"],
+    ["webp", "capture"],
+    ["webp", "encoder"],
+    ["png", "clipboard"],
+    ["webp", "clipboard"],
+  ] as const)(
+    "Copy %s recovers from a failed %s with an error, a settled announcement and retry",
+    async (format, failure) => {
+      const gate = deferred<never>();
+      const write = mock(async (_png: string, _options?: { webpDataUrl?: string }) => undefined);
+      if (failure === "clipboard") write.mockImplementationOnce(() => gate.promise);
+      const gateway = window.orkestratorGateway;
+      window.orkestratorGateway = undefined;
+      window.orkestrator = {
+        ...window.orkestrator,
+        clipboard: { writeImage: write },
+      } as unknown as Window["orkestrator"];
+      const encoder =
+        format === "webp"
+          ? spyOn(browserImageCodec, "toWebp").mockResolvedValue(new Uint8Array([1, 2, 3]))
+          : undefined;
+      if (failure === "encoder") encoder!.mockImplementationOnce(() => gate.promise);
+      let captures = 0;
+      invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+        if (command === "design_capture" && failure === "capture" && captures++ === 0)
+          return gate.promise;
+        return backend.handle(command, args ?? {});
+      });
+      const announcement = () => document.querySelector('p.sr-only[role="status"]')!.textContent;
+      try {
+        renderInAppCommandScope(
+          <DesignCanvasTab
+            canvasId={canvasId}
+            environmentId="env-1"
+            isActive
+            ownsGlobalShortcuts
+          />,
+        );
+        fireEvent.click(await screen.findByRole("button", { name: "Move frame A" }));
+        const download = screen.getByRole("button", { name: "Download A" });
+        const choose = async () => {
+          fireEvent.pointerDown(download, { button: 0 });
+          const menu = await screen.findByRole("menu");
+          fireEvent.click(
+            within(within(menu).getByRole("group", { name: "This frame" })).getByRole("menuitem", {
+              name: `Copy ${format.toUpperCase()}`,
+            }),
+          );
+        };
+        await choose();
+        await waitFor(() => expect(download.hasAttribute("disabled")).toBe(true));
+        expect(announcement()).toBe(`Copying A as ${format.toUpperCase()}`);
+        if (failure === "encoder") await waitFor(() => expect(encoder).toHaveBeenCalledTimes(1));
+        if (failure === "clipboard") await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+        await act(async () => gate.reject(new Error(`${failure} unavailable`)));
+        expect((await screen.findByRole("alert")).textContent).toContain(`${failure} unavailable`);
+        await waitFor(() => expect(download.hasAttribute("disabled")).toBe(false));
+        expect(announcement()).toBe(`Could not copy A as ${format.toUpperCase()}`);
+        expect(write).toHaveBeenCalledTimes(failure === "clipboard" ? 1 : 0);
+        await choose();
+        await waitFor(() => expect(announcement()).toBe(`Copied A as ${format.toUpperCase()}`));
+        expect(download.hasAttribute("disabled")).toBe(false);
+      expect(screen.queryByRole("alert") === null).toBe(true);
+        expect(write).toHaveBeenCalledTimes(failure === "clipboard" ? 2 : 1);
+      } finally {
+        encoder?.mockRestore();
+        window.orkestratorGateway = gateway;
+      }
+    },
+  );
+
   test("focusing another title or a Layers row cannot delete the previously selected frame", async () => {
     renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,

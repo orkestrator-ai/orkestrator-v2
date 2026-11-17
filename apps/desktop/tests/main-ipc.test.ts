@@ -281,6 +281,48 @@ function createHarness(
 }
 
 describe("main IPC registration", () => {
+  test("write-image forwards WebP and preserves omitted options for PNG-only callers", async () => {
+    const harness = createHarness();
+    const webp =
+      "UklGRkAAAABXRUJQVlA4WAoAAAAQAAAAAAAAAAAAQUxQSAIAAAAAAFZQOCAYAAAAMAEAnQEqAQABAAFAJiWkAANwAP79NmgA";
+    await harness.invoke("orkestrator:clipboard:write-image", "data:image/png;base64,def", {
+      webpDataUrl: `data:image/webp;base64,${webp}`,
+    });
+    const entry = harness.createClipboardItem.mock.calls[0]![0];
+    const format = Object.keys(entry).find((type) =>
+      type.startsWith("electron application/osclipboard"),
+    )!;
+    expect(format).toBeTruthy();
+    expect(Buffer.from(await entry[format]!.arrayBuffer()).toString("base64")).toBe(webp);
+    expect(harness.clipboardApi.write).toHaveBeenCalledTimes(1);
+    for (const options of [undefined, {}]) {
+      await harness.invoke(
+        "orkestrator:clipboard:write-image",
+        "data:image/png;base64,def",
+        options,
+      );
+      expect(Object.keys(harness.createClipboardItem.mock.calls.at(-1)![0])).toEqual(["image/png"]);
+    }
+  });
+
+  test("write-image rejects supplied invalid WebP values and malformed options without writing", async () => {
+    const harness = createHarness();
+    for (const value of [null, 123, {}, [], false, undefined]) {
+      await expect(
+        harness.invoke("orkestrator:clipboard:write-image", "data:image/png;base64,def", {
+          webpDataUrl: value,
+        }),
+      ).rejects.toThrow("Expected a WebP data URL");
+    }
+    for (const options of [null, 123, "invalid", [], false]) {
+      await expect(
+        harness.invoke("orkestrator:clipboard:write-image", "data:image/png;base64,def", options),
+      ).rejects.toThrow("Expected clipboard image options");
+    }
+    expect(harness.nativeImage.createFromDataURL).not.toHaveBeenCalled();
+    expect(harness.clipboardApi.write).not.toHaveBeenCalled();
+  });
+
   test("registers backend, clipboard, process, and window handlers", async () => {
     const harness = createHarness();
 

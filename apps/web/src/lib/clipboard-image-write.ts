@@ -4,19 +4,7 @@
  * through the async Clipboard API. Kept apart from `@/lib/native/clipboard`,
  * which the test setup replaces wholesale.
  */
-
-/**
- * The desktop app's clipboard, when this window has one. A browser gateway
- * client also has `window.orkestrator.clipboard`, but its `writeImage` does
- * nothing, so a browser always writes through `navigator.clipboard`.
- */
-function desktopClipboard() {
-  if (typeof window === "undefined") return undefined;
-  const gateway = window.orkestratorGateway;
-  if (gateway?.enabled && !gateway.desktop) return undefined;
-  const clipboard = window.orkestrator?.clipboard;
-  return typeof clipboard?.writeImage === "function" ? clipboard : undefined;
-}
+import { desktopClipboard } from "@/lib/node-scope/window-clipboard";
 
 function browserCanWriteImage(): boolean {
   return typeof ClipboardItem !== "undefined" && typeof navigator.clipboard?.write === "function";

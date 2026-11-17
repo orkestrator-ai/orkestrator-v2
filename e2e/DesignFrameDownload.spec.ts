@@ -124,8 +124,26 @@ test("selected frames copy as PNG and download as PNG, WEBP, a multi-page PDF an
       "Download PDF",
     ]);
     await page.screenshot({ path: "output/visual-previews/frame-download-menu-copy-after.png" });
+    failCapture = true;
+    rejectCapture = undefined;
     await thisFrame.getByRole("menuitem", { name: "Copy PNG" }).click();
+    await expect(download).toBeDisabled();
+    await expect.poll(() => Boolean(rejectCapture)).toBe(true);
+    await page.screenshot({ path: "output/visual-previews/frame-copy-pending-before.png" });
+    rejectCapture!(new Error("Copy capture temporarily unavailable"));
+    await expect(page.getByRole("alert")).toContainText("Copy capture temporarily unavailable");
+    await expect(page.locator('p.sr-only[role="status"]')).toHaveText(
+      "Could not copy Outro slide as PNG",
+    );
+    await expect(download).toBeEnabled();
+    await page.screenshot({ path: "output/visual-previews/frame-copy-failure-after-desktop.png" });
+    const viewport = page.viewportSize()!;
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: "output/visual-previews/frame-copy-failure-after-narrow.png" });
+    await page.setViewportSize(viewport);
+    await choose("This frame", "Copy PNG");
     await expect(page.getByText("Copied Outro slide as PNG")).toBeAttached();
+    await expect(page.getByRole("alert")).toHaveCount(0);
     const copied = await page.evaluate(async () => {
       const [item] = await navigator.clipboard.read();
       const blob = await item!.getType("image/png");

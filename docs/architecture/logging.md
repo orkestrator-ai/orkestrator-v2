@@ -531,6 +531,8 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `docker` | `writer-lease.regained` | `staleForMs` | This backend took it over from a holder that stopped refreshing it. |
 | `docker` | `writer-lease.not-acquired` | `reason` | This backend started without it. |
 | `docker` | `writer-lease.acquired-late` | none | This backend won it later, from a holder that stopped refreshing it. |
+| `agent-accounts` | `auto-switch.moved` | `provider`, `reason` | Automatic switching moved this machine to another account. `reason` is the move's reason (`threshold`, `soonest-reset`, …); no account is named. See [agent-accounts.md](agent-accounts.md#automatic-switching). |
+| `agent-accounts` | `auto-switch.reset-disputed` | `provider`, `spreadMinutes` | Fresh readings of one login named weekly resets further apart than the switcher's tolerance, so resets-sooner moves wait until they agree. See [agent-accounts.md](agent-accounts.md#disputed-resets). |
 | `bridge.pi` | `session.resume-fell-back` | error | A saved conversation could not be reopened, so a new one started. |
 | `bridge.cursor` | `session.resume-fell-back` | error | The same. |
 | `bridge.claude` | `query.failed` | `subtype`, `isError`, `reason`, `apiStatus`, `startupFailure` | A Claude turn ended on an error result the bridge cannot put down to the account or the service. `subtype` is the SDK's result subtype and `reason` its API error code (both allowlisted), so a digest can tell an invalid request from a CLI that never started. A refused login, an account on hold or a failing API logs `query.provider-refused` at `warn` instead, and a used-up plan `query.usage-limited` (`bridges/claude-bridge/src/services/claude-api-errors.ts`). |

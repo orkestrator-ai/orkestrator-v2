@@ -330,6 +330,14 @@ export interface UsageLimitReading {
   fiveHour?: FiveHourLimitReading;
   /** A turn here would be paid for rather than come out of the plan. */
   wouldPay: boolean;
+  /**
+   * Set when fresh readings of this login have lately named weekly resets that
+   * cannot all be true: more than {@link AUTO_SWITCH_RESET_TOLERANCE_MS} apart,
+   * each still ahead. The earliest and latest of them, `resetsAt` included. A
+   * `soonest-reset` move goes only where every one of them agrees
+   * (docs/architecture/agent-accounts.md, "Disputed resets").
+   */
+  resetRange?: { earliest: number; latest: number };
 }
 
 function windowUsed(window: UsageWindowLike, now: number): number | undefined {
@@ -627,7 +635,8 @@ export function decideAutoSwitch(
     !loginPastThreshold
   )
     return { action: "stay" };
-  const best = rankAutoSwitchAccounts(accounts, activeAccountId)[0];
+  const ranked = rankAutoSwitchAccounts(accounts, activeAccountId);
+  const best = ranked[0];
   if (!best || best.account.id === activeAccountId) return { action: "stay" };
   const reason: AutoSwitchReason =
     current && !current.account.signedIn
@@ -640,13 +649,56 @@ export function decideAutoSwitch(
             ? "five-hour"
             : "soonest-reset";
   if (reason === "soonest-reset") {
-    // Ranked ahead of the active account, so `best` has a known reset.
-    const soonerBy =
-      (current?.reading.resetsAt ?? Number.POSITIVE_INFINITY) -
-      (best.reading.resetsAt ?? Number.POSITIVE_INFINITY);
-    if (!(soonerBy > AUTO_SWITCH_RESET_TOLERANCE_MS)) return { action: "stay" };
+    const target = soonestResetTarget(current, ranked, activeAccountId);
+    return target ? { action: "switch", accountId: target.account.id, reason } : { action: "stay" };
   }
   return { action: "switch", accountId: best.account.id, reason };
+}
+
+/**
+ * How much sooner `candidate`'s week resets than `current`'s. `disputed` judges
+ * it on every reset lately read for each: `current`'s earliest against
+ * `candidate`'s latest, so a move is never made on one reading another of the
+ * same login contradicts.
+ */
+function resetSoonerBy(
+  current: AutoSwitchAccount | undefined,
+  candidate: AutoSwitchAccount,
+  disputed: boolean,
+): number {
+  const own = (entry: AutoSwitchAccount | undefined) =>
+    entry?.reading.resetsAt ?? Number.POSITIVE_INFINITY;
+  const range = (entry: AutoSwitchAccount | undefined) => entry?.reading.resetRange;
+  const from = disputed
+    ? Math.min(own(current), range(current)?.earliest ?? Number.POSITIVE_INFINITY)
+    : own(current);
+  const to = disputed
+    ? Math.max(own(candidate), range(candidate)?.latest ?? Number.NEGATIVE_INFINITY)
+    : own(candidate);
+  return from - to;
+}
+
+/**
+ * Where a `soonest-reset` move goes, if anywhere: the first account in the order
+ * whose week resets more than the tolerance sooner than the active one's, on
+ * every reading of both. Only a disputed reset lets it look past an account,
+ * so with readings that agree this is the head of the order or nothing.
+ */
+function soonestResetTarget(
+  current: AutoSwitchAccount | undefined,
+  ranked: readonly AutoSwitchAccount[],
+  activeAccountId: string,
+): AutoSwitchAccount | undefined {
+  for (const candidate of ranked) {
+    // Nothing ranked after the active account is a better place.
+    if (candidate.account.id === activeAccountId) return undefined;
+    // Ranked ahead of the active account, so `candidate` has a known reset.
+    if (!(resetSoonerBy(current, candidate, false) > AUTO_SWITCH_RESET_TOLERANCE_MS)) {
+      return undefined;
+    }
+    if (resetSoonerBy(current, candidate, true) > AUTO_SWITCH_RESET_TOLERANCE_MS) return candidate;
+  }
+  return undefined;
 }
 
 /**

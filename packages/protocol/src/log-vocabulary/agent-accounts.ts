@@ -8,6 +8,18 @@ export const AGENT_ACCOUNTS_LOG_AREAS = defineLogAreas({
       "switch-notice.failed":
         "A notice about an automatic account switch failed; the switch stands. `audience` says whose.",
       "auto-switch.check-failed": "An automatic account check failed; the next nudge retries.",
+      "auto-switch.moved": {
+        description:
+          "Automatic switching moved this machine to another account for `reason`. Names no account.",
+        essential: true,
+        fields: { provider: "label", reason: "label" },
+      },
+      "auto-switch.reset-disputed": {
+        description:
+          "Fresh readings of one login named weekly resets `spreadMinutes` apart, so they cannot all be its own; resets-sooner moves wait until they agree. Names no account.",
+        essential: true,
+        fields: { provider: "label", spreadMinutes: "number" },
+      },
       "kept-note.failed":
         "Recording why a limit stop found no account to move to failed; the stop stands.",
       "container-sync.failed":

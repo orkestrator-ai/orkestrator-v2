@@ -483,11 +483,14 @@ export function RemoteProjectGroup({
     rowRef.current?.scrollIntoView?.({ block: "nearest" });
   }, [revealRevision]);
   const openProject = (board = false) => {
-    const boardTab = board ? "coordinator" : projectLandingBoardTab(grouping, machine.bound);
+    // The heading returns to the project's last tab; the board button always
+    // opens the coordinator.
+    const landingTab = board ? undefined : projectLandingBoardTab(grouping, machine.bound);
     openMachineWorkspace({
       connectionId: machine.connectionId,
       projectId: project.ref.projectId,
-      ...(boardTab ? { boardTab } : {}),
+      ...(board ? { boardTab: "coordinator" as const } : {}),
+      ...(landingTab ? { landingTab } : {}),
       title: project.name,
     });
   };

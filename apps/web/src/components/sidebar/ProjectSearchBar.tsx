@@ -449,11 +449,11 @@ export function ProjectSearchBar({
           useMachineViewStore.getState().grouping,
           window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches,
         );
-        const boardTab = projectLandingBoardTab(grouping, false);
+        const landingTab = projectLandingBoardTab(grouping, false);
         openMachineWorkspace({
           connectionId: other.connectionId,
           projectId: hit.project.id,
-          ...(boardTab ? { boardTab } : {}),
+          ...(landingTab ? { landingTab } : {}),
           title: hit.project.name,
         });
       } else {

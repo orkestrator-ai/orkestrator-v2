@@ -456,6 +456,7 @@ function SortableFolderProjectRow({ project }: { project: Project }) {
       selectedEnvironmentId={null}
       onToggleCollapse={() => {}}
       onSelectProject={() => {}}
+      onOpenBoard={() => {}}
       onSelectEnvironment={() => {}}
       onDeleteProject={() => {}}
       onOpenSettings={() => {}}

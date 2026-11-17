@@ -777,3 +777,27 @@ Branch `worker-saturation-82f71cefa2c7-r1`, base `a0920f1a7` (`mise run flaky:re
 - 4 workers, load median 22: 1,758 passed, none failed (22.8 m).
 
 Against the 150 failures of the 2026-11-15 omarchy-hp run (30 s budget, six workers), the 120 s budget leaves one or two load failures per whole run. The full table is in [testing-guide.md, Component suite workers](../../../development/testing-guide.md#component-suite-workers). No implementation, assertion, timeout or skip changed.
+
+## Recurrence 2026-11-17 (frame clipboard review repair)
+
+- **Branch and base:** `image-copy-download-aeea21f2f5ef-r1` at `8b05d8bcb`,
+  base `00a44c9eb581a28cc7c5462eda5028e0f96c68bf`. The branch changes design
+  copying and desktop clipboard validation, not the floating-notice implementation
+  or this owner.
+- **Complete command:** `ORKESTRATOR_REVIEW_VALIDATION=1 ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=7200000 mise run test:logged -- --name browser -- mise run test:browser`
+  passed (2153.2 s), including the public-site phase. The component run scheduled
+  1,922 cases with six workers and one retry. Passing raw output is deleted by
+  the logged runner, so per-status totals were not retained.
+- **Observed failure:** `[desktop-chromium] coordinator splits keep notices in their conversation pane`
+  (`e2e/FloatingNotices.spec.ts:133`) timed out after 30 s at line 150:
+  the minimized first-pane notice was expected to be focused but was inactive.
+  It recovered on the configured retry.
+- **Evidence:** `output/fix-validation/browser-complete-summary.json`,
+  `output/fix-validation/browser-complete-status.json`, and
+  `output/fix-validation/browser-complete-attempt/FloatingNotices-coordinato-29255--in-their-conversation-pane-desktop-chromium/trace.zip`
+  in the observing worktree.
+- **Unchanged owner alone:** `ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name fix-notices-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts e2e/FloatingNotices.spec.ts --workers=1 --retries=0`
+  passed (22.3 s).
+- **Recurrence check:** `mise run flaky:recurrence -- 0382 --base 00a44c9eb581a28cc7c5462eda5028e0f96c68bf --registry-ref origin/main`
+  reported `open`. No notice implementation, assertion, deadline or skip was
+  changed. The cause remains unconfirmed.

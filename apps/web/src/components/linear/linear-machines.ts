@@ -28,6 +28,11 @@ export interface LinearMachineTarget {
   /** The machine's node id, when known. */
   nodeId: string | null;
   name: string;
+  /**
+   * The machine's colour token (`machine-colors.ts`), as the sidebar shows it;
+   * absent when unknown, which draws the labelled neutral fallback.
+   */
+  colorToken?: string;
   /** The same repository's project on that machine. */
   projectId: string;
   /** This tab's machine: always included. */
@@ -49,6 +54,8 @@ interface TargetInput {
   gitUrl: string | undefined;
   commandNodeId: string | null;
   commandName: string;
+  /** The command node's colour token, when known. */
+  commandColorToken?: string;
   commandProjects: readonly (Pick<Project, "id" | "gitUrl"> & { localPath?: string | null })[];
   nodes: readonly NodeSummary[];
   /** Whether this tab's own project has a checkout; true when unknown. */
@@ -58,6 +65,8 @@ interface TargetInput {
 export function linearMachineTargets(input: TargetInput): LinearMachineTarget[] {
   const hint = repositoryHint(input.gitUrl);
   const currentSummary = input.nodes.find((node) => node.nodeId === input.currentNodeId);
+  const currentColor =
+    input.currentRole === "command" ? input.commandColorToken : currentSummary?.view.colorToken;
   const current: LinearMachineTarget = {
     key: `node:${input.currentNodeId}`,
     machine: undefined,
@@ -66,6 +75,7 @@ export function linearMachineTargets(input: TargetInput): LinearMachineTarget[] 
       input.currentRole === "command"
         ? input.commandName
         : currentSummary?.view.displayName || "This machine",
+    ...(currentColor ? { colorToken: currentColor } : {}),
     projectId: input.projectId,
     current: true,
     available: true,
@@ -84,6 +94,7 @@ export function linearMachineTargets(input: TargetInput): LinearMachineTarget[] 
         machine: null,
         nodeId: input.commandNodeId,
         name: input.commandName,
+        ...(input.commandColorToken ? { colorToken: input.commandColorToken } : {}),
         projectId: commandProject.id,
         current: false,
         available: true,
@@ -100,6 +111,7 @@ export function linearMachineTargets(input: TargetInput): LinearMachineTarget[] 
       machine: node.nodeId,
       nodeId: node.nodeId,
       name: node.view.displayName || "Unnamed machine",
+      ...(node.view.colorToken ? { colorToken: node.view.colorToken } : {}),
       projectId: project.ref.projectId,
       current: false,
       available: node.available,
@@ -119,6 +131,7 @@ export function useLinearMachineTargets(projectId: string): LinearMachineTarget[
   const selfId = useStore(portalStore.store, (state) => state.selfId);
   const { boundMachine } = useFederation();
   const commandName = boundMachine?.name ?? "This machine";
+  const commandColorToken = boundMachine?.colorToken;
   const currentProject = projects.find((project) => project.id === projectId);
   const gitUrl = currentProject?.gitUrl;
   // As `useLocalEnvironmentAvailable`: an unknown project is not refused here.
@@ -132,11 +145,22 @@ export function useLinearMachineTargets(projectId: string): LinearMachineTarget[
         gitUrl,
         commandNodeId: selfId ?? (scope.role === "command" ? scope.nodeId : null),
         commandName,
+        ...(commandColorToken ? { commandColorToken } : {}),
         commandProjects,
         nodes,
         currentHasCheckout,
       }),
-    [commandName, commandProjects, currentHasCheckout, gitUrl, nodes, projectId, scope, selfId],
+    [
+      commandColorToken,
+      commandName,
+      commandProjects,
+      currentHasCheckout,
+      gitUrl,
+      nodes,
+      projectId,
+      scope,
+      selfId,
+    ],
   );
 }
 

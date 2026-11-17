@@ -108,8 +108,18 @@ function renderDialog(
   return onConfirm;
 }
 
-function machineGroup() {
-  return screen.getByRole("radiogroup", { name: "Machine" });
+function machineSelect() {
+  return screen.getByRole("combobox", { name: "Machine" });
+}
+
+async function machineOptions() {
+  fireEvent.click(machineSelect());
+  return screen.findAllByRole("option");
+}
+
+async function pickMachine(name: RegExp) {
+  fireEvent.click(machineSelect());
+  fireEvent.click(await screen.findByRole("option", { name }));
 }
 
 function environmentGroup() {
@@ -123,24 +133,24 @@ function start() {
 describe("BuildLaunchDialog machine choice", () => {
   test("offers no machine choice without another machine", () => {
     renderDialog({ machines: [own] });
-    expect(screen.queryByRole("radiogroup", { name: "Machine" }) === null).toBe(true);
+    expect(screen.queryByRole("combobox", { name: "Machine" }) === null).toBe(true);
     renderDialog();
-    expect(screen.queryByRole("radiogroup", { name: "Machine" }) === null).toBe(true);
+    expect(screen.queryByRole("combobox", { name: "Machine" }) === null).toBe(true);
   });
 
   test("opens on this machine and launches without a machine choice", () => {
     const onConfirm = renderDialog({ machines: [own, builder] });
-    const radios = within(machineGroup()).getAllByRole("radio") as HTMLInputElement[];
-    expect(radios.map((radio) => radio.checked)).toEqual([true, false]);
+    expect(machineSelect().textContent).toContain("Studio Mac");
+    expect(machineSelect().textContent).not.toContain("Builder");
 
     start();
     expect(onConfirm.mock.calls[0]![0].machine).toBeUndefined();
   });
 
-  test("reports the picked machine with its own project", () => {
+  test("reports the picked machine with its own project", async () => {
     remoteDocker = true;
     const onConfirm = renderDialog({ machines: [own, builder] });
-    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    await pickMachine(/Builder/);
 
     start();
     expect(onConfirm.mock.calls[0]![0].machine).toEqual({
@@ -151,31 +161,63 @@ describe("BuildLaunchDialog machine choice", () => {
     });
   });
 
-  test("picking this machine again drops the choice", () => {
+  test("picking this machine again drops the choice", async () => {
     const onConfirm = renderDialog({ machines: [own, builder] });
-    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
-    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Studio Mac/ }));
+    await pickMachine(/Builder/);
+    await pickMachine(/Studio Mac/);
 
     start();
     expect(onConfirm.mock.calls[0]![0].machine).toBeUndefined();
   });
 
-  test("disables a machine the command node cannot reach", () => {
+  test("lists every machine as a dropdown option, disabling one the command node cannot reach", async () => {
     renderDialog({ machines: [own, builder, asleep] });
-    const radio = within(machineGroup()).getByRole("radio", { name: /Laptop/ });
-    expect((radio as HTMLInputElement).disabled).toBe(true);
-    expect(within(machineGroup()).getByText("Not connected")).toBeTruthy();
+    const options = await machineOptions();
+    expect(options.map((option) => option.textContent)).toEqual([
+      "Studio MacThis machine",
+      "Builder",
+      "LaptopNot connected",
+    ]);
+    const laptop = screen.getByRole("option", { name: /Laptop/ });
+    expect(laptop.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByRole("option", { name: /Builder/ }).getAttribute("aria-disabled")).not.toBe(
+      "true",
+    );
   });
 
-  test("asks about Docker only for another machine", () => {
+  test("shows each machine's colour beside its name", async () => {
+    renderDialog({
+      machines: [{ ...own, colorToken: "violet" }, { ...builder, colorToken: "teal" }, asleep],
+    });
+    const triggerDot = within(machineSelect()).getByTestId("machine-color-dot");
+    expect(triggerDot.getAttribute("data-machine-color")).toBe("violet");
+
+    const options = await machineOptions();
+    const colours = options.map((option) =>
+      within(option).getByTestId("machine-color-dot").getAttribute("data-machine-color"),
+    );
+    // A machine with no colour token draws the labelled neutral fallback.
+    expect(colours).toEqual(["violet", "teal", "neutral"]);
+  });
+
+  test("names where a build on another machine runs", async () => {
+    remoteDocker = true;
+    renderDialog({ machines: [own, builder] });
+    expect(screen.queryByText(/follow it from that machine/) === null).toBe(true);
+    await pickMachine(/Builder/);
+    expect(machineSelect().textContent).toContain("Builder");
+    expect(screen.getByText("Runs on Builder; follow it from that machine.")).toBeTruthy();
+  });
+
+  test("asks about Docker only for another machine", async () => {
     renderDialog({ machines: [own, builder] });
     expect(dockerAsks.every((ask) => !ask.enabled)).toBe(true);
 
-    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    await pickMachine(/Builder/);
     expect(dockerAsks.at(-1)).toEqual({ machine: "builder", enabled: true });
   });
 
-  test("judges Container by the picked machine's Docker, not this one's", () => {
+  test("judges Container by the picked machine's Docker, not this one's", async () => {
     // This machine has no Docker; the builder does.
     const onConfirm = renderDialog({ machines: [own, builder] }, false);
     const container = () =>
@@ -183,7 +225,7 @@ describe("BuildLaunchDialog machine choice", () => {
     expect(container().disabled).toBe(true);
 
     remoteDocker = true;
-    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    await pickMachine(/Builder/);
     expect(container().disabled).toBe(false);
     fireEvent.click(container());
 
@@ -192,10 +234,10 @@ describe("BuildLaunchDialog machine choice", () => {
     expect(onConfirm.mock.calls[0]![0].machine?.machine).toBe("builder");
   });
 
-  test("falls back to local when the picked machine has no Docker", () => {
+  test("falls back to local when the picked machine has no Docker", async () => {
     const onConfirm = renderDialog({ machines: [own, builder] });
     remoteDocker = false;
-    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    await pickMachine(/Builder/);
 
     const container = within(environmentGroup()).getByRole("radio", {
       name: /^Container/,
@@ -211,13 +253,13 @@ describe("BuildLaunchDialog machine choice", () => {
     expect(onConfirm.mock.calls[0]![0].environmentType).toBe("local");
   });
 
-  test("ignores this machine's missing checkout for another machine", () => {
+  test("ignores this machine's missing checkout for another machine", async () => {
     const onConfirm = renderDialog({
       machines: [own, builder],
       localEnvironmentAvailable: false,
       defaultEnvironmentType: "local",
     });
-    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    await pickMachine(/Builder/);
     expect(
       (within(environmentGroup()).getByRole("radio", { name: /^Local/ }) as HTMLInputElement)
         .disabled,
@@ -228,7 +270,7 @@ describe("BuildLaunchDialog machine choice", () => {
     expect(onConfirm.mock.calls[0]![0].machine?.machine).toBe("builder");
   });
 
-  test("a pick that left the offered machines falls back to this machine", () => {
+  test("a pick that left the offered machines falls back to this machine", async () => {
     const view = renderInAppCommandScope(
       <DockerAvailabilityProvider available>
         <BuildLaunchDialog
@@ -242,7 +284,7 @@ describe("BuildLaunchDialog machine choice", () => {
         />
       </DockerAvailabilityProvider>,
     );
-    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    await pickMachine(/Builder/);
     view.rerender(
       <DockerAvailabilityProvider available>
         <BuildLaunchDialog
@@ -256,11 +298,11 @@ describe("BuildLaunchDialog machine choice", () => {
         />
       </DockerAvailabilityProvider>,
     );
-    const radios = within(machineGroup()).getAllByRole("radio") as HTMLInputElement[];
-    expect(radios.map((radio) => radio.checked)).toEqual([true, false]);
+    expect(machineSelect().textContent).toContain("Studio Mac");
+    expect(machineSelect().textContent).not.toContain("Builder");
   });
 
-  test("holds Container while the picked machine's Docker check is pending", () => {
+  test("holds Container while the picked machine's Docker check is pending", async () => {
     const props = {
       open: true,
       onOpenChange: () => undefined,
@@ -275,7 +317,7 @@ describe("BuildLaunchDialog machine choice", () => {
         <BuildLaunchDialog {...props} onConfirm={onConfirm} />
       </DockerAvailabilityProvider>,
     );
-    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    await pickMachine(/Builder/);
     const container = () =>
       within(environmentGroup()).getByRole("radio", { name: /^Container/ }) as HTMLInputElement;
 
@@ -301,7 +343,7 @@ describe("BuildLaunchDialog machine choice", () => {
     expect(onConfirm.mock.calls[0]![0].machine?.machine).toBe("builder");
   });
 
-  test("a pending check that answers no switches to Local", () => {
+  test("a pending check that answers no switches to Local", async () => {
     const props = {
       open: true,
       onOpenChange: () => undefined,
@@ -316,7 +358,7 @@ describe("BuildLaunchDialog machine choice", () => {
         <BuildLaunchDialog {...props} />
       </DockerAvailabilityProvider>,
     );
-    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    await pickMachine(/Builder/);
     remoteDocker = false;
     view.rerender(
       <DockerAvailabilityProvider available>
@@ -336,14 +378,14 @@ describe("BuildLaunchDialog machine choice", () => {
     ).toBe(true);
   });
 
-  test("offers no Local build when the picked machine's project has no checkout", () => {
+  test("offers no Local build when the picked machine's project has no checkout", async () => {
     const remoteOnly = { ...builder, hasCheckout: false };
     remoteDocker = false;
     const onConfirm = renderDialog({
       machines: [own, remoteOnly],
       defaultEnvironmentType: "local",
     });
-    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    await pickMachine(/Builder/);
 
     const local = within(environmentGroup()).getByRole("radio", {
       name: /^Local/,
@@ -357,14 +399,14 @@ describe("BuildLaunchDialog machine choice", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
-  test("a remote-only project with Docker builds in a container, never locally", () => {
+  test("a remote-only project with Docker builds in a container, never locally", async () => {
     const remoteOnly = { ...builder, hasCheckout: false };
     remoteDocker = true;
     const onConfirm = renderDialog({
       machines: [own, remoteOnly],
       defaultEnvironmentType: "local",
     });
-    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    await pickMachine(/Builder/);
 
     const local = within(environmentGroup()).getByRole("radio", {
       name: /^Local/,
@@ -379,7 +421,7 @@ describe("BuildLaunchDialog machine choice", () => {
     expect(onConfirm.mock.calls[0]![0].machine?.machine).toBe("builder");
   });
 
-  test("a picked machine that goes offline falls back to this machine", () => {
+  test("a picked machine that goes offline falls back to this machine", async () => {
     remoteDocker = true;
     const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
     const dialog = (machines: BuildLaunchMachine[]) => (
@@ -396,13 +438,14 @@ describe("BuildLaunchDialog machine choice", () => {
       </DockerAvailabilityProvider>
     );
     const view = renderInAppCommandScope(dialog([own, builder]));
-    fireEvent.click(within(machineGroup()).getByRole("radio", { name: /Builder/ }));
+    await pickMachine(/Builder/);
     view.rerender(dialog([own, { ...builder, available: false }]));
 
-    const radios = within(machineGroup()).getAllByRole("radio") as HTMLInputElement[];
-    expect(radios.map((radio) => radio.checked)).toEqual([true, false]);
-    expect(radios[1]!.disabled).toBe(true);
+    expect(machineSelect().textContent).toContain("Studio Mac");
+    expect(machineSelect().textContent).not.toContain("Builder");
     start();
     expect(onConfirm.mock.calls[0]![0].machine).toBeUndefined();
+    const options = await machineOptions();
+    expect(options[1]!.getAttribute("aria-disabled")).toBe("true");
   });
 });

@@ -1,6 +1,11 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function pickMachine(page: Page, name: string) {
+  await page.getByRole("combobox", { name: "Machine" }).click();
+  await page.getByRole("option", { name: new RegExp(`^${name}`) }).click();
+}
 
 test("remote network defaults wait for their owner and preserve an explicit choice", async ({
   page,
@@ -24,10 +29,7 @@ test("remote network defaults wait for their owner and preserve an explicit choi
       throw new Error(`Unexpected fixture command: ${command}`);
     };
   }, moduleUrl);
-  await page
-    .getByRole("radiogroup", { name: "Machine" })
-    .getByText("Builder", { exact: true })
-    .click();
+  await pickMachine(page, "Builder");
   const where = page.getByRole("radiogroup", { name: "Where it runs" });
   await expect(where.getByRole("radio", { name: /^Container/ })).toBeEnabled();
   await where.getByText("Container", { exact: true }).click();
@@ -58,14 +60,8 @@ test("remote network defaults wait for their owner and preserve an explicit choi
     path: path.join(output, `build-network-remote-saved-v3-${info.project.name}.png`),
   });
 
-  await page
-    .getByRole("radiogroup", { name: "Machine" })
-    .getByText("Studio Mac", { exact: true })
-    .click();
-  await page
-    .getByRole("radiogroup", { name: "Machine" })
-    .getByText("Builder", { exact: true })
-    .click();
+  await pickMachine(page, "Studio Mac");
+  await pickMachine(page, "Builder");
   await where.getByText("Container", { exact: true }).click();
   await page.waitForFunction(
     () => (window as unknown as { buildNetworkReads: number }).buildNetworkReads === 2,
@@ -83,14 +79,8 @@ test("remote network defaults wait for their owner and preserve an explicit choi
   await expect(page.getByRole("button", { name: "Start build" })).toBeEnabled();
   await expect(page.getByRole("radio", { name: /^Full access/ })).toBeChecked();
 
-  await page
-    .getByRole("radiogroup", { name: "Machine" })
-    .getByText("Studio Mac", { exact: true })
-    .click();
-  await page
-    .getByRole("radiogroup", { name: "Machine" })
-    .getByText("Builder", { exact: true })
-    .click();
+  await pickMachine(page, "Studio Mac");
+  await pickMachine(page, "Builder");
   await where.getByText("Container", { exact: true }).click();
   await page.waitForFunction(
     () => (window as unknown as { buildNetworkReads: number }).buildNetworkReads === 3,

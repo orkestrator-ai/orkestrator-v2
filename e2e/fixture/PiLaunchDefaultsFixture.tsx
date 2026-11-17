@@ -73,7 +73,7 @@ export function PiLaunchDefaultsFixture() {
         <MultiReviewRestartDialog
           open
           onOpenChange={() => undefined}
-          kind="fix"
+          kind="address-findings"
           catalog={catalog}
           defaultSelection={initialSelection}
           onSubmit={setSelection}

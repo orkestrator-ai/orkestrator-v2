@@ -76,10 +76,10 @@ export const MULTI_REVIEW_AUTO_PR_MANUAL_ADDRESS_FINDINGS_MESSAGE =
  * user's to judge.
  */
 export function interactiveAddressFindingsCanQueueAutoPr(workflow: MultiReviewWorkflow): boolean {
-  const session = workflow.fixSession;
+  const session = workflow.addressFindingsSession;
   return (
     workflow.autoPr === true &&
-    workflow.fixLaunch?.kind !== "custom" &&
+    workflow.addressFindingsLaunch?.kind !== "custom" &&
     session !== undefined &&
     session.requestIds.length > 0 &&
     session.sessionKey.startsWith(`multi-review:${workflow.id}:interactive`)
@@ -109,7 +109,7 @@ export function queueAutoPr(workflow: MultiReviewWorkflow): void {
   workflow.autoPrLaunch = {
     state: "pending",
     requestId: `multi-review-pr:${workflow.id}`,
-    fixIdentity: multiReviewAddressFindingsIdentity(workflow.fixSession),
+    addressFindingsIdentity: multiReviewAddressFindingsIdentity(workflow.addressFindingsSession),
   };
 }
 
@@ -126,10 +126,10 @@ export function consolidatedReportIsClean(
  * report has issues or test coverage gaps. Otherwise the review is ready.
  */
 export function multiReviewAutoAddressFindingsDue(
-  workflow: Pick<MultiReviewWorkflow, "autoFix" | "consolidatedReport">,
+  workflow: Pick<MultiReviewWorkflow, "autoAddressFindings" | "consolidatedReport">,
 ): boolean {
   return (
-    workflow.autoFix === true &&
+    workflow.autoAddressFindings === true &&
     workflow.consolidatedReport !== undefined &&
     !consolidatedReportIsClean(workflow)
   );
@@ -164,7 +164,7 @@ export function skipAutoPr(workflow: MultiReviewWorkflow, message: string): void
   if (state === "pending" || state === "launched") return;
   workflow.autoPrLaunch = {
     state: "skipped",
-    fixIdentity: multiReviewAddressFindingsIdentity(workflow.fixSession),
+    addressFindingsIdentity: multiReviewAddressFindingsIdentity(workflow.addressFindingsSession),
     requestId: `multi-review-pr:${workflow.id}`,
     message,
   };

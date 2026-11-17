@@ -25,9 +25,9 @@ import type { StructuredReviewReport } from "@orkestrator/protocol/structured-re
 /** Position of a step within one round, in the order the loop runs them. */
 export const PHASE_ORDER: Readonly<Record<PipelineSessionPhase, number>> = {
   build: 0,
-  fix: 0,
+  rework: 0,
   review: 2,
-  address: 3,
+  "address-findings": 3,
   verify: 4,
   pr: 5,
   "resolve-conflicts": 6,

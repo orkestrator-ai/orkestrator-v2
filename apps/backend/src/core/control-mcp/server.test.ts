@@ -485,7 +485,7 @@ describe("Orkestrator control MCP server", () => {
         phase: "preparing",
         reviewers: [{ id: "reviewer-0", agent: "claude", model: "default", status: "pending" }],
         reviewModel: { agent: "claude", model: "default" },
-        fixModel: { agent: "claude", model: "default", reasoningEffort: "high" },
+        addressFindingsModel: { agent: "claude", model: "default", reasoningEffort: "high" },
       },
       ui: { status: "opened" },
     }));
@@ -526,7 +526,7 @@ describe("Orkestrator control MCP server", () => {
         projectId: "project-1",
         environmentId: "env-1",
         phase: "preparing",
-        autoFix: true,
+        autoAddressFindings: true,
         autoPr: true,
       },
       ui: { status: "opened" },

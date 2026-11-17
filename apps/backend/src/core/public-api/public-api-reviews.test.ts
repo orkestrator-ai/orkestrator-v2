@@ -123,7 +123,14 @@ describe("review.*", () => {
     expect(launched.result).toMatchObject({ workflowId: "review-1", outcome: "opened" });
     expect(reviews.launches).toHaveLength(1);
     const sent = reviews.launches[0]!;
-    expect(sent.input).toMatchObject({ ...input, requestId: launched.receipt!.operationId });
+    // The CLI's public `autoFix` reaches the button action as `autoAddressFindings`.
+    expect(sent.input).toMatchObject({
+      environmentId: "env-1",
+      autoAddressFindings: true,
+      autoPr: true,
+      requestId: launched.receipt!.operationId,
+    });
+    expect(sent.input).not.toHaveProperty("autoFix");
     expect(String(sent.reservedId)).toMatch(/^public-[0-9a-f]{32}$/);
 
     const replay = await harness.call("review.launch", input, { requestId: "review-key" });

@@ -992,15 +992,17 @@ function InspectorNotes({
             ? "review-report"
             : session.phase === "verify"
               ? "verification-result"
-              : session.phase === "address"
+              : session.phase === "address-findings"
                 ? "fix-result"
                 : "review-preparation"
         }
       />,
     );
   }
-  if (session?.phase === "address" && session.fixResult) {
-    notes.push(<PipelineAddressFindingsReport key="address-report" result={session.fixResult} />);
+  if (session?.phase === "address-findings" && session.addressFindingsResult) {
+    notes.push(
+      <PipelineAddressFindingsReport key="address-report" result={session.addressFindingsResult} />,
+    );
   }
   if (
     node.kind === "verify" &&

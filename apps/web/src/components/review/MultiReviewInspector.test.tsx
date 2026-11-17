@@ -71,7 +71,7 @@ function workflowRevision(revision: number): MultiReviewWorkflow {
     targetBranch: "main",
     phase: "reviewing",
     reviewers: [],
-    fixModel: { agent: "codex", model: "gpt-5.6" },
+    addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
     backendRevision: revision,
@@ -396,21 +396,23 @@ describe("StepTranscriptTail", () => {
 
   test("does not read a session another step is using, and says which", () => {
     const loadTranscript = mock(async () => stepTranscript());
-    renderStepTail(loadTranscript, { access: { kind: "other-step", step: "fix" } });
+    renderStepTail(loadTranscript, { access: { kind: "other-step", step: "address-findings" } });
     expect(
       screen.getByText(
         "This step's session is now running Address Findings. Open session to read the whole conversation.",
       ),
     ).toBeTruthy();
     cleanup();
-    renderStepTail(loadTranscript, { step: "fix", access: { kind: "none" } });
+    renderStepTail(loadTranscript, { step: "address-findings", access: { kind: "none" } });
     expect(screen.getByText("The transcript appears here once this step starts.")).toBeTruthy();
     expect(loadTranscript).not.toHaveBeenCalled();
   });
 
   test("shows the backend's word when the session moved on since the snapshot", async () => {
     renderStepTail(
-      mock(async () => stepTranscript({ session: "other-step", sessionStep: "fix", messages: [] })),
+      mock(async () =>
+        stepTranscript({ session: "other-step", sessionStep: "address-findings", messages: [] }),
+      ),
     );
     expect(
       await screen.findByText(
@@ -515,7 +517,7 @@ describe("transcript tail display bounds and activity", () => {
 });
 
 describe("deferred tail tool bodies", () => {
-  for (const kind of ["reviewer", "prepare", "consolidate", "fix"] as const) {
+  for (const kind of ["reviewer", "prepare", "consolidate", "address-findings"] as const) {
     for (const fails of [false, true]) {
       test(`${kind} expands a summary-only Bash row and handles ${fails ? "rejection" : "output"}`, async () => {
         const detailRef = `inspector-${kind}-${fails}`;
@@ -594,7 +596,7 @@ describe("deferred tail tool bodies", () => {
               ]),
             ],
           })
-        : stepTranscript({ session: "other-step", sessionStep: "fix", messages: [] }),
+        : stepTranscript({ session: "other-step", sessionStep: "address-findings", messages: [] }),
     );
     renderStepTail(loadTranscript, { loadToolDetails });
     fireEvent.click(await screen.findByRole("button", { name: /pwd/ }));

@@ -522,12 +522,12 @@ export class BuildPipelineSupervisor {
       const request = pipeline.restartRequest;
       delete pipeline.restartRequest;
       if (request.kind === "review-package") {
-        pipeline.phase = request.implementationPhase === "fix" ? "fixing" : "building";
+        pipeline.phase = request.implementationPhase === "rework" ? "reworking" : "building";
         await this.startReviewPackagePreparation(pipeline);
         return;
       }
       if (request.kind === "validation") {
-        pipeline.phase = request.implementationPhase === "fix" ? "fixing" : "building";
+        pipeline.phase = request.implementationPhase === "rework" ? "reworking" : "building";
         if (!pipeline.validationRun) throw new Error("Validation restart plan is missing");
         await this.advanceValidation(pipeline);
         return;
@@ -539,7 +539,7 @@ export class BuildPipelineSupervisor {
     if (pipeline.skipRequest) {
       const { phase } = pipeline.skipRequest;
       delete pipeline.skipRequest;
-      if (phase === "build" || phase === "fix") {
+      if (phase === "build" || phase === "rework") {
         await this.startReviewPackagePreparation(pipeline);
         return;
       }
@@ -597,7 +597,7 @@ export class BuildPipelineSupervisor {
       const sessionPhase = sessionPhaseFor(phase);
       if (!sessionPhase) throw new Error(`Cannot retry pipeline phase ${phase}`);
       delete pipeline.interactionRetryRequested;
-      if (phase === "addressing") {
+      if (phase === "addressing-findings") {
         if (!pipeline.structuredReview) {
           throw new Error("Cannot retry addressing without the structured review");
         }
@@ -990,7 +990,7 @@ export class BuildPipelineSupervisor {
 
     switch (pipeline.phase) {
       case "building":
-      case "fixing":
+      case "reworking":
         if (await this.pauseUnchangedRework(pipeline, session)) return;
         if (
           usesPackagePreparationSession(pipeline) &&
@@ -1004,7 +1004,7 @@ export class BuildPipelineSupervisor {
       case "reviewing":
         await this.finishReview(pipeline, provider, session);
         return;
-      case "addressing":
+      case "addressing-findings":
         await this.recovery.finishAddressFindings(pipeline, provider, session);
         return;
       case "verifying":
@@ -1069,13 +1069,13 @@ export class BuildPipelineSupervisor {
    * round as before instead of pausing again on the same turn.
    */
   async pauseUnchangedRework(pipeline: BuildPipeline, session: PipelineSession): Promise<boolean> {
-    const baseline = session.fixWorktreeFingerprintAtStart;
-    if (session.phase !== "fix" || !baseline) return false;
+    const baseline = session.reworkWorktreeFingerprintAtStart;
+    if (session.phase !== "rework" || !baseline) return false;
     // Every attempt in this fix stage shares the original baseline. Consume
     // all copies so a restart or Resume cannot compare this same stage again.
     for (const attempt of pipeline.sessions) {
-      if (attempt.phase === "fix" && attempt.iteration === session.iteration) {
-        delete attempt.fixWorktreeFingerprintAtStart;
+      if (attempt.phase === "rework" && attempt.iteration === session.iteration) {
+        delete attempt.reworkWorktreeFingerprintAtStart;
       }
     }
     const current = await this.worktreeFingerprint(pipeline);
@@ -1083,7 +1083,7 @@ export class BuildPipelineSupervisor {
       await this.ctx.save(pipeline, pipeline.backendRevision);
       return false;
     }
-    pipeline.pausedFromPhase = "fixing";
+    pipeline.pausedFromPhase = "reworking";
     pipeline.phase = "paused";
     pipeline.pauseCause = "supervisor";
     pipeline.error = UNCHANGED_REWORK_PAUSE_MESSAGE;
@@ -1162,7 +1162,7 @@ export class BuildPipelineSupervisor {
         id: randomUUID(),
         sessionId: session.sdkSessionId,
         requestId,
-        phase: pipeline.phase as "building" | "fixing",
+        phase: pipeline.phase as "building" | "reworking",
         prompt,
         useTaskImages: false,
         structuredReview: true,
@@ -1426,7 +1426,7 @@ export class BuildPipelineSupervisor {
       session.validationPlan ??= pipeline.activePromptContext?.validationPlan;
       delete pipeline.activePromptContext;
     }
-    if (phase === "building" || phase === "fixing") discardPreparationResult(session);
+    if (phase === "building" || phase === "reworking") discardPreparationResult(session);
     if (rest.length) {
       pipeline.pendingUserMessages = rest;
     } else {
@@ -1500,12 +1500,12 @@ export class BuildPipelineSupervisor {
         ? "build"
         : pipeline.phase === "reviewing"
           ? "review"
-          : pipeline.phase === "addressing"
-            ? "address"
+          : pipeline.phase === "addressing-findings"
+            ? "address-findings"
             : pipeline.phase === "verifying"
               ? "verify"
-              : pipeline.phase === "fixing"
-                ? "fix"
+              : pipeline.phase === "reworking"
+                ? "rework"
                 : pipeline.phase === "creating-pr"
                   ? "pr"
                   : pipeline.phase === "resolving-conflicts"
@@ -1538,7 +1538,7 @@ export class BuildPipelineSupervisor {
       );
     }
     delete pipeline.reviewPackage;
-    await this.startStage(pipeline, "fix", "fixing", {
+    await this.startStage(pipeline, "rework", "reworking", {
       // The dedicated preparation runs under the preparation step, not Build.
       prompt: withBuildStepInstructions(
         reviewValidationDiscoveryPrompt(targetBranch),
@@ -1554,7 +1554,7 @@ export class BuildPipelineSupervisor {
             effort: pipeline.reviewPreparation.reasoningEffort,
             fastMode: pipeline.reviewPreparation.fastMode,
           }
-        : await this.agents.stepSettings(pipeline, "address"),
+        : await this.agents.stepSettings(pipeline, "address-findings"),
     });
   }
 
@@ -1661,10 +1661,10 @@ export class BuildPipelineSupervisor {
           ? await this.validationBaseline(pipeline, readOnlyReview ? "review" : "verify")
           : undefined;
       // Only a real fix turn: the dedicated package-preparation session also
-      // runs as "fix" but always arrives with an override and never edits code.
+      // runs as "rework" but always arrives with an override and never edits code.
       const originalRework = pipeline.sessions.find(
         (session) =>
-          session.phase === "fix" &&
+          session.phase === "rework" &&
           session.iteration === pipeline.iteration &&
           session.label !== REVIEW_PACKAGE_SESSION_LABEL &&
           // A fix superseded by a rewind from a later round ran before those
@@ -1674,9 +1674,9 @@ export class BuildPipelineSupervisor {
       // A retry/restart must compare with the code before the first attempt,
       // including when that attempt's probe was unavailable or already consumed.
       const reworkWorktreeFingerprint =
-        !override && sessionPhase === "fix"
+        !override && sessionPhase === "rework"
           ? originalRework
-            ? originalRework.fixWorktreeFingerprintAtStart
+            ? originalRework.reworkWorktreeFingerprintAtStart
             : await this.worktreeFingerprint(pipeline)
           : undefined;
       // The commit "Rewind code to here" returns to. Best effort and probed
@@ -1773,13 +1773,12 @@ export class BuildPipelineSupervisor {
           ? { producedReviewPackagePlan: true as const }
           : {}),
         // The marker Verify reads to choose the typed report over the text.
-        ...(sessionPhase === "address" &&
-        dispatchResultKind === PIPELINE_ADDRESS_FINDINGS_REPORT_KIND
-          ? { addressReportKind: PIPELINE_ADDRESS_FINDINGS_REPORT_KIND }
+        ...(sessionPhase === "address-findings" && dispatchResultKind === "fix-result"
+          ? { addressFindingsReportKind: PIPELINE_ADDRESS_FINDINGS_REPORT_KIND }
           : {}),
         ...sessionWorkspaceBaselineFields(validationWorktree),
         ...(reworkWorktreeFingerprint
-          ? { fixWorktreeFingerprintAtStart: reworkWorktreeFingerprint }
+          ? { reworkWorktreeFingerprintAtStart: reworkWorktreeFingerprint }
           : {}),
         ...(headAtStart ? { headAtStart } : {}),
       };

@@ -39,7 +39,7 @@ const input = () => ({
   environmentId,
   requestId: "button-1",
   reviewers: [selection],
-  fixModel: selection,
+  addressFindingsModel: selection,
 });
 const launch = (overrides = {}) =>
   commands.get("launch_coordinator_multi_review_action")!(
@@ -139,7 +139,7 @@ test("launch persists the root and selection, announces both resources, and rehy
   await restored.init();
   expect((await restored.getMultiReviewWorkflow(outcome.workflow.id))?.snapshot).toMatchObject({
     id: outcome.workflow.id,
-    fixModel: selection,
+    addressFindingsModel: selection,
   });
   expect((await restored.getPaneLayout(environmentId))?.root).toMatchObject({
     activeTabId: outcome.ui.tabId,
@@ -190,7 +190,7 @@ test("existing active workflows reattach even with a different model selection a
   await fullLayout(first.workflow.id, first.ui.tabId);
   const second = await launch({
     requestId: "new-click",
-    fixModel: { agent: "claude", model: "default" },
+    addressFindingsModel: { agent: "claude", model: "default" },
   });
   expect(second).toMatchObject({
     outcome: "opened",
@@ -213,7 +213,7 @@ test("existing active workflows reattach even with a different model selection a
     launch({
       requestId: "new-click",
       targetBranch: "changed",
-      fixModel: { agent: "claude", model: "default" },
+      addressFindingsModel: { agent: "claude", model: "default" },
     }),
   ).rejects.toThrow("different payload");
 });
@@ -316,10 +316,10 @@ test("saved branch and review instruction defaults match the environment button"
   const outcome = await launch();
   expect(outcome.workflow).toMatchObject({
     targetBranch: "develop",
-    autoFix: true,
+    autoAddressFindings: true,
     reviewInstruction: "Check failure recovery",
     reviewers: [expect.objectContaining(selection)],
-    fixModel: selection,
+    addressFindingsModel: selection,
   });
 });
 
@@ -562,7 +562,7 @@ test("the project home is never a coordinator worker for launch or address", asy
       projectId: scope.projectId,
       targetBranch: "main",
       reviewers: [selection],
-      fixModel: selection,
+      addressFindingsModel: selection,
     },
     "project-home-review",
   );
@@ -581,7 +581,7 @@ test("Address Findings opening is presentation-only, stable, and refuses pending
   const launched = await launch();
   const workflow = {
     ...launched.workflow,
-    fixSession: {
+    addressFindingsSession: {
       ...selection,
       providerSessionId: "provider-1",
       sessionKey: "fix-session",
@@ -609,7 +609,7 @@ test("address opens the root before persisting a handoff and reports pending wit
     ...launched.workflow,
     phase: "ready",
     consolidatedReport: report,
-    fixSession: {
+    addressFindingsSession: {
       ...selection,
       providerSessionId: "provider-1",
       sessionKey: "fix-session",
@@ -708,7 +708,7 @@ test("address accepts a renderer-started review with no coordinator association"
       projectId: scope.projectId,
       targetBranch: "main",
       reviewers: [selection],
-      fixModel: selection,
+      addressFindingsModel: selection,
     },
     "renderer-review",
   );
@@ -716,7 +716,7 @@ test("address accepts a renderer-started review with no coordinator association"
     ...rendererStarted,
     phase: "ready",
     consolidatedReport: consolidatedReport(),
-    fixSession: {
+    addressFindingsSession: {
       ...selection,
       providerSessionId: "provider-renderer",
       sessionKey: "renderer-fix-session",
@@ -794,7 +794,7 @@ test("address accepts a renderer-started review with no coordinator association"
       ...ready,
       phase: "interactive",
       addressPromptPending: false,
-      fixSession: { ...ready.fixSession!, status: "idle" },
+      addressFindingsSession: { ...ready.addressFindingsSession!, status: "idle" },
     });
     await context.coordinators!.reconcileWorkflowNotifications();
     const inbox = await storage.getAgentMailMailbox(
@@ -848,10 +848,10 @@ test("an explicit auto-fix override wins over the saved default", async () => {
     ...(await storage.loadConfig()).global,
     agentSettings: { multiReview: { autoFix: true } },
   });
-  const outcome = await launch({ autoFix: false });
-  expect(outcome.workflow.autoFix).toBe(false);
+  const outcome = await launch({ autoAddressFindings: false });
+  expect(outcome.workflow.autoAddressFindings).toBe(false);
   expect(start).toHaveBeenCalledWith(
-    expect.objectContaining({ autoFix: false }),
+    expect.objectContaining({ autoAddressFindings: false }),
     outcome.workflow.id,
   );
 });
@@ -862,7 +862,7 @@ test("saved auto-PR alone applies as the button reads it", async () => {
     agentSettings: { multiReview: { autoPr: true } },
   });
   const outcome = await launch();
-  expect(outcome.workflow).toMatchObject({ autoFix: false, autoPr: true });
+  expect(outcome.workflow).toMatchObject({ autoAddressFindings: false, autoPr: true });
 });
 
 test("a requested auto-PR brings its Address Findings even when saved auto-fix is off", async () => {
@@ -871,9 +871,9 @@ test("a requested auto-PR brings its Address Findings even when saved auto-fix i
     agentSettings: { multiReview: { autoFix: false, autoPr: false } },
   });
   const outcome = await launch({ autoPr: true });
-  expect(outcome.workflow).toMatchObject({ autoFix: true, autoPr: true });
+  expect(outcome.workflow).toMatchObject({ autoAddressFindings: true, autoPr: true });
   expect(start).toHaveBeenCalledWith(
-    expect.objectContaining({ autoFix: true, autoPr: true }),
+    expect.objectContaining({ autoAddressFindings: true, autoPr: true }),
     outcome.workflow.id,
   );
 });
@@ -901,14 +901,14 @@ test("omitted model rows use the saved Multi Review defaults and an explicit row
   ]);
   const review = { agent: "codex", model: "gpt-5.6-codex", reasoningEffort: "high" };
   const outcome = (await commands.get("launch_coordinator_multi_review_action")!(
-    { scope, input: { environmentId, requestId: "defaults-1", fixModel: selection } },
+    { scope, input: { environmentId, requestId: "defaults-1", addressFindingsModel: selection } },
     context,
   )) as MultiReviewActionResult;
   expect(start).toHaveBeenCalledWith(
     expect.objectContaining({
       reviewers: [review, review],
       reviewModel: { agent: "claude", model: "opus" },
-      fixModel: selection,
+      addressFindingsModel: selection,
     }),
     outcome.workflow.id,
   );

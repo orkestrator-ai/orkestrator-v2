@@ -76,7 +76,7 @@ describe("package-only restart", () => {
         currentSessionIndex: 1,
         sessions: [
           session("build", "build", 0),
-          session("fix", "prep", 60, { label: "Package Preparation Session" }),
+          session("rework", "prep", 60, { label: "Package Preparation Session" }),
         ],
       }),
     );

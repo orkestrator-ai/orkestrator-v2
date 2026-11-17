@@ -32,13 +32,13 @@ describe("rerunning one reviewer after consolidation", () => {
   test("keeps the other report, supersedes Consolidation and Address, and consolidates again", async () => {
     await withPipeline(async ({ service, createService, read, provider }) => {
       const started = await service.start(startInput(PANEL));
-      await advanceUntil(service, read, started.id, "addressing", 30);
+      await advanceUntil(service, read, started.id, "addressing-findings", 30);
       const paused = await service.pause(started.id);
       expect(paused.phase).toBe("paused");
       const rerunSlot = reviewerSession(paused, "opus");
       const kept = reviewerSession(paused, "sonnet");
       const [consolidation] = consolidationSessions(paused);
-      const address = paused.sessions.find((session) => session.phase === "address")!;
+      const address = paused.sessions.find((session) => session.phase === "address-findings")!;
       expect(kept.reviewReport).toBeDefined();
       // Holds the rerun in flight, so the state between the rewind and the
       // re-consolidation can be read.
@@ -82,8 +82,14 @@ describe("rerunning one reviewer after consolidation", () => {
       // rerun up from the stored record alone.
       const reloaded = createService();
       try {
-        const addressing = await advanceUntil(reloaded, read, started.id, "addressing", 30);
-        expect(addressing.phase).toBe("addressing");
+        const addressing = await advanceUntil(
+          reloaded,
+          read,
+          started.id,
+          "addressing-findings",
+          30,
+        );
+        expect(addressing.phase).toBe("addressing-findings");
       } finally {
         await reloaded.shutdown();
       }
@@ -105,7 +111,7 @@ describe("rerunning one reviewer after consolidation", () => {
       expect(prompt).toContain(`Report from ${rerun.sdkSessionId}`);
       expect(prompt).not.toContain(`Report from ${rerunSlot.sdkSessionId}`);
       const newAddress = after.sessions.filter(
-        (session) => session.phase === "address" && session.supersededBy === undefined,
+        (session) => session.phase === "address-findings" && session.supersededBy === undefined,
       );
       expect(newAddress).toHaveLength(1);
       expect(newAddress[0]!.sessionKey).not.toBe(address.sessionKey);
@@ -115,8 +121,8 @@ describe("rerunning one reviewer after consolidation", () => {
   test("is refused while a step after the review runs, changing nothing", async () => {
     await withPipeline(async ({ service, read, provider }) => {
       const started = await service.start(startInput(PANEL));
-      const addressing = await advanceUntil(service, read, started.id, "addressing", 30);
-      expect(addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings", 30);
+      expect(addressing.phase).toBe("addressing-findings");
       const created = provider.created.length;
 
       await expect(
@@ -124,7 +130,7 @@ describe("rerunning one reviewer after consolidation", () => {
       ).rejects.toThrow("Pause the pipeline, then restart the reviewer");
 
       const after = await read(started.id);
-      expect(after.phase).toBe("addressing");
+      expect(after.phase).toBe("addressing-findings");
       expect(after.rewinds).toBeUndefined();
       expect(after.sessions.some((session) => session.supersededBy)).toBe(false);
       expect(provider.created).toHaveLength(created);
@@ -137,7 +143,7 @@ describe("rerunning one reviewer after consolidation", () => {
       const started = await service.start(startInput(PANEL));
       const failed = await advanceUntil(service, read, started.id, "failed", 30);
       // The pass consolidated; opening Address failed, so it is still live.
-      expect(failed.failureContext?.phase).toBe("addressing");
+      expect(failed.failureContext?.phase).toBe("addressing-findings");
       expect(failed.reviewFanout?.report).toBeDefined();
       provider.failingCreateLabels.clear();
       provider.runningModels.add("sonnet");
@@ -155,8 +161,8 @@ describe("rerunning one reviewer after consolidation", () => {
         "running",
       ]);
       provider.runningModels.delete("sonnet");
-      const addressing = await advanceUntil(service, read, started.id, "addressing", 30);
-      expect(addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings", 30);
+      expect(addressing.phase).toBe("addressing-findings");
       expect(reviewerSessionCreates(provider)).toHaveLength(3);
       expect(consolidations(provider)).toHaveLength(2);
     });
@@ -195,12 +201,14 @@ describe("rerunning one reviewer after consolidation", () => {
       expect(reviewerSession(retried, "opus").supersededBy).toBeUndefined();
 
       provider.runningModels.delete("sonnet");
-      const addressing = await advanceUntil(service, read, started.id, "addressing", 30);
-      expect(addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings", 30);
+      expect(addressing.phase).toBe("addressing-findings");
       expect(reviewerSessionCreates(provider)).toHaveLength(3);
       expect(consolidations(provider)).toHaveLength(2);
       expect(
-        addressing.sessions.filter((s) => s.phase === "address" && s.supersededBy === undefined),
+        addressing.sessions.filter(
+          (s) => s.phase === "address-findings" && s.supersededBy === undefined,
+        ),
       ).toHaveLength(1);
     });
   });
@@ -215,7 +223,7 @@ describe("rerunning one reviewer after consolidation", () => {
           { agent: "cursor", model: "auto", reasoningEffort: "high", fastMode: true },
         ]),
       );
-      await advanceUntil(service, read, started.id, "addressing", 30);
+      await advanceUntil(service, read, started.id, "addressing-findings", 30);
       const paused = await service.pause(started.id);
       const [consolidation] = consolidationSessions(paused);
       const sessionless = consolidation!.sessionlessReviewers![0]!;
@@ -245,8 +253,8 @@ describe("rerunning one reviewer after consolidation", () => {
         fastMode: true,
       });
       providers.get("cursor")!.runningModels.delete("auto");
-      const addressing = await advanceUntil(service, read, started.id, "addressing", 30);
-      expect(addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings", 30);
+      expect(addressing.phase).toBe("addressing-findings");
       const cursorReviews = providers
         .get("cursor")!
         .created.filter((entry) => entry.phase === "review");
@@ -269,7 +277,7 @@ describe("rerunning one reviewer after consolidation", () => {
           { agent: "cursor", model: "auto", reasoningEffort: "high", fastMode: true },
         ]),
       );
-      await advanceUntil(service, read, started.id, "addressing", 30);
+      await advanceUntil(service, read, started.id, "addressing-findings", 30);
       await service.pause(started.id);
       // A Consolidation written before the slot's selection was recorded.
       await rewritePipeline(storage, started.id, (pipeline) => {
@@ -283,7 +291,7 @@ describe("rerunning one reviewer after consolidation", () => {
       unstartable.delete("cursor");
 
       await service.restartReviewer(started.id, sessionless.id);
-      await advanceUntil(service, read, started.id, "addressing", 30);
+      await advanceUntil(service, read, started.id, "addressing-findings", 30);
 
       const cursorReviews = providers
         .get("cursor")!
@@ -296,11 +304,11 @@ describe("rerunning one reviewer after consolidation", () => {
   test("the name of a slot's earlier attempt still reruns that slot", async () => {
     await withPipeline(async ({ service, read, provider }) => {
       const started = await service.start(startInput(PANEL));
-      await advanceUntil(service, read, started.id, "addressing", 30);
+      await advanceUntil(service, read, started.id, "addressing-findings", 30);
       await service.pause(started.id);
       const first = reviewerSession(await read(started.id), "opus");
       await service.restartReviewer(started.id, first.sessionKey);
-      await advanceUntil(service, read, started.id, "addressing", 30);
+      await advanceUntil(service, read, started.id, "addressing-findings", 30);
       const paused = await service.pause(started.id);
       const second = reviewerSession(paused, "opus");
       expect(second.sessionKey).toBe(`${first.sessionKey}:attempt-2`);
@@ -318,8 +326,8 @@ describe("rerunning one reviewer after consolidation", () => {
       ]);
       expect(restarted.reviewFanout?.reviewers[1]?.report).toEqual(kept.reviewReport);
       provider.runningModels.delete("opus");
-      const addressing = await advanceUntil(service, read, started.id, "addressing", 30);
-      expect(addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings", 30);
+      expect(addressing.phase).toBe("addressing-findings");
       expect(reviewerSession(addressing, "opus").sessionKey).toBe(`${first.sessionKey}:attempt-3`);
       // Only the opus slot ran again, twice; sonnet ran once.
       expect(reviewerSessionCreates(provider).map((entry) => entry.options?.model)).toEqual([
@@ -334,7 +342,7 @@ describe("rerunning one reviewer after consolidation", () => {
   test("a reviewer that is not part of a panel is refused", async () => {
     await withPipeline(async ({ service, read }) => {
       const started = await service.start(startInput());
-      await advanceUntil(service, read, started.id, "addressing", 30);
+      await advanceUntil(service, read, started.id, "addressing-findings", 30);
       const paused = await service.pause(started.id);
       const review = paused.sessions.find((session) => session.phase === "review")!;
       expect(review.label).toBe("Review Session");
@@ -397,8 +405,8 @@ describe("rerunning one reviewer after consolidation", () => {
           return current;
         };
         const started = await service.start(startInput(PANEL));
-        const addressing = await runUntil(started.id, "addressing");
-        expect(addressing.error ?? addressing.phase).toBe("addressing");
+        const addressing = await runUntil(started.id, "addressing-findings");
+        expect(addressing.error ?? addressing.phase).toBe("addressing-findings");
         const paused = await service.pause(started.id);
         const first = reviewerSession(paused, "opus");
         expect(first.structuredRequestId).toBeDefined();
@@ -437,8 +445,8 @@ describe("rerunning one reviewer after consolidation", () => {
         expect(stillRunning.reviewFanout?.report).toBeUndefined();
 
         provider.runningModels.delete("opus");
-        const after = await runUntil(started.id, "addressing");
-        expect(after.error ?? after.phase).toBe("addressing");
+        const after = await runUntil(started.id, "addressing-findings");
+        expect(after.error ?? after.phase).toBe("addressing-findings");
         const rerun = reviewerSession(after, "opus");
         expect(rerun.structuredRequestId).toBe(fresh.requestId);
         expect(rerun.reviewReport?.reviewSummary).toBe(`Report from ${rerun.sdkSessionId}`);
@@ -450,7 +458,7 @@ describe("rerunning one reviewer after consolidation", () => {
   test("an unknown reviewer is refused", async () => {
     await withPipeline(async ({ service, read }) => {
       const started = await service.start(startInput(PANEL));
-      await advanceUntil(service, read, started.id, "addressing", 30);
+      await advanceUntil(service, read, started.id, "addressing-findings", 30);
       await service.pause(started.id);
       await expect(service.restartReviewer(started.id, "missing")).rejects.toThrow(
         "no longer part of the current review",

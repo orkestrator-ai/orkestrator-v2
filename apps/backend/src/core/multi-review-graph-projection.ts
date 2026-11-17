@@ -14,7 +14,7 @@
  * | `package` | `reviewPackage` (the sealed `review-package@2` descriptor) |
  * | `review` (panel branch N) | `reviewers[N-1]`: status, session, report, provisional findings |
  * | `consolidate` | `reviewSession`, `stepRuntimes.consolidate`, `consolidatedReport`, `consolidationOverlap` |
- * | `fix` | `fixSession`, `stepRuntimes.fix`, `fixResult` |
+ * | `fix` | `addressFindingsSession`, `stepRuntimes.fix`, `addressFindingsResult` |
  * | `describe-pr`, `pr` | `autoPrLaunch` |
  *
  * The consolidated report cites graph item ids (`review/panel.2/issue-3`,
@@ -118,14 +118,21 @@ export async function projectMultiReviewGraphRun(
   const consolidate = latest.get(slot(N.consolidate));
   const fix = latest.get(slot(N.fix));
   const packageStep = latest.get(slot(N.package));
-  const preparer = workflow.reviewModel ?? workflow.fixModel;
+  const preparer = workflow.reviewModel ?? workflow.addressFindingsModel;
   const consolidator = workflow.consolidationModel ?? preparer;
   setSession(next, run.id, "preparationSession", plan, preparer, "prepare");
   setSession(next, run.id, "reviewSession", consolidate, consolidator, "consolidate");
-  setSession(next, run.id, "fixSession", fix, workflow.fixModel, "fix");
+  setSession(
+    next,
+    run.id,
+    "addressFindingsSession",
+    fix,
+    workflow.addressFindingsModel,
+    "address-findings",
+  );
   setRuntime(next, "prepare", plan);
   setRuntime(next, "consolidate", consolidate);
-  setRuntime(next, "fix", fix);
+  setRuntime(next, "address-findings", fix);
 
   // The sealed package every reviewer shared.
   if (!next.reviewPackage && packageStep?.state === "complete" && packageStep.outputs.package) {
@@ -143,9 +150,9 @@ export async function projectMultiReviewGraphRun(
   }
 
   // Address Findings's result.
-  if (!next.fixResult && fix?.state === "complete" && fix.outputs.result) {
+  if (!next.addressFindingsResult && fix?.state === "complete" && fix.outputs.result) {
     const result = await readAddressFindingsResult(read, fix.outputs.result);
-    if (result) next.fixResult = result;
+    if (result) next.addressFindingsResult = result;
   }
 
   projectAutoPr(next, run, latest, terminal);
@@ -173,7 +180,7 @@ function projectActiveRequest(
   delete workflow.activeRequest;
   if (terminal) return;
   const steps: [MultiReviewStepKind, string][] = [
-    ["fix", N.fix],
+    ["address-findings", N.fix],
     ["consolidate", N.consolidate],
     ["prepare", N.plan],
   ];
@@ -507,7 +514,7 @@ function sessionStatus(activation: NodeActivation): MultiReviewSession["status"]
 function setSession(
   workflow: MultiReviewWorkflow,
   runId: string,
-  field: "preparationSession" | "reviewSession" | "fixSession",
+  field: "preparationSession" | "reviewSession" | "addressFindingsSession",
   activation: NodeActivation | undefined,
   selection: MultiReviewModelSelection,
   step: MultiReviewStepKind,
@@ -575,16 +582,18 @@ function projectAutoPr(
   const gate = latest.get(slot(N.hasFindings));
   // An Address Findings run-authorized launch names Address Findings it follows, as `queueAutoPr` does,
   // so status notices never present it as the outcome of a later Address Findings.
-  const fixIdentity = multiReviewAddressFindingsIdentity(workflow.fixSession);
+  const addressFindingsIdentity = multiReviewAddressFindingsIdentity(
+    workflow.addressFindingsSession,
+  );
   const cleanReport =
     gate?.outlet === "clean" ||
-    (!workflow.fixResult &&
+    (!workflow.addressFindingsResult &&
       workflow.consolidatedReport !== undefined &&
       !hasFindings(workflow.consolidatedReport));
   const basis = cleanReport
     ? { basis: "clean-review" as const }
-    : fixIdentity
-      ? { fixIdentity }
+    : addressFindingsIdentity
+      ? { addressFindingsIdentity }
       : {};
   const requestId = `${run.id}:pr`;
   const attempts = Math.max(0, (pr?.attempt ?? 1) - 1);
@@ -612,7 +621,7 @@ function projectAutoPr(
   // that step, so a revision in between must already read pending: otherwise
   // it shows a review that ended without one, and a status wake reports that.
   const authorized =
-    (cleanReport || workflow.fixResult?.complete === true) &&
+    (cleanReport || workflow.addressFindingsResult?.complete === true) &&
     pr?.state !== "skipped" &&
     describe?.state !== "skipped";
   if (reached(pr) || reached(describe) || authorized) {
@@ -671,20 +680,21 @@ function phaseOf(
   if (run.status === "cancelled") return "cancelled";
   if (run.status === "cancelling") return "cancelling";
   const fix = latest.get(slot(N.fix));
-  if (workflow.fixResult) return workflow.fixResult.complete ? "completed" : "failed";
+  if (workflow.addressFindingsResult)
+    return workflow.addressFindingsResult.complete ? "completed" : "failed";
   if (run.status === "failed") return "failed";
-  if (isActive(fix)) return workflow.consolidatedReport ? "fixing" : "consolidating";
+  if (isActive(fix)) return workflow.consolidatedReport ? "addressing-findings" : "consolidating";
   // Auto-address findings hands a report with findings to Address Findings through a gate that
   // runs in a later save; the bespoke engine moves on in the same save, so
   // the review is never shown ready (with an Address Findings run button and a wake) in between.
   if (
     workflow.consolidatedReport &&
-    workflow.autoFix === true &&
+    workflow.autoAddressFindings === true &&
     hasFindings(workflow.consolidatedReport) &&
     !isGraphRunTerminal(run.status) &&
     (!fix || fix.state === "waiting")
   ) {
-    return "fixing";
+    return "addressing-findings";
   }
   if (workflow.consolidatedReport) return "ready";
   if (run.status === "complete") return "failed";
@@ -701,8 +711,8 @@ function failureOf(
   run: GraphRun,
   latest: ReadonlyMap<string, NodeActivation>,
 ): string {
-  if (workflow.fixResult && !workflow.fixResult.complete) {
-    return `The Address Findings model could not address every finding: ${workflow.fixResult.summary}`;
+  if (workflow.addressFindingsResult && !workflow.addressFindingsResult.complete) {
+    return `The Address Findings model could not address every finding: ${workflow.addressFindingsResult.summary}`;
   }
   const failed = [N.plan, N.package, N.consolidate, N.fix]
     .map((nodeId) => latest.get(slot(nodeId)))

@@ -63,7 +63,7 @@ import type { CommandContext, CommandHandler } from "./commands-context.js";
 export interface MultiReviewDefaultRows {
   reviewers: MultiReviewModelSelection[];
   reviewModel: MultiReviewModelSelection;
-  fixModel: MultiReviewModelSelection;
+  addressFindingsModel: MultiReviewModelSelection;
 }
 
 export interface MultiReviewDefaultSettings {
@@ -155,7 +155,7 @@ export function multiReviewDefaultRows(
       ...reviewLensField(lenses[index] ?? undefined),
     })),
     reviewModel: concreteRow(configuredRow("reviewPreparation") ?? review, catalog),
-    fixModel: concreteRow(configuredRow("fixReviewIssues") ?? review, catalog),
+    addressFindingsModel: concreteRow(configuredRow("fixReviewIssues") ?? review, catalog),
   };
 }
 
@@ -241,7 +241,7 @@ export function buildPipelineInputWithDefaults(
     input.reviewPreparation !== undefined
       ? withSavedSelection(
           input.reviewPreparation,
-          configured.reviewPreparation ?? configured.steps.address,
+          configured.reviewPreparation ?? configured.steps["address-findings"],
         )
       : Array.isArray(reviewers) && reviewers.length > 1
         ? configured.reviewPreparation
@@ -284,14 +284,16 @@ export async function multiReviewInputWithDefaults(
   readCatalog: () => Promise<AgentModel[]>,
 ): Promise<Record<string, unknown>> {
   const rows =
-    input.reviewers !== undefined && input.reviewModel !== undefined && input.fixModel !== undefined
+    input.reviewers !== undefined &&
+    input.reviewModel !== undefined &&
+    input.addressFindingsModel !== undefined
       ? undefined
       : multiReviewDefaultRows(settings, await readCatalog());
   return {
     ...input,
     reviewers: input.reviewers ?? rows!.reviewers,
     reviewModel: input.reviewModel ?? rows!.reviewModel,
-    fixModel: input.fixModel ?? rows!.fixModel,
+    addressFindingsModel: input.addressFindingsModel ?? rows!.addressFindingsModel,
     ...multiReviewAutomation(input, settings.global?.multiReview),
   };
 }
@@ -301,19 +303,20 @@ export async function multiReviewInputWithDefaults(
  *
  * Omitted values take the saved app-level settings, the ones the Multi Review
  * button reads (`ActionBar.view.tsx`). A requested `autoPr: true` asks for the
- * whole review → Fix → PR flow, so an omitted `autoFix` is turned on with it.
- * An explicit `autoFix: false` is kept: the PR then follows a Fix started with
+ * whole review → Address Findings → PR flow, so an omitted `autoAddressFindings`
+ * is turned on with it. An explicit `autoAddressFindings: false` is kept: the
+ * PR then follows an Address Findings run started with
  * `address_multi_review`, as the button allows. Either way the PR is queued
  * only with proof that a Fix finished, never before.
  */
 export function multiReviewAutomation(
-  input: { autoFix?: unknown; autoPr?: unknown },
+  input: { autoAddressFindings?: unknown; autoPr?: unknown },
   saved: { autoFix?: boolean; autoPr?: boolean } | undefined,
-): { autoFix: boolean; autoPr: boolean } {
+): { autoAddressFindings: boolean; autoPr: boolean } {
   const autoPr = typeof input.autoPr === "boolean" ? input.autoPr : (saved?.autoPr ?? false);
-  const autoFix =
-    typeof input.autoFix === "boolean"
-      ? input.autoFix
+  const autoAddressFindings =
+    typeof input.autoAddressFindings === "boolean"
+      ? input.autoAddressFindings
       : input.autoPr === true || (saved?.autoFix ?? false);
-  return { autoFix, autoPr };
+  return { autoAddressFindings, autoPr };
 }

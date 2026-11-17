@@ -7,7 +7,10 @@ import { COORDINATOR_WORKFLOW_STATUS_WAKE } from "@orkestrator/protocol/coordina
 import { workflowSummary } from "../control-workflow-summary.js";
 import { reviewLensSchema, selectedLens } from "./tool-support.js";
 import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
-import type { MultiReviewActionResult } from "@orkestrator/protocol/multi-review";
+import {
+  launchActionInputFromPublicFields,
+  type MultiReviewActionResult,
+} from "@orkestrator/protocol/multi-review";
 
 const selectionFields = {
   agent: Schema.Literals(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
@@ -71,16 +74,18 @@ export function reviewSelection(snapshot: object, input: ReviewLaunchInput) {
   const workflow = snapshot as {
     reviewers?: SelectionRow[];
     reviewModel?: SelectionRow;
-    fixModel?: SelectionRow;
-    autoFix?: unknown;
+    addressFindingsModel?: SelectionRow;
+    autoAddressFindings?: unknown;
     autoPr?: unknown;
   };
   const source = (field: unknown) => (field === undefined ? "default" : "requested");
   return {
     reviewers: (workflow.reviewers ?? []).map((row) => selectionRow(row)),
     reviewModel: selectionRow(workflow.reviewModel),
-    fixModel: selectionRow(workflow.fixModel),
-    autoFix: workflow.autoFix === true,
+    // The tool still answers the Address Findings fields as `fixModel` and
+    // `autoFix` (to-do 4740 task 3).
+    fixModel: selectionRow(workflow.addressFindingsModel),
+    autoFix: workflow.autoAddressFindings === true,
     autoPr: workflow.autoPr === true,
     source: {
       reviewers: source(input.reviewers),
@@ -202,16 +207,17 @@ export function registerControlReviewActions(
     },
     async ({ nodeId: requestedNode, ...input }) => {
       const node = await otherNode(requestedNode);
+      const launch = launchActionInputFromPublicFields(input);
       return response(
         node
           ? await invoke<MultiReviewActionResult>("launch_coordinator_node_multi_review", {
               scope,
               nodeId: node,
-              input,
+              input: launch,
             })
           : await invoke<MultiReviewActionResult>("launch_coordinator_multi_review_action", {
               scope,
-              input,
+              input: launch,
             }),
         invoke,
         { startsWork: true, launchInput: input, ...(node ? { nodeId: node } : {}) },

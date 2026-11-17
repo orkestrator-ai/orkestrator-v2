@@ -81,7 +81,7 @@ export async function multiReviewButtonStart(
   const config = await context.storage.loadConfig();
   // Omitted model rows take the saved defaults the Multi Review button uses.
   const defaults =
-    input.reviewers && input.reviewModel && input.fixModel
+    input.reviewers && input.reviewModel && input.addressFindingsModel
       ? undefined
       : multiReviewDefaultRows(
           savedLaunchSettings(config, projectId, environment),
@@ -103,7 +103,7 @@ export async function multiReviewButtonStart(
       : config.global.reviewInstruction,
     reviewers: input.reviewers ?? defaults!.reviewers,
     reviewModel: input.reviewModel ?? defaults!.reviewModel,
-    fixModel: input.fixModel ?? defaults!.fixModel,
+    addressFindingsModel: input.addressFindingsModel ?? defaults!.addressFindingsModel,
     ...multiReviewAutomation(input, config.global.agentSettings?.multiReview),
   };
 }
@@ -233,11 +233,13 @@ export async function runMultiReviewSurface(
         workflow.phase === "interactive" &&
         workflow.addressPromptPending === true &&
         (!customAddressFindings ||
-          (workflow.customFixInstruction === customAddressFindings.instruction &&
-            workflow.customFixModel?.agent === customAddressFindings.fixModel.agent &&
-            workflow.customFixModel.model === customAddressFindings.fixModel.model &&
-            workflow.customFixModel.reasoningEffort ===
-              customAddressFindings.fixModel.reasoningEffort));
+          (workflow.customAddressFindingsInstruction === customAddressFindings.instruction &&
+            workflow.customAddressFindingsModel?.agent ===
+              customAddressFindings.addressFindingsModel.agent &&
+            workflow.customAddressFindingsModel.model ===
+              customAddressFindings.addressFindingsModel.model &&
+            workflow.customAddressFindingsModel.reasoningEffort ===
+              customAddressFindings.addressFindingsModel.reasoningEffort));
       if (customAddressFindings && !handoffArmed)
         throw new Error(
           `Custom Address Findings handoff could not be queued: ${conciseError(error)} Retry custom_fix_multi_review with the same requestId after resolving the blocker.`,
@@ -604,7 +606,8 @@ export function registerCoordinatorReviewActions(
             instruction: customAddressFindings.instruction,
             // Omitted, the custom Address Findings runs the review's own Address Findings model, as the
             // dialog's model picker starts on it.
-            fixModel: customAddressFindings.fixModel ?? saved.snapshot.fixModel,
+            addressFindingsModel:
+              customAddressFindings.fixModel ?? saved.snapshot.addressFindingsModel,
           }
         : undefined,
     );

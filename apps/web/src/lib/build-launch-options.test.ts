@@ -345,7 +345,7 @@ describe("buildPipelineConfiguredDefaults", () => {
       model: "gpt-5.6",
       reasoningEffort: "medium",
     });
-    expect(defaults.steps.address).toEqual({
+    expect(defaults.steps["address-findings"]).toEqual({
       agent: "claude",
       model: "claude-sonnet-5",
     });
@@ -384,7 +384,7 @@ describe("buildPipelineConfiguredDefaults", () => {
     expect(defaults.reviewers).toEqual([inherited]);
     expect(defaults.steps).toEqual({
       review: inherited,
-      address: inherited,
+      "address-findings": inherited,
       verify: inherited,
       pr: inherited,
       "resolve-conflicts": inherited,
@@ -446,7 +446,7 @@ describe("buildPipelineConfiguredDefaults", () => {
       { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
       { agent: "claude", model: "claude-sonnet-5" },
     ]);
-    expect(defaults.steps.address).toEqual({
+    expect(defaults.steps["address-findings"]).toEqual({
       agent: "codex",
       model: "gpt-5.4",
       reasoningEffort: "high",
@@ -457,7 +457,7 @@ describe("buildPipelineConfiguredDefaults", () => {
       reasoningEffort: "high",
     });
     // The saved settings themselves are untouched.
-    expect(buildPipelineConfiguredDefaults(config, "project-1").steps.address).toEqual({
+    expect(buildPipelineConfiguredDefaults(config, "project-1").steps["address-findings"]).toEqual({
       agent: "codex",
       reasoningEffort: "high",
     });
@@ -480,7 +480,7 @@ describe("buildPipelineConfiguredDefaults", () => {
       "project-1",
     );
 
-    expect(defaults.steps.address).toEqual({
+    expect(defaults.steps["address-findings"]).toEqual({
       agent: "codex",
       model: "gpt-5.6",
       reasoningEffort: "medium",

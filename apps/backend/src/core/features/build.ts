@@ -278,9 +278,9 @@ export async function createFeatureBuild(
  * verify action was introduced.
  */
 function withVerifyFromAddressFindings(steps: BuildStepConfigs): BuildStepConfigs {
-  if (steps.verify || !steps.address) return steps;
+  if (steps.verify || !steps["address-findings"]) return steps;
   // Only the model selection: Address's instructions are about fixing findings.
-  const { instructions: _addressInstructions, ...selection } = steps.address;
+  const { instructions: _addressInstructions, ...selection } = steps["address-findings"];
   return { ...steps, verify: selection };
 }
 

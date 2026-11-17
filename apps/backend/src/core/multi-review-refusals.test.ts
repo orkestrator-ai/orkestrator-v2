@@ -45,7 +45,7 @@ test("MultiReviewService refuses to delete or replace a failed review with the f
           projectId: "project-1",
           targetBranch: "main",
           reviewers: [{ agent: "claude", model: "opus" }],
-          fixModel: { agent: "claude", model: "fix-model" },
+          addressFindingsModel: { agent: "claude", model: "fix-model" },
         }),
       ).rejects.toThrow(FAILED_START);
       expect(await storage.getMultiReviewWorkflow(started.id)).not.toBeNull();

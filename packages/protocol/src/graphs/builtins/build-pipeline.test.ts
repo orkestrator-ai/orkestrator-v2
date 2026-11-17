@@ -36,7 +36,7 @@ describe("Build Pipeline built-in ↔ the protocol's pipeline contract", () => {
   });
 
   test("Fix runs under Build's step, so it shares Build's role", () => {
-    expect(stepKeyForSessionPhase("fix")).toBe("build");
+    expect(stepKeyForSessionPhase("rework")).toBe("build");
     expect(agent("fix").role).toBe(agent("build").role);
   });
 

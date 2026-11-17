@@ -84,7 +84,7 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
 
   async function attempt(owned: boolean, provider: "codex" | "opencode" = "codex") {
     const resultKey = crypto.randomUUID();
-    const address = stageSession("address", { key: "address", label: "Address Session" });
+    const address = stageSession("address-findings", { key: "address", label: "Address Session" });
     await storage.saveBuildPipeline(
       PIPELINE_ID,
       "p1",
@@ -94,7 +94,7 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
         "e1",
         "p1",
         [{ ...address, ...(owned ? { structuredRequestId: resultKey } : {}) }],
-        { phase: "addressing" },
+        { phase: "addressing-findings" },
       ),
     );
     await storage.synchronizeAgentMailboxes();
@@ -205,7 +205,10 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
 
   describe("an OpenCode turn without a workflow-result capability", () => {
     async function workerPipeline(addressFindingsStatus: "running" | "finished" = "running") {
-      const address = stageSession("address", { key: "address", label: "Address Session" });
+      const address = stageSession("address-findings", {
+        key: "address",
+        label: "Address Session",
+      });
       const verify = stageSession("verify", { key: "verify", label: "Verify Session" });
       await storage.saveBuildPipeline(
         PIPELINE_ID,
@@ -213,7 +216,7 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
         "e1",
         BUILD_PIPELINE_VERSION,
         addressFindingsStatus === "running"
-          ? pipelineSnapshot("e1", "p1", [address], { phase: "addressing" })
+          ? pipelineSnapshot("e1", "p1", [address], { phase: "addressing-findings" })
           : pipelineSnapshot("e1", "p1", [{ ...address, status: "idle" }, verify], {
               phase: "verifying",
             }),

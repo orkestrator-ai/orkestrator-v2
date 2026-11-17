@@ -69,9 +69,9 @@ describe("build pipeline stop reviewer", () => {
       expect(session.completedAt).toBeDefined();
 
       provider.runningModels.clear();
-      const after = await advanceUntil(service, read, running.id, "addressing", 30);
+      const after = await advanceUntil(service, read, running.id, "addressing-findings", 30);
 
-      expect(after.phase).toBe("addressing");
+      expect(after.phase).toBe("addressing-findings");
       expect(after.structuredReview?.reviewSummary).toBe("Merged review.");
       const consolidationPrompt = provider.sent.find((entry) =>
         entry.sessionId.includes("consolidation"),
@@ -234,7 +234,7 @@ describe("build pipeline stop reviewer", () => {
       expect(
         provider.created.filter((entry) => entry.label === "Review · Consolidation"),
       ).toHaveLength(2);
-      expect(retried.phase).toBe("addressing");
+      expect(retried.phase).toBe("addressing-findings");
       expect(retried.structuredReview?.reviewSummary).toBe("Merged review.");
       expect(
         retried.sessions.filter((s) => s.reviewerOutcome === "cancelled").map((s) => s.model),

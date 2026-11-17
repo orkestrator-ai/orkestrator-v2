@@ -37,7 +37,7 @@ describe("Multi Review built-in ↔ the protocol's Multi Review contract", () =>
   test("the worst case runs the turns the launcher's work estimate counts", () => {
     const estimate = multiReviewWorkEstimate({
       reviewerCount: MULTI_REVIEW_MAX_REVIEWERS,
-      autoFix: true,
+      autoAddressFindings: true,
       autoPr: true,
     });
     const turns =
@@ -67,7 +67,7 @@ describe("Multi Review built-in ↔ the protocol's Multi Review contract", () =>
         "reviewer",
         "consolidate",
         "after-consolidation",
-        "fix",
+        "address-findings",
         "after-fix",
         "pr",
       ]),

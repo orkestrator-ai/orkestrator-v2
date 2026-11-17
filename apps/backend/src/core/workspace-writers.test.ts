@@ -25,7 +25,7 @@ function bespokeReview(id: string, phase: string): Record<string, unknown> {
     projectId: "project-1",
     targetBranch: "main",
     reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
     phase,
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
@@ -65,7 +65,12 @@ describe("how another engine uses a checkout", () => {
         buildPipelineWorkspaceUse({ ...building, phase, sessions });
       const idle = building.sessions.map((session) => ({ ...session, status: "idle" as const }));
       expect(at("reviewing", idle)).toBe("read");
-      for (const phase of ["fixing", "addressing", "verifying", "creating-pr"] as const) {
+      for (const phase of [
+        "reworking",
+        "addressing-findings",
+        "verifying",
+        "creating-pr",
+      ] as const) {
         expect(at(phase, idle)).toBe("write");
       }
       expect(at("waiting-for-setup", idle)).toBe("write");
@@ -82,7 +87,7 @@ describe("how another engine uses a checkout", () => {
     expect(multiReviewWorkspaceUse(bespokeReview("w1", "reviewing"))).toBe("read");
     expect(multiReviewWorkspaceUse(bespokeReview("w1", "cancelled"))).toBeNull();
     expect(multiReviewWorkspaceUse(graphReview("w2"))).toBeNull();
-    expect(multiReviewWorkspaceUse({ phase: "fixing" })).toBeNull();
+    expect(multiReviewWorkspaceUse({ phase: "addressing-findings" })).toBeNull();
   });
 });
 

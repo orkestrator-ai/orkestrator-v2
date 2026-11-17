@@ -957,7 +957,7 @@ describe("BuildPipelineService addressing stage", () => {
       await service.advanceNow(built.id);
 
       const addressing = await snapshot(storage, built.id);
-      expect(addressing.phase).toBe("addressing");
+      expect(addressing.phase).toBe("addressing-findings");
       expect(addressing.structuredReview?.issues).toHaveLength(1);
       expect(addressing.keyInformation?.issues).toMatchObject([
         { round: 0, issue: reviewWithIssues.issues[0]!.title, status: "open" },
@@ -965,7 +965,7 @@ describe("BuildPipelineService addressing stage", () => {
       expect(addressing.sessions).toHaveLength(reviewing.sessions.length + 1);
       const addressFindingsSession = addressing.sessions.at(-1)!;
       expect(addressFindingsSession).toMatchObject({
-        phase: "address",
+        phase: "address-findings",
         label: "Address Findings Session",
       });
       expect(addressFindingsSession.sdkSessionId).not.toBe(reviewSessionId);
@@ -1010,8 +1010,8 @@ describe("BuildPipelineService addressing stage", () => {
       await service.advanceNow(built.id);
 
       const pending = await snapshot(storage, built.id);
-      expect(pending.phase).toBe("addressing");
-      expect(pending.pendingPromptAttempt?.phase).toBe("addressing");
+      expect(pending.phase).toBe("addressing-findings");
+      expect(pending.pendingPromptAttempt?.phase).toBe("addressing-findings");
 
       await service.advanceNow(built.id);
       const dispatched = await snapshot(storage, built.id);
@@ -1084,7 +1084,7 @@ describe("BuildPipelineService addressing stage", () => {
         },
       };
       await service.advanceNow(built.id);
-      expect((await snapshot(storage, built.id)).phase).toBe("addressing");
+      expect((await snapshot(storage, built.id)).phase).toBe("addressing-findings");
       const dispatchCount = provider.sent.length;
 
       provider.structuredResult = "absent";
@@ -1132,7 +1132,7 @@ describe("BuildPipelineService retry review", () => {
           .every((session) => session.reviewReport === undefined),
       ).toBe(true);
       expect(retried.sessions).toHaveLength(sessionCount + 2);
-      expect(retried.sessions.at(-2)?.phase).toBe("fix");
+      expect(retried.sessions.at(-2)?.phase).toBe("rework");
       expect(retried.sessions.at(-1)?.phase).toBe("review");
       expect(provider.sent.at(-1)?.prompt).toContain("pins the exact committed range");
       expect(packageGeneration.count).toBe(2);
@@ -1216,8 +1216,8 @@ describe("BuildPipelineService retry review", () => {
 
       await service.advanceNow(built.id);
       const preparing = await snapshot(storage, built.id);
-      expect(preparing.phase).toBe("fixing");
-      expect(preparing.sessions.at(-1)?.phase).toBe("fix");
+      expect(preparing.phase).toBe("reworking");
+      expect(preparing.sessions.at(-1)?.phase).toBe("rework");
 
       await service.advanceNow(built.id);
       const recovered = await snapshot(storage, built.id);
@@ -1248,7 +1248,7 @@ describe("BuildPipelineService retry review", () => {
 
       await service.advanceNow(built.id);
       const preparing = await snapshot(storage, built.id);
-      expect(preparing.phase).toBe("fixing");
+      expect(preparing.phase).toBe("reworking");
       expect(preparing.reviewPackage).toBeUndefined();
       expect(invocations.some((entry) => entry.command === "verify_review_package")).toBe(true);
 

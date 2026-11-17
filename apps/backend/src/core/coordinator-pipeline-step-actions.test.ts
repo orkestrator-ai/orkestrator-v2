@@ -34,7 +34,7 @@ function fakePipelines(node: string, storage: () => StorageService) {
     resume: async (pipelineId: string) => {
       const record = (await storage().getBuildPipeline(pipelineId))!;
       resumes.push({ node, pipelineId });
-      return { ...(record.snapshot as Record<string, unknown>), phase: "fixing" };
+      return { ...(record.snapshot as Record<string, unknown>), phase: "reworking" };
     },
     restartForCoordinator: async (
       pipelineId: string,
@@ -52,13 +52,13 @@ function fakePipelines(node: string, storage: () => StorageService) {
       restarts.push({ node, pipelineId, stageId, selection });
       // The restarted pipeline is running its step again, as the service leaves it.
       const result = {
-        pipeline: { id: pipelineId, phase: "fixing" },
+        pipeline: { id: pipelineId, phase: "reworking" },
         step: { phase: "fix", round: 2, sessionKey: stageId ?? "fix-key" },
         alreadyRestarted: false,
       };
       await storage().saveBuildPipeline(pipelineId, record.projectId, "", 1, {
         ...(record.snapshot as Record<string, unknown>),
-        phase: "fixing",
+        phase: "reworking",
         restartIdentity: { requestId, result },
       });
       return result;
@@ -197,7 +197,7 @@ test("restarts the failed step here and reopens the coordinator's follow", async
     pipelineId: "pipe-local",
     restarted: true,
     step: { phase: "fix", round: 2 },
-    phase: "fixing",
+    phase: "reworking",
     followed: true,
     delivery: "async",
   });
@@ -322,10 +322,10 @@ test("resume refuses a pipeline that is not paused and points at the restart too
   const cancelled = await tool("resume_build_pipeline", { pipelineId: "pipe-cancelled" });
   expect(cancelled.isError).toBe(true);
   expect(cancelled.text).toContain("cancelled");
-  await savePipeline(world.storage, world.projectId, "pipe-running", { phase: "fixing" });
+  await savePipeline(world.storage, world.projectId, "pipe-running", { phase: "reworking" });
   const running = await tool("resume_build_pipeline", { pipelineId: "pipe-running" });
   expect(running.isError).toBe(true);
-  expect(running.text).toContain("fixing, not paused");
+  expect(running.text).toContain("reworking, not paused");
   expect(running.text).not.toContain("restart_build_pipeline_step");
 });
 

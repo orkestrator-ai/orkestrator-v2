@@ -142,7 +142,8 @@ export class BuildPipelineWorkerMail implements PipelineWorkerMailPort {
         // A steered build or fix may change the work a preparation result
         // described, exactly as a steer from the pipeline tab does. Saved
         // here, under the lock this steer already holds.
-        if (!live.session || (pipeline.phase !== "building" && pipeline.phase !== "fixing")) return;
+        if (!live.session || (pipeline.phase !== "building" && pipeline.phase !== "reworking"))
+          return;
         const record = await this.ctx.requireRecord(pipeline.id);
         const fresh = record.snapshot as BuildPipeline;
         fresh.backendRevision = record.revision;
@@ -266,7 +267,7 @@ export async function dispatchWorkerMailTurn(
       });
       archiveValidationRun(pipeline, run);
     }
-    if (phase === "building" || phase === "fixing") discardPreparationResult(session);
+    if (phase === "building" || phase === "reworking") discardPreparationResult(session);
     const startedAt = new Date().toISOString();
     if (previousRequestId) {
       session.structuredRequestId = requestId;

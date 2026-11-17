@@ -78,7 +78,7 @@ function workflow(): MultiReviewWorkflow {
         providerSessionId: "provider-session-1",
       },
     ],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
     createdAt: STARTED_AT,
     updatedAt: STARTED_AT,
     backendRevision: 1,

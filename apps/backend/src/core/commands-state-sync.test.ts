@@ -4253,7 +4253,7 @@ describe("multi review commands", () => {
       { agent: "claude", model: "opus" },
       { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
     ],
-    fixModel: { agent: "codex", model: "gpt-5.6" },
+    addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
   } as const;
 
   test("strips the controller lease and fence from renderer reads", async () => {
@@ -4369,7 +4369,7 @@ describe("multi review commands", () => {
             "start_multi_review_custom_fix",
             {
               workflowId: "multi-1",
-              fixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+              addressFindingsModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
               instruction: "Fix the inactive-tab regression",
             },
           ],
@@ -4416,7 +4416,7 @@ describe("multi review commands", () => {
         expect(address).toHaveBeenCalledWith("multi-1");
         expect(customAddressFindings).toHaveBeenCalledWith({
           workflowId: "multi-1",
-          fixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+          addressFindingsModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
           instruction: "Fix the inactive-tab regression",
         });
         expect(retry).toHaveBeenCalledWith("multi-1");
@@ -4454,8 +4454,8 @@ describe("multi review commands", () => {
       phase: "interactive",
       controllerFence: "secret-fence",
       addressPromptPending: true,
-      fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
-      fixSession: {
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+      addressFindingsSession: {
         providerSessionId: "provider-fix",
         sessionKey: "multi-review:multi-1:fix",
       },
@@ -4512,7 +4512,7 @@ describe("multi review commands", () => {
         await expect(
           invoke("start_multi_review_custom_fix", {
             workflowId: "multi-1",
-            fixModel: startInput.fixModel,
+            addressFindingsModel: startInput.addressFindingsModel,
             instruction: " ",
           }),
         ).rejects.toThrow("Invalid Multi Review custom fix request");
@@ -4596,9 +4596,12 @@ describe("multi review commands", () => {
     await withCommands(
       async (invoke) => {
         await expect(
-          invoke("get_multi_review_step_transcript", { workflowId: "multi-1", step: "fix" }),
-        ).resolves.toMatchObject({ step: "fix", messages: [{ id: "progress" }] });
-        expect(stepTranscript).toHaveBeenCalledWith("multi-1", "fix", undefined);
+          invoke("get_multi_review_step_transcript", {
+            workflowId: "multi-1",
+            step: "address-findings",
+          }),
+        ).resolves.toMatchObject({ step: "address-findings", messages: [{ id: "progress" }] });
+        expect(stepTranscript).toHaveBeenCalledWith("multi-1", "address-findings", undefined);
         await invoke("get_multi_review_step_transcript", {
           workflowId: "multi-1",
           step: "consolidate",
@@ -4823,7 +4826,7 @@ describe("build pipeline commands", () => {
           providerSessionId: "unrotated-session",
         },
       ],
-      fixModel: { agent: "codex", model: "gpt-5.6" },
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
       phase: "reviewing",
       createdAt: "2026-09-08T10:00:00.000Z",
       updatedAt: "2026-09-08T10:00:00.000Z",

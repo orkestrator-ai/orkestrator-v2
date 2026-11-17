@@ -730,7 +730,7 @@ export class BuildPipelineLifecycle {
       if (candidate.validationRun && !candidate.reviewPackage) return;
       const session = sessionForCurrentPhase(candidate);
       const resumePrompt = resumePromptFor(phase, {
-        addressFindingsResult: session?.addressReportKind !== undefined,
+        addressFindingsResult: session?.addressFindingsReportKind !== undefined,
         deliveryPolicy: candidate.delivery?.policy,
       });
       const prompt = resumePrompt ? withUnattendedPolicy(resumePrompt) : null;
@@ -742,10 +742,10 @@ export class BuildPipelineLifecycle {
         // fails the stage (`finishAddressFindings`).
         const structuredReview =
           phase === "building" ||
-          phase === "fixing" ||
+          phase === "reworking" ||
           phase === "reviewing" ||
           phase === "verifying" ||
-          (phase === "addressing" && session.addressReportKind !== undefined);
+          (phase === "addressing-findings" && session.addressFindingsReportKind !== undefined);
         const resumeResultKind = this.ctx.workflowResultKind(phase);
         const resultTransport =
           structuredReview && resumeResultKind
@@ -1282,17 +1282,17 @@ export class BuildPipelineLifecycle {
         delete candidate.verificationFeedback;
       }
 
-      const implementationPhase = (): "build" | "fix" => {
+      const implementationPhase = (): "build" | "rework" => {
         const currentIterationImplementation = [...candidate.sessions]
           .reverse()
           .find(
             (session) =>
               session.iteration === candidate.iteration &&
-              (session.phase === "build" || session.phase === "fix") &&
+              (session.phase === "build" || session.phase === "rework") &&
               !isSupersededPipelineSession(session) &&
               !isReviewPackagePreparationSession(session, candidate),
           );
-        return currentIterationImplementation?.phase === "fix" ? "fix" : "build";
+        return currentIterationImplementation?.phase === "rework" ? "rework" : "build";
       };
 
       if (keptPanel) {
@@ -1312,7 +1312,7 @@ export class BuildPipelineLifecycle {
       ) {
         candidate.restartRequest = {
           kind: "review-package",
-          implementationPhase: target.phase === "fix" ? "fix" : "build",
+          implementationPhase: target.phase === "rework" ? "rework" : "build",
         };
       } else {
         const requestedPhase = target.phase;
@@ -1321,13 +1321,13 @@ export class BuildPipelineLifecycle {
             kind: "review-package",
             implementationPhase: implementationPhase(),
           };
-        } else if (requestedPhase === "address" && !candidate.structuredReview) {
+        } else if (requestedPhase === "address-findings" && !candidate.structuredReview) {
           // A later round replaced the live report; the round's own copy lets
           // Address rerun alone instead of reviewing again.
           const retained = roundReviewReport(candidate, iteration);
           if (retained) {
             candidate.structuredReview = retained;
-            candidate.restartRequest = { kind: "session", phase: "address" };
+            candidate.restartRequest = { kind: "session", phase: "address-findings" };
           } else {
             candidate.restartRequest = candidate.reviewPackage
               ? { kind: "session", phase: "review" }
@@ -1361,11 +1361,11 @@ export class BuildPipelineLifecycle {
         // Verify runs again, so the next pass reads the ticket again.
         delete candidate.delivery;
         delete candidate.verificationResult;
-        if (!(restart.kind === "session" && restart.phase === "fix")) {
+        if (!(restart.kind === "session" && restart.phase === "rework")) {
           delete candidate.verificationFeedback;
         }
       }
-      if (restart.kind === "session" && restart.phase === "fix") {
+      if (restart.kind === "session" && restart.phase === "rework") {
         // A fix answers the verification that ended the round before it.
         // A legacy record's pipeline-level verdict belongs to its latest
         // round; it cannot explain a Fix in an earlier round.
@@ -1422,17 +1422,17 @@ export class BuildPipelineLifecycle {
             ? "building"
             : restart.phase === "review"
               ? "reviewing"
-              : restart.phase === "address"
-                ? "addressing"
+              : restart.phase === "address-findings"
+                ? "addressing-findings"
                 : restart.phase === "verify"
                   ? "verifying"
-                  : restart.phase === "fix"
-                    ? "fixing"
+                  : restart.phase === "rework"
+                    ? "reworking"
                     : restart.phase === "pr"
                       ? "creating-pr"
                       : "resolving-conflicts"
-          : restart.implementationPhase === "fix"
-            ? "fixing"
+          : restart.implementationPhase === "rework"
+            ? "reworking"
             : "building";
       delete candidate.skipRequest;
       clearStageControlState(candidate);
@@ -1487,7 +1487,7 @@ export class BuildPipelineLifecycle {
           stageId === `validation:${run.id}` &&
           !candidate.reviewPackage &&
           !candidate.reviewRetryRequested &&
-          (phase === "building" || phase === "fixing") &&
+          (phase === "building" || phase === "reworking") &&
           (run.status === "planned" ||
             run.status === "running" ||
             (run.status === "cancelled" && candidate.phase === "paused"));

@@ -1912,7 +1912,7 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
       requestId: `browser-review-${target!.id}`,
       environmentId: target!.id,
       reviewers: [{ agent: "codex", model: "default" }],
-      fixModel: { agent: "codex", model: "default" },
+      addressFindingsModel: { agent: "codex", model: "default" },
     };
     const launched = await invoke<MultiReviewActionResult>(
       "launch_coordinator_multi_review_action",

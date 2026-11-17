@@ -589,7 +589,7 @@ async function readyReview(): Promise<MultiReviewWorkflow> {
       },
     ],
     reviewModel: { agent: "codex", model: "default" },
-    fixModel: { agent: "codex", model: "default" },
+    addressFindingsModel: { agent: "codex", model: "default" },
     phase: "ready",
     consolidatedReport: cleanReview,
     backendRevision: 0,
@@ -632,7 +632,7 @@ test("a custom Address Findings on another node starts once, adopts the review, 
       ...workflow,
       phase: "interactive",
       addressPromptPending: false,
-      fixSession: {
+      addressFindingsSession: {
         agent: "codex",
         model: "default",
         sessionKey: "multi-review:review-1:fix",
@@ -641,8 +641,12 @@ test("a custom Address Findings on another node starts once, adopts the review, 
         status: "running",
         startedAt: new Date().toISOString(),
       },
-      fixTabId: "multi-review-fix:review-1:launch",
-      fixLaunch: { kind: "custom", instruction: input.instruction, model: input.fixModel },
+      addressFindingsTabId: "multi-review-fix:review-1:launch",
+      addressFindingsLaunch: {
+        kind: "custom",
+        instruction: input.instruction,
+        model: input.addressFindingsModel,
+      },
     } as unknown as MultiReviewWorkflow;
     const saved = await leaf.getMultiReviewWorkflow(workflow.id);
     await leaf.saveMultiReviewWorkflow(workflow.id, workerId, saved!.revision, delivered);
@@ -667,7 +671,7 @@ test("a custom Address Findings on another node starts once, adopts the review, 
   expect(customAddressFindings.mock.calls[0]![0]).toEqual({
     workflowId: workflow.id,
     instruction: "Only the tests",
-    fixModel: { agent: "codex", model: "default" },
+    addressFindingsModel: { agent: "codex", model: "default" },
   });
   expect((await tool("custom_fix_multi_review", input)).structuredContent).toMatchObject({
     replayed: true,
@@ -704,8 +708,8 @@ test("a delivered custom Address Findings replays only the complete explicit mod
     ...workflow,
     phase: "interactive",
     addressPromptPending: false,
-    fixModel: model,
-    fixSession: {
+    addressFindingsModel: model,
+    addressFindingsSession: {
       ...model,
       sessionKey: "fix-session",
       providerSessionId: "fix-provider",
@@ -713,8 +717,8 @@ test("a delivered custom Address Findings replays only the complete explicit mod
       status: "running",
       startedAt: new Date().toISOString(),
     },
-    fixTabId: "delivered-fix",
-    fixLaunch: { kind: "custom", instruction: "Only the tests", model },
+    addressFindingsTabId: "delivered-fix",
+    addressFindingsLaunch: { kind: "custom", instruction: "Only the tests", model },
   });
   realReviewSupervisor();
   const input = {
@@ -741,8 +745,8 @@ test("a delivered custom Address Findings replays only the complete explicit mod
     replayed: true,
   });
   expect((await leaf.getMultiReviewWorkflow(workflow.id))!.snapshot).toMatchObject({
-    fixLaunch: { model },
-    fixTabId: "delivered-fix",
+    addressFindingsLaunch: { model },
+    addressFindingsTabId: "delivered-fix",
   });
 });
 
@@ -776,7 +780,7 @@ test("a pending remote custom Address Findings retains its handoff through a los
     expect(pending).toMatchObject({
       phase: "interactive",
       addressPromptPending: true,
-      customFixModel: input.fixModel,
+      customAddressFindingsModel: input.fixModel,
     });
     // A queued handoff can be read without waiting for its blocked dispatcher.
     expect(
@@ -808,11 +812,11 @@ test("a pending remote custom Address Findings retains its handoff through a los
       addressRequestId: pending.addressRequestId,
       addressSessionKey: pending.addressSessionKey,
       addressTabId: pending.addressTabId,
-      customFixModel: input.fixModel,
+      customAddressFindingsModel: input.fixModel,
     });
   }
   expect((await leaf.getMultiReviewWorkflow(workflow.id))!.snapshot).toMatchObject({
-    customFixModel: input.fixModel,
+    customAddressFindingsModel: input.fixModel,
     addressRequestId: pending.addressRequestId,
   });
   const changed = await tool("custom_fix_multi_review", {

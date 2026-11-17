@@ -95,7 +95,7 @@ export interface MultiReviewWorkEstimate {
 
 export function multiReviewWorkEstimate(input: {
   reviewerCount: number;
-  autoFix: boolean;
+  autoAddressFindings: boolean;
   autoPr?: boolean;
 }): MultiReviewWorkEstimate {
   return {
@@ -103,7 +103,7 @@ export function multiReviewWorkEstimate(input: {
     preparationTurns: 1,
     consolidationTurns: 1,
     validationRuns: 1,
-    fixTurns: input.autoFix ? 1 : 0,
+    fixTurns: input.autoAddressFindings ? 1 : 0,
     prTurns: input.autoPr ? 1 : 0,
     maxRepairTurnsPerStep: REVIEW_FANOUT_MAX_SCHEMA_REPAIR_ATTEMPTS,
   };

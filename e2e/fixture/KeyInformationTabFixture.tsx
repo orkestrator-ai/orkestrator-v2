@@ -159,7 +159,12 @@ const keyInformation: BuildPipelineKeyInformation = {
       round: 0,
       sections: ["statement", "context", "solution", "workDone", "decisions", "tests"],
     },
-    { at: "2026-11-02T03:55:00.000Z", author: "address", round: 0, sections: ["issues", "tests"] },
+    {
+      at: "2026-11-02T03:55:00.000Z",
+      author: "address-findings",
+      round: 0,
+      sections: ["issues", "tests"],
+    },
     { at: "2026-11-02T04:20:00.000Z", author: "verify", round: 0, sections: ["verification"] },
     { at: "2026-11-02T04:41:28.000Z", author: "verify", round: 1, sections: ["verification"] },
   ],

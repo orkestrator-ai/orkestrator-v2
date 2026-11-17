@@ -10,9 +10,8 @@
  *
  * **The workflow guard is not used here**, for the build pipeline's reason
  * (`../pipelines/schemas.ts`): `isMultiReviewWorkflow` refuses fields an older
- * client does not know, and the renderer runs it only after rewriting the
- * Address Findings vocabulary (`canonicalMultiReview`). The stored `snapshot`
- * stays `unknown`, as the model types it.
+ * client does not know, so the renderer's store runs it on the snapshot
+ * instead. The stored `snapshot` stays `unknown`, as the model types it.
  *
  * Browser-safe.
  */

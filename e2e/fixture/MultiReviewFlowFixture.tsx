@@ -18,7 +18,7 @@ import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 /**
  * A Multi Review in any phase, for the flow graph's browser checks and
  * screenshots. `?phase=` picks the phase (`paused-prepare`, `paused-consolidate`
- * and `paused-fix` choose the paused step), `?reviewers=` the panel size,
+ * and `paused-address-findings` choose the paused step), `?reviewers=` the panel size,
  * `?worktreeChanged` a review whose worktree moved.
  */
 
@@ -150,7 +150,7 @@ export function multiReviewFlowWorkflow(
         ? 0
         : paused === "consolidate"
           ? 2
-          : paused === "fix"
+          : paused === "address-findings"
             ? 3
             : (
                 {
@@ -158,7 +158,7 @@ export function multiReviewFlowWorkflow(
                   reviewing: 1,
                   consolidating: 2,
                   ready: 2,
-                  fixing: 3,
+                  "addressing-findings": 3,
                   interactive: 3,
                   completed: 3,
                   cancelling: 1,
@@ -272,7 +272,7 @@ export function multiReviewFlowWorkflow(
     };
   }
   if (reached("fix")) {
-    stepRuntimes.fix = {
+    stepRuntimes["address-findings"] = {
       startedAt: minutesAgo(now, 0.8),
       ...(workflowPhase === "completed"
         ? { completedAt: minutesAgo(now, 0.1), tokenCount: 64_000 }
@@ -305,16 +305,17 @@ export function multiReviewFlowWorkflow(
         workflowPhase === "preparing" || workflowPhase === "consolidating" ? "running" : "idle",
       startedAt: minutesAgo(now, 8),
     },
-    fixModel,
+    addressFindingsModel: fixModel,
     ...(reached("fix")
       ? {
-          fixSessionKey: "multi-review:fixture:fix",
-          fixSession: {
+          addressFindingsSessionKey: "multi-review:fixture:fix",
+          addressFindingsSession: {
             ...fixModel,
             sessionKey: "multi-review:fixture:fix",
             providerSessionId: "fix-session",
             requestIds: ["fix-1"],
-            status: workflowPhase === "fixing" ? ("running" as const) : ("idle" as const),
+            status:
+              workflowPhase === "addressing-findings" ? ("running" as const) : ("idle" as const),
             startedAt: minutesAgo(now, 0.8),
           },
         }
@@ -349,7 +350,11 @@ export function multiReviewFlowWorkflow(
       : {}),
     ...(consolidated ? { consolidatedReport: report([...ISSUES[0]!, ...ISSUES[2]!]) } : {}),
     ...(workflowPhase === "completed"
-      ? { fixResult: { summary: "Addressed every finding and added regression tests." } }
+      ? {
+          addressFindingsResult: {
+            summary: "Addressed every finding and added regression tests.",
+          },
+        }
       : {}),
     ...(phase === "failed"
       ? { error: "A reviewer failed; retry the failed stage to continue" }
@@ -419,7 +424,7 @@ const STEP_LINES: Record<MultiReviewStepKind, string[]> = {
     "Merging four reviewer reports",
     "Two reviewers raised the paused-prepare finding; keeping the higher severity",
   ],
-  fix: ["Addressing the P0 shared fix session runtime", "Running the focused tests"],
+  "address-findings": ["Addressing the P0 shared fix session runtime", "Running the focused tests"],
 };
 
 async function fixtureStepTranscript(

@@ -874,7 +874,9 @@ export interface PublicBuildPipelineSummary {
 
 /** `build.get`: the summary plus what each step runs. */
 export interface PublicBuildPipelineDetail extends PublicBuildPipelineSummary {
-  steps: Partial<Record<import("./build-pipeline.js").BuildStepKey, PublicBuildStepSummary>>;
+  steps: Partial<
+    Record<import("./public-api-inputs-build.js").PublicBuildStepKey, PublicBuildStepSummary>
+  >;
   /** The review panel's rows; empty for a single-reviewer review step. */
   reviewers: PublicBuildStepSummary[];
   reviewPreparation: PublicBuildStepSummary | null;

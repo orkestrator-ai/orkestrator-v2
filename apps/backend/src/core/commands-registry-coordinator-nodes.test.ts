@@ -40,7 +40,7 @@ function review(id: string, phase: string) {
     projectId: "p-leaf",
     targetBranch: "main",
     reviewers: [{ ...row, id: "reviewer-0", status: "pending" }],
-    fixModel: row,
+    addressFindingsModel: row,
     phase,
     backendRevision: 0,
     createdAt: at,

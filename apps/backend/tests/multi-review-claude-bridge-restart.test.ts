@@ -184,7 +184,7 @@ test.each([
             { ...selection, id: "reviewer-1", status: "pending", sessionKey: "reviewer-claude" },
           ],
           reviewModel: selection,
-          fixModel: selection,
+          addressFindingsModel: selection,
           reviewWorktreeSnapshot: await captureReviewWorktreeSnapshot(
             invoke,
             environmentId,

@@ -453,8 +453,14 @@ export function registerCoordinatorWorkflowTools(
       if (input.existingEnvironmentId && !target) {
         await invoke("get_environment", { environmentId: input.existingEnvironmentId });
       }
+      // The tool keeps its public step name `address` until to-do 4740 task 3;
+      // the build's own step is `address-findings`.
+      const { address, ...steps } = input.steps ?? {};
       const scoped = {
         ...input,
+        ...(input.steps
+          ? { steps: { ...steps, ...(address ? { "address-findings": address } : {}) } }
+          : {}),
         projectId: coordinatorScope.projectId,
         delegationBaseBranch: baseBranch,
         delegationBaseCommit: baseCommit,

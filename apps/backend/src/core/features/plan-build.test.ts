@@ -112,7 +112,7 @@ describe("startFeaturePlanBuild", () => {
       expect(started.source).toEqual({ type: "kanban", taskId: result.taskId });
       expect(started.taskSnapshot.description).toContain("### 1. Toggle");
       // Saved Build defaults were filled by the backend, not the caller.
-      expect(started.steps?.address?.agent).toBeDefined();
+      expect(started.steps?.["address-findings"]?.agent).toBeDefined();
 
       const task = await storage.kanban.getKanbanTask(result.taskId);
       expect(task?.title).toBe("Dark mode");

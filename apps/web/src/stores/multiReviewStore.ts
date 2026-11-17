@@ -1,7 +1,6 @@
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
-import { canonicalMultiReview } from "@orkestrator/protocol/workflow-vocabulary";
 
 export interface MultiReviewState {
   workflows: Map<string, MultiReviewWorkflow>;
@@ -19,7 +18,7 @@ export const multiReviewStore = defineScopedStore<MultiReviewState>(
     workflows: new Map(),
     replaceWorkflow: (incoming) =>
       set((state) => {
-        const workflow = canonicalMultiReview(incoming);
+        const workflow = incoming;
         const current = state.workflows.get(workflow.id);
         if (current && current.backendRevision > workflow.backendRevision) return state;
         const workflows = new Map(state.workflows);

@@ -7,6 +7,7 @@ import type {
   BrowserPreviewCaptureMode,
 } from "@orkestrator/protocol/browser-preview";
 import {
+  WEB_ANNOTATION_MAX_FRAME_DEPTH,
   WEB_ANNOTATION_MAX_SHADOW_DEPTH,
   type WebAnnotationCaptureInput,
   type WebAnnotationPageEvidence,
@@ -117,9 +118,36 @@ function pickShadowHost(value: unknown): unknown {
   return { tagName: value.tagName, ...pickStableId(value.stableId), cssPath: value.cssPath };
 }
 
+/** A root-path step of a `frame` scope, rebuilt from its known fields only. */
+function pickRootStep(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  if (value.boundary === "frame") {
+    return {
+      boundary: "frame",
+      tagName: value.tagName,
+      ...pickStableId(value.stableId),
+      cssPath: value.cssPath,
+      documentPath: value.documentPath,
+      ...(value.documentIdentity !== undefined ? { documentIdentity: value.documentIdentity } : {}),
+    };
+  }
+  return { boundary: value.boundary, ...(pickShadowHost(value) as Record<string, unknown>) };
+}
+
 function pickScope(scope: unknown): unknown {
   if (!isRecord(scope)) return scope;
   if (scope.kind === "document") return { kind: "document" };
+  if (scope.kind === "frame") {
+    return {
+      kind: "frame",
+      // One past the limit, so an over-long path fails validation instead of being cut.
+      path: Array.isArray(scope.path)
+        ? scope.path
+            .slice(0, WEB_ANNOTATION_MAX_FRAME_DEPTH + WEB_ANNOTATION_MAX_SHADOW_DEPTH + 1)
+            .map(pickRootStep)
+        : scope.path,
+    };
+  }
   if (scope.kind === "shadow") {
     return {
       kind: "shadow",

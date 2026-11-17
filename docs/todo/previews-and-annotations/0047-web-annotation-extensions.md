@@ -4,8 +4,9 @@
 
 Analysed 2026-10-27 against `main` at `863b5782`; statuses rechecked
 2026-10-30 against `main` at `cd7bbe3e`, task 5 on 2026-11-02 against
-`main` at `38d55ee1`, and task 3 on 2026-11-16 against `main` at `c1fcc573`
-(built the same day).
+`main` at `38d55ee1`, task 3 on 2026-11-16 against `main` at `c1fcc573`
+(built the same day), and tasks 2 and 5 on 2026-11-17 against `main` at
+`0265e788` (task 5's same-origin iframes built the same day).
 
 Checked against `main` at `2459b05c` (2026-10-15).
 
@@ -16,7 +17,7 @@ Checked against `main` at `2459b05c` (2026-10-15).
    decisions).
 2. **Controlled pixel diffs**: code item 1, advisory region or pixel diffs
    behind their own capability. Status: open (not started; still no diff code
-   on 2026-10-30).
+   on 2026-11-17).
 3. **Automatic after-capture**: code item 2. Status: done (2026-11-16, the
    recommended turn-end prompt on the request card; its live check after a
    real agent turn moved to 7568).
@@ -25,10 +26,11 @@ Checked against `main` at `2459b05c` (2026-10-15).
    done (the gap closed in todo 0725, #1416; the producer, backend check and
    `operations.sourceHints` capability landed on branch
    `todo-0047-web-annotation-extensions`).
-5. **Open shadow roots and same-origin iframes**: code item 4. Status: open
-   (open shadow roots done on 2026-11-02 on branch
-   `shadow-root-annotations-583af4c65646-r1`; same-origin iframes not
-   started; the follow-ups in 2580 (retired 2026-11-11) are done).
+5. **Open shadow roots and same-origin iframes**: code item 4. Status: done
+   (open shadow roots on 2026-11-02 on branch
+   `shadow-root-annotations-583af4c65646-r1`, their follow-ups in 2580
+   (retired 2026-11-11); same-origin iframes on 2026-11-17 on branch
+   `20261117-013706-2e1112ea6343`, `operations.frameTargets`).
 6. **Non-desktop capture**: code item 5 and the second open question. Status:
    blocked (waits on 7568: 0042 task 3, per the embedding deferral recorded
    by [0046](0046-embedded-service-previews.md) task 1 on 2026-10-30; the
@@ -209,6 +211,20 @@ refused every non-document scope. Electron main does not filter scopes; it
 passes anchors to the page. A document-level `MutationObserver` (the pin
 layer's only observer) does not see changes inside shadow roots. Open shadow
 roots were built on this date; see Assumptions and decisions.
+
+Rechecked 2026-11-17 against `main` at `0265e788`: frames were still never
+entered. `scopeFor` marked any `<iframe>` or `<frame>` `unsupported`
+(`iframe`) whatever its origin, Element mode's hit test stopped at the frame
+element, `rectOf` returned frame-local coordinates, and the sensitive-field
+scan did not look inside frames at all (a password field in a same-origin
+frame was left unmasked in the screenshot). The page scripts run in an
+isolated world in the top frame only; Chromium gives that world a same-origin
+child's document through `contentDocument` and withholds it (null) for a
+cross-origin or sandboxed frame, so no message channel is needed to reach a
+same-origin frame. One Chromium detail matters: `location.origin` reads
+`"null"` for an `about:srcdoc` document that inherits its parent's origin,
+while `window.origin` reads the real one. Same-origin iframes were built on
+this date; see Assumptions and decisions.
 
 **Decisions.**
 
@@ -488,7 +504,8 @@ depth limit. A hit a root reports outside itself (slotted light content) is
 not followed. Keyboard ↑ leaves a root through its host and ↓ enters a host's
 open root; the keyboard start uses the focused element inside open roots.
 Closed roots expose no `shadowRoot`, so their host is still the target with a
-`document` scope, exactly as before. Frames are never entered.
+`document` scope, exactly as before. Frames were not entered (same-origin
+frames are since 2026-11-17; see below).
 
 ### Task 5: a shadow host is now an ordinary element
 
@@ -523,6 +540,140 @@ run (task 4). Tasks 1 and 3 were done on 2026-11-03, task 2 on 2026-11-05 and
 task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
 0044 (retired)), and 2580 was retired.
 
+### Task 5: same-origin iframes are reached through `contentDocument` only
+
+Recorded 2026-11-17 against `main` at `0265e788`, branch
+`20261117-013706-2e1112ea6343`. The isolated world reads a frame's document
+through `contentDocument`, which the browser itself leaves null for a
+cross-origin or sandboxed frame, and the new frame kit
+(`browser-preview-frame-kit.ts`) also refuses a document whose
+`window.origin` differs from the top document's (`location.origin` reads
+`"null"` for a same-origin `about:srcdoc` frame, so it cannot be used).
+Considered instead: injecting the runtime into every frame and talking to it
+over `postMessage`, which the to-do's requirements anticipated. That needs a
+reviewed message channel, sender checks and per-frame installs, and would add
+reach into cross-origin frames the user never asked for; the direct read gives
+exactly the reach the page's own scripts have, with no channel to forge. So
+the qualification bullet's forged frame messages and stale replies do not
+apply: there are no frame messages. Wrong origin, wrong document and a frame
+that navigates are covered by the Chromium tests below. Nothing changes the
+preview's sandbox, and no page script runs in a frame.
+
+### Task 5: a `frame` scope with a mixed root path, not a second list
+
+The anchor gets a new scope `{ kind: "frame", path }`: frame steps and
+shadow-host steps in one ordered list, outermost first, each marked by
+`boundary`, so a component inside a frame inside a component is one path.
+Bounds are `WEB_ANNOTATION_MAX_FRAME_DEPTH` (4) frames and the existing 8
+hosts, validated in the protocol and mirrored in the kit (a test checks the
+kit's limits). Considered: adding frames to the `shadow` scope's `hosts`,
+which an older backend would accept but misread as hosts; and separate
+`frames` and `hosts` lists, which lose their interleaving. A frame step is
+the frame's tag, a stable id unique in its containing root, a CSS path there,
+and the frame document's `documentPath`.
+
+### Task 5: a URL digest separates navigation identity from the display path
+
+The to-do asked for a per-frame navigation generation, because a frame index
+alone does not name the same document after replacement. A counter cannot
+survive a reload or travel in a stored anchor, so the step records the
+document's sanitized display path instead: the path of its http(s) URL (no origin, query or
+fragment; token-like segments of 32 or more characters read `:opaque`), or
+`about:srcdoc` / `about:blank`. Resolution requires a unique frame element
+whose document is still same-origin and has that path and the captured SHA-256 URL digest (`documentIdentity`); a frame that navigated
+elsewhere, or has not loaded yet, is `missing`, so a page with the same
+structure at another path never stands in (tested by navigating the frame to
+a copy of its page). A frame that became unreadable is `unsupported`. Live
+generations are covered separately: the capture probe checks that the
+target's document is still the one its frame shows (`isLiveDocument`), so a
+navigation between selection and screenshot makes the capture `stale`, and the
+pin layer re-resolves on each watched frame's `load`. Two `srcdoc` frames with
+the same structure are told apart by their frame step's id or CSS path, not by
+the document path.
+
+### Task 5: coordinates are mapped out, clipped, and mapped back in
+
+Rectangles are mapped from a frame's viewport to the top viewport through the
+frame's border, padding and CSS scale, and clipped to each frame's content
+box, so a highlight or pin never shows content the frame hides. Hit testing
+maps the pointer the other way. The anchor kit's `rectOf` does this for every
+caller, so pins, the capture highlight, the responsive probe and the masks all
+agree. Tested with a bordered and padded frame and with `transform:
+scale(0.5)`.
+
+### Task 5: a capability flag, because older backends refuse the scope
+
+Unlike `shadowTargets`, which the renderer stopped reading once every backend
+accepted the scope, `frame` is new to backends: one from before this change
+refuses it. So the backend advertises `operations.frameTargets` with
+authoring, and the renderer (`withAdvertisedFrameScope` in
+`capture-commit.ts`) sends the older `{ kind: "unsupported", reason:
+"iframe" }` to a backend without it; the note still saves and its pin reports
+unsupported, as before. Main rebuilds the scope from known fields
+(`pickRootStep` in `browser-preview-capture-parse.ts`).
+
+### Task 5: what the agent receives
+
+The brief names each frame step as `{ frame, cssPath, documentPath, stableId? }` and
+each host as `{ shadowHost, cssPath, stableId? }`, outermost first. The note
+explains that each root step resolves inside its containing root; the target
+selectors resolve inside the innermost document or root. The document
+path is what an agent can find in the code (a route or a static file); frame
+and host selectors remain available to resolve the ordered root path. The brief's
+same-target conflict check now keys a frame target by its path too, so a
+frame button and a top-level button that share an id are not reported as
+conflicting instructions.
+
+### Task 5: an unreadable frame reports `cross-origin`
+
+Before, every frame element was `unsupported` with the reason `iframe`. Now a
+same-origin frame element is an ordinary element (its content is reachable on
+its own, as a shadow host became in 2026-11-02), and a frame page script
+cannot read is `unsupported` with the reason `cross-origin`, a value the
+protocol already had for this. The behaviour the user sees is unchanged: the
+frame itself is the target, its pin reports unsupported and Region is the
+fallback. The happy-dom test that asserted the old reason was updated; happy-dom
+gives every frame an opaque origin, so it now stands for the unreadable case.
+
+### Task 5: text selections inside frames stay out of scope
+
+A frame keeps its own selection, which the top document's `getSelection`
+does not report, and Text mode listens only on the top window. Reading every
+frame's selection would need listeners in each frame document and a range type
+that spans documents for the brief; the ticket asked for element targets. Text
+mode inside a frame therefore still captures nothing, and Region remains the
+fallback; the architecture doc's limitations say so.
+
+### Task 5: the anchor kit was split, not grown past 2,000 lines
+
+The frame helpers live in their own self-contained `browserPreviewFrameKit`,
+which `browserPreviewAnchorKitSource()` composes with the anchor kit for every
+page script, because the anchor kit was already 1,814 lines and must stay one
+serializable function.
+
+### Task 5: tests run headless, in real Chromium for the frame paths
+
+happy-dom gives frames an opaque origin and no `frameElement`, so the
+same-origin paths are proven in `browser-preview-frame-targets.integration.test.ts`
+(slow tier, like the shadow-text Chromium file): real pointer input, the page
+scripts in a CDP isolated world as the desktop runs them, a bordered and
+padded frame, a scaled frame, a nested `srcdoc` frame, an open root inside a
+frame, a frame navigation and a reload, masking inside a frame, and
+cross-origin and sandboxed frames whose content never reaches the selection.
+The protocol, main-side parse, renderer downgrade and backend brief have
+default-tier tests. The Electron fixture now checks a readable frame host, an inner
+button and the sandboxed fallback. The original Electron run exercised the host
+and failed on its obsolete unsupported/iframe expectation; the repair rerun is
+recorded in the pipeline validation result.
+
+### Task 2: not started on 2026-11-17
+
+The ticket allowed task 2 only if it was small and clearly specified. It is
+neither: it still needs an unstable-region mask the desktop does not produce
+(only a whole-capture stable flag exists) and capped image decoding in the
+backend, and its two open decisions (where the diff runs, where the mask
+comes from) are recommendations without a design. It stays `open`.
+
 ## Current state
 
 - When the latest request’s turn has finished, the note is unresolved with
@@ -550,12 +701,21 @@ task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
 - Element targets inside open shadow roots anchor to the element itself with
   `scope: { kind: "shadow", hosts }`, the root path outermost first, and
   re-resolve inside the innermost root (task 5, 2026-11-02;
-  `browser-preview-anchor-script.ts`). Desktop clients send that scope only
-  to a backend advertising `operations.shadowTargets`. iframe and closed-root
-  targets still resolve to the host element or `unsupported`, and text
-  selections inside shadow roots are refused. Region mode
-  (`CaptureModePicker.tsx`) is the fallback for iframe, closed-root and
-  canvas content.
+  `browser-preview-anchor-script.ts`). Desktop clients send that scope to
+  every backend (the renderer stopped reading `operations.shadowTargets`).
+- Element targets inside same-origin iframes (up to four deep, mixed with open
+  shadow roots) anchor to the element itself with
+  `scope: { kind: "frame", path }`; each frame step records the frame
+  document's `documentPath` and URL digest, and resolution requires the frame to still show
+  that document (task 5, 2026-11-17; `browser-preview-frame-kit.ts`). Desktop
+  clients send that scope only to a backend advertising
+  `operations.frameTargets`, and the older `unsupported` (`iframe`) scope
+  otherwise. A cross-origin or sandboxed frame is captured as the frame
+  element alone, `unsupported` (`cross-origin`). Closed-root targets still
+  resolve to the host element, and text selections inside frames are not
+  captured. Region mode (`CaptureModePicker.tsx`) is the fallback for
+  cross-origin frames, closed roots and canvas content. See
+  [web-page-annotations.md](../../architecture/web-page-annotations.md#anchors-and-pins).
 - Only Electron captures. Web and iOS list, reply, request and review, and
   hide capture (`canCapture` in `AnnotationPanel.tsx`). The architecture doc's
   client capability matrix records this.
@@ -583,9 +743,10 @@ task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
 3. Development source hints: done (task 4). The documented emitter, the thread
    view list and the live captures are done in
    0950.
-4. Open shadow roots and same-origin iframes. Open shadow roots are done
-   (task 5), and so are its follow-ups (2580, retired 2026-11-11).
-   Same-origin iframes remain.
+4. Open shadow roots and same-origin iframes: done (task 5). Open shadow
+   roots on 2026-11-02 with their follow-ups (2580, retired 2026-11-11);
+   same-origin iframes on 2026-11-17. The requirements below were the brief;
+   how each was met is in Assumptions and decisions.
    - Requires explicit root paths, a navigation generation per frame, and
      coordinate transforms through each frame.
    - Bound depth, frame count, traversal time and transformed geometry.
@@ -638,7 +799,8 @@ task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
 
 - Which extension, if any, is wanted next? Answered on 2026-10-30: source
   hints (task 4), now built; the turn-end capture prompt (task 3) followed
-  on 2026-11-16. The next pick between tasks 2 and 5 (iframes) is open.
+  on 2026-11-16 and same-origin iframes (task 5) on 2026-11-17. Pixel diffs
+  (task 2) are the only code extension left that an agent can start.
 - Is non-desktop capture worth designing before embedded previews exist? If
   embedded previews are dropped, a backend-owned browser session is the only
   remaining option.
@@ -667,3 +829,12 @@ task 4 on 2026-11-11 (the desktop's preview view, headless Linux; see
   (pixel diffs, overlay, automatic capture, source hints)
 - `docs/improvements/web-page-annotations/plan/13-capture-modes-and-client-support.md`
   (frame and shadow boundaries, non-desktop capture)
+
+### Task 5: review repairs (2026-11-17)
+
+Frame steps now carry a SHA-256 digest of the full URL, separating query and
+opaque-segment navigation without storing raw URLs. Identical URL reloads
+remain resolvable. Legacy anchors without a digest fail closed for query or
+opaque paths. Pins hide fully clipped rectangles and subscribe to each frame's
+resize, font events and layout sizes, removing those subscriptions on navigation
+or destruction. Regression tests cover these paths, including real font loading.

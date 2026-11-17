@@ -1,7 +1,7 @@
 /**
  * A Codex recipient opens a mailed image with its own `view_image` tool, on
- * the **real** pinned `codex app-server` the bridge runs (to-do 4420 task 3,
- * the app-server part).
+ * the **real** pinned `codex app-server` the bridge runs (#2238, from
+ * to-do 4420 (retired) task 3, the app-server part).
  *
  * `coordinator-mail-attachments-read-live.test.ts` showed this for
  * `codex exec`; the bridge does not use `exec`, so this runs the bridge's own

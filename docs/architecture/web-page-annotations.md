@@ -60,9 +60,11 @@ Electron main assigns the capture id and binds the runtime to the web contents,
 document generation and a per-install nonce. Page scripts run in an isolated
 world where available. On selection main hides tooltips and pins, masks
 detectable sensitive fields (in the page and again in the screenshot pixels),
-captures, and probes again. Sensitive fields are found in the document and in
-every open shadow root down to `WEB_ANNOTATION_MAX_SHADOW_DEPTH` roots, by one
-walk bounded at 100,000 visits or 100 ms. If sensitive fields are present but
+captures, and probes again. Sensitive fields are found in the document, in
+every open shadow root down to `WEB_ANNOTATION_MAX_SHADOW_DEPTH` roots and in
+every same-origin frame down to `WEB_ANNOTATION_MAX_FRAME_DEPTH` frames (their
+rectangles mapped into the top viewport), by one walk bounded at 100,000 visits
+or 100 ms. If sensitive fields are present but
 the pixels cannot be masked, or the walk could not finish (budget, deeper
 nesting, more than 32 fields on screen), the image is dropped
 (`imageExcluded`; a responsive-set width fails as `unsupported`) and only text
@@ -301,19 +303,33 @@ object URLs. Unsent editor text kept locally is stored per node
 A saved target is a description, never a live element handle. An element
 anchor (`anchorFor` in `browser-preview-anchor-script.ts`) records:
 
-- a stable `id` or `data-testid`, only when it is unique in its document or
-  shadow root at capture time;
+- a stable `id` or `data-testid`, only when it is unique in its document,
+  frame document or shadow root at capture time;
 - semantic identity: tag, implicit role and accessible name;
 - visible text with a short prefix and suffix (whitespace is normalized for
   comparison, the original is stored);
 - up to eight ancestor descriptors (in the composed tree, so a shadow
-  target's hosts are among them) and a CSS path within its own root;
-- the root scope: `document`, or `shadow` with the root path through open
+  target's hosts are among them, and a frame target's frames too; a frame
+  document's `<html>` and `<body>` are not listed) and a CSS path within its
+  own root;
+- the root scope: `document`; `shadow` with the root path through open
   shadow roots (`hosts`, outermost first, at most
   `WEB_ANNOTATION_MAX_SHADOW_DEPTH` = 8; each host is its tag, a stable id
-  unique in its containing root, and a CSS path within that root). Targets
-  inside iframes, closed roots, detached trees or deeper paths are recorded as
-  `unsupported`, never as a top-level selector.
+  unique in its containing root, and a CSS path within that root); or `frame`
+  when the target is inside at least one same-origin frame (`path`, outermost
+  first, mixing frame steps and shadow-host steps, at most
+  `WEB_ANNOTATION_MAX_FRAME_DEPTH` = 4 frames and 8 hosts). A frame step is
+  the frame's tag (`iframe` or `frame`), a stable id unique in its containing
+  root, a CSS path within that root, and the frame document's `documentPath`:
+  the path of its http(s) URL with no origin, query or fragment (token-like
+  segments of 32 or more characters read `:opaque`), or `about:srcdoc` /
+  `about:blank`. New steps also carry `documentIdentity`, a SHA-256 digest of the
+  full URL, to distinguish query and opaque-segment changes without storing raw
+  query values. Legacy steps without a digest cannot resolve query or opaque paths. Targets inside closed roots, detached trees or deeper paths
+  are recorded as `unsupported`, never as a top-level selector. A frame page
+  script cannot read (cross-origin, or sandboxed without `allow-same-origin`)
+  is itself the target, `unsupported` with the reason `cross-origin`; nothing
+  inside it is read.
 
 Element mode hit-tests the document and then each open shadow root under the
 point, because the document retargets a hit inside a shadow root to its host.
@@ -326,6 +342,30 @@ Desktop clients send a `shadow` scope, on an element or a text range's
 container, to every backend; the backend still advertises
 `operations.shadowTargets` with authoring, but the renderer no longer reads it
 (every backend accepts the scope since 0047 task 5).
+
+Same-origin frames (`browser-preview-frame-kit.ts`) are entered only through
+`contentDocument`, which the browser withholds for a cross-origin or sandboxed
+frame; the kit also refuses a frame document whose window origin differs from
+the top document's. Nothing posts messages to a frame, runs script in one or
+changes the preview's sandbox: the isolated world reaches exactly what the
+page's own scripts could. Element mode, after descending open roots, enters
+each same-origin frame under the point (at most four deep) and hit-tests its
+document with the point mapped through the frame's border, padding and any
+CSS scale; a hit on the frame document's own `<html>` or `<body>` leaves the
+frame as the target. ↓ on such a frame steps into its body's first child and ↑
+from there returns to the frame. Rectangles are mapped back to the top viewport
+and clipped to each frame's content box, so the highlight, the screenshot and
+the pin show only what the frame displays. Before the screenshot the probe
+checks that the target's document is still the one its frame shows, so a
+frame that navigates after selection makes the capture `stale` like a removed
+target. Text selections inside a frame are not captured: the frame keeps its
+own selection, which Text mode does not read. The backend advertises
+`operations.frameTargets` with authoring; a desktop client sends a `frame`
+scope only to a backend that advertises it and otherwise sends the older
+`{ kind: "unsupported", reason: "iframe" }`. The brief gives the agent each
+frame's `documentPath`, CSS selector and stable id, and each host's tag, CSS selector and stable id, outermost first,
+with a note to resolve root steps outermost first in each containing root,
+then target `cssPath` and `stableId` in the innermost document or root. Each root step retains its selector so sibling frames can be distinguished.
 
 A text range stores its quote with context plus the anchor of its containing
 element, whose scope says which tree the quote is in. Text mode reads a selection
@@ -369,7 +409,14 @@ identity.
    None, or a host that is closed or not yet attached, is `missing`; several
    are `ambiguous`; an empty or over-long path is `unsupported`. Rules 2 to 5
    then run inside the innermost root only, so a document element with the
-   same id or name is never a candidate.
+   same id or name is never a candidate. A `frame` scope resolves its path the
+   same way, step by step: a host step as above, and a frame step must match
+   exactly one `iframe` or `frame` element that still shows a same-origin
+   document whose `documentPath` and URL digest equal the recorded ones. A frame that
+   navigated to another path (or has not loaded yet) is `missing`, so a
+   different document with the same structure never stands in; a frame whose
+   document became unreadable is `unsupported`. Rules 2 to 5 then run inside
+   the innermost frame document or root.
 2. **Stable id.** A unique match whose tag, role and name (or text) still
    agree is `matched`. A unique match that disagrees is `stale`: the id was
    reused or the label changed. Duplicate ids fall through to later rules.
@@ -407,8 +454,15 @@ request's frozen target.
 for up to `visiblePins` (50) open notes on the current page. Unmatched and
 off-page notes are listed in the panel with their state. A `MutationObserver`
 re-resolves after DOM replacement (hot reload, re-render) on a coalesced
-schedule. A document observer never sees inside a shadow root, so each open
-root a pass resolves into (at most 64) is observed as well. A host that exists
+schedule. A document observer never sees inside a shadow root or a frame's
+document, so each open root (at most 64) and each frame document (at most 16
+frames) a pass resolves into is observed as well. A frame's `load` (a
+navigation or reload inside it) schedules a pass, because it replaces the
+document the observer and the matched element belonged to, and scrolling a
+frame redraws the pins. Each watched frame also subscribes to its window's
+resize and document's font events, and observes the frame, document and body
+sizes; navigation and destruction remove these subscriptions. Fully clipped
+targets have no visible pin until they return into view. A host that exists
 before its custom element is defined has no root yet, and attaching one fires
 no mutation, so the layer schedules one pass when that tag is defined
 (`customElements.whenDefined`). The preview's isolated world has no
@@ -707,6 +761,7 @@ What has actually been exercised on a real stack (sign-off and history under
 | Desktop capture and native window | macOS (Electron 44, display scale 1, DPR 2 forced); Linux headless (Electron 45, 2026-11-06 and 2026-11-11, every local case of the Electron spec; 2026-11-16 the same, except that the capture-alignment case passed only alone, [flake 9806](../tests/flaky-tests/previews-annotations-and-gateway/9806-annotation-capture-stale-frame-after-dpr2-relaunch.md)); Linux X11 window on a disposable Xvfb display in CI (`electron-qualification.yml`, weekly since 2026-11-15), with the window really focused, so the keyboard case's OS-focus assertion runs | Windows; a physical Retina display; OS-level focus on a shared desktop; a Linux Wayland window. Under Xvfb the capture-alignment case fails: the highlight measures 3 px taller at DPR 1, zoom 1 ([8095](../todo/previews-and-annotations/8095-annotation-capture-alignment-under-xvfb.md)) |
 | Pins and Show on page | Reorder, hot reload, duplication, offscreen, closed and open modal, late-font shift (blocking and script-loaded), expired sign-in redirect (macOS; Linux headless) | — |
 | Open shadow roots | An element note and a quote inside an open root captured in the desktop's preview view (isolated world, main-side parse), stored, then pinned and shown on page again after a reload (Linux headless, 2026-11-11) | Closed roots (unsupported); a Linux Wayland or X11 window; macOS |
+| Same-origin iframes | Element notes inside a same-origin frame, a nested `srcdoc` frame and an open root inside a frame picked with real pointer input in headless Chromium, with the page scripts in a CDP isolated world (`browser-preview-frame-targets.integration.test.ts`, Linux, 2026-11-17): rectangles through border, padding and scale, resolution after a frame navigation and a reload, masking inside the frame; cross-origin and sandboxed frames captured as the frame only | The desktop's own preview view (Electron); macOS; a stored note's brief on a real agent turn |
 | Development source hints | Fixture HTML and a real Vite 8 dev server with the documented emitter, captured from the desktop in a local worktree and in a container (Linux, 2026-11-06); fixture HTML in a container (macOS desktop); the container path check through the gateway (Linux) | webpack, Next.js and other Babel setups (unqualified) |
 | Result captures | Stable, unstable (animation, loading font), route, viewport and target differences, expired sign-in (macOS) | Pixel differences (not implemented); the turn-end capture prompt after a real agent turn (unit-tested only) |
 | Live implement | Claude, Codex, Cursor, Grok, OpenCode, Pi (local worktree); Claude in a Docker container | Other providers in a container |
@@ -727,10 +782,12 @@ What has actually been exercised on a real stack (sign-off and history under
 - Pending questions and approvals are answerable from the request card only
   when their bodies can be read from the destination session's projection;
   otherwise the card offers **Answer in chat**.
-- iframes and closed shadow roots are unsupported; use Region. So is a text
-  selection that crosses a light and shadow boundary or runs between two roots.
-  Element targets and text selections inside open shadow roots are supported.
-  Sensitive fields inside closed shadow roots are not masked: page
+- Cross-origin and sandboxed iframes and closed shadow roots are unsupported;
+  use Region. So is a text selection inside any iframe, or one that crosses a
+  light and shadow boundary or runs between two roots. Element targets inside
+  same-origin iframes (four deep) and element targets and text selections
+  inside open shadow roots are supported. Sensitive fields inside closed
+  shadow roots and cross-origin frames are not masked: page
   script cannot see them. A pin whose host is already defined but attaches its
   shadow root later on its own resolves on the next DOM change or re-send. A
   page too large to

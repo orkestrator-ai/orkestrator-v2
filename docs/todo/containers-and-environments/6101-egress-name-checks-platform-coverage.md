@@ -4,14 +4,16 @@ Analysed 2026-11-05 against `main` at `704809a20`. Task 1 re-checked 2026-11-06
 against `main` at `e6c3da899`. Task 2 acted on 2026-11-10 against `main` at
 `04639b12b`, which added task 4. Re-checked 2026-11-11 against `main` at
 `498b68766`: tasks 1 and 4 cannot be finished on beelink (x86_64, no `pasta`
-on PATH), so the file is blocked.
+on PATH), so the file is blocked. Task 4 acted on 2026-11-17 against `main`
+at `0265e7882`, once the user had installed `passt` and `vpnkit` on beelink;
+the file stays blocked on task 1 alone.
 
 ### Tasks
 
 1. **Run the live suite on rootful Linux Engine**: CI's container workflow on x64 and arm64. Status: open (depends on a green Container live qualification CI run on linux-arm64; x64 passed on beelink 2026-11-06, host daemon and a disposable rootful daemon, and two test defects fixed; arm64 has only CI's hosted-runner run 42128741746, from before those fixes).
 2. **Run the live suite on rootless Docker**: a real rootless host. Status: done (2026-11-10, beelink, disposable rootless daemons from 4730: slirp4netns 6/6 and gvisor-tap-vsock 5/5; pasta is task 4).
 3. **Exercise the path where Docker names its upstreams by address**: controlled addressed upstreams, forged UDP replies and TCP failover. Status: done (Docker Desktop, 2026-11-05; on rootful Linux x64 2026-11-06, where the host daemon itself names its upstream by address).
-4. **Run the name checks on rootless Docker with the pasta driver**: the other RootlessKit network driver the task 2 problem names. Status: blocked (waits on 7568: 6101 task 4 and 7390 task 2, the user installing `passt` on beelink; decided 2026-11-14).
+4. **Run the name checks on rootless Docker with the pasta driver**: the other RootlessKit network driver the task 2 problem names. Status: done (2026-11-17, beelink, a disposable rootless daemon on pasta: 6/6, 124 assertions; also 5 pass, 1 skip on VPNKit).
 
 ### 1. Run the live suite on rootful Linux Engine
 
@@ -94,6 +96,20 @@ on PATH), so the file is blocked.
 
 **Investigation.** On 2026-11-10 beelink had no `pasta` or `passt` on PATH. Installing a package needs `sudo` and changes the host, which this run was not allowed to do. The name checks run inside the gateway's namespace, a Docker bridge network whatever RootlessKit uses to reach the outside, so no difference is expected; that is an expectation, not an observation. The two drivers that ran passed the same cases.
 
+**Install (2026-11-17).** The user installed the `passt` package `2026_10_02.cba3570-1` with pacman on 2026-11-17 (`pasta --version`: `pasta 2026_10_02.cba3570`) and a static `vpnkit` at `~/.local/bin/vpnkit` (`vpnkit --version`: `7f0eff0dd99b576c5474de53b4454a157c642834`). `command -v pasta vpnkit` printed:
+
+```text
+/usr/bin/pasta
+/home/arkaydeus/.local/bin/vpnkit
+```
+
+**Result (2026-11-17, rootless Docker x64 on pasta).** Recorded in [container qualification](../../development/container-qualification.md#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17). On beelink (kernel 7.1.8), with the image `orkestrator-v2:dev-b6bcc43399ac` (`egress-filter=1`, `egress-gateway=1`, `network-policy=3`; its firewall, gateway, name-check and entrypoint scripts match `main` at `0265e7882` byte for byte), on a disposable host rootless daemon from `mise run docker:disposable -- start --net pasta` (Engine 29.9.2, RootlessKit 3.3.0 with `--detach-netns`, the `implicit` port driver, host loopback refused, `live-restore` off):
+- `container-live-egress-filter.test.ts`, with the older image `ghcr.io/orkestrator-ai/orkestrator-v2:2.34.4-beta` loaded: **6 pass, 0 fail, 124 assertions** (59.7 s), the same counts as slirp4netns on 2026-11-10.
+- DNS topology line: `{"daemonRootless":true,"resolvers":["nameserver 127.0.0.11","# ExtServers: [host(127.0.0.53)]"],...}`, with the same five name-check `nat` redirections to `172.30.1.3:31443` and `:31453` as on 2026-11-10. Docker named its upstream through `host(...)`, so pasta's own DNS forwarder (`10.0.2.3`) was not on the path.
+- The same suite on a VPNKit daemon (`--net vpnkit`): **5 pass, 1 skip** (the older image, not loaded there), 109 assertions, with the same topology.
+- The conditions suite on pasta with `ORKESTRATOR_LIVE_IPV6_NETWORK=1`: 3/3, 69 assertions (IPv6, DNS rotation, two rootless daemon restarts).
+- No pasta-only defect in the name checks. The run found that VPNKit's host loopback address is `192.168.65.2`, which the reachability check does not probe: [8305](8305-vpnkit-host-loopback-address.md).
+
 **Decisions.**
 
 - **Is pasta needed at all?**
@@ -115,7 +131,26 @@ on PATH), so the file is blocked.
   (shared with 7390 task 2).
 - **What follows:** once the item is ticked, an agent on beelink runs
   `mise run docker:disposable -- start --net pasta` and the M12 suite, and
-  records the result here and in container qualification.
+  records the result here and in container qualification. Done 2026-11-17
+  (next subsection); the checklist item is removed.
+
+### Task 4: the pasta run on an image already on beelink (2026-11-17)
+
+- **Chose:** the newest image already on the host,
+  `orkestrator-v2:dev-b6bcc43399ac`, rather than building one, after checking
+  that it has `egress-filter=1` and that the seven scripts the name checks
+  run match the checkout byte for byte, as task 2 did. Building would have
+  cost minutes of host load for the same scripts.
+- **Chose:** `TMPDIR` on the home filesystem, as the ticket required and as
+  [7549](7549-rootless-docker-cp-refusals.md) showed is needed on rootless.
+  A directory under the worktree's `output/` would have put the daemon's
+  socket at 133 bytes, past the launcher's 100-byte limit, so a short
+  directory under `~/.cache` was used and removed afterwards.
+- **Chose:** also running the M12 suite on VPNKit and the whole conditions
+  suite on pasta, about two minutes each, so both drivers have name-check
+  and restart evidence; only pasta's M12 run was required here.
+- **Not done:** `PATH` was not changed, because `command -v` found both
+  binaries.
 
 ### Task 1: a disposable daemon, because the host's pools are full
 
@@ -204,9 +239,9 @@ x64 and arm64. Its firewall and conditions steps were red after S-0100 because o
 the two probe defects fixed on 2026-11-06. On rootless Docker x64 (beelink,
 2026-11-10) the name-check suite passed on slirp4netns and gvisor-tap-vsock
 daemons, and the conditions suite, with two rootless daemon restarts, on
-slirp4netns. Remaining: a green CI run on linux-arm64 after the probe fixes
-(task 1, by the recommended decision that CI's run counts), and rootless with
-pasta (task 4, waits on the user installing `passt` on beelink, 7568).
+slirp4netns. On 2026-11-17 the name-check suite passed on pasta (6/6) and
+VPNKit (5 pass, 1 skip). Remaining: a green CI run on linux-arm64 after the
+probe fixes (task 1, by the recommended decision that CI's run counts).
 
 ## Related
 
@@ -216,6 +251,7 @@ pasta (task 4, waits on the user installing `passt` on beelink, 7568).
 - 7000 (retired 2026-11-11): a newline-less first write is held, found by task 1; documented in [container lifecycle](../../architecture/container-lifecycle.md#name-checks-egress-filter1)
 - 4730 (retired 2026-11-10; the launcher is in [container qualification](../../development/container-qualification.md#disposable-docker-daemon)): the disposable daemon task 1 had to build by hand, and task 2 used
 - [7549](7549-rootless-docker-cp-refusals.md): rootless `docker cp` refusals, why task 2 kept `TMPDIR` off `/tmp`
-- [7390](7390-rootless-restart-remaining-settings.md): rootless daemon restarts on the other drivers (VPNKit, pasta, gvisor-tap-vsock) and with `live-restore`
+- 7390 (retired 2026-11-17): rootless daemon restarts on the other drivers (VPNKit, pasta, gvisor-tap-vsock) and with `live-restore`; its runs are in [container qualification](../../development/container-qualification.md#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17)
+- [8305](8305-vpnkit-host-loopback-address.md): VPNKit's host loopback address, found by task 4's run
 - To-do 0241 (retired 2026-11-10): the leaked networks that fill the host's pools; see [disk usage](../../development/disk-usage.md#what-you-clean-yourself)
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only part of this to-do (the user part of task 4: installing `passt` on beelink, decided 2026-11-14).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): held the user part of task 4 (installing `passt` on beelink, decided 2026-11-14), answered and removed on 2026-11-17.

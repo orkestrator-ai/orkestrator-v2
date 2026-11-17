@@ -7,7 +7,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import type { Element, ShadowRoot } from "happy-dom";
 import { WEB_ANNOTATION_MAX_SHADOW_DEPTH } from "@orkestrator/protocol/web-annotations";
-import { browserPreviewAnchorKit } from "../electron/browser-preview-anchor-script";
+import { browserPreviewAnchorKitSource } from "../electron/browser-preview-anchor-script";
 import { BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT } from "../electron/browser-preview-annotation-script";
 import {
   BROWSER_PREVIEW_PINS_SNAPSHOT_SCRIPT,
@@ -28,7 +28,7 @@ type Kit = {
 };
 
 const kitIn = (harness: Harness): Kit =>
-  harness.window.eval(`(${browserPreviewAnchorKit.toString()})()`) as Kit;
+  harness.window.eval(`${browserPreviewAnchorKitSource()}()`) as Kit;
 
 const isMask = (node: { style: { background: string } }) =>
   node.style.background === "rgb(31, 35, 40)" || node.style.background === "#1f2328";

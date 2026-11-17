@@ -767,6 +767,87 @@ describe("agent Kanban tools", () => {
     expect(rejected.response.status).toBe(401);
   });
 
+  test("key information outcome scopes come from authenticated connections", async () => {
+    await server.stop();
+    const workflowResults = workflowResultService();
+    server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
+    await server.start();
+    const seen: unknown[] = [];
+    server.setKeyInformationToolHost({
+      read: async () => ({
+        pipelineId: "p",
+        taskTitle: "Build",
+        phase: "building",
+        round: 1,
+        maxRounds: 1,
+        author: "build",
+        keyInformation: null,
+      }),
+      update: async (scope) => {
+        seen.push(scope);
+        return {
+          pipelineId: "p",
+          taskTitle: "Build",
+          phase: "building",
+          round: 1,
+          maxRounds: 1,
+          author: "build",
+          keyInformation: null,
+        };
+      },
+    });
+    const tab = server.connection("env-1", "project-1", "host", "ordinary-tab");
+    await rpc(tab.url, tab.token, "tools/call", {
+      name: "update_key_information",
+      arguments: { continueReview: true },
+    });
+    expect(seen).toEqual([
+      { environmentId: "env-1", projectId: "project-1", tabId: "ordinary-tab" },
+    ]);
+    const shared = server.connection("env-1", "project-1", "host");
+    const denied = await rpc(shared.url, shared.token, "tools/call", {
+      name: "update_key_information",
+      arguments: { continueReview: true },
+    });
+    expect(denied.body.result?.isError).toBe(true);
+    expect(seen).toHaveLength(1);
+    const resultKey = crypto.randomUUID();
+    await workflowResults.prepare({
+      resultKey,
+      kind: "review-preparation",
+      environmentId: "env-1",
+      projectId: "project-1",
+      provider: "opencode",
+    });
+    const broker = server.workflowResultConnection(
+      "env-1",
+      "project-1",
+      "host",
+      resultKey,
+      "opencode",
+    );
+    const capability = workflowResults.capabilityToken(
+      { environmentId: "env-1", projectId: "project-1" },
+      resultKey,
+    );
+    const accepted = await rpc(broker.url, broker.token, "tools/call", {
+      name: "update_key_information",
+      arguments: { continueReview: true, capability },
+    });
+    expect(accepted.body.result?.isError).not.toBe(true);
+    expect(seen.at(-1)).toEqual({
+      environmentId: "env-1",
+      projectId: "project-1",
+      workflowResultKey: resultKey,
+    });
+    const forged = await rpc(broker.url, broker.token, "tools/call", {
+      name: "update_key_information",
+      arguments: { continueReview: true, capability: "forged" },
+    });
+    expect(forged.body.result?.isError).toBe(true);
+    expect(seen).toHaveLength(2);
+  });
+
   test("advertises one typed submission tool for every workflow result kind", async () => {
     await server.stop();
     const workflowResults = workflowResultService();

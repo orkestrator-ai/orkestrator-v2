@@ -52,6 +52,10 @@ import {
   type PipelineAddressFindingsResult,
 } from "./build-pipeline-address-findings-report.js";
 import { isBuildStepInstructions } from "./build-pipeline-stage-instructions.js";
+import {
+  isPipelineBuildOutcome,
+  type PipelineBuildOutcome,
+} from "./build-pipeline-build-outcome.js";
 import { isReviewLens, type ReviewLens } from "./review-lens.js";
 
 export const BUILD_PIPELINE_VERSION = 2;
@@ -1046,6 +1050,12 @@ export interface PipelineSession {
    */
   addressFindingsResult?: PipelineAddressFindingsResult;
   /**
+   * The Build turn's decision on whether review and the stages after it run
+   * (`build-pipeline-build-outcome.ts`). Absent when the agent reported none,
+   * which continues as before, and on other phases.
+   */
+  buildOutcome?: PipelineBuildOutcome;
+  /**
    * Why this session's attempt failed, at most
    * {@link MAX_PIPELINE_SESSION_ERROR_LENGTH} characters. Set for a fan-out
    * reviewer or stage that failed, retained when the pipeline moves on.
@@ -1957,6 +1967,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
       (value.phase === "address-findings" &&
         value.addressFindingsReportKind !== undefined &&
         isPipelineAddressFindingsResult(value.addressFindingsResult))) &&
+    (value.buildOutcome === undefined ||
+      (value.phase === "build" && isPipelineBuildOutcome(value.buildOutcome))) &&
     (value.error === undefined ||
       (isNonBlankString(value.error) && value.error.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH)) &&
     (value.structuredResultStatus === undefined ||

@@ -1204,6 +1204,9 @@ sudo ufw allow proto tcp from 172.16.0.0/12 to any port 31500:31509 comment 'Ork
 ```
 
 Changing the host firewall is the host owner's decision; agents never run it.
+beelink has carried this rule since 2026-11-17; a profile there on a port in
+the range had both container signals `confirmed`
+([evidence](container-qualification.md#container-state-signals-on-a-firewalled-linux-engine-host-2026-11-17)).
 A profile whose environment network was allocated from a `192.168.0.0/16` pool
 needs that network's subnet admitted as well (`docker network inspect` shows
 it), as the installed app's own rule on such a host does. The rule is removed
@@ -1498,8 +1501,10 @@ cases that way (`missed-final`, `approval`, `reconnect`, `hidden`,
 `no-renderer`, `steer` and `rebuild`; start the profile with
 `--fixture --fixture-environments local,container --no-agent-credentials
 --agent-platforms opencode --headless`). On a host whose
-firewall drops container traffic to the profile (beelink's ufw, to-do
-[7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)),
+firewall drops container traffic to the profile (beelink's ufw, for any
+agent tools port outside 31500–31509; start the profile with
+`--agent-tools-port` in that range instead, see
+[Containers behind a host firewall](#containers-behind-a-host-firewall---agent-tools-port)),
 run that profile and the spec on `mise run docker:disposable -- start
 --host-loopback` with its `DOCKER_HOST` exported for both, and build the
 image inside that daemon. OpenCode's `shell` can background a command, so
@@ -4689,7 +4694,20 @@ both fixed and Notes-offset views, at natural DPR and forced DPR 1 and 2 with
 `--force-device-scale-factor`. Views stay small enough to assert native image
 scale without reduction. The Window-menu test always checks the selected label;
 its OS-focus predicate runs only when the host exposes a key window (and an
-active app on macOS).
+active app on macOS). The keyboard create-and-send case asserts OS focus only
+when its window got the key window at the start. If it fails while the window
+no longer has it (on a shared desktop another application, or another
+worktree's Electron run, can take it mid-case), the failure starts with
+`Lost window focus` (or `No window focus`) and names the application macOS has
+in front (`window-focus-loss.ts`), instead of only Playwright's bare
+`inactive`. It still fails: a skip would hide a handoff that really drops
+focus.
+The front-app comparison uses `process.pid` read inside Electron's main process;
+the `.bin/electron` Node launcher has a different PID. The spec exercises the
+keyboard case's catch and cleanup with an injected failure and real window
+facts. A separate native-focus regression gives the key window to another
+window in the same process; it requires an unlocked desktop and explicitly
+skips when macOS reports `loginwindow` in front, or when running headless.
 The annotation spec also checks pins and Show on page for an offscreen target,
 a target in an open and a closed modal, and a late web font (fixture routes
 `/dialogs` and `/fonts`), result-capture stability and comparison labels

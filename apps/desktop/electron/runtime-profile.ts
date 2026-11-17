@@ -77,7 +77,7 @@ export function agentToolsPortForRuntime(
  * Ports an agent-test profile's agent tools server must never take: the
  * installed app's fixed gateway and control ports (34121, 34122), and 45507,
  * the agent tools port of the production installation on the Linux
- * qualification host (to-do 7080). A profile there that took it would collide
+ * qualification host (#1930). A profile there that took it would collide
  * with the user's running app, not fall back.
  */
 export const RESERVED_AGENT_TOOLS_PORTS: readonly number[] = Object.freeze([34121, 34122, 45507]);

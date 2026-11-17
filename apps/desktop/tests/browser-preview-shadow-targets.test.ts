@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test";
 import type { Element, ShadowRoot } from "happy-dom";
 import { WEB_ANNOTATION_MAX_SHADOW_DEPTH } from "@orkestrator/protocol/web-annotations";
 import { isWebAnnotationTarget } from "@orkestrator/protocol/web-annotations-validation";
-import { browserPreviewAnchorKit } from "../electron/browser-preview-anchor-script";
+import { browserPreviewAnchorKitSource } from "../electron/browser-preview-anchor-script";
 import {
   BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT,
   BROWSER_PREVIEW_CAPTURE_STATUS_SCRIPT,
@@ -154,7 +154,7 @@ describe("capturing targets inside open shadow roots", () => {
       );
       within = deepest;
     }
-    const kit = harness.window.eval(`(${browserPreviewAnchorKit.toString()})()`) as {
+    const kit = harness.window.eval(`${browserPreviewAnchorKitSource()}()`) as {
       MAX_SHADOW_DEPTH: number;
       anchorFor: (element: Element) => Json;
     };

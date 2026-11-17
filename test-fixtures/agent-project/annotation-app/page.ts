@@ -205,6 +205,7 @@ function embeddedSections(): string {
   );
   return `<section aria-label="Embedded regions"><h2>Embedded regions</h2>
 <iframe title="Embedded billing widget" data-testid="billing-iframe" width="320" height="90" srcdoc="${frame}"></iframe>
+<iframe title="Sandboxed widget" data-testid="sandboxed-iframe" sandbox="allow-scripts" width="320" height="90" srcdoc="${frame}"></iframe>
 <fixture-shadow-card data-testid="shadow-card"></fixture-shadow-card>
 <canvas id="usage-chart" data-testid="usage-chart" width="320" height="120" aria-label="Usage chart"></canvas>
 </section>

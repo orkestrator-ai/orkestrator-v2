@@ -7,7 +7,9 @@
  * boundary, and page-supplied values are bounded before they are stored.
  */
 import {
+  WEB_ANNOTATION_FRAME_DOCUMENT_PATH_CHARS,
   WEB_ANNOTATION_LIMITS,
+  WEB_ANNOTATION_MAX_FRAME_DEPTH,
   WEB_ANNOTATION_MAX_SHADOW_DEPTH,
   webAnnotationUtf8Bytes,
   type WebAnnotationAnchor,
@@ -24,6 +26,7 @@ import {
   type WebAnnotationPageIdentity,
   type WebAnnotationRect,
   type WebAnnotationRedactionSummary,
+  type WebAnnotationRootStep,
   type WebAnnotationShadowHost,
   type WebAnnotationSourceHint,
   type WebAnnotationTarget,
@@ -137,9 +140,57 @@ function isShadowHost(value: unknown): value is WebAnnotationShadowHost {
   );
 }
 
+/**
+ * A frame's document path: an absolute URL path without query or fragment,
+ * or the two inherited-origin documents. Control characters, backslashes and
+ * dot segments are refused so the brief never carries a misleading path.
+ */
+function isFrameDocumentPath(value: unknown): boolean {
+  if (!isBoundedString(value, WEB_ANNOTATION_FRAME_DOCUMENT_PATH_CHARS)) return false;
+  if (value === "about:srcdoc" || value === "about:blank") return true;
+  if (!value.startsWith("/") || /[\\?#\u0000-\u001f\u007f]/.test(value)) return false;
+  return value
+    .split("/")
+    .slice(1)
+    .every((segment) => segment !== "." && segment !== "..");
+}
+
+function isRootStep(value: unknown): value is WebAnnotationRootStep {
+  if (!isRecord(value)) return false;
+  if (value.boundary === "shadow") return isShadowHost(value);
+  return (
+    value.boundary === "frame" &&
+    (value.tagName === "iframe" || value.tagName === "frame") &&
+    isStableId(value.stableId) &&
+    isBoundedString(value.cssPath, 4_000) &&
+    value.cssPath.length > 0 &&
+    isFrameDocumentPath(value.documentPath) &&
+    (value.documentIdentity === undefined ||
+      (typeof value.documentIdentity === "string" && /^[a-f0-9]{64}$/.test(value.documentIdentity)))
+  );
+}
+
+/** A root path through at least one frame, within both depth limits. */
+function isFramePath(path: unknown): boolean {
+  if (
+    !Array.isArray(path) ||
+    path.length > WEB_ANNOTATION_MAX_FRAME_DEPTH + WEB_ANNOTATION_MAX_SHADOW_DEPTH ||
+    !path.every(isRootStep)
+  ) {
+    return false;
+  }
+  const frames = path.filter((step) => step.boundary === "frame").length;
+  return (
+    frames >= 1 &&
+    frames <= WEB_ANNOTATION_MAX_FRAME_DEPTH &&
+    path.length - frames <= WEB_ANNOTATION_MAX_SHADOW_DEPTH
+  );
+}
+
 function isAnchorScope(scope: unknown): boolean {
   if (!isRecord(scope)) return false;
   if (scope.kind === "document") return true;
+  if (scope.kind === "frame") return isFramePath(scope.path);
   if (scope.kind === "shadow") {
     return (
       Array.isArray(scope.hosts) &&

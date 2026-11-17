@@ -1608,9 +1608,13 @@ test("text, region, and page modes capture end to end; open roots select inner c
     await preview("discardPendingCapture", pageStatus.pending.captureId);
   }
 
-  // Iframes retain host fallback; open shadow content captures its inner target.
+  // Readable frame hosts are document targets; sandboxed frames stay unsupported.
   const hosts: string[] = [];
-  for (const selector of ['[data-testid="billing-iframe"]', '[data-testid="shadow-card"]']) {
+  for (const selector of [
+    '[data-testid="billing-iframe"]',
+    '[data-testid="shadow-card"]',
+    '[data-testid="sandboxed-iframe"]',
+  ]) {
     const { descriptor } = await captureElement(selector);
     const pending = await readPending(descriptor.captureId);
     expect(pending.capture.target.kind).toBe("element");
@@ -1619,9 +1623,12 @@ test("text, region, and page modes capture end to end; open roots select inner c
       hosts.push(`${selector} -> ${tag} (${pending.capture.target.anchor.scope.kind})`);
       if (selector.includes("billing-iframe")) {
         expect(tag).toBe("iframe");
+        expect(pending.capture.target.anchor.scope).toEqual({ kind: "document" });
+      } else if (selector.includes("sandboxed-iframe")) {
+        expect(tag).toBe("iframe");
         expect(pending.capture.target.anchor.scope).toEqual({
           kind: "unsupported",
-          reason: "iframe",
+          reason: "cross-origin",
         });
       } else {
         expect(tag).not.toBe("fixture-shadow-card");
@@ -1633,6 +1640,29 @@ test("text, region, and page modes capture end to end; open roots select inner c
     }
     await preview("discardPendingCapture", descriptor.captureId);
   }
+  const innerRect = await inPreview<{ x: number; y: number; width: number; height: number }>(
+    `(() => { const f = document.querySelector('[data-testid="billing-iframe"]');
+      f.scrollIntoView({block:'center'});
+      const outer = f.getBoundingClientRect(); const r = f.contentDocument.getElementById('frame-action').getBoundingClientRect();
+      return {x: outer.x + f.clientLeft + r.x, y: outer.y + f.clientTop + r.y, width:r.width, height:r.height}; })()`,
+  );
+  await start("element");
+  await trustedClick(innerRect.x + innerRect.width / 2, innerRect.y + innerRect.height / 2);
+  await awaitCaptured();
+  const innerStatus = await preview<BrowserPreviewSelectionStatus>("getCaptureStatus", TAB_ID);
+  if (innerStatus.status !== "captured") throw new Error("Inner frame capture missing");
+  const innerPending = await readPending(innerStatus.pending.captureId);
+  expect(innerPending.capture.target).toMatchObject({
+    kind: "element",
+    anchor: {
+      stableId: { kind: "id", value: "frame-action" },
+      scope: {
+        kind: "frame",
+        path: [{ boundary: "frame", tagName: "iframe", documentPath: "about:srcdoc" }],
+      },
+    },
+  });
+  await preview("discardPendingCapture", innerStatus.pending.captureId);
   record(testInfo, "embedded-hosts", hosts.join("; "));
 });
 

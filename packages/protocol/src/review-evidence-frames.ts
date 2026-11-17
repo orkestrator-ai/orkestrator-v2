@@ -129,11 +129,11 @@ export const REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE =
   "This is a short command-discovery task.";
 
 /**
- * Official discovery prose after the signature. Legacy transcripts and test
- * fixtures may be truncated; they still match when they are an exact prefix of
- * this body or of {@link LEGACY_REVIEW_VALIDATION_DISCOVERY_PROMPT_BODIES}.
+ * The official body before the provisioning guidance was added to step 4.
+ * The current body is built from it, and it stays recognized for transcripts
+ * that recorded it.
  */
-export const REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE = ` Usually one batched inventory read and one targeted read of task definitions are sufficient. Stop as soon as you know the required entrypoints and their prerequisites. Do not review implementation correctness, read application/test bodies merely to understand the change, inspect full commit history, or repeat repository-wide scans. Read source only when it defines a validation command or is essential to resolve a specific execution dependency. When parallel safety remains uncertain, mark the command exclusive and disclose the uncertainty instead of exhaustively tracing the codebase. Keep all discovery tool output bounded.
+const PRE_PROVISIONING_DISCOVERY_PROMPT_BODY = ` Usually one batched inventory read and one targeted read of task definitions are sufficient. Stop as soon as you know the required entrypoints and their prerequisites. Do not review implementation correctness, read application/test bodies merely to understand the change, inspect full commit history, or repeat repository-wide scans. Read source only when it defines a validation command or is essential to resolve a specific execution dependency. When parallel safety remains uncertain, mark the command exclusive and disclose the uncertainty instead of exhaustively tracing the codebase. Keep all discovery tool output bounded.
 
 1. Inspect the current Git status and changes. Commit only relevant safe changes using the repository's commit conventions and hooks. Never skip hooks, force a clean tree, delete unrelated files, push, merge, rebase, reset, switch branches, or create a worktree. Do not implement features or fix validation failures. If unrelated or sensitive changes prevent a clean worktree, report the limitation.
 2. Discover validation requirements afresh from the CURRENT repository. First read the repository's agent instructions — AGENTS.md (and CLAUDE.md or an equivalent) at the root and in the directories that contain changed paths, plus any testing guide they point to — and follow what they say about which tests, checks, and builds a given kind of change needs. Then use directory structure, changed paths, CI workflows, manifests, task definitions, toolchain configuration, and relevant scripts. Do not assume a language, package manager, fixed list of files, or that the codebase resembles an earlier review. Follow repository-specific test entrypoints. Do not infer that a command covers another merely from its name.
@@ -146,11 +146,35 @@ Keep discovery focused on what must run and how it can overlap safely. Narrate c
 
 You are review preparation, not a pre-review implementation worker. Exemptions that let implementation workers defer full validation until review do not apply to this discovery task. Discover and schedule every applicable repository-required validation command, including required full suites, once against the committed branch; never defer them to a later review.`;
 
+/** Where step 4 ends; the provisioning guidance goes before it. */
+const DISCOVERY_STEP_FIVE = "\n5. resources names";
+
+/**
+ * Appended to step 4: suites must not fail on what the workspace could have
+ * been given, nor reach services another workspace owns
+ * (docs/architecture/environment-isolation.md).
+ */
+export const REVIEW_VALIDATION_DISCOVERY_PROVISIONING_GUIDANCE =
+  " Provision what the selected suites need as earlier commands they depend on, rather than letting a suite fail on a missing prerequisite: build artifacts a suite reads but does not build itself (for example a web bundle a browser test serves), a repository-owned task that creates a missing local environment file from its committed example, and repository-owned one-shot tasks that start throwaway services such as a test database. Never point a suite at a database or service another workspace may be using. In a local environment Orkestrator sets COMPOSE_PROJECT_NAME to a name unique to this workspace and reserves the host ports ORKESTRATOR_PORT_BASE through ORKESTRATOR_PORT_MAX for it; a service started for validation must use those ports or ports the repository derives from them, and a service that can only bind a fixed host port is the host-shared resource host:tcp:<port>. When a suite needs a secret, credential or external service that this workspace lacks and the repository offers no local substitute, name what is missing in a limitation.";
+
+/**
+ * Official discovery prose after the signature. Legacy transcripts and test
+ * fixtures may be truncated; they still match when they are an exact prefix of
+ * this body or of {@link LEGACY_REVIEW_VALIDATION_DISCOVERY_PROMPT_BODIES}.
+ */
+export const REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE =
+  PRE_PROVISIONING_DISCOVERY_PROMPT_BODY.replace(
+    DISCOVERY_STEP_FIVE,
+    `${REVIEW_VALIDATION_DISCOVERY_PROVISIONING_GUIDANCE}${DISCOVERY_STEP_FIVE}`,
+  );
+
 /**
  * Earlier official bodies, kept so unframed transcripts recorded before the
- * change-scoped selection guidance was added are still recognized.
+ * change-scoped selection guidance or the provisioning guidance was added are
+ * still recognized.
  */
 const LEGACY_REVIEW_VALIDATION_DISCOVERY_PROMPT_BODIES: readonly string[] = [
+  PRE_PROVISIONING_DISCOVERY_PROMPT_BODY,
   ` Usually one batched inventory read and one targeted read of task definitions are sufficient. Stop as soon as you know the required entrypoints and their prerequisites. Do not review implementation correctness, read application/test bodies merely to understand the change, inspect full commit history, or repeat repository-wide scans. Read source only when it defines a validation command or is essential to resolve a specific execution dependency. When parallel safety remains uncertain, mark the command exclusive and disclose the uncertainty instead of exhaustively tracing the codebase. Keep all discovery tool output bounded.
 
 1. Inspect the current Git status and changes. Commit only relevant safe changes using the repository's commit conventions and hooks. Never skip hooks, force a clean tree, delete unrelated files, push, merge, rebase, reset, switch branches, or create a worktree. Do not implement features or fix validation failures. If unrelated or sensitive changes prevent a clean worktree, report the limitation.

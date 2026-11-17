@@ -78,6 +78,100 @@ describe("Electron backend command registry", () => {
   // Seeding both with the same payload keeps these tests asserting the same thing
   // on every platform instead of silently depending on the developer's OS.
 
+  test("container setup drops inherited isolation and does not print a local isolation notice", async () => {
+    const { ENVIRONMENT_ISOLATION_ENV_NAMES, environmentIsolationVariables } =
+      await import("../src/core/environment-isolation");
+    const { spawnSetupTerminal } = await import("../src/core/commands-environment");
+    const inherited = ENVIRONMENT_ISOLATION_ENV_NAMES.map(
+      (name) => [name, process.env[name]] as const,
+    );
+    Object.assign(process.env, environmentIsolationVariables("parent", 20_000));
+    try {
+      await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
+        const environment = createEnvironment({
+          id: "container-setup-isolation",
+          environmentType: "containerized",
+          containerId: "container-fixture",
+          status: "running",
+        });
+        const { context } = createContext(environment);
+        const reservation = spyOn(
+          context.storage.environmentIsolation,
+          "assignEnvironmentPortBase",
+        );
+        try {
+          const { sessionId } = await spawnSetupTerminal(environment, ["true"], context);
+          const actual = ptySpawn.mock.calls.at(-1)?.[2]?.env as NodeJS.ProcessEnv | undefined;
+          for (const name of ENVIRONMENT_ISOLATION_ENV_NAMES)
+            expect(actual?.[name]).toBeUndefined();
+          expect(context.runtime.terminals.readOutput(sessionId)).not.toContain("Isolation:");
+          expect(reservation).not.toHaveBeenCalled();
+        } finally {
+          reservation.mockRestore();
+        }
+      });
+    } finally {
+      for (const [name, value] of inherited) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  test.each(["reserved", "failed"])(
+    "local terminal %s allocation replaces inherited isolation",
+    async (kind) => {
+      const { environmentIsolationVariables, ENVIRONMENT_ISOLATION_ENV_NAMES } =
+        await import("../src/core/environment-isolation");
+      const saved = ENVIRONMENT_ISOLATION_ENV_NAMES.map(
+        (name) => [name, process.env[name]] as const,
+      );
+      Object.assign(process.env, environmentIsolationVariables("parent", 20_000));
+      let restoreReservation = () => {};
+      try {
+        const worktreePath = await createTempDir("ork-terminal-isolation-");
+        const environment = createEnvironment({
+          id: "terminal-isolation",
+          environmentType: "local",
+          worktreePath,
+        });
+        const { context } = createContext(environment);
+        let calls = 0;
+        const reservation = spyOn(
+          context.storage.environmentIsolation,
+          "assignEnvironmentPortBase",
+        ).mockImplementation(async () => {
+          calls++;
+          if (kind === "failed") throw new Error("reservation failed");
+          return 21_000;
+        });
+        restoreReservation = () => reservation.mockRestore();
+        const commands = createCommandRegistry();
+        const { sessionId } = terminalSessionResult(
+          await commands.get("create_local_terminal_session")?.(
+            { environmentId: environment.id, cols: 80, rows: 24 },
+            context,
+          ),
+        );
+        await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+        const expected = environmentIsolationVariables(
+          environment.id,
+          kind === "failed" ? null : 21_000,
+        );
+        const actual = ptySpawn.mock.calls.at(-1)?.[2]?.env as NodeJS.ProcessEnv | undefined;
+        for (const name of ENVIRONMENT_ISOLATION_ENV_NAMES)
+          expect(actual?.[name]).toBe(expected[name]);
+        expect(calls).toBe(1);
+      } finally {
+        restoreReservation();
+        for (const [name, value] of saved) {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
+      }
+    },
+  );
+
   test(
     "retains an exited terminal snapshot long enough for desync recovery",
     async () => {
@@ -3615,56 +3709,71 @@ printf '["exists","missing"]'
   });
 
   test("starts container terminal sessions through docker exec in a PTY", async () => {
-    const environment = createEnvironment({
-      id: "env-container-terminal",
-      environmentType: "containerized",
-      containerId: "container-1",
-      worktreePath: undefined,
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const createArgs = {
-      containerId: "container-1",
-      environmentId: environment.id,
-      terminalKey: "root-tab",
-      cols: 100,
-      rows: 32,
-      user: "node",
-    };
-
-    const firstResult = terminalSessionResult(
-      await commands.get("create_terminal_session")?.(createArgs, context),
+    const { ENVIRONMENT_ISOLATION_ENV_NAMES, environmentIsolationVariables } =
+      await import("../src/core/environment-isolation");
+    const inherited = ENVIRONMENT_ISOLATION_ENV_NAMES.map(
+      (name) => [name, process.env[name]] as const,
     );
-    const sessionId = firstResult.sessionId;
-    expect(firstResult.created).toBe(true);
-    await commands.get("start_terminal_session")?.({ sessionId }, context);
-    const reattachedResult = terminalSessionResult(
-      await commands.get("create_terminal_session")?.(createArgs, context),
-    );
-    const reattachedSessionId = reattachedResult.sessionId;
-    expect(reattachedResult.created).toBe(false);
-    await commands.get("start_terminal_session")?.({ sessionId: reattachedSessionId }, context);
+    Object.assign(process.env, environmentIsolationVariables("parent", 20_000));
+    try {
+      const environment = createEnvironment({
+        id: "env-container-terminal",
+        environmentType: "containerized",
+        containerId: "container-1",
+        worktreePath: undefined,
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const createArgs = {
+        containerId: "container-1",
+        environmentId: environment.id,
+        terminalKey: "root-tab",
+        cols: 100,
+        rows: 32,
+        user: "node",
+      };
 
-    const spawnCall = ptySpawn.mock.calls[0];
-    expect(reattachedSessionId).toBe(sessionId);
-    expect(ptySpawn).toHaveBeenCalledTimes(1);
-    expect(spawnCall?.[0]).toBe("docker");
-    expect(spawnCall?.[1]).toEqual([
-      "exec",
-      "-it",
-      "--env",
-      expect.stringMatching(/^ORKESTRATOR_TERMINAL_SESSION=[0-9a-f-]{36}--[0-9a-f-]{36}$/),
-      "--user",
-      "node",
-      "container-1",
-      "bash",
-      "-lc",
-      expect.stringContaining("orkestrator_source_runtime_env"),
-    ]);
-    expect(spawnCall?.[2]).toMatchObject({
-      cols: 100,
-      rows: 32,
-    });
+      const firstResult = terminalSessionResult(
+        await commands.get("create_terminal_session")?.(createArgs, context),
+      );
+      const sessionId = firstResult.sessionId;
+      expect(firstResult.created).toBe(true);
+      await commands.get("start_terminal_session")?.({ sessionId }, context);
+      const reattachedResult = terminalSessionResult(
+        await commands.get("create_terminal_session")?.(createArgs, context),
+      );
+      const reattachedSessionId = reattachedResult.sessionId;
+      expect(reattachedResult.created).toBe(false);
+      await commands.get("start_terminal_session")?.({ sessionId: reattachedSessionId }, context);
+
+      const spawnCall = ptySpawn.mock.calls[0];
+      expect(reattachedSessionId).toBe(sessionId);
+      expect(ptySpawn).toHaveBeenCalledTimes(1);
+      expect(spawnCall?.[0]).toBe("docker");
+      expect(spawnCall?.[1]).toEqual([
+        "exec",
+        "-it",
+        "--env",
+        expect.stringMatching(/^ORKESTRATOR_TERMINAL_SESSION=[0-9a-f-]{36}--[0-9a-f-]{36}$/),
+        "--user",
+        "node",
+        "container-1",
+        "bash",
+        "-lc",
+        expect.stringContaining("orkestrator_source_runtime_env"),
+      ]);
+      expect(spawnCall?.[2]).toMatchObject({
+        cols: 100,
+        rows: 32,
+      });
+      const actual = spawnCall?.[2]?.env as NodeJS.ProcessEnv | undefined;
+      for (const name of ENVIRONMENT_ISOLATION_ENV_NAMES) expect(actual?.[name]).toBeUndefined();
+    } finally {
+      for (const [name, value] of inherited) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 
   test.each(["node", "orkroot"] as const)(

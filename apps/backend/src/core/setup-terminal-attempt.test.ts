@@ -437,3 +437,67 @@ describe("container setup shell", () => {
     },
   );
 });
+
+test.each(["reserved", "failed"])(
+  "setup %s allocation exports only its own isolation and prints the notice",
+  async (kind) => {
+    const {
+      ENVIRONMENT_ISOLATION_ENV_NAMES,
+      environmentIsolationVariables,
+      formatEnvironmentIsolationNotice,
+    } = await import("./environment-isolation.js");
+    const { quoteShell } = await import("./commands-agent-support.js");
+    const harness = await createPreviewHarness();
+    const runtime = new BackendRuntime({ emit: () => undefined });
+    const inherited = [...ENVIRONMENT_ISOLATION_ENV_NAMES, "SHELL"].map(
+      (name) => [name, process.env[name]] as const,
+    );
+    Object.assign(process.env, environmentIsolationVariables("parent", 20_000), {
+      SHELL: "/bin/sh",
+    });
+    const reservation = spyOn(harness.storage.environmentIsolation, "assignEnvironmentPortBase");
+    if (kind === "failed") reservation.mockRejectedValue(new Error("reservation failed"));
+    else reservation.mockResolvedValue(21_000);
+    try {
+      await harness.addLocalEnvironment("isolation");
+      await harness.storage.updateEnvironment("isolation", { worktreePath: harness.dir });
+      const environment = (await harness.storage.getEnvironment("isolation"))!;
+      const context = {
+        storage: harness.storage,
+        runtime,
+        emit() {},
+        appRoot: "",
+        resourceRoot: "",
+        toolchainBinDir: "",
+        environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+      } as CommandContext;
+      const expected = environmentIsolationVariables(
+        environment.id,
+        kind === "failed" ? null : 21_000,
+      );
+      const code = `require('fs').writeFileSync(${JSON.stringify(path.join(harness.dir, "isolation.json"))}, JSON.stringify(Object.fromEntries(${JSON.stringify(ENVIRONMENT_ISOLATION_ENV_NAMES)}.filter(k => process.env[k] !== undefined).map(k => [k, process.env[k]]))))`;
+      const result = await spawnSetupTerminal(
+        environment,
+        [`${quoteShell(process.execPath)} -e ${quoteShell(code)}`],
+        context,
+      );
+      expect(await result.completion).toBe(true);
+      expect(JSON.parse(readFileSync(path.join(harness.dir, "isolation.json"), "utf8"))).toEqual(
+        expected,
+      );
+      expect(runtime.terminals.readOutput(result.sessionId)).toContain(
+        formatEnvironmentIsolationNotice(expected),
+      );
+    } finally {
+      reservation.mockRestore();
+      for (const [name, value] of inherited) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      await runtime.terminals.terminateSessionsForEnvironment("isolation");
+      runtime.shutdown();
+      await harness.cleanup();
+    }
+  },
+  20_000,
+);

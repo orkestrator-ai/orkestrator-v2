@@ -17,6 +17,7 @@ import { GraphDescribeRepository } from "./storage-graph-describe.js";
 import { SuborksRepository } from "./storage-suborks.js";
 import { ClientStateRepository } from "./storage-client-state.js";
 import { SetupApprovalsRepository } from "./storage-setup-approvals.js";
+import { EnvironmentIsolationRepository } from "./storage-environment-isolation.js";
 import { WatchedPullRequestsRepository } from "./storage-watched-pull-requests.js";
 import { MachineLoadHistoryRepository } from "./storage-machine-load-history.js";
 import { StorageFiles } from "./storage-files.js";
@@ -86,6 +87,7 @@ export class StorageRepositories {
   readonly suborks: SuborksRepository;
   readonly clientState: ClientStateRepository;
   readonly setupApprovals: SetupApprovalsRepository;
+  readonly environmentIsolation: EnvironmentIsolationRepository;
   readonly watchedPullRequests: WatchedPullRequestsRepository;
   readonly machineLoadHistory: MachineLoadHistoryRepository;
 
@@ -127,6 +129,7 @@ export class StorageRepositories {
     this.suborks = new SuborksRepository(context, this);
     this.clientState = new ClientStateRepository(context);
     this.setupApprovals = new SetupApprovalsRepository(context);
+    this.environmentIsolation = new EnvironmentIsolationRepository(context, this);
     this.watchedPullRequests = new WatchedPullRequestsRepository(context);
     this.machineLoadHistory = new MachineLoadHistoryRepository(context);
   }

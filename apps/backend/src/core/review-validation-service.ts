@@ -18,6 +18,7 @@ import {
 import { quoteShell, resolveBunBinary, validateGitRefName } from "./commands-agent-support.js";
 import { runCommand } from "./shell.js";
 import { REVIEW_VALIDATION_CONTROL, REVIEW_VALIDATION_WORKER } from "./review-validation-worker.js";
+import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
 import type { ReviewPreparationResult } from "./review-prompts.js";
 
 /**
@@ -324,10 +325,16 @@ async function controlReviewValidationOnce(
     }),
   ).toString("base64");
   const args = ["-e", REVIEW_VALIDATION_CONTROL, payload, REVIEW_VALIDATION_WORKER];
+  // A start launches the worker, which hands its environment to every planned
+  // command: the worktree's own Compose project and port block, as its
+  // terminals and agents get (`environment-isolation.ts`).
+  const isolation =
+    action === "start" ? await localEnvironmentIsolationEnv(environment, context.storage) : {};
   const { stdout } =
     environment.environmentType === "local"
       ? await runCommand(resolveBunBinary(context), args, {
           cwd: "/",
+          env: withEnvironmentIsolation(process.env, isolation),
           timeoutMs: 20_000,
           redactValues: [payload, REVIEW_VALIDATION_CONTROL, REVIEW_VALIDATION_WORKER],
         })
@@ -343,6 +350,7 @@ async function controlReviewValidationOnce(
             withContainerRuntimeCredential(["bun", ...args].map(quoteShell).join(" ")),
           ],
           {
+            env: withEnvironmentIsolation(process.env),
             timeoutMs: 20_000,
             redactValues: [payload, REVIEW_VALIDATION_CONTROL, REVIEW_VALIDATION_WORKER],
           },

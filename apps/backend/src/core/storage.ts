@@ -9,6 +9,7 @@ export type { GraphDescribeStorage } from "./storage-graph-describe.js";
 export type { SuborksStorage } from "./storage-suborks.js";
 export type { ClientStateStorage } from "./storage-client-state.js";
 export type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
+export type { EnvironmentIsolationStorage } from "./storage-environment-isolation.js";
 export type { MachineLoadHistoryStorage } from "./storage-machine-load-history.js";
 export type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
 export type { KanbanStorage } from "./storage-kanban.js";
@@ -46,6 +47,7 @@ import type { GraphDescribeStorage } from "./storage-graph-describe.js";
 import type { SuborksStorage } from "./storage-suborks.js";
 import type { ClientStateStorage } from "./storage-client-state.js";
 import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
+import type { EnvironmentIsolationStorage } from "./storage-environment-isolation.js";
 import type { MachineLoadHistoryStorage } from "./storage-machine-load-history.js";
 import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
 import type { KanbanStorage } from "./storage-kanban.js";
@@ -183,6 +185,8 @@ export class StorageService {
   readonly suborks: SuborksStorage;
   readonly clientState: ClientStateStorage;
   readonly setupApprovals: SetupApprovalsStorage;
+  /** Local environments' port blocks (`environment-isolation.ts`). */
+  readonly environmentIsolation: EnvironmentIsolationStorage;
   readonly watchedPullRequests: WatchedPullRequestsStorage;
   /** This machine's load history (`machine-load.ts`, #2287). */
   readonly machineLoadHistory: MachineLoadHistoryStorage;
@@ -208,6 +212,7 @@ export class StorageService {
     this.suborks = this.repos.suborks;
     this.clientState = this.repos.clientState;
     this.setupApprovals = this.repos.setupApprovals;
+    this.environmentIsolation = this.repos.environmentIsolation;
     this.watchedPullRequests = this.repos.watchedPullRequests;
     this.machineLoadHistory = this.repos.machineLoadHistory;
   }

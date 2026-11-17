@@ -2,6 +2,7 @@ import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findi
 import { describe, expect, test } from "bun:test";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import {
+  launchPrAgent,
   launchResolveConflictsAgent,
   queueAutoPr,
   supersedePendingAutoPr,
@@ -101,7 +102,7 @@ for (const queued of [false, true]) {
           reused: true,
           queued,
           completionActionArmed: true,
-        } as never;
+        };
       },
       {
         getEnvironment: async () => ({ id: "env-1", projectId: "project-1" }) as never,
@@ -122,3 +123,52 @@ for (const queued of [false, true]) {
     expect(result).toEqual({ kind: "launched", tabId: "existing-resolve", refreshArmed: true });
   });
 }
+
+describe("a launch reply with no acknowledgement", () => {
+  const storage = {
+    getEnvironment: async () => ({ id: "env-1", projectId: "project-1" }) as never,
+    loadConfig: async () => ({ global: { enabledAgentPlatforms: ["codex"] } }) as never,
+  };
+  const input = { environmentId: "env-1", targetBranch: "main", requestId: "request-1" };
+
+  // A reply that is not an object used to throw a TypeError out of the launch
+  // (reading `.tabId` of null); it now reads as unacknowledged and is retried.
+  for (const reply of [null, undefined, "accepted"]) {
+    test(`Resolve Conflicts retries a ${JSON.stringify(reply) ?? "undefined"} reply`, async () => {
+      const outcome = await launchResolveConflictsAgent(async () => reply, storage, input);
+      expect(outcome).toEqual({
+        kind: "retry",
+        message: "The conflict-resolution agent did not acknowledge the launch",
+      });
+    });
+
+    test(`the PR agent retries a ${JSON.stringify(reply) ?? "undefined"} reply`, async () => {
+      const commands: string[] = [];
+      const outcome = await launchPrAgent(
+        async (command) => {
+          commands.push(command);
+          return reply;
+        },
+        storage,
+        input,
+      );
+      expect(outcome).toEqual({
+        kind: "retry",
+        message: "The pull request agent did not acknowledge the launch",
+      });
+      expect(commands).toEqual(["launch_native_agent_job"]);
+    });
+  }
+
+  test("ignores a non-string tab id or error and keeps the rejection", async () => {
+    const outcome = await launchPrAgent(
+      async () => ({ status: "rejected", tabId: 7, error: { reason: "x" } }),
+      storage,
+      input,
+    );
+    expect(outcome).toEqual({
+      kind: "rejected",
+      message: "The agent rejected the pull request request",
+    });
+  });
+});

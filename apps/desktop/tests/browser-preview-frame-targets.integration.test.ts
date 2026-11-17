@@ -513,13 +513,8 @@ describe.skipIf(!CHROMIUM)("element targets inside iframes, in Chromium", () => 
     await isolated.showPins(target);
     const display = () =>
       isolated.run(`document.querySelector('[data-orkestrator-pins] [role=img]')?.style.display`);
-    for (const [left, top] of [
-      [-500, 40],
-      [500, 40],
-      [10, -500],
-      [10, 500],
-    ]) {
-      await isolated.page.evaluate(
+    const moveTarget = (left: number, top: number) =>
+      isolated.page.evaluate(
         ({ left, top }) => {
           const doc = (document.getElementById("editor") as HTMLIFrameElement).contentDocument!;
           const button = doc.getElementById("save")!;
@@ -528,16 +523,21 @@ describe.skipIf(!CHROMIUM)("element targets inside iframes, in Chromium", () => 
         },
         { left, top },
       );
+    for (const [left, top] of [
+      [-500, 40],
+      [500, 40],
+      [10, -500],
+      [10, 500],
+    ] as const) {
+      // Observe a fresh visible-to-hidden transition for every edge: a hidden
+      // pin from the previous edge must not satisfy this edge's redraw poll.
+      await moveTarget(10, 40);
+      expect(await until(display, (value) => value === "block")).toBe("block");
+      await moveTarget(left, top);
       expect(await until(display, (value) => value === "none")).toBe("none");
     }
-    await isolated.page.evaluate(() => {
-      const doc = (document.getElementById("editor") as HTMLIFrameElement).contentDocument!;
-      doc.getElementById("save")!.style.cssText =
-        "position:fixed;left:10px;top:40px;width:140px;height:30px";
-      doc.dispatchEvent(new Event("scroll"));
-    });
-    await isolated.page.waitForTimeout(80);
-    expect(await display()).toBe("block");
+    await moveTarget(10, 40);
+    expect(await until(display, (value) => value === "block")).toBe("block");
     // Attribute edits do not trigger the mutation observer. Font completion
     // and frame-window resize must independently schedule placement.
     for (const event of ["font", "resize"]) {

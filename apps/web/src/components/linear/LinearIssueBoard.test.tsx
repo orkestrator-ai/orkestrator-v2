@@ -219,7 +219,7 @@ describe("LinearIssueBoard card assignee", () => {
     expect(avatar.getAttribute("alt")).toBe("Assigned to Ada Lovelace");
     expect(avatar.getAttribute("title")).toBe("Ada Lovelace");
     // The name is the avatar now, not a second line of text.
-    expect(screen.queryByText("Ada Lovelace")).toBeNull();
+    expect(screen.queryByText("Ada Lovelace") === null).toBe(true);
     expect(screen.getByText("High")).toBeTruthy();
   });
 
@@ -263,6 +263,6 @@ describe("LinearIssueBoard card assignee", () => {
 
   test("an unassigned card shows no avatar", () => {
     renderCards([issue("eng-5", "Nobody", "Todo")]);
-    expect(avatarOf("Nobody")).toBeNull();
+    expect(avatarOf("Nobody") === null).toBe(true);
   });
 });

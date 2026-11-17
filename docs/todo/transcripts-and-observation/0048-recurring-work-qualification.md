@@ -467,7 +467,7 @@ after a restart. Follow-ups needing a decision were in 7120 (retired
 
 **Context.** The idle A/B decides none. The feature-planning keyed row read was decided from the harness (decision 4).
 
-**Investigation.** All still present at the values listed: `pr-check-rollup` 60 s (`packages/protocol/src/recurring-work.ts:191`), `mail-retention` 60 s (`:297`), admission limits (`apps/backend/src/core/work-admission.ts:85`; no re-prioritisation in `WorkAdmissionPool`, `:185`), `DOCKER_AVAILABILITY_POLL_INTERVAL_MS` (`apps/web/src/App.tsx:111`), `DESIGN_CANVAS_CURSOR_CHECK_MS` (`apps/web/src/components/design/design-controller.ts:38`), B19 (`tmux-interactive.ts`) and B20 (`review-validation-worker.ts`). The feature-planning item is done: `getFeaturePlan` reads one row (`apps/backend/src/core/storage-kanban.ts:684`) and warm reads come from the row cache (`apps/backend/src/core/storage-database.ts:500`). B18 (decision 3) has moved on in 0020: `claude-state-signal` images now poll twice a minute when idle ([recurring-work.md](../../architecture/recurring-work.md), row B18), so the "59.9 of 63.9 `docker exec`" figure holds only for older images.
+**Investigation.** All still present at the values listed: `pr-check-rollup` 60 s (`packages/protocol/src/recurring-work.ts:191`), `mail-retention` 60 s (`:297`), admission limits (`apps/backend/src/core/work-admission.ts:85`; no re-prioritisation in `WorkAdmissionPool`, `:185`), `DOCKER_AVAILABILITY_POLL_INTERVAL_MS` (`apps/web/src/App.tsx:111`), `DESIGN_CANVAS_CURSOR_CHECK_MS` (`apps/web/src/components/design/design-controller.ts:38`), B19 (`tmux-interactive.ts`) and B20 (`review-validation-worker.ts`). The feature-planning item is done: `getFeaturePlan` reads one row (`apps/backend/src/core/storage-kanban.ts:684`) and warm reads come from the row cache (`apps/backend/src/core/storage-database.ts:500`). B18 (decision 3) has moved on in 0020 (retired 2026-11-17): `claude-state-signal` images now poll twice a minute when idle ([recurring-work.md](../../architecture/recurring-work.md), row B18), so the "59.9 of 63.9 `docker exec`" figure holds only for older images.
 
 **Decisions.**
 
@@ -767,7 +767,7 @@ unmeasured; nothing here needs it.
 
 ### 19. Changes-tab remote freshness
 
-**Problem.** 0020 still owed a real-browser check of the remote snapshot state;
+**Problem.** 0020 (retired 2026-11-17) owed a real-browser check of the remote snapshot state;
 retiring 0051 did not supply that result.
 
 **Context.** The Files panel's Changes tab renders `WorktreeSnapshotState.remote`,
@@ -2165,8 +2165,9 @@ Both questions were answered on 2026-10-25; see "Assumptions and decisions".
   drivers, or does retirement wait for the live profile?~~ It waits for the
   busy live profile.
 - ~~Should the Claude terminal-state poll (B18) be measured first?~~ Yes, in
-  [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md),
-  which owns B18. On the macOS idle A/B it was 59.9 of 63.9 `docker exec`
+  0020 (retired 2026-11-17; the signal is described in
+  [container-lifecycle.md](../../architecture/container-lifecycle.md#claude-terminal-state-signal-claude-state-signal3)),
+  which owned B18. On the macOS idle A/B it was 59.9 of 63.9 `docker exec`
   calls per minute, in both arms.
 
 ## Needs verification
@@ -2228,7 +2229,7 @@ Recorded 2026-10-25 by the worker that implemented this file's code items.
    (metrics off) that only the A/B exercises.
 3. **B18 first.** Options: measure the Claude terminal-state poll before
    the other candidates; or keep it in queue order. Chosen: measure it first,
-   in its owning file 0020. Why: it was 59.9 of 63.9 `docker exec` calls per
+   in its owning file 0020 (retired 2026-11-17). Why: it was 59.9 of 63.9 `docker exec` calls per
    minute per idle container in both arms, far above everything this file
    still lists. Pros: the largest remaining idle cost is decided first.
    Cons: none here; the work belongs to 0020.
@@ -2881,9 +2882,11 @@ collide with other tasks' decisions.
   remaining checks are tasks 18 to 20 here, and tasks 16 and 17 in 7568) and
   0052 (retired 2026-11-11; [remote-bandwidth.md](../../development/remote-bandwidth.md)): the client and
   observation halves of #852.
-- [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md): B18, the
-  container Files panel status exec and `containerRevertFileCommand`'s inline
-  fetch.
+- 0020 (retired 2026-11-17; behaviour in
+  [container-lifecycle.md](../../architecture/container-lifecycle.md#container-worktree-signal-container-worktree-signal1),
+  evidence in [container-qualification.md](../../development/container-qualification.md#container-state-signals-on-a-firewalled-linux-engine-host-2026-11-17)):
+  B18, the container Files panel status exec and
+  `containerRevertFileCommand`'s inline fetch.
 - [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md): the
   multi-review rollback gates and benchmark.
 - 0050 (retired 2026-11-15; `git show a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`):
@@ -2910,10 +2913,10 @@ collide with other tasks' decisions.
   (done; trial-limit tuning)
 - `docs/improvements/recurring-processes/plan/03-shared-worktree-snapshots.md`
   (qualification, macOS watcher, re-prioritisation; container read cost is in
-  `container-state-observation.md`)
+  0020 (retired 2026-11-17))
 - `docs/improvements/recurring-processes/plan/04-container-git-fetch-policy.md`
   (app qualification, failure ladder; the inline revert fetch is in
-  `container-state-observation.md`)
+  0020 (retired 2026-11-17))
 - `docs/improvements/recurring-processes/plan/05-pr-monitoring-policy.md`
   (live GitHub evidence, rollup backoff, container cooldown, rollback)
 - `docs/improvements/recurring-processes/plan/06-client-read-coordination.md`
@@ -2937,7 +2940,7 @@ collide with other tasks' decisions.
 - `docs/imrovements/recurring-processes.md` (inventory moved to
   `../architecture/recurring-work.md` with current cadences; findings F01 to
   F10 shipped; B19 and B20 are measured candidates above; B18 is in
-  `container-state-observation.md`)
+  0020 (retired 2026-11-17))
 
 ## Assumptions and decisions
 

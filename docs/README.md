@@ -182,8 +182,8 @@ rationale, open questions, items that need verification, and the old docs it
 replaced. The individual items live only in these files.
 
 Files are grouped into area folders, plus one `manual-test/` folder.
-[`todo/0000-index.md`](todo/0000-index.md) points to the folders and counts
-each folder's files by status, and each folder's `0000-index.md` lists its
+[`todo/0000-index.md`](todo/0000-index.md) links each folder and says what
+it covers, and each folder's `0000-index.md` lists its
 files in a table ranked by criticality, most critical first. Its columns are
 **Rank**, **File**, **Criticality**, **Status**, **Needs you**, **Covers** and
 **Why this rating**. Criticality rates a file as a whole, never its individual
@@ -309,8 +309,6 @@ The manual-test checklist's own row is the only one rated
 **`requires user input`**. There is no `done` row: a file whose last task is
 finished, or whose remaining tasks all moved to the checklist, is retired in
 the same change (see [Maintaining the folders](#maintaining-the-folders)).
-The top-level index keeps a `requires user input` and a `done` column so the
-counts stay comparable; `done` is always 0.
 
 **Needs you** is one short line:
 
@@ -321,8 +319,17 @@ counts stay comparable; `done` is always 0.
 
 Update a file's Status and Needs you in the same change that alters its tasks
 (finishes, adds, narrows or unblocks one, or records evidence that changes who
-can act), just as its rating is, and keep the counts in
-[`todo/0000-index.md`](todo/0000-index.md) matching.
+can act), just as its rating is.
+
+### Status counts
+
+Index files carry no counts or totals: no count columns, no total rows and no
+sentences such as "N files are blocked". Every change that adds or retires a
+file, or changes its status, would edit the same count cells, so open pull
+requests would conflict on them even when they touch different to-dos. When
+a count is needed, compute it from the rows instead, for example
+`rg -c '\| blocked \|' docs/todo/*/0000-index.md`. This holds for every
+`0000-index.md`, the flake registry's included; do not add a count back.
 
 ### Maintaining the folders
 
@@ -337,21 +344,19 @@ can act), just as its rating is, and keep the counts in
   If the file's most serious remaining work changed, re-rate it and move its
   row in the folder index.
 - Keep the row's **Status** and **Needs you** current in every change that
-  alters the file's tasks ([choosing a status](#choosing-a-status)), and keep
-  the counts in [`todo/0000-index.md`](todo/0000-index.md) matching the folder
-  indexes.
+  alters the file's tasks ([choosing a status](#choosing-a-status)).
 - When the last open task in a file is done, or every remaining one moved to
   the manual-test checklist, retire the file in the same change: move any
   durable behaviour into `architecture/` or `development/`, delete the file,
   remove its row from the folder index, point links and paths that named it
   at the durable doc in every file, `AGENTS.md` included (the root
   `AGENTS.md`, "Keep references current": a ticket that bars edits to a file
-  never covers this), renumber the remaining ranks to `1..n` in row order and update
-  the counts. Checklist items whose source is retired cite it as
+  never covers this) and renumber the remaining ranks to `1..n` in row order.
+  Checklist items whose source is retired cite it as
   `NNNN (retired)`. Its todo number is not reused.
 - To add work, create a new file with the next number and the same headings
   in the folder that fits, and add a rated row with its Status and Needs you to
-  that folder's index, then update the counts. A new folder also needs its own
+  that folder's index. A new folder also needs its own
   `0000-index.md` and a row in [`todo/0000-index.md`](todo/0000-index.md).
   The layout example the repository instructions name is a live one-task
   to-do in that format:
@@ -390,8 +395,8 @@ can act), just as its rating is, and keep the counts in
   file must exist, and an `#anchor` must name a heading in it whose text the
   file does not repeat (a repeated heading's bare anchor lands on the first
   one). It also requires every folder to be linked from the top-level index,
-  with status counts that match the folder index and a total row that matches
-  their sum. Two numbers were already shared when it was added: 0054 (two
+  which holds no to-do files and no counts ([status counts](#status-counts)).
+  Two numbers were already shared when it was added: 0054 (two
   files; the third was retired on 2026-11-10) stays allowlisted and may not
   gain another file, and 0723 left the allowlist when its agent-engines file
   was retired on 2026-11-14, leaving one file.

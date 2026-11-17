@@ -10,14 +10,10 @@ const INDEX = "0000-index.md";
 
 const TODO_FILE = /^\d{4}-.+\.md$/;
 const CRITICALITY = new Set(["Very high", "High", "Medium", "Low"]);
-// The four status columns of the top-level index, in order (docs/README.md,
-// "Choosing a status"). Area folders use only `backlog` and `blocked`: every
-// task that needs the user lives in the manual-test checklist, whose folder
-// uses only `requires user input`. `done` is never valid: a finished file is
-// retired in the same change.
-const STATUSES = ["backlog", "blocked", "requires user input", "done"] as const;
-type Status = (typeof STATUSES)[number];
-const STATUS_SET = new Set<string>(STATUSES);
+// Area folders use only `backlog` and `blocked` (docs/README.md, "Choosing a
+// status"): every task that needs the user lives in the manual-test checklist,
+// whose folder uses only `requires user input`. `done` is never valid: a
+// finished file is retired in the same change.
 const AREA_STATUSES = new Set<string>(["backlog", "blocked"]);
 const MANUAL_TEST = "manual-test";
 const MANUAL_TEST_STATUSES = new Set<string>(["requires user input"]);
@@ -94,52 +90,19 @@ function todoRows(index: string): TodoRow[] {
   return rows;
 }
 
-type StatusCounts = Record<Status | "total", number>;
+// Top-level index columns: Folder | Covers. It carries no status counts and
+// no total row (docs/README.md, "Status counts"): every status change would
+// edit the same cells, so open pull requests would conflict on them.
+const TOP_LEVEL_COLUMNS = ["Folder", "Covers"];
 
-function emptyCounts(): StatusCounts {
-  return { backlog: 0, blocked: 0, "requires user input": 0, done: 0, total: 0 };
-}
-
-function countStatuses(rows: TodoRow[]): StatusCounts {
-  const counts = emptyCounts();
-  for (const row of rows) {
-    if (STATUS_SET.has(row.status)) counts[row.status as Status] += 1;
-    counts.total += 1;
-  }
-  return counts;
-}
-
-// Top-level index columns: Folder | backlog | blocked | requires user input |
-// done | Total | Covers, then a `**Total**` row summing every folder.
-function parseCountCells(cells: string[]): StatusCounts | undefined {
-  const values = cells.slice(1, 6);
-  if (values.length < 5 || !values.every((value) => /^\d+$/.test(value))) return undefined;
-  const [backlog, blocked, needsUser, done, total] = values.map(Number) as [
-    number,
-    number,
-    number,
-    number,
-    number,
-  ];
-  return { backlog, blocked, "requires user input": needsUser, done, total };
-}
-
-function folderRows(index: string): Array<{ folder: string; counts: StatusCounts | undefined }> {
-  const rows: Array<{ folder: string; counts: StatusCounts | undefined }> = [];
+function folderRows(index: string): Array<{ folder: string; cells: string[] }> {
+  const rows: Array<{ folder: string; cells: string[] }> = [];
   for (const line of index.split("\n")) {
     const cells = tableCells(line);
     const link = cells?.[0]?.match(/^\[[^\]]+\]\(([a-z0-9-]+)\/0000-index\.md\)$/);
-    if (cells && link) rows.push({ folder: link[1]!, counts: parseCountCells(cells) });
+    if (cells && link) rows.push({ folder: link[1]!, cells });
   }
   return rows;
-}
-
-function totalRow(index: string): StatusCounts | undefined {
-  for (const line of index.split("\n")) {
-    const cells = tableCells(line);
-    if (cells?.[0] === "**Total**") return parseCountCells(cells);
-  }
-  return undefined;
 }
 
 function checkFolderLinks(todo: string) {
@@ -152,15 +115,20 @@ function checkFolderLinks(todo: string) {
   ).toEqual(areaFolders(todo));
 }
 
-function checkStatusCounts(todo: string) {
+function checkNoCounts(todo: string) {
   const index = readFileSync(path.join(todo, INDEX), "utf8");
-  const sum = emptyCounts();
-  for (const { folder, counts } of folderRows(index)) {
-    const actual = countStatuses(todoRows(readFileSync(path.join(todo, folder, INDEX), "utf8")));
-    expect(counts, `${folder} status counts in the top-level index`).toEqual(actual);
-    for (const key of [...STATUSES, "total"] as const) sum[key] += actual[key];
+  const header = index
+    .split("\n")
+    .map(tableCells)
+    .find((cells) => cells?.[0] === TOP_LEVEL_COLUMNS[0]);
+  expect(header, "the top-level index columns").toEqual(TOP_LEVEL_COLUMNS);
+  for (const { folder, cells } of folderRows(index)) {
+    expect(cells.length, `${folder} row has only Folder and Covers cells`).toBe(
+      TOP_LEVEL_COLUMNS.length,
+    );
   }
-  expect(totalRow(index), "the top-level index total row").toEqual(sum);
+  const totals = index.split("\n").filter((line) => /^\|\s*\**total\**\s*\|/i.test(line));
+  expect(totals, "the top-level index has no total row").toEqual([]);
 }
 
 function checkTodoNumbers(todo: string) {
@@ -246,8 +214,8 @@ describe("todo folders", () => {
     checkFolderLinks(todo);
   });
 
-  test("the top-level index counts every folder's statuses and totals them", () => {
-    checkStatusCounts(todo);
+  test("the top-level index carries no status counts or total row", () => {
+    checkNoCounts(todo);
   });
 
   test("todo numbers are unique across folders, except the allowlisted duplicates", () => {
@@ -283,11 +251,10 @@ function fixture() {
     directory,
     INDEX,
     [
-      "| Folder | backlog | blocked | requires user input | done | Total | Covers |",
-      "| --- | --- | --- | --- | --- | --- | --- |",
-      "| [Area](area/0000-index.md) | 2 | 1 | 0 | 0 | 3 | Example |",
-      "| [Manual test](manual-test/0000-index.md) | 0 | 0 | 1 | 0 | 1 | Checklist |",
-      "| **Total** | 2 | 1 | 1 | 0 | 4 | |",
+      "| Folder | Covers |",
+      "| --- | --- |",
+      "| [Area](area/0000-index.md) | Example |",
+      "| [Manual test](manual-test/0000-index.md) | Checklist |",
     ].join("\n"),
   );
   for (const file of ["0001-first.md", "0002-middle.md", "0003-last.md"]) {
@@ -327,7 +294,7 @@ function fixture() {
   // Every negative case starts with a valid filesystem and exercises the same
   // checks as the live documentation above, without modifying the repository.
   checkFolderLinks(directory);
-  checkStatusCounts(directory);
+  checkNoCounts(directory);
   checkTodoNumbers(directory);
   checkAreaIndex(path.join(directory, "area"));
   checkAreaIndex(path.join(directory, MANUAL_TEST));
@@ -410,28 +377,27 @@ describe("todo guard negative fixtures", () => {
 
   test.each([
     [
-      "stale folder count",
+      "status count columns",
       (index: string) =>
-        index.replace("| 2 | 1 | 0 | 0 | 3 | Example |", "| 3 | 0 | 0 | 0 | 3 | Example |"),
+        index
+          .replace("| Folder | Covers |", "| Folder | backlog | blocked | Covers |")
+          .replace("| --- | --- |", "| --- | --- | --- | --- |")
+          .replace("| Example |", "| 1 | 0 | Example |")
+          .replace("| Checklist |", "| 0 | 0 | Checklist |"),
     ],
     [
-      "missing folder counts",
-      (index: string) => index.replace("| 2 | 1 | 0 | 0 | 3 | Example |", "| Example |"),
+      "a count cell in one folder row",
+      (index: string) => index.replace("| Example |", "| 3 | Example |"),
     ],
-    [
-      "stale total",
-      (index: string) =>
-        index.replace("| **Total** | 2 | 1 | 1 | 0 | 4 |", "| **Total** | 2 | 1 | 1 | 0 | 5 |"),
-    ],
-    ["missing total row", (index: string) => index.split("\n").slice(0, 4).join("\n")],
-  ] as const)("rejects a top-level index with a %s", (_name, mutate) => {
+    ["a total row", (index: string) => `${index}\n| **Total** | 4 |`],
+  ] as const)("rejects a top-level index with %s", (_name, mutate) => {
     const directory = fixture();
     const index = path.join(directory, INDEX);
     writeFileSync(index, mutate(readFileSync(index, "utf8")));
-    expect(() => checkStatusCounts(directory)).toThrow();
+    expect(() => checkNoCounts(directory)).toThrow();
   });
 
-  test("a status change in a folder index requires updating the counts", () => {
+  test("a status change in a folder index needs no edit to the top-level index", () => {
     const directory = fixture();
     const index = path.join(directory, "area", INDEX);
     writeFileSync(
@@ -439,7 +405,8 @@ describe("todo guard negative fixtures", () => {
       readFileSync(index, "utf8").replace("| blocked | Waits on: 0001 |", "| backlog | — |"),
     );
     checkAreaIndex(path.dirname(index));
-    expect(() => checkStatusCounts(directory)).toThrow();
+    checkFolderLinks(directory);
+    checkNoCounts(directory);
   });
 
   test.each([

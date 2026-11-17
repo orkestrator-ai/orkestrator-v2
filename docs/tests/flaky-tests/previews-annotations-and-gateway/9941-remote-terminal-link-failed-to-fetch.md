@@ -1,7 +1,7 @@
 # Remote terminal link case: `Failed to fetch` from the second window's transport (`e2e/agent-testing/service-preview-electron.spec.ts`)
 
 - **ID:** 9941
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-15
 - **Test:** `a remote terminal link opens the native localhost forward in a separate browser`
 - **File:** `e2e/agent-testing/service-preview-electron.spec.ts:3140` at
@@ -19,9 +19,9 @@
 - **Isolated rerun:** none passed on `mbp3`. It does not meet the register's
   "passes alone" rule: on the same Mac the 7062 run (base `0cc406750`)
   failed it the same way in the full suite and again alone by `-g`
-  ([8301](../../todo/cross-cutting/8301-electron-specs-failing-on-a-macos-display.md)
-  task 2). It is recorded here because to-do 8300 (retired) asked for a case
-  for the 2181 run's failure; finding its cause is 8301 task 2.
+  (8301 (retired), task 2; fixed in
+  [PR #2355](https://github.com/orkestrator-ai/orkestrator-v2/pull/2355)). It is recorded here because to-do 8300 (retired) asked for a case
+  for the 2181 run's failure; 8301 task 2 subsequently found and fixed its cause.
 - **Evidence:** the run's compressed failure log, `t2181-mbp3-electron.log.gz`, was kept in a temporary `orkestrator-test-run.*` directory on `mbp3` and was not re-read for this case; the observation is as recorded in 2181's Current state ("Real-display run on mbp3") and in to-do 8300 (retired).
 - **Recurrence check:** `mise run flaky:recurrence -- 2390 --base 47110af03 --registry-ref origin/main`
   answers that the base contains 2390's fix. It is not counted as a
@@ -29,3 +29,20 @@
   case was a lost link hover behind a startup dialog, not a failed fetch.
 - **Hypothesis:** none established. Which invoke failed, and whether the
   second backend was listening at that moment, was not recorded.
+
+## Resolution (2026-11-17)
+
+- **Root cause:** the second window connected to the remote backend without
+  reloading. Its direct gateway transport retained the Local backend's
+  address, which then refused its requests by CORS.
+- **Fix:** [PR #2355](https://github.com/orkestrator-ai/orkestrator-v2/pull/2355)
+  (`383081c09`) reloads the second window and waits for its API after
+  connecting, matching the app's own connection flow. The lesson is recorded
+  in [agent-testing.md](../../development/agent-testing.md#electron-specs-and-their-display).
+- **Reproduced:** no — no controlled reproduction was performed during this
+  merge. The earlier failing runs are preserved above; PR #2355 identifies
+  the stale transport and reports verification after its fix.
+- **Stress:** PR #2355's commit message reports 4 of 4 isolated passes and a
+  whole-file pass on mbp3. The exact verification command was not recorded
+  in that message. These are upstream results, not runs performed during
+  this documentation-only merge resolution.

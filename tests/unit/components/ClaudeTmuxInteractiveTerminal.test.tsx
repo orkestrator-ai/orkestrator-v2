@@ -87,6 +87,14 @@ class MockTerminal {
     };
   }
 
+  onBinary() {
+    return { dispose: () => {} };
+  }
+
+  parser = {
+    registerOscHandler: () => ({ dispose: () => {} }),
+  };
+
   attachCustomKeyEventHandler(handler: KeyHandler) {
     this.keyHandler = handler;
   }

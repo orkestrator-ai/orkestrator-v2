@@ -9,6 +9,11 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope } from "@/lib/node-scope-slots";
+import { writeText } from "@/lib/native/clipboard";
+import { installOsc52ClipboardHandler } from "@/lib/terminal-osc52";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("terminal");
 
 export type CreateXtermTerminal = (
   appearance: {
@@ -103,6 +108,12 @@ export const createXtermTerminal: CreateXtermTerminal = (appearance, scrollback,
   terminal.loadAddon(fitAddon);
   terminal.loadAddon(serializeAddon);
   terminal.loadAddon(webLinksAddon);
+  // Programs that own the mouse (Claude Code's fullscreen mode) copy through
+  // OSC 52; disposed with the terminal.
+  installOsc52ClipboardHandler(terminal, {
+    writeText,
+    onError: (error) => log.error("clipboard.osc52-copy-failed", { error: formatLogError(error) }),
+  });
 
   return { terminal, fitAddon, serializeAddon, webLinksAddon };
 };

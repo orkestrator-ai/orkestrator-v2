@@ -54,6 +54,7 @@ export const TERMINAL_LOG_AREAS = defineLogAreas({
       "session-key.environment-missing": "A local session key was built with no environment id.",
       "clipboard.image-failed": "An image pasted into a terminal could not be saved.",
       "clipboard.copy-failed": "Copying a terminal selection to the clipboard failed.",
+      "clipboard.osc52-copy-failed": "A program's OSC 52 clipboard write could not be copied.",
       "clipboard.paste-failed": "A paste into a terminal failed; `target` says which path.",
       "clipboard.process-failed": "Reading or storing clipboard data for a paste failed.",
       "clipboard.image-save-failed": "An image from a paste event could not be written to disk.",

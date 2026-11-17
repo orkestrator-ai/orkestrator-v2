@@ -9,6 +9,7 @@ import {
   artifactHostDiagnosticFields,
   reportArtifactHostDiagnostics,
   reportMainThreadStall,
+  reportMainThreadSuspension,
 } from "../electron/diagnostic-logging.js";
 
 let capture: LogCapture;
@@ -66,6 +67,70 @@ describe("desktop diagnostic logging", () => {
       () => "",
     );
     expect(capture.records()[0]?.fields).toEqual({ lagMs: 1000, endedAt: "t", intervalMs: 500 });
+  });
+
+  test("a stall with host sleep taken out says how much", () => {
+    reportMainThreadStall(
+      {
+        lagMs: 12_000,
+        endedAt: "t",
+        intervalMs: 500,
+        folded: "",
+        level: "error",
+        hostSuspendedMs: 90_000,
+      },
+      () => "",
+    );
+    expect(capture.records()[0]?.fields).toEqual({
+      lagMs: 12_000,
+      endedAt: "t",
+      intervalMs: 500,
+      hostSuspendedMs: 90_000,
+    });
+  });
+
+  test("a host suspension is an info line, not a stall", () => {
+    reportMainThreadSuspension({
+      suspendedMs: 127_900,
+      lagMs: 128_123,
+      endedAt: "2026-11-16T01:50:28.526Z",
+      intervalMs: 500,
+      suppressed: 0,
+    });
+    reportMainThreadSuspension({
+      suspendedMs: 40_000,
+      lagMs: 40_100,
+      endedAt: "t",
+      intervalMs: 500,
+      suppressed: 3,
+    });
+    expect(
+      capture.records().map(({ level, area, event, fields }) => ({ level, area, event, fields })),
+    ).toEqual([
+      {
+        level: "info",
+        area: "desktop",
+        event: "main-thread.host-suspended",
+        fields: {
+          suspendedMs: 127_900,
+          lagMs: 128_123,
+          endedAt: "2026-11-16T01:50:28.526Z",
+          intervalMs: 500,
+        },
+      },
+      {
+        level: "info",
+        area: "desktop",
+        event: "main-thread.host-suspended",
+        fields: {
+          suspendedMs: 40_000,
+          lagMs: 40_100,
+          endedAt: "t",
+          intervalMs: 500,
+          suppressed: 3,
+        },
+      },
+    ]);
   });
 
   test("keeps every artifact reason as an accepted scalar field", () => {

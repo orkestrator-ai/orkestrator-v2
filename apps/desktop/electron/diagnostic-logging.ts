@@ -1,5 +1,8 @@
 import { createLogger } from "@orkestrator/protocol/logger";
-import type { EventLoopStallMonitorOptions } from "@orkestrator/protocol/event-loop-stall-monitor";
+import type {
+  EventLoopStallMonitorOptions,
+  EventLoopSuspensionReport,
+} from "@orkestrator/protocol/event-loop-stall-monitor";
 import type { ArtifactHostDiagnostics } from "./artifact-host-session.js";
 
 const desktopLog = createLogger("desktop");
@@ -13,6 +16,7 @@ export function reportMainThreadStall(
     folded,
     level,
     cpuMs,
+    hostSuspendedMs,
   }: Parameters<NonNullable<EventLoopStallMonitorOptions["report"]>>[0],
   describeStall: (lagMs: number) => string,
 ): void {
@@ -21,8 +25,26 @@ export function reportMainThreadStall(
     endedAt,
     intervalMs,
     cpuMs,
+    hostSuspendedMs,
     openDialog: describeStall(lagMs).replace(/^; /, "") || undefined,
     folded: folded.replace(/^; /, "") || undefined,
+  });
+}
+
+/** A main-thread timer late because the machine slept: not a stall, so `info`. */
+export function reportMainThreadSuspension({
+  suspendedMs,
+  lagMs,
+  endedAt,
+  intervalMs,
+  suppressed,
+}: EventLoopSuspensionReport): void {
+  desktopLog.info("main-thread.host-suspended", {
+    suspendedMs,
+    lagMs,
+    endedAt,
+    intervalMs,
+    suppressed: suppressed || undefined,
   });
 }
 

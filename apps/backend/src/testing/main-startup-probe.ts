@@ -1,5 +1,6 @@
 /** Run the real main.ts composition in a private process with no host services. */
-import { mock } from "bun:test";
+import { expect, mock } from "bun:test";
+import type { EventLoopStallMonitorOptions } from "@orkestrator/protocol/event-loop-stall-monitor";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,8 +54,15 @@ mock.module("@orkestrator/toolchain/manager", () => ({
 mock.module("@orkestrator/protocol/parent-watchdog", () => ({
   startReparentWatchdog: () => event("watchdog:armed"),
 }));
+mock.module("@orkestrator/protocol/node/host-cpu-times", () => ({
+  readHostCpuTimes: () => [123_000, 456_000],
+}));
 mock.module("@orkestrator/protocol/event-loop-stall-monitor", () => ({
-  startEventLoopStallMonitor: () => {},
+  startEventLoopStallMonitor: (options: EventLoopStallMonitorOptions) => {
+    expect(options.hostCpuTimes).toBeFunction();
+    expect(options.hostCpuTimes!()).toEqual([123_000, 456_000]);
+    expect(options.cpuUsage!()).toBeGreaterThanOrEqual(0);
+  },
   addEventLoopStallContext: () => {},
 }));
 stub("../core/index.ts", {

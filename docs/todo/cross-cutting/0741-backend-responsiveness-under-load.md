@@ -135,7 +135,9 @@ desktop's own loop, so it is not a measure of the backend's loop.
     30 s, the last 20 stalls) and `consoleOutput` (the bounded console's
     pending, written and dropped counters).
     - Pros: one timer callback per 500 ms; sees blocking synchronous work.
-    - Cons: a sleeping host is reported as a stall too.
+    - Cons: a sleeping host is reported as a stall too. (Since resolved: the
+      monitor takes host sleep out using the host's CPU time counters; see
+      [host sleep is not a stall](../../architecture/logging.md#host-sleep-is-not-a-stall).)
   - **`perf_hooks.monitorEventLoopDelay`.** Rejected: in Bun it reported about
     1 ms for a 50 ms synchronous block (todo 0050, `scripts/efficiency/resources.ts`).
 

@@ -10,8 +10,15 @@
  * `thresholdMs` is a stall, logged with its length so an incident can be
  * dated from the log afterwards. A setTimeout chain, not
  * `perf_hooks.monitorEventLoopDelay`: Bun's histogram does not see a blocking
- * synchronous call (see `scripts/efficiency/resources.ts`). A host that sleeps
- * also delays the timer and is reported the same way.
+ * synchronous call (see `scripts/efficiency/resources.ts`).
+ *
+ * A host that sleeps also delays the timer when the monotonic clock counts
+ * sleep (macOS's does). With a `hostCpuTimes` reader the monitor takes that
+ * sleep out: the host's CPU time counters stop while it sleeps, so the part of
+ * a late tick no CPU was awake for is a suspension, not a stall. It is written
+ * as `host-suspended` (info, essential) and kept out of `stalls`, `maxLagMs`
+ * and `lateTicks`; a stall that remains once the sleep is taken out is still
+ * reported, with `hostSuspendedMs` saying how much was removed.
  *
  * Cost: one timer callback every `intervalMs` and a few arithmetic updates.
  * Log lines are rate-limited; stalls between lines are folded into the next.
@@ -57,6 +64,10 @@ export interface EventLoopSnapshot {
   lateTicks: Record<string, number>;
   stalls: number;
   recentStalls: EventLoopStall[];
+  /** Late ticks the host slept through (`hostCpuTimes`); not stalls. */
+  suspensions: number;
+  /** Longest of those sleeps, in ms. */
+  maxSuspendedMs: number;
 }
 
 export interface EventLoopStallMonitorOptions {
@@ -71,6 +82,13 @@ export interface EventLoopStallMonitorOptions {
    * (`process.cpuUsage()` summed). Read once per tick; absent, no `cpuMs`.
    */
   cpuUsage?: () => number;
+  /**
+   * Milliseconds each host CPU has spent in any state (`readHostCpuTimes`).
+   * They stop while the host sleeps; absent, a sleep is reported as a stall.
+   */
+  hostCpuTimes?: () => readonly number[] | null;
+  /** Takes each host suspension instead of the `event-loop` logger. */
+  reportSuspension?: (suspension: EventLoopSuspensionReport) => void;
   /** Monotonic milliseconds. */
   now?: () => number;
   wallClock?: () => number;
@@ -135,6 +153,44 @@ export interface EventLoopStallReport {
   cpuMs?: number;
   /** What the registered context sources say ran during the stall. */
   context?: EventLoopStallContext;
+  /**
+   * Time the host slept within this late tick, already taken out of `lagMs`;
+   * absent when it did not sleep.
+   */
+  hostSuspendedMs?: number;
+}
+
+/** A late tick the host slept through: the process was not held, the machine was off. */
+export interface EventLoopSuspensionReport {
+  /** How long no host CPU was awake within the late tick. */
+  suspendedMs: number;
+  /** The tick's whole lateness, sleep included. */
+  lagMs: number;
+  /** Wall-clock end, as an ISO string. */
+  endedAt: string;
+  intervalMs: number;
+  /** Suspensions not written since the last line (spaced like stall lines). */
+  suppressed: number;
+}
+
+/**
+ * How long the host slept between two readings of its CPU times: the monotonic
+ * time that passed minus the longest any one CPU was counted awake. The
+ * longest, not the average, so a CPU whose idle time is accounted late cannot
+ * make an awake host look asleep. Null when the readings do not compare.
+ */
+export function hostSleptMs(
+  before: readonly number[],
+  after: readonly number[],
+  elapsedMs: number,
+): number | null {
+  if (before.length === 0 || before.length !== after.length) return null;
+  let awakeMs = -Infinity;
+  for (let index = 0; index < after.length; index += 1) {
+    awakeMs = Math.max(awakeMs, after[index]! - before[index]!);
+  }
+  if (!Number.isFinite(awakeMs)) return null;
+  return Math.max(0, Math.round(elapsedMs - awakeMs));
 }
 
 export interface EventLoopStallMonitor {
@@ -157,14 +213,32 @@ function reportStall({
   level,
   cpuMs,
   context,
+  hostSuspendedMs,
 }: EventLoopStallReport): void {
   log[level]("stalled", {
     lagMs,
     endedAt,
     intervalMs,
     cpuMs,
+    hostSuspendedMs,
     folded: folded.replace(/^; /, "") || undefined,
     ...context,
+  });
+}
+
+function reportSuspension({
+  suspendedMs,
+  lagMs,
+  endedAt,
+  intervalMs,
+  suppressed,
+}: EventLoopSuspensionReport): void {
+  log.info("host-suspended", {
+    suspendedMs,
+    lagMs,
+    endedAt,
+    intervalMs,
+    suppressed: suppressed || undefined,
   });
 }
 
@@ -187,6 +261,17 @@ export function startEventLoopStallMonitor(
       return null;
     }
   };
+  const hostCpuTimes = options.hostCpuTimes;
+  const readHost = (): readonly number[] | null => {
+    if (!hostCpuTimes) return null;
+    try {
+      const times = hostCpuTimes();
+      return times && times.length > 0 && times.every(Number.isFinite) ? times : null;
+    } catch {
+      return null;
+    }
+  };
+  const suspensionReport = options.reportSuspension ?? reportSuspension;
   const wallClock = options.wallClock ?? Date.now;
   const setTimer =
     options.setTimer ?? ((callback: () => void, ms: number) => setTimeout(callback, ms));
@@ -205,9 +290,71 @@ export function startEventLoopStallMonitor(
   let stopped = false;
   let expected = now() + intervalMs;
   let cpuAtLastTick = readCpu();
+  let suspensions = 0;
+  let maxSuspendedMs = 0;
+  let lastSuspensionLogAt = -Infinity;
+  let suspensionsSuppressed = 0;
+  const firstHostTimes = readHost();
+  let hostBaseline: { at: number; times: readonly number[] } | null = firstHostTimes
+    ? { at: now(), times: firstHostTimes }
+    : null;
   let timer: { unref?: () => unknown } | null = null;
 
-  const record = (lagMs: number, fromMs: number, toMs: number, cpuMs: number | undefined) => {
+  /**
+   * Read on every tick so the host and process counters cover the same window
+   * as rawLagMs. Keeping a baseline across ticks can charge an earlier sleep
+   * against a later, genuinely awake stall.
+   */
+  const suspendedWithin = (at: number, rawLagMs: number, cpuMs: number | undefined): number => {
+    if (!hostCpuTimes) return 0;
+    const times = readHost();
+    let sleptMs = 0;
+    if (rawLagMs >= thresholdMs && hostBaseline && times) {
+      const slept = hostSleptMs(hostBaseline.times, times, at - hostBaseline.at);
+      // Process CPU sums all threads. Compare it with the total host capacity
+      // actually counted awake, not with lateness (which can include sleep).
+      // Allow 100 ms per CPU for counter quantisation and read skew.
+      const capacityMs = times.reduce(
+        (total, time, index) => total + Math.max(0, time - (hostBaseline!.times[index] ?? time)),
+        0,
+      );
+      const inconsistent = cpuMs !== undefined && cpuMs > capacityMs + times.length * 100;
+      if (slept !== null && slept >= thresholdMs && !inconsistent) {
+        sleptMs = Math.min(rawLagMs, slept);
+      }
+    }
+    hostBaseline = times ? { at, times } : null;
+    return sleptMs;
+  };
+
+  const noteSuspension = (suspendedMs: number, rawLagMs: number) => {
+    suspensions += 1;
+    maxSuspendedMs = Math.max(maxSuspendedMs, suspendedMs);
+    const monotonic = now();
+    // A night of short wakes is many suspensions; one line per log interval.
+    if (monotonic - lastSuspensionLogAt < logIntervalMs) {
+      suspensionsSuppressed += 1;
+      return;
+    }
+    lastSuspensionLogAt = monotonic;
+    const suppressedSince = suspensionsSuppressed;
+    suspensionsSuppressed = 0;
+    suspensionReport({
+      suspendedMs,
+      lagMs: rawLagMs,
+      endedAt: new Date(wallClock()).toISOString(),
+      intervalMs,
+      suppressed: suppressedSince,
+    });
+  };
+
+  const record = (
+    lagMs: number,
+    fromMs: number,
+    toMs: number,
+    cpuMs: number | undefined,
+    hostSuspendedMs: number,
+  ) => {
     ticks += 1;
     maxLagMs = Math.max(maxLagMs, lagMs);
     LAG_BUCKETS_MS.forEach((bound, index) => {
@@ -239,6 +386,7 @@ export function startEventLoopStallMonitor(
       level: lagMs >= alwaysLogMs ? "error" : "warn",
       ...(cpuMs === undefined ? {} : { cpuMs }),
       context: stallContext(fromMs, toMs),
+      ...(hostSuspendedMs > 0 ? { hostSuspendedMs } : {}),
     });
   };
 
@@ -256,7 +404,11 @@ export function startEventLoopStallMonitor(
         ? Math.max(0, Math.round((cpu - cpuAtLastTick) / 1000))
         : undefined;
     cpuAtLastTick = cpu;
-    record(Math.max(0, Math.round(at - expected)), expected - intervalMs, at, cpuMs);
+    const rawLagMs = Math.max(0, Math.round(at - expected));
+    const suspendedMs = suspendedWithin(at, rawLagMs, cpuMs);
+    if (suspendedMs > 0) noteSuspension(suspendedMs, rawLagMs);
+    // Only the time the host was awake counts as lateness: a sleep held no one.
+    record(rawLagMs - suspendedMs, expected - intervalMs, at, cpuMs, suspendedMs);
     expected = at + intervalMs;
     schedule();
   };
@@ -273,6 +425,8 @@ export function startEventLoopStallMonitor(
       ),
       stalls,
       recentStalls: recent.map((stall) => ({ ...stall })),
+      suspensions,
+      maxSuspendedMs,
     }),
     stop: () => {
       stopped = true;

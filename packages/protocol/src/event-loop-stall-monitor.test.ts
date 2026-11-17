@@ -2,26 +2,40 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   addEventLoopStallContext,
   eventLoopDiagnostics,
+  hostSleptMs,
   startEventLoopStallMonitor,
   type EventLoopStallMonitor,
+  type EventLoopStallMonitorOptions,
   type EventLoopStallReport,
+  type EventLoopSuspensionReport,
 } from "./event-loop-stall-monitor.js";
 import { configureLogger } from "./logger.js";
 import { captureLogs } from "./testing/log-capture.js";
 
 /** A virtual clock and a single pending timer the test fires by hand. */
-function harness(options: { useDefaultLogger?: boolean; cpuUsage?: () => number } = {}) {
+function harness(
+  options: {
+    useDefaultLogger?: boolean;
+    cpuUsage?: () => number;
+    hostCpuTimes?: EventLoopStallMonitorOptions["hostCpuTimes"];
+  } = {},
+) {
   let monotonic = 0;
   let wall = Date.parse("2026-10-28T02:22:55.000Z");
   let pending: { callback: () => void; dueAt: number } | null = null;
   const logs: EventLoopStallReport[] = [];
+  const suspensions: EventLoopSuspensionReport[] = [];
   const monitor = startEventLoopStallMonitor({
     intervalMs: 500,
     thresholdMs: 1_000,
     logIntervalMs: 30_000,
     alwaysLogMs: 10_000,
     ...(options.useDefaultLogger ? {} : { report: (stall) => logs.push(stall) }),
+    ...(options.useDefaultLogger
+      ? {}
+      : { reportSuspension: (suspension) => suspensions.push(suspension) }),
     ...(options.cpuUsage ? { cpuUsage: options.cpuUsage } : {}),
+    ...(options.hostCpuTimes ? { hostCpuTimes: options.hostCpuTimes } : {}),
     now: () => monotonic,
     wallClock: () => wall,
     setTimer: (callback, ms) => {
@@ -42,7 +56,65 @@ function harness(options: { useDefaultLogger?: boolean; cpuUsage?: () => number 
     pending = null;
     timer.callback();
   };
-  return { monitor, logs, tick, hasTimer: () => pending !== null };
+  return {
+    monitor,
+    logs,
+    suspensions,
+    tick,
+    hasTimer: () => pending !== null,
+    /** Moves both clocks without firing anything: time passing between ticks. */
+    advance: (ms: number) => {
+      monotonic += ms;
+      wall += ms;
+    },
+  };
+}
+
+/**
+ * A host with two CPUs whose time counters run only while it is awake, as
+ * real ones do. `sleep` stops them; `lagging` holds one CPU's counter, the
+ * way an idle CPU whose time is accounted late would read.
+ */
+function host() {
+  const awake = [100_000, 100_000];
+  let sleeping = false;
+  let laggingCpu: number | null = null;
+  let reads = 0;
+  return {
+    times: () => {
+      reads += 1;
+      return [...awake];
+    },
+    /** Called with every millisecond the harness clocks move. */
+    pass(ms: number) {
+      if (sleeping) return;
+      awake.forEach((_, index) => {
+        if (index !== laggingCpu) awake[index]! += ms;
+      });
+    },
+    setSleeping: (value: boolean) => {
+      sleeping = value;
+    },
+    setLagging: (cpu: number | null) => {
+      laggingCpu = cpu;
+    },
+    reads: () => reads,
+  };
+}
+
+/** A harness whose host clock follows its monotonic clock, with sleeps on demand. */
+function hostHarness(options: { useDefaultLogger?: boolean; cpuUsage?: () => number } = {}) {
+  const machine = host();
+  const run = harness({ ...options, hostCpuTimes: machine.times });
+  /** Fires the next tick after `awakeMs` awake and `asleepMs` asleep, in that order. */
+  const tickAfter = ({ awakeMs = 0, asleepMs = 0 }: { awakeMs?: number; asleepMs?: number }) => {
+    machine.pass(500 + awakeMs);
+    machine.setSleeping(true);
+    machine.pass(asleepMs);
+    machine.setSleeping(false);
+    run.tick(awakeMs + asleepMs);
+  };
+  return { ...run, machine, tickAfter };
 }
 
 let monitor: EventLoopStallMonitor | null = null;
@@ -243,5 +315,225 @@ describe("event loop stall monitor", () => {
     run.monitor.stop();
     expect(run.hasTimer()).toBe(false);
     expect(eventLoopDiagnostics()).toBeNull();
+  });
+
+  describe("host sleep", () => {
+    test("a tick late only because the host slept is a suspension, not a stall", () => {
+      const run = hostHarness();
+      monitor = run.monitor;
+      run.tickAfter({});
+      run.tickAfter({ asleepMs: 128_123 });
+
+      expect(run.logs).toEqual([]);
+      expect(run.suspensions).toEqual([
+        {
+          suspendedMs: 128_123,
+          lagMs: 128_123,
+          endedAt: "2026-10-28T02:25:04.123Z",
+          intervalMs: 500,
+          suppressed: 0,
+        },
+      ]);
+      expect(run.monitor.snapshot()).toMatchObject({
+        ticks: 2,
+        stalls: 0,
+        maxLagMs: 0,
+        lateTicks: { "100": 0, "1000": 0, "5000": 0, "30000": 0 },
+        suspensions: 1,
+        maxSuspendedMs: 128_123,
+        recentStalls: [],
+      });
+    });
+
+    test("the default logger writes a suspension as an info line in the event-loop area", () => {
+      const capture = captureLogs();
+      try {
+        const run = hostHarness({ useDefaultLogger: true });
+        monitor = run.monitor;
+        run.tickAfter({ asleepMs: 40_000 });
+        expect(
+          capture
+            .records()
+            .map(({ level, area, event, fields }) => ({ level, area, event, fields })),
+        ).toEqual([
+          {
+            level: "info",
+            area: "event-loop",
+            event: "host-suspended",
+            fields: {
+              suspendedMs: 40_000,
+              lagMs: 40_000,
+              endedAt: "2026-10-28T02:23:35.500Z",
+              intervalMs: 500,
+            },
+          },
+        ]);
+      } finally {
+        capture.restore();
+      }
+    });
+
+    test("a stall that remains once the sleep is taken out is still a stall, and says so", () => {
+      const run = hostHarness();
+      monitor = run.monitor;
+      run.tickAfter({ awakeMs: 12_000, asleepMs: 60_000 });
+      expect(run.logs).toEqual([
+        expect.objectContaining({ lagMs: 12_000, level: "error", hostSuspendedMs: 60_000 }),
+      ]);
+      expect(run.suspensions).toEqual([
+        expect.objectContaining({ suspendedMs: 60_000, lagMs: 72_000 }),
+      ]);
+      expect(run.monitor.snapshot()).toMatchObject({ stalls: 1, maxLagMs: 12_000, suspensions: 1 });
+    });
+
+    test("short earlier sleeps are never subtracted from a later awake stall", () => {
+      const run = hostHarness({ cpuUsage: () => 0 });
+      monitor = run.monitor;
+      run.tickAfter({ asleepMs: 600 });
+      run.tickAfter({ asleepMs: 600 });
+      run.tickAfter({ awakeMs: 10_000 });
+      expect(run.logs).toEqual([expect.objectContaining({ lagMs: 10_000, level: "error" })]);
+      expect(run.logs[0]?.hostSuspendedMs).toBeUndefined();
+      expect(run.suspensions).toEqual([]);
+    });
+
+    for (const cpuMs of [0, 9_000, 18_000]) {
+      test(`mixed sleep and work preserves sleep with ${cpuMs} ms process CPU`, () => {
+        let cpuMicros = 0;
+        const run = hostHarness({ cpuUsage: () => cpuMicros });
+        monitor = run.monitor;
+        cpuMicros += cpuMs * 1_000;
+        run.tickAfter({ awakeMs: 9_000, asleepMs: 9_000 });
+        expect(run.logs).toEqual([
+          expect.objectContaining({ lagMs: 9_000, level: "warn", cpuMs, hostSuspendedMs: 9_000 }),
+        ]);
+        expect(run.suspensions).toEqual([
+          expect.objectContaining({ suspendedMs: 9_000, lagMs: 18_000 }),
+        ]);
+      });
+    }
+
+    test("a stall on an awake host is reported as before", () => {
+      const run = hostHarness();
+      monitor = run.monitor;
+      run.tickAfter({ awakeMs: 15_000 });
+      expect(run.logs).toEqual([
+        {
+          lagMs: 15_000,
+          endedAt: "2026-10-28T02:23:10.500Z",
+          intervalMs: 500,
+          folded: "",
+          level: "error",
+          context: undefined,
+        },
+      ]);
+      expect(run.suspensions).toEqual([]);
+      expect(run.monitor.snapshot()).toMatchObject({ suspensions: 0, maxSuspendedMs: 0 });
+    });
+
+    test("one CPU accounted late cannot make an awake host look asleep", () => {
+      const run = hostHarness();
+      monitor = run.monitor;
+      run.machine.setLagging(1);
+      run.tickAfter({ awakeMs: 20_000 });
+      expect(run.logs).toEqual([expect.objectContaining({ lagMs: 20_000, level: "error" })]);
+      expect(run.suspensions).toEqual([]);
+    });
+
+    test("a process that ran for most of the lateness was not on a sleeping host", () => {
+      // Counters that read as asleep (a broken reader), but the process used
+      // CPU for nearly the whole late tick.
+      let cpuMicros = 0;
+      const run = hostHarness({ cpuUsage: () => cpuMicros });
+      monitor = run.monitor;
+      cpuMicros += 30_000_000;
+      run.tickAfter({ asleepMs: 30_000 });
+      expect(run.logs).toEqual([
+        expect.objectContaining({ lagMs: 30_000, cpuMs: 30_000, level: "error" }),
+      ]);
+      expect(run.logs[0]?.hostSuspendedMs).toBeUndefined();
+      expect(run.suspensions).toEqual([]);
+    });
+
+    test("a process that barely ran while the counters stopped is a suspension", () => {
+      let cpuMicros = 0;
+      const run = hostHarness({ cpuUsage: () => cpuMicros });
+      monitor = run.monitor;
+      cpuMicros += 20_000;
+      run.tickAfter({ asleepMs: 30_000 });
+      expect(run.logs).toEqual([]);
+      expect(run.suspensions).toEqual([expect.objectContaining({ suspendedMs: 30_000 })]);
+    });
+
+    test("an unreadable or changed host reading leaves the stall reported", () => {
+      let calls = 0;
+      const run = harness({
+        hostCpuTimes: () => {
+          calls += 1;
+          if (calls === 1) return [1_000, 1_000];
+          if (calls === 2) return [1_000, 1_000, 1_000];
+          if (calls === 3) throw new Error("unreadable");
+          return null;
+        },
+      });
+      monitor = run.monitor;
+      // A CPU came online: the readings no longer compare.
+      run.tick(20_000);
+      // The reader throws: no baseline for the next.
+      run.tick(20_000);
+      run.tick(20_000);
+      expect(run.logs.map((stall) => stall.lagMs)).toEqual([20_000, 20_000, 20_000]);
+      expect(run.suspensions).toEqual([]);
+    });
+
+    test("suspension lines are spaced like stall lines, with the ones between counted", () => {
+      const run = hostHarness();
+      monitor = run.monitor;
+      run.tickAfter({ asleepMs: 20_000 });
+      run.tickAfter({ asleepMs: 5_000 });
+      run.tickAfter({ asleepMs: 3_000 });
+      expect(run.suspensions.map((suspension) => suspension.suspendedMs)).toEqual([20_000]);
+      for (let index = 0; index < 60; index += 1) run.tickAfter({});
+      run.tickAfter({ asleepMs: 50_000 });
+      expect(
+        run.suspensions.map(({ suspendedMs, suppressed }) => [suspendedMs, suppressed]),
+      ).toEqual([
+        [20_000, 0],
+        [50_000, 2],
+      ]);
+      expect(run.monitor.snapshot()).toMatchObject({
+        suspensions: 4,
+        maxSuspendedMs: 50_000,
+        stalls: 0,
+      });
+    });
+
+    test("reads host counters on every tick to align the accounting windows", () => {
+      const run = hostHarness();
+      monitor = run.monitor;
+      // One read at start.
+      expect(run.machine.reads()).toBe(1);
+      for (let index = 0; index < 20; index += 1) run.tickAfter({});
+      // Every tick refreshes the baseline, including on-time ticks.
+      expect(run.machine.reads()).toBe(21);
+      run.tickAfter({ asleepMs: 2_000 });
+      expect(run.machine.reads()).toBe(22);
+    });
+  });
+});
+
+describe("hostSleptMs", () => {
+  test("is the time that passed minus the longest any one CPU was awake", () => {
+    expect(hostSleptMs([0, 0], [500, 1_000], 61_000)).toBe(60_000);
+    expect(hostSleptMs([0, 0], [1_000, 1_000], 1_000)).toBe(0);
+  });
+
+  test("never goes below zero for counters that ran slightly ahead", () => {
+    expect(hostSleptMs([0], [3_070], 3_005)).toBe(0);
+  });
+
+  test("is null for readings that do not compare", () => {
+    expect(hostSleptMs([], [], 1_000)).toBeNull();
+    expect(hostSleptMs([0, 0], [0], 1_000)).toBeNull();
   });
 });

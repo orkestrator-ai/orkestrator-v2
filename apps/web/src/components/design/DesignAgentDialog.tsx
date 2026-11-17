@@ -146,6 +146,11 @@ export interface DesignAgentDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Called after a link is created or removed so the owner can resynchronize. */
   onLinksChanged?: () => void;
+  /**
+   * A design conversation was opened in a tab (started or resumed here). The
+   * design tab shows it in its agent panel when it has no agent yet.
+   */
+  onConversationOpened?: (tabId: string) => void;
 }
 
 /**
@@ -158,6 +163,7 @@ export function DesignAgentDialog({
   projection,
   onOpenChange,
   onLinksChanged,
+  onConversationOpened,
 }: DesignAgentDialogProps) {
   // The canvas's node (plan item 4007).
   const designScope = useDesignScope();
@@ -170,6 +176,7 @@ export function DesignAgentDialog({
           projection={projection}
           onClose={() => onOpenChange(false)}
           onLinksChanged={onLinksChanged}
+          onConversationOpened={onConversationOpened}
         />
       ) : null}
     </Dialog>
@@ -181,11 +188,13 @@ function DesignAgentDialogBody({
   projection,
   onClose,
   onLinksChanged,
+  onConversationOpened,
 }: {
   context: DesignContextReference;
   projection: DesignProjection | null | undefined;
   onClose: () => void;
   onLinksChanged?: () => void;
+  onConversationOpened?: (tabId: string) => void;
 }) {
   const environmentId = context.environmentId;
   // The canvas's node: links, history and resumes go there (plan item 4007).
@@ -457,6 +466,7 @@ function DesignAgentDialogBody({
         createTab,
         focus: (tabId) => focusTab(paneLayouts, environmentId, tabId),
       });
+      if (resumed.created && link.role === "design") onConversationOpened?.(resumed.tabId);
       return resumed.tabId;
     } catch (reason) {
       // A refused move means the link changed under us; read it again.
@@ -549,6 +559,9 @@ function DesignAgentDialogBody({
         description: messageOf(reason),
       });
     }
+    // A design conversation joins the design tab's agent panel if it has none;
+    // an implementation handoff stays a tab of its own.
+    if (role === "design") onConversationOpened?.(tabId);
     focusTab(paneLayouts, environmentId, tabId);
     onClose();
   };

@@ -79,12 +79,16 @@ design tab.
   arrow keys step 2%, Home and End jump to the bounds). The toolbar's agent
   button, the panel's close button and Ctrl/⌘+. hide and show it; hiding keeps
   the conversation mounted and running. Dock, size and visibility are kept on
-  the design tab (`designCanvasData.agentPanel`). Shortcuts go to whichever
+  the design tab (`designCanvasData.agentPanel`); until the user changes any of
+  them the panel is docked left at 40% and shows only when the design has an
+  agent, so a blank canvas keeps the whole tab. Shortcuts go to whichever
   side, canvas or agent, last had the pointer or focus.
 - **Pop out and bring in.** The panel's **Open agent in its own tab** makes the
-  agent an ordinary tab again. A design with no agent (a blank canvas, or one
-  reopened from Saved designs) shows an empty panel that offers **Show here**
-  for open conversations linked to the design.
+  agent an ordinary tab again. A design conversation that **Ask agent** starts
+  or resumes joins the panel when the design has no agent (an implementation
+  handoff stays a tab of its own). A design with no agent (a blank canvas, or
+  one reopened from Saved designs) shows an empty panel that offers **Show
+  here** for open conversations linked to the design.
 
 ## Documents, records and identities
 

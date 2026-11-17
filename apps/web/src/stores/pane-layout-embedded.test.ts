@@ -121,7 +121,7 @@ describe("embedded tab helpers", () => {
   });
 
   test("the default size depends on the dock axis", () => {
-    expect(designAgentPanelSize({ dock: "left", open: true })).toBe(34);
+    expect(designAgentPanelSize({ dock: "left", open: true })).toBe(40);
     expect(designAgentPanelSize({ dock: "bottom", open: true })).toBe(40);
     expect(designAgentPanelSize({ dock: "right", open: true, size: 5 })).toBe(15);
   });

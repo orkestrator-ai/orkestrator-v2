@@ -62,7 +62,7 @@ describe("DesignAgentDock", () => {
     renderInAppCommandScope(<Harness />);
     expect(dock().dataset.agentDock).toBe("left");
     expect(panel().style.order).toBe("0");
-    expect(panel().style.flexBasis).toBe("34%");
+    expect(panel().style.flexBasis).toBe("40%");
     expect(screen.getByTestId("canvas").parentElement!.style.order).toBe("2");
     expect(screen.getByTestId("agent").dataset.active).toBe("true");
     // The header names the agent's platform until its conversation has a title.
@@ -145,9 +145,9 @@ describe("DesignAgentDock", () => {
   test("the separator resizes the panel from the keyboard and the pointer", () => {
     renderInAppCommandScope(<Harness />);
     const separator = screen.getByRole("separator", { name: "Resize agent panel" });
-    expect(separator.getAttribute("aria-valuenow")).toBe("34");
+    expect(separator.getAttribute("aria-valuenow")).toBe("40");
     fireEvent.keyDown(separator, { key: "ArrowRight" });
-    expect(separator.getAttribute("aria-valuenow")).toBe("36");
+    expect(separator.getAttribute("aria-valuenow")).toBe("42");
     fireEvent.keyDown(separator, { key: "End" });
     expect(separator.getAttribute("aria-valuenow")).toBe("80");
     fireEvent.keyDown(separator, { key: "Home" });

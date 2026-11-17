@@ -5,7 +5,7 @@ import { LazyLoadBoundary, type LazyLoadErrorDetails } from "@/components/LazyLo
 import { DesignAgentDock, DesignAgentPanelEmpty } from "@/components/design/DesignAgentDock";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { useDesignStore } from "@/stores/designStore";
-import { designAgentPanelOf, findEmbeddedTab } from "@/stores/pane-layout-embedded";
+import { DEFAULT_DESIGN_AGENT_PANEL, findEmbeddedTab } from "@/stores/pane-layout-embedded";
 import { getAllLeaves, paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   getNativeAgentData,
@@ -58,8 +58,15 @@ export function DesignCanvasPaneTab({
   const scope = useNodeScope();
   const layouts = scope.store(paneLayoutStore);
   const { canvasId } = tab.designCanvasData;
-  const panel = designAgentPanelOf(tab);
   const embedded = findEmbeddedTab(paneTabs, tab.id);
+  // Until the user shows or hides it, the panel shows exactly when there is
+  // an agent in it: a blank design keeps its whole tab for the canvas.
+  const storedPanel = tab.designCanvasData.agentPanel;
+  const hasAgent = Boolean(embedded);
+  const panel = useMemo(
+    () => storedPanel ?? { ...DEFAULT_DESIGN_AGENT_PANEL, open: hasAgent },
+    [hasAgent, storedPanel],
+  );
   const embeddedData = embedded ? getNativeAgentData(embedded) : null;
   const visible = isTabActive && (isActive || hiddenByLayout);
 
@@ -89,8 +96,15 @@ export function DesignCanvasPaneTab({
 
   const changePanel = useCallback(
     (patch: Partial<DesignAgentPanelState>) =>
-      layouts.getState().updateDesignAgentPanel(tab.id, patch, environmentId),
-    [environmentId, layouts, tab.id],
+      layouts.getState().updateDesignAgentPanel(tab.id, { ...panel, ...patch }, environmentId),
+    [environmentId, layouts, panel, tab.id],
+  );
+  const adopt = useCallback(
+    (tabId: string) => {
+      if (layouts.getState().setTabEmbedding(tabId, tab.id, environmentId))
+        changePanel({ open: true });
+    },
+    [changePanel, environmentId, layouts, tab.id],
   );
   const closeDesign = useCallback(() => {
     // Closing the tab never deletes the design; its agent's conversation is retained.
@@ -105,6 +119,7 @@ export function DesignCanvasPaneTab({
       onPanelChange={changePanel}
       visible={visible}
       ownsGlobalShortcuts={ownsGlobalShortcuts}
+      onAdopt={adopt}
       {...(embedded && embeddedData
         ? {
             agent: { environmentId, tabId: embedded.id, platform: embeddedData.platform },
@@ -131,13 +146,7 @@ export function DesignCanvasPaneTab({
             ownsGlobalShortcuts: view.ownsGlobalShortcuts,
           })
         ) : (
-          <DesignAgentPanelEmpty
-            candidates={candidates}
-            onEmbed={(tabId) => {
-              layouts.getState().setTabEmbedding(tabId, tab.id, environmentId);
-              changePanel({ open: true });
-            }}
-          />
+          <DesignAgentPanelEmpty candidates={candidates} onEmbed={adopt} />
         )
       }
     />

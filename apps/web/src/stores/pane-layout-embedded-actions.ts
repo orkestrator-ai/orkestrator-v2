@@ -128,11 +128,16 @@ export function embeddedTabActions(get: () => PaneLayoutState, set: SetLayout): 
         env,
         mapTabs(env.root, (tab) => {
           if (tab.id !== tabId || !tab.designCanvasData) return tab;
-          const current = designAgentPanelOf(tab);
-          const next = sanitizeDesignAgentPanel({ ...current, ...patch });
+          const next = sanitizeDesignAgentPanel({ ...designAgentPanelOf(tab), ...patch });
+          // Nothing stored yet means the panel shows its default, which the
+          // design tab derives; a change to it is always written.
+          const stored = tab.designCanvasData.agentPanel;
           if (
             !next ||
-            (next.dock === current.dock && next.open === current.open && next.size === current.size)
+            (stored &&
+              next.dock === stored.dock &&
+              next.open === stored.open &&
+              next.size === stored.size)
           )
             return tab;
           return { ...tab, designCanvasData: { ...tab.designCanvasData, agentPanel: next } };

@@ -56,7 +56,7 @@ const DOCK_LABELS: Record<DesignAgentDock, string> = {
 };
 
 /** Smallest the panel gets along its axis, whatever the percentage says. */
-const PANEL_MIN_PX = { horizontal: 260, vertical: 150 } as const;
+const PANEL_MIN_PX = { horizontal: 320, vertical: 160 } as const;
 
 export interface DesignAgentDockProps {
   panel: DesignAgentPanelState;
@@ -69,9 +69,11 @@ export interface DesignAgentDockProps {
   agent?: { environmentId: string; tabId: string; platform: AgentPlatform | undefined };
   /** Makes the embedded agent an ordinary tab of its own again. */
   onPopOut?: () => void;
+  /** Shows an agent tab opened from this design in the panel, if it has none. */
+  onAdopt?: (tabId: string) => void;
   renderCanvas: (view: {
     ownsGlobalShortcuts: boolean;
-    agentPanel: { open: boolean; onToggle: () => void };
+    agentPanel: { open: boolean; onToggle: () => void; adopt?: (tabId: string) => void };
   }) => ReactNode;
   /** The agent conversation, or the empty state when there is none. */
   renderAgent: (view: { isActive: boolean; ownsGlobalShortcuts: boolean }) => ReactNode;
@@ -101,6 +103,7 @@ export function DesignAgentDock({
   ownsGlobalShortcuts,
   agent,
   onPopOut,
+  onAdopt,
   renderCanvas,
   renderAgent,
 }: DesignAgentDockProps) {
@@ -353,7 +356,7 @@ export function DesignAgentDock({
       >
         {renderCanvas({
           ownsGlobalShortcuts: ownsGlobalShortcuts && !agentOwns,
-          agentPanel: { open, onToggle: toggle },
+          agentPanel: { open, onToggle: toggle, ...(onAdopt ? { adopt: onAdopt } : {}) },
         })}
       </div>
       {previewDock && (

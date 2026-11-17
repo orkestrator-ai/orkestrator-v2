@@ -27,8 +27,8 @@ import {
 export const DESIGN_AGENT_PANEL_SIZE = Object.freeze({
   min: 15,
   max: 80,
-  /** Default when docked left or right. */
-  horizontal: 34,
+  /** Default when docked left or right: room for the composer's controls. */
+  horizontal: 40,
   /** Default when docked top or bottom. */
   vertical: 40,
 });

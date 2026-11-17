@@ -285,7 +285,10 @@ export interface DesignAgentPanelState {
 
 export interface DesignCanvasTabData {
   canvasId: string;
-  /** Absent means the default: docked left and open. */
+  /**
+   * Absent until the user moves, resizes, shows or hides the panel: it is
+   * docked left and shows when the design has an agent in it.
+   */
   agentPanel?: DesignAgentPanelState;
 }
 

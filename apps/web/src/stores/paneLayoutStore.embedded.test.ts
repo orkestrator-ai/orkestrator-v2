@@ -114,6 +114,18 @@ describe("agent tabs embedded in a design tab", () => {
     expect(pane.activeTabId).toBe("agent-1");
   });
 
+  test("showing the panel of a design with no stored state records it", () => {
+    seed(leaf("p1", [design]));
+    store().updateDesignAgentPanel("design-1", { dock: "left", open: true }, ENV);
+    expect(leaves()[0]!.tabs[0]!.designCanvasData?.agentPanel).toEqual({
+      dock: "left",
+      open: true,
+    });
+    const before = env().root;
+    store().updateDesignAgentPanel("design-1", { open: true }, ENV);
+    expect(env().root).toBe(before);
+  });
+
   test("the panel's dock, size and visibility are kept on the design tab", () => {
     seed(leaf("p1", [design]));
     store().updateDesignAgentPanel("design-1", { dock: "bottom", size: 55 }, ENV);

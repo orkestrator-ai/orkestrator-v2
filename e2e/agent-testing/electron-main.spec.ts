@@ -386,9 +386,9 @@ async function testIndependentWindows(
         const png = Buffer.from(await (await entry.getType("image/png")).arrayBuffer());
         return {
           hasWebp: await clipboard.has(rawFormat),
-          webp: Buffer.from(await (await entry.getType(rawFormat)).arrayBuffer()).toString(
-            "base64",
-          ),
+          webp: Buffer.from(
+            await ((await entry.getType(rawFormat)) as Blob).arrayBuffer(),
+          ).toString("base64"),
           size: nativeImage.createFromBuffer(png).getSize(),
         };
       }, format);

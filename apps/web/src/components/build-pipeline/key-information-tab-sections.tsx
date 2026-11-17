@@ -18,12 +18,14 @@ import {
   KEY_INFORMATION_TEST_RESULT,
 } from "./key-information-format";
 import { KeyInformationProse } from "./KeyInformationProse";
+import { KeyInformationText } from "./KeyInformationText";
 
 /**
  * The sections of the full key information tab. They show the same records as
  * the header panel's `KeyInformationBody`, laid out for a wide reading column:
  * larger prose, side-by-side options, a tests table and issues grouped by
- * round.
+ * round. Agent-written text goes through `KeyInformationText`, so its inline
+ * Markdown (code, bold, italic) renders rather than showing its delimiters.
  */
 
 export function TabSection({
@@ -59,6 +61,7 @@ export function TabProse({ text, lead = false }: { text: string; lead?: boolean 
         "max-w-[75ch] text-foreground",
         lead ? "gap-3 text-[15px] leading-7" : "text-sm leading-6 text-foreground/90",
       )}
+      renderText={(value) => <KeyInformationText text={value} />}
     />
   );
 }
@@ -69,7 +72,9 @@ export function WorkDoneList({ items }: { items: string[] }) {
       {items.map((item, index) => (
         <li key={index} className="flex items-start gap-2.5 text-sm leading-6">
           <CheckCircle2 aria-hidden className="mt-1 size-4 shrink-0 text-success/80" />
-          <span className="min-w-0 break-words">{item}</span>
+          <span className="min-w-0 break-words">
+            <KeyInformationText text={item} />
+          </span>
         </li>
       ))}
     </ul>
@@ -82,7 +87,9 @@ export function NotDoneList({ items }: { items: string[] }) {
       {items.map((item, index) => (
         <li key={index} className="flex items-start gap-2.5 text-sm leading-6">
           <CircleDot aria-hidden className="mt-1 size-4 shrink-0 text-amber-400/80" />
-          <span className="min-w-0 break-words">{item}</span>
+          <span className="min-w-0 break-words">
+            <KeyInformationText text={item} />
+          </span>
         </li>
       ))}
     </ul>
@@ -101,7 +108,7 @@ export function DecisionCards({ decisions }: { decisions: KeyInformationDecision
                 {index + 1}
               </span>
               <div className="min-w-0 flex-1 pt-0.5 text-sm font-medium break-words text-foreground">
-                {decision.decision}
+                <KeyInformationText text={decision.decision} />
               </div>
             </div>
             {decision.options.length > 0 ? (
@@ -117,7 +124,9 @@ export function DecisionCards({ decisions }: { decisions: KeyInformationDecision
                       )}
                     >
                       <div className="flex items-start gap-2">
-                        <span className="min-w-0 flex-1 text-sm break-words">{option.option}</span>
+                        <span className="min-w-0 flex-1 text-sm break-words">
+                          <KeyInformationText text={option.option} />
+                        </span>
                         {chosen ? (
                           <span className="shrink-0 rounded border border-success/40 px-1.5 py-px text-[10px] font-medium text-success uppercase">
                             Chosen
@@ -132,7 +141,9 @@ export function DecisionCards({ decisions }: { decisions: KeyInformationDecision
                                 aria-label="Pro"
                                 className="mt-0.5 size-3.5 shrink-0 text-success"
                               />
-                              <span className="min-w-0 break-words text-foreground/85">{pro}</span>
+                              <span className="min-w-0 break-words text-foreground/85">
+                                <KeyInformationText text={pro} />
+                              </span>
                             </li>
                           ))}
                           {option.cons.map((con, conIndex) => (
@@ -141,7 +152,9 @@ export function DecisionCards({ decisions }: { decisions: KeyInformationDecision
                                 aria-label="Con"
                                 className="mt-0.5 size-3.5 shrink-0 text-rose-400"
                               />
-                              <span className="min-w-0 break-words text-foreground/85">{con}</span>
+                              <span className="min-w-0 break-words text-foreground/85">
+                                <KeyInformationText text={con} />
+                              </span>
                             </li>
                           ))}
                         </ul>
@@ -154,7 +167,7 @@ export function DecisionCards({ decisions }: { decisions: KeyInformationDecision
             {!chosenListed ? (
               <div className="mt-3 text-sm">
                 <span className="text-muted-foreground">Chosen: </span>
-                {decision.chosen}
+                <KeyInformationText text={decision.chosen} />
               </div>
             ) : null}
             {decision.rationale ? (
@@ -163,7 +176,7 @@ export function DecisionCards({ decisions }: { decisions: KeyInformationDecision
                   Why
                 </div>
                 <p className="mt-0.5 text-sm leading-6 break-words whitespace-pre-wrap text-foreground/85">
-                  {decision.rationale}
+                  <KeyInformationText text={decision.rationale} />
                 </p>
               </div>
             ) : null}
@@ -225,12 +238,12 @@ export function TestsTable({ tests }: { tests: KeyInformationTest[] }) {
                   <div className="font-mono text-xs leading-5 break-all">{test.name}</div>
                   {test.details ? (
                     <div className="mt-1 text-xs leading-5 break-words text-muted-foreground @3xl:hidden">
-                      {test.details}
+                      <KeyInformationText text={test.details} />
                     </div>
                   ) : null}
                 </td>
                 <td className="hidden px-3 py-2 text-xs leading-5 break-words text-muted-foreground @3xl:table-cell">
-                  {test.details ?? ""}
+                  {test.details ? <KeyInformationText text={test.details} /> : null}
                 </td>
               </tr>
             );
@@ -260,7 +273,7 @@ export function IssuesByRound({ issues }: { issues: KeyInformationIssue[] }) {
                   <li key={index} className="rounded-lg border border-border/60 px-4 py-3">
                     <div className="flex flex-wrap items-start gap-2">
                       <span className="min-w-0 flex-1 text-sm leading-6 break-words text-foreground">
-                        {issue.issue}
+                        <KeyInformationText text={issue.issue} />
                       </span>
                       <span className="flex shrink-0 items-center gap-1.5 pt-0.5">
                         {issue.severity ? (
@@ -280,7 +293,7 @@ export function IssuesByRound({ issues }: { issues: KeyInformationIssue[] }) {
                     </div>
                     {issue.resolution ? (
                       <p className="mt-2 border-l-2 border-border pl-3 text-sm leading-6 break-words whitespace-pre-wrap text-muted-foreground">
-                        {issue.resolution}
+                        <KeyInformationText text={issue.resolution} />
                       </p>
                     ) : null}
                   </li>
@@ -338,7 +351,7 @@ export function VerificationRounds({
           </div>
           {verification.summary ? (
             <p className="mt-2 max-w-[85ch] text-sm leading-6 break-words whitespace-pre-wrap text-foreground/85">
-              {verification.summary}
+              <KeyInformationText text={verification.summary} />
             </p>
           ) : null}
           {verification.checks.length > 0 ? (
@@ -360,10 +373,12 @@ export function VerificationRounds({
                     />
                   )}
                   <div className="min-w-0 flex-1 text-sm leading-5">
-                    <div className="break-words">{check.check}</div>
+                    <div className="break-words">
+                      <KeyInformationText text={check.check} />
+                    </div>
                     {check.details ? (
                       <div className="mt-0.5 text-xs leading-5 break-words text-muted-foreground">
-                        {check.details}
+                        <KeyInformationText text={check.details} />
                       </div>
                     ) : null}
                   </div>

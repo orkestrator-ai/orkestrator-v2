@@ -407,10 +407,11 @@ export const DesignFrameView = memo(function DesignFrameView({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        {frameSelected && (
+        {(frameSelected || selected?.frameId === frame.id) && (
           <div className="ml-auto flex shrink-0">
             <DesignFrameDownloadMenu
               frameName={frame.name}
+              frameSelected={frameSelected}
               selectedCount={selectedFrameCount}
               frameCount={frameCount}
               onDownload={(scope, format) => actions.downloadFrames(frame.id, scope, format)}

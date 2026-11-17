@@ -21,18 +21,23 @@ const FORMATS: ReadonlyArray<{ format: DesignImageFormat; single: string; many: 
 const MANY_ORDER: readonly DesignImageFormat[] = ["pdf", "png", "webp"];
 
 /**
- * The download button above a selected frame's top-right corner. One frame:
+ * The download button above a frame's top-right corner, shown while the frame
+ * or an element inside it is selected. It is blue like the selection when the
+ * frame itself is selected and grey otherwise. One frame:
  * PNG, WEBP or PDF. With several frames selected a second group downloads the
  * selection, and a last group every frame on the canvas, as a multi-page PDF
  * or a ZIP of images.
  */
 export function DesignFrameDownloadMenu({
   frameName,
+  frameSelected,
   selectedCount,
   frameCount,
   onDownload,
 }: {
   frameName: string;
+  /** The frame itself (board) is selected, not just an element inside it. */
+  frameSelected: boolean;
   /** Frames in the board selection (this one included). */
   selectedCount: number;
   /** Committed frames on the canvas. */
@@ -71,8 +76,14 @@ export function DesignFrameDownloadMenu({
           aria-busy={busy || undefined}
           disabled={busy}
           data-testid="frame-download"
-          // Blue like the selection outline and title it sits beside.
-          className="shrink-0 rounded-sm p-0.5 text-blue-500 hover:bg-blue-500/15 focus-hairline disabled:opacity-70"
+          data-frame-selected={frameSelected || undefined}
+          // Blue like the selection outline and title it sits beside; grey while
+          // only an element inside the frame is selected.
+          className={`shrink-0 rounded-sm p-0.5 focus-hairline disabled:opacity-70 ${
+            frameSelected
+              ? "text-blue-500 hover:bg-blue-500/15"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          }`}
         >
           {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
         </button>

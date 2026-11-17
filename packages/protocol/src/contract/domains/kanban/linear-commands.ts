@@ -126,7 +126,9 @@ export const createLinearIssueCommand = defineCommand({
 
 /**
  * Changes the named fields of an issue on the project's board. `assigneeId`
- * null unassigns; labels are added and removed by id.
+ * null unassigns; labels are added and removed by id. `sortOrder` is Linear's
+ * manual board position (the board view's drag-to-reorder); an older backend
+ * ignores it and moves only the state, and its answer carries the real order.
  */
 export const updateLinearIssueCommand = defineCommand({
   domain: kanbanDomain,
@@ -145,6 +147,7 @@ export const updateLinearIssueCommand = defineCommand({
     addedLabelIds: optionalIds,
     removedLabelIds: optionalIds,
     estimate: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+    sortOrder: Schema.optionalKey(Schema.Finite),
   }),
   result: LinearIssueDetailSchema,
   critical: [],

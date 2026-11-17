@@ -118,6 +118,7 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
     "addedLabelIds",
     "removedLabelIds",
     "estimate",
+    "sortOrder",
   ],
   get_linear_node_connections: [],
   copy_linear_connection_from_node: ["nodeId"],

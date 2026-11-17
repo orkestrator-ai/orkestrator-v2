@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { LinearIssueListItem } from "@/types/linear";
-import { buildLinearLanes } from "./linear-issue-order";
+import { buildLinearLanes, planLinearDrop, type LinearLane } from "./linear-issue-order";
 
 function issue(id: string, status: string, extra: Partial<LinearIssueListItem> = {}) {
   return {
@@ -59,5 +59,71 @@ describe("buildLinearLanes", () => {
       "low",
       "urgent",
     ]);
+  });
+});
+
+describe("Linear board order", () => {
+  test("sorts a lane by Linear's sortOrder, unordered issues last in arrival order", () => {
+    const issues = [
+      issue("late", "Todo"),
+      issue("second", "Todo", { sortOrder: 5 }),
+      issue("later", "Todo"),
+      issue("first", "Todo", { sortOrder: -2.5 }),
+    ];
+    expect(buildLinearLanes(issues, [], "manual")[0]?.issues.map((i) => i.id)).toEqual([
+      "first",
+      "second",
+      "late",
+      "later",
+    ]);
+  });
+});
+
+describe("planLinearDrop", () => {
+  const lane = (issues: ReturnType<typeof issue>[]): LinearLane => ({
+    status: "Todo",
+    stateId: "s-todo",
+    issues,
+  });
+  const todo = lane([
+    issue("a", "Todo", { sortOrder: 1 }),
+    issue("b", "Todo", { sortOrder: 2 }),
+    issue("c", "Todo", { sortOrder: 4 }),
+  ]);
+  const plan = (...args: Parameters<typeof planLinearDrop>) => {
+    const result = planLinearDrop(...args);
+    return result ? Object.fromEntries(result) : null;
+  };
+  const other = (id: string, sortOrder?: number) =>
+    issue(id, "Done", sortOrder === undefined ? {} : { sortOrder });
+
+  test("spreads dropped issues evenly between their new neighbours", () => {
+    expect(
+      plan(todo, [other("x"), other("y"), other("z")], { issueId: "c", before: true }),
+    ).toEqual({ x: 2.5, y: 3, z: 3.5 });
+  });
+
+  test("steps one unit past the lane's first or last card", () => {
+    expect(plan(todo, [other("x"), other("y")], { issueId: "a", before: true })).toEqual({
+      x: -1,
+      y: 0,
+    });
+    expect(plan(todo, [other("x"), other("y")], null)).toEqual({ x: 5, y: 6 });
+  });
+
+  test("leaves the dropped cards out of their own neighbours", () => {
+    // `a` moves below `b`: its neighbours are `b` and `c`, not itself.
+    expect(plan(todo, [todo.issues[0]!], { issueId: "b", before: false })).toEqual({ a: 3 });
+  });
+
+  test("a drop that changes nothing, or lands on a dropped card, plans nothing", () => {
+    expect(plan(todo, [todo.issues[1]!], { issueId: "a", before: false })).toBeNull();
+    expect(plan(todo, [todo.issues[2]!], null)).toBeNull();
+    expect(plan(todo, [todo.issues[0]!], { issueId: "a", before: true })).toBeNull();
+  });
+
+  test("a lane without ordered neighbours keeps the dropped issues' own order", () => {
+    expect(plan(lane([]), [other("x", 9)], null)).toEqual({});
+    expect(plan(lane([issue("u", "Todo")]), [other("x", 9)], null)).toEqual({});
   });
 });

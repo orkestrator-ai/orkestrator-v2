@@ -218,6 +218,15 @@ describe("Linear board helpers", () => {
     ).toEqual({ title: "New", assigneeId: null, estimate: null });
   });
 
+  test("an update carries a board position, including zero and negatives", () => {
+    expect(linearIssueUpdateFields({ stateId: "s1", sortOrder: -12.5 })).toEqual({
+      stateId: "s1",
+      sortOrder: -12.5,
+    });
+    expect(linearIssueUpdateFields({ sortOrder: 0 })).toEqual({ sortOrder: 0 });
+    expect(linearIssueUpdateFields({ sortOrder: Number.NaN })).toEqual({});
+  });
+
   test("scores queries the way Linear's documentation does", () => {
     const query = `query MyCreatedIssues {
       user(id: "me") {

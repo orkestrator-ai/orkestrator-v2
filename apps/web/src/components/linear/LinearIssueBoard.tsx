@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -8,7 +8,10 @@ import {
   useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
+  type DragMoveEvent,
+  type DragOverEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { Columns3, Eye, EyeOff } from "lucide-react";
@@ -24,7 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import type { LinearIssueLabel, LinearIssueListItem } from "@/types/linear";
-import type { LinearLane } from "./linear-issue-order";
+import { planLinearDrop, type LinearDropAnchor, type LinearLane } from "./linear-issue-order";
 
 /** A lane's dot and a card's edge, by Linear's state type (the Kanban board's colours). */
 const TYPE_DOT: Record<string, string> = {
@@ -96,6 +99,7 @@ export function LinearLanesMenu({
 }
 
 const LANE_DROP_PREFIX = "linear-lane:";
+const CARD_DROP_PREFIX = "linear-card:";
 
 /** Labels a card names before folding the rest into "+N" (the Kanban card's limit is 3). */
 const CARD_LABEL_LIMIT = 4;
@@ -197,39 +201,101 @@ const CARD_CLASS = cn(
   "outline-none focus-hairline",
 );
 
-/** The copy of a card that follows the pointer while it is dragged. */
-function LinearDragPreview(props: {
+/** The copy of the carried cards that follows the pointer while they are dragged. */
+function LinearDragPreview({
+  count,
+  ...props
+}: {
   issue: LinearIssueListItem;
   type?: string;
   pipelinePhase?: string;
+  /** How many cards are carried; above one the preview shows a stack and the count. */
+  count: number;
 }) {
   return (
-    <div
-      data-testid="linear-board-card-overlay"
-      className={cn(CARD_CLASS, "rotate-1 border-primary/60 shadow-2xl shadow-black/50")}
-    >
-      <LinearCardContent {...props} />
+    <div className="relative rotate-1">
+      {count > 1 && (
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 translate-x-1.5 translate-y-1.5 rounded-lg border border-primary/40 bg-card shadow-lg"
+        />
+      )}
+      <div
+        data-testid="linear-board-card-overlay"
+        className={cn(CARD_CLASS, "border-primary/60 shadow-2xl shadow-black/50")}
+      >
+        <LinearCardContent {...props} />
+      </div>
+      {count > 1 && (
+        <span
+          data-testid="linear-board-drag-count"
+          className="absolute -right-2 -top-2 rounded-full bg-primary px-1.5 py-0.5 text-[11px] font-semibold leading-none text-primary-foreground shadow"
+        >
+          {count}
+        </span>
+      )}
     </div>
+  );
+}
+
+/** The line showing where a drop lands among a lane's cards. */
+function DropIndicator({ placement }: { placement: "before" | "after" | "end" }) {
+  return (
+    <div
+      aria-hidden="true"
+      data-testid="linear-board-drop-indicator"
+      data-placement={placement}
+      className={cn(
+        "pointer-events-none h-0.5 rounded-full bg-primary",
+        placement === "before" && "absolute inset-x-1 -top-[5px]",
+        placement === "after" && "absolute inset-x-1 -bottom-[5px]",
+      )}
+    />
   );
 }
 
 function LinearBoardCard({
   issue,
+  laneStatus,
   type,
   pipelinePhase,
   draggable,
+  droppable,
+  selected,
+  carried,
+  indicator,
   onClick,
 }: {
   issue: LinearIssueListItem;
+  laneStatus: string;
   type?: string;
   pipelinePhase?: string;
   draggable: boolean;
-  onClick: () => void;
+  /** Whether a card can be dropped beside this one. */
+  droppable: boolean;
+  /** Picked with Cmd/Ctrl- or Shift-click: dragging any selected card carries them all. */
+  selected: boolean;
+  /** Carried by the drag in progress (the held card's preview shows them). */
+  carried: boolean;
+  /** Where a drop beside this card would land, while one is aimed here. */
+  indicator?: "before" | "after";
+  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
 }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: issue.id,
-    disabled: !draggable,
+  const drag = useDraggable({ id: issue.id, disabled: !draggable });
+  const drop = useDroppable({
+    id: `${CARD_DROP_PREFIX}${issue.id}`,
+    disabled: !droppable,
+    data: { issueId: issue.id, lane: laneStatus },
   });
+  const { setNodeRef: setDragRef, isDragging } = drag;
+  const { setNodeRef: setDropRef } = drop;
+  const setNodeRef = useCallback(
+    (node: HTMLElement | null) => {
+      setDragRef(node);
+      setDropRef(node);
+    },
+    [setDragRef, setDropRef],
+  );
   // A drag ends with a click on the card under the pointer; that click must
   // not open the issue (the Kanban card does the same).
   const wasDraggingRef = useRef(false);
@@ -246,57 +312,76 @@ function LinearBoardCard({
   }, [isDragging]);
 
   // The card is already a button; keep its own role.
-  const { role: _role, ...dragAttributes } = attributes;
+  const { role: _role, ...dragAttributes } = drag.attributes;
   return (
-    <button
-      ref={setNodeRef}
-      type="button"
-      data-testid="linear-board-card"
-      data-issue-id={issue.id}
-      {...(draggable ? { ...dragAttributes, ...listeners } : {})}
-      onClick={() => {
-        if (wasDraggingRef.current) {
-          wasDraggingRef.current = false;
-          return;
-        }
-        onClick();
-      }}
-      className={cn(
-        CARD_CLASS,
-        draggable && "cursor-grab active:cursor-grabbing",
-        // The preview follows the pointer; the original stays as a dashed placeholder.
-        isDragging && "border-dashed border-primary/60 bg-primary/5 opacity-50",
-      )}
-    >
-      <LinearCardContent issue={issue} type={type} pipelinePhase={pipelinePhase} />
-    </button>
+    <div className="relative">
+      {indicator && <DropIndicator placement={indicator} />}
+      <button
+        ref={setNodeRef}
+        type="button"
+        data-testid="linear-board-card"
+        data-issue-id={issue.id}
+        data-selected={selected ? "true" : undefined}
+        {...(draggable ? { ...dragAttributes, ...drag.listeners } : {})}
+        onMouseDown={(event) => {
+          // Shift-click selects cards, not the text between them.
+          if (event.shiftKey) event.preventDefault();
+        }}
+        onClick={(event) => {
+          if (wasDraggingRef.current) {
+            wasDraggingRef.current = false;
+            return;
+          }
+          onClick(event);
+        }}
+        className={cn(
+          CARD_CLASS,
+          draggable && "cursor-grab active:cursor-grabbing",
+          selected && "border-primary bg-primary/10 ring-1 ring-primary hover:border-primary",
+          // The preview follows the pointer; the originals stay as dashed placeholders.
+          (isDragging || carried) && "border-dashed border-primary/60 bg-primary/5 opacity-50",
+        )}
+      >
+        {selected && <span className="sr-only">Selected. </span>}
+        <LinearCardContent issue={issue} type={type} pipelinePhase={pipelinePhase} />
+      </button>
+    </div>
   );
 }
 
 function LinearLaneColumn({
   lane,
-  dragging,
+  isTarget,
   canDrag,
+  dragging,
   moving,
-  onSelectIssue,
+  selected,
+  carried,
+  dropAnchor,
+  onCardClick,
   pipelinePhase,
 }: {
   lane: LinearLane;
-  /** The lane of the card being dragged, when one is. */
-  dragging: LinearLane | null;
+  /** A drag in progress would move cards into this lane from another. */
+  isTarget: boolean;
   canDrag: boolean;
+  /** Whether a card is being dragged. */
+  dragging: boolean;
   /** Issues whose move has not settled yet; they cannot be dragged again until it does. */
   moving: ReadonlySet<string>;
-  onSelectIssue: (issueId: string) => void;
+  selected: ReadonlySet<string>;
+  carried: ReadonlySet<string>;
+  /** Where a drop in this lane lands, shown as a line, when the drop places cards. */
+  dropAnchor: LinearDropAnchor | undefined;
+  onCardClick: (issue: LinearIssueListItem, event: MouseEvent<HTMLButtonElement>) => void;
   pipelinePhase: (issueId: string) => string | undefined;
 }) {
   // A lane without a state id cannot receive a card: there is nothing to move it to.
   const accepts = canDrag && Boolean(lane.stateId);
-  const { setNodeRef, isOver } = useDroppable({
+  const { setNodeRef } = useDroppable({
     id: `${LANE_DROP_PREFIX}${lane.status}`,
     disabled: !accepts,
   });
-  const target = isOver && dragging !== null && dragging.status !== lane.status;
   return (
     <section
       ref={setNodeRef}
@@ -313,7 +398,7 @@ function LinearLaneColumn({
       <div
         className={cn(
           "min-h-[200px] flex-1 overflow-y-auto rounded-lg p-1 transition-colors",
-          target ? "bg-accent/20" : "bg-transparent",
+          isTarget ? "bg-accent/20" : "bg-transparent",
         )}
       >
         <div className="space-y-2">
@@ -321,18 +406,30 @@ function LinearLaneColumn({
             <LinearBoardCard
               key={issue.id}
               issue={issue}
+              laneStatus={lane.status}
               type={lane.type}
               pipelinePhase={pipelinePhase(issue.id)}
               draggable={accepts && !moving.has(issue.id)}
-              onClick={() => onSelectIssue(issue.id)}
+              droppable={accepts}
+              selected={selected.has(issue.id)}
+              carried={carried.has(issue.id)}
+              indicator={
+                dropAnchor?.issueId === issue.id
+                  ? dropAnchor.before
+                    ? "before"
+                    : "after"
+                  : undefined
+              }
+              onClick={(event) => onCardClick(issue, event)}
             />
           ))}
+          {dropAnchor === null && lane.issues.length > 0 && <DropIndicator placement="end" />}
         </div>
         {lane.issues.length === 0 && (
           <div
             className={cn(
               "flex h-20 items-center justify-center rounded-lg border border-dashed text-xs transition-colors",
-              target
+              isTarget
                 ? "border-primary/60 bg-primary/5 text-primary"
                 : "border-border/60 text-muted-foreground",
             )}
@@ -347,15 +444,50 @@ function LinearLaneColumn({
 
 const NO_ISSUES: ReadonlySet<string> = new Set();
 
+/** A drop the board asks its caller to carry out. */
+export interface LinearBoardMove {
+  /** The issues to move, in the order they should sit. */
+  issues: LinearIssueListItem[];
+  to: LinearLane;
+  /**
+   * Each placed issue's new Linear `sortOrder`. Empty when the drop only
+   * changes lanes (another ticket order is chosen, or the position cannot be
+   * expressed); an issue that stays in its lane is listed only with one.
+   */
+  sortOrders: ReadonlyMap<string, number>;
+}
+
+/** Cards win over the lane around them, so a drop can land beside a card. */
+const cardsFirst: CollisionDetection = (args) => {
+  const hits = pointerWithin(args);
+  const card = hits.find((hit) => String(hit.id).startsWith(CARD_DROP_PREFIX));
+  return card ? [card] : hits;
+};
+
+/** The pointer's height during a drag: where it went down, plus how far it has moved. */
+function pointerY(event: DragMoveEvent | DragOverEvent | DragEndEvent): number | null {
+  const start = event.activatorEvent;
+  if (!start || !("clientY" in start) || typeof start.clientY !== "number") return null;
+  return start.clientY + event.delta.y;
+}
+
 /**
  * The Linear tab's board view: one vertical lane per workflow state, in
  * Linear's order, like the Kanban board. Lanes the user hid are left out;
  * when every lane is hidden the board says so rather than showing nothing.
  *
- * With `onMoveIssue`, a card dragged to another lane moves the issue to that
- * lane's workflow state in Linear. Only lanes with a state id (read from the
- * board) take part; the caller moves the card and puts it back on a failure.
- * A card in `movingIssueIds` stays put until its move settles.
+ * With `onMoveIssues`, cards dragged to another lane move to that lane's
+ * workflow state in Linear. Only lanes with a state id (read from the board)
+ * take part; the caller moves the cards and puts them back on a failure. A
+ * card in `movingIssueIds` stays put until its move settles.
+ *
+ * With `reorderable` (the "Linear board" ticket order), a card dropped beside
+ * another lands there: the move carries the Linear `sortOrder` that puts it
+ * between its new neighbours, in its own lane or another.
+ *
+ * Cmd/Ctrl-click toggles a card's selection and Shift-click selects the run
+ * of cards from the last one picked; dragging any selected card carries the
+ * whole selection. A plain click opens the issue; Escape clears the selection.
  */
 export function LinearIssueBoard({
   lanes,
@@ -363,7 +495,8 @@ export function LinearIssueBoard({
   onShowAll,
   onSelectIssue,
   pipelinePhase,
-  onMoveIssue,
+  onMoveIssues,
+  reorderable = false,
   movingIssueIds = NO_ISSUES,
 }: {
   lanes: readonly LinearLane[];
@@ -371,30 +504,173 @@ export function LinearIssueBoard({
   onShowAll: () => void;
   onSelectIssue: (issueId: string) => void;
   pipelinePhase: (issueId: string) => string | undefined;
-  onMoveIssue?: (issue: LinearIssueListItem, to: LinearLane) => void;
+  onMoveIssues?: (move: LinearBoardMove) => void;
+  /** Whether a drop beside a card sets the issues' Linear board order. */
+  reorderable?: boolean;
   /** Issues with a move in flight: shown, but not draggable until it settles. */
   movingIssueIds?: ReadonlySet<string>;
 }) {
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [drag, setDrag] = useState<{ activeId: string; carried: string[] } | null>(null);
+  const [dropAt, setDropAt] = useState<{ lane: string; anchor: LinearDropAnchor } | null>(null);
+  const [selection, setSelection] = useState<ReadonlySet<string>>(NO_ISSUES);
+  /** The card a Shift-click selects from: the last one picked or opened. */
+  const anchorRef = useRef<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const visible = lanes.filter((lane) => !hidden.has(lane.status));
   const laneOf = (issueId: string) =>
     lanes.find((lane) => lane.issues.some((issue) => issue.id === issueId)) ?? null;
-  const activeLane = activeId ? laneOf(activeId) : null;
-  const activeIssue = activeLane?.issues.find((issue) => issue.id === activeId) ?? null;
+  const issueById = new Map(lanes.flatMap((lane) => lane.issues.map((issue) => [issue.id, issue])));
+  const canSelect = Boolean(onMoveIssues);
 
-  const handleDragStart = (event: DragStartEvent) => setActiveId(String(event.active.id));
-  const handleDragEnd = (event: DragEndEvent) => {
-    setActiveId(null);
-    const overId = event.over ? String(event.over.id) : "";
-    if (!onMoveIssue || !overId.startsWith(LANE_DROP_PREFIX)) return;
-    const to = lanes.find((lane) => lane.status === overId.slice(LANE_DROP_PREFIX.length));
-    const from = laneOf(String(event.active.id));
-    const issue = from?.issues.find((candidate) => candidate.id === String(event.active.id));
-    if (!to?.stateId || !from || !issue || from.status === to.status) return;
-    if (movingIssueIds.has(issue.id)) return;
-    onMoveIssue(issue, to);
+  // Only cards that could be dragged now count as selected: a card that left
+  // the board, sits in a hidden lane or has a move in flight drops out.
+  const selected = useMemo(() => {
+    if (selection.size === 0) return NO_ISSUES;
+    const current = new Set<string>();
+    for (const lane of lanes) {
+      if (hidden.has(lane.status) || !lane.stateId) continue;
+      for (const issue of lane.issues) {
+        if (selection.has(issue.id) && !movingIssueIds.has(issue.id)) current.add(issue.id);
+      }
+    }
+    return current;
+  }, [selection, lanes, hidden, movingIssueIds]);
+
+  useEffect(() => {
+    if (selected.size === 0 || drag) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelection(NO_ISSUES);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [selected, drag]);
+
+  const handleCardClick = (issue: LinearIssueListItem, event: MouseEvent<HTMLButtonElement>) => {
+    const toggle = event.metaKey || event.ctrlKey;
+    if (!canSelect || (!toggle && !event.shiftKey)) {
+      setSelection(NO_ISSUES);
+      anchorRef.current = issue.id;
+      onSelectIssue(issue.id);
+      return;
+    }
+    const lane = laneOf(issue.id);
+    const anchor = anchorRef.current;
+    const anchorIndex = anchor && lane ? lane.issues.findIndex((other) => other.id === anchor) : -1;
+    if (event.shiftKey && lane && anchorIndex !== -1) {
+      const index = lane.issues.findIndex((other) => other.id === issue.id);
+      const [from, to] = anchorIndex < index ? [anchorIndex, index] : [index, anchorIndex];
+      const next = new Set(selected);
+      for (const other of lane.issues.slice(from, to + 1)) {
+        if (!movingIssueIds.has(other.id)) next.add(other.id);
+      }
+      setSelection(next);
+      return;
+    }
+    const next = new Set(selected);
+    if (next.has(issue.id)) next.delete(issue.id);
+    else if (!movingIssueIds.has(issue.id)) next.add(issue.id);
+    anchorRef.current = issue.id;
+    setSelection(next);
   };
+
+  /** Where the pointer would drop the carried cards, or null for nowhere useful. */
+  const dropTarget = (
+    event: DragMoveEvent | DragOverEvent | DragEndEvent,
+    carried: readonly string[],
+  ): { lane: LinearLane; anchor: LinearDropAnchor } | null => {
+    const over = event.over;
+    if (!over) return null;
+    const overId = String(over.id);
+    if (overId.startsWith(CARD_DROP_PREFIX)) {
+      const issueId = String(over.data.current?.issueId ?? overId.slice(CARD_DROP_PREFIX.length));
+      // Over a card being carried: the cards would land where they are.
+      if (carried.includes(issueId)) return null;
+      const lane = laneOf(issueId);
+      if (!lane) return null;
+      const y = pointerY(event);
+      const before = y === null ? false : y < over.rect.top + over.rect.height / 2;
+      return { lane, anchor: { issueId, before } };
+    }
+    if (!overId.startsWith(LANE_DROP_PREFIX)) return null;
+    const lane = lanes.find(
+      (candidate) => candidate.status === overId.slice(LANE_DROP_PREFIX.length),
+    );
+    return lane ? { lane, anchor: null } : null;
+  };
+
+  const handleDragStart = (event: DragStartEvent) => {
+    const activeId = String(event.active.id);
+    if (selected.has(activeId)) {
+      // The selection travels in board order, which is the order it lands in.
+      const carried = visible.flatMap((lane) =>
+        lane.issues.filter((issue) => selected.has(issue.id)).map((issue) => issue.id),
+      );
+      setDrag({ activeId, carried });
+    } else {
+      setSelection(NO_ISSUES);
+      setDrag({ activeId, carried: [activeId] });
+    }
+  };
+
+  /**
+   * What dropping the carried cards here would do: the lane and spot, and the
+   * move to ask for. Null when the drop would change nothing.
+   */
+  const planDrop = (
+    event: DragMoveEvent | DragOverEvent | DragEndEvent,
+    carriedIds: readonly string[],
+  ): { anchor: LinearDropAnchor; move: LinearBoardMove } | null => {
+    const target = dropTarget(event, carriedIds);
+    if (!target?.lane.stateId) return null;
+    const carriedIssues = carriedIds
+      .map((id) => issueById.get(id))
+      .filter((issue): issue is LinearIssueListItem => !!issue && !movingIssueIds.has(issue.id));
+    if (carriedIssues.length === 0) return null;
+    const sortOrders = reorderable
+      ? (planLinearDrop(target.lane, carriedIssues, target.anchor) ?? new Map<string, number>())
+      : new Map<string, number>();
+    const issues = carriedIssues.filter(
+      (issue) => issue.status !== target.lane.status || sortOrders.has(issue.id),
+    );
+    if (issues.length === 0) return null;
+    return { anchor: target.anchor, move: { issues, to: target.lane, sortOrders } };
+  };
+
+  const handleDragMove = (event: DragMoveEvent | DragOverEvent) => {
+    const plan = drag ? planDrop(event, drag.carried) : null;
+    const next = plan ? { lane: plan.move.to.status, anchor: plan.anchor } : null;
+    setDropAt((current) =>
+      current?.lane === next?.lane &&
+      current?.anchor?.issueId === next?.anchor?.issueId &&
+      current?.anchor?.before === next?.anchor?.before
+        ? current
+        : next,
+    );
+  };
+
+  const endDrag = () => {
+    setDrag(null);
+    setDropAt(null);
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const carriedIds = drag?.carried ?? [String(event.active.id)];
+    endDrag();
+    if (!onMoveIssues) return;
+    const plan = planDrop(event, carriedIds);
+    if (!plan) return;
+    setSelection(NO_ISSUES);
+    onMoveIssues(plan.move);
+  };
+
+  const carried = useMemo(() => new Set(drag?.carried ?? []), [drag]);
+  const activeIssue = drag ? (issueById.get(drag.activeId) ?? null) : null;
+  const activeLane = drag ? laneOf(drag.activeId) : null;
+  const targetLane = dropAt ? lanes.find((lane) => lane.status === dropAt.lane) : undefined;
+  // A lane lights up when the drop would bring a card in from another lane.
+  const movesIn =
+    targetLane !== undefined &&
+    [...carried].some((id) => issueById.get(id)?.status !== targetLane.status);
 
   if (lanes.length > 0 && visible.length === 0) {
     return (
@@ -410,47 +686,86 @@ export function LinearIssueBoard({
     );
   }
   return (
-    <div
-      className={cn(
-        "min-h-0 flex-1 overflow-x-auto p-3 sm:p-6",
-        // Snapping fights the drag's edge scrolling and jumps a whole lane at
-        // a time, so it is off while a card is held.
-        activeId === null && "snap-x snap-mandatory",
-      )}
-      data-testid="linear-board"
-    >
-      <DndContext
-        sensors={sensors}
-        collisionDetection={pointerWithin}
-        // Scroll the lanes only near the board's edges, and gently.
-        autoScroll={{ threshold: { x: 0.1, y: 0.15 }, acceleration: 5 }}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-        onDragCancel={() => setActiveId(null)}
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-x-auto p-3 sm:p-6",
+          // Snapping fights the drag's edge scrolling and jumps a whole lane at
+          // a time, so it is off while a card is held.
+          drag === null && "snap-x snap-mandatory",
+        )}
+        data-testid="linear-board"
       >
-        <div className="flex h-full gap-3 sm:gap-4 [&>section]:snap-center">
-          {visible.map((lane) => (
-            <LinearLaneColumn
-              key={lane.status}
-              lane={lane}
-              dragging={activeLane}
-              canDrag={Boolean(onMoveIssue)}
-              moving={movingIssueIds}
-              onSelectIssue={onSelectIssue}
-              pipelinePhase={pipelinePhase}
-            />
-          ))}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={cardsFirst}
+          // Scroll the lanes only near the board's edges, and gently.
+          autoScroll={{ threshold: { x: 0.1, y: 0.15 }, acceleration: 5 }}
+          onDragStart={handleDragStart}
+          // A move within one target repositions the line; a new target
+          // arrives as a drag over, since a move can still name the last one.
+          onDragMove={handleDragMove}
+          onDragOver={handleDragMove}
+          onDragEnd={handleDragEnd}
+          onDragCancel={endDrag}
+        >
+          <div className="flex h-full gap-3 sm:gap-4 [&>section]:snap-center">
+            {visible.map((lane) => (
+              <LinearLaneColumn
+                key={lane.status}
+                lane={lane}
+                isTarget={movesIn && targetLane?.status === lane.status}
+                canDrag={Boolean(onMoveIssues)}
+                dragging={drag !== null}
+                moving={movingIssueIds}
+                selected={selected}
+                carried={carried}
+                dropAnchor={
+                  reorderable && dropAt?.lane === lane.status && lane.stateId
+                    ? dropAt.anchor
+                    : undefined
+                }
+                onCardClick={handleCardClick}
+                pipelinePhase={pipelinePhase}
+              />
+            ))}
+          </div>
+          <DragOverlay>
+            {activeIssue && (
+              <LinearDragPreview
+                issue={activeIssue}
+                type={activeLane?.type}
+                pipelinePhase={pipelinePhase(activeIssue.id)}
+                count={carried.size}
+              />
+            )}
+          </DragOverlay>
+        </DndContext>
+      </div>
+      {selected.size > 0 && drag === null && (
+        <div
+          role="status"
+          data-testid="linear-board-selection"
+          className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-3"
+        >
+          <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-border bg-popover px-4 py-1.5 text-xs text-popover-foreground shadow-lg">
+            <span className="font-medium">
+              {selected.size} {selected.size === 1 ? "issue" : "issues"} selected
+            </span>
+            <span className="hidden text-muted-foreground sm:inline">
+              Drag one to move them together
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-xs"
+              onClick={() => setSelection(NO_ISSUES)}
+            >
+              Clear
+            </Button>
+          </div>
         </div>
-        <DragOverlay>
-          {activeIssue && (
-            <LinearDragPreview
-              issue={activeIssue}
-              type={activeLane?.type}
-              pipelinePhase={pipelinePhase(activeIssue.id)}
-            />
-          )}
-        </DragOverlay>
-      </DndContext>
+      )}
     </div>
   );
 }

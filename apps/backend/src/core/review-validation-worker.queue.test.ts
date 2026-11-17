@@ -502,3 +502,34 @@ test("review validation queues across worktrees and rehydrates hashed artifacts"
     await rm(schedulerDirectory, { recursive: true, force: true });
   }
 }, 30000);
+
+for (const duplicate of [false, true]) {
+  test(`changed evidence survives general ${duplicate ? "duplicate" : "coverage"}`, async () => {
+    const { root, run } = await fixture([
+      command("suite", duplicate ? "sleep 0.2" : "exit 1", {
+        scope: "general",
+        resources: ["dist"],
+      }),
+      command("changed", "sleep 0.2", { scope: "changed", resources: ["dist"] }),
+    ]);
+    await writeFile(
+      path.join(root, ".orkestrator-test-scheduler.json"),
+      JSON.stringify({
+        version: 1,
+        cooperativeCommands: [],
+        commandProfiles: {
+          [run.plan.commands[0]!.command]: { covers: [run.plan.commands[1]!.command] },
+        },
+      }),
+    );
+    const done = await completed(root, run);
+    expect(done.results[1]!.status).toBe("passed");
+    expect(done.results[1]!.exitCode).toBe(0);
+    expect(done.results[1]!.stdoutPath).toBeTruthy();
+    expect(done.results[0]!.status).toBe(duplicate ? "skipped" : "failed");
+    if (!duplicate)
+      expect(Date.parse(done.results[1]!.startedAt!)).toBeLessThan(
+        Date.parse(done.results[0]!.startedAt!),
+      );
+  });
+}

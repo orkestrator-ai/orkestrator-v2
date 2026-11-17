@@ -537,16 +537,17 @@ async function main() {
       // A skipped on-demand suite runs nothing, so it covers nothing.
       if (coveredBy.has(candidate.index) || onDemandSkipped.has(candidate.index)) continue;
       for (const [index, cmd] of commands.entries()) {
-        if (index !== candidate.index && cmd.cwd === "." && !coveredBy.has(index) && !Array.from(coveredBy.values()).includes(index) && candidate.covers.includes(cmd.command) && !dependsOn(candidate.index, index) && cmd.dependsOn.every(id => dependsOn(candidate.index, commands.findIndex(dependency => dependency.id === id)))) coveredBy.set(index, candidate.index);
+        if (!(cmd.scope === "changed" && commands[candidate.index].scope !== "changed") && index !== candidate.index && cmd.cwd === "." && !coveredBy.has(index) && !Array.from(coveredBy.values()).includes(index) && candidate.covers.includes(cmd.command) && !dependsOn(candidate.index, index) && cmd.dependsOn.every(id => dependsOn(candidate.index, commands.findIndex(dependency => dependency.id === id)))) coveredBy.set(index, candidate.index);
       }
     }
     // A repeated identical command (same command line and directory) adds no
-    // evidence, only its cost again. The first copy covers it, unless the copy
+    // evidence, only its cost again. A changed-scope copy needs its own result
+    // when the earlier copy is general. Otherwise the first copy covers it, unless the copy
     // waits on setup the first does not, which may make the rerun meaningful.
     const repeats = new Set();
     for (const [index, cmd] of commands.entries()) {
       if (coveredBy.has(index) || onDemandSkipped.has(index)) continue;
-      const first = commands.findIndex((other, otherIndex) => !onDemandSkipped.has(otherIndex) && other.command === cmd.command && other.cwd === cmd.cwd);
+      const first = commands.findIndex((other, otherIndex) => !onDemandSkipped.has(otherIndex) && !(cmd.scope === "changed" && other.scope !== "changed") && other.command === cmd.command && other.cwd === cmd.cwd);
       if (first === index) continue;
       const prerequisites = cmd.dependsOn.map(id => commands.findIndex(dependency => dependency.id === id));
       if (!prerequisites.every(dependency => dependency === first || dependsOn(first, dependency))) continue;

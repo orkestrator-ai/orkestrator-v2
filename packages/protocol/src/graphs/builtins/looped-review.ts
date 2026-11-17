@@ -197,7 +197,7 @@ function roundNodes(round: number, allowance: number): GraphNodeSpec[] {
       prompt: { builtIn: "review-package-preparation" },
       inputs: [{ name: "code", type: "workspace@1" }],
       outputs: [
-        { name: "plan", type: "validation-plan@1" },
+        { name: "plan", type: "validation-plan@2" },
         { name: "code", type: "workspace@1" },
       ],
     },
@@ -207,7 +207,7 @@ function roundNodes(round: number, allowance: number): GraphNodeSpec[] {
       label: `Round ${round} · Seal package`,
       action: "run-validation-and-seal",
       inputs: [
-        { name: "plan", type: "validation-plan@1" },
+        { name: "plan", type: "validation-plan@2" },
         { name: "code", type: "workspace@1" },
       ],
       outputs: [{ name: "package", type: "review-package@2" }],

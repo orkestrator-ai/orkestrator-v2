@@ -95,7 +95,7 @@ function multiReview(): GraphTemplateV1 {
         prompt: { builtIn: "review-package-preparation" },
         inputs: [{ name: "code", type: "workspace@1" }],
         outputs: [
-          { name: "plan", type: "validation-plan@1" },
+          { name: "plan", type: "validation-plan@2" },
           { name: "code", type: "workspace@1" },
         ],
       },
@@ -104,7 +104,7 @@ function multiReview(): GraphTemplateV1 {
         kind: "system",
         action: "run-validation-and-seal",
         inputs: [
-          { name: "plan", type: "validation-plan@1" },
+          { name: "plan", type: "validation-plan@2" },
           { name: "code", type: "workspace@1" },
         ],
         outputs: [{ name: "package", type: "review-package@2" }],
@@ -323,7 +323,7 @@ function buildPipelineLoop(): GraphTemplateV1 {
           },
         ],
         outputs: [
-          { name: "plan", type: "validation-plan@1" },
+          { name: "plan", type: "validation-plan@2" },
           { name: "code", type: "workspace@1" },
         ],
       },
@@ -332,7 +332,7 @@ function buildPipelineLoop(): GraphTemplateV1 {
         kind: "system",
         action: "run-validation-and-seal",
         inputs: [
-          { name: "plan", type: "validation-plan@1" },
+          { name: "plan", type: "validation-plan@2" },
           { name: "code", type: "workspace@1" },
         ],
         outputs: [{ name: "package", type: "review-package@2" }],
@@ -858,7 +858,7 @@ function failureDiagnosis(): GraphTemplateV1 {
       },
     ],
     inputs: [
-      { name: "plan", type: "validation-plan@1" },
+      { name: "plan", type: "validation-plan@2" },
       { name: "target", type: "workspace@1" },
     ],
     outputs: [
@@ -875,7 +875,7 @@ function failureDiagnosis(): GraphTemplateV1 {
         kind: "system",
         action: "run-validation",
         inputs: [
-          { name: "plan", type: "validation-plan@1" },
+          { name: "plan", type: "validation-plan@2" },
           { name: "code", type: "workspace@1", firstIterationFrom: { input: "target" } },
         ],
         outputs: [

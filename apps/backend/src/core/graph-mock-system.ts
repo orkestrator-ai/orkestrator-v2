@@ -131,7 +131,10 @@ function describe(
   const workspace = node.action === "select-workspace" ? produced : graphMockBaseWorkspace(inputs);
   const branch = workspace?.branch ?? null;
   const headRef = workspace?.headRef ?? null;
-  const commands = field(inputValue(inputs, "validation-plan@1"), "commands");
+  const commands = field(
+    inputValue(inputs, "validation-plan@2") ?? inputValue(inputs, "validation-plan@1"),
+    "commands",
+  );
   const commandCount = Array.isArray(commands) ? commands.length : 0;
   const target =
     typeof params.targetBranch === "string"

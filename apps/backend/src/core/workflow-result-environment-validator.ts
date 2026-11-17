@@ -10,7 +10,7 @@
  *   accepts it as a pathspec there: it does not lead through a symbolic link.
  *   The path need not exist (a fix may list the files it deleted); the pure
  *   check has already refused absolute paths, `..` and backslashes.
- * - `validation-plan@1`: `headRef` is the workspace HEAD the plan will be run
+ * - `validation-plan@2`: `headRef` is the workspace HEAD the plan will be run
  *   against (plan P2.1), as the validation worker requires when it starts.
  * - `review-package@2`: the referenced package still has its byte count and
  *   SHA-256 and its validation artifacts verify, through the same check the

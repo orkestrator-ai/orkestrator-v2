@@ -163,7 +163,7 @@ export function portsToAssign(
   return [...new Set(names)].filter((name) => !options.env[name]);
 }
 
-/** A loopback port that was free a moment ago. The suite's server binds it with `--strictPort`. */
+/** Probe a candidate port; launch retries handle a competing bind after this socket closes. */
 export function freeLoopbackPort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -190,7 +190,8 @@ if (import.meta.main) {
       `[loopback-network] running on the host network (${plan.reason}); host interface changes can abort browser requests (flake 2340)`,
     );
   const env = { ...process.env };
-  for (const name of portsToAssign(freePorts, { isolated: plan.isolated, env })) {
+  const assigned = portsToAssign(freePorts, { isolated: plan.isolated, env });
+  for (const name of assigned) {
     env[name] = String(await freeLoopbackPort());
     console.error(`[loopback-network] review validation: ${name}=${env[name]} for this run`);
   }
@@ -201,15 +202,66 @@ if (import.meta.main) {
   let child: ReturnType<typeof spawn> | undefined;
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
     process.on(signal, () => child?.kill(signal));
-  child = spawn(plan.command, plan.args, { stdio: "inherit", env });
-  child.on("error", (error) => {
-    console.error(`[loopback-network] ${error.message}`);
-    process.exit(127);
-  });
-  child.on("exit", (code, signal) => {
-    if (!signal) process.exit(code ?? 1);
-    // Die the way the command did, without this script's own forwarding handler.
-    process.removeAllListeners(signal);
-    process.kill(process.pid, signal);
-  });
+  let stopping = false;
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
+    process.on(signal, () => {
+      stopping = true;
+    });
+  const launch = (attempt: number) => {
+    let collision = false;
+    let spawnFailed = false;
+    let tail = "";
+    child = spawn(plan.command, plan.args, { stdio: ["inherit", "pipe", "pipe"], env });
+    const observe = (chunk: Buffer, output: NodeJS.WriteStream) => {
+      if (!output.write(chunk)) {
+        child?.stdout?.pause();
+        child?.stderr?.pause();
+        output.once("drain", () => {
+          child?.stdout?.resume();
+          child?.stderr?.resume();
+        });
+      }
+      tail = (tail + chunk.toString()).slice(-8192);
+      // Retry only an explicit collision on a port this wrapper chose.
+      collision ||= assigned.some((name) =>
+        new RegExp(
+          "(?:Port " + env[name] + " is already in use|EADDRINUSE[^\\n]*:" + env[name] + "\\b)",
+          "i",
+        ).test(tail),
+      );
+    };
+    child.stdout!.on("data", (chunk) => observe(chunk, process.stdout));
+    child.stderr!.on("data", (chunk) => observe(chunk, process.stderr));
+    child.on("error", (error) => {
+      spawnFailed = true;
+      console.error(`[loopback-network] ${error.message}`);
+      process.exitCode = 127;
+    });
+    child.on("close", async (code, signal) => {
+      if (spawnFailed) return;
+      if (!stopping && !signal && code !== 0 && collision && attempt < 3) {
+        try {
+          for (const name of assigned) env[name] = String(await freeLoopbackPort());
+        } catch {
+          console.error("[loopback-network] could not allocate replacement ports");
+          process.exitCode = 1;
+          return;
+        }
+        if (stopping) {
+          process.exitCode = 1;
+          return;
+        }
+        console.error("[loopback-network] chosen port was taken; retrying with fresh ports");
+        launch(attempt + 1);
+        return;
+      }
+      if (!signal) {
+        process.exitCode = code ?? 1;
+        return;
+      }
+      process.removeAllListeners(signal);
+      process.kill(process.pid, signal);
+    });
+  };
+  launch(1);
 }

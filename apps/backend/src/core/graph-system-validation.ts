@@ -2,7 +2,7 @@
  * `run-validation` and `run-validation-and-seal` (plan P2.7, report §6.6,
  * §9.4): the review validation service with no agent.
  *
- * Both run the `validation-plan@1`'s commands against the `workspace@1`
+ * Both run the `validation-plan@2` (or legacy `validation-plan@1`)'s commands against the `workspace@1`
  * commit through the environment-owned validation worker
  * (`start_review_validation` / `status_review_validation`, the commands the
  * Build Pipeline and Multi Review drive), after checking that the plan names
@@ -105,7 +105,9 @@ async function validationInputs(
 ): Promise<ValidationInputs> {
   let plan: ReviewValidationPlan;
   try {
-    plan = parseReviewValidationPlan(await ctx.requireInput("validation-plan@1"));
+    plan = parseReviewValidationPlan(
+      (await ctx.input("validation-plan@2")) ?? (await ctx.requireInput("validation-plan@1")),
+    );
   } catch (error) {
     if (error instanceof GraphSystemActionError) throw error;
     throw new GraphSystemActionError("The validation plan is invalid", "invalid-result");
@@ -369,7 +371,9 @@ async function cancelValidation(ctx: GraphSystemActionContext): Promise<void> {
     if (typeof id !== "string" || typeof startedAt !== "string") continue;
     let plan: ReviewValidationPlan;
     try {
-      plan = parseReviewValidationPlan(await ctx.requireInput("validation-plan@1"));
+      plan = parseReviewValidationPlan(
+        (await ctx.input("validation-plan@2")) ?? (await ctx.requireInput("validation-plan@1")),
+      );
     } catch {
       return;
     }

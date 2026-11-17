@@ -25,7 +25,10 @@ import {
   REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
   REVIEW_PR_RESULT_JSON_SCHEMA,
 } from "../review-results.js";
-import { REVIEW_VALIDATION_PLAN_V1_SCHEMA } from "../review-workflow.js";
+import {
+  REVIEW_VALIDATION_PLAN_SCHEMA,
+  REVIEW_VALIDATION_PLAN_V1_SCHEMA,
+} from "../review-workflow.js";
 import {
   backfillLegacyReviewOutcome,
   STRUCTURED_REVIEW_MAX_FILES_REVIEWED,
@@ -505,6 +508,47 @@ const BUILT_IN_SPECS: readonly BuiltInSpec[] = [
         },
         {
           id: "test",
+          command: "bun test src/reports",
+          cwd: ".",
+          dependsOn: ["typecheck"],
+          resources: [],
+          weight: 2,
+          timeoutMs: 900_000,
+        },
+      ],
+      limitations: [],
+    },
+    validator: "validation-plan",
+  },
+  {
+    name: "validation-plan",
+    version: 2,
+    label: "Validation plan",
+    description: "The repository's validation commands for one commit, in dependency order.",
+    family: "report",
+    schema: REVIEW_VALIDATION_PLAN_SCHEMA,
+    budgets: { maxBytes: 24_000, maxItems: 32 },
+    items: { path: "commands", idPrefix: "command" },
+    render: {
+      markdown: "{{#commands}}- `{{command}}` in `{{cwd}}`\n{{/commands}}",
+      summary: ["headRef"],
+    },
+    example: {
+      headRef: SHA_A,
+      commands: [
+        {
+          id: "typecheck",
+          scope: "general",
+          command: "bun run typecheck",
+          cwd: ".",
+          dependsOn: [],
+          resources: [],
+          weight: 1,
+          timeoutMs: 600_000,
+        },
+        {
+          id: "test",
+          scope: "changed",
           command: "bun test src/reports",
           cwd: ".",
           dependsOn: ["typecheck"],

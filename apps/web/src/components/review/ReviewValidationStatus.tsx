@@ -324,7 +324,6 @@ const UNSETTLED_RESULT_STATUSES: ReadonlySet<ReviewValidationResult["status"]> =
   "running",
 ]);
 
-/** Snapshot projection plus an on-demand bounded log reader; lifecycle remains backend-owned. */
 /** Ids of the commands the plan scoped to the change's own tests. */
 function changedTestIds(run: ReviewValidationRun): Set<string> {
   return new Set(
@@ -350,6 +349,7 @@ export function changedTestsSummary(run: ReviewValidationRun): string | null {
   return `Changed tests: ${parts.join(", ")}`;
 }
 
+/** Snapshot projection plus an on-demand bounded log reader; lifecycle remains backend-owned. */
 export function ReviewValidationStatus({
   environmentId,
   run,

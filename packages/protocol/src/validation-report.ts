@@ -211,6 +211,11 @@ function isText(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= MAX_TEXT_LENGTH;
 }
 
+function isCommand(value: unknown): value is string {
+  // Match the package validation-entry limit, including the quoted cwd prefix.
+  return typeof value === "string" && value.length > 0 && value.length <= 100_000;
+}
+
 function isCount(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
@@ -227,7 +232,7 @@ export function isValidationReport(value: unknown): value is ValidationReport {
       (entry) =>
         isRecord(entry) &&
         isText(entry.id) &&
-        isText(entry.command) &&
+        isCommand(entry.command) &&
         STATUSES.includes(String(entry.status)) &&
         (entry.exitCode === null || Number.isSafeInteger(entry.exitCode)),
     ) ||
@@ -241,7 +246,7 @@ export function isValidationReport(value: unknown): value is ValidationReport {
     !value.failures.every(
       (entry) =>
         isRecord(entry) &&
-        isText(entry.command) &&
+        isCommand(entry.command) &&
         VALIDATION_FAILURE_RUNNERS.includes(entry.runner as ValidationFailureRunner) &&
         (entry.file === null || isText(entry.file)) &&
         isText(entry.name) &&
@@ -250,7 +255,7 @@ export function isValidationReport(value: unknown): value is ValidationReport {
     !isCount(value.omittedFailures) ||
     !Array.isArray(value.unexplainedCommands) ||
     value.unexplainedCommands.length > MAX_VALIDATION_REPORT_COMMANDS ||
-    !value.unexplainedCommands.every(isText) ||
+    !value.unexplainedCommands.every(isCommand) ||
     !isRecord(value.counts)
   )
     return false;

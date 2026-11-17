@@ -1,3 +1,4 @@
+import { isReviewPackage } from "./review-workflow.js";
 import { describe, expect, test } from "bun:test";
 import {
   isReviewValidationPlan,
@@ -238,4 +239,44 @@ describe("validation plan scope", () => {
       }),
     ).toBe(false);
   });
+});
+
+test("long formatted commands remain valid in reports and packages", () => {
+  const validation = [
+    {
+      command: "x".repeat(8300),
+      durationMs: 1,
+      stdoutBytes: 0,
+      stderrBytes: 0,
+      stdoutPath: "out",
+      stderrPath: "err",
+      status: "failed" as const,
+      exitCode: 1,
+    },
+  ];
+  const validationPlan = { ...plan, commands: [planCommand("changed", "x", "changed")] };
+  const report = buildValidationReport({ validation, validationPlan });
+  expect(report.changedTests[0]!.command.length).toBe(8300);
+  expect(report.unexplainedCommands).toEqual([validation[0]!.command]);
+  expect(isValidationReport(report)).toBe(true);
+  expect(
+    isReviewPackage({
+      id: "pkg",
+      format: 2,
+      diffCommand: "git diff",
+      round: 1,
+      preparedAt: "2026-11-17T00:00:00.000Z",
+      targetBranch: "main",
+      baseRef: mergeBase,
+      headRef,
+      commit: null,
+      completeDiff: "",
+      changedFiles: [],
+      validation,
+      skippedFiles: [],
+      uncommittedFiles: [],
+      limitations: [],
+      validationReport: report,
+    }),
+  ).toBe(true);
 });

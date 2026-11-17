@@ -148,7 +148,7 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
         prompt: { builtIn: "review-package-preparation" },
         inputs: [{ name: "code", type: "workspace@1" }],
         outputs: [
-          { name: "plan", type: "validation-plan@1" },
+          { name: "plan", type: "validation-plan@2" },
           { name: "code", type: "workspace@1" },
         ],
       },
@@ -160,7 +160,7 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
           "The environment runs the plan's commands once, then seals one immutable, hash-verified review package every reviewer shares.",
         action: "run-validation-and-seal",
         inputs: [
-          { name: "plan", type: "validation-plan@1" },
+          { name: "plan", type: "validation-plan@2" },
           { name: "code", type: "workspace@1" },
         ],
         outputs: [{ name: "package", type: "review-package@2" }],

@@ -217,7 +217,7 @@ export function graphBuiltInPromptText(context: GraphBuiltInPromptContext): stri
     case "review-package-preparation":
       // The registry also names createMultiReviewPreparationPrompt, the older
       // contract in which the model runs validation and returns artifact
-      // metadata; it cannot fill a `validation-plan@1`. Multi Review's
+      // metadata; it cannot fill a `validation-plan@2`. Multi Review's
       // `prepare` step sends this discovery prompt today, and a system step
       // runs the plan and seals the package. Its "only the final response is
       // the schema-constrained plan" sentence is replaced by the contract's

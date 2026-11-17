@@ -318,3 +318,51 @@ describe("loopback wrapper failure and signal paths", () => {
     });
   }
 });
+
+test("retries a chosen port taken before the suite binds", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "ork-port-race-"));
+  try {
+    const fixture = path.join(dir, "race.cjs");
+    writeFileSync(
+      fixture,
+      `
+const net = require('node:net');
+const fs = require('node:fs');
+const marker = ${JSON.stringify(path.join(dir, "attempt"))};
+const port = Number(process.env.ORK_TEST_FREE_PORT);
+if (!fs.existsSync(marker)) {
+ fs.writeFileSync(marker, String(port));
+ const competitor = net.createServer().listen(port, '127.0.0.1', () => {
+  const suite = net.createServer();
+  suite.on('error', error => {
+   console.error(error.code + ' 127.0.0.1:' + port);
+   competitor.close(() => { process.exitCode = 1; });
+  });
+  suite.listen(port, '127.0.0.1');
+ });
+} else {
+ const suite = net.createServer().listen(port, '127.0.0.1', () => suite.close());
+}
+`,
+    );
+    const result = spawnSync(
+      process.execPath,
+      [script, "--free-port", "ORK_TEST_FREE_PORT", "--", process.execPath, fixture],
+      {
+        encoding: "utf8",
+        timeout: 10000,
+        env: {
+          ...process.env,
+          [HOST_NETWORK_ENV]: "1",
+          [REVIEW_VALIDATION_ENV]: "1",
+          ORK_TEST_FREE_PORT: "",
+        },
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("EADDRINUSE");
+    expect(result.stderr).toContain("retrying with fresh ports");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

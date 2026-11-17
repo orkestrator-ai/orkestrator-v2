@@ -100,8 +100,9 @@ directories, prerequisites, exclusive resources, weights, timeouts, scopes and
 coverage limitations. Each command's `scope` is `changed` when it runs only the
 tests the change adds or edits (or the tests that own the files it changes) and
 `general` otherwise; discovery lists a `changed` command first and never lets it
-replace a required suite. Plans from before scopes existed read as `general`.
-The discovery schema requires `scope`; graph type `validation-plan@1` keeps the
+replace a required suite. General-suite coverage and duplicate-command suppression
+cannot suppress a changed-scope result. Plans from before scopes existed read as `general`.
+The discovery schema and built-in graph ports use `validation-plan@2`, which requires `scope`; graph type `validation-plan@1` keeps the
 earlier shape (`REVIEW_VALIDATION_PLAN_V1_SCHEMA`), because a versioned graph
 type never gains a required field. Runtime validation bounds the plan to 32 commands and 24,000 UTF-8
 bytes. Dependencies must refer to earlier commands, so cycles are rejected.

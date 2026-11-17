@@ -42,6 +42,8 @@ export function checkGraphSystemNodes(state: GraphCompileState): void {
     }
 
     const readable = new Set(spec.inputs.map((input) => input.type));
+    // Saved graphs may still carry the unscoped plan contract.
+    if (readable.has("validation-plan@2")) readable.add("validation-plan@1");
     const seen = new Map<string, string>();
     (node.inputs ?? []).forEach((input, index) => {
       const at = { nodeId: node.id, port: input.name, path: `${path}.inputs[${index}].type` };
@@ -53,7 +55,8 @@ export function checkGraphSystemNodes(state: GraphCompileState): void {
         );
         return;
       }
-      const other = seen.get(input.type);
+      const inputType = input.type === "validation-plan@1" ? "validation-plan@2" : input.type;
+      const other = seen.get(inputType);
       if (other !== undefined) {
         diagnostics.add(
           "system-port-unsupported",
@@ -62,7 +65,7 @@ export function checkGraphSystemNodes(state: GraphCompileState): void {
         );
         return;
       }
-      seen.set(input.type, input.name);
+      seen.set(inputType, input.name);
     });
 
     for (const { type, because } of graphSystemRequiredInputs(node.action, params)) {

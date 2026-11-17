@@ -252,7 +252,7 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
           },
         ],
         outputs: [
-          { name: "plan", type: "validation-plan@1" },
+          { name: "plan", type: "validation-plan@2" },
           { name: "code", type: "workspace@1" },
         ],
       },
@@ -264,7 +264,7 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
           "The environment runs the plan's commands once and seals one immutable review package; Review, Address and Verify re-verify its hash.",
         action: "run-validation-and-seal",
         inputs: [
-          { name: "plan", type: "validation-plan@1" },
+          { name: "plan", type: "validation-plan@2" },
           { name: "code", type: "workspace@1" },
         ],
         outputs: [{ name: "package", type: "review-package@2" }],

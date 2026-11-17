@@ -24,7 +24,7 @@ function workflow(id: string): MultiReviewWorkflow {
     projectId: "project-1",
     targetBranch: "main",
     reviewers: [{ id: `${id}-reviewer`, agent: "claude", model: "opus", status: "pending" }],
-    fixModel: { agent: "codex", model: "gpt-5.6" },
+    addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
     phase: "reviewing",
     createdAt: timestamp,
     updatedAt: timestamp,

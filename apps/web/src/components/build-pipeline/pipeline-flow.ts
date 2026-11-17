@@ -257,12 +257,12 @@ export function pipelineSessionKind(session: PipelineSession): PipelineFlowNodeK
   switch (session.phase) {
     case "build":
       return "build";
-    case "fix":
+    case "rework":
       return "fix";
     case "review":
       if (session.label === CONSOLIDATION_LABEL) return "consolidation";
       return pipelineIndependentReviewSlot(session.label) !== null ? "reviewer" : "review";
-    case "address":
+    case "address-findings":
       return "address";
     case "verify":
       return "verify";
@@ -387,7 +387,7 @@ export function pipelinePackageRestartStageId(
 ): string | null {
   if (node.placeholder || node.superseded) return null;
   const writesPlan = (session: PipelineSession) =>
-    (session.phase === "build" || session.phase === "fix") &&
+    (session.phase === "build" || session.phase === "rework") &&
     session.label !== REVIEW_PACKAGE_SESSION_LABEL &&
     !isSupersededPipelineSession(session) &&
     isReviewPackagePreparationSession(session, pipeline);
@@ -417,9 +417,9 @@ function stoppedPhase(pipeline: BuildPipeline): ResumableBuildPhase | undefined 
 const PHASE_KIND: Partial<Record<ResumableBuildPhase, PipelineFlowNodeKind>> = {
   building: "build",
   reviewing: "review",
-  addressing: "address",
+  "addressing-findings": "address",
   verifying: "verify",
-  fixing: "fix",
+  reworking: "fix",
   "creating-pr": "ship",
   "resolving-conflicts": "conflicts",
 };
@@ -475,7 +475,7 @@ function sessionState(
         kind === sessionKind ||
         (sessionKind === "prepare" &&
           !session.completedAt &&
-          (pipeline.phase === "building" || pipeline.phase === "fixing"))
+          (pipeline.phase === "building" || pipeline.phase === "reworking"))
       )
         return "running";
     }

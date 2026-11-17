@@ -131,7 +131,7 @@ export const MULTI_REVIEW_STATUS: Record<string, WorkflowStatusV1> = {
   preparing: "running",
   reviewing: "running",
   consolidating: "running",
-  fixing: "running",
+  "addressing-findings": "running",
   interactive: "running",
   cancelling: "running",
   ready: "blocked",
@@ -173,7 +173,7 @@ function modelLabel(prefix: string, selection: unknown): string {
 /** Status of one Multi Review step from its recorded runtime and the current phase. */
 function multiReviewStep(
   workflow: Json,
-  step: "prepare" | "consolidate" | "fix",
+  step: "prepare" | "consolidate" | "address-findings",
   activePhase: string,
   session: unknown,
 ): Pick<WorkflowSnapshotNodeV1, "status" | "rawStatus" | "startedAt" | "finishedAt"> {
@@ -289,13 +289,24 @@ export function adaptMultiReview(runId: string, workflow: Json): AdaptedWorkflow
       findings: consolidated !== undefined,
     }),
   );
-  const fixResult = isRecord(workflow.fixResult) ? workflow.fixResult : undefined;
-  if (isRecord(workflow.fixSession) || fixResult || workflow.phase === "fixing") {
-    const step = multiReviewStep(workflow, "fix", "fixing", workflow.fixSession);
+  const fixResult = isRecord(workflow.addressFindingsResult)
+    ? workflow.addressFindingsResult
+    : undefined;
+  if (
+    isRecord(workflow.addressFindingsSession) ||
+    fixResult ||
+    workflow.phase === "addressing-findings"
+  ) {
+    const step = multiReviewStep(
+      workflow,
+      "address-findings",
+      "addressing-findings",
+      workflow.addressFindingsSession,
+    );
     nodes.push(
       node(workflowTarget, {
         id: "fix",
-        label: modelLabel("Address Findings", workflow.fixModel),
+        label: modelLabel("Address Findings", workflow.addressFindingsModel),
         role: "agent",
         ...(fixResult && step.status !== "running"
           ? {
@@ -304,7 +315,7 @@ export function adaptMultiReview(runId: string, workflow: Json): AdaptedWorkflow
               rawStatus: undefined,
             }
           : step),
-        transcript: isRecord(workflow.fixSession),
+        transcript: isRecord(workflow.addressFindingsSession),
       }),
     );
     edges.push(edge("consolidate", "fix", "handoff"));
@@ -328,9 +339,9 @@ export const BUILD_PIPELINE_STATUS: Record<string, WorkflowStatusV1> = {
   "waiting-for-setup": "running",
   building: "running",
   reviewing: "running",
-  addressing: "running",
+  "addressing-findings": "running",
   verifying: "running",
-  fixing: "running",
+  reworking: "running",
   "creating-pr": "running",
   "resolving-conflicts": "running",
   paused: "blocked",
@@ -340,8 +351,8 @@ export const BUILD_PIPELINE_STATUS: Record<string, WorkflowStatusV1> = {
 
 const PIPELINE_SESSION_ROLE: Record<string, WorkflowSnapshotNodeV1["role"]> = {
   build: "agent",
-  fix: "agent",
-  address: "agent",
+  rework: "agent",
+  "address-findings": "agent",
   "resolve-conflicts": "agent",
   review: "review",
   verify: "validation",

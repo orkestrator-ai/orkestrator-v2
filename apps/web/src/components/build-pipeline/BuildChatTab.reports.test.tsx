@@ -607,7 +607,7 @@ describe("BuildChatTab reports and verdicts", () => {
   test("moves onto and past the Prepare node with the arrow keys", async () => {
     const packageSession: BuildPipeline["sessions"][number] = {
       ...pipeline.sessions[0]!,
-      phase: "fix",
+      phase: "rework",
       sessionKey: "package-key",
       sdkSessionId: "package-session",
       label: REVIEW_PACKAGE_SESSION_LABEL,
@@ -920,9 +920,9 @@ describe("BuildChatTab reports and verdicts", () => {
       ["waiting-for-setup", "Retry Setup"],
       ["building", "Retry Build Stage"],
       ["reviewing", "Retry Review Stage"],
-      ["addressing", "Retry Address Findings Stage"],
+      ["addressing-findings", "Retry Address Findings Stage"],
       ["verifying", "Retry Verification Stage"],
-      ["fixing", "Retry Rework Stage"],
+      ["reworking", "Retry Rework Stage"],
       ["creating-pr", "Retry PR Stage"],
       ["resolving-conflicts", "Retry Conflict Resolution"],
     ];

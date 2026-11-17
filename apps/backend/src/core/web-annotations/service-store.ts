@@ -91,6 +91,8 @@ export class WebAnnotationStoreOperations {
         sourceHints: authoring && Boolean(this.ctx.options.dispatch?.checkWorkspacePaths),
         // This backend validates and stores `shadow` anchor scopes.
         shadowTargets: authoring,
+        // This backend validates and stores `frame` anchor scopes.
+        frameTargets: authoring,
       },
       targets: authoring ? [...WEB_ANNOTATION_SUBMITTABLE_TARGET_KINDS] : [],
       maxRequestAnnotations: dispatch ? WEB_ANNOTATION_LIMITS.briefAnnotations : 0,

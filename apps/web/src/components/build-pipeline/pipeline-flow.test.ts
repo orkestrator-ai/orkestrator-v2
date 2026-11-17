@@ -73,7 +73,7 @@ describe("pipelineFlowModel", () => {
     },
   );
 
-  test.each(["building", "fixing"] as const)(
+  test.each(["building", "reworking"] as const)(
     "an idle current preparation session stays running while %s collects its result",
     (phase) => {
       const model = pipelineFlowModel(
@@ -81,8 +81,8 @@ describe("pipelineFlowModel", () => {
           phase,
           currentSessionIndex: 1,
           sessions: [
-            session(phase === "building" ? "build" : "fix", "work", 0),
-            session("fix", "prep", 60, {
+            session(phase === "building" ? "build" : "rework", "work", 0),
+            session("rework", "prep", 60, {
               label: REVIEW_PACKAGE_SESSION_LABEL,
               status: "idle",
               completedAt: undefined,
@@ -106,7 +106,7 @@ describe("pipelineFlowModel", () => {
             sessions: [
               session("build", "work", 0),
               ...(dedicated
-                ? [session("fix", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL })]
+                ? [session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL })]
                 : []),
             ],
             validationRun: run,
@@ -172,7 +172,7 @@ describe("pipelineFlowModel", () => {
   test("a retry of a sessionless failure stays in its original pass", () => {
     const model = pipelineFlowModel(
       build({
-        phase: "addressing",
+        phase: "addressing-findings",
         reviewers: PANEL.slice(0, 2),
         sessions: [
           reviewer(1, "survivor", 60, { reviewPassId: "pass", reviewerOutcome: "completed" }),
@@ -189,7 +189,7 @@ describe("pipelineFlowModel", () => {
             label: "Consolidation",
             reviewPassId: "pass",
           }),
-          session("address", "address", 300),
+          session("address-findings", "address", 300),
         ],
       }),
     );
@@ -203,7 +203,7 @@ describe("pipelineFlowModel", () => {
 
   test("reload preserves sessionless failures in a retired review pass", () => {
     const pipeline = build({
-      phase: "addressing",
+      phase: "addressing-findings",
       reviewers: PANEL.slice(0, 2),
       sessions: [
         session("build", "build", 0),
@@ -221,7 +221,7 @@ describe("pipelineFlowModel", () => {
             },
           ],
         }),
-        session("address", "address", 180, { status: "running" }),
+        session("address-findings", "address", 180, { status: "running" }),
       ],
     });
     const model = pipelineFlowModel(JSON.parse(JSON.stringify(pipeline)));
@@ -326,7 +326,7 @@ describe("pipelineFlowModel", () => {
 
     test("a finished pass keeps its sessionless reviewers as unable to start", () => {
       const pipeline = build({
-        phase: "addressing",
+        phase: "addressing-findings",
         reviewers: PANEL.slice(0, 2),
         sessions: [
           reviewer(1, "survivor", 60, { reviewPassId: "pass-1", reviewerOutcome: "completed" }),
@@ -343,7 +343,7 @@ describe("pipelineFlowModel", () => {
               },
             ],
           }),
-          session("address", "address", 180, { status: "running" }),
+          session("address-findings", "address", 180, { status: "running" }),
         ],
       });
       const model = pipelineFlowModel(pipeline);
@@ -379,7 +379,7 @@ describe("pipelineFlowModel", () => {
               },
             ],
           }),
-          session("address", "address", 180),
+          session("address-findings", "address", 180),
           reviewer(0, "second-0", 240, {
             reviewPassId: "pass-2",
             iteration: 1,
@@ -514,14 +514,17 @@ describe("pipelineFlowModel", () => {
   test("Address handoff ignores leftover live fanout and preserves its completed pass", () => {
     const model = pipelineFlowModel(
       build({
-        phase: "addressing",
+        phase: "addressing-findings",
         reviewers: PANEL.slice(0, 2),
         currentSessionIndex: 3,
         sessions: [
           reviewer(0, "rev-1", 60),
           reviewer(1, "rev-2", 60),
           session("review", "consolidation", 120, { label: "Consolidation" }),
-          session("address", "address", 180, { status: "running", completedAt: undefined }),
+          session("address-findings", "address", 180, {
+            status: "running",
+            completedAt: undefined,
+          }),
         ],
         reviewFanout: {
           reviewers: [
@@ -553,7 +556,7 @@ describe("pipelineFlowModel", () => {
         structuredReview: clean,
         sessions: [
           session("build", "build", 0),
-          session("fix", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+          session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
           reviewer(0, "rev-1", 120),
           reviewer(1, "rev-2", 120),
           session("review", "consolidation", 180, {
@@ -651,10 +654,10 @@ describe("pipelineFlowModel", () => {
         reviewers: PANEL,
         error: "Preparation failed",
         currentSessionIndex: 1,
-        failureContext: { phase: "fixing", kind: "stage-transition", sessionId: "prep-session" },
+        failureContext: { phase: "reworking", kind: "stage-transition", sessionId: "prep-session" },
         sessions: [
           session("build", "build", 0),
-          session("fix", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL, status: "error" }),
+          session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL, status: "error" }),
         ],
       }),
     );
@@ -744,9 +747,9 @@ describe("pipelineFlowModel", () => {
         sessions: [
           session("build", "build", 0),
           session("review", "review", 60, { label: "Review Session" }),
-          session("address", "address", 120),
+          session("address-findings", "address", 120),
           session("verify", "verify", 180),
-          session("fix", "fix", 240, { iteration: 1 }),
+          session("rework", "fix", 240, { iteration: 1 }),
           session("review", "review-2", 300, { iteration: 1, label: "Review Session" }),
           session("verify", "verify-2", 360, {
             iteration: 1,
@@ -829,7 +832,7 @@ describe("pipelineFlowModel", () => {
         reviewFanout: { reviewers },
         sessions: [
           session("build", "build", 0),
-          session("fix", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+          session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
           reviewer(0, "rev-1", 120, { status: "running", completedAt: undefined }),
           reviewer(1, "rev-2", 120),
         ],
@@ -859,7 +862,7 @@ describe("pipelineFlowModel", () => {
   test("keeps a retired pass's reviewer outcomes and issue counts from the sessions", () => {
     const model = pipelineFlowModel(
       build({
-        phase: "addressing",
+        phase: "addressing-findings",
         reviewers: PANEL.slice(0, 2),
         currentSessionIndex: 4,
         sessions: [
@@ -873,7 +876,10 @@ describe("pipelineFlowModel", () => {
             label: "Consolidation",
             reviewReport: TEST_STRUCTURED_REVIEW_REPORT,
           }),
-          session("address", "address", 180, { status: "running", completedAt: undefined }),
+          session("address-findings", "address", 180, {
+            status: "running",
+            completedAt: undefined,
+          }),
         ],
       }),
     );
@@ -1003,7 +1009,7 @@ describe("pipelineFlowModel", () => {
           reviewers: PANEL,
           sessions: [
             session("build", "build", 0),
-            session("fix", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+            session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
           ],
           validationRun: run,
         }),
@@ -1033,13 +1039,13 @@ describe("pipelineFlowModel", () => {
         currentSessionIndex: 4,
         sessions: [
           session("build", "build", 0, { completedAt: undefined }),
-          session("fix", "prep", 60, {
+          session("rework", "prep", 60, {
             label: REVIEW_PACKAGE_SESSION_LABEL,
             completedAt: undefined,
           }),
           reviewer(0, "rev-1", 125),
           reviewer(1, "rev-2", 120),
-          session("address", "address", 400, { completedAt: undefined }),
+          session("address-findings", "address", 400, { completedAt: undefined }),
           session("verify", "verify", 500, { status: "running", completedAt: undefined }),
         ],
         validationRun: validationRun({ startedAt: at(70), completedAt: at(110) }),
@@ -1065,7 +1071,7 @@ describe("pipelineFlowModel", () => {
           phase: "complete",
           reviewers: PANEL.slice(0, 2),
           sessions: [
-            session(kind === "build" ? "build" : "fix", "before", 0, {
+            session(kind === "build" ? "build" : "rework", "before", 0, {
               ...(kind === "prepare" ? { label: REVIEW_PACKAGE_SESSION_LABEL } : {}),
               completedAt: undefined,
             }),
@@ -1110,7 +1116,7 @@ describe("pipelineFlowModel", () => {
         phase: "complete",
         reviewers: PANEL.slice(0, 1),
         sessions: [
-          session("fix", "prep", 0, {
+          session("rework", "prep", 0, {
             label: REVIEW_PACKAGE_SESSION_LABEL,
             completedAt: undefined,
           }),
@@ -1173,7 +1179,7 @@ describe("pipelineFlowModel", () => {
           sessions: [
             session("build", "build", 0, { completedAt: undefined }),
             session("review", "unknown-start", 60, { startedAt }),
-            session("address", "address", 180),
+            session("address-findings", "address", 180),
             // A legacy clock skew must not move Build's boundary past Address.
             session("verify", "verify", 120),
           ],
@@ -1220,7 +1226,11 @@ describe("pipelineFlowModel", () => {
         build({
           phase: "reviewing",
           iteration: phase === "fix" ? 1 : 0,
-          sessions: [session(phase, phase, 0, { iteration: phase === "fix" ? 1 : 0 })],
+          sessions: [
+            session(phase === "fix" ? "rework" : "build", phase, 0, {
+              iteration: phase === "fix" ? 1 : 0,
+            }),
+          ],
           validationRun: validationRun({ status: "running", completedAt: undefined }),
         }),
       );
@@ -1458,7 +1468,7 @@ describe("pipelineFlowModel", () => {
   test("falls back to the configured reviewer model and the pipeline's report", () => {
     const model = pipelineFlowModel(
       build({
-        phase: "addressing",
+        phase: "addressing-findings",
         reviewers: PANEL.slice(0, 2),
         structuredReview: TEST_STRUCTURED_REVIEW_REPORT,
         structuredReviewRequestId: "request-1",
@@ -1469,7 +1479,7 @@ describe("pipelineFlowModel", () => {
 
     const classic = pipelineFlowModel(
       build({
-        phase: "addressing",
+        phase: "addressing-findings",
         structuredReview: TEST_STRUCTURED_REVIEW_REPORT,
         structuredReviewRequestId: "request-1",
         sessions: [
@@ -1489,15 +1499,15 @@ describe("pipelineFlowModel", () => {
   test("narrows to one review pass with its preparation", () => {
     const model = pipelineFlowModel(
       build({
-        phase: "addressing",
+        phase: "addressing-findings",
         reviewers: PANEL.slice(0, 2),
         sessions: [
           session("build", "build", 0),
-          session("fix", "prep", 30, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+          session("rework", "prep", 30, { label: REVIEW_PACKAGE_SESSION_LABEL }),
           reviewer(0, "rev-1", 60),
           reviewer(1, "rev-2", 60),
           session("review", "consolidation", 120, { label: "Consolidation" }),
-          session("address", "address", 180),
+          session("address-findings", "address", 180),
         ],
       }),
     );
@@ -1694,11 +1704,11 @@ describe("pipelineSkipAction", () => {
 
   test("offers the running agent stage, not finished ones", () => {
     const pipeline = build({
-      phase: "addressing",
+      phase: "addressing-findings",
       currentSessionIndex: 1,
       sessions: [
         session("build", "work", 0),
-        session("address", "address", 60, { status: "running", completedAt: undefined }),
+        session("address-findings", "address", 60, { status: "running", completedAt: undefined }),
       ],
     });
     expect(skipOf(pipeline, "address")).toEqual({
@@ -1710,7 +1720,7 @@ describe("pipelineSkipAction", () => {
 
   test("historical validation cannot skip the replacement run", () => {
     const pipeline = rewoundToFirstVerify({
-      phase: "fixing",
+      phase: "reworking",
       validationRun: validationRun({ id: "replacement", status: "running" }),
     });
     pipeline.rewinds![0]!.validationRun = validationRun({ id: "discarded" });
@@ -1724,11 +1734,11 @@ describe("pipelineSkipAction", () => {
 
   test("review preparation cannot be skipped", () => {
     const pipeline = build({
-      phase: "fixing",
+      phase: "reworking",
       currentSessionIndex: 1,
       sessions: [
         session("build", "work", 0),
-        session("fix", "prep", 60, {
+        session("rework", "prep", 60, {
           label: REVIEW_PACKAGE_SESSION_LABEL,
           status: "running",
           completedAt: undefined,
@@ -1741,10 +1751,10 @@ describe("pipelineSkipAction", () => {
   test("an unsealed validation run is the only skippable step, even while paused", () => {
     const sessions = [
       session("build", "work", 0),
-      session("fix", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+      session("rework", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
     ];
     const running = build({
-      phase: "fixing",
+      phase: "reworking",
       currentSessionIndex: 1,
       sessions,
       validationRun: validationRun({ id: "run-1", status: "running", completedAt: undefined }),
@@ -1758,7 +1768,7 @@ describe("pipelineSkipAction", () => {
     const paused = build({
       ...running,
       phase: "paused",
-      pausedFromPhase: "fixing",
+      pausedFromPhase: "reworking",
       validationRun: validationRun({ id: "run-1", status: "cancelled" }),
     });
     expect(skipOf(paused, "prep")?.stageId).toBe("validation:run-1");
@@ -1775,7 +1785,7 @@ describe("pipelineFlowModel after a restart rewound the pipeline", () => {
       session("build", "before", 0),
       session("review", "outer-review", 1, { supersededBy: "outer" }),
       ...old,
-      session("fix", "outer-fix", 2, { supersededBy: "outer" }),
+      session("rework", "outer-fix", 2, { supersededBy: "outer" }),
       session("verify", "live", 3, { status: "running" }),
     ];
     pipeline.currentSessionIndex = pipeline.sessions.length - 1;
@@ -2031,7 +2041,7 @@ describe("pipelineFlowModel after a restart rewound the pipeline", () => {
         {
           id: "rewind-1",
           at: "2026-07-29T00:10:00.000Z",
-          fromPhase: "addressing",
+          fromPhase: "addressing-findings",
           fromIteration: 0,
           iteration: 0,
           step: { kind: "session", phase: "review" },
@@ -2095,11 +2105,11 @@ describe("earlier passes' validation", () => {
       currentSessionIndex: 5,
       sessions: [
         session("build", "build", 0),
-        session("fix", "prep-0", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+        session("rework", "prep-0", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
         session("review", "review-0", 200),
         session("verify", "verify-0", 300),
-        session("fix", "fix-1", 400, { iteration: 1 }),
-        session("fix", "prep-1", 460, { iteration: 1, label: REVIEW_PACKAGE_SESSION_LABEL }),
+        session("rework", "fix-1", 400, { iteration: 1 }),
+        session("rework", "prep-1", 460, { iteration: 1, label: REVIEW_PACKAGE_SESSION_LABEL }),
       ],
       validationRun: validationRun({
         id: "validation-1",
@@ -2201,7 +2211,7 @@ describe("earlier passes' validation", () => {
 
   test("archived node details and chips use its own run and retained skip marker", () => {
     const pipeline = twoPasses({
-      sessions: [session("build", "build", 0), session("fix", "fix", 400, { iteration: 1 })],
+      sessions: [session("build", "build", 0), session("rework", "fix", 400, { iteration: 1 })],
       validationHistory: [summary({ status: "cancelled", skipped: true })],
     });
     pipeline.validationRun!.plan.commands.push({
@@ -2274,7 +2284,7 @@ describe("earlier passes' validation", () => {
 test("retired sessionless failures preserve generic failure classification", () => {
   for (const startFailed of [false, undefined]) {
     const pipeline = build({
-      phase: "addressing",
+      phase: "addressing-findings",
       reviewers: PANEL.slice(0, 2),
       sessions: [
         reviewer(1, "survivor", 60, { reviewPassId: "pass-1", reviewerOutcome: "completed" }),
@@ -2291,7 +2301,7 @@ test("retired sessionless failures preserve generic failure classification", () 
             },
           ],
         }),
-        session("address", "address", 180, { status: "running" }),
+        session("address-findings", "address", 180, { status: "running" }),
       ],
     });
     const model = pipelineFlowModel(pipeline);

@@ -136,7 +136,7 @@ import type { CommandContext } from "./commands-context.js";
 import { cleanupLogStorage, getLogStorageStats } from "./log-storage.js";
 import { ensureProjectHomeEnvironment, readCheckoutBranch } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-service.js";
-import { validateWorktreeLocation } from "./worktree-locations.js";
+import { validateWorktreeLocation } from "./worktrees/index.js";
 import { moveEnvironmentTask } from "./environment-move.js";
 import {
   describeEnvironmentSetupApproval,

@@ -33,7 +33,7 @@ function workflow(overrides: Partial<MultiReviewWorkflow>): MultiReviewWorkflow 
     targetBranch: "main",
     phase: "reviewing",
     reviewers: [],
-    fixModel: { agent: "codex", model: "gpt-6" },
+    addressFindingsModel: { agent: "codex", model: "gpt-6" },
     createdAt: STARTED,
     updatedAt: STARTED,
     backendRevision: 1,
@@ -43,7 +43,7 @@ function workflow(overrides: Partial<MultiReviewWorkflow>): MultiReviewWorkflow 
 
 function access(target: MultiReviewWorkflow) {
   return Object.fromEntries(
-    (["prepare", "consolidate", "fix"] as const).map((step) => {
+    (["prepare", "consolidate", "address-findings"] as const).map((step) => {
       const answer = multiReviewStepSessionAccess(target, step);
       return [
         step,
@@ -58,7 +58,12 @@ function access(target: MultiReviewWorkflow) {
 }
 
 describe("step sessions", () => {
-  for (const owner of ["preparationSession", "reviewSession", "fixSession", "reviewer"] as const) {
+  for (const owner of [
+    "preparationSession",
+    "reviewSession",
+    "addressFindingsSession",
+    "reviewer",
+  ] as const) {
     test(`provider ownership includes the current ${owner} and requires the same agent`, () => {
       const current = session("current");
       const target = workflow(
@@ -77,15 +82,24 @@ describe("step sessions", () => {
     expect(
       access(
         workflow({
-          phase: "fixing",
+          phase: "addressing-findings",
           reviewModel: { agent: "claude", model: "opus" },
           preparationSession: session("prepare", "prepare"),
           reviewSession: session("consolidate", "consolidate"),
-          fixSession: session("fix", "fix"),
-          activeRequest: { kind: "fix", requestId: "f", state: "sent", createdAt: STARTED },
+          addressFindingsSession: session("address-findings", "address-findings"),
+          activeRequest: {
+            kind: "address-findings",
+            requestId: "f",
+            state: "sent",
+            createdAt: STARTED,
+          },
         }),
       ),
-    ).toEqual({ prepare: "own:prepare", consolidate: "own:consolidate", fix: "own:fix" });
+    ).toEqual({
+      prepare: "own:prepare",
+      consolidate: "own:consolidate",
+      "address-findings": "own:address-findings",
+    });
   });
 
   test("a step with no session yet has nothing to read", () => {
@@ -97,34 +111,38 @@ describe("step sessions", () => {
           reviewSession: session("prepare", "prepare"),
         }),
       ),
-    ).toEqual({ prepare: "own:prepare", consolidate: "other-step:prepare", fix: "none" });
+    ).toEqual({
+      prepare: "own:prepare",
+      consolidate: "other-step:prepare",
+      "address-findings": "none",
+    });
   });
 
   test("a session every step shares belongs to the step using it now", () => {
     // Without a separate preparation model all three ran in the Address Findings session.
     const legacy = (overrides: Partial<MultiReviewWorkflow>) =>
-      workflow({ fixSession: session("shared"), ...overrides });
+      workflow({ addressFindingsSession: session("shared"), ...overrides });
     expect(access(legacy({ phase: "reviewing" }))).toEqual({
       prepare: "own:shared",
       consolidate: "other-step:prepare",
-      fix: "other-step:prepare",
+      "address-findings": "other-step:prepare",
     });
     expect(access(legacy({ phase: "ready" }))).toEqual({
       prepare: "other-step:consolidate",
       consolidate: "own:shared",
-      fix: "other-step:consolidate",
+      "address-findings": "other-step:consolidate",
     });
     expect(access(legacy({ phase: "completed" }))).toEqual({
-      prepare: "other-step:fix",
-      consolidate: "other-step:fix",
-      fix: "own:shared",
+      prepare: "other-step:address-findings",
+      consolidate: "other-step:address-findings",
+      "address-findings": "own:shared",
     });
     // The handoff has not been dispatched: the session still holds
     // consolidation's turn, and no step may claim it.
     expect(access(legacy({ phase: "interactive", addressPromptPending: true }))).toEqual({
       prepare: "other-step:none",
       consolidate: "other-step:none",
-      fix: "other-step:none",
+      "address-findings": "other-step:none",
     });
   });
 
@@ -133,14 +151,23 @@ describe("step sessions", () => {
     expect(
       access(
         workflow({
-          phase: "fixing",
+          phase: "addressing-findings",
           reviewModel: { agent: "claude", model: "opus" },
           reviewSession: session("review"),
-          fixSession: session("fix"),
-          activeRequest: { kind: "fix", requestId: "f", state: "sent", createdAt: STARTED },
+          addressFindingsSession: session("address-findings"),
+          activeRequest: {
+            kind: "address-findings",
+            requestId: "f",
+            state: "sent",
+            createdAt: STARTED,
+          },
         }),
       ),
-    ).toEqual({ prepare: "other-step:consolidate", consolidate: "own:review", fix: "own:fix" });
+    ).toEqual({
+      prepare: "other-step:consolidate",
+      consolidate: "own:review",
+      "address-findings": "own:address-findings",
+    });
   });
 
   test("the shared-session owner follows the phase, then the failed request", () => {
@@ -162,7 +189,9 @@ describe("step sessions", () => {
 
 describe("step transcript requests", () => {
   test("accept a known step and a bounded token only", () => {
-    expect(isMultiReviewStepTranscriptRequest({ workflowId: "multi-1", step: "fix" })).toBe(true);
+    expect(
+      isMultiReviewStepTranscriptRequest({ workflowId: "multi-1", step: "address-findings" }),
+    ).toBe(true);
     expect(
       isMultiReviewStepTranscriptRequest({
         workflowId: "multi-1",
@@ -172,10 +201,10 @@ describe("step transcript requests", () => {
     ).toBe(true);
     for (const invalid of [
       { workflowId: "multi-1", step: "reviewer" },
-      { workflowId: " ", step: "fix" },
-      { workflowId: "multi-1", step: "fix", knownSourceToken: "" },
-      { workflowId: "multi-1", step: "fix", knownSourceToken: "x".repeat(513) },
-      { workflowId: "multi-1", step: "fix", extra: true },
+      { workflowId: " ", step: "address-findings" },
+      { workflowId: "multi-1", step: "address-findings", knownSourceToken: "" },
+      { workflowId: "multi-1", step: "address-findings", knownSourceToken: "x".repeat(513) },
+      { workflowId: "multi-1", step: "address-findings", extra: true },
     ]) {
       expect(isMultiReviewStepTranscriptRequest(invalid)).toBe(false);
     }

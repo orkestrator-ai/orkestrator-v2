@@ -391,10 +391,10 @@ export class FanoutProvider implements BuildPipelineProvider {
       };
     }
     const phase = this.sessionPhases.get(sessionId);
-    if (phase === "build" || phase === "fix") {
+    if (phase === "build" || phase === "rework") {
       return { ...base, value: TEST_REVIEW_PREPARATION as T };
     }
-    if (phase === "address") return { ...base, value: TEST_ADDRESS_FINDINGS_RESULT as T };
+    if (phase === "address-findings") return { ...base, value: TEST_ADDRESS_FINDINGS_RESULT as T };
     // Verify, PR and resolve answer the verdict shape; none of them matter to
     // the fan-out, which ends at the consolidated report.
     return { ...base, value: { complete: true, rationale: "Done." } as T };

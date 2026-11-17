@@ -127,7 +127,7 @@ function workflow(overrides: Partial<MultiReviewWorkflow>): MultiReviewWorkflow 
     targetBranch: "main",
     phase: "reviewing",
     reviewers: [completed(0), running(1), pending(2)],
-    fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+    addressFindingsModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
     createdAt: STARTED,
     updatedAt: STARTED,
     backendRevision: 1,
@@ -136,7 +136,7 @@ function workflow(overrides: Partial<MultiReviewWorkflow>): MultiReviewWorkflow 
 }
 
 const allDone = () => [completed(0), completed(1), completed(2)];
-const fixSession = (status: "running" | "idle"): MultiReviewWorkflow["fixSession"] => ({
+const fixSession = (status: "running" | "idle"): MultiReviewWorkflow["addressFindingsSession"] => ({
   agent: "codex",
   model: "gpt-5.6",
   sessionKey: "fix",
@@ -215,12 +215,12 @@ const PHASES: PhaseCase[] = [
     selected: "Consolidation",
   },
   {
-    name: "fixing",
+    name: "addressing-findings",
     workflow: workflow({
-      phase: "fixing",
+      phase: "addressing-findings",
       reviewers: allDone(),
       consolidatedReport: report,
-      fixSession: fixSession("running"),
+      addressFindingsSession: fixSession("running"),
     }),
     nodes: ["complete", ["complete", "complete", "complete"], "complete", "running"],
     edges: {
@@ -236,8 +236,8 @@ const PHASES: PhaseCase[] = [
       phase: "interactive",
       reviewers: allDone(),
       consolidatedReport: report,
-      fixSession: fixSession("running"),
-      stepRuntimes: { fix: { startedAt: STARTED } },
+      addressFindingsSession: fixSession("running"),
+      stepRuntimes: { "address-findings": { startedAt: STARTED } },
     }),
     nodes: ["complete", ["complete", "complete", "complete"], "complete", "running"],
     edges: {
@@ -277,7 +277,7 @@ const PHASES: PhaseCase[] = [
     name: "paused while fixing",
     workflow: workflow({
       phase: "paused",
-      pausedStep: "fix",
+      pausedStep: "address-findings",
       reviewers: allDone(),
       consolidatedReport: report,
     }),
@@ -696,7 +696,7 @@ describe("flow graph nodes", () => {
     const target = workflow({
       phase: "preparing",
       reviewers: [pending(0), pending(1)],
-      fixSession: { ...fixSession("running")!, requestIds: ["prepare-1"] },
+      addressFindingsSession: { ...fixSession("running")!, requestIds: ["prepare-1"] },
       activeRequest: { kind: "prepare", requestId: "prepare-1", state: "sent", createdAt: STARTED },
     });
     appCommandStore(multiReviewStore).getState().replaceWorkflow(target);
@@ -964,7 +964,11 @@ describe("failed nodes", () => {
         phase: "interactive",
         reviewers: allDone(),
         consolidatedReport: report,
-        fixSession: { ...fixSession("idle")!, status: "failed", error: "Codex exited with code 1" },
+        addressFindingsSession: {
+          ...fixSession("idle")!,
+          status: "failed",
+          error: "Codex exited with code 1",
+        },
       }),
     );
     const fix = screen.getByRole("tab", { name: /^Address Findings,/ });
@@ -1725,7 +1729,7 @@ describe("step transcript tails", () => {
   function renderWithStepTail(target: MultiReviewWorkflow) {
     appCommandStore(multiReviewStore).getState().replaceWorkflow(target);
     const loadStepTranscript = mock(
-      async (workflowId: string, step: "prepare" | "consolidate" | "fix") => ({
+      async (workflowId: string, step: "prepare" | "consolidate" | "address-findings") => ({
         workflowId,
         step,
         workflowPhase: target.phase,
@@ -1777,7 +1781,7 @@ describe("step transcript tails", () => {
       workflow({
         phase: "consolidating",
         reviewers: allDone(),
-        fixSession: fixSession("running"),
+        addressFindingsSession: fixSession("running"),
         activeRequest: { kind: "consolidate", requestId: "c-1", state: "sent", createdAt: STARTED },
       }),
     );

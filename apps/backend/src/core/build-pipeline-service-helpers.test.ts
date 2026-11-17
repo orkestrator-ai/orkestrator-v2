@@ -104,7 +104,7 @@ describe("stageAfterReview", () => {
     ).toEqual(
       stage === "Verify"
         ? { sessionPhase: "verify", phase: "verifying" }
-        : { sessionPhase: "address", phase: "addressing" },
+        : { sessionPhase: "address-findings", phase: "addressing-findings" },
     );
   });
 });
@@ -356,9 +356,9 @@ class FakeProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : phase === "build" || phase === "fix"
+        : phase === "build" || phase === "rework"
           ? TEST_REVIEW_PREPARATION
-          : phase === "address"
+          : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
             : { complete: true, rationale: "All criteria pass." }) as T,
     };
@@ -555,7 +555,7 @@ async function withService(
     const send = provider.send.bind(provider);
     provider.send = async (sessionId, prompt, sendOptions) => {
       await send(sessionId, prompt, sendOptions);
-      if (["build", "review", "verify", "fix"].includes(provider.phases.get(sessionId)!)) {
+      if (["build", "review", "verify", "rework"].includes(provider.phases.get(sessionId)!)) {
         const result = await provider.structured(sessionId, sendOptions.requestId);
         if (!result.ok) throw new Error("Test provider returned no submission");
         expect(
@@ -773,9 +773,9 @@ describe("BuildPipelineService", () => {
         return {
           ok: true,
           value:
-            phase === "build" || phase === "fix"
+            phase === "build" || phase === "rework"
               ? TEST_REVIEW_PREPARATION
-              : phase === "address"
+              : phase === "address-findings"
                 ? TEST_ADDRESS_FINDINGS_RESULT
                 : {
                     ...cleanReview,
@@ -801,7 +801,7 @@ describe("BuildPipelineService", () => {
       const { started } = await startBuilding(service, storage);
       await service.advanceNow(started.id);
       await service.advanceNow(started.id);
-      expect((await pipeline(storage, started.id)).phase).toBe("addressing");
+      expect((await pipeline(storage, started.id)).phase).toBe("addressing-findings");
 
       // The addressing turn commits its fixes and leaves a scratch file.
       controls.currentHead = "3333333333333333333333333333333333333333";
@@ -1167,7 +1167,7 @@ describe("BuildPipelineService", () => {
       const verifying = await startVerifying(service, storage);
       await service.advanceNow(verifying.id);
       const fixing = await pipeline(storage, verifying.id);
-      expect(fixing.phase).toBe("fixing");
+      expect(fixing.phase).toBe("reworking");
       return fixing;
     }
 
@@ -1199,7 +1199,7 @@ describe("BuildPipelineService", () => {
         );
         await service.advanceNow(verifying.id);
         const fixing = await pipeline(storage, verifying.id);
-        expect(fixing.phase).toBe("fixing");
+        expect(fixing.phase).toBe("reworking");
         expect(fixing.verificationResult).toBe("fail");
         expect(provider.sent.at(-1)?.prompt).toContain(
           "including requested repairs that also fail on origin/main",
@@ -1215,8 +1215,8 @@ describe("BuildPipelineService", () => {
         controls.fingerprint = UNCHANGED;
         const fixing = await startReworking(service, storage, provider);
         expect(fixing.sessions.at(-1)).toMatchObject({
-          phase: "fix",
-          fixWorktreeFingerprintAtStart: UNCHANGED,
+          phase: "rework",
+          reworkWorktreeFingerprintAtStart: UNCHANGED,
         });
 
         await service.advanceNow(fixing.id);
@@ -1224,11 +1224,11 @@ describe("BuildPipelineService", () => {
         const paused = await pipeline(storage, fixing.id);
         expect(paused).toMatchObject({
           phase: "paused",
-          pausedFromPhase: "fixing",
+          pausedFromPhase: "reworking",
           pauseCause: "supervisor",
           error: UNCHANGED_REWORK_PAUSE_MESSAGE,
         });
-        expect(paused.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();
+        expect(paused.sessions.at(-1)?.reworkWorktreeFingerprintAtStart).toBeUndefined();
         expect(
           paused.sessions.some((session) => session.phase === "review" && session.iteration === 1),
         ).toBe(false);
@@ -1259,8 +1259,8 @@ describe("BuildPipelineService", () => {
         expect((await pipeline(storage, fixing.id)).phase).toBe("verifying");
         await service.advanceNow(fixing.id);
         const nextRework = await pipeline(storage, fixing.id);
-        expect(nextRework).toMatchObject({ phase: "fixing", iteration: 2 });
-        expect(nextRework.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBe(CHANGED);
+        expect(nextRework).toMatchObject({ phase: "reworking", iteration: 2 });
+        expect(nextRework.sessions.at(-1)?.reworkWorktreeFingerprintAtStart).toBe(CHANGED);
         await service.advanceNow(fixing.id);
         expect((await pipeline(storage, fixing.id)).phase).toBe("paused");
       });
@@ -1269,7 +1269,7 @@ describe("BuildPipelineService", () => {
     test("continues the loop when the fingerprint cannot be established", async () => {
       await withService(async (service, storage, provider) => {
         const fixing = await startReworking(service, storage, provider);
-        expect(fixing.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();
+        expect(fixing.sessions.at(-1)?.reworkWorktreeFingerprintAtStart).toBeUndefined();
 
         await service.advanceNow(fixing.id);
 
@@ -1304,8 +1304,8 @@ describe("BuildPipelineService", () => {
           }
           const retried = await pipeline(storage, fixing.id);
           expect(retried.sessions.at(-1)).toMatchObject({
-            phase: "fix",
-            fixWorktreeFingerprintAtStart: UNCHANGED,
+            phase: "rework",
+            reworkWorktreeFingerprintAtStart: UNCHANGED,
           });
           expect(retried.sessions.at(-1)!.sdkSessionId).not.toBe(originalSessionId);
           expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(before);
@@ -1315,8 +1315,8 @@ describe("BuildPipelineService", () => {
           expect(next.phase).toBe("reviewing");
           expect(
             next.sessions
-              .filter((session) => session.phase === "fix")
-              .every((session) => session.fixWorktreeFingerprintAtStart === undefined),
+              .filter((session) => session.phase === "rework")
+              .every((session) => session.reworkWorktreeFingerprintAtStart === undefined),
           ).toBe(true);
         });
       });
@@ -1329,7 +1329,7 @@ describe("BuildPipelineService", () => {
         const before = invocations.filter((call) => call.args.fingerprint).length;
         await service.restartCurrentStep(fixing.id);
         expect(
-          (await pipeline(storage, fixing.id)).sessions.at(-1)?.fixWorktreeFingerprintAtStart,
+          (await pipeline(storage, fixing.id)).sessions.at(-1)?.reworkWorktreeFingerprintAtStart,
         ).toBeUndefined();
         await service.advanceNow(fixing.id);
         expect((await pipeline(storage, fixing.id)).phase).toBe("reviewing");
@@ -1351,8 +1351,8 @@ describe("BuildPipelineService", () => {
           expect(next.phase).toBe(failure === "transient" ? "paused" : "reviewing");
           expect(
             next.sessions
-              .filter((session) => session.phase === "fix")
-              .every((session) => session.fixWorktreeFingerprintAtStart === undefined),
+              .filter((session) => session.phase === "rework")
+              .every((session) => session.reworkWorktreeFingerprintAtStart === undefined),
           ).toBe(true);
           expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(before + 3);
           controls.probeError = undefined;
@@ -1370,10 +1370,10 @@ describe("BuildPipelineService", () => {
         controls.probeError = new Error("review-worktree-probe:too-large");
         const fixing = await startReworking(service, storage, provider);
         expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(1);
-        expect(fixing.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();
+        expect(fixing.sessions.at(-1)?.reworkWorktreeFingerprintAtStart).toBeUndefined();
         // Install a persisted baseline to exercise the same policy on completion.
         await mutateStored(storage, fixing.id, (snapshot) => {
-          snapshot.sessions.at(-1)!.fixWorktreeFingerprintAtStart = UNCHANGED;
+          snapshot.sessions.at(-1)!.reworkWorktreeFingerprintAtStart = UNCHANGED;
         });
         await service.advanceNow(fixing.id);
         expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(2);
@@ -1407,10 +1407,10 @@ describe("BuildPipelineService", () => {
           await service.advanceNow(fixing.id);
           const preparing = await pipeline(storage, fixing.id);
           expect(preparing.sessions.at(-1)).toMatchObject({
-            phase: "fix",
+            phase: "rework",
             label: REVIEW_PACKAGE_SESSION_LABEL,
           });
-          expect(preparing.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();
+          expect(preparing.sessions.at(-1)?.reworkWorktreeFingerprintAtStart).toBeUndefined();
           expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(probes);
           // Completion of that override also must not trigger the unchanged-fix check.
           await service.advanceNow(fixing.id);
@@ -1462,7 +1462,7 @@ describe("BuildPipelineService", () => {
         expect((await pipeline(storage, fixing.id)).phase).toBe("paused");
 
         const resumed = await service.resume(fixing.id);
-        expect(resumed.phase).toBe("fixing");
+        expect(resumed.phase).toBe("reworking");
         expect(resumed.error).toBeUndefined();
         // The first pass dispatches the resume prompt to the idle fix session;
         // the second sees that turn finish on the same, unchanged worktree.

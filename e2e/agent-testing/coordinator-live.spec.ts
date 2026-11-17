@@ -889,7 +889,9 @@ async function statusCase(input: {
       },
     );
     const workflow = workflows[0];
-    const rows = workflow ? [...workflow.reviewers, workflow.reviewModel, workflow.fixModel] : [];
+    const rows = workflow
+      ? [...workflow.reviewers, workflow.reviewModel, workflow.addressFindingsModel]
+      : [];
     checks.push({
       name: "pi-saved-default-rows",
       passed:
@@ -906,7 +908,7 @@ async function statusCase(input: {
         (workflow.phase === "completed" ||
           (workflow.phase === "interactive" &&
             workflow.addressPromptPending !== true &&
-            workflow.fixSession?.status === "idle")),
+            workflow.addressFindingsSession?.status === "idle")),
     });
   }
   const coordinatorEnvironmentId = coordinator.identity.environmentId;

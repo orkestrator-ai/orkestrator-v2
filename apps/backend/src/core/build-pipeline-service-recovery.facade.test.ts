@@ -162,9 +162,9 @@ class FakeProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : phase === "build" || phase === "fix"
+        : phase === "build" || phase === "rework"
           ? TEST_REVIEW_PREPARATION
-          : phase === "address"
+          : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
             : { complete: true, rationale: "All criteria pass." }) as T,
     };
@@ -968,7 +968,7 @@ describe("BuildPipelineService", () => {
         requestId: string,
       ): Promise<StructuredOutputResult<T>> => {
         const phase = provider.phases.get(sessionId);
-        if (phase === "build" || phase === "fix") {
+        if (phase === "build" || phase === "rework") {
           return {
             ok: true,
             provider: "claude",
@@ -1045,7 +1045,7 @@ describe("BuildPipelineService", () => {
         requestId: string,
       ): Promise<StructuredOutputResult<T>> => {
         const phase = provider.phases.get(sessionId);
-        if (phase === "build" || phase === "fix") {
+        if (phase === "build" || phase === "rework") {
           return {
             ok: true,
             provider: "claude",
@@ -1120,7 +1120,7 @@ describe("BuildPipelineService", () => {
         requestId: string,
       ): Promise<StructuredOutputResult<T>> => {
         const phase = provider.phases.get(sessionId);
-        if (phase === "build" || phase === "fix") {
+        if (phase === "build" || phase === "rework") {
           return {
             ok: true,
             provider: "claude",
@@ -1166,7 +1166,7 @@ describe("BuildPipelineService", () => {
         requestId: string,
       ): Promise<StructuredOutputResult<T>> => {
         const phase = provider.phases.get(sessionId);
-        if (phase === "build" || phase === "fix") {
+        if (phase === "build" || phase === "rework") {
           return {
             ok: true,
             provider: "claude",

@@ -3,8 +3,8 @@
  * stage (`docs/architecture/review-preparation.md`).
  *
  * An Address session opened with a `fix-result` slot carries the marker
- * `addressReportKind` and, once the backend accepts its result, a bounded copy
- * in `fixResult`; Verify reads that copy as an evidence frame. An Address
+ * `addressFindingsReportKind` and, once the backend accepts its result, a bounded copy
+ * in `addressFindingsResult`; Verify reads that copy as an evidence frame. An Address
  * session without the marker (one started before the typed handoff) has no
  * report: Verify is told none is available.
  */
@@ -27,7 +27,7 @@ export function roundAddressFindingsSession(pipeline: BuildPipeline): PipelineSe
     const session = pipeline.sessions[index]!;
     if (session.iteration !== pipeline.iteration) return undefined;
     if (session.phase === "review") return address;
-    if (!address && session.phase === "address" && !isSupersededPipelineSession(session)) {
+    if (!address && session.phase === "address-findings" && !isSupersededPipelineSession(session)) {
       address = session;
     }
   }
@@ -44,6 +44,7 @@ export function verificationAddressFindingsReport(
   pipeline: BuildPipeline,
 ): VerificationAddressFindingsReport | undefined {
   const address = roundAddressFindingsSession(pipeline);
-  if (address?.addressReportKind === undefined || !address.fixResult) return undefined;
-  return { kind: "fix-result", result: address.fixResult };
+  if (address?.addressFindingsReportKind === undefined || !address.addressFindingsResult)
+    return undefined;
+  return { kind: "fix-result", result: address.addressFindingsResult };
 }

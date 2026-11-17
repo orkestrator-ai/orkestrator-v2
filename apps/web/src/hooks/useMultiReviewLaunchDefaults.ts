@@ -42,8 +42,8 @@ export function useMultiReviewLaunchDefaults(
             selection: {
               reviewers: rows.reviewers,
               reviewModel: rows.reviewModel,
-              fixModel: rows.fixModel,
-              autoFix: rows.autoFix,
+              fixModel: rows.addressFindingsModel,
+              autoFix: rows.autoAddressFindings,
               autoPr: rows.autoPr,
             },
           },

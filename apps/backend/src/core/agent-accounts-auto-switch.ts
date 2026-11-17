@@ -210,6 +210,11 @@ interface HeldLimit {
   usedPercent: number;
   /** Epoch ms: the limit's reset, or its window's length from the reading when unknown. */
   until: number;
+  /**
+   * Epoch ms: when the newest reading that put it there was taken. Only a fresh
+   * reading taken after it can say the limit has room again.
+   */
+  readAt: number;
 }
 
 /** What fresh readings last said past the threshold about one login. */
@@ -232,12 +237,23 @@ type HeldLevel = {
   resetsAt?: number;
 };
 
+/** One entry's level of a limit, with when the reading behind it was taken. */
+type TimedLevel = HeldLevel & { readAt: number };
+
 /**
  * What the fresh readings of one limit, across a login's entries, say now:
  * `hold` at or past the threshold, `release` below it, nothing without one.
+ *
+ * Only a percentage counts. A fresh reading can name a limit's window and reset
+ * with no percentage: a Claude `rate_limit_event` may carry a reset time
+ * without utilization, and the windows a session reports are kept and shared as
+ * the login's newest reading. That says nothing about room. Nor does a reading
+ * below the threshold taken before the one that held the limit (`before`), such
+ * as a twin's cached reading: it is older news, not a sign of room.
  */
 function heldLimitFrom(
-  levels: readonly (HeldLevel | undefined)[],
+  levels: readonly (TimedLevel | undefined)[],
+  before: HeldLimit | undefined,
   now: number,
   windowMs: number,
 ): HeldLimit | "release" | undefined {
@@ -246,26 +262,41 @@ function heldLimitFrom(
   for (const level of levels) {
     if (level?.freshness !== "fresh" || level.usedPercent === undefined) continue;
     if (level.usedPercent < AUTO_SWITCH_THRESHOLD_PERCENT) {
-      release = true;
+      if (!before || level.readAt > before.readAt) release = true;
       continue;
     }
     const until = level.resetsAt ?? now + windowMs;
-    if (!held || level.usedPercent > held.usedPercent)
-      held = { usedPercent: level.usedPercent, until };
+    const readAt = Math.max(level.readAt, held?.readAt ?? -Infinity);
+    if (!held || level.usedPercent > held.usedPercent) {
+      held = { usedPercent: level.usedPercent, until, readAt };
+    } else {
+      held = { ...held, readAt };
+    }
   }
+  if (held && before && before.readAt > held.readAt) held = { ...held, readAt: before.readAt };
   return held ?? (release ? "release" : undefined);
 }
 
 /**
- * A level no fresh reading speaks for, as the held limit says it: past the
+ * An idle level while its limit is held, as the held limit says it: past the
  * threshold, with its reset ahead, which is what keeps an idle account out.
+ * Every level gets it, a fresh one included, unless its own fresh percentage
+ * already keeps the account out: a fresh percentage below the threshold that
+ * could release the limit has already done so (`heldLimitFrom`).
  */
 function heldLevel(
   level: HeldLevel | undefined,
   held: HeldLimit | undefined,
   now: number,
 ): { freshness: "stale"; usedPercent: number; resetsAt: number } | undefined {
-  if (!held || now >= held.until || level?.freshness === "fresh") return undefined;
+  if (!held || now >= held.until) return undefined;
+  if (
+    level?.freshness === "fresh" &&
+    level.usedPercent !== undefined &&
+    level.usedPercent >= AUTO_SWITCH_THRESHOLD_PERCENT
+  ) {
+    return undefined;
+  }
   return {
     freshness: "stale",
     usedPercent: Math.max(level?.usedPercent ?? 0, held.usedPercent),
@@ -305,6 +336,8 @@ export class AgentAccountAutoSwitcher {
    * like it has room again before a fresh reading says so or the limit resets.
    */
   private readonly held = new Map<string, HeldLogin>();
+  /** When each reading `readings` took was fetched, so a hold can tell newer news from older. */
+  private readonly readAt = new WeakMap<UsageLimitReading, number>();
   private timer: ReturnType<typeof setInterval> | undefined;
   /** Per provider, the check due when an account's 5-hour limit resets. */
   private readonly fiveHourWakes = new Map<AgentAccountPlatform, ReturnType<typeof setTimeout>>();
@@ -820,7 +853,12 @@ export class AgentAccountAutoSwitcher {
       CONFIRMATION_REUSE_MS;
     const read = async (accountId: string, forced: boolean): Promise<UsageLimitReading> => {
       const reading = await this.deps.readUsage(platform, accountId, { force: forced }).then(
-        (snapshot) => boundedUsageReading(platform, snapshot, this.now()),
+        (snapshot) => {
+          const bounded = boundedUsageReading(platform, snapshot, this.now());
+          const fetchedAt = Date.parse(snapshot.fetchedAt);
+          if (Number.isFinite(fetchedAt)) this.readAt.set(bounded, fetchedAt);
+          return bounded;
+        },
         (): UsageLimitReading => ({ freshness: "none", wouldPay: false }),
       );
       if (forced && reading.freshness === "fresh") {
@@ -859,11 +897,12 @@ export class AgentAccountAutoSwitcher {
 
   /**
    * Remember each login a fresh reading puts at or past the threshold, on either
-   * limit, and forget it once a fresh reading puts it below or the limit resets.
-   * Until then an idle entry of it reads as held past the threshold with its reset
-   * ahead wherever no fresh reading speaks for it, so between turns it is no place
-   * to go (`levelHasRoom`). The active entry keeps its own reading: only a fresh
-   * one moves the machine.
+   * limit, and forget it once a later fresh reading puts it below or the limit
+   * resets. Until then every idle entry of it reads as held past the threshold
+   * with its reset ahead, so between turns it is no place to go
+   * (`levelHasRoom`), even when its own reading is fresh but gives no percentage
+   * for that limit. The active entry keeps its own reading: only a fresh one
+   * moves the machine.
    */
   private holdPastThreshold(
     platform: AgentAccountPlatform,
@@ -879,23 +918,29 @@ export class AgentAccountAutoSwitcher {
       const key = heldLoginKey(platform, entry);
       logins.set(key, [...(logins.get(key) ?? []), entry]);
     }
+    // Every fresh reading comes through `read`, which notes its time; anything
+    // else is treated as just read.
+    const timed = (reading: UsageLimitReading, level: HeldLevel | undefined) =>
+      level && { ...level, readAt: this.readAt.get(reading) ?? now };
+    const live = (before: HeldLimit | undefined) =>
+      before && now < before.until ? before : undefined;
     for (const [key, twins] of logins) {
       const previous = this.held.get(key);
       const next: HeldLogin = {};
       const weekly = heldLimitFrom(
-        twins.map(({ reading }) => reading),
+        twins.map(({ reading }) => timed(reading, reading)),
+        live(previous?.weekly),
         now,
         WEEK_MS,
       );
       const fiveHour = heldLimitFrom(
-        twins.map(({ reading }) => reading.fiveHour),
+        twins.map(({ reading }) => timed(reading, reading.fiveHour)),
+        live(previous?.fiveHour),
         now,
         FIVE_HOUR_MS,
       );
       const keep = (limit: HeldLimit | "release" | undefined, before: HeldLimit | undefined) =>
-        limit === "release"
-          ? undefined
-          : (limit ?? (before && now < before.until ? before : undefined));
+        limit === "release" ? undefined : (limit ?? live(before));
       const heldWeekly = keep(weekly, previous?.weekly);
       const heldFiveHour = keep(fiveHour, previous?.fiveHour);
       if (heldWeekly) next.weekly = heldWeekly;

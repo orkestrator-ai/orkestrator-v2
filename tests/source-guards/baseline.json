@@ -44,7 +44,7 @@
     "apps/backend/src/core/transcript-artifacts/media-stream.test.ts": 1,
     "apps/backend/src/core/transcript-artifacts/preview-interactive.test.ts": 1,
     "apps/backend/src/core/watch-host.test.ts": 2,
-    "apps/backend/src/core/worktree-watcher-split.test.ts": 3,
+    "apps/backend/src/core/worktrees/watcher-split.test.ts": 3,
     "apps/backend/src/host-standalone-updater.test.ts": 2,
     "apps/backend/src/preview-relay-supervisor.test.ts": 2,
     "apps/backend/src/remote-bandwidth-baseline.test.ts": 2,

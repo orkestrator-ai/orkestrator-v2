@@ -60,7 +60,7 @@ function workflow(overrides: Partial<MultiReviewWorkflow> = {}): MultiReviewWork
     targetBranch: "main",
     phase: "reviewing",
     reviewers: [reviewer()],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
     createdAt: "2026-10-16T00:00:00.000Z",
     updatedAt: "2026-10-16T00:00:00.000Z",
     backendRevision: 1,

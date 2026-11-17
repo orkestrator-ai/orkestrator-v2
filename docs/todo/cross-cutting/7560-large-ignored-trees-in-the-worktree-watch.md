@@ -28,7 +28,7 @@ in a worktree is walked on every watcher attach. A rootless Docker data root
 under `output/` held 14,000 to 30,000 directories per worktree on beelink2.
 
 **Context.** The plan is `planWatchTargets` and `listIgnoredDependencyTrees` in
-`apps/backend/src/core/worktree-watch-plan.ts`; the reason it is limited to
+`apps/backend/src/core/worktrees/watch-plan.ts`; the reason it is limited to
 `node_modules` is in
 [git-scan-caches.md](../../architecture/git-scan-caches.md#what-the-worktree-watch-leaves-out):
 the Files tree shows other ignored directories, and under a qualified watcher
@@ -50,7 +50,7 @@ seconds on a loaded host.
 Done on 2026-11-11 with the recommended option
 ([git-scan-caches.md](../../architecture/git-scan-caches.md#a-large-ignored-tree)):
 
-- `listIgnoredTrees` (`worktree-watch-plan.ts`) returns the `node_modules`
+- `listIgnoredTrees` (`worktrees/watch-plan.ts`) returns the `node_modules`
   trees and every other ignored, untracked directory from the same
   `ls-files` and `check-ignore` pair that `listIgnoredDependencyTrees` runs,
   so a Linux replan still costs two Git processes. Past 64 other candidates
@@ -71,8 +71,8 @@ Done on 2026-11-11 with the recommended option
   watches go waits for a plan that asked Git and measured it before it is
   watched. Without Git's answer the last measurement stands.
   macOS (one recursive root) measures nothing.
-- Tests: `worktree-watch-plan.test.ts` (the count, its early stop, symlinks),
-  `worktree-watcher-large-ignored.test.ts` (left out, coverage withdrawn and
+- Tests: `worktrees/watch-plan.test.ts` (the count, its early stop, symlinks),
+  `worktrees/watcher-large-ignored.test.ts` (left out, coverage withdrawn and
   restored, one count per identity, no Git answer, macOS, a large tree arriving
   through only its parent's rename, a small one arriving, growth in place, a
   tree replaced under a reused inode), and in

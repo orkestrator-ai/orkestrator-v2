@@ -3,7 +3,6 @@ import {
   isMultiReviewWorkflow,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
-import { canonicalMultiReview } from "@orkestrator/protocol/workflow-vocabulary";
 import type { StoreApi } from "zustand/vanilla";
 import type { PersistedWorkflowRecord } from "@/types";
 import * as backend from "@/lib/backend";
@@ -31,7 +30,7 @@ function workflowReadsApi(scope: NodeScope) {
 }
 
 function snapshot(entry: PersistedWorkflowRecord<unknown>): MultiReviewWorkflow | null {
-  const workflow = canonicalMultiReview(entry.snapshot);
+  const workflow = entry.snapshot;
   if (
     !isMultiReviewWorkflow(workflow) ||
     workflow.id !== entry.id ||

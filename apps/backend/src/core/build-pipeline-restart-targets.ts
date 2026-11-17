@@ -35,7 +35,7 @@ export interface CoordinatorRestartedStep {
 export type RestartTarget =
   | { kind: "validation" }
   | { kind: "satisfied" }
-  | { kind: "review-package"; implementationPhase: "build" | "fix" }
+  | { kind: "review-package"; implementationPhase: "build" | "rework" }
   | {
       kind: "session";
       session?: PipelineSession;
@@ -122,7 +122,7 @@ export function currentStepTarget(candidate: BuildPipeline): RestartTarget {
   if (validationTarget === "review-package") {
     return {
       kind: "review-package",
-      implementationPhase: phase === "fixing" ? "fix" : "build",
+      implementationPhase: phase === "reworking" ? "rework" : "build",
     };
   }
   // Between a transition and the next tick the current session can still be
@@ -155,7 +155,7 @@ export function failedStepTarget(candidate: BuildPipeline): RestartTarget {
   if (special === "review-package")
     return {
       kind: "review-package",
-      implementationPhase: failure.phase === "fixing" ? "fix" : "build",
+      implementationPhase: failure.phase === "reworking" ? "rework" : "build",
     };
   const session = failure.sessionId ? findStageSession(candidate, failure.sessionId) : undefined;
   return session?.phase === stagePhase

@@ -24,10 +24,10 @@ function pipelineWith(session: Partial<PipelineSession>): BuildPipeline {
     environmentId: "environment-1",
     environmentType: "local",
     agentType: "claude",
-    phase: "addressing",
+    phase: "addressing-findings",
     sessions: [
       {
-        phase: "address",
+        phase: "address-findings",
         iteration: 0,
         sessionKey: "address-1",
         sdkSessionId: "sdk-address-1",
@@ -118,23 +118,34 @@ describe("Address session report fields", () => {
   });
 
   test("an Address session carries the marker and its accepted result", () => {
-    expect(isBuildPipeline(pipelineWith({ addressReportKind: "fix-result" }))).toBe(true);
     expect(
-      isBuildPipeline(pipelineWith({ addressReportKind: "fix-result", fixResult: result })),
+      isBuildPipeline(pipelineWith({ addressFindingsReportKind: "address-findings-result" })),
+    ).toBe(true);
+    expect(
+      isBuildPipeline(
+        pipelineWith({
+          addressFindingsReportKind: "address-findings-result",
+          addressFindingsResult: result,
+        }),
+      ),
     ).toBe(true);
   });
 
   test("rejects the fields on another phase, without the marker, or malformed", () => {
     expect(
-      isBuildPipeline(pipelineWith({ phase: "verify", addressReportKind: "fix-result" })),
+      isBuildPipeline(
+        pipelineWith({ phase: "verify", addressFindingsReportKind: "address-findings-result" }),
+      ),
     ).toBe(false);
-    expect(isBuildPipeline(pipelineWith({ fixResult: result }))).toBe(false);
-    expect(isBuildPipeline(pipelineWith({ addressReportKind: "text" as never }))).toBe(false);
+    expect(isBuildPipeline(pipelineWith({ addressFindingsResult: result }))).toBe(false);
+    expect(isBuildPipeline(pipelineWith({ addressFindingsReportKind: "text" as never }))).toBe(
+      false,
+    );
     expect(
       isBuildPipeline(
         pipelineWith({
-          addressReportKind: "fix-result",
-          fixResult: { ...result, summary: 1 } as never,
+          addressFindingsReportKind: "address-findings-result",
+          addressFindingsResult: { ...result, summary: 1 } as never,
         }),
       ),
     ).toBe(false);

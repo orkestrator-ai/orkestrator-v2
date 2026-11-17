@@ -24,7 +24,7 @@ Each command was `mise exec -- bun test --preload ../../tests/setup-node.ts <fil
 | --- | --- | --- | --- |
 | `apps/backend/src/core/environment-move.test.ts` | 32 passed, 6 failed (five-second deadlines) | 15 passed, 23 failed (load average about 117) | Load-dependent; reproduces on main. |
 | `apps/backend/tests/commands-integration.test.ts` | 53 passed, 2 failed (artifact excludes, scan caches) | same two failed | Reproduces on main; see 0162, 0300. |
-| `apps/backend/src/core/worktree-snapshots-git.test.ts` | 1 passed, 3 failed (five-second deadlines) | 0 passed, 2 failed | Reproduces on main; see 0947, 0957. |
+| `apps/backend/src/core/worktrees/snapshots-git.test.ts` | 1 passed, 3 failed (five-second deadlines) | 0 passed, 2 failed | Reproduces on main; see 0947, 0957. |
 | `apps/backend/tests/worktree-watcher.test.ts` | `observes a real file write` failed | same case failed | Reproduces on main; see 0091. |
 | `apps/backend/tests/staged-input-relay.test.ts` | 4 failed | same four failed | Reproduces on main (rootless relay work, todo 0109). |
 | `apps/backend/tests/docker-image.test.ts` | 2 `pinned image identity` cases failed | same two failed | Reproduces on main. |

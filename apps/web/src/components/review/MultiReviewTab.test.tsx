@@ -188,8 +188,8 @@ function readyWorkflow(): MultiReviewWorkflow {
         report,
       },
     ],
-    fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
-    fixSession: {
+    addressFindingsModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+    addressFindingsSession: {
       agent: "codex",
       model: "gpt-5.6",
       reasoningEffort: "high",
@@ -211,7 +211,11 @@ function readyWorkflow(): MultiReviewWorkflow {
 function reviewingWorkflow(): MultiReviewWorkflow {
   const ready = readyWorkflow();
   const timestamp = "2026-08-14T00:00:00.000Z";
-  const { fixSession: _fixSession, consolidatedReport: _consolidatedReport, ...rest } = ready;
+  const {
+    addressFindingsSession: _fixSession,
+    consolidatedReport: _consolidatedReport,
+    ...rest
+  } = ready;
   return {
     ...rest,
     phase: "reviewing",
@@ -1027,7 +1031,11 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       report: undefined,
     }));
     delete workflow.consolidatedReport;
-    workflow.fixSession = { ...workflow.fixSession!, status: "idle", completedAt: undefined };
+    workflow.addressFindingsSession = {
+      ...workflow.addressFindingsSession!,
+      status: "idle",
+      completedAt: undefined,
+    };
     workflow.stepRuntimes = { prepare: { startedAt: "2026-09-08T20:00:00.000Z" } };
     workflow.validationRun = {
       id: "validation-1",
@@ -1930,13 +1938,13 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const customAddressFindings = mock(
       async (
         _workflowId: string,
-        fixModel: MultiReviewWorkflow["fixModel"],
+        fixModel: MultiReviewWorkflow["addressFindingsModel"],
         instruction: string,
       ): Promise<MultiReviewWorkflow> => ({
         ...ready,
         phase: "interactive",
-        customFixInstruction: instruction,
-        customFixModel: fixModel,
+        customAddressFindingsInstruction: instruction,
+        customAddressFindingsModel: fixModel,
         addressPromptPending: true,
         addressPromptAttempts: 0,
         backendRevision: 8,
@@ -2068,8 +2076,8 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         ...ready,
         phase: "interactive",
         addressPromptPending: true,
-        customFixInstruction: "Please address all the issues and coverage gaps",
-        customFixModel: ready.fixModel,
+        customAddressFindingsInstruction: "Please address all the issues and coverage gaps",
+        customAddressFindingsModel: ready.addressFindingsModel,
         backendRevision: 8,
       });
     });
@@ -2109,8 +2117,8 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const pending: MultiReviewWorkflow = {
       ...ready,
       phase: "interactive",
-      customFixInstruction: "Please address all the issues and coverage gaps",
-      customFixModel: ready.fixModel,
+      customAddressFindingsInstruction: "Please address all the issues and coverage gaps",
+      customAddressFindingsModel: ready.addressFindingsModel,
       addressPromptPending: true,
       addressPromptAttempts: 0,
       backendRevision: 8,
@@ -2223,7 +2231,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(
       await screen.findByText(/Address Findings request was recorded and is being delivered/),
     ).toBeTruthy();
-    const { fixSession: _missing, ...withoutSession } = pending;
+    const { addressFindingsSession: _missing, ...withoutSession } = pending;
     act(() =>
       appCommandStore(multiReviewStore)
         .getState()
@@ -2245,7 +2253,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
   test("surfaces an acknowledged interactive handoff with no Address Findings session", async () => {
     const ready = readyWorkflow();
     appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
-    const { fixSession: _missing, ...withoutSession } = ready;
+    const { addressFindingsSession: _missing, ...withoutSession } = ready;
     const unavailable: MultiReviewWorkflow = {
       ...withoutSession,
       phase: "interactive",
@@ -2567,14 +2575,14 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
     const defaultModel = multiReviewAddressFindingsSessionTabOptions({
       ...ready,
-      fixModel: { agent: "codex", model: "default" },
+      addressFindingsModel: { agent: "codex", model: "default" },
     });
     expect(defaultModel?.initialAgentModel).toBeUndefined();
     expect(defaultModel?.initialReasoningEffort).toBeUndefined();
     expect(
       multiReviewAddressFindingsSessionTabOptions({
         ...ready,
-        fixTabId: "multi-review-fix:multi-1:launch-1",
+        addressFindingsTabId: "multi-review-fix:multi-1:launch-1",
       })?.tabId,
     ).toBe("multi-review-fix:multi-1:launch-1");
   });
@@ -2759,7 +2767,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       stepRuntimes: {
         prepare: { startedAt: ready.createdAt, completedAt: ready.updatedAt },
         consolidate: { startedAt: ready.createdAt, completedAt: ready.updatedAt },
-        fix: { startedAt: ready.createdAt, completedAt: ready.updatedAt },
+        "address-findings": { startedAt: ready.createdAt, completedAt: ready.updatedAt },
       },
     };
     appCommandStore(multiReviewStore).getState().replaceWorkflow(completed);
@@ -2783,7 +2791,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     for (const [nodeName, kind] of [
       ["Review package", "prepare"],
       ["Consolidation", "consolidate"],
-      ["Address Findings,", "fix"],
+      ["Address Findings,", "address-findings"],
     ] as const) {
       fireEvent.contextMenu(flowNode(nodeName));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
@@ -2842,7 +2850,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       selection: { agent: "claude" as const, model: "sonnet", reasoningEffort: "high" },
     },
     {
-      kind: "fix" as const,
+      kind: "address-findings" as const,
       node: "Address Findings,",
       heading: "Restart Address Findings",
       selection: { agent: "codex" as const, model: "gpt-6.1-sol", reasoningEffort: "high" },
@@ -2859,10 +2867,10 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       startedAt: ready.createdAt,
       completedAt: ready.updatedAt,
     };
-    if (fixture.kind === "fix") {
+    if (fixture.kind === "address-findings") {
       ready.phase = "completed";
       ready.stepRuntimes = {
-        fix: { startedAt: ready.createdAt, completedAt: ready.updatedAt },
+        "address-findings": { startedAt: ready.createdAt, completedAt: ready.updatedAt },
       };
     }
     appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
@@ -2939,9 +2947,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         state: "sent",
         createdAt: timestamp,
       },
-      fixSession: {
-        ...ready.fixSession!,
-        requestIds: [...ready.fixSession!.requestIds, "prepare-2"],
+      addressFindingsSession: {
+        ...ready.addressFindingsSession!,
+        requestIds: [...ready.addressFindingsSession!.requestIds, "prepare-2"],
         status: "running",
         completedAt: undefined,
       },
@@ -2952,7 +2960,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       pausedFromPhase: "preparing",
       pausedStep: "prepare",
       activeRequest: undefined,
-      fixSession: { ...preparing.fixSession!, status: "idle" },
+      addressFindingsSession: { ...preparing.addressFindingsSession!, status: "idle" },
     };
     const resumed: MultiReviewWorkflow = {
       ...paused,
@@ -2999,9 +3007,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
   test("does not offer Pause for an interactive Address Findings session", async () => {
     const workflow = readyWorkflow();
     workflow.phase = "interactive";
-    workflow.fixSession = { ...workflow.fixSession!, status: "running" };
-    workflow.fixLaunch = { kind: "default" };
-    workflow.stepRuntimes = { fix: { startedAt: workflow.createdAt } };
+    workflow.addressFindingsSession = { ...workflow.addressFindingsSession!, status: "running" };
+    workflow.addressFindingsLaunch = { kind: "default" };
+    workflow.stepRuntimes = { "address-findings": { startedAt: workflow.createdAt } };
     appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
 
     renderInAppCommandScope(
@@ -3315,19 +3323,19 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("surfaces a stalled consolidation or Address Findings session with recovery guidance", () => {
     const ready = readyWorkflow();
-    for (const phase of ["consolidating", "fixing"] as const) {
+    for (const phase of ["consolidating", "addressing-findings"] as const) {
       const stalled: MultiReviewWorkflow = {
         ...ready,
         phase,
-        fixSession: {
-          ...ready.fixSession!,
+        addressFindingsSession: {
+          ...ready.addressFindingsSession!,
           status: "running",
           stalledSince: "2026-08-14T00:20:00.000Z",
         },
-        ...(phase === "fixing"
+        ...(phase === "addressing-findings"
           ? {
               activeRequest: {
-                kind: "fix" as const,
+                kind: "address-findings" as const,
                 requestId: "fix-1",
                 state: "sent" as const,
                 createdAt: "2026-08-14T00:15:00.000Z",
@@ -3359,7 +3367,10 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const ready = readyWorkflow();
     const settled = {
       ...ready,
-      fixSession: { ...ready.fixSession!, stalledSince: "2026-08-14T00:20:00.000Z" },
+      addressFindingsSession: {
+        ...ready.addressFindingsSession!,
+        stalledSince: "2026-08-14T00:20:00.000Z",
+      },
     };
     appCommandStore(multiReviewStore).getState().replaceWorkflow(settled);
     renderInAppCommandScope(
@@ -3396,8 +3407,8 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       ...ready,
       id: reviewing.id,
       phase: "consolidating",
-      fixSession: {
-        ...ready.fixSession!,
+      addressFindingsSession: {
+        ...ready.addressFindingsSession!,
         status: "running",
         stalledSince: "2026-08-14T00:20:00.000Z",
       },
@@ -3460,7 +3471,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       state: "sent",
       createdAt: "2026-08-14T00:00:00.000Z",
     };
-    workflow.fixSession = {
+    workflow.addressFindingsSession = {
       agent: "codex",
       model: "gpt-5.6",
       reasoningEffort: "high",
@@ -3685,7 +3696,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     const legacy = readyWorkflow();
     const workflow: MultiReviewWorkflow = {
       ...legacy,
-      phase: "fixing",
+      phase: "addressing-findings",
       reviewModel: { agent: "claude", model: "opus", reasoningEffort: "high" },
       reviewSessionKey: "multi-review:multi-1:review",
       reviewSession: {
@@ -3699,9 +3710,13 @@ describe("MultiReviewTab pipeline step cards", () => {
         startedAt: "2026-08-14T00:00:00.000Z",
         completedAt: "2026-08-14T00:04:00.000Z",
       },
-      fixSession: { ...legacy.fixSession!, status: "running", completedAt: undefined },
+      addressFindingsSession: {
+        ...legacy.addressFindingsSession!,
+        status: "running",
+        completedAt: undefined,
+      },
       activeRequest: {
-        kind: "fix",
+        kind: "address-findings",
         requestId: "fix-1",
         state: "sent",
         createdAt: "2026-08-14T00:05:00.000Z",
@@ -3826,11 +3841,11 @@ describe("MultiReviewTab pipeline step cards", () => {
     const workflow: MultiReviewWorkflow = {
       ...legacy,
       preparationSession: {
-        ...legacy.fixSession!,
+        ...legacy.addressFindingsSession!,
         providerSessionId: "provider-prepare",
         openedFor: "prepare",
       },
-      fixSession: { ...legacy.fixSession!, openedFor: "consolidate" },
+      addressFindingsSession: { ...legacy.addressFindingsSession!, openedFor: "consolidate" },
     };
     appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
@@ -3861,7 +3876,7 @@ describe("MultiReviewTab pipeline step cards", () => {
 
   test("stays disabled until the review model has opened a provider session", () => {
     const workflow = preparingWorkflow();
-    delete workflow.fixSession;
+    delete workflow.addressFindingsSession;
     appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
@@ -3945,7 +3960,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       reviewPackageGenerationStep({
         ...preparing,
         phase: "failed",
-        fixSession: { ...preparing.fixSession!, status: "failed" },
+        addressFindingsSession: { ...preparing.addressFindingsSession!, status: "failed" },
       }),
     ).toEqual({ label: "Failed", state: "failed" });
     expect(reviewPackageGenerationStep({ ...preparing, phase: "cancelling" })).toEqual({
@@ -4064,7 +4079,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       label: "Not started",
       state: "not-started",
     });
-    expect(addressFindingsStep({ ...ready, phase: "fixing" })).toEqual({
+    expect(addressFindingsStep({ ...ready, phase: "addressing-findings" })).toEqual({
       label: "Addressing findings",
       state: "running",
     });
@@ -4072,7 +4087,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       addressFindingsStep({
         ...ready,
         phase: "interactive",
-        fixSession: { ...ready.fixSession!, status: "running" },
+        addressFindingsSession: { ...ready.addressFindingsSession!, status: "running" },
       }),
     ).toEqual({
       label: "Interactive session",
@@ -4082,16 +4097,16 @@ describe("MultiReviewTab pipeline step cards", () => {
       addressFindingsStep({
         ...ready,
         phase: "interactive",
-        fixSession: { ...ready.fixSession!, status: "idle" },
+        addressFindingsSession: { ...ready.addressFindingsSession!, status: "idle" },
       }),
     ).toEqual({ label: "Interactive session", state: "running" });
     expect(
       addressFindingsStep({
         ...ready,
         phase: "interactive",
-        fixSession: { ...ready.fixSession!, status: "idle" },
+        addressFindingsSession: { ...ready.addressFindingsSession!, status: "idle" },
         stepRuntimes: {
-          fix: {
+          "address-findings": {
             startedAt: "2026-08-14T00:10:00.000Z",
             completedAt: "2026-08-14T00:14:00.000Z",
           },
@@ -4102,7 +4117,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       addressFindingsStep({
         ...ready,
         phase: "interactive",
-        fixSession: { ...ready.fixSession!, status: "failed" },
+        addressFindingsSession: { ...ready.addressFindingsSession!, status: "failed" },
       }),
     ).toEqual({ label: "Failed", state: "failed" });
     expect(
@@ -4110,7 +4125,7 @@ describe("MultiReviewTab pipeline step cards", () => {
         ...ready,
         phase: "interactive",
         addressPromptPending: true,
-        fixSession: { ...ready.fixSession!, status: "idle" },
+        addressFindingsSession: { ...ready.addressFindingsSession!, status: "idle" },
       }),
     ).toEqual({ label: "Starting session", state: "running" });
     expect(addressFindingsStep({ ...ready, phase: "completed" })).toEqual({
@@ -4121,7 +4136,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       addressFindingsStep({
         ...ready,
         phase: "failed",
-        fixResult: {
+        addressFindingsResult: {
           complete: false,
           summary: "Two findings remain",
           filesChanged: [],
@@ -4152,7 +4167,9 @@ describe("MultiReviewTab pipeline step cards", () => {
       "consolidation",
     );
     expect(addressFindingsSessionRuntimeStep(ready)).toBe("consolidation");
-    expect(addressFindingsSessionRuntimeStep({ ...ready, phase: "fixing" })).toBe("fix");
+    expect(addressFindingsSessionRuntimeStep({ ...ready, phase: "addressing-findings" })).toBe(
+      "fix",
+    );
     expect(addressFindingsSessionRuntimeStep({ ...ready, phase: "completed" })).toBe("fix");
     // Until the address turn is dispatched the session still carries
     // consolidation's timings, so no step may show them as its own.
@@ -4186,7 +4203,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       ...ready,
       phase: "consolidating",
       consolidatedReport: undefined,
-      fixSession: { ...ready.fixSession!, status: "running" },
+      addressFindingsSession: { ...ready.addressFindingsSession!, status: "running" },
       activeRequest: {
         kind: "consolidate",
         requestId: "consolidate-1",
@@ -4233,7 +4250,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       ...preparing,
       phase: "failed",
       error: "The preparation session produced no activity for 20 minutes",
-      fixSession: { ...preparing.fixSession!, status: "failed" },
+      addressFindingsSession: { ...preparing.addressFindingsSession!, status: "failed" },
     };
     appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
@@ -4270,7 +4287,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       ...ready,
       phase: "failed",
       consolidatedReport: undefined,
-      fixSession: { ...ready.fixSession!, status: "failed" },
+      addressFindingsSession: { ...ready.addressFindingsSession!, status: "failed" },
       activeRequest: {
         kind: "consolidate",
         requestId: "consolidate-1",
@@ -4307,10 +4324,14 @@ describe("MultiReviewTab pipeline step cards", () => {
     const ready = readyWorkflow();
     const workflow: MultiReviewWorkflow = {
       ...ready,
-      phase: "fixing",
-      fixSession: { ...ready.fixSession!, status: "running", completedAt: undefined },
+      phase: "addressing-findings",
+      addressFindingsSession: {
+        ...ready.addressFindingsSession!,
+        status: "running",
+        completedAt: undefined,
+      },
       activeRequest: {
-        kind: "fix",
+        kind: "address-findings",
         requestId: "fix-1",
         state: "sent",
         createdAt: "2026-08-14T00:00:00.000Z",
@@ -4346,14 +4367,14 @@ describe("MultiReviewTab pipeline step cards", () => {
     const workflow: MultiReviewWorkflow = {
       ...ready,
       phase: "interactive",
-      fixSession: {
-        ...ready.fixSession!,
+      addressFindingsSession: {
+        ...ready.addressFindingsSession!,
         status: "idle",
         tokenCount: 23_456,
         completedAt: "2026-08-14T00:14:00.000Z",
       },
       stepRuntimes: {
-        fix: {
+        "address-findings": {
           startedAt: "2026-08-14T00:10:00.000Z",
           completedAt: "2026-08-14T00:14:00.000Z",
           tokenBaseline: 0,
@@ -4387,13 +4408,13 @@ describe("MultiReviewTab pipeline step cards", () => {
     const workflow: MultiReviewWorkflow = {
       ...ready,
       phase: "interactive",
-      fixSession: {
-        ...ready.fixSession!,
+      addressFindingsSession: {
+        ...ready.addressFindingsSession!,
         status: "idle",
         completedAt: undefined,
       },
       stepRuntimes: {
-        fix: { startedAt: "2026-08-14T00:10:00.000Z" },
+        "address-findings": { startedAt: "2026-08-14T00:10:00.000Z" },
       },
     };
     appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
@@ -4420,8 +4441,8 @@ describe("MultiReviewTab pipeline step cards", () => {
     const workflow: MultiReviewWorkflow = {
       ...ready,
       phase: "interactive",
-      fixSession: {
-        ...ready.fixSession!,
+      addressFindingsSession: {
+        ...ready.addressFindingsSession!,
         status,
         ...(error ? { error } : {}),
       },
@@ -4453,9 +4474,9 @@ describe("MultiReviewTab pipeline step cards", () => {
     const ready = readyWorkflow();
     const workflow: MultiReviewWorkflow = {
       ...ready,
-      phase: "fixing",
-      fixSession: {
-        ...ready.fixSession!,
+      phase: "addressing-findings",
+      addressFindingsSession: {
+        ...ready.addressFindingsSession!,
         status: "running",
         completedAt: undefined,
         stalledSince: "2026-08-14T00:10:00.000Z",
@@ -4549,7 +4570,7 @@ describe("MultiReviewTab pipeline step cards", () => {
           completedAt: "2026-08-14T00:07:45.000Z",
           tokenCount: 25_000,
         },
-        fix: { startedAt: "2026-08-14T00:10:00.000Z", tokenBaseline: 65_000 },
+        "address-findings": { startedAt: "2026-08-14T00:10:00.000Z", tokenBaseline: 65_000 },
       },
     };
     const now = Date.parse("2026-08-14T00:11:10.000Z");
@@ -4587,7 +4608,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     const now = Date.parse("2026-08-14T00:02:05.000Z");
 
     expect(multiReviewStepRuntimeSummary(ready, "consolidation", false, now)).toBe(
-      addressFindingsSessionRuntimeSummary(ready.fixSession!, now),
+      addressFindingsSessionRuntimeSummary(ready.addressFindingsSession!, now),
     );
     expect(multiReviewStepRuntimeSummary(ready, "package", false, now)).toBeNull();
     // Once a workflow records steps, one that has not run yet stays blank
@@ -4637,7 +4658,7 @@ describe("MultiReviewTab pipeline step cards", () => {
 
   test("formats Address Findings session runtime for live and settled sessions", () => {
     const ready = readyWorkflow();
-    const session = ready.fixSession!;
+    const session = ready.addressFindingsSession!;
     const now = Date.parse("2026-08-14T00:02:05.000Z");
     expect(addressFindingsSessionRuntimeSummary({ ...session, status: "running" }, now)).toBe(
       "2m 5s",
@@ -4710,7 +4731,10 @@ describe("PR background state and review clock", () => {
     phase: "completed",
     autoPr: true,
     stepRuntimes: {
-      fix: { startedAt: "2026-08-14T00:00:00.000Z", completedAt: "2026-08-14T00:01:00.000Z" },
+      "address-findings": {
+        startedAt: "2026-08-14T00:00:00.000Z",
+        completedAt: "2026-08-14T00:01:00.000Z",
+      },
     },
     autoPrLaunch: { state: "launched", requestId: "pr", tabId: "agent-job-pr" },
   });
@@ -4795,7 +4819,7 @@ describe("PR background state and review clock", () => {
     const workflow = {
       ...readyWorkflow(),
       autoPr: false,
-      fixSession: undefined,
+      addressFindingsSession: undefined,
       consolidatedReport: { ...report, issues: [], testCoverageGaps: [] },
     };
     appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);

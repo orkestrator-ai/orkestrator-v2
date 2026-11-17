@@ -1463,7 +1463,7 @@ describe("backend native agent and review workflow wrappers", () => {
         { agent: "claude" as const, model: "opus" },
         { agent: "codex" as const, model: "gpt-5.6", reasoningEffort: "high" },
       ],
-      fixModel: { agent: "codex" as const, model: "gpt-5.6" },
+      addressFindingsModel: { agent: "codex" as const, model: "gpt-5.6" },
     };
     const workflow = { id: "multi-1" } as unknown as Awaited<
       ReturnType<typeof backendWrappers.startMultiReview>
@@ -1477,7 +1477,7 @@ describe("backend native agent and review workflow wrappers", () => {
 
     const customAddressFindings = {
       workflowId: "multi-1",
-      fixModel: { agent: "codex" as const, model: "gpt-5.4", reasoningEffort: "high" },
+      addressFindingsModel: { agent: "codex" as const, model: "gpt-5.4", reasoningEffort: "high" },
       instruction: "Fix the inactive-tab regression",
     };
     await expect(

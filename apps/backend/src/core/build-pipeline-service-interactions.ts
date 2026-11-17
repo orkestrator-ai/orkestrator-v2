@@ -304,7 +304,7 @@ export class BuildPipelineInteractions {
           )
         : sessionForCurrentPhase(pipeline);
     // Before preparation owns a session, an adopted Build retries from its
-    // setup handoff. Retrying the destination "fixing" phase would launch
+    // setup handoff. Retrying the destination "reworking" phase would launch
     // Rework instead of package preparation.
     const adoptedBootstrap =
       (pipeline.phase === "starting-environment" || pipeline.phase === "waiting-for-setup") &&

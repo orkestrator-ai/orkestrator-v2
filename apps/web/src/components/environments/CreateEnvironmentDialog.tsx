@@ -594,7 +594,7 @@ export function CreateEnvironmentDialog({
       review2: configured.reviewers[1] ?? review,
       reviewers: configured.reviewers,
       reviewPreparation: configured.reviewPreparation,
-      address: configured.steps.address ?? review,
+      address: configured.steps["address-findings"] ?? review,
       verify: configured.steps.verify ?? review,
       pr: configured.steps.pr ?? review,
       resolve: configured.steps["resolve-conflicts"] ?? review,

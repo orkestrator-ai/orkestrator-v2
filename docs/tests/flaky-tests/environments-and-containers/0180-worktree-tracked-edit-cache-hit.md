@@ -6,9 +6,9 @@
 - **Snapshot:** based on `19cf6535`, with the workflow-result submission and review-nudge fixes staged. No watcher, diff-statistics or Git-snapshot implementation or tests changed.
 - **Original command:** `mise run test:logged -- --name full-suite-gnu -- mise run test`, with the GNU-tool PATH prescribed in `docs/development/testing-guide.md`.
 - **Worker configuration:** workspace group 2 workers (Turbo at most two package tasks, one isolated Bun worker per package); root group 3, bridges 2 and protocol 1. The workspace group waited 35.7 seconds for the preceding full run's workspace group to finish.
-- **Failure:** `real Git through the shared owner > a tracked edit that never touches the index is detected` at `apps/backend/src/core/worktree-snapshots-git.test.ts:136` expected the file-list cache-hit count to be 1 but received 0 (130.66 ms). The preceding assertion returned the expected modified `a.txt` row.
+- **Failure:** `real Git through the shared owner > a tracked edit that never touches the index is detected` at `apps/backend/src/core/worktrees/snapshots-git.test.ts:136` expected the file-list cache-hit count to be 1 but received 0 (130.66 ms). The preceding assertion returned the expected modified `a.txt` row.
 - **Suite result:** backend 5,625 passed, 15 skipped, 1 failed across 316 files (228.70 seconds); the full run exited 1 after 290.4 seconds. Root, bridges and protocol passed. The preceding full run's workspace group passed; that run failed five unrelated shell fixtures because BSD utilities were selected. Those shell fixtures passed with the documented GNU-tool PATH.
-- **Isolated rerun:** `mise run test:logged -- --name worktree-snapshot-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, passed all four tests in 0.5 seconds.
+- **Isolated rerun:** `mise run test:logged -- --name worktree-snapshot-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, passed all four tests in 0.5 seconds.
 - **Evidence:** aggregate artifact `orkestrator-test-run.wloB6p/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; wrapper artifact `orkestrator-test-run.v3aPaS`. The aggregate contains only this backend assertion failure.
 - **Hypothesis:** another watcher hint may invalidate the file-list cache after the test observes the changed revision but before `readRows()` runs. The correct file row followed by a missing cache hit is consistent with a fresh read-triggered scan. This is unconfirmed; no test was skipped or loosened.
 
@@ -22,7 +22,7 @@ Backend package: 5,840 passed, 15 skipped and 4 failed across 328 files; this fa
 The owning file passed alone, exit 0, in 0.5 seconds:
 
 ```bash
-mise run test:logged -- --name isolate-worktree-snapshots -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name isolate-worktree-snapshots -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures
 ```
 
 Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.tUZZDC/summary.json`
@@ -45,7 +45,7 @@ workspace worker slots. Evidence is in
 The unchanged owning file passed alone (exit 0, 0.7 seconds):
 
 ```bash
-mise run test:logged -- --name worktree-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name worktree-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures
 ```
 
 No watcher implementation, assertion, timeout or skip was changed.
@@ -57,7 +57,7 @@ graph follow-ups; no worktree-snapshot code changed) failed the same test in
 the workspace group, alongside cases 0248 and the deterministic
 `agent provider module boundaries` failure. Evidence is in
 `/tmp/orkestrator-test-run.zlamOL/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
-The unchanged owning file passed alone (`bun test src/core/worktree-snapshots-git.test.ts`
+The unchanged owning file passed alone (`bun test src/core/worktrees/snapshots-git.test.ts`
 from `apps/backend`: 4 pass, 0 fail). No assertion, timeout or skip was changed.
 
 ## MCP apply-path merge validation recurrence on 2026-10-16
@@ -74,7 +74,7 @@ After the aggregate finished, the unchanged owning file passed alone (exit 0,
 1.5 seconds):
 
 ```bash
-mise run test:logged -- --name merge-worktree-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name merge-worktree-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures
 ```
 
 No watcher implementation, assertion, timeout or skip was changed. The existing
@@ -89,7 +89,7 @@ deterministic failures that change caused and fixed: the command-label budget
 and the CLI pack list. It failed once more when run in one `bun test` process
 with `tests/gateway-support-extra.test.ts` (139 ms), then passed alone three
 times in a row (4 pass, 0 fail each) with
-`bun test --preload ../../tests/setup-node.ts src/core/worktree-snapshots-git.test.ts`
+`bun test --preload ../../tests/setup-node.ts src/core/worktrees/snapshots-git.test.ts`
 from `apps/backend`. The change touches no worktree-snapshot, watcher or diff
 code. Status remains open.
 
@@ -100,7 +100,7 @@ observed zero in `a tracked edit that never touches the index is detected`.
 The unchanged owning file passed alone in 0.4 s with:
 
 ```sh
-mise run test:logged -- --name git-snapshots-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name git-snapshots-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures
 ```
 
 Aggregate evidence:
@@ -122,7 +122,7 @@ workspace packages, root, bridges and protocol passed.
 The unchanged owning file passed alone (exit 0, four tests, 0.9 seconds):
 
 ```bash
-mise run test:logged -- --name merge-worktree-recheck -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name merge-worktree-recheck -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures
 ```
 
 Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.CRhLaf/summary.json`
@@ -140,7 +140,7 @@ cache-invalidation hypothesis remains unconfirmed.
 - **Failure:** the same cache-hit assertion at line 139 (130.18 ms).
 - **Suite counts:** backend 8,715 passed, 41 skipped, 1 failed; every other
   workspace package, root/support, bridges and the protocol lockfile passed.
-- **Isolated reruns:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1`
+- **Isolated reruns:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1`
   failed this case in 2 of 6 runs alone (3 pass, 1 fail each time) and passed
   in the other 4, at a host load average of about 22 with other worktrees
   running live tests. Earlier recurrences always passed alone; this is the
@@ -152,7 +152,7 @@ cache-invalidation hypothesis remains unconfirmed.
 
 - Command: `mise run test:logged -- --name final-full-review-recovery -- mise run test` on `4443c027` plus the recovery fixes, macOS arm64 on the shared host. Workspace/root/bridge/protocol reserved 4/1/2/1 slots; backend used two isolated workers. Workspace admission waited 49.6 seconds.
 - The tracked-edit case failed at 153.74 ms: cache hits expected 1, received 0 (line 139). Backend: 8,636 passed, 41 skipped, one failed across 463 files (327.78 seconds). The outer run exited 1 after 409.7 seconds. Every other workspace package and the root/bridge/protocol groups passed; all recovery tests passed.
-- Unchanged owning-file rerun: `mise run test:logged -- --name snapshots-owner-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed all four tests, exit 0, 0.5 seconds.
+- Unchanged owning-file rerun: `mise run test:logged -- --name snapshots-owner-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures` passed all four tests, exit 0, 0.5 seconds.
 - Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IJ4t3D/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NEipUr/final-full-review-recovery.log.gz`.
 - No watcher implementation, assertion, timeout or skip changed. Cache invalidation racing the read remains a hypothesis, not an established cause.
 
@@ -161,14 +161,14 @@ cache-invalidation hypothesis remains unconfirmed.
 - **Original command:** `mise run test:logged -- --name pr-stage-full -- mise run test`, on `verify-grok-trust-claude-parked-retry` merged with `origin/main` at `607d12e2`, host load average about 27.
 - **Failure:** the cache-hit assertion expected 1 and received 0 (`worktree-snapshots-git.test.ts:139`). The workspace group had three failures in total (8821 backend tests passed); root, bridges and the protocol lockfile groups passed.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.rEfkv1/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
-- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts src/core/worktree-snapshots-git.test.ts` from `apps/backend` passed unchanged: 4 pass, 0 fail in under a second.
+- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts src/core/worktrees/snapshots-git.test.ts` from `apps/backend` passed unchanged: 4 pass, 0 fail in under a second.
 - **Assessment:** an unchanged owning-file pass confirms a recurrence. The branch does not touch this code. No source, assertion, timeout or skip changed.
 
 ## Pi and Cursor agent-test logins PR stage — 2026-10-17
 
 - Original command: `bun run test:workspace` in `apps/backend` (two workers) after merging `origin/main` into `fix-pi-login-in-agent-test-profiles-379ebff75838`, macOS arm64 on the heavily loaded shared host.
 - The tracked-edit case failed at 304.02 ms: cache hits expected 1, received 0 (line 139). Backend: 8,830 passed, 41 skipped, two failed across 475 files (457.71 seconds); the other failure was 0165.
-- Unchanged owning-file rerun: `bun test --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts` in `apps/backend` passed all four tests (0.83 seconds).
+- Unchanged owning-file rerun: `bun test --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts` in `apps/backend` passed all four tests (0.83 seconds).
 - The branch does not touch worktree snapshots. No watcher implementation, assertion, timeout or skip changed.
 
 ## Preview tunnel close-drain validation recurrence (2026-10-17)
@@ -181,7 +181,7 @@ cache-invalidation hypothesis remains unconfirmed.
   2 failed across 471 files (401.33 seconds). The other failure was a new
   relay-test scheduling assumption, corrected in the same change. Other
   workspace packages, root/support, bridges and protocol passed.
-- **Isolated rerun:** `mise run test:logged -- --name git-cache-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`
+- **Isolated rerun:** `mise run test:logged -- --name git-cache-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures`
   passed all four unchanged tests, exit 0 (0.8 seconds logged).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ZmlX01/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - The existing cache-invalidation hypothesis remains unconfirmed. No watcher
@@ -191,7 +191,7 @@ cache-invalidation hypothesis remains unconfirmed.
 
 - **Original command:** `mise run test:logged -- --name full-tests -- mise run test`, macOS arm64, Bun 1.4.3, with 4/1/2/1 workspace/root/bridge/protocol slots on the shared host.
 - **Failure:** `real Git through the shared owner > a tracked edit that never touches the index is detected` failed at line 139 in 270.83 ms: cache hits expected 1, received 0. Backend reported 8804 passed, 41 skipped and two failed across 472 files (485.60 seconds). The other failure was the provider module line limit introduced by the slash catalogue fix and corrected by extracting dispatch gate and prompt-tool responsibilities.
-- **Owning-file rerun:** `mise run test:logged -- --name worktree-owner-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` also failed the unchanged case in 178.63 ms (three passed, one failed; 1.1 seconds overall). This observation does not independently establish a flake.
+- **Owning-file rerun:** `mise run test:logged -- --name worktree-owner-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures` also failed the unchanged case in 178.63 ms (three passed, one failed; 1.1 seconds overall). This observation does not independently establish a flake.
 - **Evidence:** aggregate `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.fs9eAA/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; isolated `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.HPudXt/worktree-owner-isolated.log.gz`.
 - No watcher implementation, assertion, timeout or skip changed. The existing cache-invalidation hypothesis remains unconfirmed.
 
@@ -206,7 +206,7 @@ the owning test unchanged.
 harness, e2e and docs change) on a heavily loaded macOS host. Evidence is in
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Zq7Cut/`. The cache-hit assertion (expected 1, received 0) failed in the
 backend package, and again in one of three runs of the owning file alone
-(`bun test src/core/worktree-snapshots-git.test.ts` from `apps/backend`:
+(`bun test src/core/worktrees/snapshots-git.test.ts` from `apps/backend`:
 4 passed, 3/1, 4 passed).
 
 ## Backend preload contract validation recurrence — 2026-10-18
@@ -220,7 +220,7 @@ backend package, and again in one of three runs of the owning file alone
   9,017 passed, 41 skipped, one failed across 480 files (577.47 seconds). The
   aggregate exited 1 after 593.6 seconds; every other workspace package and
   the root, bridge and protocol groups passed.
-- **Isolated rerun:** `mise run test:logged -- --name worktree-snapshot-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`
+- **Isolated rerun:** `mise run test:logged -- --name worktree-snapshot-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures`
   passed the unchanged owning file (four tests, exit 0, 0.8 seconds logged).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XESA6C/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
   outer artifacts are in `orkestrator-test-run.di5BQw`.
@@ -231,7 +231,7 @@ backend package, and again in one of three runs of the owning file alone
 
 - **Command:** `mise run test:logged -- --name usage-all-tests -- mise run test`, with aggregate workspace/root/bridges/protocol reservations of 4/1/2/1 workers; backend used two isolated workers.
 - **Failure:** the tracked-edit cache-hit assertion expected 1 and received 0 at line 139 (140.96 ms). Backend reported 9038 passed, 41 skipped and four failures across 481 files; the remaining failures concern shell fixtures outside the usage-cache change.
-- **Isolated rerun:** `mise run test:logged -- --name baseline-worktree-git -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.6 s.
+- **Isolated rerun:** `mise run test:logged -- --name baseline-worktree-git -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.6 s.
 - **Evidence:** `orkestrator-test-run.BopZMS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Disposition:** Confirmed recurrence; no watcher implementation, assertion, timeout or skip changed.
 
@@ -239,7 +239,7 @@ backend package, and again in one of three runs of the owning file alone
 
 - **Command:** `mise run test:logged -- --name merge-final-tests -- mise run test`, with the testing guide's macOS GNU-tool PATH and aggregate workspace/root/bridges/protocol reservations of 4/1/2/1 workers; backend used two isolated workers.
 - **Failure:** The same assertion at line 139 expected 1 and received 0 (175.25 ms). Backend reported 9059 passed, 41 skipped and one failure across 481 files; all other workspace packages, root tests, bridges and protocol regeneration passed. The full command exited 1 after 566.1 seconds including capacity waits.
-- **Isolated rerun:** `mise run test:logged -- --name merge-worktree-cache-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, also failed unchanged: three passed, one failed in 1.1 seconds (116.10 ms for the failing test).
+- **Isolated rerun:** `mise run test:logged -- --name merge-worktree-cache-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, also failed unchanged: three passed, one failed in 1.1 seconds (116.10 ms for the failing test).
 - **Evidence:** `orkestrator-test-run.xfw48l/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.PMDdwy/merge-worktree-cache-rerun.log.gz` under the host temporary directory.
 - **Disposition:** This observation does not independently establish a flake because the owning file failed alone. The test and its worktree implementation were not changed by the merge; no assertion, timeout or skip changed. Full-suite validation remains non-green.
 
@@ -264,7 +264,7 @@ The unchanged owning file passed alone (4 pass, 1.4 s).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.MUMuwG/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Failure:** the tracked-edit cache-hit assertion at line 139 expected 1
   and received 0 (105.32 ms). The preceding modified-file assertion passed.
-- **Owning-file rerun:** `mise run test:logged -- --name worktree-cache-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`
+- **Owning-file rerun:** `mise run test:logged -- --name worktree-cache-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures`
   passed unchanged, exit 0, in 0.4 s.
 - **Assessment:** confirmed intermittent recurrence; the existing
   invalidation hypothesis remains unconfirmed. No watcher implementation,
@@ -274,7 +274,7 @@ The unchanged owning file passed alone (4 pass, 1.4 s).
 
 - **Original command:** `mise run test:logged -- --name full-test -- mise run test` on `qualify-transcript-paging-live-mr-c2fa28c0ecdd` (web transcript views and an opt-in e2e spec only), shared macOS arm64 host.
 - **Failure:** the unchanged case failed at line 139 in 185.23 ms: cache hits expected 1, received 0. Backend reported 9,016 passed, 41 skipped and two failed across 480 files (414.4 seconds); the other was the new coordinator timeout [0480](../coordinator-and-multi-review/0480-coordinator-fetch-remotes-submodule-timeout.md).
-- **Isolated rerun:** `mise run test:logged -- --name git-cache-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed, exit 0 (0.8 seconds logged).
+- **Isolated rerun:** `mise run test:logged -- --name git-cache-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures` passed, exit 0 (0.8 seconds logged).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.9ChzHs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - No watcher implementation, assertion, timeout or skip changed.
 
@@ -285,7 +285,7 @@ The unchanged owning file passed alone (4 pass, 1.4 s).
   `origin/main` at `68dc1c8d`, on a macOS arm64 host shared with other
   live-test worktrees.
 - **Failure:** the same test failed in the backend workspace group (135.8 ms).
-- **Isolated rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1`
+- **Isolated rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1`
   passed 4/4. The owning file was unchanged on the branch.
 
 
@@ -293,7 +293,7 @@ The unchanged owning file passed alone (4 pass, 1.4 s).
 
 - **Original command:** the testing guide's GNU-tool PATH with `/opt/homebrew/bin:/usr/bin` ahead of ambient shims, `mise run test:logged -- --name merge-final-tests -- mise run test`, merging `cd443028` into `d897a4eb`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers.
 - **Failure:** the tracked-edit cache-hit assertion at line 139 expected 1 and received 0 (991.71 ms). Backend reported 9166 passed, 41 skipped and two failed across 9209 tests in 491 files (471.65 seconds). The other failure was the resource-event timeout in [0503](../backend-services-and-tooling/0503-backend-resource-event-aggregate-timeout.md). Every other workspace package, root/support, bridge and protocol check passed. Aggregate exit 1 in 608.1 seconds logged, including 84.5 seconds waiting for the workspace reservation.
-- **Owning-file rerun:** the same PATH with `mise run test:logged -- --name merge-final-owner-worktree-snapshots -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.5 seconds logged).
+- **Owning-file rerun:** the same PATH with `mise run test:logged -- --name merge-final-owner-worktree-snapshots -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.5 seconds logged).
 - **Evidence:** `orkestrator-test-run.cM59au/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.NdOLPH/merge-final-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence. The invalidation-timing hypothesis remains unconfirmed; no implementation, assertion, timeout or skip changed.
 
@@ -301,7 +301,7 @@ The unchanged owning file passed alone (4 pass, 1.4 s).
 
 - **Original command:** `mise run test:logged -- --name ct-full2 -- mise run test` on branch `implement-file-change-f3950a40ac3a-r1` (uncommitted change-tracking implementation on `97af3d45`), on a macOS arm64 host.
 - **Failure:** the tracked-edit cache-hit assertion at line 139 expected 1 and received 0 (134.31 ms). Backend ran 9748 tests across 548 files; this was the only failure. Root/support, bridges and the codex protocol lockfile passed.
-- **Owning-file rerun:** `bun test --cwd apps/backend ./src/core/worktree-snapshots-git.test.ts` passed 4/4 in five consecutive runs.
+- **Owning-file rerun:** `bun test --cwd apps/backend ./src/core/worktrees/snapshots-git.test.ts` passed 4/4 in five consecutive runs.
 - **Caveat:** the owning file is unchanged, but the branch changes the shared scan path it exercises (`SharedScanQueue` now lets a caller join a running pass that started after its request, and `DiffScanEvent` hooks were added), so this occurrence does not independently establish the flake. An earlier full run on the same branch, before the scan-sharing change, passed this test.
 - **Evidence:** `orkestrator-test-run.MRqN8v` and `orkestrator-test-run.SZoJWF` below the host temporary directory.
 
@@ -335,7 +335,7 @@ The tracked-edit cache-hit assertion at line 139 again expected 1 and received
 assertion; this observation does not establish that the previously fixed
 index-write cause returned.
 
-`mise run test:logged -- --name backend-worktree-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`
+`mise run test:logged -- --name backend-worktree-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktrees/snapshots-git.test.ts --parallel=1 --only-failures`
 passed the tracked-edit case but timed out the separate linked-worktree staging
 case at 5000.27 ms (3 passed, 1 failed; 10.1 s logged;
 `orkestrator-test-run.IfGXl4`). After the aggregate ended, the complete unchanged

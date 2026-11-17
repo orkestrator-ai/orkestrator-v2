@@ -406,7 +406,7 @@ export function toMultiReviewStepMessages(snapshot: MultiReviewStepTranscript): 
 const STEP_LABEL: Record<MultiReviewStepKind, string> = {
   prepare: "review package generation",
   consolidate: "consolidation",
-  fix: "Address Findings",
+  "address-findings": "Address Findings",
 };
 
 /** The transcript tail of a preparation, consolidation or Address Findings session. */

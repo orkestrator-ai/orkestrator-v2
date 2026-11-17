@@ -30,11 +30,11 @@ function session(phase: PipelineSessionPhase, key: string, iteration = 0): Pipel
 /** A typed Address session; with a summary, its accepted result. */
 function typed(key: string, summary?: string): PipelineSession {
   return {
-    ...session("address", key),
-    addressReportKind: "fix-result",
+    ...session("address-findings", key),
+    addressFindingsReportKind: "address-findings-result",
     ...(summary
       ? {
-          fixResult: {
+          addressFindingsResult: {
             complete: true,
             summary,
             filesChanged: ["src/app.ts"],
@@ -149,7 +149,7 @@ describe("verification address-report boundaries", () => {
         session("review", "review-0"),
         typed("old", "ITERATION ZERO REPORT"),
         session("verify", "verify-0"),
-        session("fix", "fix-1", 1),
+        session("rework", "fix-1", 1),
       ];
       const { prompt } = await supervisor.promptFor(value, "verify", "claude");
       expect(prompt).toContain("**Address Findings report**: none.");
@@ -190,8 +190,8 @@ describe("verification address-report boundaries", () => {
   test("a typed address session with no accepted result has no report", async () => {
     await withSupervisor(async (supervisor, ctx, value) => {
       const skipped = {
-        ...session("address", "skipped"),
-        addressReportKind: "fix-result" as const,
+        ...session("address-findings", "skipped"),
+        addressFindingsReportKind: "address-findings-result" as const,
         skipped: true,
       };
       value.sessions = [session("review", "review"), skipped];
@@ -214,7 +214,7 @@ describe("verification address-report boundaries", () => {
 
   test("an address session from before the typed handoff has no report", async () => {
     await withSupervisor(async (supervisor, ctx, value) => {
-      const legacy = session("address", "legacy");
+      const legacy = session("address-findings", "legacy");
       value.sessions = [session("review", "review"), legacy];
       ctx.transcriptCheckpoints.observe(legacy, [assistant("LEGACY REPORT")]);
       const { prompt } = await supervisor.promptFor(value, "verify", "claude");

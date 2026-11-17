@@ -122,7 +122,7 @@ export function multiReviewTotalTokens(workflow: MultiReviewWorkflow): number | 
     for (const session of [
       workflow.preparationSession,
       workflow.reviewSession,
-      workflow.fixSession,
+      workflow.addressFindingsSession,
     ]) {
       if (session) sessions.set(session.sessionKey, session.tokenCount);
     }

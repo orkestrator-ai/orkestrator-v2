@@ -389,14 +389,22 @@ describe("coordinator status wakes", () => {
     await saveReview(world, worker, "review-1", {
       phase: "interactive",
       consolidatedReport: READY_REPORT,
-      fixSession: { sessionKey: "fix", status: "idle", startedAt: "2026-10-16T10:10:00Z" },
+      addressFindingsSession: {
+        sessionKey: "fix",
+        status: "idle",
+        startedAt: "2026-10-16T10:10:00Z",
+      },
     });
     await settle(context);
     await world.finishTurn(coordinator);
 
     await saveReview(world, worker, "review-1", {
       phase: "completed",
-      fixResult: { complete: true, summary: "All findings fixed", filesChanged: ["a.ts", "b.ts"] },
+      addressFindingsResult: {
+        complete: true,
+        summary: "All findings fixed",
+        filesChanged: ["a.ts", "b.ts"],
+      },
     });
     await settle(context);
 
@@ -419,7 +427,7 @@ describe("coordinator status wakes", () => {
     const { world } = context;
     const coordinator = await world.main();
     const worker = await world.addEnvironment("review-env");
-    const auto = { autoFix: true, autoPr: true, consolidatedReport: READY_REPORT };
+    const auto = { autoAddressFindings: true, autoPr: true, consolidatedReport: READY_REPORT };
     const fix = { sessionKey: "fix", startedAt: "2026-10-16T10:10:00Z" };
     await saveReview(world, worker, "review-1", { ...auto, phase: "reviewing" });
     await associate(world, "multi-review", "review-1");
@@ -434,14 +442,14 @@ describe("coordinator status wakes", () => {
     await saveReview(world, worker, "review-1", {
       ...auto,
       phase: "interactive",
-      fixSession: { ...fix, status: "running" },
+      addressFindingsSession: { ...fix, status: "running" },
     });
     await settle(context);
     // Address Findings finished and queued its PR in the same save: hold for the PR.
     await saveReview(world, worker, "review-1", {
       ...auto,
       phase: "interactive",
-      fixSession: { ...fix, status: "idle" },
+      addressFindingsSession: { ...fix, status: "idle" },
       autoPrLaunch: { state: "pending", requestId: "multi-review-pr:review-1" },
     });
     await settle(context);
@@ -450,12 +458,12 @@ describe("coordinator status wakes", () => {
     await saveReview(world, worker, "review-1", {
       ...auto,
       phase: "interactive",
-      fixSession: { ...fix, status: "idle" },
+      addressFindingsSession: { ...fix, status: "idle" },
       autoPrLaunch: {
         state: "launched",
         requestId: "multi-review-pr:review-1",
         tabId: "pr-tab",
-        fixIdentity: multiReviewAddressFindingsIdentity(fix),
+        addressFindingsIdentity: multiReviewAddressFindingsIdentity(fix),
       },
     });
     await settle(context);
@@ -500,9 +508,14 @@ describe("coordinator status wakes", () => {
         state: "launched",
         requestId: "pr",
         tabId: "pr-tab",
-        fixIdentity: multiReviewAddressFindingsIdentity(fix),
+        addressFindingsIdentity: multiReviewAddressFindingsIdentity(fix),
       };
-      const snapshot = { autoPr: true, phase: "interactive", fixSession: fix, autoPrLaunch };
+      const snapshot = {
+        autoPr: true,
+        phase: "interactive",
+        addressFindingsSession: fix,
+        autoPrLaunch,
+      };
       await saveReview(world, worker, "review-1", snapshot);
       await associate(world, "multi-review", "review-1");
       await settle(context);
@@ -513,7 +526,10 @@ describe("coordinator status wakes", () => {
       });
       await saveReview(world, worker, "review-1", {
         ...snapshot,
-        fixSession: { ...fix, [field]: field === "sessionKey" ? "fix-b" : "2026-10-16T11:10:00Z" },
+        addressFindingsSession: {
+          ...fix,
+          [field]: field === "sessionKey" ? "fix-b" : "2026-10-16T11:10:00Z",
+        },
       });
       await settle(context);
       expect(world.carriers(coordinator).map((turn) => turn[0]!.notice?.state)).toEqual([
@@ -537,11 +553,11 @@ describe("coordinator status wakes", () => {
       const snapshot = {
         autoPr: true,
         phase: "interactive",
-        fixSession: fix,
+        addressFindingsSession: fix,
         autoPrLaunch: {
           state: "launched",
           requestId: "pr",
-          fixIdentity: multiReviewAddressFindingsIdentity(fix),
+          addressFindingsIdentity: multiReviewAddressFindingsIdentity(fix),
         },
       };
       const prUrl = "https://github.com/org/repo/pull/7";
@@ -576,7 +592,7 @@ describe("coordinator status wakes", () => {
       const snapshot = {
         autoPr: true,
         phase: "completed",
-        fixResult: { complete: true, summary: "Fixed" },
+        addressFindingsResult: { complete: true, summary: "Fixed" },
       };
       await saveReview(world, worker, "review-1", {
         ...snapshot,
@@ -605,7 +621,7 @@ describe("coordinator status wakes", () => {
     const { world } = context;
     const coordinator = await world.main();
     const worker = await world.addEnvironment("review-env");
-    const auto = { autoFix: true, autoPr: true, consolidatedReport: READY_REPORT };
+    const auto = { autoAddressFindings: true, autoPr: true, consolidatedReport: READY_REPORT };
     for (const id of ["fix-failed", "pr-failed", "pr-skipped"]) {
       await saveReview(world, worker, id, { ...auto, phase: "reviewing" });
       await associate(world, "multi-review", id);
@@ -615,7 +631,7 @@ describe("coordinator status wakes", () => {
     await saveReview(world, worker, "fix-failed", {
       ...auto,
       phase: "interactive",
-      fixSession: {
+      addressFindingsSession: {
         ...fix,
         status: "failed",
         error: "The interactive Address Findings session failed",
@@ -624,7 +640,7 @@ describe("coordinator status wakes", () => {
     await saveReview(world, worker, "pr-failed", {
       ...auto,
       phase: "interactive",
-      fixSession: { ...fix, status: "idle" },
+      addressFindingsSession: { ...fix, status: "idle" },
       autoPrLaunch: {
         state: "failed",
         requestId: "multi-review-pr:pr-failed",
@@ -635,7 +651,7 @@ describe("coordinator status wakes", () => {
     await saveReview(world, worker, "pr-skipped", {
       ...auto,
       phase: "interactive",
-      fixSession: { ...fix, status: "idle" },
+      addressFindingsSession: { ...fix, status: "idle" },
       autoPrLaunch: {
         state: "skipped",
         requestId: "multi-review-pr:pr-skipped",
@@ -679,7 +695,7 @@ describe("coordinator status wakes", () => {
 
     await savePipeline(world, worker, "pipeline-1", {
       phase: "paused",
-      pausedFromPhase: "fixing",
+      pausedFromPhase: "reworking",
       error: "The fix changed nothing",
       pauseCause: "supervisor",
     });
@@ -953,7 +969,7 @@ describe("coordinator status wakes", () => {
     await associate(world, "multi-review", "legacy");
     const snapshot = {
       phase: "ready",
-      fixSession: {
+      addressFindingsSession: {
         sessionKey: "legacy-consolidation",
         status: "idle",
         completedAt: "2026-10-16T10:00:00Z",
@@ -1498,7 +1514,7 @@ describe("status classification and bounds", () => {
       multiReviewStatus(
         {
           phase: "interactive",
-          fixSession: { sessionKey, status: "idle", startedAt: "2026-10-16T10:00:00Z" },
+          addressFindingsSession: { sessionKey, status: "idle", startedAt: "2026-10-16T10:00:00Z" },
         },
         "review-1",
       )!.key;
@@ -1512,7 +1528,11 @@ describe("status classification and bounds", () => {
     // A pending Address Findings handoff has not settled.
     expect(
       multiReviewStatus(
-        { phase: "interactive", addressPromptPending: true, fixSession: { status: "idle" } },
+        {
+          phase: "interactive",
+          addressPromptPending: true,
+          addressFindingsSession: { status: "idle" },
+        },
         "review-1",
       ),
     ).toBeNull();
@@ -1527,7 +1547,7 @@ describe("status classification and bounds", () => {
       multiReviewStatus(
         {
           phase,
-          autoFix: true,
+          autoAddressFindings: true,
           autoPr: true,
           consolidatedReport: { issues: [], testCoverageGaps: [] },
           autoPrLaunch: { basis: "clean-review", requestId: "pr", ...autoPrLaunch },
@@ -1585,7 +1605,7 @@ describe("status classification and bounds", () => {
         { phase: "ready", consolidatedReport: { issues: [], testCoverageGaps: [] }, ...snapshot },
         "review-1",
       )!.details;
-    expect(ready({ autoFix: true, autoPr: true })).toContain(
+    expect(ready({ autoAddressFindings: true, autoPr: true })).toContain(
       "Auto-address findings is on, but there was nothing to fix, so no Address Findings or PR session started.",
     );
     expect(ready({ autoPr: true }).join(" ")).toContain(
@@ -1594,7 +1614,7 @@ describe("status classification and bounds", () => {
     expect(ready({})).toHaveLength(1);
     expect(
       multiReviewStatus(
-        { phase: "ready", consolidatedReport: READY_REPORT, autoFix: true },
+        { phase: "ready", consolidatedReport: READY_REPORT, autoAddressFindings: true },
         "review-1",
       )!.details.join(" "),
     ).not.toContain("nothing to fix");
@@ -1605,8 +1625,8 @@ describe("status classification and bounds", () => {
     const completed = {
       phase: "completed",
       autoPr: true,
-      fixResult: { complete: true },
-      fixSession: completedAddressFindings,
+      addressFindingsResult: { complete: true },
+      addressFindingsSession: completedAddressFindings,
     };
     expect(
       multiReviewStatus(
@@ -1622,7 +1642,7 @@ describe("status classification and bounds", () => {
             state: "launched",
             requestId: "r",
             tabId: "pr",
-            fixIdentity: multiReviewAddressFindingsIdentity(completedAddressFindings),
+            addressFindingsIdentity: multiReviewAddressFindingsIdentity(completedAddressFindings),
           },
         },
         "review-1",
@@ -1633,7 +1653,7 @@ describe("status classification and bounds", () => {
       multiReviewStatus(
         {
           phase: "interactive",
-          fixSession: { sessionKey: "fix", status: "idle" },
+          addressFindingsSession: { sessionKey: "fix", status: "idle" },
           autoPrLaunch: { state: "pending", requestId: "r" },
         },
         "review-1",
@@ -1647,7 +1667,7 @@ describe("status classification and bounds", () => {
         {
           phase: "interactive",
           autoPr: true,
-          fixSession: { sessionKey: "later-fix", status: "idle" },
+          addressFindingsSession: { sessionKey: "later-fix", status: "idle" },
           autoPrLaunch: { state: "launched", requestId: "pr" },
         },
         "review-1",
@@ -1670,16 +1690,18 @@ describe("status classification and bounds", () => {
   test("legacy ready and consolidation keys use the session attempt, not bookkeeping time", () => {
     const session = { sessionKey: "legacy", startedAt: "start", completedAt: "done" };
     const ready = (updatedAt: string) =>
-      multiReviewStatus({ phase: "ready", fixSession: session, updatedAt }, "r")!.key;
+      multiReviewStatus({ phase: "ready", addressFindingsSession: session, updatedAt }, "r")!.key;
     expect(ready("first save")).toBe(ready("delayed result consumption"));
     const stage = (sessionKey: string) =>
-      multiReviewStatus({ phase: "consolidating", fixSession: { ...session, sessionKey } }, "r")!
-        .key;
+      multiReviewStatus(
+        { phase: "consolidating", addressFindingsSession: { ...session, sessionKey } },
+        "r",
+      )!.key;
     expect(stage("first attempt")).not.toBe(stage("second attempt"));
   });
 
   for (const [phase, finished] of [
-    ["fixing", "verification"],
+    ["reworking", "verification"],
     ["creating-pr", "verification"],
     ["resolving-conflicts", "pull request"],
   ]) {
@@ -1696,19 +1718,19 @@ describe("status classification and bounds", () => {
     expect(
       tools({
         error: "Claude usage limit reached",
-        failureContext: { phase: "fixing", kind: "stage-transition" },
+        failureContext: { phase: "reworking", kind: "stage-transition" },
       }),
     ).toContain('restart_build_pipeline_step { "pipelineId": "p"');
     expect(
       tools({
         error: "Build cancelled",
-        failureContext: { phase: "fixing", kind: "stage-transition" },
+        failureContext: { phase: "reworking", kind: "stage-transition" },
       }),
     ).not.toContain("restart_build_pipeline_step");
     expect(
       tools({
         cancelledAt: new Date().toISOString(),
-        failureContext: { phase: "fixing", kind: "stage-transition" },
+        failureContext: { phase: "reworking", kind: "stage-transition" },
       }),
     ).not.toContain("restart_build_pipeline_step");
     expect(tools({ error: "Build cancelled" })).not.toContain("restart_build_pipeline_step");

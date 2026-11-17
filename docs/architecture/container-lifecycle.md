@@ -2063,9 +2063,10 @@ each hold at most the active file, its `.1` and `.2` rotations and one
 adds 10 MiB × 3, so a runtime holds at most about 150 MiB of diagnostic
 output (plus the writer's dropped-line markers), and a rebuild discards the
 `/tmp` copies. A live per-environment total would need a `docker exec` per
-environment, the polling cost
-[0020](../todo/containers-and-environments/0020-container-state-observation.md)
-works to remove, so it is not built while the bound holds (to-do 0022
+environment, the polling cost the
+[Claude terminal state signal](#claude-terminal-state-signal-claude-state-signal3)
+and the [container worktree signal](#container-worktree-signal-container-worktree-signal1)
+removed, so it is not built while the bound holds (to-do 0022
 task 6, retired 2026-11-11). Revisit if a surface needs actual sizes, or when
 another launch log is added, which also raises this bound.
 
@@ -2281,6 +2282,17 @@ to `/claude-state-signal` on the agent
 tools server. The request only says "read now"; the backend reads the file
 itself, so a late or reordered request can never report a stale value.
 
+Why a doorbell (decided 2026-10-16, to-do 0020, retired 2026-11-17). The
+alternatives were one long-lived `docker exec` per container streaming
+changes (one blocked `docker` CLI process, about 32 MB, per container on the
+host, all stalling together when Docker Desktop hangs), reporting through a
+bridge (bridges run only for native sessions, never for terminal Claude),
+and a FIFO or socket on a mount (named volumes are not host-visible on
+Desktop). The 30 s safety read halves the worst case for a missed ring
+against 60 s at the cost of one exec a minute per container. The credential
+is per poll lineage, random, held only in backend memory and written from
+stdin.
+
 | Step | What happens | Where |
 | --- | --- | --- |
 | Arm | Once per poll lineage, if the image's manifest declares the capability: issue a doorbell credential, prepare the host alias and service port as a bridge start does, write the curl config to `/tmp/.orkestrator-claude-state-signal` (0600, from stdin, never argv), then ring once | `claude-state-signal.ts` |
@@ -2326,7 +2338,10 @@ never wait on the network), so this is the only place the backend can see it;
 it cannot say why. A re-arm on the window keeps the lineage `unconfirmed`; a
 ring confirms it and a demotion starts a new `armed` stretch. The worktree
 signal and the claude-tmux hook doorbell report the same state the same way
-(to-do 7080).
+(to-do 7080, retired 2026-11-17). A Linux host whose firewall drops the
+port shows exactly this; isolated profiles get an agent tools port one
+firewall rule can admit through `dev:test --agent-tools-port`
+([agent-testing.md](../development/agent-testing.md#containers-behind-a-host-firewall---agent-tools-port)).
 
 A poll is adopted for every running container, but it runs the 1 s cadence
 only while the container can run terminal Claude: a terminal shell in it or a
@@ -2754,3 +2769,53 @@ processes use 7 MB RSS and no CPU while idle, set up in 254 ms, and the kernel
 holds about 0.5 MB for the watches. One tree walk costs about 130 ms of VM CPU
 and one status scan about 150 ms, plus about 19 ms in the host `docker` CLI
 each. A file change reaches a completed scan in about 0.45 s.
+
+Linux Engine measured the same: on GitHub's `ubuntu-24.04` and
+`ubuntu-24.04-arm` runners (2026-10-26) the watcher set up 520 watches in
+about 0.35–0.37 s at about 7 MB RSS and no idle CPU, and arm to confirmed
+took about 0.42–0.45 s. On a firewalled Linux desktop host (beelink,
+2026-11-17), with the signal confirmed through the profile's agent tools
+port, an idle container cost 1.5 diff scans and no tree walks a minute, an
+open Files panel added 1.5 tree walks, and a change was visible 424–528 ms
+after the write, the same execs as Docker Desktop
+([container-qualification.md](../development/container-qualification.md#container-state-signals-on-a-firewalled-linux-engine-host-2026-11-17)).
+
+### Why these bounds
+
+Decided while building the signal (to-do 0020, retired 2026-11-17):
+
+- **Watcher: `inotifywait` in a bash loop.** A Node or Bun process would idle
+  at about 30–50 MB, and recursive `fs.watch` on Linux has no overflow event.
+  A long-lived `docker exec` per container is the transport the Claude
+  signal rejected, and a polling `find -newer` loop spends CPU forever. One
+  inotify instance per container counts against uid 1000's
+  `max_user_instances`, which on Linux Engine the host user's own tools
+  share; a refusal only drops that container to the fallback.
+- **Rings carry no paths.** A credential valid on one route cannot ring the
+  other signal, and a ring without content cannot make the backend trust a
+  stale or forged view: every ring is a full rescan, which also makes an
+  overflow free to handle. The cost is that a ring always rescans the whole
+  worktree.
+- **300 ms settle, 1 s maximum wait, 2 s hint gap, 60 s safety scan.** A 2 s
+  gap caps an agent writing constantly at 30 status execs a minute and keeps
+  the worst-case change-to-visible near 3.3 s, inside the 6 s budget. The
+  safety scan bounds what the watcher cannot see (`node_modules`, Git's
+  object store) and a watcher killed by the agent or a restart; 120 s would
+  double that bound and 30 s halve the idle saving. Idle drops from 4 to 1
+  scan a minute and an open panel from about 17 execs a minute to about 2;
+  a busy container can cost up to 30 scans a minute instead of 4, for about
+  0.5 s badge updates instead of 15 s.
+- **A 3 s grace window before a missed change demotes.** The watcher
+  settles for up to 1 s, so during active editing a safety scan often lands
+  inside a settle window; demoting on the first unannounced change would put
+  busy containers on the fallback for 5 minutes for no reason, and never
+  demoting would hide a dead watcher. A real miss is acted on 3 s later; the
+  scan that found it has already corrected the view.
+- **A read-only status scan.** `GIT_OPTIONAL_LOCKS=0` and
+  `diff.autoRefreshIndex=false` with the local scan's numstat filter, rather
+  than excluding `.git/index` from the watcher (which would miss `git add`)
+  or letting every scan ring for its own index refresh. A stale stat cache is
+  rehashed on every scan until the agent's own Git refreshes it.
+- **Health as aggregate counts.** The diagnostics surface is content-free,
+  so it carries counts per state, a fallback count and demotion reasons, not
+  a per-container list; the demotion log line names the container.

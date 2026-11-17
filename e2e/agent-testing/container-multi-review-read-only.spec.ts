@@ -270,7 +270,7 @@ test("Docker fixture Multi Review with Claude read-only reviewers runs without t
       targetBranch: "main",
       reviewers: [reviewer, reviewer],
       reviewModel: reviewer,
-      fixModel: reviewer,
+      addressFindingsModel: reviewer,
     });
 
     // Agent Info while a reviewer turn runs: the reported policy is the

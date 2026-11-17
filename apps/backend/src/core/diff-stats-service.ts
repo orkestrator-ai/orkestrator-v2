@@ -6,7 +6,6 @@ import type { BackendEmit } from "./backend-emit.js";
 import type { PayloadOf } from "@orkestrator/protocol/contract/event";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { WorktreeRemovalReads } from "./worktree-removal-reads.js";
 import type { RecurringPriorityClass } from "@orkestrator/protocol/recurring-work";
 import {
   type EnvironmentDiffStats,
@@ -22,31 +21,26 @@ import {
   type WorktreeSnapshotRevisionsSnapshot,
   type WorktreeSnapshotState,
 } from "@orkestrator/protocol/worktree-snapshots";
-import {
-  startWorktreeWatcher,
-  type WorktreeChangeHint,
-  type WorktreeWatcher,
-} from "./worktree-watcher.js";
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
+  AdhocWorktreeReads,
   responseDigest,
   semanticFileListDigest,
+  startWorktreeWatcher,
   treeMembershipDigest,
-} from "./worktree-snapshot-digest.js";
-import {
-  WorktreeTreeSnapshots,
-  type TreeSnapshotLimits,
-  type TreeTarget,
-} from "./worktree-tree-snapshots.js";
-import {
-  AdhocWorktreeReads,
   worktreeTargetKey,
+  WorktreeTreeSnapshots,
   type AdhocTreeCacheLimits,
   type FileListScanRequest,
   type FileListScanResult,
+  type TreeSnapshotLimits,
+  type TreeTarget,
   type TreeWalkRequest,
+  type WorktreeChangeHint,
   type WorktreeLookup,
-} from "./worktree-adhoc-reads.js";
+  type WorktreeWatcher,
+} from "./worktrees/index.js";
+import { WorktreeRemovalReads } from "./worktrees/removal-reads.js";
 import type { WorkAdmissionPool } from "./work-admission.js";
 
 /**

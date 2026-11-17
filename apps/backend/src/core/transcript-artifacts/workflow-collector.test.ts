@@ -160,7 +160,7 @@ describe("status adapters", () => {
 
     const pipeline = (structuredResultStatus?: string) =>
       adaptBuildPipeline("bp-1", {
-        phase: "addressing",
+        phase: "addressing-findings",
         currentSessionIndex: 1,
         structuredReview: { issues: [{}, {}], testCoverageGaps: [] },
         verificationResult: "maybe",
@@ -209,7 +209,7 @@ describe("status adapters", () => {
           completedAt: "2026-10-20T08:00:00Z",
         },
         { phase: "verify", status: "idle", iteration: 1, label: "Verify" },
-        { phase: "fix", status: "idle", iteration: 2, label: "Address Findings" },
+        { phase: "rework", status: "idle", iteration: 2, label: "Address Findings" },
         { phase: "verify", status: "idle", iteration: 2, label: "Verify" },
       ],
     });

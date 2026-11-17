@@ -83,7 +83,7 @@ test("cancelling package preparation stops its fix-model session before settling
     async ({ service, start, snapshot }) => {
       const started = await start();
       await service.advanceNow(started.id);
-      const sessionId = (await snapshot(started.id))!.fixSession!.providerSessionId;
+      const sessionId = (await snapshot(started.id))!.addressFindingsSession!.providerSessionId;
       provider.statusOverrides.set(sessionId, "idle");
       await service.cancel(started.id);
       await service.advanceNow(started.id);
@@ -165,7 +165,7 @@ test("preparation and consolidation each keep their own runtime and token count"
       expect(preparing.stepRuntimes?.prepare).toMatchObject({ tokenCount: 40_000 });
       expect(preparing.stepRuntimes?.prepare?.startedAt).toBeDefined();
       expect(preparing.stepRuntimes?.prepare?.completedAt).toBeUndefined();
-      expect(preparing.fixSession?.tokenCount).toBe(40_000);
+      expect(preparing.addressFindingsSession?.tokenCount).toBe(40_000);
 
       provider.statusValue = "idle";
       await service.advanceNow(started.id);
@@ -175,7 +175,7 @@ test("preparation and consolidation each keep their own runtime and token count"
       expect(prepare.completedAt).toBeDefined();
 
       // Consolidation runs on a session of its own with its own counter.
-      provider.usageTokensBySession.set(prepared.fixSession!.providerSessionId, 90_000);
+      provider.usageTokensBySession.set(prepared.addressFindingsSession!.providerSessionId, 90_000);
       provider.usageTokens = 25_000;
       await waitUntil(async () => {
         await service.advanceNow(started.id);
@@ -192,7 +192,7 @@ test("preparation and consolidation each keep their own runtime and token count"
       });
       expect(ready.stepRuntimes?.consolidate).toMatchObject({ tokenCount: 25_000 });
       expect(ready.stepRuntimes?.consolidate?.completedAt).toBeDefined();
-      expect(ready.fixSession?.tokenCount).toBe(25_000);
+      expect(ready.addressFindingsSession?.tokenCount).toBe(25_000);
       expect(ready.preparationSession?.tokenCount).toBe(40_000);
     },
     { packageFlow: true },
@@ -224,7 +224,7 @@ test("finalizes delayed preparation usage before baselining consolidation", asyn
       expect(prepared.phase).toBe("reviewing");
       expect(prepared.stepRuntimes?.prepare?.tokenCount).toBe(40_000);
 
-      provider.usageTokensBySession.set(prepared.fixSession!.providerSessionId, 90_000);
+      provider.usageTokensBySession.set(prepared.addressFindingsSession!.providerSessionId, 90_000);
       provider.usageTokens = 25_000;
       await waitUntil(async () => {
         await service.advanceNow(started.id);
@@ -261,8 +261,8 @@ test("consolidation's own session is counted from zero when preparation usage wa
       await service.advanceNow(started.id);
 
       const consolidating = (await snapshot(started.id))!;
-      expect(consolidating.fixSession?.tokenCount).toBe(65_000);
-      expect(consolidating.fixSession?.openedFor).toBe("consolidate");
+      expect(consolidating.addressFindingsSession?.tokenCount).toBe(65_000);
+      expect(consolidating.addressFindingsSession?.openedFor).toBe("consolidate");
       expect(consolidating.stepRuntimes?.consolidate?.tokenBaseline).toBe(0);
       expect(consolidating.stepRuntimes?.consolidate?.tokenCount).toBe(65_000);
       expect(consolidating.stepRuntimes?.prepare?.tokenCount).toBeUndefined();
@@ -289,7 +289,10 @@ test("a failed consolidation keeps the step's clock and preparation's numbers", 
       expect(consolidating.stepRuntimes?.consolidate?.startedAt).toBeDefined();
       expect(consolidating.stepRuntimes?.consolidate?.completedAt).toBeUndefined();
 
-      provider.sessionFailures.set(consolidating.fixSession!.providerSessionId, "bridge crashed");
+      provider.sessionFailures.set(
+        consolidating.addressFindingsSession!.providerSessionId,
+        "bridge crashed",
+      );
       await service.advanceNow(started.id);
 
       const failed = (await snapshot(started.id))!;
@@ -316,7 +319,10 @@ test("retrying consolidation restarts its numbers and preserves preparation's", 
       provider.statusValue = "running";
       await service.advanceNow(started.id);
       const consolidating = (await snapshot(started.id))!;
-      provider.sessionFailures.set(consolidating.fixSession!.providerSessionId, "bridge crashed");
+      provider.sessionFailures.set(
+        consolidating.addressFindingsSession!.providerSessionId,
+        "bridge crashed",
+      );
       await service.advanceNow(started.id);
       expect((await snapshot(started.id))?.phase).toBe("failed");
 
@@ -403,17 +409,17 @@ test("a failed fix-session transcript read does not reset the progress baseline"
     async ({ service, storage, start, snapshot }) => {
       const started = await start();
       await service.advanceNow(started.id);
-      const baseline = (await snapshot(started.id))!.fixSession!;
+      const baseline = (await snapshot(started.id))!.addressFindingsSession!;
       expect(baseline.progressDigest).toBeDefined();
 
       const stalledSince = "2026-08-14T00:10:00.000Z";
       await mutateStoredWorkflow(storage, started.id, (workflow) => {
-        workflow.fixSession!.stalledSince = stalledSince;
+        workflow.addressFindingsSession!.stalledSince = stalledSince;
       });
       provider.messagesError = new Error("transcript unavailable");
       await service.advanceNow(started.id);
 
-      expect((await snapshot(started.id))?.fixSession).toMatchObject({
+      expect((await snapshot(started.id))?.addressFindingsSession).toMatchObject({
         progressAt: baseline.progressAt,
         progressDigest: baseline.progressDigest,
         stalledSince,
@@ -489,7 +495,7 @@ test.each(["delivery", "retry", "restart"] as const)(
               started.id,
             );
             expect(settled.autoPrLaunch).toMatchObject({ state: "pending" });
-            const fix = settled.fixSession!;
+            const fix = settled.addressFindingsSession!;
             const input = {
               environmentId: settled.environmentId,
               agent: fix.agent,
@@ -582,9 +588,9 @@ test.each(["delivery", "retry", "restart"] as const)(
             dispatchAddressFindingsPrompt: async (workflow) => {
               const delivered = await dispatchMultiReviewAddressFindingsPrompt(native, {
                 ...workflow,
-                reviewModel: workflow.fixModel,
+                reviewModel: workflow.addressFindingsModel,
               });
-              const fix = delivered.fixSession;
+              const fix = delivered.addressFindingsSession;
               // Simulate the provider's natural completion before the workflow's idle observation.
               await nativeStorage.recordNativeAgentTurnOutcome(
                 nativeAgentSessionStorageKey(workflow.environmentId, fix.agent, fix.sessionKey),
@@ -628,12 +634,12 @@ test.each(["interrupted", "failed", "completed"] as const)(
         });
         currentOutcome = outcome;
         const recovered = await service.recoverAddressFindingsSession(settled.environmentId, {
-          tabId: settled.fixTabId!,
-          expectedProviderSessionId: settled.fixSession!.providerSessionId,
+          tabId: settled.addressFindingsTabId!,
+          expectedProviderSessionId: settled.addressFindingsSession!.providerSessionId,
           replacementProviderSessionId: "replacement",
         });
         expect(recovered.autoPrLaunch).toBeUndefined();
-        expect(recovered.fixSession?.completedAt).toBeUndefined();
+        expect(recovered.addressFindingsSession?.completedAt).toBeUndefined();
         expect(
           (service as unknown as { autoPrRetryAt: Map<string, number> }).autoPrRetryAt.has(
             started.id,
@@ -642,7 +648,7 @@ test.each(["interrupted", "failed", "completed"] as const)(
         provider.statusValue = "idle";
         await waitUntil(async () => {
           await service.advanceNow(started.id);
-          return (await snapshot(started.id))?.fixSession?.completedAt !== undefined;
+          return (await snapshot(started.id))?.addressFindingsSession?.completedAt !== undefined;
         });
         expect((await snapshot(started.id))?.autoPrLaunch?.state).toBe(
           outcome === "completed" ? "pending" : "skipped",
@@ -650,7 +656,7 @@ test.each(["interrupted", "failed", "completed"] as const)(
         await service.advanceNow(started.id);
         expect(pr.launches).toHaveLength(outcome === "completed" ? 2 : 1);
         expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot).toMatchObject({
-          fixSession: { providerSessionId: "replacement" },
+          addressFindingsSession: { providerSessionId: "replacement" },
         });
       },
       {
@@ -662,10 +668,10 @@ test.each(["interrupted", "failed", "completed"] as const)(
           addressFindingsDispatchRetryMs: 60_000,
           recoverAddressFindingsSession: async (workflow, replacement) => ({
             tabId: replacement.tabId,
-            fixSession: {
-              ...workflow.fixSession!,
+            addressFindingsSession: {
+              ...workflow.addressFindingsSession!,
               providerSessionId: replacement.replacementProviderSessionId,
-              requestIds: [...workflow.fixSession!.requestIds, "replacement-request"],
+              requestIds: [...workflow.addressFindingsSession!.requestIds, "replacement-request"],
             },
           }),
         },
@@ -794,7 +800,7 @@ test.each(["queued", "dispatch"] as const)(
           };
           const delivery = service.advanceNow(started.id);
           await loading;
-          const fix = settled.fixSession!;
+          const fix = settled.addressFindingsSession!;
           let followUp: Promise<unknown> | undefined;
           if (mutation === "queued") {
             await storage.enqueuePromptQueueMessage(
@@ -840,9 +846,9 @@ test.each(["queued", "dispatch"] as const)(
           dispatchAddressFindingsPrompt: async (workflow) => {
             const delivered = await dispatchMultiReviewAddressFindingsPrompt(native, {
               ...workflow,
-              reviewModel: workflow.fixModel,
+              reviewModel: workflow.addressFindingsModel,
             });
-            const fix = delivered.fixSession;
+            const fix = delivered.addressFindingsSession;
             await nativeStorage.recordNativeAgentTurnOutcome(
               nativeAgentSessionStorageKey(workflow.environmentId, fix.agent, fix.sessionKey),
               fix.providerSessionId,
@@ -860,7 +866,7 @@ test.each(["queued", "dispatch"] as const)(
   },
 );
 
-for (const kind of ["prepare", "consolidate", "fix"] as const) {
+for (const kind of ["prepare", "consolidate", "address-findings"] as const) {
   test(`${kind} re-sends a recovered dispatch the provider proves never arrived, once`, async () => {
     const provider = new Provider(false);
     provider.statusValue = "running";
@@ -935,7 +941,7 @@ for (const kind of ["prepare", "consolidate", "fix"] as const) {
   });
 }
 
-for (const kind of ["prepare", "consolidate", "fix"] as const) {
+for (const kind of ["prepare", "consolidate", "address-findings"] as const) {
   test.each([false, true])(
     `${kind} reconciles a recovered dispatch before observing the old restart (continuation %s)`,
     async (continuation) => {
@@ -972,7 +978,8 @@ for (const kind of ["prepare", "consolidate", "fix"] as const) {
             first = await startFollowUpStep(kind, context, environmentId, true);
           }
           provider.statusValue = "running";
-          const sessionId = (first.reviewSession ?? first.fixSession)!.providerSessionId;
+          const sessionId = (first.reviewSession ?? first.addressFindingsSession)!
+            .providerSessionId;
           const initial = provider.sends.get(first.activeRequest!.requestId)!;
           let current = first;
           if (continuation) {
@@ -1065,7 +1072,7 @@ for (const kind of ["prepare", "consolidate", "fix"] as const) {
   );
 }
 
-for (const kind of ["prepare", "consolidate", "fix"] as const) {
+for (const kind of ["prepare", "consolidate", "address-findings"] as const) {
   for (const toolMode of [false, true]) {
     test.each(["absent", "lost"] as const)(
       `${kind} accepts a saved ${toolMode ? "tool-v1" : "structured"} result over %s dispatch status`,
@@ -1117,7 +1124,8 @@ for (const kind of ["prepare", "consolidate", "fix"] as const) {
             }
             provider.statusValue = "running";
             const requestId = first.activeRequest!.requestId;
-            const sessionId = (first.reviewSession ?? first.fixSession)!.providerSessionId;
+            const sessionId = (first.reviewSession ?? first.addressFindingsSession)!
+              .providerSessionId;
             const value =
               kind === "prepare"
                 ? toolMode
@@ -1127,7 +1135,7 @@ for (const kind of ["prepare", "consolidate", "fix"] as const) {
                       limitations: ["No validation commands were discovered"],
                     }
                   : TEST_REVIEW_PREPARATION
-                : kind === "fix"
+                : kind === "address-findings"
                   ? completedAddressFindings
                   : cleanReport;
             if (toolMode) {
@@ -1307,7 +1315,7 @@ test("MultiReviewService skip stops the reviewers still working and consolidates
       return (await snapshot(started.id))?.phase === "ready";
     });
     await expect(service.skipStep(started.id, "review")).rejects.toThrow("not running");
-    await expect(service.skipStep(started.id, "fix")).rejects.toThrow("not running");
+    await expect(service.skipStep(started.id, "address-findings")).rejects.toThrow("not running");
   });
 });
 
@@ -1352,10 +1360,10 @@ test("MultiReviewService rewinds code to preparation's starting commit and resta
       });
       const ready = (await snapshot(started.id))!;
       const target = ready.reviewWorktreeSnapshot!.head;
-      expect((await service.previewCodeRewind(started.id, "fix")).blocked).toContain(
+      expect((await service.previewCodeRewind(started.id, "address-findings")).blocked).toContain(
         "has not started",
       );
-      await expect(service.rewindCode(started.id, "fix", target)).rejects.toThrow(
+      await expect(service.rewindCode(started.id, "address-findings", target)).rejects.toThrow(
         "has not started",
       );
       expect(calls.some((args) => args[0] === "reset")).toBe(false);
@@ -1535,11 +1543,11 @@ test("MultiReviewService skips normal interactive Address Findings without a res
       });
       await service.address(started.id);
       expect((await snapshot(started.id))?.phase).toBe("interactive");
-      const skipped = await service.skipStep(started.id, "fix");
+      const skipped = await service.skipStep(started.id, "address-findings");
       expect(skipped.phase).toBe("ready");
-      expect(skipped.fixResult).toBeUndefined();
+      expect(skipped.addressFindingsResult).toBeUndefined();
       expect(skipped.addressPromptPending).toBeUndefined();
-      expect(skipped.fixSession?.status).not.toBe("running");
+      expect(skipped.addressFindingsSession?.status).not.toBe("running");
     },
   );
 });
@@ -1550,7 +1558,7 @@ test("MultiReviewService refused skip keeps a supervised controller", async () =
   await withService("env-skip-claim", provider, async ({ service, storage, start }) => {
     const started = await start();
     await service.advanceNow(started.id);
-    await expect(service.skipStep(started.id, "fix")).rejects.toThrow("not running");
+    await expect(service.skipStep(started.id, "address-findings")).rejects.toThrow("not running");
     expect(
       (await storage.claimMultiReviewController(started.id, "other-owner", 15000)).granted,
     ).toBe(false);
@@ -1674,7 +1682,7 @@ test("MultiReviewService refuses rewind for a running paused session or sibling 
           ...ready,
           phase: "paused",
           pausedStep: "prepare",
-          reviewSession: { ...ready.fixSession!, status: "running" },
+          reviewSession: { ...ready.addressFindingsSession!, status: "running" },
         }),
       ).toContain("still running");
     },
@@ -1695,12 +1703,12 @@ test("MultiReviewService rewinds an attempted Address Findings step to the packa
         return (await snapshot(started.id))?.phase === "ready";
       });
       await service.address(started.id);
-      const preview = await service.previewCodeRewind(started.id, "fix");
+      const preview = await service.previewCodeRewind(started.id, "address-findings");
       expect(preview.blocked).toBeUndefined();
       expect(preview.targetCommit).toBe((await snapshot(started.id))?.reviewPackage?.headRef);
-      const restarted = await service.rewindCode(started.id, "fix", head.value);
+      const restarted = await service.rewindCode(started.id, "address-findings", head.value);
       expect(restarted.phase).toBe("interactive");
-      expect(restarted.fixResult).toBeUndefined();
+      expect(restarted.addressFindingsResult).toBeUndefined();
       expect(restarted.pendingCodeRewind).toBeUndefined();
       expect(calls).toContainEqual(["reset", "--hard", preview.targetCommit!]);
     },

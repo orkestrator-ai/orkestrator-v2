@@ -22,7 +22,7 @@ function workflow(
     projectId: "p",
     targetBranch: "main",
     reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
     phase,
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),

@@ -121,7 +121,7 @@ function multiReviewWorkflow(overrides: Partial<MultiReviewWorkflow> = {}): Mult
         providerSessionId: "reviewer-provider-session",
       },
     ],
-    fixModel: { agent: "codex", model: "gpt-5.6" },
+    addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
     phase: "reviewing",
     createdAt: "2026-09-08T10:00:00.000Z",
     updatedAt: "2026-09-08T10:00:00.000Z",

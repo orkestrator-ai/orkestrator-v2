@@ -59,7 +59,7 @@ import {
   type ContainerGitFetchPolicy,
 } from "./container-git-fetch.js";
 import type { WorkAdmissionPool } from "./work-admission.js";
-import { worktreeTargetKey } from "./worktree-adhoc-reads.js";
+import { worktreeTargetKey } from "./worktrees/index.js";
 import type { WorktreeRemoteFreshness } from "@orkestrator/protocol/worktree-snapshots";
 import { UNTRACKED_SCAN_CONCURRENCY, UNTRACKED_SCAN_MAX_FILES } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";

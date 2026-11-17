@@ -30,12 +30,12 @@ describe("typed Address report", () => {
     await withPipeline(
       async ({ service, provider, read, workflowResults }) => {
         const started = await service.start(startInput());
-        const addressing = await advanceUntil(service, read, started.id, "addressing");
-        expect(addressing.phase).toBe("addressing");
+        const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+        expect(addressing.phase).toBe("addressing-findings");
         const address = current(addressing);
         expect(address).toMatchObject({
-          phase: "address",
-          addressReportKind: "fix-result",
+          phase: "address-findings",
+          addressFindingsReportKind: "address-findings-result",
           resultTransport: "tool-v1",
           structuredResultStatus: "pending",
         });
@@ -67,7 +67,7 @@ describe("typed Address report", () => {
           (session) => session.sdkSessionId === address.sdkSessionId,
         )!;
         expect(accepted.structuredResultStatus).toBe("accepted");
-        expect(accepted.fixResult).toEqual(submitted);
+        expect(accepted.addressFindingsResult).toEqual(submitted);
         expect(await workflowResults!.status(scope, address.structuredRequestId!)).toMatchObject({
           lifecycle: "consumed",
         });
@@ -89,7 +89,7 @@ describe("typed Address report", () => {
       await withPipeline(
         async ({ service, provider, read, workflowResults }) => {
           const started = await service.start(startInput());
-          const addressing = await advanceUntil(service, read, started.id, "addressing");
+          const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
           const address = current(addressing);
           const firstRequestId = address.structuredRequestId!;
           let reminded = addressing;
@@ -97,7 +97,7 @@ describe("typed Address report", () => {
             await service.advanceNow(started.id);
             reminded = await read(started.id);
           }
-          expect(reminded.phase).toBe("addressing");
+          expect(reminded.phase).toBe("addressing-findings");
           const remindedSession = current(reminded);
           expect(remindedSession).toMatchObject({
             sdkSessionId: address.sdkSessionId,
@@ -120,7 +120,7 @@ describe("typed Address report", () => {
             expect(verifying.phase).toBe("verifying");
             expect(
               verifying.sessions.find((session) => session.sdkSessionId === address.sdkSessionId)
-                ?.fixResult,
+                ?.addressFindingsResult,
             ).toEqual(TEST_ADDRESS_FINDINGS_RESULT);
             return;
           }
@@ -142,10 +142,10 @@ describe("typed Address report", () => {
   test("a structured-output Address turn carries the schema and a malformed result fails it", async () => {
     await withPipeline(async ({ service, provider, read }) => {
       const started = await service.start(startInput());
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
       const address = current(addressing);
       expect(address).toMatchObject({
-        addressReportKind: "fix-result",
+        addressFindingsReportKind: "address-findings-result",
         resultTransport: "structured-output-v1",
       });
       // The contract rejects a complete result that still reports a failure.
@@ -164,7 +164,7 @@ describe("typed Address report", () => {
           : structured(sessionId, requestId);
       const failed = await advanceUntil(service, read, started.id, "failed", 5);
       expect(failed.error).toContain("The Address Findings stage returned a malformed result");
-      expect(current(failed).fixResult).toBeUndefined();
+      expect(current(failed).addressFindingsResult).toBeUndefined();
     });
   });
 });
@@ -173,12 +173,12 @@ describe("Address sessions from before the typed report", () => {
   test("a pipeline record from before the upgrade fails the stage instead of reading its text", async () => {
     await withPipeline(async ({ service, storage, provider, read }) => {
       const started = await service.start(startInput());
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
       const address = current(addressing);
       // A pre-upgrade Address session: no marker and no result slot.
       await rewritePipeline(storage, started.id, (pipeline) => {
         const session = current(pipeline);
-        delete session.addressReportKind;
+        delete session.addressFindingsReportKind;
         delete session.structuredRequestId;
         delete session.resultTransport;
         delete session.resultSubmission;
@@ -214,14 +214,16 @@ describe("Address sessions from before the typed report", () => {
       const started = await service.start(startInput());
       const verifying = await advanceUntil(service, read, started.id, "verifying");
       expect(verifying.phase).toBe("verifying");
-      expect(verifying.sessions.some((session) => session.phase === "address")).toBe(false);
+      expect(verifying.sessions.some((session) => session.phase === "address-findings")).toBe(
+        false,
+      );
       expect(verifyPrompt(provider.sent)).toContain("**Address Findings report**: none.");
     });
   });
 
   test("resume asks for the fix result only from a typed Address session", () => {
-    const typed = resumePromptFor("addressing", { addressFindingsResult: true })!;
-    const legacy = resumePromptFor("addressing")!;
+    const typed = resumePromptFor("addressing-findings", { addressFindingsResult: true })!;
+    const legacy = resumePromptFor("addressing-findings")!;
     expect(typed).toContain("finish with the required fix result");
     expect(legacy).not.toContain("fix result");
     expect(legacy).toContain("Resume addressing the review findings");
@@ -233,7 +235,7 @@ describe("Address sessions from before the typed report", () => {
         const prepare = spyOn(workflowResults!, "prepare");
         try {
           const started = await service.start(startInput());
-          await advanceUntil(service, read, started.id, "addressing");
+          await advanceUntil(service, read, started.id, "addressing-findings");
           const call = prepare.mock.calls.find(([input]) => input.kind === "fix-result");
           expect(call?.[0].schema).toEqual(REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA);
         } finally {

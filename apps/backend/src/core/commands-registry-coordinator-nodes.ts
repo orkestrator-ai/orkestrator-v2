@@ -1,3 +1,4 @@
+import { coordinatorMultiReviewLaunchHash } from "./coordinator-action-scope.js";
 import {
   assertCoordinatorEnvironmentScopeCommand,
   noteCoordinatorNodeUnavailableCommand,
@@ -1152,7 +1153,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     const target = await coordinatorNodeTarget(context, caller, asNonBlankString(nodeId, "nodeId"));
     await target.environment(input.environmentId);
     const reservedId = `action-${createHash("sha256").update(`${caller.coordinatorId}\0${input.requestId}`).digest("hex").slice(0, 32)}`;
-    const payloadHash = actionHash({ action: "launch-multi-review", nodeId: target.nodeId, input });
+    const payloadHash = coordinatorMultiReviewLaunchHash(input, target.nodeId);
     return once(`${caller.coordinatorId}\0${input.requestId}`, () =>
       context.storage.withAgentMailWorkerAdmission(
         `review:${target.nodeId}:${input.environmentId}`,

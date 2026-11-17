@@ -279,7 +279,7 @@ describe("pipeline worker mailboxes", () => {
     ).toBeNull();
   });
 
-  test.each(["address", "verify"] as const)(
+  test.each(["address-findings", "verify"] as const)(
     "mail renews the %s result authority",
     async (phase) => {
       const h = await harness();
@@ -291,7 +291,7 @@ describe("pipeline worker mailboxes", () => {
       };
       await h.save(
         pipelineSnapshot(h.environmentId, h.world.projectId, [session], {
-          phase: phase === "verify" ? "verifying" : "addressing",
+          phase: phase === "verify" ? "verifying" : "addressing-findings",
         }),
       );
       const main = await h.world.main();

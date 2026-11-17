@@ -553,7 +553,7 @@ describe("DraggableTab title precedence", () => {
       targetBranch: "main",
       phase: "interactive" as const,
       reviewers: [],
-      fixModel: { agent: "codex" as const, model: "gpt-5.6" },
+      addressFindingsModel: { agent: "codex" as const, model: "gpt-5.6" },
       createdAt: "2026-08-14T00:00:00.000Z",
       updatedAt: "2026-08-14T00:00:00.000Z",
       backendRevision: 1,
@@ -567,7 +567,7 @@ describe("DraggableTab title precedence", () => {
       | "targetBranch"
       | "phase"
       | "reviewers"
-      | "fixModel"
+      | "addressFindingsModel"
       | "createdAt"
       | "updatedAt"
       | "backendRevision"

@@ -44,7 +44,7 @@ export class MultiReviewAddressFindingsDispatchError extends Error {
 }
 
 export interface MultiReviewAddressFindingsDispatchResult {
-  fixSession: MultiReviewAddressFindingsSession;
+  addressFindingsSession: MultiReviewAddressFindingsSession;
   tabId: string;
   presentationError?: string;
 }
@@ -74,7 +74,7 @@ export async function recoverMissingMultiReviewAddressFindingsSession(
   workflow: MultiReviewWorkflow,
   replacement: MultiReviewAddressFindingsSessionReplacement,
 ): Promise<MultiReviewAddressFindingsDispatchResult> {
-  const session = workflow.fixSession;
+  const session = workflow.addressFindingsSession;
   if (
     workflow.phase !== "interactive" ||
     !workflow.consolidatedReport ||
@@ -86,7 +86,7 @@ export async function recoverMissingMultiReviewAddressFindingsSession(
     );
   }
   const expectedTabId =
-    workflow.fixTabId ?? workflow.addressTabId ?? `multi-review-fix:${workflow.id}`;
+    workflow.addressFindingsTabId ?? workflow.addressTabId ?? `multi-review-fix:${workflow.id}`;
   if (replacement.tabId !== expectedTabId) {
     throw new InvalidMultiReviewAddressFindingsStateError(
       "The Multi Review Address Findings session replacement targeted an unexpected tab",
@@ -98,22 +98,25 @@ export async function recoverMissingMultiReviewAddressFindingsSession(
     (session.sessionKey.startsWith(interactiveSessionKeyPrefix)
       ? session.sessionKey
       : interactiveSessionKeyPrefix);
-  const model = workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model;
+  const model =
+    workflow.addressFindingsModel.model === "default"
+      ? undefined
+      : workflow.addressFindingsModel.model;
   const identity = {
     environmentId: workflow.environmentId,
-    agent: workflow.fixModel.agent,
+    agent: workflow.addressFindingsModel.agent,
     logicalSessionKey,
     origin: "interactive-native" as const,
     interactionPolicy: MULTI_REVIEW_INTERACTIVE_ADDRESS_FINDINGS.interactionPolicy,
     title: MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
     model,
-    reasoningEffort: workflow.fixModel.reasoningEffort,
+    reasoningEffort: workflow.addressFindingsModel.reasoningEffort,
     ...(typeof session.fastMode === "boolean"
       ? { fastMode: session.fastMode }
-      : typeof workflow.fixModel.fastMode === "boolean"
-        ? { fastMode: workflow.fixModel.fastMode }
+      : typeof workflow.addressFindingsModel.fastMode === "boolean"
+        ? { fastMode: workflow.addressFindingsModel.fastMode }
         : {}),
-    phase: "fix" as const,
+    phase: "address-findings" as const,
     sessionMode: "build" as const,
   };
   await nativeAgents.adoptSession({
@@ -135,7 +138,7 @@ export async function recoverMissingMultiReviewAddressFindingsSession(
   }
   return {
     tabId: replacement.tabId,
-    fixSession: {
+    addressFindingsSession: {
       ...session,
       sessionKey: logicalSessionKey,
       providerSessionId: replacement.replacementProviderSessionId,
@@ -151,7 +154,7 @@ interface AddressFindingsTabPublisher {
   ensureNativeAgentJobTab(input: {
     environmentId: string;
     tabId: string;
-    agent: MultiReviewWorkflow["fixModel"]["agent"];
+    agent: MultiReviewWorkflow["addressFindingsModel"]["agent"];
     providerSessionId?: string;
     title?: string;
     isReviewTab?: boolean;
@@ -166,9 +169,9 @@ export async function dispatchMultiReviewAddressFindingsPrompt(
   tabs?: AddressFindingsTabPublisher,
   activateTab = false,
 ): Promise<MultiReviewAddressFindingsDispatchResult> {
-  const session = workflow.fixSession;
-  const selection = workflow.customFixModel ?? workflow.fixModel;
-  const customAddressFindings = workflow.customFixInstruction !== undefined;
+  const session = workflow.addressFindingsSession;
+  const selection = workflow.customAddressFindingsModel ?? workflow.addressFindingsModel;
+  const customAddressFindings = workflow.customAddressFindingsInstruction !== undefined;
   const createsFreshAddressFindingsSession = Boolean(workflow.reviewModel || customAddressFindings);
   if (createsFreshAddressFindingsSession && workflow.consolidatedReport === undefined) {
     throw new InvalidMultiReviewAddressFindingsStateError(
@@ -187,7 +190,7 @@ export async function dispatchMultiReviewAddressFindingsPrompt(
     model,
     reasoningEffort: selection.reasoningEffort,
     ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
-    phase: "fix" as const,
+    phase: "address-findings" as const,
     sessionMode: "build" as const,
   };
   const tab = {
@@ -225,7 +228,7 @@ export async function dispatchMultiReviewAddressFindingsPrompt(
   const prompt = customAddressFindings
     ? multiReviewCustomAddressFindingsPrompt(
         workflow.consolidatedReport!,
-        workflow.customFixInstruction!,
+        workflow.customAddressFindingsInstruction!,
       )
     : createsFreshAddressFindingsSession
       ? addressFindingsReportPrompt(workflow.consolidatedReport!)
@@ -275,7 +278,7 @@ export async function dispatchMultiReviewAddressFindingsPrompt(
     log.warn("fix-tab.publish-failed", { error: formatLogError(error) });
   }
   return {
-    fixSession: preparedSession ?? session!,
+    addressFindingsSession: preparedSession ?? session!,
     tabId: tab.tabId,
     ...(presentationError ? { presentationError } : {}),
   };

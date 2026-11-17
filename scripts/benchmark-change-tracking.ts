@@ -85,7 +85,7 @@ import { CHANGE_TRACKING_POLICY_V1 } from "../apps/backend/src/core/change-track
 import { compareManifests } from "../apps/backend/src/core/change-tracking/snapshot-diff";
 import { SharedScanQueue } from "../apps/backend/src/core/change-tracking/shared-physical-work";
 import { ChangeTrackingService } from "../apps/backend/src/core/change-tracking/service";
-import { startWorktreeWatcher } from "../apps/backend/src/core/worktree-watcher";
+import { startWorktreeWatcher } from "../apps/backend/src/core/worktrees/watcher";
 import { turnIdFor } from "../apps/backend/src/core/change-tracking/turn-boundaries";
 import {
   CHANGE_LEDGER_DATABASE_FILE,

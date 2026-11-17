@@ -69,7 +69,7 @@ function reviewInput() {
   };
 }
 
-describe("workflow vocabulary at backend command boundaries", () => {
+describe("workflow vocabulary at backend command boundaries (to-do 4740)", () => {
   for (const command of [
     "start_build_pipeline",
     "launch_build_pipeline",
@@ -78,17 +78,25 @@ describe("workflow vocabulary at backend command boundaries", () => {
     const args = (input: Record<string, unknown>) =>
       command === "start_controller_build_pipeline" ? { input } : input;
 
-    test(`${command} translates the future Address Findings step before starting`, async () => {
+    test(`${command} starts with the Address Findings step as sent`, async () => {
       const h = harness();
       await h.invoke(command, args(buildInput()));
       expect(h.startBuild).toHaveBeenCalledTimes(1);
       const input = h.startBuild.mock.calls[0]![0];
-      expect(input.steps).toMatchObject({ address: addressRow });
-      expect(input.steps).not.toHaveProperty("address-findings");
+      expect(input.steps).toMatchObject({ "address-findings": addressRow });
+      expect(input.steps).not.toHaveProperty("address");
       expect(input.taskId).toBe("task-1");
     });
 
-    test(`${command} refuses a malformed future step before service invocation`, async () => {
+    test(`${command} refuses the former \`address\` step before service invocation`, async () => {
+      const h = harness();
+      await expect(
+        h.invoke(command, args({ ...buildInput(), steps: { address: addressRow } })),
+      ).rejects.toThrow("Invalid build pipeline");
+      expect(h.startBuild).not.toHaveBeenCalled();
+    });
+
+    test(`${command} refuses a malformed step before service invocation`, async () => {
       const h = harness();
       await expect(
         h.invoke(
@@ -106,17 +114,26 @@ describe("workflow vocabulary at backend command boundaries", () => {
         ? { input, reservedId: "review-1", buildPipelineId: "build-1" }
         : input;
 
-    test(`${command} preserves the future model and explicit false automation`, async () => {
+    test(`${command} preserves the Address Findings model and explicit false automation`, async () => {
       const h = harness();
       await h.invoke(command, args(reviewInput()));
       expect(h.startReview).toHaveBeenCalledTimes(1);
       const input = h.startReview.mock.calls[0]![0];
-      expect(input).toMatchObject({ fixModel: addressRow, autoFix: false });
-      expect(input).not.toHaveProperty("addressFindingsModel");
-      expect(input).not.toHaveProperty("autoAddressFindings");
+      expect(input).toMatchObject({ addressFindingsModel: addressRow, autoAddressFindings: false });
+      expect(input).not.toHaveProperty("fixModel");
+      expect(input).not.toHaveProperty("autoFix");
     });
 
-    test(`${command} rejects a nonboolean future automation flag before service invocation`, async () => {
+    test(`${command} refuses the former \`fixModel\` before service invocation`, async () => {
+      const h = harness();
+      const { addressFindingsModel: _model, ...former } = reviewInput();
+      await expect(h.invoke(command, args({ ...former, fixModel: addressRow }))).rejects.toThrow(
+        "Invalid multi",
+      );
+      expect(h.startReview).not.toHaveBeenCalled();
+    });
+
+    test(`${command} rejects a nonboolean automation flag before service invocation`, async () => {
       const h = harness();
       await expect(
         h.invoke(command, args({ ...reviewInput(), autoAddressFindings: "false" })),
@@ -132,7 +149,7 @@ describe("workflow vocabulary at backend command boundaries", () => {
       expect(h.startReview).not.toHaveBeenCalled();
     });
 
-    test(`${command} rejects a malformed future model before service invocation`, async () => {
+    test(`${command} rejects a malformed model before service invocation`, async () => {
       const h = harness();
       await expect(
         h.invoke(command, args({ ...reviewInput(), addressFindingsModel: { agent: "unknown" } })),

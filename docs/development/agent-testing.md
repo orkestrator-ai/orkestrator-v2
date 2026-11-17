@@ -1204,6 +1204,9 @@ sudo ufw allow proto tcp from 172.16.0.0/12 to any port 31500:31509 comment 'Ork
 ```
 
 Changing the host firewall is the host owner's decision; agents never run it.
+beelink has carried this rule since 2026-11-17; a profile there on a port in
+the range had both container signals `confirmed`
+([evidence](container-qualification.md#container-state-signals-on-a-firewalled-linux-engine-host-2026-11-17)).
 A profile whose environment network was allocated from a `192.168.0.0/16` pool
 needs that network's subnet admitted as well (`docker network inspect` shows
 it), as the installed app's own rule on such a host does. The rule is removed
@@ -1498,8 +1501,10 @@ cases that way (`missed-final`, `approval`, `reconnect`, `hidden`,
 `no-renderer`, `steer` and `rebuild`; start the profile with
 `--fixture --fixture-environments local,container --no-agent-credentials
 --agent-platforms opencode --headless`). On a host whose
-firewall drops container traffic to the profile (beelink's ufw, to-do
-[7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)),
+firewall drops container traffic to the profile (beelink's ufw, for any
+agent tools port outside 31500–31509; start the profile with
+`--agent-tools-port` in that range instead, see
+[Containers behind a host firewall](#containers-behind-a-host-firewall---agent-tools-port)),
 run that profile and the spec on `mise run docker:disposable -- start
 --host-loopback` with its `DOCKER_HOST` exported for both, and build the
 image inside that daemon. OpenCode's `shell` can background a command, so
@@ -1970,6 +1975,27 @@ review the file's diff.
 Its Vite-served renderer is exposed to
 [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
 while other work starts or stops containers; the `file://` renderer is not.
+
+Two things a spec has to do the way the app does (to-do 8301, retired
+2026-11-17, found both on mbp3's display):
+
+- **Reload a window after switching its connection.** A Local window's
+  `window.orkestrator` uses the direct gateway transport by default, and its
+  address is fixed when the page loads. The app reloads after a connect or
+  switch (`reloadAfterConnectionChange`); a spec that calls
+  `orkestrator.connections.connect` or `use` and then sends commands from the
+  same page must `reload()` it and wait for the API first. Otherwise the
+  commands still go to the Local backend, which no longer authorizes that
+  window, and fail with `TypeError: Failed to fetch` (the renderer console says
+  CORS). `service-preview-electron.spec.ts`'s remote terminal link case does
+  this.
+- **Do not wait for `document.exitFullscreen()` right after entering
+  fullscreen on macOS.** On a real display `requestFullscreen()` resolves
+  while the window is still animating into its own Space, and an exit issued
+  then never settles (3 of 3 runs; it settled 2 of 2 after a 5 s wait).
+  `renderer-permissions-electron.spec.ts` bounds that cleanup and runs each
+  in-page step as its own `executeJavaScript` with a 20 s budget, so a step
+  that hangs is named in the failure.
 
 `window-visibility-polls-electron.spec.ts` checks that a real window pauses
 the renderer's polls (`startCoordinatedPoll`) while its document is hidden.
@@ -4651,7 +4677,20 @@ both fixed and Notes-offset views, at natural DPR and forced DPR 1 and 2 with
 `--force-device-scale-factor`. Views stay small enough to assert native image
 scale without reduction. The Window-menu test always checks the selected label;
 its OS-focus predicate runs only when the host exposes a key window (and an
-active app on macOS).
+active app on macOS). The keyboard create-and-send case asserts OS focus only
+when its window got the key window at the start. If it fails while the window
+no longer has it (on a shared desktop another application, or another
+worktree's Electron run, can take it mid-case), the failure starts with
+`Lost window focus` (or `No window focus`) and names the application macOS has
+in front (`window-focus-loss.ts`), instead of only Playwright's bare
+`inactive`. It still fails: a skip would hide a handoff that really drops
+focus.
+The front-app comparison uses `process.pid` read inside Electron's main process;
+the `.bin/electron` Node launcher has a different PID. The spec exercises the
+keyboard case's catch and cleanup with an injected failure and real window
+facts. A separate native-focus regression gives the key window to another
+window in the same process; it requires an unlocked desktop and explicitly
+skips when macOS reports `loginwindow` in front, or when running headless.
 The annotation spec also checks pins and Show on page for an offscreen target,
 a target in an open and a closed modal, and a late web font (fixture routes
 `/dialogs` and `/fonts`), result-capture stability and comparison labels

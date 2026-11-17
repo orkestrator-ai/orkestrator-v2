@@ -998,6 +998,7 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/electron-display-setup.test.ts",
   "./e2e/agent-testing/web-annotations-native-captures.test.ts",
   "./e2e/agent-testing/electron-startup-dialogs.test.ts",
+  "./e2e/agent-testing/window-focus-loss.test.ts",
   "./e2e/agent-testing/fake-anthropic-model.test.ts",
   "./e2e/agent-testing/refused-login-model.test.ts",
   "./e2e/agent-testing/failed-turn-bell-support.test.ts",

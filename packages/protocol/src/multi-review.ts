@@ -294,7 +294,7 @@ export type MultiReviewPhase =
   | "reviewing"
   | "consolidating"
   | "ready"
-  | "fixing"
+  | "addressing-findings"
   | "interactive"
   | "paused"
   | "completed"
@@ -302,10 +302,10 @@ export type MultiReviewPhase =
   | "cancelled"
   | "failed";
 
-export type MultiReviewPausablePhase = "preparing" | "consolidating" | "fixing";
+export type MultiReviewPausablePhase = "preparing" | "consolidating" | "addressing-findings";
 
 /** The preparation/consolidation turns plus the separate Address Findings turn. */
-export type MultiReviewStepKind = "prepare" | "consolidate" | "fix";
+export type MultiReviewStepKind = "prepare" | "consolidate" | "address-findings";
 
 /**
  * One step's timing and consumption.
@@ -378,7 +378,7 @@ export interface MultiReviewAutoPrLaunch {
    */
   basis?: "clean-review";
   /** Address Findings attempt that authorized this launch; absent on legacy and clean-review records. */
-  fixIdentity?: string;
+  addressFindingsIdentity?: string;
   state: "pending" | "launched" | "skipped" | "failed";
   requestId: string;
   /** Failed delivery attempts, persisted so a restart cannot reset the budget. */
@@ -438,7 +438,7 @@ export interface MultiReviewGraphRunLink {
 
 export interface MultiReviewWorkflow {
   /** Launch the ordinary Address Findings handoff after successful consolidation; absent means off. */
-  autoFix?: boolean;
+  autoAddressFindings?: boolean;
   /**
    * Launch the ordinary PR tab once Address Findings proves completion (a complete
    * structured result, or an interactive handoff turn that finished on its own
@@ -477,10 +477,10 @@ export interface MultiReviewWorkflow {
    * after consolidation moves to a session of its own.
    */
   preparationSession?: MultiReviewSession;
-  fixModel: MultiReviewModelSelection;
+  addressFindingsModel: MultiReviewModelSelection;
   /** Durable key reserved for the next or current Address Findings session. */
-  fixSessionKey?: string;
-  fixSession?: MultiReviewAddressFindingsSession;
+  addressFindingsSessionKey?: string;
+  addressFindingsSession?: MultiReviewAddressFindingsSession;
   /** Per-step timing and token consumption, kept once the shared session moves on. */
   stepRuntimes?: MultiReviewStepRuntimes;
   reviewWorktreeSnapshot?: MultiReviewWorktreeSnapshot;
@@ -509,7 +509,7 @@ export interface MultiReviewWorkflow {
   consolidatedReport?: StructuredReviewReport;
   /** Reviewer overlap in {@link consolidatedReport}; written and cleared with it. */
   consolidationOverlap?: ReviewPanelOverlapV1;
-  fixResult?: {
+  addressFindingsResult?: {
     complete: boolean;
     summary: string;
     filesChanged: string[];
@@ -526,20 +526,20 @@ export interface MultiReviewWorkflow {
   /** Pane tab identity reserved for the pending interactive handoff. */
   addressTabId?: string;
   /** User-authored instructions for a fresh interactive Address Findings session. */
-  customFixInstruction?: string;
-  /** Model selection paired with {@link customFixInstruction} until delivery succeeds. */
-  customFixModel?: MultiReviewModelSelection;
+  customAddressFindingsInstruction?: string;
+  /** Model selection paired with {@link customAddressFindingsInstruction} until delivery succeeds. */
+  customAddressFindingsModel?: MultiReviewModelSelection;
   /** Persisted failed delivery attempts so backend restarts cannot reset the retry budget. */
   addressPromptAttempts?: number;
   /** Tab that presents the current Address Findings session, including provider-switch launches. */
-  fixTabId?: string;
+  addressFindingsTabId?: string;
   /** Non-fatal failure to publish the current Address Findings session into the pane layout. */
   presentationError?: string;
   /** How Address Findings was most recently launched, retained so an upstream restart can replay it. */
-  fixLaunch?:
+  addressFindingsLaunch?:
     { kind: "default" } | { kind: "custom"; instruction: string; model: MultiReviewModelSelection };
   /** Relaunch Address Findings after an explicitly restarted upstream step reconsolidates. */
-  restartFixAfterConsolidation?: boolean;
+  restartAddressFindingsAfterConsolidation?: boolean;
   activeRequest?: {
     kind: MultiReviewStepKind;
     requestId: string;
@@ -574,7 +574,7 @@ export interface MultiReviewWorkflow {
 
 export interface StartMultiReviewInput {
   /** Launch the ordinary Address Findings handoff after successful consolidation; absent means off. */
-  autoFix?: boolean;
+  autoAddressFindings?: boolean;
   /** Launch the ordinary PR tab after the Address Findings turn completes successfully; absent means off. */
   autoPr?: boolean;
   environmentId: string;
@@ -584,13 +584,13 @@ export interface StartMultiReviewInput {
   reviewers: MultiReviewModelSelection[];
   /** Absent only for compatibility with callers predating the separate review default. */
   reviewModel?: MultiReviewModelSelection;
-  fixModel: MultiReviewModelSelection;
+  addressFindingsModel: MultiReviewModelSelection;
 }
 
 /** Complete environment button action. Selections are the launch dialog's exact rows. */
 export interface LaunchMultiReviewActionInput {
   /** Launch the ordinary Address Findings handoff after successful consolidation; omitted uses saved defaults. */
-  autoFix?: boolean;
+  autoAddressFindings?: boolean;
   /** Launch the ordinary PR tab after the Address Findings turn completes; omitted uses saved defaults. */
   autoPr?: boolean;
   requestId: string;
@@ -598,7 +598,7 @@ export interface LaunchMultiReviewActionInput {
   /** Omitted model rows use the saved Multi Review defaults, as the button does. */
   reviewers?: MultiReviewModelSelection[];
   reviewModel?: MultiReviewModelSelection;
-  fixModel?: MultiReviewModelSelection;
+  addressFindingsModel?: MultiReviewModelSelection;
   /** Omitted values use saved defaults; an explicit blank instruction clears its default. */
   targetBranch?: string;
   reviewInstruction?: string;
@@ -620,6 +620,27 @@ export interface MultiReviewActionResult {
   replayed?: true;
 }
 
+/**
+ * A launch request whose Address Findings fields carry the public names the
+ * coordinator tools and the CLI still use (`fixModel`, `autoFix`), in the
+ * button action's names. The public names change with to-do 4740 task 3.
+ */
+export function launchActionInputFromPublicFields<
+  T extends { fixModel?: unknown; autoFix?: unknown },
+>(
+  input: T,
+): Omit<T, "fixModel" | "autoFix"> & {
+  addressFindingsModel?: unknown;
+  autoAddressFindings?: unknown;
+} {
+  const { fixModel, autoFix, ...rest } = input;
+  return {
+    ...rest,
+    ...(fixModel === undefined ? {} : { addressFindingsModel: fixModel }),
+    ...(autoFix === undefined ? {} : { autoAddressFindings: autoFix }),
+  };
+}
+
 export function isLaunchMultiReviewActionInput(
   value: unknown,
 ): value is LaunchMultiReviewActionInput {
@@ -632,10 +653,10 @@ export function isLaunchMultiReviewActionInput(
       "environmentId",
       "reviewers",
       "reviewModel",
-      "fixModel",
+      "addressFindingsModel",
       "targetBranch",
       "reviewInstruction",
-      "autoFix",
+      "autoAddressFindings",
       "autoPr",
     ]) &&
     nonBlank(value.requestId, 256) &&
@@ -654,8 +675,11 @@ export function isLaunchMultiReviewActionInput(
       reviewers:
         value.reviewers === undefined ? [DEFAULTED_SELECTION_PLACEHOLDER] : value.reviewers,
       reviewModel: value.reviewModel,
-      fixModel: value.fixModel === undefined ? DEFAULTED_SELECTION_PLACEHOLDER : value.fixModel,
-      autoFix: value.autoFix,
+      addressFindingsModel:
+        value.addressFindingsModel === undefined
+          ? DEFAULTED_SELECTION_PLACEHOLDER
+          : value.addressFindingsModel,
+      autoAddressFindings: value.autoAddressFindings,
       autoPr: value.autoPr,
     })
   );
@@ -669,7 +693,7 @@ const DEFAULTED_SELECTION_PLACEHOLDER: MultiReviewModelSelection = {
 
 export interface StartMultiReviewCustomAddressFindingsInput {
   workflowId: string;
-  fixModel: MultiReviewModelSelection;
+  addressFindingsModel: MultiReviewModelSelection;
   instruction: string;
 }
 
@@ -717,24 +741,24 @@ export function isStartMultiReviewInput(value: unknown): value is StartMultiRevi
       "projectId",
       "targetBranch",
       "reviewInstruction",
-      "autoFix",
+      "autoAddressFindings",
       "autoPr",
       "reviewers",
       "reviewModel",
-      "fixModel",
+      "addressFindingsModel",
     ]) ||
     !nonBlank(value.environmentId) ||
     !nonBlank(value.projectId) ||
     !isSafeReviewTargetBranch(value.targetBranch) ||
     getReviewInstructionValidationError(value.reviewInstruction) !== null ||
-    (value.autoFix !== undefined && typeof value.autoFix !== "boolean") ||
+    (value.autoAddressFindings !== undefined && typeof value.autoAddressFindings !== "boolean") ||
     (value.autoPr !== undefined && typeof value.autoPr !== "boolean") ||
     !Array.isArray(value.reviewers) ||
     value.reviewers.length < MULTI_REVIEW_MIN_REVIEWERS ||
     value.reviewers.length > MULTI_REVIEW_MAX_REVIEWERS ||
     !value.reviewers.every(isMultiReviewReviewerSelection) ||
     (value.reviewModel !== undefined && !isMultiReviewModelSelection(value.reviewModel)) ||
-    !isMultiReviewModelSelection(value.fixModel)
+    !isMultiReviewModelSelection(value.addressFindingsModel)
   ) {
     return false;
   }
@@ -746,14 +770,14 @@ export function isStartMultiReviewCustomAddressFindingsInput(
 ): value is StartMultiReviewCustomAddressFindingsInput {
   return (
     record(value) &&
-    hasOnlyKeys(value, ["workflowId", "fixModel", "instruction"]) &&
+    hasOnlyKeys(value, ["workflowId", "addressFindingsModel", "instruction"]) &&
     nonBlank(value.workflowId) &&
-    isMultiReviewModelSelection(value.fixModel) &&
+    isMultiReviewModelSelection(value.addressFindingsModel) &&
     nonBlank(value.instruction, MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH)
   );
 }
 
-export const MULTI_REVIEW_STEP_KINDS = ["prepare", "consolidate", "fix"] as const;
+export const MULTI_REVIEW_STEP_KINDS = ["prepare", "consolidate", "address-findings"] as const;
 
 export function isMultiReviewStepControlInput(
   value: unknown,
@@ -767,16 +791,16 @@ export function isMultiReviewStepControlInput(
 }
 
 /** What Skip acts on: the reviewers still working, or the Address Findings turn. */
-export type MultiReviewSkippableStep = "review" | "fix";
+export type MultiReviewSkippableStep = "review" | "address-findings";
 /** The steps with a recorded starting commit, which "Rewind code to here" can reach. */
-export type MultiReviewRewindStep = "prepare" | "fix";
+export type MultiReviewRewindStep = "prepare" | "address-findings";
 
 export function isMultiReviewSkippableStep(value: unknown): value is MultiReviewSkippableStep {
-  return value === "review" || value === "fix";
+  return value === "review" || value === "address-findings";
 }
 
 export function isMultiReviewRewindStep(value: unknown): value is MultiReviewRewindStep {
-  return value === "prepare" || value === "fix";
+  return value === "prepare" || value === "address-findings";
 }
 
 export function isRestartMultiReviewStepInput(
@@ -796,7 +820,7 @@ const PHASES = new Set<MultiReviewPhase>([
   "reviewing",
   "consolidating",
   "ready",
-  "fixing",
+  "addressing-findings",
   "interactive",
   "paused",
   "completed",
@@ -1026,12 +1050,12 @@ function isAutoPrLaunch(value: unknown): value is MultiReviewAutoPrLaunch {
       "attempts",
       "tabId",
       "message",
-      "fixIdentity",
+      "addressFindingsIdentity",
       "basis",
     ]) &&
     AUTO_PR_LAUNCH_STATES.has(value.state as MultiReviewAutoPrLaunch["state"]) &&
     (value.basis === undefined || value.basis === "clean-review") &&
-    optionalProgressDigest(value.fixIdentity) &&
+    optionalProgressDigest(value.addressFindingsIdentity) &&
     nonBlank(value.requestId, 256) &&
     (value.attempts === undefined ||
       (Number.isSafeInteger(value.attempts) && (value.attempts as number) >= 0)) &&
@@ -1046,7 +1070,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     if (
       intent !== undefined &&
       (!record(intent) ||
-        (intent.step !== "prepare" && intent.step !== "fix") ||
+        (intent.step !== "prepare" && intent.step !== "address-findings") ||
         !nonBlank(intent.from, 256) ||
         !nonBlank(intent.to, 256) ||
         !nonBlank(intent.backupRef, 512))
@@ -1071,7 +1095,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "projectId",
       "targetBranch",
       "reviewInstruction",
-      "autoFix",
+      "autoAddressFindings",
       "autoPr",
       "autoPrLaunch",
       "engine",
@@ -1082,9 +1106,9 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "reviewSessionKey",
       "reviewSession",
       "preparationSession",
-      "fixModel",
-      "fixSessionKey",
-      "fixSession",
+      "addressFindingsModel",
+      "addressFindingsSessionKey",
+      "addressFindingsSession",
       "stepRuntimes",
       "phase",
       "pausedFromPhase",
@@ -1099,18 +1123,18 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "pendingCodeRewind",
       "consolidatedReport",
       "consolidationOverlap",
-      "fixResult",
+      "addressFindingsResult",
       "addressPromptPending",
       "addressSessionKey",
       "addressRequestId",
       "addressTabId",
-      "customFixInstruction",
-      "customFixModel",
+      "customAddressFindingsInstruction",
+      "customAddressFindingsModel",
       "addressPromptAttempts",
-      "fixTabId",
+      "addressFindingsTabId",
       "presentationError",
-      "fixLaunch",
-      "restartFixAfterConsolidation",
+      "addressFindingsLaunch",
+      "restartAddressFindingsAfterConsolidation",
       "activeRequest",
       "pendingResultConsumptions",
       "cancellingSince",
@@ -1126,7 +1150,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     !nonBlank(value.projectId) ||
     !isSafeReviewTargetBranch(value.targetBranch) ||
     getReviewInstructionValidationError(value.reviewInstruction) !== null ||
-    (value.autoFix !== undefined && typeof value.autoFix !== "boolean") ||
+    (value.autoAddressFindings !== undefined && typeof value.autoAddressFindings !== "boolean") ||
     (value.autoPr !== undefined && typeof value.autoPr !== "boolean") ||
     (value.autoPrLaunch !== undefined && !isAutoPrLaunch(value.autoPrLaunch)) ||
     (value.engine !== undefined && value.engine !== "graph") ||
@@ -1143,15 +1167,16 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     (value.reviewSession !== undefined && !isAddressFindingsSession(value.reviewSession)) ||
     (value.preparationSession !== undefined &&
       !isAddressFindingsSession(value.preparationSession)) ||
-    !record(value.fixModel) ||
-    !isMultiReviewModelSelection(value.fixModel) ||
-    (value.fixSessionKey !== undefined && !nonBlank(value.fixSessionKey)) ||
+    !record(value.addressFindingsModel) ||
+    !isMultiReviewModelSelection(value.addressFindingsModel) ||
+    (value.addressFindingsSessionKey !== undefined && !nonBlank(value.addressFindingsSessionKey)) ||
     !Number.isFinite(Date.parse(value.createdAt as string)) ||
     !Number.isFinite(Date.parse(value.updatedAt as string)) ||
     !Number.isSafeInteger(value.backendRevision) ||
     (value.backendRevision as number) < 0 ||
     (value.controllerFence !== undefined && !nonBlank(value.controllerFence)) ||
-    (value.fixSession !== undefined && !isAddressFindingsSession(value.fixSession)) ||
+    (value.addressFindingsSession !== undefined &&
+      !isAddressFindingsSession(value.addressFindingsSession)) ||
     (value.stepRuntimes !== undefined && !isStepRuntimes(value.stepRuntimes)) ||
     (value.reviewWorktreeSnapshot !== undefined &&
       !isReviewWorktreeSnapshotRecord(value.reviewWorktreeSnapshot)) ||
@@ -1167,7 +1192,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     (value.pausedFromPhase !== undefined &&
       value.pausedFromPhase !== "preparing" &&
       value.pausedFromPhase !== "consolidating" &&
-      value.pausedFromPhase !== "fixing") ||
+      value.pausedFromPhase !== "addressing-findings") ||
     (value.pausedStep !== undefined &&
       !MULTI_REVIEW_STEP_KINDS.includes(value.pausedStep as MultiReviewStepKind)) ||
     (value.activeRequest !== undefined && !isActiveRequest(value.activeRequest)) ||
@@ -1176,35 +1201,37 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
         value.pendingResultConsumptions.length > 64 ||
         !value.pendingResultConsumptions.every((key) => nonBlank(key)))) ||
     !optionalDate(value.cancellingSince) ||
-    (value.fixResult !== undefined && !isAddressFindingsResult(value.fixResult)) ||
+    (value.addressFindingsResult !== undefined &&
+      !isAddressFindingsResult(value.addressFindingsResult)) ||
     (value.addressPromptPending !== undefined && typeof value.addressPromptPending !== "boolean") ||
     (value.addressSessionKey !== undefined && !nonBlank(value.addressSessionKey)) ||
     (value.addressRequestId !== undefined && !nonBlank(value.addressRequestId)) ||
     (value.addressTabId !== undefined && !nonBlank(value.addressTabId)) ||
-    (value.customFixInstruction !== undefined &&
+    (value.customAddressFindingsInstruction !== undefined &&
       !nonBlank(
-        value.customFixInstruction,
+        value.customAddressFindingsInstruction,
         MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH,
       )) ||
-    (value.customFixModel !== undefined && !isMultiReviewModelSelection(value.customFixModel)) ||
+    (value.customAddressFindingsModel !== undefined &&
+      !isMultiReviewModelSelection(value.customAddressFindingsModel)) ||
     (value.addressPromptAttempts !== undefined &&
       (!Number.isSafeInteger(value.addressPromptAttempts) ||
         (value.addressPromptAttempts as number) < 0)) ||
-    (value.fixTabId !== undefined && !nonBlank(value.fixTabId)) ||
+    (value.addressFindingsTabId !== undefined && !nonBlank(value.addressFindingsTabId)) ||
     !optionalString(value.presentationError, 4_096) ||
-    (value.fixLaunch !== undefined &&
-      (!record(value.fixLaunch) ||
-        (value.fixLaunch.kind === "default"
-          ? !hasOnlyKeys(value.fixLaunch, ["kind"])
-          : value.fixLaunch.kind !== "custom" ||
-            !hasOnlyKeys(value.fixLaunch, ["kind", "instruction", "model"]) ||
+    (value.addressFindingsLaunch !== undefined &&
+      (!record(value.addressFindingsLaunch) ||
+        (value.addressFindingsLaunch.kind === "default"
+          ? !hasOnlyKeys(value.addressFindingsLaunch, ["kind"])
+          : value.addressFindingsLaunch.kind !== "custom" ||
+            !hasOnlyKeys(value.addressFindingsLaunch, ["kind", "instruction", "model"]) ||
             !nonBlank(
-              value.fixLaunch.instruction,
+              value.addressFindingsLaunch.instruction,
               MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH,
             ) ||
-            !isMultiReviewModelSelection(value.fixLaunch.model)))) ||
-    (value.restartFixAfterConsolidation !== undefined &&
-      typeof value.restartFixAfterConsolidation !== "boolean") ||
+            !isMultiReviewModelSelection(value.addressFindingsLaunch.model)))) ||
+    (value.restartAddressFindingsAfterConsolidation !== undefined &&
+      typeof value.restartAddressFindingsAfterConsolidation !== "boolean") ||
     !optionalString(value.error, 4_096) ||
     (value.consolidatedReport !== undefined &&
       !isStructuredReviewReport(value.consolidatedReport)) ||
@@ -1215,7 +1242,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
   if (!isReviewerRecordList(value.reviewers)) return false;
   if (
     (value.phase === "ready" ||
-      value.phase === "fixing" ||
+      value.phase === "addressing-findings" ||
       value.phase === "interactive" ||
       value.phase === "completed") &&
     !isStructuredReviewReport(value.consolidatedReport)
@@ -1227,20 +1254,27 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
   const graphEngine = value.engine === "graph";
   if (
     !graphEngine &&
-    (value.phase === "fixing" || value.phase === "completed") &&
-    !isAddressFindingsSession(value.fixSession)
+    (value.phase === "addressing-findings" || value.phase === "completed") &&
+    !isAddressFindingsSession(value.addressFindingsSession)
   ) {
     return false;
   }
-  if (value.phase === "fixing" && !graphEngine) {
+  if (value.phase === "addressing-findings" && !graphEngine) {
     const activeRequest = value.activeRequest;
-    if (!isActiveRequest(activeRequest) || activeRequest.kind !== "fix") return false;
+    if (!isActiveRequest(activeRequest) || activeRequest.kind !== "address-findings") return false;
   }
   if (value.addressPromptPending === true && value.phase !== "interactive") return false;
-  if (value.customFixInstruction !== undefined && value.addressPromptPending !== true) return false;
-  if (value.customFixInstruction !== undefined && value.consolidatedReport === undefined)
+  if (value.customAddressFindingsInstruction !== undefined && value.addressPromptPending !== true)
     return false;
-  if ((value.customFixInstruction === undefined) !== (value.customFixModel === undefined))
+  if (
+    value.customAddressFindingsInstruction !== undefined &&
+    value.consolidatedReport === undefined
+  )
+    return false;
+  if (
+    (value.customAddressFindingsInstruction === undefined) !==
+    (value.customAddressFindingsModel === undefined)
+  )
     return false;
   if (value.addressPromptAttempts !== undefined && value.addressPromptPending !== true)
     return false;
@@ -1263,19 +1297,24 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     paused &&
     ((value.pausedFromPhase === "preparing" && value.pausedStep !== "prepare") ||
       (value.pausedFromPhase === "consolidating" && value.pausedStep !== "consolidate") ||
-      (value.pausedFromPhase === "fixing" && value.pausedStep !== "fix"))
+      (value.pausedFromPhase === "addressing-findings" && value.pausedStep !== "address-findings"))
   ) {
     return false;
   }
   if (
     paused &&
-    (value.pausedFromPhase === "consolidating" || value.pausedFromPhase === "fixing") &&
+    (value.pausedFromPhase === "consolidating" ||
+      value.pausedFromPhase === "addressing-findings") &&
     value.reviewPackage === undefined &&
     !value.reviewers.some((reviewer) => reviewer.report !== undefined)
   ) {
     return false;
   }
-  if (paused && value.pausedFromPhase === "fixing" && value.consolidatedReport === undefined) {
+  if (
+    paused &&
+    value.pausedFromPhase === "addressing-findings" &&
+    value.consolidatedReport === undefined
+  ) {
     return false;
   }
   return true;
@@ -1308,15 +1347,15 @@ export function multiReviewSharedSessionStep(
     case "consolidating":
     case "ready":
       return "consolidate";
-    case "fixing":
+    case "addressing-findings":
     case "completed":
-      return "fix";
+      return "address-findings";
     case "paused":
       return workflow.pausedStep ?? null;
     // The address turn has not been dispatched yet, so the session still
     // carries consolidation's turn and no step may claim it.
     case "interactive":
-      return workflow.addressPromptPending === true ? null : "fix";
+      return workflow.addressPromptPending === true ? null : "address-findings";
     default:
       break;
   }
@@ -1334,10 +1373,12 @@ export function multiReviewStepSession(
   workflow: MultiReviewWorkflow,
   step: MultiReviewStepKind,
 ): MultiReviewSession | undefined {
-  if (step === "fix") return workflow.fixSession;
+  if (step === "address-findings") return workflow.addressFindingsSession;
   const coordinatorSession =
     workflow.reviewSession ??
-    (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession);
+    (workflow.reviewModel || workflow.consolidationModel
+      ? undefined
+      : workflow.addressFindingsSession);
   return step === "prepare"
     ? (workflow.preparationSession ?? coordinatorSession)
     : coordinatorSession;
@@ -1356,7 +1397,7 @@ export function multiReviewOwnsProviderSession(
   const sessions = [
     workflow.reviewSession,
     workflow.preparationSession,
-    workflow.fixSession,
+    workflow.addressFindingsSession,
     ...workflow.reviewers,
   ];
   return sessions.some(

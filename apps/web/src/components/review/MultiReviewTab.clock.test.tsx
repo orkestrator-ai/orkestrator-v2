@@ -39,7 +39,7 @@ function reviewingWorkflow(): MultiReviewWorkflow {
     stepRuntimes: {
       prepare: { startedAt, completedAt: "2026-08-14T00:00:20.000Z" },
     },
-    fixModel: { agent: "codex", model: "gpt-5.6" },
+    addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
     createdAt: startedAt,
     updatedAt: startedAt,
     backendRevision: 3,

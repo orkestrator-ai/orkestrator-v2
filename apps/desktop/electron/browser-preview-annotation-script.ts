@@ -11,7 +11,10 @@
  * installer must not reference module-level bindings.
  */
 import type { BrowserPreviewCaptureMode } from "@orkestrator/protocol/browser-preview";
-import { browserPreviewAnchorKit } from "./browser-preview-anchor-script.js";
+import {
+  browserPreviewAnchorKitSource,
+  type BrowserPreviewAnchorKit,
+} from "./browser-preview-anchor-script.js";
 
 export const BROWSER_PREVIEW_CAPTURE_RUNTIME_KEY = "__orkestratorCaptureRuntime__";
 /** Upper bound on any JSON string the runtime returns to main. */
@@ -31,7 +34,7 @@ export interface BrowserPreviewCaptureRuntimeConfig {
 }
 
 function installBrowserPreviewCaptureRuntime(
-  kitFactory: typeof browserPreviewAnchorKit,
+  kitFactory: () => BrowserPreviewAnchorKit,
   config: {
     key: string;
     maxChars: number;
@@ -265,14 +268,14 @@ function installBrowserPreviewCaptureRuntime(
     }
   };
   /**
-   * The page element under a point. The document retargets a hit inside an
-   * open shadow root to its host, so ask each open root in turn, at most
-   * `MAX_SHADOW_DEPTH` deep. A hit the root reports outside itself (slotted
-   * light content) stays where it is. Closed roots expose no `shadowRoot`, so
-   * their host is the target, as before.
+   * The element under a point, starting from `element` hit in its document.
+   * The document retargets a hit inside an open shadow root to its host, so
+   * ask each open root in turn, at most `MAX_SHADOW_DEPTH` deep. A hit the
+   * root reports outside itself (slotted light content) stays where it is.
+   * Closed roots expose no `shadowRoot`, so their host is the target, as before.
    */
-  const elementAt = (x: number, y: number): Element | null => {
-    let element = topmostAt(document, x, y);
+  const descendShadowRoots = (start: Element | null, x: number, y: number): Element | null => {
+    let element = start;
     for (let depth = 0; element && depth < kit.MAX_SHADOW_DEPTH; depth += 1) {
       const root = element.shadowRoot;
       if (!root) break;
@@ -282,21 +285,41 @@ function installBrowserPreviewCaptureRuntime(
     }
     return element;
   };
-  /** The focused element, inside open shadow roots too. */
+  /**
+   * The page element under a point, through open shadow roots and into each
+   * same-origin frame under it (at most `MAX_FRAME_DEPTH`), with the point
+   * mapped into the frame's own viewport. A frame page script cannot read
+   * (cross-origin or sandboxed) is itself the hit, and so is a same-origin
+   * frame where its document has nothing but `<html>` or `<body>`.
+   */
+  const elementAt = (x: number, y: number): Element | null => {
+    let element = descendShadowRoots(topmostAt(document, x, y), x, y);
+    let point = { x, y };
+    for (let depth = 0; element && depth < kit.MAX_FRAME_DEPTH; depth += 1) {
+      const frameDocument = kit.frameDocument(element);
+      const inner = frameDocument ? kit.framePoint(element, point.x, point.y) : null;
+      if (!frameDocument || !inner) break;
+      const hit = descendShadowRoots(topmostAt(frameDocument, inner.x, inner.y), inner.x, inner.y);
+      if (!hit || kit.isDocumentRoot(hit)) break;
+      element = hit;
+      point = inner;
+    }
+    return element;
+  };
+  /** The focused element, inside open shadow roots and same-origin frames too. */
   const focusedElement = (): Element | null => {
     let active = document.activeElement;
-    for (let depth = 0; active && depth < kit.MAX_SHADOW_DEPTH; depth += 1) {
-      const inner = active.shadowRoot?.activeElement ?? null;
-      if (!inner) break;
+    for (let depth = 0; active && depth < kit.MAX_SHADOW_DEPTH + kit.MAX_FRAME_DEPTH; depth += 1) {
+      const inner =
+        active.shadowRoot?.activeElement ?? kit.frameDocument(active)?.activeElement ?? null;
+      if (!inner || kit.isDocumentRoot(inner)) break;
       active = inner;
     }
     return active;
   };
+  /** Never a document's own `<html>` or `<body>`, nor inspector UI. */
   const selectable = (element: Element | null): element is Element =>
-    Boolean(element) &&
-    element !== document.documentElement &&
-    element !== document.body &&
-    !kit.isInspectorNode(element);
+    Boolean(element) && !kit.isDocumentRoot(element!) && !kit.isInspectorNode(element);
   const initialTargetElement = (): Element | null => {
     const initial = config.initialTarget;
     if (!initial || initial.kind !== "element") return null;
@@ -329,7 +352,7 @@ function installBrowserPreviewCaptureRuntime(
   };
   const showCandidate = (): void => {
     frame = null;
-    if (!candidate || !candidate.isConnected || status !== "selecting") return;
+    if (!candidate || !kit.isLive(candidate) || status !== "selecting") return;
     const rect = kit.rectOf(candidate);
     place(highlight, rect);
     const width = Math.round(rect.width);
@@ -432,14 +455,22 @@ function installBrowserPreviewCaptureRuntime(
       ].includes(key);
       if (!navigation) return;
       swallow(event);
-      if (!candidate || !candidate.isConnected) {
+      if (!candidate || !kit.isLive(candidate)) {
         downStack.length = 0;
         moveTo(startingCandidate(), true);
         if (key !== "Enter") return;
       }
       if (!candidate) return;
       if (key === "ArrowUp" || key === "[") {
-        const parent: Element | null = kit.composedParent(candidate);
+        // A frame document's <html> and <body> are crossed to reach its frame.
+        let parent: Element | null = kit.composedParent(candidate);
+        for (
+          let step = 0;
+          parent && !selectable(parent) && kit.isDocumentRoot(parent) && step < 2;
+          step += 1
+        ) {
+          parent = kit.composedParent(parent);
+        }
         if (selectable(parent)) {
           downStack.push(candidate);
           moveTo(parent, true);
@@ -448,10 +479,14 @@ function installBrowserPreviewCaptureRuntime(
         let next = downStack.pop() ?? null;
         if (!next || !kit.composedContains(candidate, next)) {
           next = null;
-          // An open shadow root's content is what renders, so step into it first.
+          // An open shadow root's content is what renders, so step into it
+          // first; a same-origin frame steps into its document's body.
           const shadowChildren = candidate.shadowRoot?.children;
+          const frameChildren = kit.frameDocument(candidate)?.body?.children;
           const children =
-            shadowChildren && shadowChildren.length > 0 ? shadowChildren : candidate.children;
+            shadowChildren && shadowChildren.length > 0
+              ? shadowChildren
+              : (frameChildren ?? candidate.children);
           for (let index = 0; index < Math.min(children.length, 200); index += 1) {
             const child = children[index]!;
             if (
@@ -738,7 +773,8 @@ function installBrowserPreviewCaptureRuntime(
     let connected = true;
     let rect: Rect | null = null;
     if (selectedElement) {
-      connected = selectedElement.isConnected;
+      // A frame that navigated since selection no longer shows the element.
+      connected = kit.isLive(selectedElement);
       rect = kit.rectOf(selectedElement);
     } else if (selectedRange) {
       connected =
@@ -785,7 +821,8 @@ function installBrowserPreviewCaptureRuntime(
         layer.style.visibility = "hidden";
       }
     }
-    if (selectedElement?.isConnected) place(highlight, kit.rectOf(selectedElement));
+    if (selectedElement && kit.isLive(selectedElement))
+      place(highlight, kit.rectOf(selectedElement));
     else if (selectedRange) place(highlight, kit.rectOf(selectedRange));
     else if (!regionRect) highlight.style.display = "none";
     removeMasks();
@@ -846,12 +883,17 @@ function installBrowserPreviewCaptureRuntime(
           mutated = true;
         }
       });
-      observer.observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        characterData: true,
-      });
+      const options = { childList: true, subtree: true, attributes: true, characterData: true };
+      observer.observe(document.documentElement, options);
+      // A target inside a same-origin frame changes in that frame's document.
+      const frameRoot = selectedElement?.ownerDocument?.documentElement;
+      if (frameRoot && selectedElement?.ownerDocument !== document) {
+        try {
+          observer.observe(frameRoot, options);
+        } catch {
+          // The layout key below still sees the target move.
+        }
+      }
     }
     const layoutKey = (): string => {
       const current = probe();
@@ -941,7 +983,7 @@ export function browserPreviewCaptureStartScript(
     mode: config.mode,
     initialTarget: config.initialTarget ?? null,
   };
-  return `/*orkestrator:capture-start*/(${installBrowserPreviewCaptureRuntime.toString()})(${browserPreviewAnchorKit.toString()}, ${JSON.stringify(payload)});`;
+  return `/*orkestrator:capture-start*/(${installBrowserPreviewCaptureRuntime.toString()})(${browserPreviewAnchorKitSource()}, ${JSON.stringify(payload)});`;
 }
 
 export const BROWSER_PREVIEW_CAPTURE_STATUS_SCRIPT = `/*orkestrator:capture-status*/(() => {

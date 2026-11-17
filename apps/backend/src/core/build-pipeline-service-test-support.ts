@@ -179,9 +179,9 @@ export class FakeProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : phase === "build" || phase === "fix"
+        : phase === "build" || phase === "rework"
           ? TEST_REVIEW_PREPARATION
-          : phase === "address"
+          : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
             : { complete: true, rationale: "All criteria pass." }) as T,
     };

@@ -1,3 +1,6 @@
+import path from "node:path";
+import { actionHash } from "./coordinator-action-scope.js";
+import { readStoredValue, seedStore, upgradedLaunchReceipt } from "./storage-test-support.js";
 /**
  * A coordinator acting on a node it controls, over the real coordinator
  * store: receipts, associations and delegations are kept here with the
@@ -40,7 +43,7 @@ function review(id: string, phase: string) {
     projectId: "p-leaf",
     targetBranch: "main",
     reviewers: [{ ...row, id: "reviewer-0", status: "pending" }],
-    fixModel: row,
+    addressFindingsModel: row,
     phase,
     backendRevision: 0,
     createdAt: at,
@@ -1232,3 +1235,58 @@ describe("node mail request collisions", () => {
     expect(routed.filter((item) => item.command === "deliver_node_mail")).toHaveLength(delivered);
   });
 });
+
+for (const alias of [false, true]) {
+  test(`node public launch replays upgraded ${alias ? "alias" : "pending receipt"}`, async () => {
+    const { run, scope, world, associations } = await setup({
+      answers: {
+        get_multi_review_workflow: { snapshot: review("active-review", "preparing"), revision: 1 },
+        launch_controller_multi_review: {
+          workflow: review("active-review", "preparing"),
+          reused: true,
+          outcome: "opened",
+          ui: { status: "opened" },
+        },
+      },
+    });
+    const selection = { agent: "codex", model: "gpt-5.6-codex" };
+    const input = {
+      environmentId: "leaf-env",
+      requestId: "review-1",
+      addressFindingsModel: selection,
+      autoAddressFindings: false,
+    };
+    await run("launch_coordinator_node_multi_review", { scope, nodeId: "bk_leaf", input });
+    const requestId = alias ? "old-alias" : input.requestId;
+    const payloadHash = actionHash({
+      action: "launch-multi-review",
+      nodeId: "bk_leaf",
+      input: { environmentId: "leaf-env", requestId, fixModel: selection, autoFix: false },
+    });
+    const old = {
+      ...(await associations())[0]!,
+      pending: !alias,
+      ...(alias ? { requestAliases: [{ requestId, payloadHash }] } : { payloadHash }),
+    };
+    const upgraded = upgradedLaunchReceipt(path.join(world.storage.getDataDir(), "upgrade"), old);
+    expect(upgraded).toEqual(old);
+    const store = readStoredValue<Record<string, unknown>>(
+      world.storage.getDataDir(),
+      "coordinators.json",
+    )!;
+    seedStore(world.storage.getDataDir(), "coordinators.json", { ...store, workflows: [upgraded] });
+    const replay = await run("launch_coordinator_node_multi_review", {
+      scope,
+      nodeId: "bk_leaf",
+      input: { ...input, requestId },
+    });
+    expect(replay).toMatchObject({ workflow: { id: "active-review" } });
+    await expect(
+      run("launch_coordinator_node_multi_review", {
+        scope,
+        nodeId: "bk_leaf",
+        input: { ...input, requestId, autoAddressFindings: true },
+      }),
+    ).rejects.toThrow("different payload");
+  });
+}

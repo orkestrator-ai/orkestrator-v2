@@ -100,7 +100,7 @@ test("MultiReviewService collects a live reviewer's reported findings on its nex
             startedAt: timestamp,
           },
         ],
-        fixModel: { agent: "claude", model: "opus" },
+        addressFindingsModel: { agent: "claude", model: "opus" },
         phase: "reviewing",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -192,8 +192,8 @@ test("MultiReviewService finishes an Address Findings turn persisted before the 
 
     expect(await snapshot(workflowId)).toMatchObject({
       phase: "completed",
-      fixResult: { complete: true, summary: "Addressed every finding" },
-      fixSession: { status: "idle" },
+      addressFindingsResult: { complete: true, summary: "Addressed every finding" },
+      addressFindingsSession: { status: "idle" },
     });
     expect(provider.addressFindingsSends).toBe(1);
   });
@@ -220,8 +220,8 @@ test.each([true, false])(
             ? {
                 state: "pending",
                 requestId: `multi-review-pr:${workflowId}`,
-                fixIdentity: multiReviewAddressFindingsIdentity(
-                  (await snapshot(workflowId))?.fixSession,
+                addressFindingsIdentity: multiReviewAddressFindingsIdentity(
+                  (await snapshot(workflowId))?.addressFindingsSession,
                 ),
               }
             : undefined,
@@ -308,8 +308,8 @@ test("MultiReviewService asks the Address Findings model to correct an invalid f
     });
 
     const completed = await snapshot(workflowId);
-    expect(completed?.fixResult).toMatchObject({ complete: true });
-    expect(completed?.fixSession?.requestIds).toHaveLength(3);
+    expect(completed?.addressFindingsResult).toMatchObject({ complete: true });
+    expect(completed?.addressFindingsSession?.requestIds).toHaveLength(3);
     const repair = [...provider.sends.values()].find(
       (sent) =>
         sent.options.schema === REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA &&
@@ -340,7 +340,7 @@ test("MultiReviewService does not treat provider fix failures as schema repair w
         expect(failed?.error).toBe(`Fix result failed with ${code}`);
         expect(failed?.activeRequest?.schemaRepairAttempts).toBeUndefined();
         expect(failed?.activeRequest?.schemaRepairPrompt).toBeUndefined();
-        expect(failed?.fixSession?.requestIds).toHaveLength(2);
+        expect(failed?.addressFindingsSession?.requestIds).toHaveLength(2);
       },
     );
   }
@@ -361,8 +361,8 @@ test.each([
 
       expect(await snapshot(workflowId)).toMatchObject({
         phase: "failed",
-        activeRequest: { kind: "fix" },
-        fixSession: { providerSessionId: "session-legacy-fix", status: "failed" },
+        activeRequest: { kind: "address-findings" },
+        addressFindingsSession: { providerSessionId: "session-legacy-fix", status: "failed" },
         error: message,
       });
     });
@@ -441,12 +441,12 @@ test("MultiReviewService retries an incomplete legacy Address Findings turn from
     });
 
     const failed = await snapshot(workflowId);
-    expect(failed?.fixSession?.status).toBe("failed");
+    expect(failed?.addressFindingsSession?.status).toBe("failed");
     expect(failed?.error).toContain("could not address every finding");
 
     const retried = await service.retry(workflowId);
     expect(retried.phase).toBe("ready");
-    expect(retried.fixSession?.status).toBe("idle");
+    expect(retried.addressFindingsSession?.status).toBe("idle");
     expect(retried.activeRequest).toBeUndefined();
     expect(retried.error).toBeUndefined();
     expect(retried.consolidatedReport).toBeDefined();
@@ -554,7 +554,7 @@ test("MultiReviewService reports a failure that ended across a restart", async (
     projectId: "project-1",
     targetBranch: "main",
     reviewers: [{ agent: "claude", model: "opus" }],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
   });
   for (let attempt = 0; attempt < 7; attempt++) await first.advanceNow(started.id);
   await first.shutdown();
@@ -588,8 +588,8 @@ test("MultiReviewService reports a failure that ended across a restart", async (
 });
 
 test("a workflow's end says failed, nothing, or finished from its own record", () => {
-  const outcome = (phase: string, fixSession?: { status: string }) =>
-    workflowCompletionOutcome({ phase, fixSession } as unknown as MultiReviewWorkflow);
+  const outcome = (phase: string, addressFindingsSession?: { status: string }) =>
+    workflowCompletionOutcome({ phase, addressFindingsSession } as unknown as MultiReviewWorkflow);
   expect(outcome("failed")).toBe("failed");
   expect(outcome("interactive", { status: "failed" })).toBe("failed");
   expect(outcome("cancelled")).toBe("none");
@@ -635,7 +635,7 @@ test("MultiReviewService rehydrates active review activity without a renderer", 
     projectId: "project-1",
     targetBranch: "main",
     reviewers: [{ agent: "claude", model: "opus" }],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
   });
   await waitUntil(() => provider.statusCalls > 0);
   await first.shutdown();
@@ -703,7 +703,7 @@ test("MultiReviewService owns fan-out, consolidation, and the interactive Addres
       { agent: "claude", model: "opus" },
       { agent: "claude", model: "sonnet" },
     ],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
   });
 
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -724,7 +724,7 @@ test("MultiReviewService owns fan-out, consolidation, and the interactive Addres
   await service.address(started.id);
   expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot).toMatchObject({
     phase: "interactive",
-    fixSession: { status: "idle" },
+    addressFindingsSession: { status: "idle" },
   });
   expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot).not.toHaveProperty(
     "activeRequest",
@@ -772,7 +772,7 @@ test("MultiReviewService fails an idle reviewer that never returns structured ou
     projectId: "project-1",
     targetBranch: "main",
     reviewers: [{ agent: "claude", model: "opus" }],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
   });
 
   for (let attempt = 0; attempt < 7; attempt++) await service.advanceNow(started.id);
@@ -820,7 +820,7 @@ test("MultiReviewService leaves an interactive handoff idle for the native tab",
     projectId: "project-1",
     targetBranch: "main",
     reviewers: [{ agent: "claude", model: "opus" }],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
   });
   for (let attempt = 0; attempt < 4; attempt += 1) {
     await service.advanceNow(started.id);
@@ -841,7 +841,7 @@ test("MultiReviewService leaves an interactive handoff idle for the native tab",
   expect(addressed.phase).toBe("interactive");
   expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot).toMatchObject({
     phase: "interactive",
-    fixSession: { status: "idle" },
+    addressFindingsSession: { status: "idle" },
   });
   expect(provider.sends.size).toBe(sendsBeforeAddressFindings);
   expect(provider.addressFindingsSends).toBe(0);
@@ -883,7 +883,7 @@ test("MultiReviewService persists cancellation until an aborting consolidation p
     projectId: "project-1",
     targetBranch: "main",
     reviewers: [{ agent: "claude", model: "opus" }],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
   });
   await waitUntil(async () => {
     await service.advanceNow(started.id);
@@ -908,7 +908,7 @@ test("MultiReviewService persists cancellation until an aborting consolidation p
   expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot).toMatchObject({
     phase: "cancelled",
     reviewers: [{ status: "completed" }],
-    fixSession: { status: "cancelled" },
+    addressFindingsSession: { status: "cancelled" },
   });
   // Someone asked for the stop, and nothing completed.
   expect((await storage.getEnvironment("env-cancel"))?.agentActivityState).toBe("idle");
@@ -918,7 +918,7 @@ test("MultiReviewService persists cancellation until an aborting consolidation p
     projectId: "project-1",
     targetBranch: "main",
     reviewers: [{ agent: "claude", model: "opus" }],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
   });
   expect(replacement.id).not.toBe(started.id);
   await service.shutdown();
@@ -962,7 +962,7 @@ test("MultiReviewService settles cancellation when the aborted session reports a
     projectId: "project-1",
     targetBranch: "main",
     reviewers: [{ agent: "claude", model: "opus" }],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
   });
   await waitUntil(async () => {
     await service.advanceNow(started.id);
@@ -985,7 +985,7 @@ test("MultiReviewService settles cancellation when the aborted session reports a
   // it to `toMatchObject`, so narrow it here to read one field back out.
   const cancelling = (await storage.getMultiReviewWorkflow(started.id))?.snapshot as
     MultiReviewWorkflow | undefined;
-  const addressFindingsSessionId = cancelling?.fixSession?.providerSessionId;
+  const addressFindingsSessionId = cancelling?.addressFindingsSession?.providerSessionId;
   expect(addressFindingsSessionId).toBeDefined();
   // The turn ends terminally rather than returning to idle: still settled.
   provider.sessionFailures.set(addressFindingsSessionId!, "Selected model is at capacity");
@@ -993,7 +993,7 @@ test("MultiReviewService settles cancellation when the aborted session reports a
 
   expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot).toMatchObject({
     phase: "cancelled",
-    fixSession: { status: "cancelled" },
+    addressFindingsSession: { status: "cancelled" },
   });
   await service.shutdown();
   await fs.rm(dataDir, { recursive: true, force: true });
@@ -1032,7 +1032,7 @@ test("MultiReviewService coalesces repeated advances while a provider call is bl
     projectId: "project-1",
     targetBranch: "main",
     reviewers: [{ agent: "claude", model: "opus" }],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
   });
   await waitUntil(() => provider.statusCalls === 1);
 
@@ -1087,7 +1087,7 @@ test("MultiReviewService renews its lease while a provider call is blocked", asy
     projectId: "project-1",
     targetBranch: "main",
     reviewers: [{ agent: "claude", model: "opus" }],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
   });
   await waitUntil(() => provider.statusCalls === 1);
   // The storage lease floor is 2 s, so the claim cannot be shortened. The
@@ -1154,7 +1154,7 @@ test("MultiReviewService atomically admits only one active workflow per environm
     projectId: "project-1",
     targetBranch: "main",
     reviewers: [{ agent: "claude" as const, model: "opus" }],
-    fixModel: { agent: "claude" as const, model: "opus" },
+    addressFindingsModel: { agent: "claude" as const, model: "opus" },
   };
   const outcomes = await Promise.allSettled([service.start(input), service.start(input)]);
 
@@ -1821,12 +1821,12 @@ test("MultiReviewService keeps a released Address Findings turn open until its r
   await withService("env-fix-background", provider, async ({ service, storage, snapshot }) => {
     const workflowId = await seedLegacyFixingWorkflow(storage, "env-fix-background");
     for (let attempt = 0; attempt < 8; attempt++) await service.advanceNow(workflowId);
-    expect((await snapshot(workflowId))?.phase).toBe("fixing");
-    expect((await snapshot(workflowId))?.fixSession?.idleResultPolls).toBeUndefined();
+    expect((await snapshot(workflowId))?.phase).toBe("addressing-findings");
+    expect((await snapshot(workflowId))?.addressFindingsSession?.idleResultPolls).toBeUndefined();
     provider.backgroundWorkLive = false;
     provider.retainedContinuation = true;
     for (let attempt = 0; attempt < 8; attempt++) await service.advanceNow(workflowId);
-    expect((await snapshot(workflowId))?.phase).toBe("fixing");
+    expect((await snapshot(workflowId))?.phase).toBe("addressing-findings");
     provider.retainedContinuation = false;
     provider.returnStructured = true;
     await service.advanceNow(workflowId);
@@ -1847,7 +1847,7 @@ test("MultiReviewService keeps preparation open while background work finishes",
         targetBranch: "main",
         reviewers: [{ agent: "claude", model: "reviewer" }],
         reviewModel: { agent: "claude", model: "preparation-model" },
-        fixModel: { agent: "codex", model: "fix-model" },
+        addressFindingsModel: { agent: "codex", model: "fix-model" },
       });
       for (let attempt = 0; attempt < 8; attempt++) await service.advanceNow(started.id);
       expect((await snapshot(started.id))?.phase).not.toBe("failed");
@@ -1903,7 +1903,7 @@ test("MultiReviewService identifies the preparation model when it returns no res
         targetBranch: "main",
         reviewers: [{ agent: "claude", model: "reviewer" }],
         reviewModel: { agent: "opencode", model: "preparation-model" },
-        fixModel: { agent: "codex", model: "fix-model" },
+        addressFindingsModel: { agent: "codex", model: "fix-model" },
       });
       await waitUntil(async () => {
         await service.advanceNow(started.id);
@@ -1916,7 +1916,7 @@ test("MultiReviewService identifies the preparation model when it returns no res
         reviewSession: { agent: "opencode", model: "preparation-model" },
         error: "The preparation model became idle without returning its review package preparation",
       });
-      expect((await snapshot(started.id))?.fixSession).toBeUndefined();
+      expect((await snapshot(started.id))?.addressFindingsSession).toBeUndefined();
     },
     { packageFlow: true },
   );
@@ -1993,7 +1993,7 @@ test("MultiReviewService does not abort an interactive Address Findings session 
     const cancelled = await service.cancel(started.id);
     expect(cancelled.phase).toBe("interactive");
     expect(provider.aborted).toEqual([]);
-    expect(cancelled.fixSession?.status).toBe("idle");
+    expect(cancelled.addressFindingsSession?.status).toBe("idle");
   });
 });
 
@@ -2008,17 +2008,22 @@ test("MultiReviewService retries a failed consolidation with a fresh Address Fin
     const failed = await snapshot(started.id);
     expect(failed?.phase).toBe("failed");
     expect(failed?.error).toBe("The consolidation session failed");
-    expect(failed?.fixSession).toMatchObject({ providerSessionId: "session-2", status: "failed" });
+    expect(failed?.addressFindingsSession).toMatchObject({
+      providerSessionId: "session-2",
+      status: "failed",
+    });
 
     provider.statusOverrides.delete("session-2");
     const retried = await service.retry(started.id);
     expect(retried.phase).toBe("consolidating");
-    expect(retried.fixSession).toBeUndefined();
+    expect(retried.addressFindingsSession).toBeUndefined();
     expect(retried.activeRequest).toBeUndefined();
     expect(provider.aborted).toEqual(["session-2"]);
 
     await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
-    expect((await snapshot(started.id))?.fixSession?.providerSessionId).toBe("session-3");
+    expect((await snapshot(started.id))?.addressFindingsSession?.providerSessionId).toBe(
+      "session-3",
+    );
   });
 });
 
@@ -2035,7 +2040,7 @@ test("MultiReviewService fails a consolidation on a terminal turn error and repo
     const failed = await snapshot(started.id);
     expect(failed?.phase).toBe("failed");
     expect(failed?.error).toBe(`The consolidation session failed: ${detail}`);
-    expect(failed?.fixSession).toMatchObject({
+    expect(failed?.addressFindingsSession).toMatchObject({
       providerSessionId: "session-2",
       status: "failed",
     });
@@ -2251,7 +2256,7 @@ test("MultiReviewService retains recovery state when provider construction fails
             providerSessionId: "session-orphan",
           },
         ],
-        fixModel: { agent: "claude", model: "opus" },
+        addressFindingsModel: { agent: "claude", model: "opus" },
         phase: "cancelled",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -2525,7 +2530,7 @@ test("MultiReviewService moves the queued reviewers up when one is stopped", asy
         admissionState: "queued" as const,
         queuePosition: index + 1,
       })),
-      fixModel: { agent: "claude", model: "opus" },
+      addressFindingsModel: { agent: "claude", model: "opus" },
       phase: "reviewing",
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -2815,15 +2820,15 @@ test("MultiReviewService rewinds consolidation when a completed reviewer is rest
             tokenCount: 10_000,
             tokenBaseline: 0,
           },
-          fix: { startedAt: "2026-08-14T00:10:00.000Z", tokenBaseline: 20_000 },
+          "address-findings": { startedAt: "2026-08-14T00:10:00.000Z", tokenBaseline: 20_000 },
         };
       });
       const ready = (await snapshot(started.id))!;
       expect(ready.consolidationOverlap).toBeDefined();
       const reviewerSessionId = ready.reviewers[0]!.providerSessionId!;
-      const addressFindingsSessionId = ready.fixSession!.providerSessionId;
+      const addressFindingsSessionId = ready.addressFindingsSession!.providerSessionId;
       const reviewerSessionKey = ready.reviewers[0]!.sessionKey!;
-      const addressFindingsKey = ready.fixSession!.sessionKey;
+      const addressFindingsKey = ready.addressFindingsSession!.sessionKey;
 
       const restarted = await service.restartReviewer(started.id, ready.reviewers[0]!.id);
       expect(restarted.phase).toBe("reviewing");
@@ -2833,13 +2838,13 @@ test("MultiReviewService rewinds consolidation when a completed reviewer is rest
       expect(restarted.consolidatedReport).toBeUndefined();
       expect(restarted.consolidationOverlap).toBeUndefined();
       expect((await snapshot(started.id))?.consolidationOverlap).toBeUndefined();
-      expect(restarted.fixSession).toBeUndefined();
+      expect(restarted.addressFindingsSession).toBeUndefined();
       expect(restarted.activeRequest).toBeUndefined();
       expect(restarted.stepRuntimes?.prepare).toBeDefined();
       expect(restarted.stepRuntimes?.consolidate).toBeUndefined();
-      expect(restarted.stepRuntimes?.fix).toBeUndefined();
+      expect(restarted.stepRuntimes?.["address-findings"]).toBeUndefined();
       expect(restarted.reviewers[0]?.sessionKey).not.toBe(reviewerSessionKey);
-      expect(restarted.fixSessionKey).not.toBe(addressFindingsKey);
+      expect(restarted.addressFindingsSessionKey).not.toBe(addressFindingsKey);
       expect(provider.aborted).toEqual(
         expect.arrayContaining([reviewerSessionId, addressFindingsSessionId]),
       );
@@ -2852,19 +2857,21 @@ test("MultiReviewService rewinds consolidation when a completed reviewer is rest
       const reconsolidated = (await snapshot(started.id))!;
       expect(reconsolidated.consolidationOverlap).toBeDefined();
       expect(reconsolidated.reviewers[0]?.providerSessionId).not.toBe(reviewerSessionId);
-      expect(reconsolidated.fixSession?.providerSessionId).not.toBe(addressFindingsSessionId);
-      expect(reconsolidated.fixSession?.sessionKey).toStartWith(
+      expect(reconsolidated.addressFindingsSession?.providerSessionId).not.toBe(
+        addressFindingsSessionId,
+      );
+      expect(reconsolidated.addressFindingsSession?.sessionKey).toStartWith(
         `multi-review:${started.id}:interactive:`,
       );
-      expect(reconsolidated.fixSessionKey).toBe(restarted.fixSessionKey);
-      expect(reconsolidated.restartFixAfterConsolidation).toBeUndefined();
+      expect(reconsolidated.addressFindingsSessionKey).toBe(restarted.addressFindingsSessionKey);
+      expect(reconsolidated.restartAddressFindingsAfterConsolidation).toBeUndefined();
     },
     {
       serviceOptions: {
         dispatchAddressFindingsPrompt: async (workflow, _presentation) => ({
           tabId: workflow.addressTabId!,
-          fixSession: {
-            ...workflow.fixModel,
+          addressFindingsSession: {
+            ...workflow.addressFindingsModel,
             sessionKey: workflow.addressSessionKey!,
             providerSessionId: "provider-restarted-fix",
             requestIds: [workflow.addressRequestId!],
@@ -2906,7 +2913,7 @@ test("MultiReviewService gives restarted auto-fix a fresh durable identity", asy
 
       const interactive = (await snapshot(started.id))!;
       const restarted = await service.restartReviewer(started.id, interactive.reviewers[0]!.id);
-      expect(restarted.restartFixAfterConsolidation).toBe(true);
+      expect(restarted.restartAddressFindingsAfterConsolidation).toBe(true);
       expect(restarted.phase).toBe("reviewing");
 
       await waitUntil(async () => {
@@ -2920,10 +2927,12 @@ test("MultiReviewService gives restarted auto-fix a fresh durable identity", asy
       expect(replayed.requestId).toStartWith(`multi-review-address:${started.id}:`);
       expect(replayed.tabId).toStartWith(`multi-review-fix:${started.id}:`);
       expect(replayed).not.toEqual(first);
-      expect((await snapshot(started.id))?.restartFixAfterConsolidation).toBeUndefined();
+      expect(
+        (await snapshot(started.id))?.restartAddressFindingsAfterConsolidation,
+      ).toBeUndefined();
     },
     {
-      autoFix: true,
+      autoAddressFindings: true,
       packageFlow: true,
       serviceOptions: {
         dispatchAddressFindingsPrompt: async (workflow) => {
@@ -2934,8 +2943,8 @@ test("MultiReviewService gives restarted auto-fix a fresh durable identity", asy
           });
           return {
             tabId: workflow.addressTabId!,
-            fixSession: {
-              ...workflow.fixModel,
+            addressFindingsSession: {
+              ...workflow.addressFindingsModel,
               sessionKey: workflow.addressSessionKey!,
               providerSessionId: `provider-auto-fix-${dispatches.length}`,
               requestIds: [workflow.addressRequestId!],
@@ -2964,10 +2973,10 @@ test("MultiReviewService invalidates incomplete fix work when a reviewer restart
     expect(restarted.phase).toBe("reviewing");
     expect(restarted.reviewers[0]).toMatchObject({ status: "pending" });
     expect(restarted.consolidatedReport).toBeUndefined();
-    expect(restarted.fixSession).toBeUndefined();
-    expect(restarted.fixResult).toBeUndefined();
-    expect(restarted.restartFixAfterConsolidation).toBe(true);
-    expect(provider.aborted).toContain(failed.fixSession!.providerSessionId);
+    expect(restarted.addressFindingsSession).toBeUndefined();
+    expect(restarted.addressFindingsResult).toBeUndefined();
+    expect(restarted.restartAddressFindingsAfterConsolidation).toBe(true);
+    expect(provider.aborted).toContain(failed.addressFindingsSession!.providerSessionId);
 
     const claim = await storage.claimMultiReviewController(workflowId, "other-owner", 15_000);
     expect(claim.granted).toBe(false);
@@ -3035,7 +3044,8 @@ test("MultiReviewService pauses and resumes preparation in the retained provider
       });
       const running = (await snapshot(started.id))!;
       const requestId = running.activeRequest!.requestId;
-      const providerSessionId = (running.reviewSession ?? running.fixSession)!.providerSessionId;
+      const providerSessionId = (running.reviewSession ?? running.addressFindingsSession)!
+        .providerSessionId;
 
       await storage.setEnvironmentUnread(started.environmentId, false);
       const paused = await service.pauseStep(started.id, "prepare");
@@ -3050,7 +3060,7 @@ test("MultiReviewService pauses and resumes preparation in the retained provider
       });
       expect((await storage.getEnvironment(started.environmentId))!.unreadReason).toBeUndefined();
       expect(paused.activeRequest).toBeUndefined();
-      expect((paused.reviewSession ?? paused.fixSession)?.status).toBe("idle");
+      expect((paused.reviewSession ?? paused.addressFindingsSession)?.status).toBe("idle");
       expect(provider.aborted).toContain(providerSessionId);
       expect(isMultiReviewWorkflow(paused)).toBe(true);
 
@@ -3067,9 +3077,9 @@ test("MultiReviewService pauses and resumes preparation in the retained provider
         );
       });
       const redispatched = (await snapshot(started.id))!;
-      expect((redispatched.reviewSession ?? redispatched.fixSession)?.providerSessionId).toBe(
-        providerSessionId,
-      );
+      expect(
+        (redispatched.reviewSession ?? redispatched.addressFindingsSession)?.providerSessionId,
+      ).toBe(providerSessionId);
     },
     { packageFlow: true },
   );
@@ -3120,7 +3130,7 @@ test("MultiReviewService keeps failed validation cancellation supervised until r
       });
       await mutateStoredWorkflow(storage, started.id, (workflow) => {
         delete workflow.activeRequest;
-        const session = workflow.reviewSession ?? workflow.fixSession;
+        const session = workflow.reviewSession ?? workflow.addressFindingsSession;
         if (session) {
           session.status = "idle";
           session.completedAt = new Date().toISOString();
@@ -3198,7 +3208,7 @@ test("MultiReviewService propagates a fence loss after validation cancellation",
       });
       await mutateStoredWorkflow(storage, started.id, (workflow) => {
         delete workflow.activeRequest;
-        const session = workflow.reviewSession ?? workflow.fixSession;
+        const session = workflow.reviewSession ?? workflow.addressFindingsSession;
         if (session) session.status = "idle";
         workflow.validationRun = newReviewValidationRun("pause-validation-fence", {
           headRef: REVIEW_HEAD,
@@ -3263,7 +3273,8 @@ test("MultiReviewService pauses and resumes consolidation in its retained sessio
     });
     const running = (await snapshot(started.id))!;
     const requestId = running.activeRequest!.requestId;
-    const providerSessionId = (running.reviewSession ?? running.fixSession)!.providerSessionId;
+    const providerSessionId = (running.reviewSession ?? running.addressFindingsSession)!
+      .providerSessionId;
 
     provider.statusOverrides.set(providerSessionId, "idle");
     const paused = await service.pauseStep(started.id, "consolidate");
@@ -3274,7 +3285,7 @@ test("MultiReviewService pauses and resumes consolidation in its retained sessio
     });
     expect(paused.validationRun).toBeUndefined();
     expect(paused.activeRequest).toBeUndefined();
-    expect((paused.reviewSession ?? paused.fixSession)?.status).toBe("idle");
+    expect((paused.reviewSession ?? paused.addressFindingsSession)?.status).toBe("idle");
 
     provider.statusOverrides.set(providerSessionId, "running");
     const resumed = await service.resumeStep(started.id, "consolidate");
@@ -3287,7 +3298,9 @@ test("MultiReviewService pauses and resumes consolidation in its retained sessio
         current.activeRequest.requestId !== requestId
       );
     });
-    expect((await snapshot(started.id))?.fixSession?.providerSessionId).toBe(providerSessionId);
+    expect((await snapshot(started.id))?.addressFindingsSession?.providerSessionId).toBe(
+      providerSessionId,
+    );
   });
 });
 
@@ -3330,7 +3343,7 @@ test("MultiReviewService clears paused markers when paused reconciliation fails"
       provider.statusValue = "idle";
       await service.pauseStep(started.id, "prepare");
       await mutateStoredWorkflow(storage, started.id, (workflow) => {
-        const session = workflow.reviewSession ?? workflow.fixSession;
+        const session = workflow.reviewSession ?? workflow.addressFindingsSession;
         if (session) session.status = "running";
       });
 
@@ -3377,7 +3390,7 @@ test("MultiReviewService rejects pausing the interactive Address Findings step",
       await service.address(started.id);
       await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
 
-      await expect(service.pauseStep(started.id, "fix")).rejects.toThrow(
+      await expect(service.pauseStep(started.id, "address-findings")).rejects.toThrow(
         "The Address Findings step is not running",
       );
     },
@@ -3385,8 +3398,8 @@ test("MultiReviewService rejects pausing the interactive Address Findings step",
       serviceOptions: {
         dispatchAddressFindingsPrompt: async (workflow) => ({
           tabId: workflow.addressTabId!,
-          fixSession: {
-            ...workflow.fixModel,
+          addressFindingsSession: {
+            ...workflow.addressFindingsModel,
             sessionKey: workflow.addressSessionKey!,
             providerSessionId: "interactive-fix-not-pausable",
             requestIds: [workflow.addressRequestId!],
@@ -3413,7 +3426,7 @@ test("MultiReviewService restarts consolidation without rerunning completed revi
       targetBranch: "main",
       reviewers: [{ agent: "claude", model: "opus" }],
       reviewModel: preparationModel,
-      fixModel: { agent: "claude", model: "opus" },
+      addressFindingsModel: { agent: "claude", model: "opus" },
     });
     await waitUntil(async () => {
       await service.advanceNow(started.id);
@@ -3523,7 +3536,7 @@ test("MultiReviewService keeps per-step selections on ordinary restarts", async 
       targetBranch: "main",
       reviewers: [{ agent: "claude", model: "opus" }],
       reviewModel,
-      fixModel: { agent: "claude", model: "opus" },
+      addressFindingsModel: { agent: "claude", model: "opus" },
     });
     await waitUntil(async () => {
       await service.advanceNow(started.id);
@@ -3557,31 +3570,31 @@ test("MultiReviewService restarts the Address Findings handoff with a fresh dura
       });
       const first = await service.address(started.id);
       const firstRequestId = first.addressRequestId!;
-      const firstSessionId = first.fixSession!.providerSessionId;
+      const firstSessionId = first.addressFindingsSession!.providerSessionId;
       await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
 
-      const restarted = await service.restartStep(started.id, "fix");
+      const restarted = await service.restartStep(started.id, "address-findings");
       expect(restarted).toMatchObject({
         phase: "interactive",
         addressPromptPending: true,
         addressPromptAttempts: 0,
-        fixSession: { providerSessionId: firstSessionId },
+        addressFindingsSession: { providerSessionId: firstSessionId },
       });
       expect(restarted.addressRequestId).not.toBe(firstRequestId);
-      expect(restarted.fixResult).toBeUndefined();
+      expect(restarted.addressFindingsResult).toBeUndefined();
       expect(provider.aborted).not.toContain(firstSessionId);
 
       await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
       expect(await snapshot(started.id)).toMatchObject({
         phase: "interactive",
-        fixSession: { providerSessionId: firstSessionId },
+        addressFindingsSession: { providerSessionId: firstSessionId },
         stepRuntimes: { fix: { startedAt: expect.any(String) } },
       });
     },
     {
       serviceOptions: {
         dispatchAddressFindingsPrompt: async (workflow) => ({
-          fixSession: workflow.fixSession!,
+          addressFindingsSession: workflow.addressFindingsSession!,
           tabId: workflow.addressTabId!,
         }),
       },
@@ -3603,22 +3616,23 @@ test("MultiReviewService restarts Address Findings in the selected model and rep
       });
       await service.address(started.id);
       await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
-      const firstSessionId = (await snapshot(started.id))!.fixSession!.providerSessionId;
+      const firstSessionId = (await snapshot(started.id))!.addressFindingsSession!
+        .providerSessionId;
       const selectedModel = {
         agent: "codex" as const,
         model: "gpt-5.4",
         reasoningEffort: "high",
       };
 
-      const restarted = await service.restartStep(started.id, "fix", selectedModel);
-      expect(restarted.fixModel).toEqual(selectedModel);
-      expect(restarted.fixSession).toBeUndefined();
+      const restarted = await service.restartStep(started.id, "address-findings", selectedModel);
+      expect(restarted.addressFindingsModel).toEqual(selectedModel);
+      expect(restarted.addressFindingsSession).toBeUndefined();
       expect(provider.aborted).toContain(firstSessionId);
 
       await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
       expect(await snapshot(started.id)).toMatchObject({
-        fixModel: selectedModel,
-        fixSession: {
+        addressFindingsModel: selectedModel,
+        addressFindingsSession: {
           ...selectedModel,
           providerSessionId: "replacement-fix-1",
         },
@@ -3627,8 +3641,8 @@ test("MultiReviewService restarts Address Findings in the selected model and rep
     {
       serviceOptions: {
         dispatchAddressFindingsPrompt: async (workflow) => ({
-          fixSession: workflow.fixSession ?? {
-            ...workflow.fixModel,
+          addressFindingsSession: workflow.addressFindingsSession ?? {
+            ...workflow.addressFindingsModel,
             sessionKey: workflow.addressSessionKey!,
             providerSessionId: `replacement-fix-${++replacementCount}`,
             requestIds: [workflow.addressRequestId!],
@@ -3642,7 +3656,7 @@ test("MultiReviewService restarts Address Findings in the selected model and rep
   );
 });
 
-test.each(["fix", "consolidate", "prepare", "reviewer"] as const)(
+test.each(["address-findings", "consolidate", "prepare", "reviewer"] as const)(
   "MultiReviewService aborts a custom Address Findings through its owning provider before %s restart",
   async (restartKind) => {
     const defaultProvider = new Provider();
@@ -3659,11 +3673,12 @@ test.each(["fix", "consolidate", "prepare", "reviewer"] as const)(
         });
         await service.customAddressFindings({
           workflowId: started.id,
-          fixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+          addressFindingsModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
           instruction: "Preserve this custom launch",
         });
         await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
-        const customSessionId = (await snapshot(started.id))!.fixSession!.providerSessionId;
+        const customSessionId = (await snapshot(started.id))!.addressFindingsSession!
+          .providerSessionId;
 
         if (restartKind === "reviewer") {
           await service.restartReviewer(started.id, (await snapshot(started.id))!.reviewers[0]!.id);
@@ -3680,8 +3695,8 @@ test.each(["fix", "consolidate", "prepare", "reviewer"] as const)(
         serviceOptions: {
           dispatchAddressFindingsPrompt: async (workflow) => ({
             tabId: workflow.addressTabId!,
-            fixSession: {
-              ...(workflow.customFixModel ?? workflow.fixModel),
+            addressFindingsSession: {
+              ...(workflow.customAddressFindingsModel ?? workflow.addressFindingsModel),
               sessionKey: workflow.addressSessionKey!,
               providerSessionId: `custom-fix-${restartKind}`,
               requestIds: [workflow.addressRequestId!],
@@ -3713,7 +3728,7 @@ test("MultiReviewService replays a restarted custom Address Findings instruction
       const model = { agent: "codex" as const, model: "gpt-5.4", reasoningEffort: "high" };
       await service.customAddressFindings({
         workflowId: started.id,
-        fixModel: model,
+        addressFindingsModel: model,
         instruction: "Repair only the reviewed regression",
       });
       await waitUntil(() => dispatches.length === 1);
@@ -3728,19 +3743,21 @@ test("MultiReviewService replays a restarted custom Address Findings instruction
         instruction: "Repair only the reviewed regression",
         model,
       });
-      expect((await snapshot(started.id))?.restartFixAfterConsolidation).toBeUndefined();
+      expect(
+        (await snapshot(started.id))?.restartAddressFindingsAfterConsolidation,
+      ).toBeUndefined();
     },
     {
       serviceOptions: {
         dispatchAddressFindingsPrompt: async (workflow) => {
           dispatches.push({
-            instruction: workflow.customFixInstruction,
-            model: workflow.customFixModel,
+            instruction: workflow.customAddressFindingsInstruction,
+            model: workflow.customAddressFindingsModel,
           });
           return {
             tabId: workflow.addressTabId!,
-            fixSession: {
-              ...(workflow.customFixModel ?? workflow.fixModel),
+            addressFindingsSession: {
+              ...(workflow.customAddressFindingsModel ?? workflow.addressFindingsModel),
               sessionKey: workflow.addressSessionKey!,
               providerSessionId: `replayed-custom-fix-${dispatches.length}`,
               requestIds: [workflow.addressRequestId!],
@@ -3863,13 +3880,13 @@ test.each([
   },
   {
     name: "unstarted fix",
-    kind: "fix" as const,
+    kind: "address-findings" as const,
     message: "Address Findings has not started",
     mutate: (workflow: MultiReviewWorkflow) => {
       workflow.phase = "ready";
-      delete workflow.fixLaunch;
+      delete workflow.addressFindingsLaunch;
       delete workflow.stepRuntimes;
-      delete workflow.fixResult;
+      delete workflow.addressFindingsResult;
     },
   },
   {
@@ -3891,12 +3908,12 @@ test.each([
   },
   {
     name: "fix without consolidation",
-    kind: "fix" as const,
+    kind: "address-findings" as const,
     message: "without a consolidated report",
     mutate: (workflow: MultiReviewWorkflow) => {
       workflow.phase = "failed";
       workflow.error = "Previous fix failed";
-      workflow.fixLaunch = { kind: "default" };
+      workflow.addressFindingsLaunch = { kind: "default" };
       delete workflow.consolidatedReport;
     },
   },
@@ -4387,7 +4404,7 @@ test("MultiReviewService fails a consolidation session whose transcript stopped 
       });
       const failed = (await snapshot(started.id))!;
       expect(failed.error).toContain("consolidation session produced no activity");
-      expect(failed.fixSession?.status).toBe("failed");
+      expect(failed.addressFindingsSession?.status).toBe("failed");
       expect(provider.aborted).toContain("session-2");
     },
     { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } },
@@ -4407,12 +4424,12 @@ test("MultiReviewService gives a fresh consolidation baseline a grace clock", as
       const started = await start();
       await waitUntil(async () => {
         await service.advanceNow(started.id);
-        return (await snapshot(started.id))?.fixSession?.progressAt !== undefined;
+        return (await snapshot(started.id))?.addressFindingsSession?.progressAt !== undefined;
       });
 
       const consolidating = (await snapshot(started.id))!;
       expect(consolidating.phase).toBe("consolidating");
-      expect(consolidating.fixSession?.status).toBe("running");
+      expect(consolidating.addressFindingsSession?.status).toBe("running");
       expect(provider.aborted).not.toContain("session-2");
       expect(provider.messageOptions).toContainEqual({ limit: 1 });
     },
@@ -4596,7 +4613,7 @@ test("Multi Review prepares and consolidates with its review model before openin
           model: "review-coordinator",
           reasoningEffort: "medium",
         },
-        fixModel: { agent: "claude", model: "fix-model", reasoningEffort: "high" },
+        addressFindingsModel: { agent: "claude", model: "fix-model", reasoningEffort: "high" },
       });
       expect(started.phase).toBe("preparing");
       await service.advanceNow(started.id);
@@ -4704,11 +4721,11 @@ test("Multi Review prepares and consolidates with its review model before openin
         openedFor: "prepare",
         status: "idle",
       });
-      expect(ready.fixSession).toBeUndefined();
+      expect(ready.addressFindingsSession).toBeUndefined();
       const interactive = await service.address(started.id);
       expect(interactive.phase).toBe("interactive");
       expect(interactive.addressPromptPending).toBe(true);
-      expect(interactive.fixSession).toBeUndefined();
+      expect(interactive.addressFindingsSession).toBeUndefined();
       expect(interactive.reviewSession?.providerSessionId).toBe("session-4");
       await service.close(started.id);
       expect(new Set(provider.closed)).toEqual(
@@ -4795,7 +4812,9 @@ test("Multi Review closes retained preparation before creating its replacement a
       const replaced = (await snapshot(started.id))!;
       expect(provider.closed).toContain(retained.providerSessionId);
       expect(replaced.preparationSession).toBeUndefined();
-      expect(replaced.fixSession?.providerSessionId).not.toBe(retained.providerSessionId);
+      expect(replaced.addressFindingsSession?.providerSessionId).not.toBe(
+        retained.providerSessionId,
+      );
       expect(provider.creates).toHaveLength(createsBefore + 1);
     },
     { packageFlow: true },
@@ -4823,14 +4842,14 @@ test.each([
         const retained = (await snapshot(started.id))!.preparationSession!;
         await mutateStoredWorkflow(storage, started.id, (workflow) => {
           workflow.phase = "consolidating";
-          workflow.fixSession = { ...retained, status: running ? "running" : "idle" };
+          workflow.addressFindingsSession = { ...retained, status: running ? "running" : "idle" };
           delete workflow.preparationSession;
           delete workflow.activeRequest;
           delete workflow.consolidatedReport;
           if (modelChanged) {
             workflow.consolidationModel = { agent: "codex", model: "gpt-5.4" };
-            workflow.reviewSession = workflow.fixSession;
-            delete workflow.fixSession;
+            workflow.reviewSession = workflow.addressFindingsSession;
+            delete workflow.addressFindingsSession;
           }
         });
         await service.advanceNow(started.id);
@@ -5372,8 +5391,8 @@ test("package preparation uses the durable fix-session stall clock", async () =>
 
       const failed = (await snapshot(started.id))!;
       expect(failed.error).toContain("preparation session produced no activity");
-      expect(failed.fixSession?.status).toBe("failed");
-      expect(provider.aborted).toContain(failed.fixSession!.providerSessionId);
+      expect(failed.addressFindingsSession?.status).toBe("failed");
+      expect(provider.aborted).toContain(failed.addressFindingsSession!.providerSessionId);
     },
     {
       packageFlow: true,
@@ -5394,7 +5413,8 @@ test("restarting a packaged reviewer re-verifies and reuses the read-only packag
       await waitUntil(async () => (await snapshot(started.id))?.activeRequest?.state === "sent");
       const preparing = (await snapshot(started.id))!;
       const preparationSessionId =
-        preparing.reviewSession?.providerSessionId ?? preparing.fixSession?.providerSessionId;
+        preparing.reviewSession?.providerSessionId ??
+        preparing.addressFindingsSession?.providerSessionId;
       expect(preparationSessionId).toBeDefined();
       // start() deliberately supervises in the background. If this test joins
       // that run while it is still settling, runLocked may perform the queued
@@ -5496,11 +5516,11 @@ test("failed package generation blocks reviewers and retry runs preparation agai
       expect((await snapshot(started.id))?.phase).toBe("failed");
       expect((await snapshot(started.id))?.error).toContain("requires a clean worktree");
       expect(provider.creates).toHaveLength(1);
-      const previousKey = (await snapshot(started.id))!.fixSessionKey;
+      const previousKey = (await snapshot(started.id))!.addressFindingsSessionKey;
       blocked = false;
       const retried = await service.retry(started.id);
       expect(retried.phase).toBe("preparing");
-      expect(retried.fixSessionKey).not.toBe(previousKey);
+      expect(retried.addressFindingsSessionKey).not.toBe(previousKey);
       await waitUntil(async () => {
         await service.advanceNow(started.id);
         return (await snapshot(started.id))?.phase === "ready";
@@ -5569,7 +5589,7 @@ test("stale-snapshot retry abandons both separate review and fix sessions", asyn
         targetBranch: "main",
         reviewers: [{ agent: "claude", model: "opus" }],
         reviewModel: { agent: "claude", model: "review-coordinator" },
-        fixModel: { agent: "claude", model: "fix-model" },
+        addressFindingsModel: { agent: "claude", model: "fix-model" },
       });
       await waitUntil(async () => {
         await service.advanceNow(started.id);
@@ -5577,15 +5597,15 @@ test("stale-snapshot retry abandons both separate review and fix sessions", asyn
       });
       const ready = (await snapshot(started.id))!;
       expect(ready.consolidationOverlap).toBeDefined();
-      const oldAddressFindingsSessionKey = ready.fixSessionKey;
+      const oldAddressFindingsSessionKey = ready.addressFindingsSessionKey;
 
       await mutateStoredWorkflow(storage, started.id, (workflow) => {
         workflow.phase = "failed";
         workflow.reviewSnapshotStale = true;
         workflow.error = "The review snapshot is stale";
-        workflow.fixSession = {
-          ...workflow.fixModel,
-          sessionKey: workflow.fixSessionKey ?? `multi-review:${workflow.id}:fix`,
+        workflow.addressFindingsSession = {
+          ...workflow.addressFindingsModel,
+          sessionKey: workflow.addressFindingsSessionKey ?? `multi-review:${workflow.id}:fix`,
           providerSessionId: "provider-stale-fix",
           requestIds: ["fix-stale"],
           status: "idle",
@@ -5597,13 +5617,13 @@ test("stale-snapshot retry abandons both separate review and fix sessions", asyn
 
       expect(retried.phase).toBe("preparing");
       expect(retried.reviewSession).toBeUndefined();
-      expect(retried.fixSession).toBeUndefined();
+      expect(retried.addressFindingsSession).toBeUndefined();
       expect(retried.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(true);
       expect(retried.reviewers.every((reviewer) => reviewer.report === undefined)).toBe(true);
       expect(retried.consolidatedReport).toBeUndefined();
       expect(retried.consolidationOverlap).toBeUndefined();
       expect((await snapshot(started.id))?.consolidationOverlap).toBeUndefined();
-      expect(retried.fixSessionKey).not.toBe(oldAddressFindingsSessionKey);
+      expect(retried.addressFindingsSessionKey).not.toBe(oldAddressFindingsSessionKey);
       expect(provider.aborted).toContain(ready.reviewSession!.providerSessionId);
       expect(provider.aborted).toContain("provider-stale-fix");
     },

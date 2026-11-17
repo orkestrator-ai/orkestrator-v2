@@ -10,12 +10,9 @@
  * fan-out, review packages) stay open objects.
  *
  * **The build pipeline guard is not used here.** `isBuildPipeline` refuses a
- * reviewer key an older client does not know, and the renderer runs it only
- * after rewriting the Rework and Address Findings vocabulary
- * (`canonicalBuildPipeline`, `workflow-vocabulary.ts`). Running it inside a
- * decode, before that rewrite, would refuse a newer backend's snapshot that
- * today's renderer reads. The stored `snapshot` is `unknown` in the model
- * and stays so: the renderer's stores canonicalise and guard it.
+ * reviewer key an older client does not know, so running it inside a decode
+ * would refuse a whole answer over one record. The stored `snapshot` is
+ * `unknown` in the model and stays so: the renderer's stores guard it.
  *
  * Values a newer backend may extend (phases, agents, deliveries) are
  * `Schema.String` unless a union branches on them.
@@ -78,7 +75,7 @@ export const BuildPipelineSchema = modelRecord<BuildPipeline>()({
  * required, and the backend's `PersistedBuildPipeline` and the web's view of
  * it are this type. `snapshot` is the `BuildPipeline`, `unknown` here (a
  * record written by an older build may predate fields the current guard
- * needs); the renderer canonicalises and guards it.
+ * needs); the renderer guards it.
  */
 export const BuildPipelineRecordSchema = openRecord({
   version: Schema.Finite,

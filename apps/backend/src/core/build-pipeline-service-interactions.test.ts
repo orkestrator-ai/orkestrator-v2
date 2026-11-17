@@ -166,9 +166,9 @@ class FakeProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : phase === "build" || phase === "fix"
+        : phase === "build" || phase === "rework"
           ? TEST_REVIEW_PREPARATION
-          : phase === "address"
+          : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
             : { complete: true, rationale: "All criteria pass." }) as T,
     };
@@ -692,7 +692,7 @@ describe("BuildPipelineService", () => {
       failed.phase = "failed";
       failed.structuredReview = report;
       failed.failureContext = {
-        phase: "addressing",
+        phase: "addressing-findings",
         kind: "interactive-request",
         sessionId: failed.sessions[failed.currentSessionIndex]!.sdkSessionId,
         requestId: "permission-1",
@@ -708,14 +708,14 @@ describe("BuildPipelineService", () => {
 
       const retried = await service.retryInteractionFailure(started.id);
       const dispatch = provider.sent.at(-1)!;
-      expect(retried.phase).toBe("addressing");
+      expect(retried.phase).toBe("addressing-findings");
       expect(retried.structuredReview).toEqual(report);
-      expect(retried.sessions.at(-1)).toMatchObject({ phase: "address" });
+      expect(retried.sessions.at(-1)).toMatchObject({ phase: "address-findings" });
       expect(provider.created.at(-1)?.options?.mode).toBe("build");
       expect(dispatch.mode).toBe("build");
       // The retried Address turn opens its own fix-result slot.
       expect(dispatch.schema).toEqual(REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA);
-      expect(retried.sessions.at(-1)?.addressReportKind).toBe("fix-result");
+      expect(retried.sessions.at(-1)?.addressFindingsReportKind).toBe("address-findings-result");
       expect(dispatch.prompt).toContain("Address this exact finding");
       expect(dispatch.prompt).toContain("orkestrator-handoff-transcript-json");
       expect(dispatch.prompt).toContain("non-interactive build session");
@@ -2929,7 +2929,7 @@ describe("BuildPipelineService", () => {
         snapshot.error = "The build session requested unexpected authorization";
         delete snapshot.structuredReview;
         snapshot.failureContext = {
-          phase: "addressing",
+          phase: "addressing-findings",
           kind: "interactive-request",
           sessionId: snapshot.sessions[0]!.sdkSessionId,
           requestId: "permission-1",
@@ -2989,12 +2989,12 @@ describe("BuildPipelineService", () => {
     await withService(async (service, storage, provider) => {
       const { started, session } = await startBuilding(service, storage);
       await mutateStored(storage, started.id, (snapshot) => {
-        snapshot.phase = "fixing";
+        snapshot.phase = "reworking";
         const current = snapshot.sessions[snapshot.currentSessionIndex]!;
-        current.phase = "fix";
+        current.phase = "rework";
         current.label = "Fix Session";
       });
-      provider.phases.set(session.sdkSessionId, "fix");
+      provider.phases.set(session.sdkSessionId, "rework");
 
       await service.pause(started.id);
       await service.resume(started.id);
@@ -3007,9 +3007,9 @@ describe("BuildPipelineService", () => {
       expect(resumed.schema).toBe(REVIEW_PREPARATION_RESULT_JSON_SCHEMA);
 
       const resuming = await pipeline(storage, started.id);
-      expect(resuming.phase).toBe("fixing");
+      expect(resuming.phase).toBe("reworking");
       expect(resuming.sessions[resuming.currentSessionIndex]).toMatchObject({
-        phase: "fix",
+        phase: "rework",
         structuredRequestId: resumed.requestId,
         structuredResultStatus: "pending",
       });

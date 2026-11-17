@@ -20,7 +20,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`. Re-checked 2026-11-05 against
 Re-checked 2026-11-05 against `41f9eb638`, reading the code rather than a live run:
 
 - `steerSupported` still dropped a failed request, a non-OK answer and an unreadable body without a trace. `HttpBridgeProvider` is the only implementation.
-- The transcript changes kept the `.catch(() => false)`, and there are two: the full projection and the progressive state read (`native-agent-transcript-projection.ts`). `steerSupported` handles its own failures, so neither catch can fire for an HTTP bridge.
+- The transcript changes kept the `.catch(() => false)`, and there are two: the full projection and the progressive state read (`native-agent-full-projection.ts` and `native-agent-progressive-session-state.ts` since 0057 split the projection on 2026-11-17). `steerSupported` handles its own failures, so neither catch can fire for an HTTP bridge.
 - `queuedSteerNote` still gives no note when the turn is not running, and the gate in `AgentNativeTab.controller.tsx` is still running, nothing parked and `actions.steer`.
 - New: the Claude and Codex bridges answer the qualification id `unknown` before any session lookup, and Pi and Cursor look it up in a journal that never holds it. A reachable Claude bridge with the route therefore always qualifies, so on Claude `actions.steer: false` needs the request itself to fail or answer non-OK. Other callers (build pipeline, Multi Review and branch mail) share `steerSupported`, so they write the same warning.
 

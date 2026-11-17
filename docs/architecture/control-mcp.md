@@ -284,6 +284,9 @@ original tools remain:
   remove one on a ticket (`list_ticket_labels`, `create_ticket_label`,
   `set_ticket_label`; [tickets.md](tickets.md#labels)). These are ticket
   labels, separate from a pull request's labels (`pr_label`, `pr_options`).
+- Coordinators only: delete a Kanban ticket with `delete_ticket`
+  ([tickets.md](tickets.md#deleting-a-ticket)). Operator credentials have no
+  public action that deletes a ticket, so the tool is not registered for them.
 - Coordinators only: work a project's linked Linear board
   (`list_linear_issues`, `get_linear_issue`, `create_linear_issue`,
   `update_linear_issue`, `add_linear_comment`, `list_linear_board_options`;

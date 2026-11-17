@@ -80,6 +80,7 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["create_ticket", "tickets"],
   ["update_ticket", "tickets"],
   ["add_ticket_comment", "tickets"],
+  ["delete_ticket", "tickets"],
   ["list_ticket_labels", "tickets"],
   ["create_ticket_label", "tickets"],
   ["set_ticket_label", "tickets"],

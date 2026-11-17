@@ -398,6 +398,89 @@ describe("the reset tolerance", () => {
   });
 });
 
+describe("disputed resets", () => {
+  const range = (earliest: number, latest: number) => ({ resetRange: { earliest, latest } });
+
+  test("a soonest-reset move needs the target sooner on every reset its login was given", () => {
+    // L's newest reading says its week ends at 169 h, an older one of L said 56 h.
+    expect(
+      decideAutoSwitch(
+        [
+          login("l", "l@example.com", {
+            usedPercent: 0,
+            resetsAt: at(169),
+            ...range(at(56), at(169)),
+          }),
+          login("m", "m@example.com", { usedPercent: 2, resetsAt: at(156) }),
+        ],
+        "l",
+      ),
+    ).toEqual(STAY);
+    expect(
+      decideAutoSwitch(
+        [
+          login("l", "l@example.com", {
+            usedPercent: 84,
+            resetsAt: at(56),
+            ...range(at(56), at(169)),
+          }),
+          login("m", "m@example.com", { usedPercent: 2, resetsAt: at(156) }),
+        ],
+        "m",
+      ),
+    ).toEqual(STAY);
+  });
+
+  test("past a disputed login, the next account sooner on every reading is still a move", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login("l", "l@example.com", {
+            usedPercent: 84,
+            resetsAt: at(56),
+            ...range(at(56), at(169)),
+          }),
+          login("n", "n@example.com", { usedPercent: 10, resetsAt: at(80) }),
+          login("m", "m@example.com", { usedPercent: 2, resetsAt: at(156) }),
+        ],
+        "m",
+      ),
+    ).toEqual({ action: "switch", accountId: "n", reason: "soonest-reset" });
+  });
+
+  test("a range within the tolerance of the move changes nothing", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login("active", "a@example.com", { usedPercent: 20, resetsAt: at(100) }),
+          login("other", "b@example.com", {
+            usedPercent: 50,
+            resetsAt: at(50),
+            ...range(at(50), at(98)),
+          }),
+        ],
+        "active",
+      ),
+    ).toEqual({ action: "switch", accountId: "other", reason: "soonest-reset" });
+  });
+
+  test("does not hold back a threshold move off a disputed login", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login("l", "l@example.com", {
+            usedPercent: 98,
+            resetsAt: at(56),
+            ...range(at(56), at(169)),
+          }),
+          login("m", "m@example.com", { usedPercent: 2, resetsAt: at(156) }),
+        ],
+        "l",
+      ),
+    ).toEqual({ action: "switch", accountId: "m", reason: "threshold" });
+  });
+});
+
 describe("the same login", () => {
   test("is one account, so resets milliseconds apart stay put in either order", () => {
     for (const [first, second] of [

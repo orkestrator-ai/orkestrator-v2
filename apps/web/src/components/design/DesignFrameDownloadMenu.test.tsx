@@ -16,6 +16,7 @@ describe("DesignFrameDownloadMenu", () => {
     render(
       <DesignFrameDownloadMenu
         frameName="Home"
+        frameSelected
         selectedCount={1}
         frameCount={3}
         onDownload={onDownload}
@@ -52,6 +53,7 @@ describe("DesignFrameDownloadMenu", () => {
     render(
       <DesignFrameDownloadMenu
         frameName="Home"
+        frameSelected
         selectedCount={2}
         frameCount={4}
         onDownload={onDownload}
@@ -76,6 +78,7 @@ describe("DesignFrameDownloadMenu", () => {
     render(
       <DesignFrameDownloadMenu
         frameName="Home"
+        frameSelected
         selectedCount={1}
         frameCount={1}
         onDownload={() => Promise.resolve()}
@@ -93,6 +96,7 @@ describe("DesignFrameDownloadMenu", () => {
     render(
       <DesignFrameDownloadMenu
         frameName="Home"
+        frameSelected
         selectedCount={1}
         frameCount={2}
         onDownload={onDownload}
@@ -113,6 +117,7 @@ describe("DesignFrameDownloadMenu", () => {
     render(
       <DesignFrameDownloadMenu
         frameName="Home"
+        frameSelected
         selectedCount={2}
         frameCount={3}
         onDownload={() => Promise.resolve()}
@@ -144,6 +149,7 @@ describe("DesignFrameDownloadMenu", () => {
     render(
       <DesignFrameDownloadMenu
         frameName="Home"
+        frameSelected
         selectedCount={1}
         frameCount={1}
         onDownload={() => Promise.resolve()}
@@ -157,5 +163,60 @@ describe("DesignFrameDownloadMenu", () => {
         .getAllByRole("menuitem")
         .map((item) => item.textContent),
     ).toEqual(["Download PNG", "Download WEBP", "Download PDF"]);
+  });
+
+  test("blue while the frame is selected, grey while only an element inside it is", () => {
+    const { rerender } = render(
+      <DesignFrameDownloadMenu
+        frameName="Home"
+        frameSelected
+        selectedCount={1}
+        frameCount={2}
+        onDownload={() => Promise.resolve()}
+        onCopy={() => Promise.resolve()}
+      />,
+    );
+    const trigger = () => screen.getByRole("button", { name: "Download Home" });
+    expect(trigger().getAttribute("data-frame-selected")).toBe("true");
+    expect(trigger().className).toContain("text-blue-500");
+    expect(trigger().className).not.toContain("text-muted-foreground");
+
+    rerender(
+      <DesignFrameDownloadMenu
+        frameName="Home"
+        frameSelected={false}
+        selectedCount={0}
+        frameCount={2}
+        onDownload={() => Promise.resolve()}
+        onCopy={() => Promise.resolve()}
+      />,
+    );
+    expect(trigger().hasAttribute("data-frame-selected")).toBe(false);
+    expect(trigger().className).toContain("text-muted-foreground");
+    expect(trigger().className).not.toContain("text-blue-500");
+  });
+
+  test("an element selection still downloads this frame and every frame", async () => {
+    const onDownload = mock(() => Promise.resolve());
+    render(
+      <DesignFrameDownloadMenu
+        frameName="Home"
+        frameSelected={false}
+        selectedCount={0}
+        frameCount={2}
+        onDownload={onDownload}
+        onCopy={() => Promise.resolve()}
+      />,
+    );
+    const menu = await open();
+    expect(
+      within(menu)
+        .getAllByRole("group")
+        .map((group) => group.getAttribute("aria-label")),
+    ).toEqual(["This frame", "All frames (2)"]);
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Download PNG" }));
+    });
+    expect(onDownload).toHaveBeenCalledWith("frame", "png");
   });
 });

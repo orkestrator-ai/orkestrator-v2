@@ -3,7 +3,9 @@ import { render } from "@testing-library/react";
 import {
   isBarePathToken,
   KEY_INFORMATION_CODE_CLASS,
+  type KeyInformationInline,
   KeyInformationText,
+  keyInformationInline,
   keyInformationSegments,
 } from "./KeyInformationText";
 
@@ -76,6 +78,131 @@ describe("keyInformationSegments", () => {
   });
 });
 
+describe("keyInformationInline", () => {
+  test("renders bold, italic and strikethrough", () => {
+    expect(keyInformationInline("**Health**: both _soft_ and *hard* ~~gone~~ now")).toEqual([
+      { kind: "strong", children: [{ kind: "text", value: "Health" }] },
+      { kind: "text", value: ": both " },
+      { kind: "em", children: [{ kind: "text", value: "soft" }] },
+      { kind: "text", value: " and " },
+      { kind: "em", children: [{ kind: "text", value: "hard" }] },
+      { kind: "text", value: " " },
+      { kind: "strike", children: [{ kind: "text", value: "gone" }] },
+      { kind: "text", value: " now" },
+    ]);
+  });
+
+  test("renders __bold__ and code inside emphasis", () => {
+    expect(keyInformationInline("__Docs__ and **the `backup-ts` service**")).toEqual([
+      { kind: "strong", children: [{ kind: "text", value: "Docs" }] },
+      { kind: "text", value: " and " },
+      {
+        kind: "strong",
+        children: [
+          { kind: "text", value: "the " },
+          { kind: "code", value: "backup-ts" },
+          { kind: "text", value: " service" },
+        ],
+      },
+    ]);
+  });
+
+  test("keeps emphasis delimiters inside a code span literal", () => {
+    expect(keyInformationInline("run `**x**` and `a_b_c`")).toEqual([
+      { kind: "text", value: "run " },
+      { kind: "code", value: "**x**" },
+      { kind: "text", value: " and " },
+      { kind: "code", value: "a_b_c" },
+    ]);
+  });
+
+  test.each([
+    ["**", "strong"],
+    ["*", "em"],
+    ["~~", "strike"],
+  ] as const)("keeps code opaque inside %s", (marker, kind) => {
+    const text = `${marker}use \`a${marker} b\` now${marker}`;
+    expect(keyInformationInline(text)).toEqual([
+      {
+        kind,
+        children: [
+          { kind: "text", value: "use " },
+          { kind: "code", value: `a${marker} b` },
+          { kind: "text", value: " now" },
+        ],
+      },
+    ]);
+    const { container } = render(<KeyInformationText text={text} />);
+    expect(container.querySelector(`${kind === "strike" ? "del" : kind} > code`)?.textContent).toBe(
+      `a${marker} b`,
+    );
+    expect(container.textContent).toBe(`use a${marker} b now`);
+  });
+
+  test.each(["*", "_"])("resolves adjacent %s delimiter runs", (marker) => {
+    for (const [text, prefix] of [
+      [marker.repeat(3) + "important" + marker.repeat(3), ""],
+      [marker.repeat(2) + "bold and " + marker + "important" + marker.repeat(3), "bold and "],
+    ]) {
+      const children: KeyInformationInline[] = [
+        ...(prefix ? [{ kind: "text" as const, value: prefix }] : []),
+        { kind: "em", children: [{ kind: "text", value: "important" }] },
+      ];
+      expect(keyInformationInline(text!)).toEqual([{ kind: "strong", children }]);
+      const { container } = render(<KeyInformationText text={text!} />);
+      expect(container.querySelector("strong > em")?.textContent).toBe("important");
+      expect(container.textContent).toBe(prefix + "important");
+    }
+  });
+
+  test.each([
+    ["see __tests__/a.ts", "see ", "__tests__/a.ts"],
+    ["edit __init__.py", "edit ", "__init__.py"],
+  ])("preserves dunder path in %s", (text, prefix, path) => {
+    expect(keyInformationInline(text)).toEqual([
+      { kind: "text", value: prefix },
+      { kind: "code", value: path },
+    ]);
+  });
+
+  test("keeps word-leading and slash-preceded globs separate", () => {
+    expect(keyInformationInline("*.test.ts and src/*.spec.ts")).toEqual([
+      { kind: "code", value: "*.test.ts" },
+      { kind: "text", value: " and " },
+      { kind: "code", value: "src/*.spec.ts" },
+    ]);
+  });
+
+  test("does not read glob stars as emphasis", () => {
+    expect(keyInformationInline("globs src/**/*.ts and lib/*.js")).toEqual([
+      { kind: "text", value: "globs " },
+      { kind: "code", value: "src/**/*.ts" },
+      { kind: "text", value: " and " },
+      { kind: "code", value: "lib/*.js" },
+    ]);
+  });
+
+  test("still highlights bare file paths beside emphasis", () => {
+    expect(keyInformationInline("**Docs**: see docs/guides/backups.md.")).toEqual([
+      { kind: "strong", children: [{ kind: "text", value: "Docs" }] },
+      { kind: "text", value: ": see " },
+      { kind: "code", value: "docs/guides/backups.md" },
+      { kind: "text", value: "." },
+    ]);
+  });
+
+  test.each([
+    "2 * 3 * 4",
+    "2**10 and 3**2",
+    "snake_case_name and other_name",
+    "a ** b ** c",
+    "**unclosed bold",
+    "trailing _ underscores _",
+  ])("leaves %s as prose", (text) => {
+    expect(keyInformationInline(text)).toEqual([{ kind: "text", value: text }]);
+  });
+});
+
 describe("isBarePathToken", () => {
   test.each([
     ["apps/backend/src/core/portable-inputs.ts", true],
@@ -100,6 +227,16 @@ describe("isBarePathToken", () => {
   ])("%s -> %p", (word, expected) => {
     expect(isBarePathToken(word)).toBe(expected);
   });
+});
+
+test("renders emphasis without its Markdown delimiters", () => {
+  const { container } = render(
+    <KeyInformationText text="**Transfers**: restic is _always_ pinned via `HTTP_PROXY`" />,
+  );
+  expect(container.querySelector("strong")?.textContent).toBe("Transfers");
+  expect(container.querySelector("em")?.textContent).toBe("always");
+  expect(container.querySelector("code")?.textContent).toBe("HTTP_PROXY");
+  expect(container.textContent).toBe("Transfers: restic is always pinned via HTTP_PROXY");
 });
 
 test("renders code segments with the transcript's inline-code chip", () => {

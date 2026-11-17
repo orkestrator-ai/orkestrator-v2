@@ -98,7 +98,8 @@ function ticketDetail(task: JsonRecord, environmentHead?: string): JsonRecord {
 
 /**
  * `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket`,
- * `add_ticket_comment`, and the label tools `list_ticket_labels`,
+ * `add_ticket_comment`, `delete_ticket` (not for operator credentials), and
+ * the label tools `list_ticket_labels`,
  * `create_ticket_label` and `set_ticket_label`.
  */
 export function registerTicketTools(
@@ -384,6 +385,75 @@ export function registerTicketTools(
   );
 
   registerTicketLabelTools(server, { invoke, operator });
+  // Operator credentials act through public actions, and none deletes a ticket.
+  if (!operator) registerDeleteTicketTool(server, invoke);
+}
+
+/**
+ * `delete_ticket`: removes a ticket from this board, which syncs the deletion
+ * to every machine with the project. A ticket with work still attached is
+ * refused, so a coordinator cannot pull a ticket out from under a running
+ * build or environment.
+ */
+function registerDeleteTicketTool(server: McpServer, invoke: ControlMcpToolContext["invoke"]) {
+  server.registerTool(
+    "delete_ticket",
+    {
+      title: "Delete a Kanban ticket",
+      description:
+        "Permanently delete a ticket, with its comments and images, from every machine with this project. Only for a ticket the user asked to remove, or one you made by mistake or merged into another. " +
+        "Refused while work is attached or a pipeline is active. Not found means it is not on this project's board.",
+      inputSchema: toolInput(
+        Schema.Struct({
+          projectId: str({ trim: true, min: 1, max: 200 }),
+          ticketId: str({ trim: true, min: 1, max: 200 }),
+        }),
+      ),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ projectId, ticketId }) => {
+      // Reading through the project first is what scopes the delete: the
+      // storage also rechecks project membership under its mutation lease.
+      const existing = asArray(await invoke("get_kanban_tasks", { projectId })).find(
+        (candidate) => candidate.id === ticketId,
+      );
+      if (!existing) throw new Error(`Kanban ticket not found in project: ${ticketId}`);
+      const activeWork = activeTicketWork(existing);
+      if (activeWork) {
+        throw new Error(
+          `Ticket ${ticketId} is ${String(existing.status)} with ${activeWork} attached, so it was not deleted. ` +
+            "Finish or cancel that work before deleting it.",
+        );
+      }
+      await invoke("delete_idle_kanban_task", { taskId: ticketId, projectId });
+      return toolResult({
+        deleted: true,
+        ticket: { id: existing.id, projectId, title: existing.title, status: existing.status },
+      });
+    },
+  );
+}
+
+/** What still works on a ticket, worded for a refusal; null when nothing does. */
+function activeTicketWork(task: JsonRecord): string | null {
+  if (task.status === "done") return null;
+  const sync = isRecord(task.sync) && isRecord(task.sync.work) ? task.sync.work : null;
+  for (const work of [task, sync]) {
+    if (!work) continue;
+    const node = typeof work.nodeId === "string" ? ` on node ${work.nodeId}` : "";
+    if (typeof work.buildPipelineId === "string" && work.buildPipelineId) {
+      return `build pipeline ${work.buildPipelineId}${node}`;
+    }
+    if (typeof work.environmentId === "string" && work.environmentId) {
+      return `environment ${work.environmentId}${node}`;
+    }
+  }
+  return null;
 }
 
 function hasLabel(task: JsonRecord, label: string): boolean {

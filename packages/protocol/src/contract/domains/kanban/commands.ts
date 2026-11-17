@@ -214,6 +214,18 @@ export const deleteKanbanTaskCommand = defineCommand({
   critical: [],
 });
 
+/** Coordinator deletion: project and idle-work checks happen under storage leases. */
+export const deleteIdleKanbanTaskCommand = defineCommand({
+  domain: kanbanDomain,
+  name: "delete_idle_kanban_task",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({ taskId: Schema.String, projectId: Schema.String }),
+  result: Schema.Void,
+  critical: ["projectId"],
+});
+
 /**
  * Adds a comment. `projectId` refuses a ticket of another project with the
  * same id; `requestId` makes a retry add nothing new.
@@ -522,6 +534,7 @@ export const KANBAN_COMMANDS = [
   createKanbanLabelCommand,
   setKanbanTaskLabelCommand,
   deleteKanbanTaskCommand,
+  deleteIdleKanbanTaskCommand,
   addKanbanCommentCommand,
   deleteKanbanCommentCommand,
   addKanbanImageCommand,

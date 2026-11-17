@@ -4,8 +4,9 @@ import { keyInformationBlocks } from "./key-information-blocks";
 
 /**
  * A Key information prose section laid out as paragraphs and lists
- * ({@link keyInformationBlocks}). `renderText` draws each run of text, so the
- * panel can highlight code and paths while the tab keeps plain text.
+ * ({@link keyInformationBlocks}). `renderText` draws each run of text; the
+ * panel and the tab both pass `KeyInformationText`, which renders the run's
+ * inline Markdown (code, bold, italic) and highlights file paths.
  */
 export function KeyInformationProse({
   text,

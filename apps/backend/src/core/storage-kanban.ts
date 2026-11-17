@@ -618,11 +618,62 @@ export class KanbanRepository {
     return saved?.projectId === projectId ? saved.policy : undefined;
   }
 
-  async deleteKanbanTask(taskId: string): Promise<void> {
+  /** Called under the pipeline lease, shared with guarded ticket deletion. */
+  async assertKanbanBuildNotDeleted(taskId: string): Promise<void> {
+    const deleted = await this.context.loadJson<unknown>(
+      this.board.deletedDeliveryFile(taskId),
+      () => null,
+    );
+    if (deleted && !(await this.getKanbanTask(taskId)))
+      throw new Error("Cannot start a build for a deleted ticket");
+  }
+
+  async deleteKanbanTask(taskId: string, idleProjectId?: string): Promise<void> {
+    // Match admission's lease order: pipeline first, then the board (including sync).
+    if (idleProjectId !== undefined) {
+      await this.context.serialize(this.files.buildPipelinesFile(), "build pipeline storage", () =>
+        this.removeKanbanTask(taskId, idleProjectId),
+      );
+    } else {
+      await this.removeKanbanTask(taskId);
+    }
+  }
+
+  private async removeKanbanTask(taskId: string, idleProjectId?: string): Promise<void> {
     await this.board.enqueue(async () => {
       const tasks = await this.board.loadTasks();
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+      if (idleProjectId !== undefined) {
+        if (task.projectId !== idleProjectId) throw new Error("Kanban ticket not found in project");
+        const pipelines = await this.context.loadJson<
+          Record<string, shared.PersistedBuildPipeline>
+        >(this.files.buildPipelinesFile(), () => ({}));
+        for (const pipeline of Object.values(pipelines)) {
+          const snapshot = pipeline.snapshot;
+          if (!shared.isRecord(snapshot) || pipeline.projectId !== idleProjectId) continue;
+          const source = shared.isRecord(snapshot.source) ? snapshot.source : null;
+          const sourceId = source
+            ? source.type === "kanban"
+              ? source.taskId
+              : null
+            : snapshot.taskId;
+          if (
+            (sourceId === taskId || task.buildPipelineId === pipeline.id) &&
+            snapshot.phase !== "complete" &&
+            snapshot.phase !== "failed"
+          ) {
+            throw new Error(`Ticket has active build pipeline ${pipeline.id}; it was not deleted`);
+          }
+        }
+        if (task.status !== "done") {
+          for (const work of [task, task.sync?.work]) {
+            if (work && (work.buildPipelineId || work.environmentId)) {
+              throw new Error("Ticket has work attached; it was not deleted");
+            }
+          }
+        }
+      }
       await this.context.saveJson(this.board.deletedDeliveryFile(taskId), {
         projectId: task.projectId,
         policy: effectiveDeliveryPolicy(normalizeKanbanTask(task).sections?.delivery?.policy),

@@ -8,7 +8,6 @@ import {
 import { CoordinatorService } from "../src/core/coordinator-service.js";
 import {
   COORDINATOR_WORKFLOW_NEAR_LIMIT,
-  COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR,
   MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
 } from "../src/core/coordinator-workflow-retention.js";
 import { runCommand } from "../src/core/shell.js";
@@ -21,7 +20,7 @@ import { isDefaultDataDir } from "../src/data-dir.js";
  * or full) can be checked on a live stack (6360 (retired), task 4). The launcher
  * runs it for `--seed-workflow-records` before it starts Electron, so no
  * backend has the store open: the records go in through the store's own API
- * (`saveCoordinatorWorkflowAssociation`), never by editing the database.
+ * (`saveCoordinatorWorkflowAssociations`), never by editing the database.
  *
  *   bun apps/backend/scripts/seed-coordinator-workflows.ts \
  *     --data-dir <profile>/data --checkout <profile>/fixtures/seeded-workflows \
@@ -157,11 +156,11 @@ export async function seedCoordinatorWorkflowRecords(
   );
 
   const taken = new Set(seeded.map((association) => association.requestId));
-  let added = 0;
-  for (let index = 0; keep.size + added < records; index += 1) {
+  const additions: CoordinatorWorkflowAssociation[] = [];
+  for (let index = 0; keep.size + additions.length < records; index += 1) {
     const requestId = `${SEEDED_REQUEST_PREFIX}${index}`;
     if (taken.has(requestId)) continue;
-    const association: CoordinatorWorkflowAssociation = {
+    additions.push({
       id: `${requestId}-${workspace.id}`,
       projectId: project.id,
       coordinatorId: workspace.id,
@@ -171,18 +170,11 @@ export async function seedCoordinatorWorkflowRecords(
       requestId,
       createdAt: at,
       workerOutcome: { ended: endedWatch },
-    };
-    try {
-      await storage.coordinators.saveCoordinatorWorkflowAssociation(association);
-    } catch (error) {
-      // Every record left is in use: the store is full, which is as far as
-      // seeding can go. Anything else is a real failure.
-      if (error instanceof Error && error.message === COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR)
-        break;
-      throw error;
-    }
-    added += 1;
+    });
   }
+  // One write for every new record. Once only records in use are left, the
+  // store refuses the rest: that is as far as seeding can go.
+  const { added } = await storage.coordinators.saveCoordinatorWorkflowAssociations(additions);
 
   const storeRecords = (await storage.coordinators.getCoordinatorReconciliationState()).workflows
     .length;

@@ -45,6 +45,13 @@ import {
   zoomAt,
   type DesignViewport,
 } from "./design-viewport";
+import {
+  DesignMarqueeBox,
+  DesignSnapGrid,
+  DesignSnapGuides,
+  gridBackground,
+  useDesignCanvasGestures,
+} from "./design-canvas-gestures";
 import { planLiveFrames } from "./design-visibility";
 import { DesignAgentDialog } from "./DesignAgentDialog";
 import { DesignExportDialog } from "./DesignExportDialog";
@@ -580,6 +587,39 @@ export function DesignCanvasTab({
     validatePendingElement();
   }, [projection, validatePendingElement]);
   const resumePendingElementRef = useRef<() => void>(() => undefined);
+  /** Replaces the board selection (a marquee) and clears any element selection. */
+  const selectFrames = useCallback(
+    (ids: readonly string[]) => {
+      selectionGeneration.current++;
+      cancelPendingElement();
+      selectedFrameRef.current = ids;
+      setSelectedFrameIds(ids);
+      setSelection(null);
+    },
+    [cancelPendingElement],
+  );
+  const { frameGesture, frameActions, marquee, marqueeHandlers } = useDesignCanvasGestures({
+    frames,
+    committedFrames: () => projectionRef.current?.canvas?.frames ?? [],
+    selectedFrames: () => selectedFrameRef.current,
+    viewport: () => viewportRef.current,
+    submitGeometry,
+    setPinned,
+    selectFrames,
+    onMarqueeSelected: (chosen) => {
+      const last = chosen.at(-1);
+      if (last) {
+        setFocusedFrame(last);
+        // Canvas keys (Delete, arrows) act on the focused title.
+        workspace.current
+          ?.querySelector<HTMLElement>(`[data-frame-title-id="${CSS.escape(last)}"]`)
+          ?.focus({ preventScroll: true });
+      }
+      setAnnouncement(
+        chosen.length === 1 ? "1 frame selected" : `${chosen.length} frames selected`,
+      );
+    },
+  });
   const actions = useMemo<DesignCanvasActions>(
     () => ({
       controller,
@@ -674,6 +714,7 @@ export function DesignCanvasTab({
       downloadFrames: (frameId, scope, format) =>
         downloadFrameImagesRef.current(frameId, scope, format),
       copyFrame: (frameId, format) => copyFrameImageRef.current(frameId, format),
+      ...frameActions,
     }),
     [
       applyStyles,
@@ -681,6 +722,7 @@ export function DesignCanvasTab({
       cancelPendingElement,
       controller,
       environmentId,
+      frameActions,
       refreshSelection,
       reportError,
       submitGeometry,
@@ -994,6 +1036,11 @@ export function DesignCanvasTab({
     const root = workspace.current;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
+      // A selection box in progress: Escape puts the selection back.
+      if (event.key === "Escape" && marqueeHandlers.escape()) {
+        event.preventDefault();
+        return;
+      }
       const inside = root?.contains(document.activeElement) ?? false;
       const editing = isTextEditingTarget(event.target);
       const modifier = event.metaKey || event.ctrlKey;
@@ -1094,6 +1141,7 @@ export function DesignCanvasTab({
     inspectorOpen,
     isActive,
     layersOpen,
+    marqueeHandlers,
     mode,
     narrow,
     ownsGlobalShortcuts,
@@ -1367,12 +1415,10 @@ export function DesignCanvasTab({
               ref={viewportElement}
               aria-label="Canvas viewport"
               className="relative min-w-0 flex-1 overflow-hidden bg-muted/40 touch-none"
-              style={{
-                backgroundImage: "radial-gradient(var(--muted-foreground) .6px, transparent .6px)",
-                backgroundSize: "20px 20px",
-                backgroundPosition: `${viewport.panX}px ${viewport.panY}px`,
-              }}
+              style={gridBackground(viewport)}
               onPointerDown={(event) => {
+                // Shift-drag on the background or a frame's body draws a selection box.
+                if (marqueeHandlers.pointerDown(event)) return;
                 if (event.target !== event.currentTarget && event.button !== 1) return;
                 event.currentTarget.setPointerCapture(event.pointerId);
                 panStart.current = {
@@ -1385,6 +1431,7 @@ export function DesignCanvasTab({
                 }
               }}
               onPointerMove={(event) => {
+                if (marqueeHandlers.pointerMove(event)) return;
                 const start = panStart.current;
                 if (start)
                   setViewport({
@@ -1395,11 +1442,15 @@ export function DesignCanvasTab({
               }}
               onPointerUp={() => {
                 panStart.current = null;
+                marqueeHandlers.pointerUp();
               }}
               onPointerCancel={() => {
                 panStart.current = null;
+                marqueeHandlers.pointerCancel();
               }}
+              onLostPointerCapture={marqueeHandlers.lostPointerCapture}
             >
+              {frameGesture && <DesignSnapGrid viewport={viewport} />}
               {canvas?.frames.length === 0 && (
                 <div className="pointer-events-none absolute inset-0 grid place-content-center p-8 text-center">
                   <MousePointer2 className="mx-auto mb-4 size-8 text-muted-foreground" />
@@ -1457,10 +1508,17 @@ export function DesignCanvasTab({
                       frameSelected={selectedFrameIds.includes(frame.id)}
                       selectedFrameCount={selectedFrameIds.length}
                       frameCount={canvas?.frames.length ?? 0}
+                      dragOffset={
+                        frameGesture?.members.includes(frame.id) ? frameGesture.offset : undefined
+                      }
                     />
                   );
                 })}
+                {frameGesture && (
+                  <DesignSnapGuides guides={frameGesture.guides} zoom={viewport.zoom} />
+                )}
               </div>
+              {marquee && <DesignMarqueeBox rect={marquee} />}
             </main>
             {showInspector && selection && (
               <DesignInspector

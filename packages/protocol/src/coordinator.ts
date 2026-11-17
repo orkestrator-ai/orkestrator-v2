@@ -679,6 +679,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "create_ticket",
   "create_ticket_label",
   "custom_fix_multi_review",
+  "delete_ticket",
   "edit_worker_tab",
   "fork_worker",
   "get_build_pipeline",

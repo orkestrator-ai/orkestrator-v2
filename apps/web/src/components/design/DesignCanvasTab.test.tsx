@@ -604,7 +604,7 @@ describe("DesignCanvasTab", () => {
     }
   });
 
-  test("selecting an element clears board selection so Delete cannot remove its frame", async () => {
+  test("selecting an element clears board selection so Delete cannot remove its frame; its download turns grey", async () => {
     const element: DesignElement = {
       selector: "body > p",
       tag: "p",
@@ -629,8 +629,16 @@ describe("DesignCanvasTab", () => {
       act(() => title.focus());
       fireEvent.click(title);
       await waitFor(() => expect(title.getAttribute("aria-pressed")).toBe("true"));
+      const download = () => screen.getByRole("button", { name: "Download A" });
+      // The frame itself is selected: its download button is in the selection blue.
+      expect(download().getAttribute("data-frame-selected")).toBe("true");
       fireEvent.click(screen.getByRole("button", { name: "Select element in A" }));
       await waitFor(() => expect(title.getAttribute("aria-pressed")).toBe("false"));
+      // An element inside the frame is selected: the button stays, in grey.
+      expect(download().hasAttribute("data-frame-selected")).toBe(false);
+      expect(download().className).toContain("text-muted-foreground");
+      // Other frames show no download button.
+      expect(screen.queryByRole("button", { name: "Download B" }) === null).toBe(true);
       fireEvent.keyDown(title, { key: "Delete" });
       expect(prepared("delete_frame")).toHaveLength(0);
     } finally {

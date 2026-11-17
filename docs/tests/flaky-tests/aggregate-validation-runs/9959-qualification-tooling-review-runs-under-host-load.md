@@ -101,3 +101,32 @@ with this pattern now wait for the position and the rendered `followEnabled`
 together (`waitForFollowingAtEnd`), then assert `followOutput(true)` once as
 before; the whole file passed 80 of 80 under the same load. Other owners in
 this case are unaffected.
+
+## Recurrence during design-canvas merge validation (2026-11-17)
+
+On macOS, branch `image-copy-download-aeea21f2f5ef-r1`, pre-merge head
+`085ea46e84781507245c70dff750f6dea3ce1f43`, base
+`00a44c9eb581a28cc7c5462eda5028e0f96c68bf`, merging
+`e6ab012facd31f0d3acb86a95d5f03b619e25be1`:
+
+- `mise run test:logged -- --name merge-default -- mise run test` failed.
+  The web package ran with `--parallel=2`: 15,100 passed, 10 skipped, one
+  failed. `returning a detached reader to their semantic place > a remount
+  after a reflow restores the persisted row at its viewport offset`
+  (`apps/web/src/hooks/useVirtuosoScrollState.return.test.ts:134`) saw
+  `lastOutcome` null instead of `"converged"` after observing the expected
+  scroll position (199.60 ms).
+- `mise run test:logged -- --name merge-scroll-return-alone -- bun test --cwd apps/web ./src/hooks/useVirtuosoScrollState.return.test.ts --parallel=1 --only-failures`
+  passed (0.8 s). The aggregate runner's own isolated rerun also passed:
+  15 tests in 535 ms, after 94.3 s queued for the host-wide resource.
+- The test and scroll hook are unchanged from the pre-merge head. This is
+  consistent with a position becoming observable before navigation settles;
+  the cause was not investigated in this merge resolution.
+- The root group's seven apt-installer failures reproduced alone and are not
+  counted as flakes. Other workspace packages, bridges and the Codex protocol
+  group passed.
+- Compressed evidence:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.1vkeYg/`.
+  `mise run flaky:recurrence -- 9959 --base 00a44c9eb581a28cc7c5462eda5028e0f96c68bf --registry-ref origin/main`
+  reported the case open (registry `d3a85023ed`). No product code, assertion,
+  timeout or skip was changed for this observation.

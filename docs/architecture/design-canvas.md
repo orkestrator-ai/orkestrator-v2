@@ -373,6 +373,30 @@ items run after it closes, so focus returns to its trigger. **Preview** mode
 routes scroll and hover into the frame while links, forms, navigation, scripts
 and network stay blocked; Escape inside the frame returns to Inspect.
 
+Pointer gestures (`design-canvas-gestures.tsx`, geometry in
+`design-snapping.ts`): the background dots sit on a canvas-space grid whose
+step is a multiple of the 10 px snap pitch (never denser than 12 screen px),
+and grid lines show while a frame is held (both read the theme's
+`--color-muted-foreground`; the dots used an undefined `--muted-foreground`
+before and never showed). Dragging a frame title snaps the
+frame's corner to that grid after 3 screen px of pointer travel (click jitter never
+changes geometry); an edge within 6 screen px of another frame's
+edge (top/bottom on one axis, left/right on the other) snaps to it instead and
+draws a red guide running between the two frames, two guides when a
+neighbour of the same height matches top and bottom. Resizing from the corner
+snaps the right and bottom edges the same way; holding Alt moves or resizes
+freely. Shift-drag on the background or a frame's body draws a selection box
+that adds every frame it touches to the board selection (a Shift-click
+without a drag still inspects the element; Escape restores the earlier
+selection). Dragging one frame of a several-frame board selection moves them
+all by the same snapped offset, one `update_frame` per frame (each its own
+undo step). The shared offset is constrained by every member's coordinate limits,
+so previews and commits preserve spacing. Companion edits use their gesture-start
+committed revisions; concurrent writes conflict, while the controller still rebases
+over its own earlier commits. Pressing one member without dragging selects only it.
+Escape cancels a title drag or corner resize without submitting geometry. Keyboard
+nudges never snap.
+
 Inspector fields are named by their visible label ("Fill", "Align items"),
 not the CSS property, so speech input can use what it sees (WCAG 2.5.3); the
 property is in the field's `data-property` and the label's tooltip, and tests
@@ -421,10 +445,11 @@ download selection, and one delete per frame would race on the canvas
 revision. Pressing Delete with several frames selected announces that a single
 selection is required. Removed frames leave the selection when a current
 authoritative snapshot arrives; loading or stale snapshots keep the selection.
-Every selected frame shows a download button at its top right, in
-the selection blue (`DesignFrameDownloadMenu.tsx`). Its menu offers **This
-frame**: Copy PNG and Copy WEBP, then Download PNG, WEBP or PDF; with several
-frames selected, a separated
+A frame shows a download button at its top right while the frame or an
+element inside it is selected (`DesignFrameDownloadMenu.tsx`): in the
+selection blue when the frame itself is selected, grey when only an element
+inside it is. Its menu offers **This frame**: Copy PNG and Copy WEBP, then
+Download PNG, WEBP or PDF; with several frames selected, a separated
 **Selected frames** group; and, when the canvas has more than one frame, an
 **All frames** group. A group of several frames saves one PDF with a page per
 frame or a ZIP of PNG or WEBP images, numbered in canvas order.

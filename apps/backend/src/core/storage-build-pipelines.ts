@@ -659,6 +659,16 @@ export class BuildPipelinesRepository {
       const loaded = await this.loadBuildPipelineState();
       const pipelines = loaded.records;
       const previous = pipelines[pipelineId];
+      if (!previous) {
+        const source = isRecord(storedSnapshot.source) ? storedSnapshot.source : null;
+        const ticketId = source
+          ? source.type === "kanban"
+            ? source.taskId
+            : null
+          : storedSnapshot.taskId;
+        if (typeof ticketId === "string")
+          await this.repos.kanban.assertKanbanBuildNotDeleted(ticketId);
+      }
       if (previous && previous.projectId !== projectId) {
         throw new Error("Build pipeline belongs to another project");
       }

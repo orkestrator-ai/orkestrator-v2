@@ -685,7 +685,8 @@ act on the project's linked Linear board with this machine's own key; with a
 `invoke_on_node`, which reads the same board with that machine's key.
 
 The label tools (`list_ticket_labels`, `create_ticket_label`, `set_ticket_label`)
-take no `nodeId`: they act on this board, whose labels sync with the tickets.
+and `delete_ticket` take no `nodeId`: they act on this board, whose labels and
+deletions sync with the tickets ([tickets.md](tickets.md#deleting-a-ticket)).
 To label a ticket that exists only on a leaf, pass `labels` to `update_ticket`
 with that `nodeId`.
 

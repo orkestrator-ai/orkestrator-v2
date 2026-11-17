@@ -256,6 +256,67 @@ describe("Linear backend API", () => {
     ]);
   });
 
+  test("reads each assignee's avatar image and colour, keeping only safe values", async () => {
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { query: string };
+      expect(request.query).toContain("assignee { name avatarUrl avatarBackgroundColor }");
+      const node = (id: string, sortOrder: number, assignee: unknown) => ({
+        id,
+        identifier: id.toUpperCase(),
+        title: id,
+        sortOrder,
+        updatedAt: "2026-11-16T00:00:00.000Z",
+        state: { name: "Todo", type: "unstarted", position: 1 },
+        assignee,
+      });
+      return jsonResponse({
+        data: {
+          issues: {
+            nodes: [
+              node("eng-1", 1, {
+                name: "Ada",
+                avatarUrl: "https://public.linear.app/avatars/ada.png",
+                avatarBackgroundColor: "#5e6ad2",
+              }),
+              node("eng-2", 2, {
+                name: "Grace",
+                avatarUrl: null,
+                avatarBackgroundColor: "#eb5757",
+              }),
+              node("eng-3", 3, {
+                name: "Mallory",
+                avatarUrl: "javascript:alert(1)",
+                avatarBackgroundColor: "red; background: url(x)",
+              }),
+              node("eng-4", 4, { name: "Plain", avatarUrl: "http://example.com/a.png" }),
+              node("eng-5", 5, null),
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      });
+    }) as unknown as typeof fetch;
+
+    const issues = await listLinearIssues("lin_api_secret");
+    const avatars = issues.map(({ assigneeName, assigneeAvatarUrl, assigneeAvatarColor }) => ({
+      assigneeName,
+      assigneeAvatarUrl,
+      assigneeAvatarColor,
+    }));
+    expect(avatars).toEqual([
+      {
+        assigneeName: "Ada",
+        assigneeAvatarUrl: "https://public.linear.app/avatars/ada.png",
+        assigneeAvatarColor: "#5e6ad2",
+      },
+      { assigneeName: "Grace", assigneeAvatarUrl: undefined, assigneeAvatarColor: "#eb5757" },
+      { assigneeName: "Mallory", assigneeAvatarUrl: undefined, assigneeAvatarColor: undefined },
+      { assigneeName: "Plain", assigneeAvatarUrl: undefined, assigneeAvatarColor: undefined },
+      { assigneeName: undefined, assigneeAvatarUrl: undefined, assigneeAvatarColor: undefined },
+    ]);
+    expect("assigneeAvatarUrl" in issues[1]!).toBe(false);
+  });
+
   test("maps Linear issue details, labels, and comments", async () => {
     globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body)) as { query: string };
@@ -264,6 +325,7 @@ describe("Linear backend API", () => {
         // the ordering fields here too rather than letting the two drift apart.
         expect(request.query).toContain("prioritySortOrder");
         expect(request.query).toContain("state { name type position }");
+        expect(request.query).toContain("assignee { name avatarUrl avatarBackgroundColor }");
       }
       if (request.query.includes("OrkestratorLinearIssueComments")) {
         return jsonResponse({
@@ -309,7 +371,11 @@ describe("Linear backend API", () => {
             priorityLabel: "High",
             state: { name: "Todo", type: "unstarted", position: 2 },
             team: { key: "ENG", name: "Engineering" },
-            assignee: { name: "Ada" },
+            assignee: {
+              name: "Ada",
+              avatarUrl: "https://public.linear.app/avatars/ada.png",
+              avatarBackgroundColor: "#5e6ad2",
+            },
             creator: { name: "Grace" },
             project: { name: "Integrations" },
             cycle: { name: "Cycle 1" },
@@ -330,6 +396,9 @@ describe("Linear backend API", () => {
       prioritySortOrder: 17,
       statusPosition: 2,
       creatorName: "Grace",
+      assigneeName: "Ada",
+      assigneeAvatarUrl: "https://public.linear.app/avatars/ada.png",
+      assigneeAvatarColor: "#5e6ad2",
       projectName: "Integrations",
       cycleName: "Cycle 1",
       labels: ["linear", "pipeline"],

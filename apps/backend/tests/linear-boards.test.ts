@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   getLinearBoardOptions,
+  getLinearIssueWithIds,
   getLinearTeam,
   issueIsOnBoard,
   listLinearTeams,
@@ -137,6 +138,37 @@ async function boardContext() {
   });
   return { context, commands: createCommandRegistry(), real };
 }
+
+describe("Linear board detail assignee avatars", () => {
+  test("requests avatar fields and maps them alongside board IDs", async () => {
+    const requests = fakeLinear({
+      OrkestratorLinearIssueWithIds: () => ({
+        issue: issueNode({
+          assignee: {
+            id: "user-ada",
+            name: "Ada",
+            avatarUrl: "https://public.linear.app/avatars/ada.png",
+            avatarBackgroundColor: "#5e6ad2",
+          },
+        }),
+      }),
+    });
+    const detail = await getLinearIssueWithIds("lin_api_secret", "ENG-1");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.query).toMatch(
+      /assignee\s*\{[^}]*\bid\b[^}]*\bname\b[^}]*\bavatarUrl\b[^}]*\bavatarBackgroundColor\b[^}]*\}/,
+    );
+    expect(requests[0]!.variables).toEqual({ id: "ENG-1" });
+    expect(detail).toMatchObject({
+      assigneeId: "user-ada",
+      assigneeName: "Ada",
+      assigneeAvatarUrl: "https://public.linear.app/avatars/ada.png",
+      assigneeAvatarColor: "#5e6ad2",
+      teamId: "team-1",
+      stateId: "state-1",
+    });
+  });
+});
 
 /** The most a single Linear query may score before Linear refuses it. */
 const LINEAR_MAX_QUERY_COMPLEXITY = 10_000;

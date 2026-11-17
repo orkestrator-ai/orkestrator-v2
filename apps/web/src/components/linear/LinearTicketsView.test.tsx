@@ -326,6 +326,29 @@ describe("LinearTicketsView", () => {
     );
   }
 
+  test("list and detail metadata keep the name beside a decorative assignee image", async () => {
+    const avatarUrl = "https://public.linear.app/avatars/ada.png";
+    getLinearIssuesMock.mockResolvedValue([
+      { ...issues[0]!, assigneeName: "Ada", assigneeAvatarUrl: avatarUrl },
+    ]);
+    const detailAvatarUrl = "https://public.linear.app/avatars/ada-detail.png";
+    getLinearIssueMock.mockResolvedValue({ ...issueDetail, assigneeAvatarUrl: detailAvatarUrl });
+    renderLinearTicketsView();
+
+    const title = await screen.findByText("Add Linear integration");
+    const assertDecorativeAvatar = (avatar: HTMLElement, expectedUrl: string) => {
+      expect(avatar.tagName).toBe("IMG");
+      expect(avatar.getAttribute("src")).toBe(expectedUrl);
+      expect(avatar.getAttribute("alt")).toBe("");
+      expect(avatar.getAttribute("aria-hidden")).toBe("true");
+      expect(avatar.parentElement?.textContent).toBe("Ada");
+    };
+    assertDecorativeAvatar(screen.getByTestId("linear-assignee-avatar"), avatarUrl);
+    fireEvent.click(title);
+    await screen.findByText("Build Linear support");
+    assertDecorativeAvatar(screen.getByTestId("linear-assignee-avatar"), detailAvatarUrl);
+  });
+
   test("shows a connect state and can start Linear connection setup", async () => {
     getLinearConnectionMock.mockResolvedValueOnce({
       connected: false,

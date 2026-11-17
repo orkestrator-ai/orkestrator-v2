@@ -54,7 +54,7 @@ describe("multi review protocol", () => {
       projectId: "project-1",
       targetBranch: "main",
       reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
-      fixModel: { agent: "codex", model: "gpt-5.6" },
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
       phase: "reviewing",
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
@@ -100,7 +100,9 @@ describe("multi review protocol", () => {
       model: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
     };
     expect(isRestartMultiReviewStepInput(restart)).toBe(true);
-    expect(isRestartMultiReviewStepInput({ workflowId: "multi-1", kind: "fix" })).toBe(true);
+    expect(isRestartMultiReviewStepInput({ workflowId: "multi-1", kind: "address-findings" })).toBe(
+      true,
+    );
     expect(isRestartMultiReviewStepInput({ ...restart, kind: "reviewers" })).toBe(false);
     expect(isRestartMultiReviewStepInput({ ...restart, model: { agent: "codex" } })).toBe(false);
     expect(isRestartMultiReviewStepInput({ ...restart, rendererOnly: true })).toBe(false);
@@ -113,7 +115,11 @@ describe("multi review protocol", () => {
     );
     expect(isMultiReviewStepControlInput({ workflowId: "multi-1", kind: "reviewers" })).toBe(false);
     expect(
-      isMultiReviewStepControlInput({ workflowId: "multi-1", kind: "fix", rendererOnly: true }),
+      isMultiReviewStepControlInput({
+        workflowId: "multi-1",
+        kind: "address-findings",
+        rendererOnly: true,
+      }),
     ).toBe(false);
   });
 
@@ -123,13 +129,13 @@ describe("multi review protocol", () => {
       requestId: "click",
       reviewers: [{ agent: "codex", model: "default" }],
       reviewModel: { agent: "codex", model: "gpt-5.6" },
-      fixModel: { agent: "claude", model: "default" },
+      addressFindingsModel: { agent: "claude", model: "default" },
     };
     expect(isLaunchMultiReviewActionInput(input)).toBe(true);
-    expect(isLaunchMultiReviewActionInput({ ...input, autoFix: true })).toBe(true);
-    expect(isLaunchMultiReviewActionInput({ ...input, autoFix: false })).toBe(true);
-    expect(isLaunchMultiReviewActionInput({ ...input, autoFix: "true" })).toBe(false);
-    expect(isLaunchMultiReviewActionInput({ ...input, autoFix: null })).toBe(false);
+    expect(isLaunchMultiReviewActionInput({ ...input, autoAddressFindings: true })).toBe(true);
+    expect(isLaunchMultiReviewActionInput({ ...input, autoAddressFindings: false })).toBe(true);
+    expect(isLaunchMultiReviewActionInput({ ...input, autoAddressFindings: "true" })).toBe(false);
+    expect(isLaunchMultiReviewActionInput({ ...input, autoAddressFindings: null })).toBe(false);
     expect(isLaunchMultiReviewActionInput({ ...input, autoPr: true })).toBe(true);
     expect(isLaunchMultiReviewActionInput({ ...input, autoPr: "true" })).toBe(false);
     expect(isLaunchMultiReviewActionInput({ ...input, reviewInstruction: "" })).toBe(true);
@@ -138,15 +144,15 @@ describe("multi review protocol", () => {
     expect(isLaunchMultiReviewActionInput({ requestId: "button-1", environmentId: "env-1" })).toBe(
       true,
     );
-    const { reviewers: _reviewers, fixModel: _fixModel, ...withoutRows } = input;
+    const { reviewers: _reviewers, addressFindingsModel: _fixModel, ...withoutRows } = input;
     expect(isLaunchMultiReviewActionInput(withoutRows)).toBe(true);
     for (const override of [
       { requestId: " " },
       { requestId: "x".repeat(257) },
       { reviewers: [] },
-      { fixModel: { agent: "invalid", model: "default" } },
+      { addressFindingsModel: { agent: "invalid", model: "default" } },
       { reviewers: null },
-      { fixModel: null },
+      { addressFindingsModel: null },
       { projectId: "forged" },
       { targetBranch: "--upload-pack=bad" },
       { reviewInstruction: "x".repeat(100_001) },
@@ -162,13 +168,13 @@ describe("multi review protocol", () => {
       targetBranch: "main",
       reviewers: [{ agent: "claude", model: "opus" }],
       reviewModel: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
-      fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
     };
     expect(isStartMultiReviewInput(input)).toBe(true);
-    expect(isStartMultiReviewInput({ ...input, autoFix: true })).toBe(true);
-    expect(isStartMultiReviewInput({ ...input, autoFix: false })).toBe(true);
-    expect(isStartMultiReviewInput({ ...input, autoFix: "true" })).toBe(false);
-    expect(isStartMultiReviewInput({ ...input, autoFix: null })).toBe(false);
+    expect(isStartMultiReviewInput({ ...input, autoAddressFindings: true })).toBe(true);
+    expect(isStartMultiReviewInput({ ...input, autoAddressFindings: false })).toBe(true);
+    expect(isStartMultiReviewInput({ ...input, autoAddressFindings: "true" })).toBe(false);
+    expect(isStartMultiReviewInput({ ...input, autoAddressFindings: null })).toBe(false);
     expect(isStartMultiReviewInput({ ...input, autoPr: true })).toBe(true);
     expect(isStartMultiReviewInput({ ...input, autoPr: false })).toBe(true);
     expect(isStartMultiReviewInput({ ...input, autoPr: 1 })).toBe(false);
@@ -192,7 +198,7 @@ describe("multi review protocol", () => {
       reviewers: [
         { id: "reviewer-1", agent: "claude", model: "opus", status: "completed", report },
       ],
-      fixModel: { agent: "codex", model: "gpt-5.6" },
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
       reviewModel: { agent: "claude", model: "sonnet" },
       reviewSessionKey: "review-session",
       reviewSession: {
@@ -220,16 +226,20 @@ describe("multi review protocol", () => {
     expect(isMultiReviewWorkflow({ ...workflow, consolidationModel: { agent: "unknown" } })).toBe(
       false,
     );
-    expect(isMultiReviewWorkflow({ ...workflow, autoFix: true })).toBe(true);
-    expect(isMultiReviewWorkflow({ ...workflow, autoFix: false })).toBe(true);
-    expect(isMultiReviewWorkflow({ ...workflow, autoFix: "true" })).toBe(false);
-    expect(isMultiReviewWorkflow({ ...workflow, autoFix: null })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...workflow, autoAddressFindings: true })).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, autoAddressFindings: false })).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, autoAddressFindings: "true" })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...workflow, autoAddressFindings: null })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, autoPr: true })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, autoPr: "true" })).toBe(false);
     for (const autoPrLaunch of [
       { state: "pending", requestId: "multi-review-pr:1" },
       { state: "pending", requestId: "multi-review-pr:1", attempts: 2, message: "tab limit" },
-      { state: "launched", requestId: "multi-review-pr:1", fixIdentity: "a".repeat(64) },
+      {
+        state: "launched",
+        requestId: "multi-review-pr:1",
+        addressFindingsIdentity: "a".repeat(64),
+      },
       { state: "launched", requestId: "multi-review-pr:1", tabId: "agent-job-1" },
       { state: "pending", requestId: "multi-review-pr:1", basis: "clean-review" },
       { state: "skipped", requestId: "multi-review-pr:1", message: "PR exists" },
@@ -244,17 +254,19 @@ describe("multi review protocol", () => {
       { state: "launched", requestId: "multi-review-pr:1", tabId: "" },
       { state: "failed", requestId: "multi-review-pr:1", message: "x".repeat(4_097) },
       { state: "pending", requestId: "multi-review-pr:1", extra: true },
-      { state: "pending", requestId: "multi-review-pr:1", fixIdentity: "" },
-      { state: "pending", requestId: "multi-review-pr:1", fixIdentity: "a".repeat(65) },
-      { state: "pending", requestId: "multi-review-pr:1", fixIdentity: 42 },
-      { state: "pending", requestId: "multi-review-pr:1", basis: "fix" },
+      { state: "pending", requestId: "multi-review-pr:1", addressFindingsIdentity: "" },
+      { state: "pending", requestId: "multi-review-pr:1", addressFindingsIdentity: "a".repeat(65) },
+      { state: "pending", requestId: "multi-review-pr:1", addressFindingsIdentity: 42 },
+      { state: "pending", requestId: "multi-review-pr:1", basis: "address-findings" },
     ]) {
       expect(isMultiReviewWorkflow({ ...workflow, autoPrLaunch })).toBe(false);
     }
     expect(isMultiReviewWorkflow({ ...workflow, validationStopRequested: true })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, validationStopRequested: "yes" })).toBe(false);
-    expect(isMultiReviewWorkflow({ ...workflow, fixSessionKey: "next-fix-session" })).toBe(true);
-    expect(isMultiReviewWorkflow({ ...workflow, fixSessionKey: "" })).toBe(false);
+    expect(
+      isMultiReviewWorkflow({ ...workflow, addressFindingsSessionKey: "next-fix-session" }),
+    ).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, addressFindingsSessionKey: "" })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, phase: "interactive" })).toBe(true);
     expect(
       isMultiReviewWorkflow({
@@ -269,7 +281,7 @@ describe("multi review protocol", () => {
         ...workflow,
         phase: "paused",
         pausedFromPhase: "consolidating",
-        pausedStep: "fix",
+        pausedStep: "address-findings",
       }),
     ).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, phase: "paused" })).toBe(false);
@@ -303,7 +315,7 @@ describe("multi review protocol", () => {
       reviewers: [
         { id: "reviewer-1", agent: "claude", model: "opus", status: "completed", report },
       ],
-      fixModel: { agent: "codex", model: "gpt-5.6" },
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
       phase: "preparing",
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
@@ -318,44 +330,50 @@ describe("multi review protocol", () => {
       expect(isMultiReviewWorkflow({ ...workflow, reviewSession: { ...session, fastMode } })).toBe(
         true,
       );
-      expect(isMultiReviewWorkflow({ ...workflow, fixSession: { ...session, fastMode } })).toBe(
-        true,
-      );
+      expect(
+        isMultiReviewWorkflow({ ...workflow, addressFindingsSession: { ...session, fastMode } }),
+      ).toBe(true);
     }
     expect(
-      isMultiReviewWorkflow({ ...workflow, fixSession: { ...session, fastMode: "yes" } }),
-    ).toBe(false);
-    expect(
-      isMultiReviewWorkflow({ ...workflow, fixSession: { ...session, unknownKey: true } }),
+      isMultiReviewWorkflow({
+        ...workflow,
+        addressFindingsSession: { ...session, fastMode: "yes" },
+      }),
     ).toBe(false);
     expect(
       isMultiReviewWorkflow({
         ...workflow,
-        fixSession: { ...session, usageFinalizationPolls: 12 },
+        addressFindingsSession: { ...session, unknownKey: true },
+      }),
+    ).toBe(false);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        addressFindingsSession: { ...session, usageFinalizationPolls: 12 },
       }),
     ).toBe(true);
     expect(
       isMultiReviewWorkflow({
         ...workflow,
-        fixSession: { ...session, usageFinalizationPolls: 13 },
+        addressFindingsSession: { ...session, usageFinalizationPolls: 13 },
       }),
     ).toBe(false);
     expect(
       isMultiReviewWorkflow({
         ...workflow,
-        fixSession: { ...session, idleResultPolls: 1, observedRunning: true },
+        addressFindingsSession: { ...session, idleResultPolls: 1, observedRunning: true },
       }),
     ).toBe(true);
     expect(
       isMultiReviewWorkflow({
         ...workflow,
-        fixSession: { ...session, idleResultPolls: 6 },
+        addressFindingsSession: { ...session, idleResultPolls: 6 },
       }),
     ).toBe(false);
     expect(
       isMultiReviewWorkflow({
         ...workflow,
-        fixSession: { ...session, observedRunning: "yes" },
+        addressFindingsSession: { ...session, observedRunning: "yes" },
       }),
     ).toBe(false);
     // Consolidation moves to its own session and keeps preparation's aside.
@@ -367,7 +385,10 @@ describe("multi review protocol", () => {
       }),
     ).toBe(true);
     expect(
-      isMultiReviewWorkflow({ ...workflow, fixSession: { ...session, openedFor: "review" } }),
+      isMultiReviewWorkflow({
+        ...workflow,
+        addressFindingsSession: { ...session, openedFor: "review" },
+      }),
     ).toBe(false);
     expect(
       isMultiReviewWorkflow({ ...workflow, preparationSession: { ...session, status: "done" } }),
@@ -384,8 +405,8 @@ describe("multi review protocol", () => {
       projectId: "project-1",
       targetBranch: "main",
       reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
-      fixModel: { agent: "codex", model: "gpt-5.6" },
-      fixSession: {
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
+      addressFindingsSession: {
         agent: "codex",
         model: "gpt-5.6",
         sessionKey: "fix-session",
@@ -414,7 +435,7 @@ describe("multi review protocol", () => {
     expect(
       isMultiReviewWorkflow({
         ...workflow,
-        fixSession: { ...workflow.fixSession, tokenCount: -1 },
+        addressFindingsSession: { ...workflow.addressFindingsSession, tokenCount: -1 },
       }),
     ).toBe(false);
     expect(
@@ -462,8 +483,8 @@ describe("multi review protocol", () => {
           stalledSince: timestamp,
         },
       ],
-      fixModel: { agent: "codex", model: "gpt-5.6" },
-      fixSession: {
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
+      addressFindingsSession: {
         agent: "codex",
         model: "gpt-5.6",
         sessionKey: "fix-session",
@@ -498,7 +519,7 @@ describe("multi review protocol", () => {
     expect(
       isMultiReviewWorkflow({
         ...workflow,
-        fixSession: { ...workflow.fixSession, stalledSince: "soon" },
+        addressFindingsSession: { ...workflow.addressFindingsSession, stalledSince: "soon" },
       }),
     ).toBe(false);
   });
@@ -508,7 +529,7 @@ describe("multi review protocol", () => {
     expect(isMultiReviewTerminalPhase("completed")).toBe(true);
     expect(isMultiReviewTerminalPhase("cancelled")).toBe(true);
     expect(isMultiReviewTerminalPhase("ready")).toBe(false);
-    expect(isMultiReviewTerminalPhase("fixing")).toBe(false);
+    expect(isMultiReviewTerminalPhase("addressing-findings")).toBe(false);
     expect(isMultiReviewTerminalPhase("paused")).toBe(false);
   });
 
@@ -523,8 +544,8 @@ describe("multi review protocol", () => {
       reviewers: [
         { id: "reviewer-1", agent: "claude", model: "opus", status: "completed", report },
       ],
-      fixModel: { agent: "codex", model: "gpt-5.6" },
-      fixSession: {
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
+      addressFindingsSession: {
         agent: "codex",
         model: "gpt-5.6",
         sessionKey: "fix-session",
@@ -554,15 +575,17 @@ describe("multi review protocol", () => {
     ).toBe(false);
     const custom = {
       ...workflow,
-      customFixInstruction: "Fix the inactive-tab regression",
-      customFixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+      customAddressFindingsInstruction: "Fix the inactive-tab regression",
+      customAddressFindingsModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
       addressSessionKey: "interactive-launch-1",
       addressRequestId: "address-launch-1",
       addressTabId: "fix-tab-launch-1",
     };
     expect(isMultiReviewWorkflow(custom)).toBe(true);
-    expect(isMultiReviewWorkflow({ ...custom, customFixModel: undefined })).toBe(false);
-    expect(isMultiReviewWorkflow({ ...custom, customFixInstruction: undefined })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...custom, customAddressFindingsModel: undefined })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...custom, customAddressFindingsInstruction: undefined })).toBe(
+      false,
+    );
     expect(isMultiReviewWorkflow({ ...custom, consolidatedReport: undefined })).toBe(false);
     expect(
       isMultiReviewWorkflow({
@@ -579,9 +602,9 @@ describe("multi review protocol", () => {
         addressSessionKey: undefined,
         addressRequestId: undefined,
         addressTabId: undefined,
-        customFixInstruction: undefined,
-        customFixModel: undefined,
-        fixTabId: "fix-tab-launch-1",
+        customAddressFindingsInstruction: undefined,
+        customAddressFindingsModel: undefined,
+        addressFindingsTabId: "fix-tab-launch-1",
         presentationError: "The tab could not be opened",
       }),
     ).toBe(true);
@@ -590,7 +613,7 @@ describe("multi review protocol", () => {
   test("validates a bounded custom Address Findings intent", () => {
     const input = {
       workflowId: "multi-1",
-      fixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+      addressFindingsModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
       instruction: "Fix the inactive-tab regression",
     };
     expect(isStartMultiReviewCustomAddressFindingsInput(input)).toBe(true);
@@ -608,7 +631,7 @@ describe("multi review protocol", () => {
       projectId: "project-1",
       targetBranch: "main",
       reviewers: [{ agent: "claude", model: "opus" }],
-      fixModel: { agent: "codex", model: "gpt-5.6" },
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
     };
     expect(isStartMultiReviewInput({ ...input, targetBranch: "main; touch /tmp/x" })).toBe(false);
     expect(isStartMultiReviewInput({ ...input, reviewInstruction: "  " })).toBe(false);
@@ -626,7 +649,7 @@ describe("multi review protocol", () => {
         projectId: "project-1",
         targetBranch: "main",
         reviewers: [reviewer, reviewer],
-        fixModel: input.fixModel,
+        addressFindingsModel: input.addressFindingsModel,
         phase: "reviewing",
         createdAt: new Date(0).toISOString(),
         updatedAt: new Date(0).toISOString(),
@@ -644,7 +667,7 @@ describe("multi review protocol", () => {
       projectId: "project-1",
       targetBranch: "main",
       reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
-      fixModel: { agent: "codex", model: "gpt-5.6" },
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
       reviewWorktreeSnapshot: {
         status: "dirty",
         head: "1".repeat(40),
@@ -718,7 +741,7 @@ describe("multi review protocol", () => {
       projectId: "project-1",
       targetBranch: "main",
       reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "running" }],
-      fixModel: { agent: "codex", model: "gpt-5.6" },
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
       phase: "cancelling",
       cancellingSince: new Date(0).toISOString(),
       createdAt: new Date(0).toISOString(),
@@ -750,7 +773,7 @@ describe("multi review protocol", () => {
           schemaRepairPrompt: "Return corrected JSON.",
         },
       ],
-      fixModel: { agent: "codex", model: "gpt-5.6" },
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
       phase: "reviewing",
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
@@ -774,7 +797,7 @@ describe("multi review protocol", () => {
       projectId: "project-1",
       targetBranch: "main",
       reviewers: [{ id: "reviewer-1", agent: "codex", model: "default", status: "pending" }],
-      fixModel: { agent: "codex", model: "default" },
+      addressFindingsModel: { agent: "codex", model: "default" },
       phase: "preparing",
       activeRequest: {
         kind: "prepare",
@@ -810,7 +833,7 @@ test("preparation and immutable package references survive strict workflow valid
     projectId: "project",
     targetBranch: "main",
     reviewers: [{ id: "reviewer", agent: "claude", model: "opus", status: "pending" }],
-    fixModel: { agent: "codex", model: "default" },
+    addressFindingsModel: { agent: "codex", model: "default" },
     phase: "preparing",
     activeRequest: {
       kind: "prepare",
@@ -858,18 +881,22 @@ test("preparation and immutable package references survive strict workflow valid
   expect(
     isMultiReviewWorkflow({
       ...candidate,
-      fixLaunch: {
+      addressFindingsLaunch: {
         kind: "custom",
         instruction: "Repeat the selected fix from the beginning",
         model: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
       },
-      restartFixAfterConsolidation: true,
+      restartAddressFindingsAfterConsolidation: true,
     }),
   ).toBe(true);
   expect(
     isMultiReviewWorkflow({
       ...candidate,
-      fixLaunch: { kind: "custom", instruction: "", model: workflow.fixModel },
+      addressFindingsLaunch: {
+        kind: "custom",
+        instruction: "",
+        model: workflow.addressFindingsModel,
+      },
     }),
   ).toBe(false);
   expect(

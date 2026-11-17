@@ -58,11 +58,11 @@ is fast enough to move back.
 
 | File (tier) | Solo wall / CPU | What it waits on | Fix | Saving |
 | --- | --- | --- | --- | --- |
-| `backend/src/core/worktree-snapshots-git.test.ts` | 28.6 s / 0.6 s | About 15 detections each gated by the 2 s `LOCAL_SCAN_MIN_GAP_MS` | `DiffStatsService` already takes `localScanMinGapMs` (`diff-stats-service.ts:212`); the test builds the service without it. Pass about 250 ms and use that value in the `sleep` calls at lines 323, 329 and 363. A fake-clock test of the 2 s gap exists in `worktree-snapshots.test.ts:1060` | ~23 s |
+| `backend/src/core/worktrees/snapshots-git.test.ts` | 28.6 s / 0.6 s | About 15 detections each gated by the 2 s `LOCAL_SCAN_MIN_GAP_MS` | `DiffStatsService` already takes `localScanMinGapMs` (`diff-stats-service.ts:212`); the test builds the service without it. Pass about 250 ms and use that value in the `sleep` calls at lines 323, 329 and 363. A fake-clock test of the 2 s gap exists in `worktree-snapshots.test.ts:1060` | ~23 s |
 | `backend/src/core/transcript-artifacts/runtime-scratch.test.ts` | 20.9 s / 1.5 s | Three tests of ~7 s each; fixture child idles after its work | Hypothesis: the uncleared 10 s timer in `TranscriptPreviewRunner.close()` (`preview-runner.ts:750`). Time the child alone, then `unref` the timer or end the fixture with `process.exit(0)` | ~18 s, unconfirmed |
 | `backend/tests/container-replacement.test.ts` | 16.4 s / 1.2 s | 10 s Docker-probe timeout, four serial `sleep 1` attempts | Thread a probe timeout through `replacementCopyFailure`; run the four attempts with `Promise.all` | ~12 s |
 | `backend/src/core/storage-backups-release.integration.test.ts` (slow) | 13.5 s / 0.7 s | Six tests inject a real 1.5 s `Bun.sleepSync` | Use the existing `slowStepMs` option with a skewed `performance.now` in the child prelude. Not confirmed that `performance.now` is assignable in Bun | ~9 s |
-| `backend/src/core/native-agent-service-progressive.test.ts` | 16.5 s / 1.8 s | Four `Bun.sleep(2_100)` waiting out the 2 s discovery deadline (`native-agent-transcript-projection.ts:4072`) | Inject the deadline or use fake timers | ~8 s |
+| `backend/src/core/native-agent-service-progressive.test.ts` | 16.5 s / 1.8 s | Four `Bun.sleep(2_100)` waiting out the 2 s discovery deadline (`native-agent-progressive-discovery.ts:302`) | Inject the deadline or use fake timers | ~8 s |
 | `web/src/lib/store-resource-sync.test.ts` | 10.5 s / 1.3 s | 97 `tick()` calls of 80 ms past a 50 ms coalesce timer (`resource-sync.ts:78`) | Controlled timers (`installControlledTimeout`). Could then leave the slow tier | ~7 s |
 | `web/.../AgentNativeTab.render-count.test.tsx` | 14.0 s / 4.2 s | `settle()` waits the real 400 ms `CHAT_COLUMN_SHIFT_SETTLE_MS` 26 times | Controlled timers | ~9 s |
 | `root/tests/unit/release/release-linux-remote-script.test.ts` (slow) | 10.7 s / 1.0 s | Fixed `sleep 1` in `follow()` (`release-linux-remote.sh:131`), about 9 times | Env override for the poll | ~8 s |
@@ -228,7 +228,7 @@ unverified. The default suite was not re-timed per file.
 
 | File | Before | After | How |
 | --- | --- | --- | --- |
-| `backend/src/core/worktree-snapshots-git.test.ts` | 28.5 | 4.1 | Passes `localScanMinGapMs: 250`. Added a test that the production gap is exactly 2000 ms |
+| `backend/src/core/worktrees/snapshots-git.test.ts` | 28.5 | 4.1 | Passes `localScanMinGapMs: 250`. Added a test that the production gap is exactly 2000 ms |
 | `backend/src/core/transcript-artifacts/runtime-scratch.test.ts` | ~21 | 0.9 | Product fix: `TranscriptPreviewRunner.close()` left a 10 s bound timer uncleared, so every shutdown waited it out. It is now cleared in a `finally` |
 | `backend/tests/container-replacement.test.ts` | 17.4 | 4.0 | Optional probe timeout on `replacementCopyFailure`; independent attempts run with `Promise.all` |
 | `backend/src/core/storage-backups-release.integration.test.ts` | 13.5 | 4.5 | Slow step simulated with a skewed `performance.now` instead of `Bun.sleepSync` |

@@ -34,6 +34,7 @@
 import type { Page, TestInfo } from "@playwright/test";
 import { closeElectronWithin } from "./design-electron-cleanup";
 import { focusedWebContentsUrls, trackWebContentsFocus } from "./webcontents-focus";
+import { explainLostFocus, readFrontApplication, readWindowFocus } from "./window-focus-loss";
 import { expect, test } from "./electron-fixtures";
 import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
@@ -1607,9 +1608,13 @@ test("text, region, and page modes capture end to end; open roots select inner c
     await preview("discardPendingCapture", pageStatus.pending.captureId);
   }
 
-  // Iframes retain host fallback; open shadow content captures its inner target.
+  // Readable frame hosts are document targets; sandboxed frames stay unsupported.
   const hosts: string[] = [];
-  for (const selector of ['[data-testid="billing-iframe"]', '[data-testid="shadow-card"]']) {
+  for (const selector of [
+    '[data-testid="billing-iframe"]',
+    '[data-testid="shadow-card"]',
+    '[data-testid="sandboxed-iframe"]',
+  ]) {
     const { descriptor } = await captureElement(selector);
     const pending = await readPending(descriptor.captureId);
     expect(pending.capture.target.kind).toBe("element");
@@ -1618,9 +1623,12 @@ test("text, region, and page modes capture end to end; open roots select inner c
       hosts.push(`${selector} -> ${tag} (${pending.capture.target.anchor.scope.kind})`);
       if (selector.includes("billing-iframe")) {
         expect(tag).toBe("iframe");
+        expect(pending.capture.target.anchor.scope).toEqual({ kind: "document" });
+      } else if (selector.includes("sandboxed-iframe")) {
+        expect(tag).toBe("iframe");
         expect(pending.capture.target.anchor.scope).toEqual({
           kind: "unsupported",
-          reason: "iframe",
+          reason: "cross-origin",
         });
       } else {
         expect(tag).not.toBe("fixture-shadow-card");
@@ -1632,6 +1640,29 @@ test("text, region, and page modes capture end to end; open roots select inner c
     }
     await preview("discardPendingCapture", descriptor.captureId);
   }
+  const innerRect = await inPreview<{ x: number; y: number; width: number; height: number }>(
+    `(() => { const f = document.querySelector('[data-testid="billing-iframe"]');
+      f.scrollIntoView({block:'center'});
+      const outer = f.getBoundingClientRect(); const r = f.contentDocument.getElementById('frame-action').getBoundingClientRect();
+      return {x: outer.x + f.clientLeft + r.x, y: outer.y + f.clientTop + r.y, width:r.width, height:r.height}; })()`,
+  );
+  await start("element");
+  await trustedClick(innerRect.x + innerRect.width / 2, innerRect.y + innerRect.height / 2);
+  await awaitCaptured();
+  const innerStatus = await preview<BrowserPreviewSelectionStatus>("getCaptureStatus", TAB_ID);
+  if (innerStatus.status !== "captured") throw new Error("Inner frame capture missing");
+  const innerPending = await readPending(innerStatus.pending.captureId);
+  expect(innerPending.capture.target).toMatchObject({
+    kind: "element",
+    anchor: {
+      stableId: { kind: "id", value: "frame-action" },
+      scope: {
+        kind: "frame",
+        path: [{ boundary: "frame", tagName: "iframe", documentPath: "about:srcdoc" }],
+      },
+    },
+  });
+  await preview("discardPendingCapture", innerStatus.pending.captureId);
   record(testInfo, "embedded-hosts", hosts.join("; "));
 });
 
@@ -2392,7 +2423,94 @@ async function expectNoCodexLaunch(): Promise<void> {
   expect(await readFile(path.join(s().profile.dataDir, "codex-launches"), "utf8")).toBe("");
 }
 
+test("focus-loss diagnostics preserve the keyboard failure using real Electron window facts", async () => {
+  const original = new Error("controlled keyboard failure");
+  let explained: unknown;
+  try {
+    await keyboardAnnotationCase(async () => {
+      await s().app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.blur());
+      const facts = await readWindowFocus(s().app);
+      expect(facts.electronPid).toBe(await s().app.evaluate(() => process.pid));
+      expect(facts.electronPid).not.toBe(s().app.process().pid);
+      expect(facts.windowFocused).toBe(false);
+      throw original;
+    });
+  } catch (error) {
+    explained = error;
+  }
+  expect(explained).toBeInstanceOf(Error);
+  expect((explained as Error).cause).toBe(original);
+  expect((explained as Error).message).toMatch(/^(Lost|No) window focus:/);
+  expect((explained as Error).message).toContain(original.message);
+  expect((explained as Error).stack).toContain("web-annotations-electron.spec.ts");
+});
+
+test("focus-loss diagnostics recognise another window in the same Electron main process", async () => {
+  test.skip(headlessElectronRequested(), "Requires native window focus");
+  const front = readFrontApplication();
+  test.skip(
+    front.kind === "front" && front.application.name === "loginwindow",
+    "The macOS desktop is locked; native focus cannot be acquired",
+  );
+  const app = s().app;
+  const host = await app.browserWindow(s().window);
+  const mainPid = await app.evaluate(() => process.pid);
+  // Launching through .bin/electron must exercise the wrapper/main distinction.
+  expect(app.process().pid).not.toBe(mainPid);
+  const other = await app.evaluateHandle(
+    ({ BrowserWindow }) => new BrowserWindow({ width: 320, height: 180, show: false }),
+  );
+  try {
+    await other.evaluate((window) =>
+      window.loadURL("data:text/html,<title>Focus regression</title>"),
+    );
+    await app.evaluate(({ app }, window) => {
+      window.show();
+      if (process.platform === "darwin") app.focus({ steal: true });
+      window.focus();
+    }, other);
+    await expect.poll(() => other.evaluate((window) => window.isFocused())).toBe(true);
+    const facts = await readWindowFocus(app);
+    expect(facts).toMatchObject({
+      electronPid: mainPid,
+      windowFocused: false,
+      appHasFocusedWindow: true,
+    });
+    if (process.platform === "darwin") {
+      expect(facts.front).toMatchObject({ kind: "front", application: { pid: mainPid } });
+    }
+    let explained: unknown;
+    try {
+      expect(await host.evaluate((window) => window.isFocused()), "host lost the key window").toBe(
+        true,
+      );
+    } catch (error) {
+      explained = await explainLostFocus(error, app, true);
+      expect((explained as Error).cause).toBe(error);
+    }
+    expect(explained).toBeInstanceOf(Error);
+    expect((explained as Error).message.startsWith("Lost window focus:")).toBe(true);
+    expect((explained as Error).message).toContain("another of the app's windows is focused");
+    expect((explained as Error).message).not.toContain("another application took the key window");
+    if (process.platform === "darwin") {
+      expect((explained as Error).message).toContain(
+        `macOS still has this Electron app (pid ${mainPid}) in front`,
+      );
+    }
+  } finally {
+    await other.evaluate((window) => window.destroy());
+    await other.dispose();
+    await host.evaluate((window) => window.focus());
+    await host.dispose();
+  }
+});
+
 test("keyboard alone creates a note and sends it, with focus handed to the native view and back", async () => {
+  await keyboardAnnotationCase();
+});
+
+/** Optional failure injection exercises this case's real catch and cleanup path. */
+async function keyboardAnnotationCase(afterFocusRead?: () => Promise<void>): Promise<void> {
   const testInfo = test.info();
   testInfo.setTimeout(180_000);
   const agentTabId = "annotation-ui-codex";
@@ -2407,6 +2525,9 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
   let annotationId: string | null = null;
   let sent = false;
   let requestId: string | null = null;
+  // Read after the window is brought forward; a failure then names a lost
+  // window focus (explainLostFocus) instead of a bare "inactive".
+  let windowFocused: boolean | undefined;
   try {
     // Hold the destination's queue with an unsent chat draft (as the gateway
     // suite does), so the send is durable and observable but never executed.
@@ -2433,7 +2554,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
       (await focusedWebContentsUrls(s().app)).map((url) =>
         url.startsWith(fixtureOrigin()) ? "preview" : url === s().window.url() ? "host" : url,
       );
-    const windowFocused = await s().app.evaluate(async ({ app, BrowserWindow }) => {
+    windowFocused = await s().app.evaluate(async ({ app, BrowserWindow }) => {
       const host = BrowserWindow.getAllWindows()[0]!;
       if (process.platform === "darwin") app.focus({ steal: true });
       host.focus();
@@ -2441,6 +2562,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
       return host.isFocused();
     });
     record(testInfo, "window-focused", String(windowFocused));
+    await afterFocusRead?.();
 
     await tabActivate(s().window.getByRole("button", { name: /^Annotations, / }));
     // Start in the native page, then reach its target with real Tab events.
@@ -2550,6 +2672,10 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
         return got.requests.map((request) => `${request.operation}:${request.state}`);
       })
       .toEqual(["discuss:queued"]);
+  } catch (error) {
+    // Another application can take the key window mid-case on a shared
+    // desktop. Still fail, but say so rather than report a bare "inactive".
+    throw await explainLostFocus(error, s().app, windowFocused);
   } finally {
     try {
       if (draftKey) {
@@ -2594,7 +2720,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
       await restoreDirectPreview();
     }
   }
-});
+}
 
 /** The pin query `showPins`/`showOnPage` take, built from the saved capture. */
 async function pinQuery(annotationId: string, number = 1) {

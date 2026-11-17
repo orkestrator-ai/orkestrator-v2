@@ -169,8 +169,8 @@ describe("build pipeline consolidation result reminder", () => {
                 strictReport(value.value),
               ),
             ).toMatchObject({ ok: true });
-            const addressed = await advanceUntil(service, read, started.id, "addressing");
-            expect(addressed.phase).toBe("addressing");
+            const addressed = await advanceUntil(service, read, started.id, "addressing-findings");
+            expect(addressed.phase).toBe("addressing-findings");
             expect(addressed.structuredReview).toBeDefined();
             return;
           }
@@ -191,9 +191,9 @@ describe("build pipeline consolidation result reminder", () => {
 
 // Exercise the stage reminder boundary with real slot preparation and dispatch.
 for (const [phase, kind, tool] of [
-  ["fixing", "validation-plan", "submit_validation_plan"],
+  ["reworking", "validation-plan", "submit_validation_plan"],
   ["reviewing", "review-report", "submit_review_report"],
-  ["addressing", "fix-result", "submit_fix_result"],
+  ["addressing-findings", "fix-result", "submit_fix_result"],
   ["verifying", "verification-result", "submit_verification_result"],
 ] as const) {
   test.each(["present", "missing", "throws", "mismatch"] as const)(

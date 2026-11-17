@@ -305,14 +305,14 @@ async function seedMultiReviews(storage: StorageService, fixture: WorkflowFixtur
     environmentId,
     projectId: "project-1",
     targetBranch: "main",
-    autoFix: false,
+    autoAddressFindings: false,
     reviewers: [1, 2].map((index) => ({
       id: `reviewer-${index}`,
       agent: "claude" as const,
       model: "model",
       status: "pending" as const,
     })),
-    fixModel: { agent: "claude", model: "model" },
+    addressFindingsModel: { agent: "claude", model: "model" },
     reviewWorktreeSnapshot: {
       status: "clean",
       head: "1".repeat(40),

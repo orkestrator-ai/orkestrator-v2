@@ -298,7 +298,7 @@ export class BuildPipelineContext {
   ): WorkflowResultKind | undefined {
     // An implementation-phase turn sent the validation-plan schema: the
     // dedicated package preparation.
-    if (validationPlan && (phase === "building" || phase === "fixing")) {
+    if (validationPlan && (phase === "building" || phase === "reworking")) {
       return buildPipelineStage("preparation").result ?? undefined;
     }
     const sessionPhase = sessionPhaseForBuildPhase(phase);

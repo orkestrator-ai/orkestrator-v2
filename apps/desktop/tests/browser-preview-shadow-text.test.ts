@@ -9,7 +9,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import type { Element, Node, ShadowRoot } from "happy-dom";
 import { WEB_ANNOTATION_MAX_SHADOW_DEPTH } from "@orkestrator/protocol/web-annotations";
 import { isWebAnnotationTarget } from "@orkestrator/protocol/web-annotations-validation";
-import { browserPreviewAnchorKit } from "../electron/browser-preview-anchor-script";
+import { browserPreviewAnchorKitSource } from "../electron/browser-preview-anchor-script";
 import {
   BROWSER_PREVIEW_CAPTURE_STATUS_SCRIPT,
   browserPreviewCaptureStartScript,
@@ -150,7 +150,7 @@ function hintText(harness: Harness): string {
 }
 
 function kitIn(harness: Harness) {
-  return harness.window.eval(`(${browserPreviewAnchorKit.toString()})()`) as {
+  return harness.window.eval(`${browserPreviewAnchorKitSource()}()`) as {
     describeRange: (range: unknown) => Json;
     selectionRange: (selection: unknown) => Json | null;
   };

@@ -110,8 +110,8 @@ describe("build pipeline review pause/resume", () => {
       expect(turns[1]!.prompt).toContain("This work was paused and has now resumed");
 
       provider.runningConsolidation = false;
-      expect((await advanceUntil(service, read, started.id, "addressing", 5)).phase).toBe(
-        "addressing",
+      expect((await advanceUntil(service, read, started.id, "addressing-findings", 5)).phase).toBe(
+        "addressing-findings",
       );
     });
   });

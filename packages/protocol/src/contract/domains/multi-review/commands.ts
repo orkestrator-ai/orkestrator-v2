@@ -7,10 +7,9 @@
  * reads is declared; `asNonBlankString`/`asRequiredBoolean` keys are typed;
  * keys a protocol guard checks with its own message (the start requests, step
  * and model selections, tokens, cursors and detail references) are
- * `optionalKey(Unknown)`. The start requests also declare the newer
- * vocabulary's key names (`autoAddressFindings`, `addressFindingsModel`),
- * which the handler rewrites to today's before its guard runs
- * (`canonicalMultiReview`).
+ * `optionalKey(Unknown)`. The start requests use the Address Findings names
+ * (`autoAddressFindings`, `addressFindingsModel`); the former `autoFix` and
+ * `fixModel` were retired with the stored names (to-do 4740).
  *
  * Browser-safe.
  */
@@ -223,12 +222,10 @@ export const startMultiReviewCommand = workflowCommand(
     projectId: checked,
     targetBranch: checked,
     reviewInstruction: checked,
-    autoFix: checked,
     autoAddressFindings: checked,
     autoPr: checked,
     reviewers: checked,
     reviewModel: checked,
-    fixModel: checked,
     addressFindingsModel: checked,
   }),
 );
@@ -240,7 +237,6 @@ export const startMultiReviewCustomFixCommand = workflowCommand(
   // `StartMultiReviewCustomAddressFindingsInput`, checked by its guard.
   Schema.Struct({
     workflowId: checked,
-    fixModel: checked,
     addressFindingsModel: checked,
     instruction: checked,
   }),

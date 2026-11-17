@@ -172,7 +172,7 @@ describe("build pipeline protocol", () => {
     }
   });
   test("validates durable skip intents and validation run markers", () => {
-    for (const phase of ["build", "fix", "review", "address", "verify"]) {
+    for (const phase of ["build", "rework", "review", "address-findings", "verify"]) {
       expect(isBuildPipeline({ ...snapshot(), skipRequest: { phase } })).toBe(true);
     }
     for (const skipRequest of [
@@ -405,11 +405,13 @@ describe("build pipeline protocol", () => {
     }
 
     // A fix turn's content fingerprint is a SHA-256 digest or nothing.
-    expect(isBuildPipeline(withSession({ fixWorktreeFingerprintAtStart: "a".repeat(64) }))).toBe(
+    expect(isBuildPipeline(withSession({ reworkWorktreeFingerprintAtStart: "a".repeat(64) }))).toBe(
       true,
     );
     for (const invalid of ["", "a".repeat(63), "z".repeat(64), 1, null]) {
-      expect(isBuildPipeline(withSession({ fixWorktreeFingerprintAtStart: invalid }))).toBe(false);
+      expect(isBuildPipeline(withSession({ reworkWorktreeFingerprintAtStart: invalid }))).toBe(
+        false,
+      );
     }
 
     // The baseline path set travels with the head it was observed at.
@@ -1373,7 +1375,7 @@ describe("build pipeline protocol", () => {
     const steps = {
       build: { agent: "claude", model: "claude-a", reasoningEffort: "high" },
       review: { agent: "codex" },
-      address: { agent: "opencode", model: "provider/model" },
+      "address-findings": { agent: "opencode", model: "provider/model" },
     };
     expect(isBuildPipeline({ ...base, steps })).toBe(true);
     expect(
@@ -1608,12 +1610,12 @@ describe("build pipeline protocol", () => {
   test("maps every phase to its own step, except the fix stage", () => {
     expect(stepKeyForSessionPhase("build")).toBe("build");
     expect(stepKeyForSessionPhase("review")).toBe("review");
-    expect(stepKeyForSessionPhase("address")).toBe("address");
+    expect(stepKeyForSessionPhase("address-findings")).toBe("address-findings");
     expect(stepKeyForSessionPhase("verify")).toBe("verify");
     expect(stepKeyForSessionPhase("pr")).toBe("pr");
     expect(stepKeyForSessionPhase("resolve-conflicts")).toBe("resolve-conflicts");
     // The fix stage has no launcher control of its own; it is build work.
-    expect(stepKeyForSessionPhase("fix")).toBe("build");
+    expect(stepKeyForSessionPhase("rework")).toBe("build");
   });
 
   test("maps every member of the phase union to a configurable step", () => {
@@ -1624,9 +1626,9 @@ describe("build pipeline protocol", () => {
     const expected: Record<PipelineSessionPhase, BuildStepKey> = {
       build: "build",
       review: "review",
-      address: "address",
+      "address-findings": "address-findings",
       verify: "verify",
-      fix: "build",
+      rework: "build",
       pr: "pr",
       "resolve-conflicts": "resolve-conflicts",
     };
@@ -1647,7 +1649,7 @@ describe("build pipeline protocol", () => {
     expect([...BUILD_STEP_KEYS]).toEqual([
       "build",
       "review",
-      "address",
+      "address-findings",
       "verify",
       "pr",
       "resolve-conflicts",
@@ -1656,7 +1658,7 @@ describe("build pipeline protocol", () => {
     // in order; a consumer mutating it would change both at once.
     expect(Object.isFrozen(BUILD_STEP_KEYS)).toBe(true);
     expect(() => {
-      (BUILD_STEP_KEYS as BuildStepKey[]).push("fix" as BuildStepKey);
+      (BUILD_STEP_KEYS as BuildStepKey[]).push("rework" as BuildStepKey);
     }).toThrow();
     expect(BUILD_STEP_KEYS).toHaveLength(6);
   });
@@ -2368,7 +2370,13 @@ describe("execution mode policy", () => {
   });
 
   test("never sandboxes a stage that has to write", () => {
-    const writing: PipelineSessionPhase[] = ["build", "address", "fix", "pr", "resolve-conflicts"];
+    const writing: PipelineSessionPhase[] = [
+      "build",
+      "address-findings",
+      "rework",
+      "pr",
+      "resolve-conflicts",
+    ];
     for (const phase of writing) {
       for (const agent of BUILD_PIPELINE_AGENTS) {
         expect(executionModeForSessionPhase(phase, agent)).toBe("build");
@@ -2403,11 +2411,14 @@ describe("review package preparation session", () => {
       plan: { headRef: "a".repeat(40), commands: [], limitations: ["No commands"] },
       results: [],
     };
-    expect(reviewValidationStage({ validationRun }, "fixing")).toBe("validation");
+    expect(reviewValidationStage({ validationRun }, "reworking")).toBe("validation");
     expect(
-      reviewValidationStage({ validationRun: { ...validationRun, status: "cancelled" } }, "fixing"),
+      reviewValidationStage(
+        { validationRun: { ...validationRun, status: "cancelled" } },
+        "reworking",
+      ),
     ).toBe("review-package");
-    for (const phase of ["building", "fixing"] as const) {
+    for (const phase of ["building", "reworking"] as const) {
       const cancelled = { ...validationRun, status: "cancelled" as const };
       expect(
         reviewValidationStage(
@@ -2448,7 +2459,7 @@ describe("review package preparation session", () => {
     expect(
       reviewValidationStage(
         { validationRun, reviewPackage: {} as BuildPipeline["reviewPackage"] },
-        "fixing",
+        "reworking",
       ),
     ).toBeNull();
     expect(reviewValidationStage({ validationRun }, "reviewing")).toBeNull();
@@ -2462,7 +2473,7 @@ describe("review package preparation session", () => {
     expect(
       isReviewPackagePreparationSession({
         label: REVIEW_PACKAGE_SESSION_LABEL,
-        phase: "fix",
+        phase: "rework",
       }),
     ).toBe(true);
     expect(
@@ -2475,7 +2486,7 @@ describe("review package preparation session", () => {
     expect(
       isReviewPackagePreparationSession({
         label: "Fix Session",
-        phase: "fix",
+        phase: "rework",
         structuredResultStatus: "accepted",
       }),
     ).toBe(true);
@@ -2513,7 +2524,7 @@ describe("review package preparation session", () => {
   });
 
   test("does not treat other phases with leftover structured bookkeeping as preparation", () => {
-    for (const phase of ["address", "pr", "resolve-conflicts"] as const) {
+    for (const phase of ["address-findings", "pr", "resolve-conflicts"] as const) {
       expect(
         isReviewPackagePreparationSession({
           label: "Later Session",
@@ -2585,7 +2596,7 @@ describe("pipeline restart requests", () => {
     for (const restartRequest of [
       { kind: "session", phase: "review" },
       { kind: "review-package", implementationPhase: "build" },
-      { kind: "validation", implementationPhase: "fix" },
+      { kind: "validation", implementationPhase: "rework" },
     ] as const) {
       expect(isBuildPipeline({ ...snapshot(), restartRequest })).toBe(true);
     }

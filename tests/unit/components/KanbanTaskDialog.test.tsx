@@ -233,7 +233,7 @@ function defaultSteps(agent = "claude", model = "sonnet") {
   return {
     build: { ...step },
     review: { ...step },
-    address: { ...step },
+    "address-findings": { ...step },
     verify: { ...step },
     pr: { ...step },
     "resolve-conflicts": { ...step },

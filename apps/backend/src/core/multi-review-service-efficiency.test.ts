@@ -168,7 +168,7 @@ async function setup(reviewerCount: number, options: { snapshotMode?: boolean } 
     environmentId,
     projectId: "project-1",
     targetBranch: "main",
-    autoFix: false,
+    autoAddressFindings: false,
     reviewInstruction: `Focus on ${SECRET}`,
     reviewers: Array.from({ length: reviewerCount }, (_, index) => ({
       id: `reviewer-${index + 1}`,
@@ -176,7 +176,7 @@ async function setup(reviewerCount: number, options: { snapshotMode?: boolean } 
       model: "opus",
       status: "pending" as const,
     })),
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
     reviewWorktreeSnapshot: {
       status: "clean",
       head: HEAD,

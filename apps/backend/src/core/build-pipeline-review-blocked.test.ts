@@ -37,8 +37,8 @@ describe("build pipeline review that could not review", () => {
           { agent: "claude", model: "sonnet" },
         ]),
       );
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
-      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+      expect(addressing.error ?? addressing.phase).toBe("addressing-findings");
       // The retired fan-out leaves each reviewer's outcome on its session.
       const [reviewed, blocked] = [0, 1].map((slot) =>
         addressing.sessions.find(
@@ -96,8 +96,8 @@ describe("build pipeline review that could not review", () => {
 
       // The ordinary stage retry consolidates again.
       await service.retryStage(started.id);
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
-      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+      expect(addressing.error ?? addressing.phase).toBe("addressing-findings");
       expect(addressing.structuredReview?.reviewSummary).toBe("Merged review.");
     });
   });

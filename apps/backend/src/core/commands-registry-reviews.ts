@@ -37,7 +37,6 @@ import {
   unstickMultiReviewReviewerCommand,
 } from "@orkestrator/protocol/contract/domains/multi-review";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
-import { canonicalMultiReview } from "@orkestrator/protocol/workflow-vocabulary";
 import {
   isMultiReviewReviewerHistoryPageRequest,
   isMultiReviewWorkflow,
@@ -252,9 +251,8 @@ export function registerReviewWorkflowCommands(
       );
     },
   );
-  register(startMultiReviewCommand, (rawArgs, context) => {
+  register(startMultiReviewCommand, (args, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
-    const args = canonicalMultiReview(rawArgs);
     if (!isStartMultiReviewInput(args)) throw new Error("Invalid multi review start request");
     return context.multiReviews
       .start(args as unknown as StartMultiReviewInput)
@@ -265,9 +263,8 @@ export function registerReviewWorkflowCommands(
     const id = asNonBlankString(workflowId, "workflowId");
     return context.multiReviews.address(id).then(stripWorkflowSnapshotSecrets);
   });
-  register(startMultiReviewCustomFixCommand, (rawArgs, context) => {
+  register(startMultiReviewCustomFixCommand, (args, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
-    const args = canonicalMultiReview(rawArgs);
     if (!isStartMultiReviewCustomAddressFindingsInput(args)) {
       throw new Error("Invalid Multi Review custom fix request");
     }

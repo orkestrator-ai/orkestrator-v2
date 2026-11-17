@@ -165,7 +165,7 @@ export class BuildPipelineRecovery {
   /**
    * Completes an Address turn and opens Verify.
    *
-   * A session opened with a `fix-result` slot (`addressReportKind`) must
+   * A session opened with a `fix-result` slot (`addressFindingsReportKind`) must
    * return that result first: a missing one gets the stage's one reminder and
    * then fails the stage, exactly as for Review and Verify. The accepted
    * result is kept, bounded, on the session, where Verify and the inspector
@@ -179,7 +179,7 @@ export class BuildPipelineRecovery {
     provider: BuildPipelineProvider,
     session: PipelineSession,
   ): Promise<void> {
-    if (session.addressReportKind === undefined) {
+    if (session.addressFindingsReportKind === undefined) {
       throw new Error(
         "This Address Findings session was started before typed fix results and has no result to read; retry the stage to run it again.",
       );
@@ -193,16 +193,16 @@ export class BuildPipelineRecovery {
     }
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
-    let fixResult: ReviewAddressFindingsResult;
+    let addressFindingsResult: ReviewAddressFindingsResult;
     try {
-      fixResult = parseAddressFindingsResult(result.value);
+      addressFindingsResult = parseAddressFindingsResult(result.value);
     } catch (error) {
       throw new Error(
         `The Address Findings stage returned a malformed result: ${errorMessage(error)}`,
       );
     }
     session.structuredResultStatus = "accepted";
-    session.fixResult = boundPipelineAddressFindingsResult(fixResult);
+    session.addressFindingsResult = boundPipelineAddressFindingsResult(addressFindingsResult);
     this.ctx.stageWorkflowResultConsumption(pipeline, session, requestId);
     await this.stageSupervisor.startStage(pipeline, "verify", "verifying");
     await this.ctx.consumeWorkflowResult(pipeline, session, requestId);
@@ -295,8 +295,8 @@ export class BuildPipelineRecovery {
     pipeline.iteration += 1;
     if (stall) {
       // The round is queued, not dispatched: Resume runs it.
-      pipeline.restartRequest = { kind: "session", phase: "fix" };
-      pipeline.pausedFromPhase = "fixing";
+      pipeline.restartRequest = { kind: "session", phase: "rework" };
+      pipeline.pausedFromPhase = "reworking";
       pipeline.phase = "paused";
       pipeline.pauseCause = "supervisor";
       pipeline.error = stall;
@@ -305,7 +305,7 @@ export class BuildPipelineRecovery {
       await this.ctx.consumeWorkflowResult(pipeline, session, resolvedRequestId);
       return;
     }
-    await this.stageSupervisor.startStage(pipeline, "fix", "fixing");
+    await this.stageSupervisor.startStage(pipeline, "rework", "reworking");
     await this.ctx.consumeWorkflowResult(pipeline, session, resolvedRequestId);
   }
 

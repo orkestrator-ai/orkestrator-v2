@@ -82,7 +82,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Volume copy metadata | `container-live-data-contracts.test.ts` | Production `copy-volume` between real Docker volumes with a read-only source; compare raw `user.*` file/directory attributes and `security.capability` bytes before and after. Missing xattr or setcap support fails qualification. |
 | Registry | `scripts/measure-registry-image.sh [--transfer <platform>] [--dind <platform>] [--json <file>] <image-ref>` | Compressed manifest and layer bytes, blob transfer time, cold pull |
 | Upgrade and rollback | `bun scripts/qualify-backend-upgrade-rollback.ts [--old-ref <ref>] [--floor-ref <ref>] [--main-ref <ref>] [--report <file>]` | Backend upgrade over an older release's data and containers; the floor's refusal of a newer directory |
-| Real stack, terminal Claude | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1 mise run test:agent:docker`. With no login and no billed turn: start the profile with `--no-agent-credentials --agent-platforms claude` and set `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1` instead, which points the image's `claude` at a fixture Messages API on the container's loopback (`container-fake-claude-api.ts`). Add `ORKESTRATOR_AGENT_TEST_CLAUDE_TERMINAL_FAILED_TURN=1` (fake API only) for a third, refused turn. On beelink, run the profile and the spec on `mise run docker:disposable -- start --host-loopback` with its `DOCKER_HOST`; the host-loopback daemon lets the ring through the firewall | A real `claude` turn in a **Claude CLI** tab, foreground and background: the Claude state signal's working and waiting latency against the activity and completion budgets, no missed ring, no bypass-consent or auto-mode offer, and nothing of the tab left in the container after close (`container-claude-terminal-signal.spec.ts`). With the refused turn: the CLI retries the 401 for about three minutes, then the sidebar leaves working, the environment rings `agent_failed` and the toast shows; a fresh signed-out CLI in the same container (the fixture removes its settings token and omits StopFailure to require fallback recovery) must refuse its prompt locally, leave working and ring `agent_failed` again: the backend settles it from the CLI's notice ([container-lifecycle.md](../architecture/container-lifecycle.md#turns-no-hook-ends), from to-do 8092, retired). Passed on beelink on 2026-11-14 in 224 s, when the follow-up prompt was still a recorded known gap (to-do 5160 (retired) task 4; the native, container-restart and `claude-tmux` failed-turn checks are in [agent-testing.md](agent-testing.md#failed-turn-bell-refused-login-model)). The containers must reach the profile's agent tools port: a Linux host firewall that drops it fails the spec at its first check, naming the port; start the profile with `--agent-tools-port` in the range one firewall rule admits, or `--agent-tools-port auto` to take a free one there ([agent-testing.md](agent-testing.md#containers-behind-a-host-firewall---agent-tools-port), [7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)) |
+| Real stack, terminal Claude | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1 mise run test:agent:docker`. With no login and no billed turn: start the profile with `--no-agent-credentials --agent-platforms claude` and set `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1` instead, which points the image's `claude` at a fixture Messages API on the container's loopback (`container-fake-claude-api.ts`). Add `ORKESTRATOR_AGENT_TEST_CLAUDE_TERMINAL_FAILED_TURN=1` (fake API only) for a third, refused turn. On beelink, run the profile and the spec on `mise run docker:disposable -- start --host-loopback` with its `DOCKER_HOST`; the host-loopback daemon lets the ring through the firewall | A real `claude` turn in a **Claude CLI** tab, foreground and background: the Claude state signal's working and waiting latency against the activity and completion budgets, no missed ring, no bypass-consent or auto-mode offer, and nothing of the tab left in the container after close (`container-claude-terminal-signal.spec.ts`). With the refused turn: the CLI retries the 401 for about three minutes, then the sidebar leaves working, the environment rings `agent_failed` and the toast shows; a fresh signed-out CLI in the same container (the fixture removes its settings token and omits StopFailure to require fallback recovery) must refuse its prompt locally, leave working and ring `agent_failed` again: the backend settles it from the CLI's notice ([container-lifecycle.md](../architecture/container-lifecycle.md#turns-no-hook-ends), from to-do 8092, retired). Passed on beelink on 2026-11-17 three times with both signals `confirmed` behind its firewall on `--agent-tools-port 31500` ([evidence](#container-state-signals-on-a-firewalled-linux-engine-host-2026-11-17)); with the refused turn, passed on beelink on 2026-11-14 in 224 s, when the follow-up prompt was still a recorded known gap (to-do 5160 (retired) task 4; the native, container-restart and `claude-tmux` failed-turn checks are in [agent-testing.md](agent-testing.md#failed-turn-bell-refused-login-model)). The containers must reach the profile's agent tools port: a Linux host firewall that drops it fails the spec at its first check, naming the port; start the profile with `--agent-tools-port` in the range one firewall rule admits, or `--agent-tools-port auto` to take a free one there ([agent-testing.md](agent-testing.md#containers-behind-a-host-firewall---agent-tools-port); beelink's ufw admits 31500–31509 since 2026-11-17) |
 | Real stack, Claude read-only Multi Review | A Docker profile started with `--no-agent-credentials --agent-platforms claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_REVIEW=1 mise run test:agent:docker -- container-multi-review-read-only.spec.ts`. No login and no billed turn: the image's `claude` answers from a scripted Messages API on the container's loopback (`container-fake-claude-review-api.ts`), staged as Claude managed settings, which reach every turn (the entrypoint rewrites the container's user settings file at start). On a host whose firewall drops container traffic to the profile, run the profile on `mise run docker:disposable -- start --host-loopback` (its `DOCKER_HOST` exported for both the profile and the spec) | A two-reviewer Multi Review with Claude reviewers and a Claude consolidation, every read-only turn without the CLI's command sandbox (the image ships neither bubblewrap nor socat): the review settles `ready`; reviewers and consolidation carry the sandbox-off note in the snapshot and the inspector, worded for a container; `ls` runs, the package's `diffCommand` and a write are refused by the hook, the reviewers read the sealed diff file instead, and that file matches `diffCommand`'s output; while the reviewers are held before submitting (the fake's `--hold`), Reviewer 1's Agent Info says "No sandbox, approvals denied" with the container reason (`container-multi-review-read-only.spec.ts`, to-do 0190 (retired); behaviour in [coordinator.md](../architecture/coordinator.md#read-only-review-turns-without-a-working-sandbox)). Passed on beelink on 2026-11-10 in 51 s, before the Agent Info step was added, and with it on 2026-11-14 in 29 s (Claude CLI 2.1.319, disposable rootless daemon with `--host-loopback`) |
 | Real stack, Codex read-only Multi Review | A Docker profile started fresh with `--no-agent-credentials --agent-platforms codex`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_FAKE_CODEX_REVIEW=1 mise run test:agent:docker -- container-multi-review-codex-read-only.spec.ts` (alone: the other Docker fixture specs start Codex in `fixture-container`, and its app-server must first start after the spec has pointed it at the fake). No login and no billed turn: the spec writes the fake's `openai_base_url` and a made-up API key into the container's own `~/.codex` before the first Codex session and restores both afterwards, and the image's `codex` answers from a scripted Responses WebSocket on the container's loopback (`container-fake-codex-review-api.ts`). The containers must reach the profile's agent tools server, as in the Claude row | A two-reviewer Multi Review with Codex reviewers, consolidation and preparation, every read-only turn `danger-full-access` under `untrusted`: the review settles `ready`; reviewers and consolidation carry Codex's sandbox-off note; `cat` and `ls` run through the bridge's exec-policy rules, the package's `git diff`, a `touch` and an `apply_patch` are declined, the reviewers read the sealed diff file instead and submit through the `orkestrator` MCP server; nothing reaches the checkout and the rules file is in the container's Codex home (`container-multi-review-codex-read-only.spec.ts`, to-do 7872 (retired); behaviour in [coordinator.md](../architecture/coordinator.md#codex-read-only-turns-in-a-container)). The scripted reviewer speaks only Codex code mode, so the spec uses Codex's default model, which the pinned catalogue marks `code_mode_only` (`gpt-5.5` is not, and fails at preparation). Passed on beelink on 2026-11-14 in 34 s (Codex 0.167.0, disposable rootless daemon with `--host-loopback`); the reviewer turn alone also passed on the host (`live-read-only-reviewer-turn.test.ts`, 2026-11-13) |
 | Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites, the signal scripts or the benchmark harness) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm`, both container change-signal live tests, the design export test (`export-container.test.ts`), the exec-cost script, then the benchmarks (C28); the numbers are uploaded as `container-benchmarks-<platform>` |
@@ -449,6 +449,100 @@ gvisor-tap-vsock on 2026-11-11.
   `host(...)` on both drivers), and the backend's reachability check on
   VPNKit with host loopback (8305). No provider turns, credentials or app
   profile were used.
+
+## Container state signals on a firewalled Linux Engine host (2026-11-17)
+
+The last qualification of the two container state signals (the Claude
+terminal state signal and the container worktree signal,
+[container-lifecycle.md](../architecture/container-lifecycle.md#claude-terminal-state-signal-claude-state-signal3)):
+the real-stack run on a Linux Engine host, which to-dos 0020 and 7080
+tracked until they were retired on this date (read them with
+`git log -1 --diff-filter=D -- docs/todo/containers-and-environments/0020-container-state-observation.md`
+and the same for `7080-linux-host-firewall-blocks-profile-signals.md`).
+
+- **Host:** beelink, Arch Linux, kernel 7.1.8-arch1-3, x86_64, rootful
+  Docker Engine 29.9.2 (overlayfs, cgroup v2). ufw drops input by default;
+  since 2026-11-17 it admits TCP from `172.16.0.0/12` to the agent-test
+  range (`-A ufw-user-input -p tcp -m multiport --dports 31500:31509 -s 172.16.0.0/12 -j ACCEPT`,
+  added by the user, [agent-testing.md](agent-testing.md#containers-behind-a-host-firewall---agent-tools-port)).
+- **Image:** `orkestrator-v2:dev-1d6c8552e7ca` from `main` at `0265e7882`
+  (`claude-state-signal=3`, `container-worktree-signal=1`, egress gateway and
+  filter, network policy 3), Claude Code 2.1.319.
+- **Profile:** headless (no Xvfb, no display variables), `--fixture
+  --fixture-environments local,container --no-agent-credentials
+  --no-host-seed --agent-platforms claude --headless --agent-tools-port
+  31500`, with the `docker-qualification-bin` shim first on `PATH` (it did
+  not need to act: the environment network came from the daemon's own pool,
+  `172.27.0.0/16`, host alias `172.27.0.1`). The host reachability check was
+  left on. No login, credential or billed turn: the image's real `claude`
+  answered from the fake Messages API on the container's loopback.
+
+**Both signals confirmed** before any test: one container, `confirmed`, one
+ring each, `fallback` 0, `unconfirmed` 0, no demotions
+(`get_recurring_work_diagnostics`).
+
+**Terminal Claude spec** (`ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1 mise run
+test:agent:docker -- container-claude-terminal-signal.spec.ts --workers=1`,
+three runs). Host-clock upper bounds; the container clock was 16–18 ms ahead
+and corrected.
+
+| Run | Result | Foreground: Enter to backend / sidebar working | Background: Enter to backend / sidebar working | Foreground: Stop hook to backend / sidebar waiting | Background: Stop hook to backend / sidebar waiting | Claude signal rings |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | passed, 16.8 s | 213 / 303 ms | 118 / 198 ms | 163 / 284 ms | 150 / 226 ms | 1 → 5 |
+| 2 | passed, 16.2 s | 197 / 297 ms | 135 / 217 ms | 107 / 285 ms | 126 / 239 ms | 5 → 9 |
+| 3 | passed, 16.4 s | 218 / 284 ms | 118 / 217 ms | 104 / 280 ms | 145 / 190 ms | 9 → 13 |
+| Budget | | sidebar ≤ 4 s | sidebar ≤ 4 s | sidebar ≤ 3 s | sidebar ≤ 3 s | ≥ 2 per turn |
+
+12 rings for 6 turns, the signal `confirmed` throughout, `fallback` 0, no
+demotion. Docker Desktop's real-login run (2026-10-26, Claude Code 2.1.309)
+read 222–307 / 159–308 ms to the sidebar showing working and 257–356 /
+207–230 ms to waiting.
+
+**Profile sample** (`container-signal-profile-sample.ts`, 120 s windows) on
+the same profile straight afterwards:
+
+| What | No `--demote` (signal) | `--demote` (fallback) | beelink 2026-11-06, firewall closed (fallback, both runs) | Docker Desktop, signal confirmed (2026-10-26) | Docker Desktop, fallback (2026-10-24) |
+| --- | --- | --- | --- | --- | --- |
+| Idle, a minute | Claude reads 2, diff scans 1.5, tree walks 0 | Claude reads 2, diff scans 4.5, tree walks 0 | Claude reads 2, diff scans 4.5, tree walks 0 | Claude reads 2, diff scans 1.5, tree walks 0 | diff scans 4 |
+| Files panel open, a minute | Claude reads 2, diff scans 2, tree walks 1.5 | Claude reads 2, diff scans 11.8, tree walks 5.9 | Claude reads 1.9, diff scans 11.6–12.1, tree walks 5.8 | plus 1.5 tree walks | about 11 status scans and 6 tree walks |
+| Change announced | 416–510 ms, median 421 ms (5 of 5) | 2,423 ms (1 of 5; the client's poll saw the others first) | announced first in 2 of 5 (1,813 and 2,437 ms) and, with `--demote`, 3 of 5 (668–3,708 ms) | 507–535 ms | — |
+| Change visible to the client | 424–528 ms, median 427 ms (5) | 513–6,924 ms, median 3,092 ms (5) | 249–4,909 ms, median 2,455 ms; 602–3,708 ms, median 1,331 ms | 520–554 ms | 1.0–6.6 s, median 1.6 s |
+| Signals after | both `confirmed`, worktree rings 1 → 11, no demotion | worktree `demoted` (`watcher-lost`, the script's own `pkill`), `fallback` 1; Claude `confirmed` | both `armed`, 0 rings | both `confirmed` | — |
+
+With the signal confirmed, Linux Engine matches Docker Desktop's
+signal-confirmed execs exactly and shows a change about 90 ms sooner; the
+`--demote` run matches both fallback rows. A demoted worktree lineage
+re-armed and confirmed again 5 min later, as designed.
+
+**Method notes.**
+
+- The first `--demote` attempt was stopped by the logged runner's 300 s
+  silence watchdog: the script prints only when it finishes, and its
+  `--demote` path takes about 350 s. The rerun passed with
+  `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=1200000` on `test:logged`; set it
+  for any `--demote` sample.
+- Before the rule (2026-11-06, `main` at `e6c3da899`, Claude Code 2.1.314),
+  both signals stayed `armed` with 0 rings on the same host: the profile's
+  random agent tools port (37525) was dropped by ufw, the spec stopped at its
+  first check naming that port, and both samples measured only the
+  fallback (the beelink column above). That run found the auto-mode offer
+  returning on every container start (fixed by to-do 7081, retired
+  2026-11-10) and led to `--agent-tools-port` and the `unconfirmed` signal
+  state.
+- The fake Messages API holds each reply for 3 s: an instant turn fits
+  between two 1 s polls of an unconfirmed signal and its `working` edge is
+  never read. A Claude Code release that changes its API use can break the
+  fixture; the spec then fails, it does not pass.
+- Linux Engine CI repeats the pieces weekly on `ubuntu-24.04` and
+  `ubuntu-24.04-arm` (Docker Engine 28.0.4; 2026-10-26: one Claude state
+  read about 32–38 ms wall p50 and 47–52 ms of machine CPU, so about 5 % of a
+  core for the 1 s poll against 9–10 % on Docker Desktop; the watcher 520
+  watches, about 7 MB, no idle CPU; arm to confirmed 419–451 ms), through
+  `container-live-qualification.yml`
+  ([Exec cost and container change signals](#exec-cost-and-container-change-signals)).
+- Cleanup: `dev:stop`, then `dev:reset` removed the profile's two
+  containers, two volumes and one network, and the image was removed by its
+  tag. No firewall, network or Docker daemon setting was changed.
 
 ## GitHub ranges seed directory bind on beelink (2026-11-15)
 
@@ -1444,7 +1538,9 @@ change's pull request; they had not run when this was written.
 tenth being the C22 host-service reply, which reports itself INCOMPLETE
 because beelink's host firewall closes the agent-tools path from the nested
 daemon's containers (see the disposable daemon's "Not covered by it" above
-and [7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)).
+and to-do 7080, retired 2026-11-17, whose
+[evidence](#container-state-signals-on-a-firewalled-linux-engine-host-2026-11-17)
+records the rule that since admits the agent-test range).
 The whole rebuild-fault file on the rootful daemon: 6/6.
 
 **Not covered.** A Docker Desktop quit (the macOS VM going away) during a

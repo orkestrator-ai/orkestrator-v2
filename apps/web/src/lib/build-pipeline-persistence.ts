@@ -4,7 +4,6 @@ import {
   type BuildPipelineDetail,
 } from "@orkestrator/protocol/build-pipeline-detail";
 import { backfillLegacyTestResults } from "@orkestrator/protocol/structured-review";
-import { canonicalBuildPipeline } from "@orkestrator/protocol/workflow-vocabulary";
 import type { StoreApi } from "zustand/vanilla";
 import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
@@ -157,7 +156,7 @@ export function resetBuildPipelineUnavailableMarkersForTests(
 function toSnapshot(persisted: PersistedBuildPipeline<BuildPipeline>): BuildPipeline | null {
   // Older remote backends cannot run the storage migration. Backfill only the
   // historical field here; strict pipeline validation still rejects bad reports.
-  const raw = canonicalBuildPipeline(persisted.snapshot);
+  const raw = persisted.snapshot;
   const snapshot: unknown =
     raw && typeof raw === "object" && raw.structuredReview
       ? { ...raw, structuredReview: backfillLegacyTestResults(raw.structuredReview) }

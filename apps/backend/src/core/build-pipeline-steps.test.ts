@@ -181,9 +181,9 @@ class RecordingProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : phase === "build" || phase === "fix"
+        : phase === "build" || phase === "rework"
           ? TEST_REVIEW_PREPARATION
-          : phase === "address"
+          : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
             : this.verificationComplete
               ? { complete: true, rationale: "All criteria pass." }
@@ -609,7 +609,11 @@ async function withBridgeService(
 const steps = {
   build: { agent: "claude" as const, model: "claude-a", reasoningEffort: "high" },
   review: { agent: "codex" as const, model: "codex-b", reasoningEffort: "low" },
-  address: { agent: "claude" as const, model: "claude-address", reasoningEffort: "high" },
+  "address-findings": {
+    agent: "claude" as const,
+    model: "claude-address",
+    reasoningEffort: "high",
+  },
   verify: { agent: "opencode" as const, model: "opencode/c" },
   pr: { agent: "codex" as const, model: "codex-pr" },
   "resolve-conflicts": { agent: "claude" as const, model: "claude-conflicts" },
@@ -1237,15 +1241,15 @@ describe("per-step stage coverage", () => {
           verify: { agent: "opencode", model: "opencode/c" },
         },
       });
-      const pipeline = await advanceToStage(service, storage, started.id, "fix");
+      const pipeline = await advanceToStage(service, storage, started.id, "rework");
 
       expect(created).toContainEqual({
         agent: "claude",
-        phase: "fix",
+        phase: "rework",
         model: "claude-a",
         effort: "high",
       });
-      const fix = pipeline.sessions.find((session) => session.phase === "fix");
+      const fix = pipeline.sessions.find((session) => session.phase === "rework");
       expect(fix?.agent).toBe("claude");
     });
   });
@@ -1728,7 +1732,7 @@ describe("per-step execution modes", () => {
         ok: true,
         provider: "codex",
         requestId,
-        value: (codex.phases.get(sessionId) === "build" || codex.phases.get(sessionId) === "fix"
+        value: (codex.phases.get(sessionId) === "build" || codex.phases.get(sessionId) === "rework"
           ? TEST_REVIEW_PREPARATION
           : codex.phases.get(sessionId) === "review"
             ? {
@@ -1768,7 +1772,7 @@ describe("per-step execution modes", () => {
         steps: {
           build: { agent: "codex" },
           review: { agent: "codex" },
-          address: {
+          "address-findings": {
             agent: "opencode",
             model: "provider/address-model",
             reasoningEffort: "high",
@@ -1777,10 +1781,10 @@ describe("per-step execution modes", () => {
       });
       await advanceToStage(service, storage, started.id, "verify");
 
-      expect(opencode.createdModes).toContainEqual(["address", "build"]);
+      expect(opencode.createdModes).toContainEqual(["address-findings", "build"]);
       expect(created).toContainEqual({
         agent: "opencode",
-        phase: "address",
+        phase: "address-findings",
         model: "provider/address-model",
         effort: "high",
       });
@@ -1808,9 +1812,9 @@ describe("per-step execution modes", () => {
         "Fixed the off-by-one; reran src/app.test.ts: pass.",
       );
       const verifying = await snapshot(storage, started.id);
-      const address = verifying.sessions.find((session) => session.phase === "address");
-      expect(address?.addressReportKind).toBe("fix-result");
-      expect(address?.fixResult).toEqual(TEST_ADDRESS_FINDINGS_RESULT);
+      const address = verifying.sessions.find((session) => session.phase === "address-findings");
+      expect(address?.addressFindingsReportKind).toBe("address-findings-result");
+      expect(address?.addressFindingsResult).toEqual(TEST_ADDRESS_FINDINGS_RESULT);
       expect(codex.sentModes.slice(0, 2)).toEqual(["build", "plan"]);
     });
   });

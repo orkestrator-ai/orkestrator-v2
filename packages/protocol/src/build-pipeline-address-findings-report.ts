@@ -3,17 +3,20 @@
  *
  * An Address turn opens a `fix-result` workflow result slot, as Multi Review's
  * fix step does. The accepted result is copied, bounded, onto the Address
- * session (`PipelineSession.fixResult`), where the Verify prompt reads it as an
+ * session (`PipelineSession.addressFindingsResult`), where the Verify prompt reads it as an
  * evidence frame and the pipeline inspector shows it.
  *
- * `PipelineSession.addressReportKind` is the recorded marker that a session was
+ * `PipelineSession.addressFindingsReportKind` is the recorded marker that a session was
  * opened with that slot. An Address session without it was started before the
  * typed handoff existed (or by a provider path with no result transport), and
  * Verify reads that session's last assistant text instead.
  */
 
-/** The result kind an Address session submits; the only value of the marker today. */
-export const PIPELINE_ADDRESS_FINDINGS_REPORT_KIND = "fix-result" as const;
+/**
+ * The stored marker that an Address session was opened with a `fix-result`
+ * slot; the only value of the marker today.
+ */
+export const PIPELINE_ADDRESS_FINDINGS_REPORT_KIND = "address-findings-result" as const;
 export type PipelineAddressFindingsReportKind = typeof PIPELINE_ADDRESS_FINDINGS_REPORT_KIND;
 
 /** One check the Address stage reports it ran. */

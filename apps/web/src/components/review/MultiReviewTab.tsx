@@ -116,7 +116,7 @@ interface MultiReviewCommands {
   address: (workflowId: string) => Promise<MultiReviewWorkflow>;
   customAddressFindings?: (
     workflowId: string,
-    fixModel: MultiReviewWorkflow["fixModel"],
+    fixModel: MultiReviewWorkflow["addressFindingsModel"],
     instruction: string,
   ) => Promise<MultiReviewWorkflow>;
   retry: (workflowId: string) => Promise<MultiReviewWorkflow>;
@@ -126,7 +126,7 @@ interface MultiReviewCommands {
   restartReviewer?: (
     workflowId: string,
     reviewerId: string,
-    model?: MultiReviewWorkflow["fixModel"],
+    model?: MultiReviewWorkflow["addressFindingsModel"],
   ) => Promise<MultiReviewWorkflow>;
   skipStep?: (workflowId: string, step: MultiReviewSkippableStep) => Promise<MultiReviewWorkflow>;
   rewindCode?: (
@@ -137,7 +137,7 @@ interface MultiReviewCommands {
   restartStep?: (
     workflowId: string,
     kind: MultiReviewStepKind,
-    model?: MultiReviewWorkflow["fixModel"],
+    model?: MultiReviewWorkflow["addressFindingsModel"],
   ) => Promise<MultiReviewWorkflow>;
   pauseStep?: (workflowId: string, kind: MultiReviewStepKind) => Promise<MultiReviewWorkflow>;
   resumeStep?: (workflowId: string, kind: MultiReviewStepKind) => Promise<MultiReviewWorkflow>;
@@ -149,7 +149,11 @@ function nodeMultiReviewCommands(node: ScopeBackend): MultiReviewCommands {
   return {
     address: (...args) => node.addressMultiReviewFindings(...args),
     customAddressFindings: (workflowId, fixModel, instruction) =>
-      node.startMultiReviewCustomAddressFindings({ workflowId, fixModel, instruction }),
+      node.startMultiReviewCustomAddressFindings({
+        workflowId,
+        addressFindingsModel: fixModel,
+        instruction,
+      }),
     retry: (...args) => node.retryMultiReview(...args),
     cancel: (...args) => node.cancelMultiReview(...args),
     stopValidation: (...args) => node.stopMultiReviewValidation(...args),
@@ -184,7 +188,7 @@ function phaseCopy(workflow: MultiReviewWorkflow): string {
     reviewing: "Independent read-only reviews are running",
     consolidating: "The review preparation model is consolidating findings",
     ready: "Consolidated report ready",
-    fixing: "The Address Findings model is addressing every finding",
+    "addressing-findings": "The Address Findings model is addressing every finding",
     interactive: "The Address Findings model is working interactively",
     paused: "Multi Review paused",
     completed: "All findings were addressed",
@@ -195,17 +199,19 @@ function phaseCopy(workflow: MultiReviewWorkflow): string {
   if (
     workflow.phase === "interactive" &&
     workflow.addressPromptPending !== true &&
-    workflow.fixSession?.status === "idle" &&
-    workflow.stepRuntimes?.fix?.completedAt !== undefined
+    workflow.addressFindingsSession?.status === "idle" &&
+    workflow.stepRuntimes?.["address-findings"]?.completedAt !== undefined
   ) {
     return "The Address Findings session finished and is ready for follow-up";
   }
   if (
     workflow.phase === "interactive" &&
     workflow.addressPromptPending !== true &&
-    workflow.fixSession?.status === "failed"
+    workflow.addressFindingsSession?.status === "failed"
   ) {
-    return workflow.fixSession.error ?? "The Address Findings session stopped with an error";
+    return (
+      workflow.addressFindingsSession.error ?? "The Address Findings session stopped with an error"
+    );
   }
   return labels[workflow.phase];
 }
@@ -216,7 +222,7 @@ function isBusyPhase(phase: MultiReviewPhase): boolean {
     phase === "preparing" ||
     phase === "reviewing" ||
     phase === "consolidating" ||
-    phase === "fixing" ||
+    phase === "addressing-findings" ||
     phase === "cancelling"
   );
 }
@@ -452,7 +458,7 @@ function StepFacts({
   runtime: givenRuntime,
   status,
 }: {
-  model: MultiReviewWorkflow["fixModel"];
+  model: MultiReviewWorkflow["addressFindingsModel"];
   runtime: RuntimeParts | null;
   status: MultiReviewStepStatus;
 }) {
@@ -536,7 +542,7 @@ function MultiReviewOverviewTab({
   const [restartDialogReviewer, setRestartDialogReviewer] = useState<{
     id: string;
     name: string;
-    selection: MultiReviewWorkflow["fixModel"];
+    selection: MultiReviewWorkflow["addressFindingsModel"];
   } | null>(null);
   const [skippingStep, setSkippingStep] = useState<MultiReviewSkippableStep | null>(null);
   const codeRewind = usePipelineCodeRewind(
@@ -587,11 +593,11 @@ function MultiReviewOverviewTab({
     (reviewer) => reviewer.status === "running" && reviewer.startedAt,
   );
   const hasRunningAddressFindingsSession =
-    workflow?.fixSession?.status === "running" ||
+    workflow?.addressFindingsSession?.status === "running" ||
     workflow?.reviewSession?.status === "running" ||
     (workflow?.phase === "interactive" &&
-      workflow.stepRuntimes?.fix !== undefined &&
-      workflow.stepRuntimes.fix.completedAt === undefined);
+      workflow.stepRuntimes?.["address-findings"] !== undefined &&
+      workflow.stepRuntimes["address-findings"].completedAt === undefined);
   const hasRunningValidation =
     workflow?.validationRun?.status === "planned" || workflow?.validationRun?.status === "running";
   // The header measures review, validation and Address Findings; PR work has no workflow timing record.
@@ -665,7 +671,7 @@ function MultiReviewOverviewTab({
       const options = multiReviewAddressFindingsSessionTabOptions(target);
       if (!options) return "no-session";
       if (!createTab) return "environment-unavailable";
-      return createTab(target.fixModel.agent, options) ? "opened" : "tab-rejected";
+      return createTab(target.addressFindingsModel.agent, options) ? "opened" : "tab-rejected";
     },
     [createTab],
   );
@@ -788,7 +794,7 @@ function MultiReviewOverviewTab({
 
   const restartReviewerIn = async (
     reviewerId: string,
-    selection: MultiReviewWorkflow["fixModel"],
+    selection: MultiReviewWorkflow["addressFindingsModel"],
   ) => {
     if (!workflow || !commands.restartReviewer || reviewerAction !== null || pending) return;
     setReviewerAction({ reviewerId, kind: "restart" });
@@ -823,7 +829,7 @@ function MultiReviewOverviewTab({
 
   const restartStep = async (
     kind: MultiReviewStepKind,
-    model?: MultiReviewWorkflow["fixModel"],
+    model?: MultiReviewWorkflow["addressFindingsModel"],
   ) => {
     if (
       !workflow ||
@@ -912,7 +918,7 @@ function MultiReviewOverviewTab({
   };
 
   const startCustomAddressFindings = async (
-    selection: MultiReviewWorkflow["fixModel"],
+    selection: MultiReviewWorkflow["addressFindingsModel"],
     prompt: string,
   ) => {
     if (customAddressFindingsPending) return;
@@ -1026,20 +1032,23 @@ function MultiReviewOverviewTab({
     (workflow.engine === "graph" && workflow.phase === "preparing"
       ? workflow.preparationSession
       : (workflow.reviewSession ??
-        (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession))
+        (workflow.reviewModel || workflow.consolidationModel
+          ? undefined
+          : workflow.addressFindingsSession))
     )?.stalledSince !== undefined;
   const addressFindingsSessionStalled =
-    workflow.phase === "fixing" && workflow.fixSession?.stalledSince !== undefined;
+    workflow.phase === "addressing-findings" &&
+    workflow.addressFindingsSession?.stalledSince !== undefined;
   const packageStatus = reviewPackageGenerationStep(workflow);
   const consolidationStatus = consolidationStep(workflow);
   const addressFindingsStatus = addressFindingsStep(workflow);
-  const reviewSelection = workflow.reviewModel ?? workflow.fixModel;
+  const reviewSelection = workflow.reviewModel ?? workflow.addressFindingsModel;
   const consolidationSelection = workflow.consolidationModel ?? reviewSelection;
   const hasReviewSession = Boolean(multiReviewReviewSession(workflow)?.providerSessionId);
   const hasPreparationSession = Boolean(
     multiReviewReviewSession(workflow, "prepare")?.providerSessionId,
   );
-  const hasAddressFindingsSession = Boolean(workflow.fixSession?.providerSessionId);
+  const hasAddressFindingsSession = Boolean(workflow.addressFindingsSession?.providerSessionId);
   const canCancel =
     workflow.phase !== "completed" &&
     workflow.phase !== "cancelled" &&
@@ -1082,7 +1091,7 @@ function MultiReviewOverviewTab({
     title: string;
     status: MultiReviewStepStatus;
     stalled: boolean;
-    model: MultiReviewWorkflow["fixModel"];
+    model: MultiReviewWorkflow["addressFindingsModel"];
     runtimeLabel: string;
     openLabel: string;
     openTitle: string;
@@ -1115,15 +1124,15 @@ function MultiReviewOverviewTab({
     const resume = () => void runStepLifecycle(kind, "resume", commands.resumeStep);
     const bespoke = workflow.engine !== "graph";
     const canSkip =
-      kind === "fix" &&
+      kind === "address-findings" &&
       bespoke &&
       Boolean(commands.skipStep) &&
-      (workflow.phase === "fixing" ||
+      (workflow.phase === "addressing-findings" ||
         workflow.phase === "interactive" ||
-        (workflow.phase === "paused" && workflow.pausedStep === "fix"));
-    const skip = () => void skipStep("fix");
+        (workflow.phase === "paused" && workflow.pausedStep === "address-findings"));
+    const skip = () => void skipStep("address-findings");
     const canRewind =
-      (kind === "prepare" || kind === "fix") &&
+      (kind === "prepare" || kind === "address-findings") &&
       bespoke &&
       status.state !== "not-started" &&
       Boolean(commands.rewindCode);
@@ -1434,11 +1443,11 @@ function MultiReviewOverviewTab({
 
   const addressFindingsView = stepView({
     key: "fix",
-    kind: "fix",
+    kind: "address-findings",
     title: "Address Findings",
     status: addressFindingsStatus,
-    stalled: workflow.phase === "fixing" && addressFindingsSessionStalled,
-    model: workflow.fixModel,
+    stalled: workflow.phase === "addressing-findings" && addressFindingsSessionStalled,
+    model: workflow.addressFindingsModel,
     runtimeLabel: "Address Findings runtime",
     openLabel: "Open Address Findings model session",
     openTitle: stepOpenTitle(
@@ -1452,13 +1461,15 @@ function MultiReviewOverviewTab({
       hasAddressFindingsSession &&
       Boolean(createTab),
     onOpen: () => presentAddressFindingsSession(workflow, "manual"),
-    canPause: workflow.phase === "fixing" && Boolean(commands.pauseStep),
+    canPause: workflow.phase === "addressing-findings" && Boolean(commands.pauseStep),
     canResume:
-      workflow.phase === "paused" && workflow.pausedStep === "fix" && Boolean(commands.resumeStep),
+      workflow.phase === "paused" &&
+      workflow.pausedStep === "address-findings" &&
+      Boolean(commands.resumeStep),
     showPauseAction: false,
-    activityAt: latestActivityAt(workflow.stepRuntimes?.fix),
-    details: workflow.fixResult ? (
-      <p className="text-xs text-foreground/85">{workflow.fixResult.summary}</p>
+    activityAt: latestActivityAt(workflow.stepRuntimes?.["address-findings"]),
+    details: workflow.addressFindingsResult ? (
+      <p className="text-xs text-foreground/85">{workflow.addressFindingsResult.summary}</p>
     ) : null,
   });
 
@@ -1570,7 +1581,7 @@ function MultiReviewOverviewTab({
     (workflow.phase === "reviewing" ||
       workflow.phase === "consolidating" ||
       workflow.phase === "ready" ||
-      workflow.phase === "fixing" ||
+      workflow.phase === "addressing-findings" ||
       workflow.phase === "interactive" ||
       workflow.phase === "completed" ||
       workflow.phase === "failed") &&
@@ -2152,7 +2163,7 @@ function MultiReviewOverviewTab({
           )}
           {workflow.phase === "interactive" &&
             workflow.addressPromptPending !== true &&
-            workflow.fixSession?.providerSessionId && (
+            workflow.addressFindingsSession?.providerSessionId && (
               <Button
                 variant="outline"
                 disabled={pending || !createTab}
@@ -2190,7 +2201,7 @@ function MultiReviewOverviewTab({
             if (!open) setCustomAddressFindingsError(null);
           }}
           catalog={modelCatalog}
-          defaultSelection={workflow.fixModel}
+          defaultSelection={workflow.addressFindingsModel}
           error={customAddressFindingsError}
           busy={customAddressFindingsPending}
           onSubmit={startCustomAddressFindings}
@@ -2225,8 +2236,8 @@ function MultiReviewOverviewTab({
             kind={restartDialogStep}
             catalog={modelCatalog}
             defaultSelection={
-              restartDialogStep === "fix"
-                ? workflow.fixModel
+              restartDialogStep === "address-findings"
+                ? workflow.addressFindingsModel
                 : restartDialogStep === "consolidate"
                   ? consolidationSelection
                   : reviewSelection

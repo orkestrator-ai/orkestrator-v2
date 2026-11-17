@@ -58,7 +58,7 @@ function loop(rounds: number): PipelineSession[] {
   const sessions = [session("build", 0), session("review", 0), session("verify", 0)];
   for (let iteration = 1; iteration < rounds; iteration += 1) {
     sessions.push(
-      session("fix", iteration),
+      session("rework", iteration),
       session("review", iteration),
       session("verify", iteration),
     );
@@ -69,9 +69,9 @@ function loop(rounds: number): PipelineSession[] {
 describe("build pipeline rewinds", () => {
   test("orders steps the way a round runs them", () => {
     expect(sessionStepOrder(session("build", 0))).toBe(0);
-    expect(sessionStepOrder(session("fix", 1))).toBe(0);
+    expect(sessionStepOrder(session("rework", 1))).toBe(0);
     expect(
-      sessionStepOrder(session("fix", 1, { label: REVIEW_PACKAGE_SESSION_LABEL })),
+      sessionStepOrder(session("rework", 1, { label: REVIEW_PACKAGE_SESSION_LABEL })),
     ).toBeGreaterThan(0);
     // A build turn that also wrote the package plan is still the build step.
     expect(sessionStepOrder(session("build", 0, { producedReviewPackagePlan: true }))).toBe(0);
@@ -80,7 +80,7 @@ describe("build pipeline rewinds", () => {
       restartStepOrder({ kind: "review-package", implementationPhase: "build" }),
       restartStepOrder({ kind: "validation", implementationPhase: "build" }),
       restartStepOrder({ kind: "session", phase: "review" }),
-      restartStepOrder({ kind: "session", phase: "address" }),
+      restartStepOrder({ kind: "session", phase: "address-findings" }),
       restartStepOrder({ kind: "session", phase: "verify" }),
       restartStepOrder({ kind: "session", phase: "pr" }),
       restartStepOrder({ kind: "session", phase: "resolve-conflicts" }),
@@ -144,7 +144,7 @@ describe("build pipeline rewinds", () => {
 
   test("a package restart keeps the build that wrote the plan; validation keeps the preparation", () => {
     const build = session("build", 0, { producedReviewPackagePlan: true });
-    const preparation = session("fix", 0, { label: REVIEW_PACKAGE_SESSION_LABEL });
+    const preparation = session("rework", 0, { label: REVIEW_PACKAGE_SESSION_LABEL });
     const review = session("review", 0);
     const packageRestart = { sessions: [structuredClone(build), structuredClone(review)] };
     supersedeSessionsFrom(
@@ -207,7 +207,7 @@ describe("build pipeline rewinds", () => {
   });
 
   test("an earlier fix baseline carries over only within its own round", () => {
-    const fix = session("fix", 1);
+    const fix = session("rework", 1);
     expect(carriesReworkBaseline({}, fix)).toBe(true);
 
     const sameRound = rewind({ id: "same", fromIteration: 1, iteration: 1 });

@@ -38,18 +38,21 @@ import type { MultiReviewFlowState } from "./multi-review-flow";
 export function multiReviewAddressFindingsSessionTabOptions(
   workflow: MultiReviewWorkflow,
 ): CreateTabOptions | null {
-  const session = workflow.fixSession;
+  const session = workflow.addressFindingsSession;
   if (!session?.providerSessionId) return null;
   return {
-    tabId: workflow.fixTabId ?? `multi-review-fix:${workflow.id}`,
+    tabId: workflow.addressFindingsTabId ?? `multi-review-fix:${workflow.id}`,
     activateExistingTab: true,
     agentLaunchMode: "native",
     resumeSessionId: session.providerSessionId,
     displayTitle: MULTI_REVIEW_ADDRESS_FINDINGS_TAB_TITLE,
     isReviewTab: true,
     hideStructuredOutput: true,
-    initialAgentModel: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
-    initialReasoningEffort: workflow.fixModel.reasoningEffort,
+    initialAgentModel:
+      workflow.addressFindingsModel.model === "default"
+        ? undefined
+        : workflow.addressFindingsModel.model,
+    initialReasoningEffort: workflow.addressFindingsModel.reasoningEffort,
     initialConversationMode: "build",
     // A backend-owned turn is in flight. Seeding a fresh replacement for a
     // missing provider session would show an empty tab that looks like the
@@ -70,7 +73,9 @@ export function multiReviewReviewSession(
   return (
     (step === "prepare" ? workflow.preparationSession : undefined) ??
     workflow.reviewSession ??
-    (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession)
+    (workflow.reviewModel || workflow.consolidationModel
+      ? undefined
+      : workflow.addressFindingsSession)
   );
 }
 
@@ -117,7 +122,7 @@ const PACKAGE_PRODUCED_PHASES: ReadonlySet<MultiReviewPhase> = new Set<MultiRevi
   "reviewing",
   "consolidating",
   "ready",
-  "fixing",
+  "addressing-findings",
   "interactive",
   "completed",
 ]);
@@ -199,8 +204,8 @@ export function consolidationStep(workflow: MultiReviewWorkflow): MultiReviewSte
 /** The Address Findings turn is the last step, and only the user can start it. */
 export function addressFindingsStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
   if (workflow.phase === "completed") return step("Complete", "complete");
-  if (workflow.phase === "fixing") return step("Addressing findings", "running");
-  if (workflow.phase === "paused" && workflow.pausedStep === "fix") {
+  if (workflow.phase === "addressing-findings") return step("Addressing findings", "running");
+  if (workflow.phase === "paused" && workflow.pausedStep === "address-findings") {
     return step("Paused", "paused");
   }
   if (workflow.phase === "paused" && workflow.pausedStep === "prepare") {
@@ -212,23 +217,24 @@ export function addressFindingsStep(workflow: MultiReviewWorkflow): MultiReviewS
   if (workflow.phase === "interactive") {
     if (workflow.addressPromptPending === true) return step("Starting session", "running");
     if (
-      workflow.fixSession?.status === "idle" &&
-      workflow.stepRuntimes?.fix?.completedAt !== undefined
+      workflow.addressFindingsSession?.status === "idle" &&
+      workflow.stepRuntimes?.["address-findings"]?.completedAt !== undefined
     )
       return step("Complete", "complete");
-    if (workflow.fixSession?.status === "failed") return step("Failed", "failed");
-    if (workflow.fixSession?.status === "cancelled") return step("Cancelled", "cancelled");
+    if (workflow.addressFindingsSession?.status === "failed") return step("Failed", "failed");
+    if (workflow.addressFindingsSession?.status === "cancelled")
+      return step("Cancelled", "cancelled");
     return step("Interactive session", "running");
   }
   const cancelled = cancellationStep(workflow.phase);
   if (cancelled) return cancelled;
   const dispatched =
-    workflow.activeRequest?.kind === "fix" ||
-    workflow.fixResult !== undefined ||
+    workflow.activeRequest?.kind === "address-findings" ||
+    workflow.addressFindingsResult !== undefined ||
     workflow.addressPromptPending === true ||
     // A graph-engine Address Findings that started (item 301), whose run then ended.
-    (workflow.engine === "graph" && workflow.stepRuntimes?.fix !== undefined) ||
-    (workflow.engine === "graph" && workflow.fixSession?.status === "failed");
+    (workflow.engine === "graph" && workflow.stepRuntimes?.["address-findings"] !== undefined) ||
+    (workflow.engine === "graph" && workflow.addressFindingsSession?.status === "failed");
   if (workflow.phase === "failed" && dispatched) return step("Failed", "failed");
   if (workflow.phase === "ready") return step("Ready to start", "not-started");
   return step("Not started", "not-started");
@@ -248,7 +254,7 @@ export function multiReviewStepError(
 ): string | undefined {
   if (status.state !== "failed") return undefined;
   if (key === "fix" && workflow.phase === "interactive") {
-    return workflow.fixSession?.error ?? workflow.error;
+    return workflow.addressFindingsSession?.error ?? workflow.error;
   }
   return workflow.error;
 }
@@ -256,7 +262,7 @@ export function multiReviewStepError(
 const STEP_KEY: Record<MultiReviewStepKind, MultiReviewStepKey> = {
   prepare: "package",
   consolidate: "consolidation",
-  fix: "fix",
+  "address-findings": "fix",
 };
 
 /**
@@ -272,7 +278,7 @@ export function addressFindingsSessionRuntimeStep(
 }
 
 export function addressFindingsSessionRuntimeSummary(
-  session: NonNullable<MultiReviewWorkflow["fixSession"]>,
+  session: NonNullable<MultiReviewWorkflow["addressFindingsSession"]>,
   now = Date.now(),
 ): string | null {
   const startedAt = Date.parse(session.startedAt);
@@ -555,7 +561,7 @@ export function reviewerRuntimeSummary(
 const STEP_REQUEST_KIND: Record<MultiReviewStepKey, MultiReviewStepKind> = {
   package: "prepare",
   consolidation: "consolidate",
-  fix: "fix",
+  fix: "address-findings",
 };
 
 /**
@@ -581,9 +587,11 @@ export function multiReviewStepRuntimeParts(
   if (addressFindingsSessionRuntimeStep(workflow) !== step) return null;
   const session =
     step === "fix"
-      ? workflow.fixSession
+      ? workflow.addressFindingsSession
       : (workflow.reviewSession ??
-        (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession));
+        (workflow.reviewModel || workflow.consolidationModel
+          ? undefined
+          : workflow.addressFindingsSession));
   if (!session) return null;
   const elapsed = addressFindingsSessionRuntimeSummary(session, now);
   if (!elapsed) return null;
@@ -710,7 +718,10 @@ export function reviewerTranscriptLabel(
   return `${action}, ${findingCountLabel(reviewer.report.issues.length, "issue")}, ${findingCountLabel(reviewer.report.testCoverageGaps.length, "coverage gap")}`;
 }
 
-export function modelDetail(model: MultiReviewWorkflow["fixModel"], withAgent: boolean): string {
+export function modelDetail(
+  model: MultiReviewWorkflow["addressFindingsModel"],
+  withAgent: boolean,
+): string {
   return [withAgent ? model.agent : null, model.model, model.reasoningEffort]
     .filter(Boolean)
     .join(" · ");

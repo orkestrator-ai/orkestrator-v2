@@ -237,7 +237,7 @@ export async function graphReviewWorld(
         projectId,
         targetBranch: "main",
         reviewers: [opus, { agent: "claude", model: "sonnet" }],
-        fixModel: opus,
+        addressFindingsModel: opus,
         ...input,
       }),
     workflow: read,

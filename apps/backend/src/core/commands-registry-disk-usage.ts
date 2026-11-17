@@ -11,7 +11,7 @@ import {
   listDiskUsageEnvironments,
   listProjectGitMirrorUsage,
 } from "./disk-usage.js";
-import { getWorktreeLocations, updateWorktreeLocations } from "./worktree-locations.js";
+import { getWorktreeLocations, updateWorktreeLocations } from "./worktrees/index.js";
 
 export function registerDiskUsageCommands(register: CommandRegistrar): void {
   register(listDiskUsageEnvironmentsCommand, (_args, context) =>

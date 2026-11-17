@@ -32,8 +32,8 @@ import { watchDirectory } from "../apps/backend/src/core/watch-host";
 import {
   startWorktreeWatcher,
   type WorktreeWatcher,
-} from "../apps/backend/src/core/worktree-watcher";
-import { worktreeWatchPlanIo } from "../apps/backend/src/core/worktree-watch-plan";
+} from "../apps/backend/src/core/worktrees/watcher";
+import { worktreeWatchPlanIo } from "../apps/backend/src/core/worktrees/watch-plan";
 
 function arg(name: string, fallback: string): string {
   const match = process.argv.find((value) => value.startsWith(`--${name}=`));

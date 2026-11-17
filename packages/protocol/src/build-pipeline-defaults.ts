@@ -180,7 +180,7 @@ export function buildPipelineConfiguredDefaults(
   return {
     steps: {
       review: reviewers[0],
-      address: actionSelection(tiers, "fixReviewIssues", enabledAgents),
+      "address-findings": actionSelection(tiers, "fixReviewIssues", enabledAgents),
       verify,
       pr: actionSelection(tiers, "pr", enabledAgents),
       "resolve-conflicts": actionSelection(tiers, "resolve", enabledAgents),

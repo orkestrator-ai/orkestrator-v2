@@ -76,7 +76,7 @@ const request = (requestId: string, overrides: Record<string, unknown> = {}) => 
     environmentId,
     reviewers: [row, row],
     reviewModel: row,
-    fixModel: row,
+    addressFindingsModel: row,
     ...overrides,
   },
   reservedId: requestId,
@@ -139,7 +139,7 @@ test("future Address Findings choices reach the button start and override saved 
     },
   });
   const addressModel = { agent: "claude", model: "address-model" };
-  const { fixModel: _formerModel, ...input } = request("future-review").input;
+  const { addressFindingsModel: _formerModel, ...input } = request("future-review").input;
   const result = (await launch(
     {
       reservedId: "future-review",
@@ -150,9 +150,12 @@ test("future Address Findings choices reach the button start and override saved 
 
   expect(result.ui.status).toBe("opened");
   expect(start).toHaveBeenCalledTimes(1);
-  expect(start.mock.calls[0]![0]).toMatchObject({ fixModel: addressModel, autoFix: false });
-  expect(start.mock.calls[0]![0]).not.toHaveProperty("addressFindingsModel");
-  expect(start.mock.calls[0]![0]).not.toHaveProperty("autoAddressFindings");
+  expect(start.mock.calls[0]![0]).toMatchObject({
+    addressFindingsModel: addressModel,
+    autoAddressFindings: false,
+  });
+  expect(start.mock.calls[0]![0]).not.toHaveProperty("fixModel");
+  expect(start.mock.calls[0]![0]).not.toHaveProperty("autoFix");
 });
 
 for (const malformed of [
@@ -160,7 +163,7 @@ for (const malformed of [
   { addressFindingsModel: row, autoAddressFindings: "false" },
 ]) {
   test(`the button rejects malformed future choices ${JSON.stringify(malformed)} before starting`, async () => {
-    const { fixModel: _formerModel, ...input } = request("invalid-future-review").input;
+    const { addressFindingsModel: _formerModel, ...input } = request("invalid-future-review").input;
     await expect(
       launch({ reservedId: "invalid-future-review", input: { ...input, ...malformed } }, context),
     ).rejects.toThrow("Invalid Multi Review button action");
@@ -212,8 +215,8 @@ test("launch defaults resolve saved rows against this node's own catalogue", asy
       { agent: "claude" },
     ],
     reviewModel: { agent: "codex", model: "gpt-6-luna", reasoningEffort: "high" },
-    fixModel: { agent: "codex", model: "gpt-6.1-sol" },
-    autoFix: true,
+    addressFindingsModel: { agent: "codex", model: "gpt-6.1-sol" },
+    autoAddressFindings: true,
     autoPr: false,
   });
   expect(catalogue).toHaveBeenCalledWith({ environmentId }, context);
@@ -236,8 +239,8 @@ test("a plain click's omitted rows start on exactly the dialog's defaults", asyn
   expect({
     reviewers: started.reviewers,
     reviewModel: started.reviewModel,
-    fixModel: started.fixModel,
-    autoFix: started.autoFix,
+    addressFindingsModel: started.addressFindingsModel,
+    autoAddressFindings: started.autoAddressFindings,
     autoPr: started.autoPr,
   }).toEqual(defaults as never);
 });

@@ -35,7 +35,7 @@ describe("MultiReviewRestartDialog", () => {
       <MultiReviewRestartDialog
         open
         onOpenChange={() => undefined}
-        kind="fix"
+        kind="address-findings"
         catalog={{
           ...catalog,
           pi: [
@@ -105,7 +105,7 @@ describe("MultiReviewRestartDialog", () => {
       <MultiReviewRestartDialog
         open
         onOpenChange={() => undefined}
-        kind="fix"
+        kind="address-findings"
         catalog={catalog}
         defaultSelection={{ agent: "codex", model: "gpt-5.6" }}
         error="The selected model is unavailable"

@@ -86,7 +86,7 @@ Done on 2026-11-11 with the recommended option:
 - Tests: `watch-host-program.test.ts` (who is flagged, once per flush, never on
   a refused start or a repeated close), `watch-host.test.ts` (the flag reaches
   only that watch, after its events; an older helper's batch; a watch closed by
-  its own listener, the close after an error), `worktree-watcher-lost-events.test.ts`
+  its own listener, the close after an error), `worktrees/watcher-lost-events.test.ts`
   (root, burst and metadata cases, one Git read per burst, a proof the lost
   events invalidated, none when nothing is left out), and
   `graph-project-templates.test.ts` (the default watch reloads on a flag).

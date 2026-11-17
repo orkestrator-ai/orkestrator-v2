@@ -1,6 +1,6 @@
 import type { CommandContext } from "./commands-context.js";
 import { coordinatorAttachmentsRoot } from "./storage-coordinators.js";
-import { getWorktreeBaseDir } from "./worktree-locations.js";
+import { getWorktreeBaseDir } from "./worktrees/index.js";
 
 /**
  * The host roots an environment-less file read may open: `read_file_base64`

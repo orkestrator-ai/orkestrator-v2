@@ -575,12 +575,12 @@ describe("pull request status wakes", () => {
       reviewers: [],
       autoPr: true,
       phase: "interactive",
-      fixSession: fix,
+      addressFindingsSession: fix,
       autoPrLaunch: {
         state: "launched",
         requestId: "pr",
         tabId: "pr-tab",
-        fixIdentity: multiReviewAddressFindingsIdentity(fix),
+        addressFindingsIdentity: multiReviewAddressFindingsIdentity(fix),
       },
     });
     const main = await current.main();
@@ -632,12 +632,12 @@ describe("pull request status wakes", () => {
       reviewers: [],
       autoPr: true,
       phase: "interactive",
-      fixSession: fix,
+      addressFindingsSession: fix,
       autoPrLaunch: {
         state: "launched",
         requestId: "pr",
         tabId: "pr-tab",
-        fixIdentity: multiReviewAddressFindingsIdentity(fix),
+        addressFindingsIdentity: multiReviewAddressFindingsIdentity(fix),
       },
     });
     const main = await current.main();

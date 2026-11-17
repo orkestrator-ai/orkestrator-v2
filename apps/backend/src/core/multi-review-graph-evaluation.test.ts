@@ -760,7 +760,7 @@ function workflowFor(fixture: CaseRun): MultiReviewWorkflow {
       ...(reviewer.lens ? { lens: reviewer.lens } : {}),
       status: "pending" as const,
     })),
-    fixModel: { agent: "claude", model: "fixer" },
+    addressFindingsModel: { agent: "claude", model: "fixer" },
     phase: "reviewing",
     engine: "graph",
     graphRun: { runId: fixture.run.id },

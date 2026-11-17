@@ -130,7 +130,7 @@ test.each(["reviewer", "step"] as const)(
             { ...selection, id: "reviewer-1", status: "pending", sessionKey: "reviewer-stack" },
           ],
           reviewModel: selection,
-          fixModel: selection,
+          addressFindingsModel: selection,
           reviewWorktreeSnapshot: await captureReviewWorktreeSnapshot(
             invoke,
             environmentId,

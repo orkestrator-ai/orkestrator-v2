@@ -212,7 +212,7 @@ test("manual discovery hands off once; a replacement controller seals completed 
       projectId: "project-1",
       targetBranch: "main",
       reviewers: [{ agent: "claude", model: "reviewer" }],
-      fixModel: { agent: "claude", model: "preparer" },
+      addressFindingsModel: { agent: "claude", model: "preparer" },
     });
     const read = async () =>
       (await h.storage.getMultiReviewWorkflow(started.id))!.snapshot as MultiReviewWorkflow;
@@ -319,13 +319,13 @@ test("pipeline separates implementation from fresh discovery and waits for backe
       value: { complete: false, rationale: "Another change is needed" } as T,
     });
     await service.advanceNow(started.id);
-    expect((await read()).phase).toBe("fixing");
+    expect((await read()).phase).toBe("reworking");
     expect((await read()).validationRun).toBeUndefined();
     expect((await read()).reviewPackage).toBeUndefined();
     // A failed verification starts an implementation turn first. Only after
     // that turn changes the worktree may fresh discovery certify another run.
     expect(h.sends.at(-1)!.options.schema).toBeUndefined();
-    expect((await read()).sessions.at(-1)?.phase).toBe("fix");
+    expect((await read()).sessions.at(-1)?.phase).toBe("rework");
     h.changeWorktree();
     await service.advanceNow(started.id);
     expect(h.sends.at(-1)!.options.schema).toBe(REVIEW_VALIDATION_PLAN_SCHEMA);

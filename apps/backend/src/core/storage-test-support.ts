@@ -1,9 +1,15 @@
+import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { STORAGE_DATABASE_FILE, StorageDatabase } from "./storage-database.js";
-import { databaseStoreForPath, openBackendDatabase } from "./storage-stores.js";
+import {
+  databaseStoreForPath,
+  openBackendDatabase,
+  STORAGE_MIGRATIONS,
+  storeLayout,
+} from "./storage-stores.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 import { StorageService } from "./storage.js";
@@ -277,5 +283,26 @@ export async function withTemporaryStorage<T>(
     return await run(storage, dataDir);
   } finally {
     await fs.promises.rm(dataDir, { recursive: true, force: true });
+  }
+}
+
+/** Seed the receipt as an older backend wrote it, then run the actual upgrade. */
+export function upgradedLaunchReceipt(
+  directory: string,
+  receipt: CoordinatorWorkflowAssociation,
+): CoordinatorWorkflowAssociation {
+  const before = new StorageDatabase(directory, {
+    layoutFor: storeLayout,
+    migrations: STORAGE_MIGRATIONS.filter((migration) => migration.version < 11),
+  });
+  before.writeStore("coordinators", { workspaces: [], workflows: [receipt] });
+  before.close();
+  const after = openBackendDatabase(directory);
+  try {
+    return (
+      after.readStore("coordinators")!.value as { workflows: CoordinatorWorkflowAssociation[] }
+    ).workflows[0]!;
+  } finally {
+    after.close();
   }
 }

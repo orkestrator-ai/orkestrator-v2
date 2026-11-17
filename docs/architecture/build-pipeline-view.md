@@ -3,10 +3,14 @@
 > **Names.** Rework runs after Verify finds the ticket unmet, under the Build
 > step's model. Address Findings runs after review reports findings, under the "Address
 > review findings" setting; Multi Review's step of that name is the same job.
-> Stored and transmitted values still say `fix` and `address` until
-> [4740](../todo/cross-cutting/4740-workflow-vocabulary-stage-two.md), and "fix"
-> means Rework in a pipeline but Address Findings in a Multi Review
-> (`workflow-vocabulary.ts`).
+>
+> Stored and transmitted values use the same names (`rework`, `reworking`,
+> `address-findings`, `addressing-findings`). Records older builds wrote with
+> `fix` and `address` are rewritten once by a storage migration
+> (`storage-workflow-vocabulary-upgrade.ts`), where "fix" meant Rework in a
+> pipeline but Address Findings in a Multi Review. Public names (coordinator
+> tools, CLI wire fields, graph templates) still say Fix until task 3 of
+> [4740](../todo/cross-cutting/4740-workflow-vocabulary-stage-two.md).
 
 Status: Living. Checked against the branch that introduced the pipeline flow
 graph (2026-10-26), the branch that made restarts rewind (2026-10-27), the
@@ -212,8 +216,8 @@ a transcript.
 - **Address Findings → Verify.** Address Findings submits a typed `fix-result` and Verify reads
   it as an evidence frame, not the Address Findings session's last assistant text
   ([review preparation](review-preparation.md#the-address-findings--verify-handoff)). The
-  accepted result is kept, bounded, on the Address Findings session (`fixResult`, marked
-  by `addressReportKind`), and the Address Findings inspector shows it above the
+  accepted result is kept, bounded, on the Address Findings session (`addressFindingsResult`, marked
+  by `addressFindingsReportKind`), and the Address Findings inspector shows it above the
   transcript as a collapsed "Address Findings report": complete or incomplete, files,
   checks (failed ones counted), then the summary, checks, files, notes and
   limitations (`PipelineAddressFindingsReport.tsx`). Its submission status reads as for

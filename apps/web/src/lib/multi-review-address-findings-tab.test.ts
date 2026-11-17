@@ -16,7 +16,7 @@ function workflow(overrides: Partial<MultiReviewWorkflow> = {}): MultiReviewWork
     targetBranch: "main",
     phase: "interactive",
     reviewers: [],
-    fixModel: { agent: "codex", model: "gpt-5.6" },
+    addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
     consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
     createdAt: "2026-09-15T00:00:00.000Z",
     updatedAt: "2026-09-15T00:00:00.000Z",
@@ -79,7 +79,7 @@ describe("findMultiReviewAddressFindingsReport", () => {
   test("returns the consolidated report for a recorded fixTabId without the default prefix", () => {
     expect(
       findMultiReviewAddressFindingsReport(
-        [workflow({ fixTabId: "fix-tab-launch-1" })],
+        [workflow({ addressFindingsTabId: "fix-tab-launch-1" })],
         "fix-tab-launch-1",
         "env-1",
       ),

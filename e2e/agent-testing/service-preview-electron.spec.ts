@@ -3006,6 +3006,13 @@ test("a remote terminal link opens the native localhost forward in a separate br
         }),
       { address: remote.address, token: remote.token },
     );
+    // Reload, as the app's own connect flow does (`reloadAfterConnectionChange`).
+    // A Local window's commands use the direct gateway transport by default
+    // (#2146), whose address is fixed when the page loads: without the reload
+    // they still go to the Local backend, which no longer authorizes this
+    // window, and fail with "Failed to fetch" (to-do 8301, retired).
+    await second.reload();
+    await waitForApi(second);
     // Drive the actual terminal link handler, renderer resolver, preload IPC,
     // main route selection and tunnel, then navigate a separate browser context.
     // Capture shell.openExternal so qualification never opens the user's browser.

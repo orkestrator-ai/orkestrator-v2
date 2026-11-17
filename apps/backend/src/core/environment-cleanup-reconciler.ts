@@ -39,7 +39,7 @@ import type { Project } from "./models.js";
 import { removeConfinedDirectory } from "./path-safety.js";
 import { sweepOrphanedProjectGitMirrors } from "./project-git-mirror.js";
 import { pathExists, runCommand } from "./shell.js";
-import { configuredWorktreeLocations, validateWorktreeLocation } from "./worktree-locations.js";
+import { configuredWorktreeLocations, validateWorktreeLocation } from "./worktrees/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 

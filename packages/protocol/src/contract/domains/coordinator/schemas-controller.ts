@@ -126,8 +126,8 @@ const MultiReviewLaunchRowSchema = openRecord({
 export const MultiReviewLaunchDefaultsSchema = openRecord({
   reviewers: Schema.Array(MultiReviewLaunchRowSchema),
   reviewModel: MultiReviewLaunchRowSchema,
-  fixModel: MultiReviewLaunchRowSchema,
-  autoFix: Schema.Boolean,
+  addressFindingsModel: MultiReviewLaunchRowSchema,
+  autoAddressFindings: Schema.Boolean,
   autoPr: Schema.Boolean,
 });
 

@@ -418,7 +418,7 @@ describe("coordinator command registry", () => {
       const expected = { agent: "pi", model: marked ? "openai/gpt-6.1-sol" : "default" };
       expect(rows.reviewers).toEqual([expected, expected]);
       expect(rows.reviewModel).toEqual(expected);
-      expect(rows.fixModel).toEqual(expected);
+      expect(rows.addressFindingsModel).toEqual(expected);
     },
   );
 
@@ -650,7 +650,7 @@ describe("coordinator command registry", () => {
             projectId: project.id,
             targetBranch: "main",
             reviewers: [{ agent: "claude", model: "opus" }],
-            fixModel: { agent: "codex", model: "gpt-5.6" },
+            addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
           },
         },
         context,
@@ -904,7 +904,7 @@ describe("coordinator command registry", () => {
         agentType: "codex",
         reviewers: [opus, { agent: "codex", model: "gpt-5.6" }],
         reviewPreparation: opus,
-        steps: expect.objectContaining({ review: opus, address: fix, verify: fix }),
+        steps: expect.objectContaining({ review: opus, "address-findings": fix, verify: fix }),
       }),
       expect.any(String),
     );
@@ -943,7 +943,7 @@ describe("coordinator command registry", () => {
         steps: expect.objectContaining({
           build: { agent: "claude" },
           review: { agent: "codex", model: "gpt-5.6" },
-          address: fix,
+          "address-findings": fix,
           verify: { agent: "claude", model: "sonnet" },
         }),
       }),
@@ -988,8 +988,8 @@ describe("coordinator command registry", () => {
         targetBranch: "main",
         reviewers: [opus, { agent: "codex", model: "gpt-5.6" }],
         reviewModel: opus,
-        fixModel: fix,
-        autoFix: true,
+        addressFindingsModel: fix,
+        autoAddressFindings: true,
         autoPr: false,
       },
       expect.any(String),

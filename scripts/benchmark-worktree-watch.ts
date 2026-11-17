@@ -38,8 +38,8 @@ import {
 import path from "node:path";
 import { observeCommandInvocations } from "../apps/backend/src/core/shell";
 import { watchDirectory } from "../apps/backend/src/core/watch-host";
-import { worktreeWatchPlanIo } from "../apps/backend/src/core/worktree-watch-plan";
-import { startWorktreeWatcher } from "../apps/backend/src/core/worktree-watcher";
+import { worktreeWatchPlanIo } from "../apps/backend/src/core/worktrees/watch-plan";
+import { startWorktreeWatcher } from "../apps/backend/src/core/worktrees/watcher";
 
 function arg(name: string, fallback: string): string {
   const match = process.argv.find((value) => value.startsWith(`--${name}=`));

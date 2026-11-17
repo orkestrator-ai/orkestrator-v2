@@ -477,7 +477,7 @@ exit 2
           ...input,
           steps: {
             build: { agent: "claude", model: "opus" },
-            address: {
+            "address-findings": {
               agent: "codex",
               model: "gpt-5.6",
               reasoningEffort: "high",
@@ -504,13 +504,17 @@ exit 2
         {
           ...input,
           steps: {
-            address: { agent: "codex", model: "gpt-5.6", instructions: "Fix every nit." },
+            "address-findings": {
+              agent: "codex",
+              model: "gpt-5.6",
+              instructions: "Fix every nit.",
+            },
           },
         },
         { storage, runtime, buildPipelines: supervisor.service },
       );
       const started = supervisor.started[0]!;
-      expect(started.steps?.address?.instructions).toBe("Fix every nit.");
+      expect(started.steps?.["address-findings"]?.instructions).toBe("Fix every nit.");
       expect(started.steps?.verify).toEqual({ agent: "codex", model: "gpt-5.6" });
     });
   });
@@ -569,7 +573,7 @@ exit 2
         {
           ...input,
           steps: {
-            address: { agent: "codex", model: "gpt-5.6" },
+            "address-findings": { agent: "codex", model: "gpt-5.6" },
             verify: { agent: "claude", model: "opus" },
           },
         },
@@ -872,7 +876,7 @@ exit 2
               name: "different-environment",
               networkAccessMode: "full",
             },
-            steps: { address: { agent: "codex", model: "gpt-5.6" } },
+            steps: { "address-findings": { agent: "codex", model: "gpt-5.6" } },
             reviewers: [
               { agent: "claude", model: "opus" },
               { agent: "codex", model: "gpt-5.6" },

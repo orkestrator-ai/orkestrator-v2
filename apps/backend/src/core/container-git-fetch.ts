@@ -5,7 +5,7 @@ import type {
 } from "@orkestrator/protocol/worktree-snapshots";
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { WorkAdmissionPool } from "./work-admission.js";
-import { worktreeTargetKey } from "./worktree-adhoc-reads.js";
+import { worktreeTargetKey } from "./worktrees/index.js";
 
 /**
  * Remote freshness for container clones, separated from status scans.

@@ -6,7 +6,7 @@
  */
 
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
-import { BUILD_STEP_KEYS, MAX_BUILD_PIPELINE_ITERATIONS } from "./build-pipeline.js";
+import { MAX_BUILD_PIPELINE_ITERATIONS, type BuildStepKey } from "./build-pipeline.js";
 import { MAX_BUILD_STEP_INSTRUCTIONS_BYTES } from "./build-pipeline-stage-instructions.js";
 import { PUBLIC_API_LIMITS } from "./public-api.js";
 import type {
@@ -39,8 +39,25 @@ export const REVIEW_LENS_INPUT: PublicJsonSchema = {
   additionalProperties: false,
 };
 
-/** The Build Pipeline's steps, in launcher order. */
-export const PUBLIC_BUILD_STEPS = BUILD_STEP_KEYS;
+/**
+ * The Build Pipeline's steps, in launcher order, by their public names. The
+ * public names keep `address` for Address Findings until to-do 4740 task 3;
+ * the build itself stores and sends `address-findings`.
+ */
+export const PUBLIC_BUILD_STEPS = Object.freeze([
+  "build",
+  "review",
+  "address",
+  "verify",
+  "pr",
+  "resolve-conflicts",
+] as const);
+export type PublicBuildStepKey = (typeof PUBLIC_BUILD_STEPS)[number];
+
+/** The build's own step a public step name sets. */
+export function buildStepKeyForPublicStep(step: PublicBuildStepKey): BuildStepKey {
+  return step === "address" ? "address-findings" : step;
+}
 
 const instructions: PublicJsonSchema = {
   type: "string",

@@ -66,7 +66,7 @@ function workflow(overrides: Partial<MultiReviewWorkflow> = {}): MultiReviewWork
     targetBranch: "main",
     phase: "ready",
     reviewers: [],
-    fixModel: { agent: "codex", model: "gpt-5.6" },
+    addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
     createdAt: "2026-08-14T00:00:00.000Z",
     updatedAt: "2026-08-14T00:30:00.000Z",
     backendRevision: 1,
@@ -353,10 +353,10 @@ describe("workflow totals", () => {
           stepRuntimes: {
             prepare: { startedAt: "2026-08-14T00:00:00.000Z", tokenCount: 300 },
             consolidate: { startedAt: "2026-08-14T00:00:00.000Z" },
-            fix: { startedAt: "2026-08-14T00:00:00.000Z", tokenCount: 40 },
+            "address-findings": { startedAt: "2026-08-14T00:00:00.000Z", tokenCount: 40 },
           },
           // The shared session's cumulative counter is not added again.
-          fixSession: {
+          addressFindingsSession: {
             agent: "codex",
             model: "gpt-5.6",
             sessionKey: "fix",
@@ -384,7 +384,11 @@ describe("workflow totals", () => {
     };
     expect(
       multiReviewTotalTokens(
-        workflow({ reviewSession: session, fixSession: session, reviewers: [reviewer(0)] }),
+        workflow({
+          reviewSession: session,
+          addressFindingsSession: session,
+          reviewers: [reviewer(0)],
+        }),
       ),
     ).toBe(500);
     expect(multiReviewTotalTokens(workflow({ reviewers: [reviewer(0)] }))).toBeNull();

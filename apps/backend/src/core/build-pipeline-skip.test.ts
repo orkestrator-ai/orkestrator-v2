@@ -16,22 +16,22 @@ const PANEL = [
   { agent: "claude" as const, model: "sonnet" },
 ];
 
-test.each(["build", "fix"] as const)(
+test.each(["build", "rework"] as const)(
   "skipping %s starts fresh review package preparation and refuses to skip it",
   async (phase) => {
     await withPipeline(async ({ service, read, storage, provider }) => {
       const queued = await service.start(startInput());
       const started = await advanceUntil(service, read, queued.id, "building");
       const work = started.sessions[started.currentSessionIndex]!;
-      if (phase === "fix") {
+      if (phase === "rework") {
         await rewritePipeline(storage, started.id, (pipeline) => {
-          pipeline.phase = "fixing";
-          pipeline.sessions[pipeline.currentSessionIndex]!.phase = "fix";
+          pipeline.phase = "reworking";
+          pipeline.sessions[pipeline.currentSessionIndex]!.phase = "rework";
           pipeline.verificationFeedback = "Fix the regression";
         });
       }
       const skipped = await service.skipStep(started.id, work.sdkSessionId);
-      expect(skipped.phase).toBe("fixing");
+      expect(skipped.phase).toBe("reworking");
       expect(skipped.sessions.find((s) => s.sdkSessionId === work.sdkSessionId)).toMatchObject({
         skipped: true,
         status: "idle",
@@ -52,10 +52,10 @@ test.each(["build", "fix"] as const)(
 test("skipping a paused address stage clears pause state and starts verification", async () => {
   await withPipeline(async ({ service, read }) => {
     const started = await service.start(startInput(PANEL));
-    const addressing = await advanceUntil(service, read, started.id, "addressing");
+    const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
     const address = addressing.sessions[addressing.currentSessionIndex]!;
     const paused = await service.pause(started.id);
-    expect(paused).toMatchObject({ phase: "paused", pausedFromPhase: "addressing" });
+    expect(paused).toMatchObject({ phase: "paused", pausedFromPhase: "addressing-findings" });
     const skipped = await service.skipStep(started.id, address.sessionKey!);
     expect(skipped.phase).toBe("verifying");
     expect(skipped.pausedFromPhase).toBeUndefined();
@@ -309,7 +309,7 @@ test.each(["reviewers", "consolidation"] as const)(
   },
 );
 
-test.each(["build", "fix", "review", "address", "verify"] as const)(
+test.each(["build", "rework", "review", "address-findings", "verify"] as const)(
   "a replacement controller consumes the persisted %s skip request once",
   async (phase) => {
     await withPipeline(async ({ service, read, storage, createService }) => {
@@ -320,12 +320,12 @@ test.each(["build", "fix", "review", "address", "verify"] as const)(
         pipeline.phase =
           phase === "build"
             ? "building"
-            : phase === "fix"
-              ? "fixing"
+            : phase === "rework"
+              ? "reworking"
               : phase === "review"
                 ? "reviewing"
-                : phase === "address"
-                  ? "addressing"
+                : phase === "address-findings"
+                  ? "addressing-findings"
                   : "verifying";
         const current = pipeline.sessions[pipeline.currentSessionIndex]!;
         current.phase = phase;
@@ -343,7 +343,7 @@ test.each(["build", "fix", "review", "address", "verify"] as const)(
         expect(snapshot.skipRequest).toBeUndefined();
         expect(snapshot.sessions).toHaveLength(2);
         expect(snapshot.sessions[1]).toMatchObject(
-          phase === "build" || phase === "fix"
+          phase === "build" || phase === "rework"
             ? { label: REVIEW_PACKAGE_SESSION_LABEL, status: "running" }
             : { phase: phase === "verify" ? "pr" : "verify", status: "running" },
         );

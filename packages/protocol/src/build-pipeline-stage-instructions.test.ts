@@ -92,7 +92,7 @@ describe("the instructions guard", () => {
     expect(
       isCreateFeatureBuildInput({
         ...feature,
-        steps: { address: { agent: "claude", instructions: "Fix every nit." } },
+        steps: { "address-findings": { agent: "claude", instructions: "Fix every nit." } },
         reviewers: [
           { agent: "claude", instructions: "Security." },
           { agent: "codex", instructions: "Performance." },
@@ -156,7 +156,9 @@ describe("which step a stage reads", () => {
   };
 
   test("Fix reads Build's instructions through the step it runs under", () => {
-    expect(pipelineStepInstructions(pipeline, stepKeyForSessionPhase("fix"))).toBe("Build rules.");
+    expect(pipelineStepInstructions(pipeline, stepKeyForSessionPhase("rework"))).toBe(
+      "Build rules.",
+    );
     expect(pipelineStepInstructions(pipeline, stepKeyForSessionPhase("build"))).toBe(
       "Build rules.",
     );

@@ -11,6 +11,7 @@ import { webAnnotationStore } from "@/stores/webAnnotationStore";
 import {
   commitPendingCapture,
   resultCaptureMetadata,
+  withAdvertisedFrameScope,
   withAdvertisedSourceHints,
 } from "./capture-commit";
 import { forgetCaptureIntent, rememberCaptureIntent } from "./capture-intents";
@@ -194,6 +195,89 @@ describe("shadow-root targets", () => {
     };
     expect(args.capture.target.anchor.scope).toEqual(shadowScope);
   });
+});
+
+describe("same-origin frame targets", () => {
+  const frameScope = {
+    kind: "frame" as const,
+    path: [
+      {
+        boundary: "frame" as const,
+        tagName: "iframe" as const,
+        cssPath: "html > body > iframe",
+        documentPath: "/embed/editor.html",
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    backend = new FakeWebAnnotationBackend("env-1").install();
+  });
+  afterEach(() => {
+    appCommandStore(webAnnotationStore).getState().reset();
+    invokeMock.mockImplementation(() => Promise.resolve());
+  });
+
+  function frameRecord(captureId: string) {
+    const fake = createFakeCaptureApi();
+    const record = seedPending(fake.spool, { captureId, image: null });
+    const target = record.capture.target;
+    if (target.kind !== "element") throw new Error("expected an element fixture");
+    record.capture = {
+      ...record.capture,
+      target: { ...target, anchor: { ...target.anchor, scope: frameScope } },
+    };
+    return { fake, record };
+  }
+
+  test("keep the scope for an advertising backend and downgrade it otherwise", () => {
+    const { record } = frameRecord("cap-frame-pure");
+    const scopeOf = (capture: typeof record.capture) =>
+      capture.target.kind === "element" ? capture.target.anchor.scope : null;
+    expect(scopeOf(withAdvertisedFrameScope(record.capture, true))).toEqual(frameScope);
+    expect(scopeOf(withAdvertisedFrameScope(record.capture, false))).toEqual({
+      kind: "unsupported",
+      reason: "iframe",
+    });
+    // Other scopes pass through untouched.
+    const documentCapture = {
+      ...record.capture,
+      target: {
+        ...record.capture.target,
+        anchor: {
+          ...(record.capture.target.kind === "element" ? record.capture.target.anchor : null)!,
+          scope: { kind: "document" as const },
+        },
+      },
+    } as typeof record.capture;
+    expect(withAdvertisedFrameScope(documentCapture, false)).toBe(documentCapture);
+  });
+
+  for (const [advertised, expected] of [
+    [true, frameScope],
+    [false, { kind: "unsupported", reason: "iframe" }],
+  ] as const) {
+    test(`commit sends ${advertised ? "the root path" : "the older scope"} when frameTargets is ${String(advertised)}`, async () => {
+      appCommandStore(webAnnotationStore)
+        .getState()
+        .update("env-1", () => ({
+          capabilities: fixtureCapabilities({ frameTargets: advertised }),
+          capabilityStatus: "available",
+        }));
+      const { fake, record } = frameRecord(`cap-frame-${String(advertised)}`);
+      await commitPendingCapture({
+        api: fake.api,
+        environmentId: "env-1",
+        captureId: record.descriptor.captureId,
+        record,
+        input: { body: "Inside the embedded editor." },
+      });
+      const args = backend.callsOf("web_annotation_create")[0]!.args as {
+        capture: { target: { anchor: { scope: unknown } } };
+      };
+      expect(args.capture.target.anchor.scope).toEqual(expected);
+    });
+  }
 });
 
 describe("capture commit on another machine's environment", () => {

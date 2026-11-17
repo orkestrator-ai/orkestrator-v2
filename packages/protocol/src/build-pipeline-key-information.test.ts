@@ -58,7 +58,7 @@ describe("applyKeyInformationPatch", () => {
     const after = applyKeyInformationPatch(
       before,
       { framing: "objective", workDone: ["Rewrote the panel"] },
-      { at: LATER, author: "fix", round: 1 },
+      { at: LATER, author: "rework", round: 1 },
     );
     expect(before).toEqual(snapshot);
     expect(after.framing).toBe("objective");
@@ -67,7 +67,7 @@ describe("applyKeyInformationPatch", () => {
     expect(after.updatedAt).toBe(LATER);
     expect(after.updates.at(-1)).toEqual({
       at: LATER,
-      author: "fix",
+      author: "rework",
       round: 1,
       sections: ["framing", "workDone"],
     });
@@ -110,7 +110,7 @@ describe("applyKeyInformationPatch", () => {
     let info = applyKeyInformationPatch(
       built(),
       { issues: [{ issue: "A", resolution: "Fixed A", status: "resolved" }] },
-      { at: AT, author: "address", round: 0 },
+      { at: AT, author: "address-findings", round: 0 },
     );
     info = applyKeyInformationPatch(
       info,
@@ -120,12 +120,12 @@ describe("applyKeyInformationPatch", () => {
     info = applyKeyInformationPatch(
       info,
       { issues: [{ issue: "B", resolution: "", status: "open" }] },
-      { at: LATER, author: "address", round: 1 },
+      { at: LATER, author: "address-findings", round: 1 },
     );
     info = applyKeyInformationPatch(
       info,
       { issues: [{ issue: "B", resolution: "Fixed B", status: "resolved" }] },
-      { at: LATER, author: "address", round: 1 },
+      { at: LATER, author: "address-findings", round: 1 },
     );
     expect(info.issues.map((entry) => [entry.round, entry.issue, entry.status])).toEqual([
       [0, "A", "resolved"],
@@ -245,7 +245,7 @@ describe("recordKeyInformationReviewIssues", () => {
     const addressed = applyKeyInformationPatch(
       replaced,
       { issues: [{ issue: "New", resolution: "Done", status: "resolved" }] },
-      { at: LATER, author: "address", round: 0 },
+      { at: LATER, author: "address-findings", round: 0 },
     );
     const kept = recordKeyInformationReviewIssues(addressed, [{ title: "Newer" }], {
       at: LATER,

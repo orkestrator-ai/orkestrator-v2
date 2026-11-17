@@ -1067,7 +1067,7 @@ describe("TerminalContainer", () => {
           targetBranch: "main",
           phase: "cancelled",
           reviewers: [{ id: "reviewer", agent: "codex", model: "default", status: "cancelled" }],
-          fixModel: { agent: "codex", model: "default" },
+          addressFindingsModel: { agent: "codex", model: "default" },
           createdAt: timestamp,
           updatedAt: timestamp,
         },

@@ -16,7 +16,7 @@ MacBook Pro `mbp3`, at the user's request; the suite itself ran at
 
 ### Tasks
 
-1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: blocked (Linux only: waits on 7568 for a Linux real-display run of the whole Electron suite, from whichever comes first of the scheduled CI job's first runs (0031 task 8) and a fleet display host (7568: 2181 task 1 Linux display host); its `desktop-window-polls` attachment says whether a covered Linux window pauses, and only if it stays `visible` is the covered-window decision in 7568 needed). Implementation done 2026-11-03; macOS qualified 2026-11-06; Linux re-checked on current `main` and the CI real-display run repaired 2026-11-11; the Windows check moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10; the macOS real-display run of the whole suite done on `mbp3` on 2026-11-15 (hidden, minimised and covered windows all pause there; one spec defect fixed, the rest recorded in [8300](8300-electron-suite-on-a-shared-mac-desktop.md)).
+1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: blocked (Linux only: waits on 7568 for a Linux real-display run of the whole Electron suite, from whichever comes first of the scheduled CI job's first runs (0031 task 8) and a fleet display host (7568: 2181 task 1 Linux display host); its `desktop-window-polls` attachment says whether a covered Linux window pauses, and only if it stays `visible` is the covered-window decision in 7568 needed). Implementation done 2026-11-03; macOS qualified 2026-11-06; Linux re-checked on current `main` and the CI real-display run repaired 2026-11-11; the Windows check moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10; the macOS real-display run of the whole suite done on `mbp3` on 2026-11-15 (hidden, minimised and covered windows all pause there; one spec defect fixed, the rest filed by 8300 (retired 2026-11-17) as flakes 9938 to 9942 and 9949 and a named focus-loss failure).
 2. **Home terminal on a host without systemd OSC context**: qualify the repaired exact-line assertion outside beelink. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06, passed on macOS).
 3. **Audit other terminal snapshot line comparisons**: check for the same OSC-sensitive assertion elsewhere. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06; every whole-line comparison already used visible text, so no spec changed).
 4. **Keep agent-test Electron off the macOS desktop**: on macOS `--headless` changed nothing, so every agent's profile opened a window (and a detached DevTools window) on the user's desktop. Status: done (2026-11-13: the browser smoke and the native-dialog checks passed on macOS with the window kept hidden; implementation done 2026-11-06; the checks that need a person watching the Mac's screen are in [7568](../manual-test/7568-manual-test-checklist.md) since 2026-11-11).
@@ -63,9 +63,10 @@ MacBook Pro `mbp3`, at the user's request (Current state, "Real-display run on
 mbp3"). The desktop case of `window-visibility-polls-electron.spec.ts` ran
 there for the first time on a Mac: hidden, minimised and covered windows all
 reported `hidden` and read nothing, and the window read again once back. The
-one spec defect the run found is fixed; the failures that passed alone and
-the one that depends on the desktop's focus are in
-[8300](8300-electron-suite-on-a-shared-mac-desktop.md). Since 2026-11-15 CI
+one spec defect the run found is fixed; the failures that passed alone are
+flake cases 9938 to 9942 and 9949, and the keyboard annotation case that
+depends on the desktop's focus now names a lost window focus in its failure
+(both from to-do 8300, retired 2026-11-17). Since 2026-11-15 CI
 also runs the whole suite weekly on Linux under `xvfb-run`
 (`electron-qualification.yml`, 0031 task 8), so the Linux run this task waits
 on can come from that job's first runs, read in 7568 under 0031 task 8, as
@@ -218,13 +219,24 @@ to this pipeline (9850 to 9859) were all claimed before it ran, and the
 register's four-digit numbers end at 9999, which is also taken, so no case
 file could be added without taking a number given to other work. They are
 recorded in Current state and in
-[8300](8300-electron-suite-on-a-shared-mac-desktop.md) task 1, which files
+8300 task 1, which files
 them once numbers are free. The seeded preview case already had a case
 (9902), which took its observation, so 8300 task 1 files the other four plus
 two tests that failed only in the reruns: six cases. The keyboard annotation case failed alone
 too, because the window lost the key focus mid-run on a desktop shared with
 the user's app and other worktrees' Electron runs; 8300 task 2 makes that
 failure say so, and 7568 has its run at an idle Mac.
+
+Done on 2026-11-17 by to-do 8300 (now retired): the six cases are flakes
+[9938](../../tests/flaky-tests/electron-and-desktop/9938-application-menu-first-window-timeout.md),
+[9939](../../tests/flaky-tests/electron-and-desktop/9939-renderer-log-boundary-closing-window-destroyed.md),
+[9940](../../tests/flaky-tests/previews-annotations-and-gateway/9940-service-preview-reattach-context-closed.md),
+[9941](../../tests/flaky-tests/previews-annotations-and-gateway/9941-remote-terminal-link-failed-to-fetch.md),
+[9942](../../tests/flaky-tests/electron-and-desktop/9942-desktop-window-restored-reads-hidden.md) and
+[9949](../../tests/flaky-tests/electron-and-desktop/9949-never-shown-window-page-load-timeout.md),
+and a keyboard annotation failure on a window that lost the key focus now
+starts with `Lost window focus` and names macOS's front application
+([agent-testing.md](../../development/agent-testing.md)).
 
 ### Task 1: the window-visibility spec reports how far its fixture got (2026-11-15)
 
@@ -845,13 +857,13 @@ after a failure in the same file.
 
 | Case | Full suite | Rerun alone (after rebasing onto `47110af03`) | Outcome |
 | --- | --- | --- | --- |
-| `application-menu-electron.spec.ts:30` | `firstWindow` timed out (30 s) | Passed | Flake; 8300 task 1 |
-| `renderer-log-boundary-electron.spec.ts:204` | `Object has been destroyed` | Passed | Flake; 8300 task 1 |
+| `application-menu-electron.spec.ts:30` | `firstWindow` timed out (30 s) | Passed | Flake [9938](../../tests/flaky-tests/electron-and-desktop/9938-application-menu-first-window-timeout.md) |
+| `renderer-log-boundary-electron.spec.ts:204` | `Object has been destroyed` | Passed | Flake [9939](../../tests/flaky-tests/electron-and-desktop/9939-renderer-log-boundary-closing-window-destroyed.md) (resolved by #2299) |
 | `renderer-permissions-electron.spec.ts:14` | Timed out (120 s) | Failed 3 of 3 | Fixed: Assumptions and decisions; then passed 3 of 3 |
-| `service-preview-electron.spec.ts:944` | `Target page, context or browser has been closed` | Passed in its whole file (22 passed, 1 skipped), where `:3140` failed with `Failed to fetch` | Flakes; 8300 task 1 |
+| `service-preview-electron.spec.ts:944` | `Target page, context or browser has been closed` | Passed in its whole file (22 passed, 1 skipped), where `:3140` failed with `Failed to fetch` | Flakes [9940](../../tests/flaky-tests/previews-annotations-and-gateway/9940-service-preview-reattach-context-closed.md) and [9941](../../tests/flaky-tests/previews-annotations-and-gateway/9941-remote-terminal-link-failed-to-fetch.md) |
 | `service-preview-seeded-electron.spec.ts:567` | `firstWindow` timed out (90 s) | Passed | Flake; added to 9902 |
-| `web-annotations-electron.spec.ts:2221` | The preview never became the focused view | Failed: the window lost the key focus mid-case | Desktop focus; 8300 task 2 and 7568 |
-| `window-visibility-polls-electron.spec.ts:517` (desktop case) | `restored` read `hidden` | Passed 4 of 4 | Flake; 8300 task 1 |
+| `web-annotations-electron.spec.ts:2221` | The preview never became the focused view | Failed: the window lost the key focus mid-case | Desktop focus; the failure now names it (8300, retired) and 7568 |
+| `window-visibility-polls-electron.spec.ts:517` (desktop case) | `restored` read `hidden` | Passed 4 of 4 | Flake [9942](../../tests/flaky-tests/electron-and-desktop/9942-desktop-window-restored-reads-hidden.md) |
 
 **`window-visibility-polls-electron.spec.ts`**, its `desktop-window-polls`
 attachment (400 ms poll, 2 s windows). In a passing run alone (the first of
@@ -902,7 +914,7 @@ before the fixture's page had loaded. The lock-screen case was not run (7568).
 
 ## Related
 
-- [8300](8300-electron-suite-on-a-shared-mac-desktop.md): the flakes and the desktop-focus failure from task 1's run on `mbp3`, 2026-11-15.
+- 8300 (retired 2026-11-17; `git show 0265e7882:docs/todo/cross-cutting/8300-electron-suite-on-a-shared-mac-desktop.md`): the flakes (now cases 9938 to 9942 and 9949) and the desktop-focus failure message from task 1's run on `mbp3`, 2026-11-15.
 - [0031](0031-live-provider-and-platform-qualification.md) task 8: `electron-qualification.yml`, the weekly Linux Xvfb run of the whole suite that can give task 1 its Linux answer.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do: the Windows check of task 1 (moved 2026-11-10), the desktop observation of task 4 (moved 2026-11-11), the covered-window decision of task 1 (moved 2026-11-13), the keyboard annotation case at an idle Mac and the lock-screen case of the window-visibility spec (both 2026-11-15), and the Linux display host, one of the two Linux runs task 1 waits on (filed under 6303 task 2 until 2026-11-15).
 - 6303 (retired 2026-11-15; `git show a8b89f154:docs/todo/cross-cutting/6303-window-close-during-request-throws.md`): its task 2 first asked for the display host; its own run was done on mbp3's real macOS display, and the crash it found is recorded in [process-crashes-and-kills.md](../../debugging/process-crashes-and-kills.md#7-a-native-dialog-during-a-quit-macos-sigsegv).

@@ -259,7 +259,7 @@ describe("featureBuildStepConfigs", () => {
       model: "opus",
       reasoningEffort: "max",
     });
-    expect(configured.steps.address).toEqual({
+    expect(configured.steps["address-findings"]).toEqual({
       agent: "codex",
       model: "gpt-5.6",
       reasoningEffort: "high",
@@ -298,7 +298,7 @@ describe("featureBuildStepConfigs", () => {
     });
     // An explicit Normal must reach the backend rather than being dropped as
     // falsy, or the step silently inherits the provider default instead.
-    expect(configured.steps.address?.fastMode).toBe(false);
+    expect(configured.steps["address-findings"]?.fastMode).toBe(false);
     expect(configured.reviewers[0]?.fastMode).toBe(true);
     // A row that chose nothing leaves the key off entirely.
     expect(configured.steps.pr).not.toHaveProperty("fastMode");

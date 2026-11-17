@@ -273,7 +273,7 @@ test("profile flags replace the credential-free Codex defaults they name", async
     "codex,claude",
   ]);
   expect(() => isolatedProfileArguments(["--profile", "other"])).toThrow("Unsupported");
-  // A port a host firewall admits (to-do 7080); the reserved ports are still refused.
+  // A port a host firewall admits (#1930); the reserved ports are still refused.
   expect(isolatedProfileArguments(["--agent-tools-port", "31505"]).slice(-2)).toEqual([
     "--agent-tools-port",
     "31505",

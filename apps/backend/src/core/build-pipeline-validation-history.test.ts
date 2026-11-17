@@ -250,7 +250,7 @@ describe("validation history", () => {
             requestId,
             value: (phase === "review"
               ? cleanReview
-              : phase === "build" || phase === "fix"
+              : phase === "build" || phase === "rework"
                 ? {
                     headRef: controls.currentHead,
                     commands: [],

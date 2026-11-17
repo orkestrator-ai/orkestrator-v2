@@ -67,7 +67,7 @@ function seedPipeline(
 ): ReturnType<typeof buildPipelineFixture> {
   const pipeline = buildPipelineFixture({
     environmentId: "env-1",
-    phase: "addressing",
+    phase: "addressing-findings",
     ...overrides,
   });
   appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);

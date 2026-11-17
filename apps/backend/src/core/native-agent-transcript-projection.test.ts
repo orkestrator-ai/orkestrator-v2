@@ -444,6 +444,167 @@ describe("NativeAgentTranscriptProjection", () => {
   });
 });
 
+/** Every gauge key the projection reported before it was split by read model. */
+const GAUGE_KEYS = [
+  "artifactOverlays",
+  "deferredDiscoveryRenewals",
+  "directHistoryCursorHandleBytes",
+  "directHistoryCursorHandles",
+  "directHistoryPageBytes",
+  "directHistoryPages",
+  "directHistoryReads",
+  "directHistorySessions",
+  "displayTailCheckpoints",
+  "interactiveSnapshotShares",
+  "pinnedToolDetails",
+  "progressiveDirtyFollowUps",
+  "progressiveDiscovery",
+  "progressiveDiscoveryBytes",
+  "progressiveDiscoveryProviders",
+  "progressiveHydrationReadStarts",
+  "progressiveHydrationTimers",
+  "progressiveHydrations",
+  "progressivePreviewFills",
+  "progressiveReadEpochs",
+  "progressiveReadWaiters",
+  "progressiveReads",
+  "progressiveSourceTokens",
+  "progressiveStates",
+  "progressiveTrailing",
+  "progressiveTranscriptBytes",
+  "progressiveTranscripts",
+  "projectedMessageBytes",
+  "projectedMessageSessions",
+  "projectedMessages",
+  "projectionEpochs",
+  "projectionMissingSince",
+  "projectionRefreshDescriptors",
+  "projectionRefreshes",
+  "projectionRevisions",
+  "projections",
+  "remoteToolDetailReads",
+  "stopNotices",
+  "toolDetailBytes",
+  "toolDetailEncodingBytes",
+  "toolDetailEncodings",
+  "toolDetails",
+  "transcriptDeltaBaseBytes",
+  "transcriptDeltaBases",
+];
+
+describe("the owner's session lifecycle across read models", () => {
+  const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
+  const progressive = { ...identity, viewVersion: 1 as const };
+
+  /** Fill the full projection, the transcript and state views, and the shared row cache. */
+  async function readEveryView(projection: NativeAgentTranscriptProjection): Promise<void> {
+    await projection.refreshProjection(identity, true);
+    const transcript = await projection.getTranscriptUpdate({ ...progressive, liveWindow });
+    expect(transcript.status).toBe("snapshot");
+    const state = await projection.getSessionStateUpdate(progressive);
+    expect(state.status).toBe("snapshot");
+  }
+
+  const toolRow = {
+    ...textMessage("m1", "hello"),
+    parts: [
+      { type: "text", content: "hello" },
+      {
+        type: "tool-invocation",
+        toolName: "bash",
+        toolState: "success",
+        toolArgs: { command: "echo hello" },
+        toolOutput: `output ${"x".repeat(300)}`,
+      },
+    ],
+  };
+
+  test("cache gauges still list every map of every read model", async () => {
+    const stub = createProviderStub("opencode");
+    await withProjection(stub.provider, async ({ projection }) => {
+      expect(Object.keys(projection.cacheGauges()).sort()).toEqual(GAUGE_KEYS);
+    });
+  });
+
+  test("invalidation bumps both epochs and empties every read model's entries", async () => {
+    const stub = createProviderStub("opencode", { messages: async () => [toolRow] });
+    await withProjection(stub.provider, async ({ projection }) => {
+      await readEveryView(projection);
+      const held = projection.cacheGauges();
+      expect(held.projections).toBe(1);
+      expect(held.progressiveTranscripts).toBe(1);
+      expect(held.progressiveStates).toBe(1);
+      expect(held.projectedMessages).toBeGreaterThan(0);
+      const { projectionEpochs } = projection.forTesting();
+      const recovery = `${sessionKey}\0detail-recovery`;
+      const before = projectionEpochs.get(sessionKey) ?? 0;
+      const recoveryBefore = projectionEpochs.get(recovery) ?? 0;
+
+      projection.invalidateProjection(sessionKey);
+
+      const gauges = projection.cacheGauges();
+      expect(gauges.projections).toBe(0);
+      expect(gauges.progressiveTranscripts).toBe(0);
+      expect(gauges.progressiveTranscriptBytes).toBe(0);
+      expect(gauges.progressiveStates).toBe(0);
+      expect(gauges.projectedMessages).toBe(0);
+      expect(projectionEpochs.get(sessionKey)).toBe(before + 1);
+      expect(projectionEpochs.get(recovery)).toBe(recoveryBefore + 1);
+    });
+  });
+
+  test("an epoch nothing caches or reads is pruned; a cached one is kept", async () => {
+    const stub = createProviderStub("opencode", { messages: async () => [toolRow] });
+    await withProjection(stub.provider, async ({ projection }) => {
+      await projection.refreshProjection(identity, true);
+      const state = projection.forTesting();
+      state.projectionEpochs.set(sessionKey, 3);
+      state.pruneProjectionEpoch(sessionKey);
+      expect(state.projectionEpochs.get(sessionKey)).toBe(3);
+
+      projection.invalidateProjection(sessionKey);
+      state.pruneProjectionEpoch(sessionKey);
+      expect(state.projectionEpochs.has(sessionKey)).toBe(false);
+    });
+  });
+
+  test("forgetting an environment releases its session from every read model", async () => {
+    const stub = createProviderStub("opencode", { messages: async () => [toolRow] });
+    await withProjection(stub.provider, async ({ projection }) => {
+      await readEveryView(projection);
+      expect(projection.forgetEnvironment("env-other")).toBe(0);
+      expect(projection.cacheGauges().projections).toBe(1);
+
+      expect(projection.forgetEnvironment(identity.environmentId)).toBe(1);
+
+      const gauges = projection.cacheGauges();
+      expect(gauges.projections).toBe(0);
+      expect(gauges.projectionRevisions).toBe(0);
+      expect(gauges.projectionEpochs).toBe(0);
+      expect(gauges.progressiveTranscripts).toBe(0);
+      expect(gauges.progressiveStates).toBe(0);
+      expect(gauges.projectedMessages).toBe(0);
+    });
+  });
+
+  test("shutdown settles the progressive reads and clears their caches", async () => {
+    const stub = createProviderStub("opencode", { messages: async () => [toolRow] });
+    await withProjection(stub.provider, async ({ projection }) => {
+      await readEveryView(projection);
+      await projection.settleAndClearProgressiveReads();
+      const gauges = projection.cacheGauges();
+      expect(gauges.progressiveTranscripts).toBe(0);
+      expect(gauges.progressiveStates).toBe(0);
+      expect(gauges.progressiveReads).toBe(0);
+      expect(gauges.projectedMessages).toBe(0);
+      // The full projection keeps its view until `clear`.
+      expect(gauges.projections).toBe(1);
+      projection.clear();
+      expect(projection.cacheGauges().projections).toBe(0);
+    });
+  });
+});
+
 describe("permission rules on projection reads", () => {
   test.each(["covered", "unmatched", "transient", "failure"] as const)(
     "%s pending interaction read",

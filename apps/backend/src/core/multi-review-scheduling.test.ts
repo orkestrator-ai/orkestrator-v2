@@ -37,13 +37,17 @@ describe("multi review obligations", () => {
     expect(multiReviewObligation(handoff, false)).toBeNull();
     const fix = workflow({
       phase: "interactive",
-      fixSession: { status: "running" } as MultiReviewWorkflow["fixSession"],
+      addressFindingsSession: {
+        status: "running",
+      } as MultiReviewWorkflow["addressFindingsSession"],
     });
     expect(multiReviewObligation(fix, true)).toBe("interactive-fix");
     const pausedStop = workflow({
       phase: "paused",
-      pausedStep: "fix",
-      fixSession: { status: "running" } as MultiReviewWorkflow["fixSession"],
+      pausedStep: "address-findings",
+      addressFindingsSession: {
+        status: "running",
+      } as MultiReviewWorkflow["addressFindingsSession"],
     });
     expect(multiReviewObligation(pausedStop, true)).toBe("paused-stop");
     // A successful Address Findings's PR launch is owed in any phase, until delivered.
@@ -80,7 +84,13 @@ describe("graph-engine reviews (item 301)", () => {
     workflow({ engine: "graph", graphRun: { runId: "multi-review-workflow" }, ...fields });
 
   test("an unsettled graph review only projects its run, in every phase", () => {
-    for (const phase of ["preparing", "reviewing", "ready", "fixing", "completed"] as const) {
+    for (const phase of [
+      "preparing",
+      "reviewing",
+      "ready",
+      "addressing-findings",
+      "completed",
+    ] as const) {
       const record = graph({
         phase,
         // Bespoke obligations it carries are the run's, not the service's.

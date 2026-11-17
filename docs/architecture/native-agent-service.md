@@ -15,7 +15,7 @@ collaborators that own it privately, and the service wires them together.
 | `NativeAgentTurnRecovery` | `native-agent-turn-recovery.ts` | Incomplete-turn recovery tasks and candidates, manual-prompt claims, recovery dispatches. |
 | `NativeAgentObservationBroker` | `native-agent-observation.ts` | Shared observation records, dispatch and generation fences, next-due provider groups. |
 | `NativeAgentCatalogCache` | `native-agent-catalog-cache.ts` | Per-environment model catalogues and their coalesced refreshes; per-session command catalogues (through `NativeAgentCommandCatalogueCache`). |
-| `NativeAgentTranscriptProjection` | `native-agent-transcript-projection.ts` | The legacy projection cache, sync revisions and history, epochs and in-flight refreshes, tool details, stop notices, pushed titles, the progressive transcript/state/discovery caches and reads, the display-tail scheduler, projected-message and direct-history-page caches, artifact overlays. |
+| `NativeAgentTranscriptProjection` | `native-agent-transcript-projection.ts` | The session epochs, pushed titles, usage recorder and the session lifecycle that crosses every read model (invalidate, prune, forget an environment, shutdown). Its read models are collaborators of their own, listed in [Transcript projection read models](#transcript-projection-read-models). |
 | `NativeAgentInteractionTracker` | `native-agent-interaction-tracker.ts` | The pending-interaction read cache: one session's pending approvals and questions, read on demand, and withdrawn when its environment stops. |
 | `NativeAgentLaunchActivityReconciler` | `native-agent-launch-activity-reconciler.ts` | `observedSessionActivity` (the exact turn-edge state machine), activity sweep scheduling and per-group back-off, pending PR-monitor notifications, startup-launch tasks and retry. |
 | `NativeAgentPromptQueueDispatcher` | `native-agent-prompt-queue-dispatcher.ts` | The per-session work fence, mutation-intent counts, unpersisted Stop fences, queue drain tasks with their retry and attempt counts, the keyed queue scheduler, in-flight parked-dispatch settles. |
@@ -40,6 +40,81 @@ initialization promise, the scan-task set every collaborator's background work
 is tracked in (kept on the service, not the launch reconciler, because the
 projection, queue drains and launch scan all feed it and
 shutdown drains it), and the turn-outcome retry bookkeeping.
+
+## Transcript projection read models
+
+`NativeAgentTranscriptProjection` builds one `NativeAgentProjectionContext`
+(`native-agent-projection-context.ts`) and hands it to each read model, which
+reaches its siblings and the owner's lifecycle only through it. The service
+still talks to the owner alone: its public methods are one-line delegates.
+
+| Collaborator | File | State it owns |
+| --- | --- | --- |
+| `NativeAgentProjectionParts` | `native-agent-projection-parts.ts` | The one owner of the caches every read model builds from: tool details (bytes, pins, encodings), projected rows, direct history pages and cursor handles, artifact overlays. Also the row and composer projection steps that fill them. Other read models change the tool-detail cache only through its methods. |
+| `NativeAgentProgressiveReads` | `native-agent-progressive-reads.ts` | Joined progressive reads, their start epochs and waiters, trailing re-reads and follow-up markers, shared provider snapshots, live request descriptors, read metrics; held coordinator reads. |
+| `NativeAgentProgressiveTranscript` | `native-agent-progressive-transcript.ts` | The transcript view cache, delta bases, source tokens, incomplete-preview recovery (hydrations, timers, read starts, preview fills) and the display-tail scheduler. |
+| `NativeAgentProgressiveSessionState` | `native-agent-progressive-session-state.ts` | The session-state view cache. |
+| `NativeAgentProgressiveDiscovery` | `native-agent-progressive-discovery.ts` | Discovery sections and their bytes, per-provider job counts, deferred renewals, the MCP action fence. |
+| `NativeAgentHistoryPages` | `native-agent-history-pages.ts` | No state. Direct history pages over the parts' page cache. |
+| `NativeAgentToolDetailReads` | `native-agent-tool-detail-reads.ts` | In-flight remote detail reads; tool details on demand and the recovery of an evicted reference. |
+| `NativeAgentFullProjection` | `native-agent-full-projection.ts` | The whole-session projection cache, its revisions, missing-session grace, serialized refreshes, stop notices. It is what `get_native_agent_projection`, every session mutation and `cachedProjectionSnapshot` return, plus the `detail-recovery` read. |
+
+The owner keeps the session epochs and what crosses every read model:
+`invalidateProjection` asks each read model to forget the session after
+bumping both epochs, `pruneProjectionEpoch` drops an epoch only when no read
+model still holds the key, `forgetEnvironment` gathers sessions from each, and
+shutdown settles reads before each clears. `forTesting()` and `cacheGauges()`
+are gathered from each read model's own accessor.
+
+### Decisions behind the split
+
+From to-do 0057 (retired 2026-11-17; read it with
+`git show 0265e7882:docs/todo/backend-structure/0057-native-agent-service-size.md`),
+which split `native-agent-service.ts` (4,940 lines) and
+`native-agent-transcript-projection.ts` (6,347 lines) by responsibility. Each
+move kept the method bodies verbatim apart from `this.` becoming the owner's
+reference, and left the public methods as one-line delegates so callers and
+public-API fakes did not change.
+
+- **Session controls, dispatch and mail injection are three collaborators,
+  not one.** The fence state and its order already live in
+  `NativeAgentPromptQueueDispatcher`, so Stop (in
+  `NativeAgentSessionOperations`) and dispatch share it without sharing a
+  class. Mail injection takes no fence: it calls the dispatch's entry points.
+  One class for dispatch and mail injection would have been about 2,200
+  lines; one "turn lifecycle" class for dispatch and Stop about 2,600.
+- **The projection's shared caches have one owner,
+  `NativeAgentProjectionParts`, rather than living in the progressive read
+  model.** Every read model is then a plain consumer and the byte bounds stay
+  with one class (the 0010 rule that a bound moves with its state). The
+  alternative, a progressive read model owning them and the full projection
+  reaching them through a callback, would have made the full projection
+  depend on the larger, faster-changing class. Other read models change the
+  tool-detail cache only through its methods (`replaceToolDetail`,
+  `dropToolDetail`, `pinToolDetail` and the rest), never by assigning its
+  fields.
+- **The progressive reads are four collaborators, not one.** Together they
+  were about 2,700 lines, over the 2,000-line guideline, so the transcript,
+  session-state and discovery views each have a module and share the read
+  scheduling (`NativeAgentProgressiveReads`). Direct history pages and tool
+  details are read models of their own.
+- **The session lifecycle stays on the owner, and each read model forgets its
+  own state.** `invalidateProjection`, `pruneProjectionEpoch`,
+  `forgetEnvironment` and shutdown cross every read model, so the owner
+  sequences them and calls each read model's `forgetSession`, `holdsSession`
+  or `collectEnvironmentSessions`. These steps are synchronous map changes, so
+  the order across read models does not matter; the one ordering kept is that
+  the epochs are bumped before the progressive reads mark their follow-ups.
+- **The read models share a context object, not a host per class.** The
+  owner builds one `NativeAgentProjectionContext` and passes it to each; its
+  lifecycle members are arrow functions over the owner, so a test that patches
+  `invalidateProjection` on the owner still sees every call.
+- **The full projection is split, not retired.** After the sync-v1 read went
+  (to-do 8173, #2348) it still has live callers: `get_native_agent_projection`,
+  every session mutation's returned projection, `cachedProjectionSnapshot`
+  (public API, interaction tracker, web annotations) and the `detail-recovery`
+  read that rebuilds an evicted tool detail. Retiring it needs its own
+  compatibility analysis. No compatibility shim was added for the split.
 
 ## "Continue in…" handoffs
 

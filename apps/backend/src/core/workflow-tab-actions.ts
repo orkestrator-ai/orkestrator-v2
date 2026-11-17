@@ -24,7 +24,12 @@ export async function openMultiReviewTab(
   storage: StorageService,
   workflow: Pick<
     MultiReviewWorkflow,
-    "id" | "projectId" | "environmentId" | "fixTabId" | "fixSession" | "addressPromptPending"
+    | "id"
+    | "projectId"
+    | "environmentId"
+    | "addressFindingsTabId"
+    | "addressFindingsSession"
+    | "addressPromptPending"
   >,
   surface: "root" | "fix" | "reviewer" = "root",
   checkOnly = false,
@@ -76,7 +81,7 @@ export async function openMultiReviewTab(
           ? tab.type === "multi-review" &&
             data?.workflowId === workflow.id &&
             data.reviewerId === reviewerId
-          : tab.id === (workflow.fixTabId ?? `multi-review-fix:${workflow.id}`);
+          : tab.id === (workflow.addressFindingsTabId ?? `multi-review-fix:${workflow.id}`);
     };
     const existingPane = panes.find((pane) => pane.tabs.some(matches));
     const existing = existingPane?.tabs.find(matches);
@@ -93,10 +98,10 @@ export async function openMultiReviewTab(
         ? `multi-review:${workflow.id}`
         : surface === "reviewer"
           ? `multi-review:${workflow.id}:reviewer:${reviewerId}`
-          : (workflow.fixTabId ?? `multi-review-fix:${workflow.id}`));
+          : (workflow.addressFindingsTabId ?? `multi-review-fix:${workflow.id}`));
     if (!existing && panes.some((pane) => pane.tabs.some((tab) => tab.id === tabId)))
       throw new Error("The reserved tab ID is already in use");
-    if (surface === "fix" && !workflow.fixSession)
+    if (surface === "fix" && !workflow.addressFindingsSession)
       throw new Error("The Address Findings session is not available yet");
     if (surface === "fix" && workflow.addressPromptPending)
       throw new Error(
@@ -106,11 +111,14 @@ export async function openMultiReviewTab(
       throw new Error("The Address Findings tab ID is already in use");
     if (existing && surface === "fix") {
       const data = isRecord(existing.nativeAgentData) ? existing.nativeAgentData : {};
-      if (data.environmentId !== environment.id || data.platform !== workflow.fixSession!.agent)
+      if (
+        data.environmentId !== environment.id ||
+        data.platform !== workflow.addressFindingsSession!.agent
+      )
         throw new Error("The Address Findings tab belongs to a different session identity");
       existing.nativeAgentData = {
         ...data,
-        sessionId: workflow.fixSession!.providerSessionId,
+        sessionId: workflow.addressFindingsSession!.providerSessionId,
         requireExistingResumeSession: true,
       };
     }
@@ -134,11 +142,11 @@ export async function openMultiReviewTab(
               displayTitle: "Address Findings",
               isReviewTab: true,
               nativeAgentData: {
-                platform: workflow.fixSession!.agent,
+                platform: workflow.addressFindingsSession!.agent,
                 environmentId: environment.id,
                 isLocal: environment.environmentType === "local",
                 ...(containerId ? { containerId } : {}),
-                sessionId: workflow.fixSession!.providerSessionId,
+                sessionId: workflow.addressFindingsSession!.providerSessionId,
                 requireExistingResumeSession: true,
               },
             },

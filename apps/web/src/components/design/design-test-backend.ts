@@ -15,6 +15,9 @@ import {
 export const canvasId = "00000000-0000-4000-8000-00000000c001";
 export const frameA = "00000000-0000-4000-8000-00000000f00a";
 export const frameB = "00000000-0000-4000-8000-00000000f00b";
+/** A 1 × 1 opaque white PNG: what `design_capture` answers in tests. */
+export const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
 
 export function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -741,6 +744,18 @@ export class FakeBackend {
       }
       case "design_operation_status":
         return ok(this.statusOf(String(args.token)));
+      case "design_capture": {
+        const entry = this.frames.get(String(args.frameId));
+        if (!entry)
+          return { ok: false, failure: { code: "not-found", message: "Frame not found" } };
+        return ok({
+          revision: entry.frame.revision,
+          contentId: `content-${entry.frame.id}`,
+          viewportId: "viewport",
+          data: TINY_PNG_BASE64,
+          mimeType: "image/png",
+        });
+      }
       case "design_cancel": {
         const token = String(args.token);
         this.pending.delete(token);

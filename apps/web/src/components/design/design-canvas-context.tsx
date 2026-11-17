@@ -3,6 +3,7 @@ import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
 import type { DesignCanvasController } from "./design-controller";
 import type { DesignSelection } from "./design-selection";
 import type { DesignFrameBridge } from "./frame-bridge";
+import type { DesignDownloadScope, DesignImageFormat } from "./design-frame-download";
 
 export type DesignFrameAction =
   | "rename"
@@ -39,9 +40,27 @@ export interface DesignCanvasActions {
   reportError(error: unknown, frameId?: string): void;
   exitPreview(): void;
   frameAction(frameId: string, action: DesignFrameAction): void;
-  focusFrame(frameId: string): void;
-  /** Selects a whole frame (board): outlined on the canvas, removable with Delete. */
-  selectFrame(frameId: string): void;
+  /**
+   * Focus moved to a frame's chrome. Focusing a frame outside the board
+   * selection clears it unless `keepSelection` (an additive click in progress).
+   */
+  focusFrame(frameId: string, options?: { keepSelection?: boolean }): void;
+  /**
+   * Selects a whole frame (board): outlined on the canvas, removable with
+   * Delete when it is the only one. `additive` adds it to, or removes it from,
+   * the current board selection instead of replacing it.
+   */
+  selectFrame(frameId: string, options?: { additive?: boolean }): void;
+  /**
+   * Downloads frames as images or a PDF: this frame, the board selection, or
+   * every frame on the canvas. Settles when the file was handed to the
+   * browser; failures are reported on the canvas, never rejected.
+   */
+  downloadFrames(
+    frameId: string,
+    scope: DesignDownloadScope,
+    format: DesignImageFormat,
+  ): Promise<void>;
 }
 
 export const DesignCanvasContext = createContext<DesignCanvasActions | null>(null);

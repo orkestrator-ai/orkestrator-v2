@@ -22,6 +22,7 @@ import type { DesignSelection } from "./design-selection";
 import { designFrameSource } from "./design-frame-source";
 import { clampCoordinate, clampDimension } from "./design-viewport";
 import { DesignFrameBridge } from "./frame-bridge";
+import { DesignFrameDownloadMenu } from "./DesignFrameDownloadMenu";
 
 export type { DesignSelection } from "./design-selection";
 
@@ -75,6 +76,8 @@ export const DesignFrameView = memo(function DesignFrameView({
   canRestorePrevious,
   focused,
   frameSelected = false,
+  selectedFrameCount = 0,
+  frameCount = 0,
 }: {
   /** Frame with optimistic previews applied. */
   frame: DesignFrame;
@@ -91,6 +94,10 @@ export const DesignFrameView = memo(function DesignFrameView({
   focused: boolean;
   /** The whole frame (board) is selected: outlined and removable with Delete. */
   frameSelected?: boolean;
+  /** Frames in the board selection; several offer "download selected". */
+  selectedFrameCount?: number;
+  /** Committed frames on the canvas; several offer "download all". */
+  frameCount?: number;
 }) {
   const actions = useDesignCanvasActions();
   // Effects read actions through a ref: the bridge's lifetime must follow the
@@ -116,6 +123,10 @@ export const DesignFrameView = memo(function DesignFrameView({
   } | null>(null);
   const [elementSize, setElementSize] = useState<{ width: number; height: number } | null>(null);
   const invalid = meta?.validation.state === "invalid";
+  /** Set while an additive click focuses the title, so focus keeps the selection. */
+  const additiveFocus = useRef(false);
+  /** The click that follows an additive pointerdown was already handled by it. */
+  const additiveClick = useRef(false);
 
   useEffect(() => {
     if (!live) setBridge(null);
@@ -319,18 +330,32 @@ export const DesignFrameView = memo(function DesignFrameView({
       className="design-frame absolute"
       style={{ left: shown.x, top: shown.y, width: shown.width, height: shown.height }}
     >
-      <div className="absolute -top-7 left-0 flex max-w-full items-center gap-1">
+      {/* Spans the frame's width so the download button sits at its top right; the
+          gaps between controls stay part of the canvas (pan, deselect). */}
+      <div className="pointer-events-none absolute inset-x-0 -top-7 flex items-center gap-1 *:pointer-events-auto">
         <button
           type="button"
-          className={`max-w-full cursor-grab truncate rounded-sm px-0.5 text-left text-xs text-muted-foreground focus-hairline focus-hairline-outset ${frameSelected ? "text-blue-500" : focused ? "text-foreground" : ""}`}
+          className={`min-w-0 cursor-grab truncate rounded-sm px-0.5 text-left text-xs text-muted-foreground focus-hairline focus-hairline-outset ${frameSelected ? "text-blue-500" : focused ? "text-foreground" : ""}`}
           onPointerDown={(event) => {
             if (event.button !== 0) return;
+            const additive = event.shiftKey || event.metaKey || event.ctrlKey;
             // WebKit does not focus buttons on click; canvas keys (Delete) need focus inside.
+            additiveFocus.current = additive;
             event.currentTarget.focus({ preventScroll: true });
-            actions.selectFrame(frame.id);
+            additiveFocus.current = false;
+            additiveClick.current = additive;
+            actions.selectFrame(frame.id, { additive });
             startDrag(event, "move");
           }}
-          onClick={() => actions.selectFrame(frame.id)}
+          onClick={(event) => {
+            if (additiveClick.current) {
+              additiveClick.current = false;
+              return;
+            }
+            actions.selectFrame(frame.id, {
+              additive: event.shiftKey || event.metaKey || event.ctrlKey,
+            });
+          }}
           onPointerMove={moveDrag}
           onPointerUp={() => settleDrag(true)}
           onPointerCancel={() => settleDrag(false)}
@@ -338,11 +363,11 @@ export const DesignFrameView = memo(function DesignFrameView({
             if (drag.current) settleDrag(false);
           }}
           onKeyDown={onFrameKey}
-          onFocus={() => actions.focusFrame(frame.id)}
+          onFocus={() => actions.focusFrame(frame.id, { keepSelection: additiveFocus.current })}
           aria-label={`Move frame ${frame.name}`}
           data-frame-title-id={frame.id}
           aria-pressed={frameSelected}
-          aria-description="Arrow keys move, Alt+Arrow keys resize, Shift for larger steps, Delete removes a selected frame"
+          aria-description="Shift-click adds to the selection. Arrow keys move, Alt+Arrow keys resize, Shift for larger steps, Delete requires a single selected frame"
         >
           {frame.name} · {Math.round(shown.width)} × {Math.round(shown.height)}
           {pending && <span className="ml-1 text-[10px] text-primary">· saving</span>}
@@ -382,6 +407,16 @@ export const DesignFrameView = memo(function DesignFrameView({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        {frameSelected && (
+          <div className="ml-auto flex shrink-0">
+            <DesignFrameDownloadMenu
+              frameName={frame.name}
+              selectedCount={selectedFrameCount}
+              frameCount={frameCount}
+              onDownload={(scope, format) => actions.downloadFrames(frame.id, scope, format)}
+            />
+          </div>
+        )}
       </div>
       {live ? (
         <iframe

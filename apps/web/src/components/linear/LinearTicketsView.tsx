@@ -209,10 +209,12 @@ export function LinearTicketsView({ projectId }: LinearTicketsViewProps) {
   return <LinearTicketsViewContent projectId={projectId} buildPipeline={buildPipeline} />;
 }
 
-export function LinearTicketsViewContent({
-  projectId,
-  buildPipeline,
-}: LinearTicketsViewContentProps) {
+export function LinearTicketsViewContent(props: LinearTicketsViewContentProps) {
+  // A project's local state and pending reads must never follow another project.
+  return <LinearTicketsViewProject key={props.projectId} {...props} />;
+}
+
+function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsViewContentProps) {
   const nodeBackend = useScopeBackend();
   const { scope, windowScope } = useScopesWithCommandFallback();
   const onCommandNode = scope.role === "command";
@@ -421,9 +423,9 @@ export function LinearTicketsViewContent({
           setNodeConnections([]);
           const board = await fetchBoardLink();
           if (!current()) return;
-          setBoardLink(board.link);
-          setBoardState(board.state);
           if (board.state === "unlinked") {
+            setBoardLink(board.link);
+            setBoardState(board.state);
             issuesLoadedRef.current += 1;
             setIssues([]);
             setBoardStates([]);
@@ -445,6 +447,9 @@ export function LinearTicketsViewContent({
           ]);
           if (!current()) return;
           issuesLoadedRef.current += 1;
+          // Publish the identity only with the tickets and lanes read for it.
+          setBoardLink(board.link);
+          setBoardState(board.state);
           // Unchanged tickets keep their objects, so only changed cards redraw.
           setIssues((shown) => reconcileByKey(shown, nextIssues, (issue) => issue.id));
           setBoardStates((shown) => reconcileByKey(shown, states, (state) => state.id));
@@ -1099,6 +1104,7 @@ export function LinearTicketsViewContent({
       await nodeBackend.clearLinearBoardLink(projectId);
       // A read in flight began before the unlink; it must not bring the board back.
       issuesRequestRef.current += 1;
+      setBackgroundRefreshing(false);
       setUnlinkOpen(false);
       setChangingBoard(false);
       setBoardLink(null);
@@ -1476,6 +1482,7 @@ export function LinearTicketsViewContent({
             void loadIssues();
           } else {
             issuesRequestRef.current += 1;
+            setBackgroundRefreshing(false);
             setIssues([]);
             setIssuesState("loaded");
           }

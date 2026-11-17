@@ -793,6 +793,20 @@ a node from before board links, shows the lanes without dragging. While a card
 is held the board stops snapping to lanes, because snapping fights the drag's
 edge scrolling.
 
+**Keeping the tab current.** Linear sends the tab nothing when an issue
+changes, so the tab reads it again on its own (`linear-board-refresh.ts`).
+Each node scope remembers the board it last read per project (the last 12
+projects), and a reopened tab paints that at once instead of a loading
+state. A background read then follows: when the tab mounts, when its node is
+shown again after another node was (a hidden node's workspace stays mounted,
+so it would otherwise keep what it showed when the user left), and when the
+window regains focus (at most every 10 seconds). Only the tickets that changed
+redraw. A background read that fails keeps the board on screen and logs
+(`web.linear` `issues.refresh-failed`, `connection.refresh-failed`) rather
+than showing an error, and one that a card move overtook is dropped, since it
+may have read Linear before the move. The Refresh button's icon spins while a
+background read is in flight; pressing it still does a full load.
+
 **Reordering.** Under the "Linear board" ticket order (the default), lanes are
 sorted by Linear's own manual order (`sortOrder`; issues without one last), and
 a card dropped above or below another card lands there, in its own lane or

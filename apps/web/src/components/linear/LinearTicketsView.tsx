@@ -85,6 +85,14 @@ import {
 import { LinearAssigneeAvatar } from "./LinearAssigneeAvatar";
 import { LinearIssueBoard, LinearLanesMenu, type LinearBoardMove } from "./LinearIssueBoard";
 import {
+  type LinearBoardState,
+  forgetLinearBoardSnapshot,
+  readLinearBoardSnapshot,
+  reconcileByKey,
+  rememberLinearBoardSnapshot,
+  watchLinearBoardReturns,
+} from "./linear-board-refresh";
+import {
   DEFAULT_LINEAR_PROJECT_VIEW,
   useLinearViewPreferencesStore,
   type LinearIssueView,
@@ -109,11 +117,16 @@ interface LinearTicketsViewContentProps extends LinearTicketsViewProps {
 }
 
 type LoadState = "idle" | "loading" | "loaded" | "error";
+type BoardState = LinearBoardState;
+
 /**
- * The project's Linear board: `unsupported` is a node from before board
- * links, which lists every issue the key can see, as it always did.
+ * How a read of the board was started. A `background` read refreshes a board
+ * already on screen: it shows no loading state, and when it fails it keeps
+ * the board and logs, rather than replacing the tickets with an error.
  */
-type BoardState = "unknown" | "linked" | "unlinked" | "unsupported";
+interface FetchIssuesOptions {
+  readonly background?: boolean;
+}
 
 const isStringDraft = (value: unknown): value is string => typeof value === "string";
 const isBlankDraft = (value: string): boolean => value.length === 0;
@@ -198,15 +211,23 @@ export function LinearTicketsView({ projectId }: LinearTicketsViewProps) {
   return <LinearTicketsViewContent projectId={projectId} buildPipeline={buildPipeline} />;
 }
 
-export function LinearTicketsViewContent({
-  projectId,
-  buildPipeline,
-}: LinearTicketsViewContentProps) {
+export function LinearTicketsViewContent(props: LinearTicketsViewContentProps) {
+  // A project's local state and pending reads must never follow another project.
+  return <LinearTicketsViewProject key={props.projectId} {...props} />;
+}
+
+function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsViewContentProps) {
   const nodeBackend = useScopeBackend();
-  const onCommandNode = useScopesWithCommandFallback().scope.role === "command";
-  const [connection, setConnection] = useState<LinearConnectionStatus | null>(null);
-  const [boardLink, setBoardLink] = useState<LinearBoardLink | null>(null);
-  const [boardState, setBoardState] = useState<BoardState>("unknown");
+  const { scope, windowScope } = useScopesWithCommandFallback();
+  const onCommandNode = scope.role === "command";
+  // The board this node last read for the project paints at once; the mount's
+  // read then refreshes it in the background (`linear-board-refresh.ts`).
+  const [snapshot] = useState(() => readLinearBoardSnapshot(scope, projectId));
+  const [connection, setConnection] = useState<LinearConnectionStatus | null>(
+    snapshot?.connection ?? null,
+  );
+  const [boardLink, setBoardLink] = useState<LinearBoardLink | null>(snapshot?.boardLink ?? null);
+  const [boardState, setBoardState] = useState<BoardState>(snapshot?.boardState ?? "unknown");
   const [changingBoard, setChangingBoard] = useState(false);
   const [unlinkOpen, setUnlinkOpen] = useState(false);
   const [unlinking, setUnlinking] = useState(false);
@@ -214,11 +235,21 @@ export function LinearTicketsViewContent({
   const [disconnecting, setDisconnecting] = useState(false);
   const [nodeConnections, setNodeConnections] = useState<LinearNodeConnection[]>([]);
   const [copyingFrom, setCopyingFrom] = useState<string | null>(null);
-  // Both start loading: the first load begins on mount.
-  const [connectionState, setConnectionState] = useState<LoadState>("loading");
-  const [issues, setIssues] = useState<LinearIssueListItem[]>([]);
+  // Both start loading, unless a remembered board is shown: the first load
+  // begins on mount.
+  const [connectionState, setConnectionState] = useState<LoadState>(
+    snapshot ? "loaded" : "loading",
+  );
+  const [issues, setIssues] = useState<LinearIssueListItem[]>(() => [...(snapshot?.issues ?? [])]);
   /** The linked board's workflow states: the board view's lanes, empty ones included. */
-  const [boardStates, setBoardStates] = useState<LinearWorkflowState[]>([]);
+  const [boardStates, setBoardStates] = useState<LinearWorkflowState[]>(() => [
+    ...(snapshot?.boardStates ?? []),
+  ]);
+  /**
+   * A background read is in flight: the Refresh icon spins, the board stays.
+   * A remembered board is refreshed by the mount's read.
+   */
+  const [backgroundRefreshing, setBackgroundRefreshing] = useState(snapshot !== undefined);
   const viewPreference =
     useLinearViewPreferencesStore((state) => state.projects[projectId]) ??
     DEFAULT_LINEAR_PROJECT_VIEW;
@@ -230,7 +261,7 @@ export function LinearTicketsViewContent({
     () => new Set(viewPreference.hiddenLanes),
     [viewPreference.hiddenLanes],
   );
-  const [issuesState, setIssuesState] = useState<LoadState>("loading");
+  const [issuesState, setIssuesState] = useState<LoadState>(snapshot ? "loaded" : "loading");
   const [issuesError, setIssuesError] = useState<string | null>(null);
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set());
   const [issueOrder, setIssueOrder] = useState<IssueOrder>("manual");
@@ -261,6 +292,8 @@ export function LinearTicketsViewContent({
   const issuesLoadedRef = useRef(0);
   /** Issues with a move in flight; another move of the same issue waits for it to settle. */
   const movingIssuesRef = useRef(new Set<string>());
+  /** Counts moves started, so a background read that a move overtook is dropped. */
+  const movesStartedRef = useRef(0);
   const [movingIssueIds, setMovingIssueIds] = useState<ReadonlySet<string>>(() => new Set());
   const buildLaunchTriggerRef = useRef<HTMLButtonElement>(null);
   const selectedIssueIdRef = useRef(selectedIssueId);
@@ -273,7 +306,6 @@ export function LinearTicketsViewContent({
   }, [selectedIssueId, commentBody]);
 
   const ownPipelines = useBuildPipelineStore((state) => state.pipelines);
-  const { scope, windowScope } = useScopesWithCommandFallback();
   const pipelineStore = scope.store(buildPipelineStore);
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
   // Every connected machine holding a project for this repository can run the build.
@@ -297,29 +329,39 @@ export function LinearTicketsViewContent({
     selectedIssueId !== null,
   );
 
-  /** Callers mark the connection as loading; see `loadIssues`. */
-  const loadConnection = useCallback(() => {
-    const requestId = connectionRequestRef.current + 1;
-    connectionRequestRef.current = requestId;
-    return nodeBackend.getLinearConnection().then(
-      (status) => {
-        if (connectionRequestRef.current !== requestId) return null;
-        setConnection(status);
-        setConnectionState("loaded");
-        return status;
-      },
-      (error: unknown) => {
-        if (connectionRequestRef.current !== requestId) return null;
-        setConnection({
-          connected: false,
-          hasToken: false,
-          error: error instanceof Error ? error.message : "Failed to verify Linear connection",
-        });
-        setConnectionState("error");
-        return null;
-      },
-    );
-  }, [nodeBackend]);
+  /**
+   * Callers mark the connection as loading; see `loadIssues`. Resolves to
+   * `undefined` when a background read failed: the connection shown stays.
+   */
+  const loadConnection = useCallback(
+    (background = false): Promise<LinearConnectionStatus | null | undefined> => {
+      const requestId = connectionRequestRef.current + 1;
+      connectionRequestRef.current = requestId;
+      return nodeBackend.getLinearConnection().then(
+        (status) => {
+          if (connectionRequestRef.current !== requestId) return null;
+          setConnection(status);
+          setConnectionState("loaded");
+          return status;
+        },
+        (error: unknown) => {
+          if (connectionRequestRef.current !== requestId) return null;
+          if (background) {
+            log.warn("connection.refresh-failed", { error: formatLogError(error) });
+            return undefined;
+          }
+          setConnection({
+            connected: false,
+            hasToken: false,
+            error: error instanceof Error ? error.message : "Failed to verify Linear connection",
+          });
+          setConnectionState("error");
+          return null;
+        },
+      );
+    },
+    [nodeBackend],
+  );
 
   /**
    * On a command node that is not connected: which other machines are, so
@@ -354,69 +396,141 @@ export function LinearTicketsViewContent({
     }
   }, [nodeBackend, projectId]);
 
-  /** Loads without marking the load as started; `loadIssues` does both. */
-  const fetchIssues = useCallback(() => {
-    const requestId = issuesRequestRef.current + 1;
-    issuesRequestRef.current = requestId;
-    return loadConnection()
-      .then(async (status) => {
-        if (issuesRequestRef.current !== requestId) return;
-        if (!status?.connected) {
+  /**
+   * Loads without marking the load as started; `loadIssues` does both. A
+   * background load (see `FetchIssuesOptions`) keeps the tickets shown when it
+   * fails, and is dropped when a card move started after it, because its read
+   * may predate the move.
+   */
+  const fetchIssues = useCallback(
+    ({ background = false }: FetchIssuesOptions = {}) => {
+      const requestId = issuesRequestRef.current + 1;
+      issuesRequestRef.current = requestId;
+      const movesAtStart = movesStartedRef.current;
+      /** Whether this load's answer may still replace what is shown. */
+      const current = () =>
+        issuesRequestRef.current === requestId &&
+        (!background ||
+          (movesStartedRef.current === movesAtStart && movingIssuesRef.current.size === 0));
+      return loadConnection(background)
+        .then(async (status) => {
+          if (!current() || status === undefined) return;
+          if (!status?.connected) {
+            issuesLoadedRef.current += 1;
+            setIssues([]);
+            setIssuesState("loaded");
+            if (onCommandNode) void loadNodeConnections(requestId);
+            return;
+          }
+          setNodeConnections([]);
+          const board = await fetchBoardLink();
+          if (!current()) return;
+          if (board.state === "unlinked") {
+            setBoardLink(board.link);
+            setBoardState(board.state);
+            issuesLoadedRef.current += 1;
+            setIssues([]);
+            setBoardStates([]);
+            setIssuesState("loaded");
+            return;
+          }
+          // The board's states give the board view its empty lanes too; without
+          // them (an older node, or a failed read) lanes come from the issues.
+          const [nextIssues, states] = await Promise.all([
+            nodeBackend.getLinearIssues(board.state === "linked" ? projectId : undefined),
+            board.state === "linked"
+              ? Promise.resolve()
+                  .then(() => nodeBackend.getLinearBoardOptions(projectId))
+                  .then(
+                    (options) => options.states ?? [],
+                    () => [],
+                  )
+              : Promise.resolve([]),
+          ]);
+          if (!current()) return;
           issuesLoadedRef.current += 1;
-          setIssues([]);
+          // Publish the identity only with the tickets and lanes read for it.
+          setBoardLink(board.link);
+          setBoardState(board.state);
+          // Unchanged tickets keep their objects, so only changed cards redraw.
+          setIssues((shown) => reconcileByKey(shown, nextIssues, (issue) => issue.id));
+          setBoardStates((shown) => reconcileByKey(shown, states, (state) => state.id));
           setIssuesState("loaded");
-          if (onCommandNode) void loadNodeConnections(requestId);
-          return;
-        }
-        setNodeConnections([]);
-        const board = await fetchBoardLink();
-        if (issuesRequestRef.current !== requestId) return;
-        setBoardLink(board.link);
-        setBoardState(board.state);
-        if (board.state === "unlinked") {
-          issuesLoadedRef.current += 1;
-          setIssues([]);
-          setBoardStates([]);
-          setIssuesState("loaded");
-          return;
-        }
-        // The board's states give the board view its empty lanes too; without
-        // them (an older node, or a failed read) lanes come from the issues.
-        const [nextIssues, states] = await Promise.all([
-          nodeBackend.getLinearIssues(board.state === "linked" ? projectId : undefined),
-          board.state === "linked"
-            ? Promise.resolve()
-                .then(() => nodeBackend.getLinearBoardOptions(projectId))
-                .then(
-                  (options) => options.states ?? [],
-                  () => [],
-                )
-            : Promise.resolve([]),
-        ]);
-        if (issuesRequestRef.current !== requestId) return;
-        issuesLoadedRef.current += 1;
-        setIssues(nextIssues);
-        setBoardStates(states);
-        setIssuesState("loaded");
-      })
-      .catch((error: unknown) => {
-        if (issuesRequestRef.current !== requestId) return;
-        setIssuesError(error instanceof Error ? error.message : "Failed to load Linear tickets");
-        setIssuesState("error");
-      });
-  }, [fetchBoardLink, loadConnection, loadNodeConnections, nodeBackend, onCommandNode, projectId]);
+          setIssuesError(null);
+        })
+        .catch((error: unknown) => {
+          if (issuesRequestRef.current !== requestId) return;
+          if (background) {
+            log.warn("issues.refresh-failed", { error: formatLogError(error) });
+            return;
+          }
+          setIssuesError(error instanceof Error ? error.message : "Failed to load Linear tickets");
+          setIssuesState("error");
+        })
+        .finally(() => {
+          if (background && issuesRequestRef.current === requestId) setBackgroundRefreshing(false);
+        });
+    },
+    [fetchBoardLink, loadConnection, loadNodeConnections, nodeBackend, onCommandNode, projectId],
+  );
 
   const loadIssues = useCallback(() => {
     setIssuesState("loading");
     setIssuesError(null);
     setConnectionState("loading");
+    setBackgroundRefreshing(false);
     return fetchIssues();
   }, [fetchIssues]);
 
-  // The initial state already shows this first load as loading.
+  // The initial state already shows this first load: as loading, or as the
+  // board remembered from the last visit, which this read then refreshes.
   useEffect(() => {
-    void fetchIssues();
-  }, [fetchIssues]);
+    void fetchIssues({ background: snapshot !== undefined });
+  }, [fetchIssues, snapshot]);
+
+  // A node's workspace stays mounted while another node is shown, and the
+  // window may sit in the background for hours: refresh the board in the
+  // background when its node is shown again and when the window regains focus.
+  const refreshInBackground = useCallback(() => {
+    if (issuesState === "loading" || connectionState === "loading") return;
+    setBackgroundRefreshing(true);
+    void fetchIssues({ background: true });
+  }, [connectionState, fetchIssues, issuesState]);
+  const refreshInBackgroundRef = useRef(refreshInBackground);
+  useLayoutEffect(() => {
+    refreshInBackgroundRef.current = refreshInBackground;
+  }, [refreshInBackground]);
+  useEffect(
+    () => watchLinearBoardReturns(scope, windowScope, () => refreshInBackgroundRef.current()),
+    [scope, windowScope],
+  );
+
+  // Remember what is shown, so the next visit paints it at once.
+  useEffect(() => {
+    if (connectionState !== "loaded" || !connection) return;
+    if (!connection.connected) {
+      forgetLinearBoardSnapshot(scope, projectId);
+      return;
+    }
+    if (issuesState !== "loaded") return;
+    rememberLinearBoardSnapshot(scope, projectId, {
+      connection,
+      boardLink,
+      boardState,
+      issues,
+      boardStates,
+    });
+  }, [
+    boardLink,
+    boardState,
+    boardStates,
+    connection,
+    connectionState,
+    issues,
+    issuesState,
+    projectId,
+    scope,
+  ]);
 
   const statusOrder = useMemo(() => buildStatusOrder(issues), [issues]);
 
@@ -483,6 +597,7 @@ export function LinearTicketsViewContent({
       };
       for (const { issue } of moves) movingIssuesRef.current.add(issue.id);
       setMovingIssueIds(new Set(movingIssuesRef.current));
+      movesStartedRef.current += 1;
       const loadedAtStart = issuesLoadedRef.current;
       const patch = (
         issueId: string,
@@ -1076,6 +1191,9 @@ export function LinearTicketsViewContent({
     setUnlinking(true);
     try {
       await nodeBackend.clearLinearBoardLink(projectId);
+      // A read in flight began before the unlink; it must not bring the board back.
+      issuesRequestRef.current += 1;
+      setBackgroundRefreshing(false);
       setUnlinkOpen(false);
       setChangingBoard(false);
       setBoardLink(null);
@@ -1183,7 +1301,7 @@ export function LinearTicketsViewContent({
             onClick={() => void loadIssues()}
             disabled={issuesState === "loading"}
           >
-            {issuesState === "loading" || connectionState === "loading" ? (
+            {issuesState === "loading" || connectionState === "loading" || backgroundRefreshing ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
               <RefreshCw className="h-3.5 w-3.5" />
@@ -1455,6 +1573,8 @@ export function LinearTicketsViewContent({
           if (status.connected) {
             void loadIssues();
           } else {
+            issuesRequestRef.current += 1;
+            setBackgroundRefreshing(false);
             setIssues([]);
             setIssuesState("loaded");
           }

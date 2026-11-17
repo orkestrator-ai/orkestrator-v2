@@ -552,8 +552,13 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
       readImage(): Promise<{ width: number; height: number; dataUrl: string } | null> {
         return ipcRenderer.invoke("orkestrator:clipboard:read-image");
       },
-      writeImage(dataUrl: string): Promise<void> {
-        return ipcRenderer.invoke("orkestrator:clipboard:write-image", dataUrl);
+      /** Copies a PNG; `webpDataUrl` adds a WebP of the same image to the entry. */
+      writeImage(dataUrl: string, options?: { webpDataUrl?: string }): Promise<void> {
+        return options?.webpDataUrl === undefined
+          ? ipcRenderer.invoke("orkestrator:clipboard:write-image", dataUrl)
+          : ipcRenderer.invoke("orkestrator:clipboard:write-image", dataUrl, {
+              webpDataUrl: options.webpDataUrl,
+            });
       },
     },
 

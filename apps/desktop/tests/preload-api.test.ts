@@ -360,6 +360,14 @@ describe("preload API factory", () => {
       channel: "orkestrator:clipboard:write-image",
       args: ["data:image/png;base64,abc"],
     });
+    await expect(
+      api.clipboard.writeImage("data:image/png;base64,abc", {
+        webpDataUrl: "data:image/webp;base64,def",
+      }),
+    ).resolves.toEqual<IpcEcho>({
+      channel: "orkestrator:clipboard:write-image",
+      args: ["data:image/png;base64,abc", { webpDataUrl: "data:image/webp;base64,def" }],
+    });
     await expect(api.shell.openExternal("https://example.com/docs")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:shell:open-external",
       args: ["https://example.com/docs"],

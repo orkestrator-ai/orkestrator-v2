@@ -15,7 +15,7 @@ async function saved(page: Page, act: () => Promise<void>) {
   };
 }
 
-test("selected frames download as PNG, WEBP, a multi-page PDF and a ZIP", async ({
+test("selected frames copy as PNG and download as PNG, WEBP, a multi-page PDF and a ZIP", async ({
   page,
 }, testInfo) => {
   // Shift-click selection is a pointer gesture; the phone project has touch only.
@@ -88,7 +88,7 @@ test("selected frames download as PNG, WEBP, a multi-page PDF and a ZIP", async 
     const downloads: Download[] = [];
     page.on("download", (value) => downloads.push(value));
     failCapture = true;
-    await choose("This frame", "PNG image");
+    await choose("This frame", "Download PNG");
     await expect(download).toBeDisabled();
     await expect.poll(() => Boolean(rejectCapture)).toBe(true);
     rejectCapture!(new Error("Capture temporarily unavailable"));
@@ -100,17 +100,41 @@ test("selected frames download as PNG, WEBP, a multi-page PDF and a ZIP", async 
       path: "output/visual-previews/frame-download-capture-error-after.png",
     });
 
-    const png = await saved(page, () => choose("This frame", "PNG image"));
+    const png = await saved(page, () => choose("This frame", "Download PNG"));
     await expect(page.getByRole("alert")).toHaveCount(0);
     expect(png.name).toBe("Outro-slide.png");
     expect(png.bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
     expect(png.bytes.readUInt32BE(16)).toBe(320);
     expect(png.bytes.readUInt32BE(20)).toBe(180);
 
-    const webp = await saved(page, () => choose("This frame", "WEBP image"));
+    const webp = await saved(page, () => choose("This frame", "Download WEBP"));
     expect(webp.name).toBe("Outro-slide.webp");
     expect(webp.bytes.subarray(0, 4).toString("latin1")).toBe("RIFF");
     expect(webp.bytes.subarray(8, 12).toString("latin1")).toBe("WEBP");
+
+    // Copy PNG puts the real capture on the clipboard. Chromium's clipboard
+    // cannot hold a WEBP, so the browser client does not offer Copy WEBP.
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await download.click();
+    const thisFrame = menu.getByRole("group", { name: "This frame" });
+    await expect(thisFrame.getByRole("menuitem")).toHaveText([
+      "Copy PNG",
+      "Download PNG",
+      "Download WEBP",
+      "Download PDF",
+    ]);
+    await page.screenshot({ path: "output/visual-previews/frame-download-menu-copy-after.png" });
+    await thisFrame.getByRole("menuitem", { name: "Copy PNG" }).click();
+    await expect(page.getByText("Copied Outro slide as PNG")).toBeAttached();
+    const copied = await page.evaluate(async () => {
+      const [item] = await navigator.clipboard.read();
+      const blob = await item!.getType("image/png");
+      return Array.from(new Uint8Array(await blob.arrayBuffer()).subarray(0, 24));
+    });
+    const copiedPng = Buffer.from(copied);
+    expect(copiedPng.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    expect(copiedPng.readUInt32BE(16)).toBe(320);
+    expect(copiedPng.readUInt32BE(20)).toBe(180);
 
     const pdf = await saved(page, () => choose("Selected frames (2)", "PDF (one page per frame)"));
     expect(pdf.name).toBe("Pitch-deck-selected.pdf");

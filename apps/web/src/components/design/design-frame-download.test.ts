@@ -2,6 +2,7 @@ import { base64ToBytes } from "@/lib/chat/artifact-download";
 import { describe, expect, mock, test } from "bun:test";
 import {
   browserImageCodec,
+  copyFrame,
   downloadFileName,
   downloadFrames,
   type DesignDownloadDeps,
@@ -174,5 +175,61 @@ describe("downloadFrames", () => {
       ).arrayBuffer(),
     );
     expect(Array.from(inflated)).toEqual(Array.from(input));
+  });
+});
+
+describe("copyFrame", () => {
+  test("PNG hands the clipboard the capture as soon as it is called, without a WEBP", async () => {
+    const { capture, codec } = harness();
+    const writes: Array<{ png: Promise<Blob>; webp?: Promise<Blob> }> = [];
+    const done = copyFrame({
+      frame: frames[0]!,
+      format: "png",
+      capture,
+      codec,
+      writeClipboard: (images) => {
+        writes.push(images);
+        return images.png.then(() => undefined);
+      },
+    });
+    // Synchronously, before the capture settles: a browser needs the gesture.
+    expect(writes).toHaveLength(1);
+    await done;
+    expect(writes[0]!.webp).toBeUndefined();
+    const png = await writes[0]!.png;
+    expect(png.type).toBe("image/png");
+    expect(Array.from(await bytes(png))).toEqual(Array.from(base64ToBytes(TINY_PNG_BASE64)));
+    expect(codec.toWebp).not.toHaveBeenCalled();
+  });
+
+  test("WEBP carries a re-encoded WEBP alongside the PNG", async () => {
+    const { capture, codec } = harness();
+    let images!: { png: Promise<Blob>; webp?: Promise<Blob> };
+    await copyFrame({
+      frame: frames[1]!,
+      format: "webp",
+      capture,
+      codec,
+      writeClipboard: async (written) => {
+        images = written;
+      },
+    });
+    expect((await images.png).type).toBe("image/png");
+    const webp = await images.webp!;
+    expect(webp.type).toBe("image/webp");
+    expect(Array.from(await bytes(webp))).toEqual([0x52, 0x49, 0x46, 0x46]);
+    expect(capture).toHaveBeenCalledTimes(1);
+  });
+
+  test("a capture that is not a PNG fails the copy", async () => {
+    const capture = mock(() => Promise.resolve({ data: "AA==", mimeType: "image/jpeg" }));
+    await expect(
+      copyFrame({
+        frame: frames[0]!,
+        format: "png",
+        capture,
+        writeClipboard: (images) => images.png.then(() => undefined),
+      }),
+    ).rejects.toThrow("Unexpected capture of Keep or pass · List view");
   });
 });

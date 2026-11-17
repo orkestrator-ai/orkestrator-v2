@@ -478,14 +478,19 @@ export function registerMainIpc({
   handle("orkestrator:clipboard:read-image", () =>
     readClipboardImage(clipboardApi, nativeImageApi),
   );
-  handle("orkestrator:clipboard:write-image", (_event, dataUrl: unknown) =>
-    writeClipboardImage(
+  handle("orkestrator:clipboard:write-image", (_event, dataUrl: unknown, options: unknown) => {
+    const webpDataUrl =
+      typeof options === "object" && options !== null && "webpDataUrl" in options
+        ? options.webpDataUrl
+        : undefined;
+    return writeClipboardImage(
       clipboardApi,
       nativeImageApi,
       createClipboardItem,
       typeof dataUrl === "string" ? dataUrl : "",
-    ),
-  );
+      typeof webpDataUrl === "string" ? { webpDataUrl } : {},
+    );
+  });
   handle("orkestrator:shell:open-external", (_event, url: unknown) =>
     shellApi.openExternal(externalBrowserUrl(url)),
   );

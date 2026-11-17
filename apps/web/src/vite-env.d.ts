@@ -135,7 +135,8 @@ interface Window {
         /** Browser-only transport, retained to allow bounded bitmap decoding. */
         blob?: Blob;
       } | null>;
-      writeImage(dataUrl: string): Promise<void>;
+      /** Copies a PNG; `webpDataUrl` adds a WebP of the same image to the entry. */
+      writeImage(dataUrl: string, options?: { webpDataUrl?: string }): Promise<void>;
     };
     /** Electron only: opens web URLs with the client operating system. */
     shell?: {

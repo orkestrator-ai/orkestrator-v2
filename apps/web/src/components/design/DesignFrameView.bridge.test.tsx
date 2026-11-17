@@ -44,6 +44,7 @@ function actions(): DesignCanvasActions {
     focusFrame: noop,
     selectFrame: noop,
     downloadFrames: () => Promise.resolve(),
+    copyFrame: () => Promise.resolve(),
   };
 }
 

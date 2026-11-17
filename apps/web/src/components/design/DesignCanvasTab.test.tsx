@@ -454,7 +454,7 @@ describe("DesignCanvasTab", () => {
           const menu = await screen.findByRole("menu");
           fireEvent.click(
             within(within(menu).getByRole("group", { name: "This frame" })).getByRole("menuitem", {
-              name: failure === "capture" ? "PNG image" : "WEBP image",
+              name: failure === "capture" ? "Download PNG" : "Download WEBP",
             }),
           );
         };

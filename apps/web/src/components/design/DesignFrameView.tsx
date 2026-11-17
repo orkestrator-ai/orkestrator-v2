@@ -414,6 +414,7 @@ export const DesignFrameView = memo(function DesignFrameView({
               selectedCount={selectedFrameCount}
               frameCount={frameCount}
               onDownload={(scope, format) => actions.downloadFrames(frame.id, scope, format)}
+              onCopy={(format) => actions.copyFrame(frame.id, format)}
             />
           </div>
         )}

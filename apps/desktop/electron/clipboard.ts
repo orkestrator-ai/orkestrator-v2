@@ -104,19 +104,53 @@ export async function readClipboardImage(
   return { width: size.width, height: size.height, dataUrl: image.toDataURL() };
 }
 
-/** Write an image data URL to the clipboard as PNG. */
+/**
+ * The platform clipboard format a WebP is offered under. No standard MIME
+ * mapping exists for WebP on any desktop clipboard, so it travels as a raw
+ * format: the `org.webmproject.webp` UTI on macOS and the MIME name elsewhere.
+ */
+export function webpClipboardFormat(platform: NodeJS.Platform): string {
+  const name = platform === "darwin" ? "org.webmproject.webp" : "image/webp";
+  return `electron application/osclipboard;format="${name}"`;
+}
+
+const WEBP_DATA_URL_PREFIX = "data:image/webp;base64,";
+
+/** Decodes a base64 WebP data URL, bounded like every other clipboard image. */
+function webpBytes(dataUrl: string): Uint8Array<ArrayBuffer> {
+  if (!dataUrl.startsWith(WEBP_DATA_URL_PREFIX)) throw new Error("Expected a WebP data URL");
+  const encoded = dataUrl.slice(WEBP_DATA_URL_PREFIX.length);
+  if (encoded.length > (MAX_CLIPBOARD_IMAGE_BYTES / 3) * 4) {
+    throw new Error("Clipboard image is too large to transfer");
+  }
+  const bytes = new Uint8Array(Buffer.from(encoded, "base64"));
+  if (bytes.length === 0) throw new Error("Expected a WebP data URL");
+  return bytes;
+}
+
+/**
+ * Write an image data URL to the clipboard as PNG. With `webpDataUrl` the same
+ * clipboard entry also carries that WebP, so an app that reads WebP pastes it
+ * and every other app still gets the PNG.
+ */
 export async function writeClipboardImage(
   clipboardApi: Pick<ClipboardLike, "write">,
   nativeImageApi: Pick<ClipboardNativeImageApi, "createFromDataURL">,
   createClipboardItem: CreateClipboardItem,
   dataUrl: string,
+  options: { webpDataUrl?: string; platform?: NodeJS.Platform } = {},
 ): Promise<void> {
   const image = nativeImageApi.createFromDataURL(dataUrl);
   if (image.isEmpty()) throw new Error("Expected an image data URL");
   const png = new Uint8Array(image.toPNG());
-  await clipboardApi.write([
-    createClipboardItem({ "image/png": new Blob([png], { type: "image/png" }) }),
-  ]);
+  const payload: Record<string, Blob> = { "image/png": new Blob([png], { type: "image/png" }) };
+  if (options.webpDataUrl !== undefined) {
+    payload[webpClipboardFormat(options.platform ?? process.platform)] = new Blob(
+      [webpBytes(options.webpDataUrl)],
+      { type: "image/webp" },
+    );
+  }
+  await clipboardApi.write([createClipboardItem(payload)]);
 }
 
 /**

@@ -109,6 +109,12 @@ Updated 2026-11-16: 8201 was retired once the component suite's default
 worker count was lowered to a third of the cores from beelink measurements;
 its run on omarchy-hp came in under Cross-cutting.
 
+Updated 2026-11-17: the user answered 7080 task 1 by adding the ufw rule
+for the agent-test range on beelink (`sudo ufw allow proto tcp from
+172.16.0.0/12 to any port 31500:31509`), so its item left the decisions
+section. The signal-confirmed Linux Engine run it unblocked passed the same
+day, and 7080 and 0020 were retired.
+
 ### Tasks
 
 1. **Manual tests and live checks** (364 items): run each check under
@@ -116,7 +122,7 @@ its run on omarchy-hp came in under Cross-cutting.
 
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
-2. **Decisions, approvals and outward actions** (25 items): make each call
+2. **Decisions, approvals and outward actions** (24 items): make each call
    or take each action under
    [Decisions, approvals and outward actions](#decisions-approvals-and-outward-actions)
    and record it. Status: open.
@@ -292,14 +298,14 @@ agent can apply it.
 | --- | --- | --- |
 | Agent engines and provider SDKs | 71 | 3 |
 | CLI and slash commands | 6 | 0 |
-| Containers and environments | 34 | 6 |
+| Containers and environments | 34 | 5 |
 | Coordinator and Multi Review | 87 | 3 |
 | Cross-cutting | 102 | 9 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 18 | 1 |
 | Transcripts, observation and bandwidth | 31 | 2 |
-| **Total** | 364 | 25 |
+| **Total** | 364 | 24 |
 
 
 
@@ -560,7 +566,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **8092 (retired) task 1: a container Claude CLI prompt refused after a refused login settles and rings.** (Background: [Turns no hook ends](../../architecture/container-lifecycle.md#turns-no-hook-ends).) On beelink, start `mise run docker:disposable -- start --host-loopback`, build a dev image of current `main` with `mise run docker:build:dev` against its `DOCKER_HOST`, start a `dev:test` profile with `--fixture-environments local,container --no-agent-credentials --no-host-seed --agent-platforms claude` on that daemon, and run `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_DOCKER=1 ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1 ORKESTRATOR_AGENT_TEST_CLAUDE_TERMINAL_FAILED_TURN=1 mise run test:agent:docker` (`container-claude-terminal-signal.spec.ts`; fake Messages API, nothing billed). The follow-up prompt in the fixture’s fresh signed-out CLI (settings token removed and StopFailure omitted to qualify recovery; same container) must answer "Not logged in" and now read idle in the backend and the sidebar within its 15 s and ring `agent_failed`; the spec asserts it. Then run the spec a second time on the same container without resetting the profile: the environment must not read working before its first turn. Then `dev:stop` and `dev:reset` the profile and stop the disposable daemon. Record: pass or fail of both runs, the follow-up prompt's `followingTurn`, `followingTurnBackendState` and `followingTurnUnreadReason` from the spec's report, and any `terminal-claude.settled` or `terminal-claude.settle-failed` lines in the profile's backend log.
 - [ ] **8094 (retired) task 1: a container claude-tmux tab leaves working after a refused prompt.** (Background: [claude-tmux tabs and a refused prompt](../../architecture/container-lifecycle.md#claude-tmux-tabs-and-a-refused-prompt).) Agents established on the host on 2026-11-16 that the pinned CLI (2.1.319, the image's pin too) fires `StopFailure` for a prompt it refuses locally, so a claude-tmux tab settles through its own hooks; no container claude-tmux tab was run. On beelink, start `mise run docker:disposable -- start --host-loopback`, build a dev image of current `main` with `mise run docker:build:dev` against its `DOCKER_HOST`, and start a `dev:test` profile with `--fixture-environments local,container --no-agent-credentials --no-host-seed --agent-platforms claude` on that daemon. In the fixture container, make sure `~/.claude/settings.json` has no `ANTHROPIC_AUTH_TOKEN` and the CLI has no login (nothing is billed: the CLI refuses the prompt without a model request), open a claude-tmux tab, submit a prompt, switch to another environment and wait 15 s. The prompt must answer "Not logged in · Please run /login", and the backend and the sidebar must read idle (not working) with the environment ringing `agent_failed`. Then `dev:stop` and `dev:reset` the profile and stop the disposable daemon. Record: pass or fail, the backend activity state and unread reason 15 s after the prompt, and whether the tab's info events list a `StopFailure`.
 
-- [ ] **8172 (retired) task 1: a container Claude Multi Review when the agent tools port is unreachable.** (Background: [Agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts), the paragraph on structured-output turns.) On a Linux host whose firewall drops the profile's agent tools port from containers (beelink's ufw without the 7080 task 1 rule, or a profile started so containers cannot reach it), start an isolated profile with a container fixture and the fake Claude review API, no credentials and no host seed (`--fixture --fixture-environments local,container --no-host-seed --no-agent-credentials`). On both the bespoke and graph engines, start a Claude Multi Review in the container environment, once on the default tool transport and once on structured output (global config `workflowResultTools.enabled` set to `false`).
+- [ ] **8172 (retired) task 1: a container Claude Multi Review when the agent tools port is unreachable.** (Background: [Agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts), the paragraph on structured-output turns.) On a Linux host whose firewall drops the profile's agent tools port from containers (on beelink, a profile whose agent tools port is outside 31500–31509, which its ufw has admitted since 2026-11-17 (7080 (retired) task 1); or a profile started so containers cannot reach it), start an isolated profile with a container fixture and the fake Claude review API, no credentials and no host seed (`--fixture --fixture-environments local,container --no-host-seed --no-agent-credentials`). On both the bespoke and graph engines, start a Claude Multi Review in the container environment, once on the default tool transport and once on structured output (global config `workflowResultTools.enabled` set to `false`).
   1. Each review fails at its first stage before any turn: the error names the agent tools URL and the fix, the transcript shows no prompt, and the tab offers "Retry failed stage" and "Abandon".
   2. Press "Retry failed stage" while the port is still blocked: it fails the same way, at once. Record what the tab shows.
   3. While it is failed, call `delete_multi_review_workflow` (the tab offers no Delete on a failed review): the refusal reads "This Multi Review failed. Retry the failed stage or abandon (cancel) the review before deleting it", and a new start reads "The existing Multi Review failed. Retry its failed stage or abandon (cancel) it before starting another" (8172 task 2).
@@ -963,7 +969,6 @@ None open (both answered on 2026-11-14).
   Record: the counts from each step and the fixture result in [container-qualification.md](../../development/container-qualification.md) (or reply to the coordinator). This unblocks [0020](../containers-and-environments/0020-container-state-observation.md) task 2, [0729](../containers-and-environments/0729-container-benchmark-target-misses.md) task 5 and [0870](../containers-and-environments/0870-container-start-poll-quantisation.md) task 3.
 
 - [ ] **[6101](../containers-and-environments/6101-egress-name-checks-platform-coverage.md) task 4 and [7390](../containers-and-environments/7390-rootless-restart-remaining-settings.md) task 2: install `passt` and a `vpnkit` binary on beelink.** You decided on 2026-11-14 that beelink gets them and that you install them yourself: packages only, with no firewall or network change. Install the `passt` package (it provides `pasta`) and a `vpnkit` binary on beelink's `PATH` (both need `sudo`). Record: the date, the package and binary versions, and the output of `command -v pasta vpnkit`, in 6101 task 4 and 7390 task 2 (or reply to the coordinator). An agent on beelink then runs `mise run docker:disposable -- start --net pasta` with the M12 suite (6101 task 4) and the rootless restart case on pasta and VPNKit (7390 task 2).
-- [ ] **[7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md) task 1: admit the agent-test port range through beelink's firewall.** On beelink run `sudo ufw allow proto tcp from 172.16.0.0/12 to any port 31500:31509 comment 'Orkestrator agent-test agent tools'` (undo: `sudo ufw delete allow proto tcp from 172.16.0.0/12 to any port 31500:31509`), or name a Linux Engine host with no blocking input firewall. Record: "rule added on beelink <date>" or the host name in 7080 task 1; that unblocks the signal-confirmed run (and 0020's remaining tasks).
 - [ ] **[7420](../containers-and-environments/7420-telemetry-hosts-grok-and-cursor-turns.md) task 3: release-note line for the removed telemetry hosts.** When cutting the next release, add: "New installs no longer allow `sentry.io`, `statsig.anthropic.com` and `statsig.com` in restricted containers; Claude Code, Codex, OpenCode, Pi, Grok and Cursor completed fake-provider turns without them. Existing allowlists keep them; remove them in Settings to close the channel." Record: the release version that carried the line, in 7420.
 
 #### Coordinator and Multi Review

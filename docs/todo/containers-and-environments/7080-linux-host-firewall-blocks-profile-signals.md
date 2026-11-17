@@ -6,10 +6,12 @@ Analysed 2026-11-06 against `main` at `c1724ab74`, on beelink (Arch Linux,
 kernel 7.1.8, rootful Docker Engine 29.9.2). First analysed at `e6c3da899`
 while running [0020](0020-container-state-observation.md) tasks 2 and 3;
 tasks 2 and 3 were done on 2026-11-06 (see Assumptions and decisions).
+Updated 2026-11-17 against `main` at `0265e7882`: rule added on beelink
+2026-11-17, and task 1's run passed with both signals confirmed.
 
 ### Tasks
 
-1. **Linux Engine real-stack signal run**: run `container-claude-terminal-signal.spec.ts` and `container-signal-profile-sample.ts` (with and without `--demote`) on a Linux Engine host where the profile's containers can reach its agent tools port. Status: blocked (waits on 7568: 7080 task 1).
+1. **Linux Engine real-stack signal run**: run `container-claude-terminal-signal.spec.ts` and `container-signal-profile-sample.ts` (with and without `--demote`) on a Linux Engine host where the profile's containers can reach its agent tools port. Status: done (2026-11-17; rule added on beelink 2026-11-17, both signals `confirmed`, evidence below and in [0020](0020-container-state-observation.md#evidence-linux-engine-host-signal-confirmed-2026-11-17)).
 2. **A firewall-friendly agent tools port for agent-test profiles**: let a Linux host with a default-deny input firewall admit every isolated profile with one rule. Status: done (`dev:test --agent-tools-port`, range 31500–31509).
 3. **Show an unreachable doorbell in signal diagnostics**: tell "armed, route blocked" apart from "armed, waiting for a first ring". Status: done (`unconfirmed` signal state).
 
@@ -26,7 +28,16 @@ tasks 2 and 3 were done on 2026-11-06 (see Assumptions and decisions).
 - 2026-11-06, 0049 (retired 2026-11-11) task 9: the same route also carries the Orkestrator agent MCP a native Claude session in a container requires. On beelink the first turn of a container's native Claude tab ran, and every later turn was refused by the bridge with 409 "Claude required MCP server is not connected; retry the prompt" (a join checks the required server; a first launch does not). So a blocked agent-tools port also stops native Claude in containers after one turn, not only the signal rings. Since 8172 (retired 2026-11-16) that refusal names the address the server could not reach and the agent tools reachability notice instead of asking for a retry, and container Multi Review turns are refused up front by the backend's reachability preflight.
 - [container-qualification.md](../../development/container-qualification.md) records that ufw on this host once also admitted TCP 35723 from `172.16.0.0/12`. It no longer does: a listener on `0.0.0.0:35723` was not reachable from a container on the default bridge, and `/etc/ufw/user.rules` admits only 45507 and DNS from Docker's ranges.
 
-Since task 2, the host change this run needs is one ufw rule admitting TCP from Docker's `172.16.0.0/12` pools to the documented agent-test range 31500–31509 (the command and its undo are in [agent-testing.md](../../development/agent-testing.md#containers-behind-a-host-firewall---agent-tools-port)). Adding it on beelink, or naming a Linux Engine host with no blocking input firewall, is the user's step and moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (7080 task 1). With it in place, start the profile with `--agent-tools-port 31500` (any free port in the range), confirm `get_recurring_work_diagnostics` reports both signals `confirmed` rather than `unconfirmed`, and run the spec and the sample.
+2026-11-17: **rule added on beelink 2026-11-17** by the user. `/etc/ufw/user.rules` now holds
+`-A ufw-user-input -p tcp -m multiport --dports 31500:31509 -s 172.16.0.0/12 -j ACCEPT`,
+the rule `sudo ufw allow proto tcp from 172.16.0.0/12 to any port 31500:31509` writes. With it, a headless
+`dev:test` profile started with `--agent-tools-port 31500` (fake Messages API, `--no-agent-credentials
+--no-host-seed`) had both container signals `confirmed` with one ring each before any test ran, the
+terminal Claude spec passed three runs of two turns with four rings per run and no demotion, and the
+profile sample measured the signal rather than the fallback. The numbers are in
+[0020](0020-container-state-observation.md#evidence-linux-engine-host-signal-confirmed-2026-11-17).
+
+Before the rule (kept for the record): the host change this run needs is one ufw rule admitting TCP from Docker's `172.16.0.0/12` pools to the documented agent-test range 31500–31509 (the command and its undo are in [agent-testing.md](../../development/agent-testing.md#containers-behind-a-host-firewall---agent-tools-port)). Adding it on beelink, or naming a Linux Engine host with no blocking input firewall, is the user's step and moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (7080 task 1). With it in place, start the profile with `--agent-tools-port 31500` (any free port in the range), confirm `get_recurring_work_diagnostics` reports both signals `confirmed` rather than `unconfirmed`, and run the spec and the sample.
 
 A real run needs, on a Linux Engine host: this checkout and its dev image (`mise run docker:build:dev`); a profile started with `--fixture --fixture-environments local,container` and either `--no-agent-credentials --agent-platforms claude` (fake API) or `--credential-source claude --agent-platforms claude` (a real login, billed turns); and a host firewall that admits TCP from Docker's ranges to the profile's agent tools port. On a host with exhausted Docker address pools, put `apps/desktop/scripts/dev/docker-qualification-bin` first on `PATH`, as the isolated runner does.
 
@@ -119,7 +130,24 @@ lands on one. The range is advisory: the flag accepts any unreserved port from
 
 The ufw rule (in agent-testing.md and the manual-test checklist) is written down for the user and was not run. beelink's
 `/etc/ufw/user.rules` still admits only DNS and TCP 45507 from Docker's
-ranges.
+ranges. (Superseded on 2026-11-17: the user added the rule; see task 1.)
+
+### Task 1: the signal-confirmed run on beelink (2026-11-17)
+
+- **Model backend:** the fake Messages API (the task's recommended option),
+  with `--no-agent-credentials --no-host-seed`, so no login, credential or
+  billed turn was used.
+- **Port:** an exact `--agent-tools-port 31500` rather than `auto`, because
+  no other profile held a claim in the range and an exact port makes the
+  evidence name the port the rule admits.
+- **Docker:** the host's rootful daemon with the `docker-qualification-bin`
+  shim first on `PATH`. The shim did not need to act: the fixture's
+  environment network came from the daemon's own pool (`172.27.0.0/16`,
+  host alias `172.27.0.1`), inside the rule's `172.16.0.0/12`.
+- **Cleanup:** `dev:stop` and `dev:reset` removed the profile's two
+  containers, two volumes and one network; the dev image this run built
+  (`orkestrator-v2:dev-1d6c8552e7ca`) was removed by tag. No firewall,
+  network or Docker daemon setting was changed.
 
 ### Task 3: `unconfirmed` is a state, not a separate counter
 

@@ -1,3 +1,4 @@
+import { environmentPortBlockAvailable } from "./environment-port-probe.js";
 import { chooseEnvironmentPortBase, isEnvironmentPortBase } from "./environment-isolation.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageRepositories } from "./storage-repositories.js";
@@ -8,8 +9,8 @@ import type { StorageRepositories } from "./storage-repositories.js";
  *
  * The block is chosen and written under the environment store's lease, which
  * every other environment write also holds, so two environments starting at
- * once cannot be handed the same block, and a deleted environment's block is
- * free again because its record is gone.
+ * once cannot be handed the same block. Newly assigned blocks are also probed:
+ * deleting a row never makes a still-bound service port available for reuse.
  */
 export class EnvironmentIsolationRepository {
   constructor(
@@ -44,7 +45,11 @@ export class EnvironmentIsolationRepository {
           .map((other) => other.isolationPortBase)
           .filter(isEnvironmentPortBase),
       );
-      const base = chooseEnvironmentPortBase(environmentId, taken);
+      let base = chooseEnvironmentPortBase(environmentId, taken);
+      while (base !== null && !(await environmentPortBlockAvailable(base))) {
+        taken.add(base);
+        base = chooseEnvironmentPortBase(environmentId, taken);
+      }
       if (base === null) return null;
       environment.isolationPortBase = base;
       projects.saveEnvironment(environment);

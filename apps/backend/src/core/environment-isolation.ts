@@ -63,6 +63,24 @@ export const ENVIRONMENT_ISOLATION_ENV_NAMES: readonly string[] = [
   ENVIRONMENT_PORT_MAX_ENV,
 ];
 
+/** Remove a parent worktree's values before applying the launch target's own. */
+export function withEnvironmentIsolation(
+  inherited: NodeJS.ProcessEnv,
+  isolation: Record<string, string> = {},
+): NodeJS.ProcessEnv {
+  const env = { ...inherited };
+  for (const name of ENVIRONMENT_ISOLATION_ENV_NAMES) delete env[name];
+  return Object.assign(env, isolation);
+}
+
+/** tmux inherits its server's environment, so replace these values in the pane. */
+export function environmentIsolationShellPrefix(isolation: Record<string, string>): string {
+  const exports = Object.entries(isolation)
+    .filter(([name]) => ENVIRONMENT_ISOLATION_ENV_NAMES.includes(name))
+    .map(([name, value]) => `${name}='${value.replace(/'/g, "'\\''")}'`);
+  return `unset ${ENVIRONMENT_ISOLATION_ENV_NAMES.join(" ")}; ${exports.length ? `export ${exports.join(" ")}; ` : ""}`;
+}
+
 /** Whether `value` is the first port of a block this module hands out. */
 export function isEnvironmentPortBase(value: unknown): value is number {
   return (
@@ -77,10 +95,8 @@ export function isEnvironmentPortBase(value: unknown): value is number {
 /**
  * A free block for `environmentId`, or null when every block is taken.
  *
- * The search starts at a block derived from the environment's id rather than
- * at the lowest free one, so the block a just-deleted environment released is
- * not the next one handed out: containers it left running would still hold
- * those ports.
+ * The hash spreads allocations across the range; it does not prove a block
+ * is unused. The storage allocator also probes candidates for bound ports.
  */
 export function chooseEnvironmentPortBase(
   environmentId: string,

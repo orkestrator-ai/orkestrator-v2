@@ -1,4 +1,8 @@
 import {
+  localEnvironmentIsolationEnv,
+  environmentIsolationShellPrefix,
+} from "./environment-isolation.js";
+import {
   claudeTmuxEvent,
   tmuxAgentUsageEvent,
   tmuxPromptClearedEvent,
@@ -411,6 +415,13 @@ export class TmuxSession {
             ? await context.runtime.tmux.localClaudeConfigDirectory(context)
             : undefined;
         const accountPrefix = localClaudeAccountPrefix(accountDirectory);
+        const environment =
+          this.backend.kind === "local"
+            ? await context.storage.getEnvironment(this.environmentId)
+            : undefined;
+        const isolationPrefix = environmentIsolationShellPrefix(
+          environment ? await localEnvironmentIsolationEnv(environment, context.storage) : {},
+        );
         // The managed binary stays on its pin; see CLAUDE_PINNED_RUNTIME_ENV.
         const pinnedPrefix =
           this.backend.kind === "local" && claudeCommand.includes("/")
@@ -421,7 +432,7 @@ export class TmuxSession {
         // Only this pane is lowered: the tmux server stays at normal priority, so
         // it keeps relaying input and output to every session.
         const priorityPrefix = this.backend.kind === "local" ? LOW_PRIORITY_SHELL_PREFIX : "";
-        const wrapped = `${priorityPrefix}${runtimePrefix}${pinnedPrefix}${accountPrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
+        const wrapped = `${priorityPrefix}${runtimePrefix}${pinnedPrefix}${accountPrefix}${isolationPrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
         const out = await this.backend.exec([
           this.tmuxCommand,
           "new-session",

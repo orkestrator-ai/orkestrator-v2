@@ -53,17 +53,22 @@ The block is reserved on first use and kept on the environment record as
 (`storage-environment-isolation.ts`) chooses and writes it under the
 environment store's lease, the lease every environment write holds, so two
 environments starting at once cannot be handed the same block, and a restart
-keeps the same ports. Deleting the environment deletes the record and frees the
-block.
+keeps the same ports. Deleting the environment deletes the record. Before
+assigning a block to another environment, the allocator tries binding every
+port on IPv4 and IPv6 wildcard and local interface addresses, under the same
+store lease. It skips
+a block if any port is occupied, including by a deleted environment's leftover
+services. Probe sockets are closed before returning. Existing reservations are
+kept without probing because the environment's own services may hold them.
 
 The search starts at a block derived from a hash of the environment id rather
-than the lowest free one, so the block a just-deleted environment released is
-not the next one handed out while containers it left behind may still hold
-those ports. A block two records share (a copied row) is given up by the
+than the lowest free one. Hashing spreads allocations; it does not establish
+availability. A block two records share (a copied row) is given up by the
 first of them to ask.
 
-The reservation is per backend, that is per machine. It does not probe
-whether a port is already bound by something else on the host.
+The reservation is per backend, that is per machine. An unrelated program can
+still race to bind a port after the probe; repository tasks must handle bind
+failures. Orkestrator does not stop leftover Compose services on deletion.
 
 A failed or exhausted reservation never fails a launch: the process starts
 without the port variables but still with its own Compose project name, and
@@ -77,6 +82,8 @@ Every process Orkestrator starts in a local environment's worktree:
   the port range;
 - terminal tabs;
 - user commands run in the worktree;
+- local Claude tmux sessions, with values exported in each pane rather than
+  changing the shared tmux server;
 - the agent bridges (Claude, Codex, OpenCode, Cursor, Grok, Pi), so an
   agent's shell commands inherit them;
 - review validation: the worker that runs a review's planned commands
@@ -85,7 +92,9 @@ Every process Orkestrator starts in a local environment's worktree:
 
 A coordinator conversation (which works in the project checkout) and a bug
 report (a scratch directory) are not environments and get none of them; their
-bridges drop any copy inherited from the backend's own environment.
+launches drop any copy inherited from the backend's own environment. Every
+launch replaces all five isolation variables before applying the target values,
+including when allocation fails; stale port values cannot survive that fallback.
 
 Not covered: `orkestrator exec` through the public CLI, whose worker removes
 every `ORKESTRATOR_*` variable from the command's environment by design, and
@@ -129,3 +138,30 @@ arbitrary repository. The project's part:
 The Environment Files setting (`envFilePatterns`) still copies a `.env` from
 the project checkout into each new worktree; a copied file with fixed ports
 still collides, so the derived file is the one to prefer.
+
+## Verification
+
+Backend launch tests cover inherited-value replacement for setup, terminals,
+user commands, bridges, coordinator and bug-report runtimes, and review workers.
+The worker tests exercise both successful and failed reservations and verify that
+status and cancel do not allocate blocks.
+
+`environment-isolation.integration.test.ts` keeps a listener alive after deleting
+its environment, then allocates an id with the same hash start. It also checks
+IPv6-only occupancy and reuse after the listener stops.
+`tmux-environment-isolation.integration.test.ts` launches two fixture Claude
+processes through the real session launcher on one private tmux server, checks
+both child environments, and confirms the server's values are unchanged.
+
+The opt-in Compose smoke test needs Docker Compose, a locally available
+`postgres:17-alpine` image and the `psql` client. It creates two temporary Git
+worktrees, derives their local environment files and fixture build artifacts,
+starts separate databases with interpolated host ports, and checks independent
+markers through those ports. Stopping one stack must leave the other usable.
+It removes only its own Compose resources and temporary storage:
+
+```bash
+ORKESTRATOR_ISOLATION_COMPOSE_SMOKE=1 mise run test:logged -- --name isolation-compose -- \
+  bun test --cwd apps/backend ./src/core/environment-isolation-compose.integration.test.ts \
+  --parallel=1 --only-failures
+```

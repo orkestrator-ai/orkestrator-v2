@@ -17,7 +17,7 @@ import {
   stripInheritedAgentCredentials,
 } from "./agent-accounts-active.js";
 import { envWithManagedBinaries } from "./commands-agent-support.js";
-import { localEnvironmentIsolationEnv } from "./environment-isolation.js";
+import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
 import type { CommandContext } from "./commands-context.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
@@ -193,7 +193,12 @@ async function resolveLaunch(
     target: "container",
     containerId,
     cwd: "/workspace",
-    spawn: (command) => spawnContainerUserCommand(containerId, command, terminalEnv()),
+    spawn: (command) =>
+      spawnContainerUserCommand(
+        containerId,
+        command,
+        terminalEnv(withEnvironmentIsolation(process.env)),
+      ),
   };
 }
 
@@ -206,7 +211,10 @@ async function localLaunch(
   // The same environment a terminal tab gets: the user's own, plus managed
   // binaries, a worktree's isolation variables and the active agent accounts.
   const accounts = await activeAgentAccountShellEnvironment(context).catch(() => ({}));
-  const env = { ...envWithManagedBinaries(context), ...isolation, ...accounts };
+  const env = {
+    ...withEnvironmentIsolation(envWithManagedBinaries(context), isolation),
+    ...accounts,
+  };
   if ("CLAUDE_CONFIG_DIR" in accounts || "CODEX_HOME" in accounts) {
     stripInheritedAgentCredentials(env);
   }

@@ -124,10 +124,7 @@ import {
   resolveCoordinatorRuntime,
 } from "./coordinator-runtime.js";
 import { coordinatorRoleCapabilities } from "./control-mcp/tools.js";
-import {
-  ENVIRONMENT_ISOLATION_ENV_NAMES,
-  localEnvironmentIsolationEnv,
-} from "./environment-isolation.js";
+import { withEnvironmentIsolation, localEnvironmentIsolationEnv } from "./environment-isolation.js";
 import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountEnvironment,
@@ -864,7 +861,7 @@ async function startLocalServerAttempt(
   let launchedAccountId: string | undefined;
   let launchedTokenExpiresAt: number | undefined;
   let launchedLoginless = false;
-  const env: NodeJS.ProcessEnv = {
+  let env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: String(port),
     HOSTNAME: "127.0.0.1",
@@ -911,10 +908,11 @@ async function startLocalServerAttempt(
   // cannot reach another environment's services. A coordinator works in the
   // project checkout and a bug report in a scratch directory: neither is an
   // environment with a reservation.
-  for (const name of ENVIRONMENT_ISOLATION_ENV_NAMES) delete env[name];
-  if (!coordinatorId && !bugReportId) {
-    Object.assign(env, await localEnvironmentIsolationEnv(environment, context.storage));
-  }
+  const isolation =
+    !coordinatorId && !bugReportId
+      ? await localEnvironmentIsolationEnv(environment, context.storage)
+      : {};
+  env = withEnvironmentIsolation(env, isolation);
   if (coordinatorId) {
     // Coordinator authority is always freshly issued for this exact
     // conversation. Never inherit a token from the backend's own environment

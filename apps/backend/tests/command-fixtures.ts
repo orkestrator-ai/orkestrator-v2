@@ -633,6 +633,9 @@ export async function createCommandFixtures() {
         ),
         getAgentModelCatalogCache: mock(async () => ({ schemaVersion: 1 as const })),
         getOpenCodeModelCatalog: mock(async () => null),
+        environmentIsolation: {
+          assignEnvironmentPortBase: mock(async () => 21_000),
+        },
         getEnvironment: mock(
           async (environmentId: string) =>
             environments.find((environment) => environment.id === environmentId) ?? null,

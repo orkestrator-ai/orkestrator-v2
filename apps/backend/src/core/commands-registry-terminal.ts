@@ -211,7 +211,7 @@ import {
 } from "./agent-accounts-active.js";
 import { applyActiveAgentAccountsForContainerTerminal } from "./agent-accounts-containers.js";
 import { newContainerTerminalToken } from "./container-terminal-shell.js";
-import { localEnvironmentIsolationEnv } from "./environment-isolation.js";
+import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
 
 /**
  * Starts a container terminal's `docker exec -it` shell, marked with a fresh
@@ -891,8 +891,10 @@ export function registerTerminalCommands(
       // applies to terminals opened after it.
       const accountEnvironment = await activeAgentAccountShellEnvironment(context);
       const launchEnvironment = {
-        ...envWithManagedBinaries(context),
-        ...(await localEnvironmentIsolationEnv(currentEnvironment, storage)),
+        ...withEnvironmentIsolation(
+          envWithManagedBinaries(context),
+          await localEnvironmentIsolationEnv(currentEnvironment, storage),
+        ),
         ...accountEnvironment,
       };
       if (accountEnvironment.CLAUDE_CONFIG_DIR || accountEnvironment.CODEX_HOME) {

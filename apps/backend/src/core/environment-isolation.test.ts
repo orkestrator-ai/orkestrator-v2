@@ -11,6 +11,8 @@ import {
   formatEnvironmentIsolationNotice,
   isEnvironmentPortBase,
   localEnvironmentIsolationEnv,
+  withEnvironmentIsolation,
+  environmentIsolationShellPrefix,
 } from "./environment-isolation.js";
 import { createEnvironment } from "./storage-shared-core.js";
 import { withTemporaryStorage } from "./storage-test-support.js";
@@ -86,8 +88,25 @@ describe("isolation variables", () => {
   });
 });
 
+test("a launch replaces all inherited isolation keys without mutating its parent", () => {
+  const parent: NodeJS.ProcessEnv = {
+    ...environmentIsolationVariables("parent", 20_000),
+    PATH: "/bin",
+  };
+  expect(withEnvironmentIsolation(parent)).toEqual({ PATH: "/bin" });
+  expect(withEnvironmentIsolation(parent, environmentIsolationVariables(ID, null))).toEqual({
+    PATH: "/bin",
+    ORKESTRATOR_ENVIRONMENT_ID: ID,
+    COMPOSE_PROJECT_NAME: environmentComposeProjectName(ID),
+  });
+  expect(parent.ORKESTRATOR_PORT_BASE).toBe("20000");
+  expect(environmentIsolationShellPrefix({})).toBe(
+    `unset ${ENVIRONMENT_ISOLATION_ENV_NAMES.join(" ")}; `,
+  );
+});
+
 describe("reserving a block", () => {
-  test("each local environment keeps its own block, and a deleted one's is free again", async () => {
+  test("each local environment keeps its own block", async () => {
     await withTemporaryStorage(async (storage) => {
       const first = await storage.addEnvironment(
         createEnvironment("project-a", { environmentType: "local", name: "one" }),

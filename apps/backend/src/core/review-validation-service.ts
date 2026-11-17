@@ -18,7 +18,7 @@ import {
 import { quoteShell, resolveBunBinary, validateGitRefName } from "./commands-agent-support.js";
 import { runCommand } from "./shell.js";
 import { REVIEW_VALIDATION_CONTROL, REVIEW_VALIDATION_WORKER } from "./review-validation-worker.js";
-import { localEnvironmentIsolationEnv } from "./environment-isolation.js";
+import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
 import type { ReviewPreparationResult } from "./review-prompts.js";
 
 /**
@@ -334,7 +334,7 @@ async function controlReviewValidationOnce(
     environment.environmentType === "local"
       ? await runCommand(resolveBunBinary(context), args, {
           cwd: "/",
-          env: { ...process.env, ...isolation },
+          env: withEnvironmentIsolation(process.env, isolation),
           timeoutMs: 20_000,
           redactValues: [payload, REVIEW_VALIDATION_CONTROL, REVIEW_VALIDATION_WORKER],
         })
@@ -350,6 +350,7 @@ async function controlReviewValidationOnce(
             withContainerRuntimeCredential(["bun", ...args].map(quoteShell).join(" ")),
           ],
           {
+            env: withEnvironmentIsolation(process.env),
             timeoutMs: 20_000,
             redactValues: [payload, REVIEW_VALIDATION_CONTROL, REVIEW_VALIDATION_WORKER],
           },

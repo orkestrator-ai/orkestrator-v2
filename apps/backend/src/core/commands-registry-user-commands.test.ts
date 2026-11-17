@@ -223,3 +223,59 @@ test("coordinator and container refusal states explain unavailable launch target
     "container first",
   );
 });
+
+test.each(["reserved", "failed", "coordinator", "container"])(
+  "%s user command replaces inherited worktree isolation at the spawn boundary",
+  async (kind) => {
+    const { environmentIsolationVariables, ENVIRONMENT_ISOLATION_ENV_NAMES } =
+      await import("./environment-isolation.js");
+    const inherited = environmentIsolationVariables("parent", 20_000);
+    const saved = ENVIRONMENT_ISOLATION_ENV_NAMES.map((name) => [name, process.env[name]] as const);
+    Object.assign(process.env, inherited);
+    const reservation = spyOn(storage.environmentIsolation, "assignEnvironmentPortBase");
+    if (kind === "failed") reservation.mockRejectedValue(new Error("reservation failed"));
+    else reservation.mockResolvedValue(21_000);
+    const spawn = spyOn(pty, "spawnPty").mockImplementation(() => {
+      throw new Error("spawn boundary");
+    });
+    let launch: Awaited<ReturnType<typeof resolveUserCommandLaunch>> | undefined;
+    try {
+      let id = environment.id;
+      if (kind === "container")
+        await storage.updateEnvironment(id, {
+          environmentType: "containerized",
+          containerId: "owned-fixture",
+          status: "running",
+        });
+      if (kind === "coordinator") {
+        const coordinator = new CoordinatorService(storage, () => ({
+          enabled: true,
+          running: true,
+          error: null,
+        }));
+        const snapshot = await coordinator.ensure(environment.projectId);
+        id = coordinatorRuntimeId(snapshot.workspace.id, snapshot.workspace.conversations[0]!.id);
+      }
+      launch = await resolveUserCommandLaunch(context, id);
+      expect(() => launch!.spawn("true")).toThrow("spawn boundary");
+      const actual = spawn.mock.calls[0]![2]!.env!;
+      const expected =
+        kind === "reserved"
+          ? environmentIsolationVariables(id, 21_000)
+          : kind === "failed"
+            ? environmentIsolationVariables(id, null)
+            : {};
+      for (const name of ENVIRONMENT_ISOLATION_ENV_NAMES) expect(actual[name]).toBe(expected[name]);
+      if (kind === "coordinator" || kind === "container")
+        expect(reservation).not.toHaveBeenCalled();
+    } finally {
+      launch?.release?.();
+      spawn.mockRestore();
+      reservation.mockRestore();
+      for (const [name, value] of saved) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  },
+);

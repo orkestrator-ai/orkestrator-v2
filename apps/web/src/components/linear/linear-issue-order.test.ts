@@ -122,8 +122,43 @@ describe("planLinearDrop", () => {
     expect(plan(todo, [todo.issues[0]!], { issueId: "a", before: true })).toBeNull();
   });
 
-  test("a lane without ordered neighbours keeps the dropped issues' own order", () => {
-    expect(plan(lane([]), [other("x", 9)], null)).toEqual({});
-    expect(plan(lane([issue("u", "Todo")]), [other("x", 9)], null)).toEqual({});
+  test("an empty lane receives fresh increasing positions in carried board order", () => {
+    const dropped = [other("x", 20), other("y", 1)];
+    const positions = planLinearDrop(lane([]), dropped, null)!;
+    expect(Object.fromEntries(positions)).toEqual({ x: 1, y: 2 });
+    const patched = dropped.map((item) => ({
+      ...item,
+      status: "Todo",
+      sortOrder: positions.get(item.id),
+    }));
+    expect(buildLinearLanes(patched, [], "manual")[0]!.issues.map((item) => item.id)).toEqual([
+      "x",
+      "y",
+    ]);
   });
+
+  for (const orders of [
+    [1, 1, 2],
+    [1, 1 + Number.EPSILON, 2],
+    [Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE],
+    [undefined, undefined, undefined],
+  ]) {
+    test(`repairs unusable positions ${orders.join(",")} and preserves the final sequence`, () => {
+      const items = orders.map((sortOrder, i) => issue(["a", "b", "c"][i]!, "Todo", { sortOrder }));
+      const positions = planLinearDrop(lane(items), [items[2]!], { issueId: "b", before: true })!;
+      const patched = items.map((item) => ({
+        ...item,
+        sortOrder: positions.get(item.id) ?? item.sortOrder,
+      }));
+      const ordered = buildLinearLanes(patched, [], "manual")[0]!.issues;
+      expect(ordered.map((item) => item.id)).toEqual(["a", "c", "b"]);
+      expect(
+        ordered.every(
+          (item, index) =>
+            Number.isFinite(item.sortOrder) &&
+            (index === 0 || item.sortOrder! > ordered[index - 1]!.sortOrder!),
+        ),
+      ).toBe(true);
+    });
+  }
 });

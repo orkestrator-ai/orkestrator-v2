@@ -7,6 +7,7 @@ import {
   dragLinearCard,
   dragLinearCardBeside,
   holdLinearCardBeside,
+  holdLinearCardAt,
   layOutLinearBoard,
 } from "./linear-board-drag-test-support";
 
@@ -401,5 +402,38 @@ describe("LinearIssueBoard card labels", () => {
     ) as HTMLElement[];
     expect(dots.map((dot) => dot.style.backgroundColor)).toEqual(["", ""]);
     expect(dots.every((dot) => dot.className.includes("bg-muted-foreground"))).toBe(true);
+  });
+});
+
+describe("LinearIssueBoard lane geometry and selection edges", () => {
+  for (const [y, expected] of [
+    [154, 1.5],
+    [20, 0],
+  ] as const) {
+    test(`lane hit at y=${y} uses the pointer's position`, async () => {
+      const { onMoveIssues } = renderOrderedBoard();
+      const release = await holdLinearCardAt("Charlie", { clientX: 40, clientY: y });
+      expect(screen.getByTestId("linear-board-drop-indicator")).toBeTruthy();
+      await release();
+      expect(onlyMove(onMoveIssues).sortOrders).toEqual({ c: expected });
+    });
+  }
+
+  test("Shift-click with an anchor in another lane toggles the clicked card", () => {
+    renderOrderedBoard();
+    fireEvent.click(card("Alpha"), { metaKey: true });
+    fireEvent.click(card("X-ray"), { shiftKey: true });
+    expect(card("Alpha").getAttribute("data-selected")).toBe("true");
+    expect(card("X-ray").getAttribute("data-selected")).toBe("true");
+    expect(screen.getByTestId("linear-board-selection").textContent).toContain("2 issues selected");
+  });
+
+  test("modifier clicks cannot select cards without a workflow state id", () => {
+    const { onMoveIssues, onSelectIssue } = renderBoard({ withStates: false });
+    fireEvent.click(card("Header"), { metaKey: true });
+    expect(card("Header").getAttribute("data-selected")).not.toBe("true");
+    expect(screen.queryByTestId("linear-board-selection") === null).toBe(true);
+    expect(onMoveIssues).not.toHaveBeenCalled();
+    expect(onSelectIssue).not.toHaveBeenCalled();
   });
 });

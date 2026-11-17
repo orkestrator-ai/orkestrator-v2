@@ -112,3 +112,10 @@ export async function holdLinearCardBeside(
   await pickUpAndMove(card, end);
   return () => release(card, end);
 }
+
+/** Holds at an exact viewport point, including a lane header or inter-card gap. */
+export async function holdLinearCardAt(title: string, end: Point): Promise<() => Promise<void>> {
+  const card = cardByTitle(title);
+  await pickUpAndMove(card, end);
+  return () => release(card, end);
+}

@@ -451,24 +451,10 @@ export interface LinearBoardMove {
   to: LinearLane;
   /**
    * Each placed issue's new Linear `sortOrder`. Empty when the drop only
-   * changes lanes (another ticket order is chosen, or the position cannot be
-   * expressed); an issue that stays in its lane is listed only with one.
+   * changes lanes (another ticket order is chosen). May include destination
+   * neighbours when a tied or exhausted gap requires fresh positions.
    */
   sortOrders: ReadonlyMap<string, number>;
-}
-
-/** Cards win over the lane around them, so a drop can land beside a card. */
-const cardsFirst: CollisionDetection = (args) => {
-  const hits = pointerWithin(args);
-  const card = hits.find((hit) => String(hit.id).startsWith(CARD_DROP_PREFIX));
-  return card ? [card] : hits;
-};
-
-/** The pointer's height during a drag: where it went down, plus how far it has moved. */
-function pointerY(event: DragMoveEvent | DragOverEvent | DragEndEvent): number | null {
-  const start = event.activatorEvent;
-  if (!start || !("clientY" in start) || typeof start.clientY !== "number") return null;
-  return start.clientY + event.delta.y;
 }
 
 /**
@@ -515,6 +501,15 @@ export function LinearIssueBoard({
   const [selection, setSelection] = useState<ReadonlySet<string>>(NO_ISSUES);
   /** The card a Shift-click selects from: the last one picked or opened. */
   const anchorRef = useRef<string | null>(null);
+  // Collision coordinates and rectangles share viewport space. Drag event delta
+  // also includes scroll displacement, so it cannot locate the pointer.
+  const geometry = useRef<Parameters<CollisionDetection>[0] | null>(null);
+  const cardsFirst = useCallback<CollisionDetection>((args) => {
+    geometry.current = args;
+    const hits = pointerWithin(args);
+    const card = hits.find((hit) => String(hit.id).startsWith(CARD_DROP_PREFIX));
+    return card ? [card] : hits;
+  }, []);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const visible = lanes.filter((lane) => !hidden.has(lane.status));
   const laneOf = (issueId: string) =>
@@ -587,7 +582,7 @@ export function LinearIssueBoard({
       if (carried.includes(issueId)) return null;
       const lane = laneOf(issueId);
       if (!lane) return null;
-      const y = pointerY(event);
+      const y = geometry.current?.pointerCoordinates?.y ?? null;
       const before = y === null ? false : y < over.rect.top + over.rect.height / 2;
       return { lane, anchor: { issueId, before } };
     }
@@ -595,7 +590,18 @@ export function LinearIssueBoard({
     const lane = lanes.find(
       (candidate) => candidate.status === overId.slice(LANE_DROP_PREFIX.length),
     );
-    return lane ? { lane, anchor: null } : null;
+    if (!lane) return null;
+    const y = geometry.current?.pointerCoordinates?.y;
+    if (y !== undefined) {
+      for (const issue of lane.issues) {
+        if (carried.includes(issue.id)) continue;
+        const rect = geometry.current?.droppableRects.get(`${CARD_DROP_PREFIX}${issue.id}`);
+        if (rect && y < rect.top + rect.height / 2) {
+          return { lane, anchor: { issueId: issue.id, before: true } };
+        }
+      }
+    }
+    return { lane, anchor: null };
   };
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -629,7 +635,14 @@ export function LinearIssueBoard({
     const sortOrders = reorderable
       ? (planLinearDrop(target.lane, carriedIssues, target.anchor) ?? new Map<string, number>())
       : new Map<string, number>();
-    const issues = carriedIssues.filter(
+    const placedIssues = [
+      ...carriedIssues,
+      ...target.lane.issues.filter(
+        (issue) => !carriedIds.includes(issue.id) && sortOrders.has(issue.id),
+      ),
+    ];
+    if (placedIssues.some((issue) => movingIssueIds.has(issue.id))) return null;
+    const issues = placedIssues.filter(
       (issue) => issue.status !== target.lane.status || sortOrders.has(issue.id),
     );
     if (issues.length === 0) return null;

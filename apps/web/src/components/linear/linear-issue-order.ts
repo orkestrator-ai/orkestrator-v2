@@ -192,9 +192,9 @@ export type LinearDropAnchor = { issueId: string; before: boolean } | null;
  * past the only neighbour that has one (cards without an order sort last).
  *
  * Returns `null` when the drop changes nothing (the issues are already there,
- * or the anchor is one of the dropped cards). An empty map means the position
- * cannot be expressed (no neighbour has a `sortOrder`, as in an otherwise
- * empty lane): the issues move lane, if they change one, keeping their order.
+ * or the anchor is one of the dropped cards). Empty lanes get fresh positions.
+ * If interpolation cannot produce strict finite positions, the result includes
+ * fresh positions for the destination lane too, preserving its intended order.
  */
 export function planLinearDrop(
   lane: LinearLane,
@@ -228,7 +228,22 @@ export function planLinearDrop(
       sortOrders.set(issue.id, low + position + 1);
     } else if (high !== undefined) {
       sortOrders.set(issue.id, high - (count - position));
+    } else {
+      sortOrders.set(issue.id, position + 1);
     }
   });
+  // Verify the complete sequence: ties, exhausted float gaps and unordered
+  // neighbours can all make an apparently valid interpolation sort incorrectly.
+  let previous = -Infinity;
+  const valid = result.every((issue) => {
+    const value = sortOrders.get(issue.id) ?? issue.sortOrder;
+    if (value === undefined || !Number.isFinite(value) || value <= previous) return false;
+    previous = value;
+    return true;
+  });
+  if (!valid) {
+    sortOrders.clear();
+    result.forEach((issue, position) => sortOrders.set(issue.id, position + 1));
+  }
   return sortOrders;
 }

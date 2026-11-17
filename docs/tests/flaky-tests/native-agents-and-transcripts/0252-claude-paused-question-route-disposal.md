@@ -239,3 +239,24 @@ No assertion, deadline, retry or skip was changed.
 ## Triage note (2026-11-15)
 
 Left `open` by the Playwright default-deadline triage. Every recorded failure is a route callback using a disposed request context or closed page during teardown, not a deadline, so the 2026-11-15 timeout change in `e2e/playwright.config.ts` does not address it.
+
+## Recurrence 2026-11-17 (frame clipboard review repair)
+
+- **Branch and base:** `image-copy-download-aeea21f2f5ef-r1`, repair worktree later committed as
+  `661b583ef` and `98c3d2b3f`, base `00a44c9eb581a28cc7c5462eda5028e0f96c68bf`.
+  The branch changes design-frame copying and desktop clipboard input validation;
+  it does not change this spec or the Claude interaction surface.
+- **Command:** `ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name browser -- mise run test:browser`
+  on macOS with six Playwright workers and one retry. The attempt was stopped
+  after the failure to restart the complete suite with a one-off longer logged
+  runner deadline; no complete suite counts are available for this attempt.
+- **Failure:** `[mobile-chromium] a paused Claude question stays paused across a reload, then resumes and answers`
+  at `e2e/ClaudeInteractions.spec.ts:100`; `route.fulfill: Fetch response has been disposed`
+  in the route callback at line 111, also reported on retry.
+- **Evidence:** `output/fix-validation/browser-first-attempt.log.gz` and
+  `output/fix-validation/browser-first-attempt/ClaudeInteractions-a-pause-0f5cb-ad-then-resumes-and-answers-mobile-chromium/trace.zip`
+  in the observing worktree.
+- **Unchanged owner alone:** `ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name fix-claude-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts --workers=1 --retries=0`
+  passed (21.9 s).
+- **Recurrence check:** `mise run flaky:recurrence -- 0252 --base 00a44c9eb581a28cc7c5462eda5028e0f96c68bf --registry-ref origin/main`
+  reported `open`. No assertion, retry, deadline or skip in the spec was changed.

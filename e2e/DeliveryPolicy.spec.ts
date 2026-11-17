@@ -22,25 +22,41 @@ test.describe("When verified", () => {
     page,
   }) => {
     await page.goto("/delivery-policy?launch&machines");
-    const machines = page.getByRole("radiogroup", { name: "Machine" });
-    await expect(machines.getByRole("radio", { name: /Studio Mac/ })).toBeChecked();
-    await expect(machines.getByRole("radio", { name: /Laptop/ })).toBeDisabled();
+    const machine = page.getByRole("combobox", { name: "Machine" });
+    await expect(machine).toContainText("Studio Mac");
+    await expect(machine.getByTestId("machine-color-dot")).toHaveAttribute(
+      "data-machine-color",
+      "violet",
+    );
     await mkdir(path.join(process.cwd(), "output/visual-previews"), { recursive: true });
     await page.screenshot({
       path: path.join(process.cwd(), "output/visual-previews/build-machine-choice.png"),
     });
 
-    // The radio is visually hidden; the user picks through its card.
-    await machines.getByText("Builder").click();
-    await expect(machines.getByRole("radio", { name: /Builder/ })).toBeChecked();
+    await machine.click();
+    const options = page.getByRole("option");
+    await expect(options).toHaveText([/^Studio Mac/, /^Builder/, /^Laptop/]);
+    await expect(page.getByRole("option", { name: /Laptop/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await expect(
+      page.getByRole("option", { name: /Builder/ }).getByTestId("machine-color-dot"),
+    ).toHaveAttribute("data-machine-color", "teal");
+    await page.screenshot({
+      path: path.join(process.cwd(), "output/visual-previews/build-machine-choice-open.png"),
+    });
+
+    await page.getByRole("option", { name: /Builder/ }).click();
+    await expect(machine).toContainText("Builder");
     await page.getByRole("button", { name: "Start build" }).click();
     await expect(page.getByTestId("confirmed-machine")).toHaveText("Builder");
   });
 
   test("the launcher offers no Local build on a machine without a checkout", async ({ page }) => {
     await page.goto("/delivery-policy?launch&machines&remote-only");
-    const machines = page.getByRole("radiogroup", { name: "Machine" });
-    await machines.getByText("Builder").click();
+    await page.getByRole("combobox", { name: "Machine" }).click();
+    await page.getByRole("option", { name: /Builder/ }).click();
     const where = page.getByRole("radiogroup", { name: "Where it runs" });
     await expect(where.getByRole("radio", { name: /^Local/ })).toBeDisabled();
     await expect(where.getByText("No project checkout on Builder")).toBeVisible();
@@ -58,7 +74,7 @@ test.describe("When verified", () => {
 
   test("the launcher has no machine choice for a single machine", async ({ page }) => {
     await page.goto("/delivery-policy?launch");
-    await expect(page.getByRole("radiogroup", { name: "Machine" })).toHaveCount(0);
+    await expect(page.getByRole("combobox", { name: "Machine" })).toHaveCount(0);
   });
 
   test("a commit-only ticket keeps its selection in the launcher", async ({ page }) => {

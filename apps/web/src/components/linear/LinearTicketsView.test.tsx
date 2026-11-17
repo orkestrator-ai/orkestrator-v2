@@ -967,8 +967,8 @@ describe("LinearTicketsView", () => {
       );
       fireEvent.click(screen.getByRole("button", { name: /^build/i }));
 
-      const machines = await screen.findByRole("radiogroup", { name: "Machine" });
-      fireEvent.click(within(machines).getByRole("radio", { name: /Builder/ }));
+      fireEvent.click(await screen.findByRole("combobox", { name: "Machine" }));
+      fireEvent.click(await screen.findByRole("option", { name: /Builder/ }));
       const container = () =>
         within(screen.getByRole("radiogroup", { name: "Where it runs" })).getByRole("radio", {
           name: /^Container/,

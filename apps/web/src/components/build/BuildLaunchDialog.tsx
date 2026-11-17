@@ -16,7 +16,6 @@ import {
   Hammer,
   ListChecks,
   MessageSquare,
-  Monitor,
   Package,
   ScanSearch,
   Shield,
@@ -35,6 +34,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
   mergeReorderedFavoriteModels,
@@ -72,6 +78,7 @@ import {
 } from "./build-machines";
 import { useBuildNetworkPreference } from "./useBuildNetworkPreference";
 import { useMachineDockerAvailability } from "./useMachineDockerAvailability";
+import { MachineColorDot } from "@/components/federation/MachineDot";
 import {
   ReviewLensField,
   launchedReviewLens,
@@ -917,7 +924,7 @@ export function BuildLaunchDialog({
   const environmentGroupId = useId();
   const networkGroupId = useId();
   const commentContextId = useId();
-  const machineGroupId = useId();
+  const machineHintId = useId();
 
   const resetLaunchState = useCallback(() => {
     setSteps(
@@ -1215,48 +1222,43 @@ export function BuildLaunchDialog({
                       of the project.
                     </p>
                   </div>
-                  <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Machine">
-                    {machines.map((option) => {
-                      const selected = machineKey === option.key;
-                      const disabled = !option.available;
-                      const id = `${machineGroupId}-${option.key}`;
-                      return (
-                        <div key={option.key} className="relative min-w-0">
-                          <input
-                            id={id}
-                            type="radio"
-                            name={`${machineGroupId}-machine`}
-                            checked={selected}
-                            disabled={disabled}
-                            onChange={() => setPickedMachineKey(option.key)}
-                            className="peer sr-only"
-                          />
-                          <label
-                            htmlFor={id}
-                            className={cn(
-                              "flex min-h-16 cursor-pointer flex-col rounded-lg border px-3 py-2.5 transition-colors focus-hairline-peer",
-                              disabled && "cursor-not-allowed opacity-50",
-                              selected
-                                ? "border-cyan-400/55 bg-cyan-500/10 text-zinc-100"
-                                : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700",
-                            )}
-                          >
-                            <span className="flex min-w-0 items-center gap-2 text-sm font-medium">
-                              <Monitor className="size-4 shrink-0" />
-                              <span className="truncate">{option.name}</span>
+                  <Select
+                    value={machineKey ?? undefined}
+                    onValueChange={(key) => setPickedMachineKey(key)}
+                    disabled={busy}
+                  >
+                    <SelectTrigger
+                      aria-label="Machine"
+                      aria-describedby={machineChoice ? machineHintId : undefined}
+                      data-testid="build-machine-select"
+                      className="w-full border-zinc-800 bg-zinc-900/60 text-zinc-100 hover:border-zinc-700"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper" align="start">
+                      {machines.map((option) => (
+                        <SelectItem
+                          key={option.key}
+                          value={option.key}
+                          disabled={!option.available}
+                          data-build-machine-option={option.key}
+                        >
+                          <MachineColorDot colorToken={option.colorToken} />
+                          <span className="truncate">{option.name}</span>
+                          {option.current || !option.available ? (
+                            <span className="text-xs text-zinc-500">
+                              {option.available ? "This machine" : "Not connected"}
                             </span>
-                            <span className="mt-1 text-[11px] leading-snug text-zinc-500">
-                              {disabled
-                                ? "Not connected"
-                                : option.current
-                                  ? "This machine"
-                                  : "Runs there; follow it from that machine"}
-                            </span>
-                          </label>
-                        </div>
-                      );
-                    })}
-                  </div>
+                          ) : null}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {machineChoice ? (
+                    <p id={machineHintId} className="mt-1.5 text-[11px] text-zinc-500">
+                      Runs on {machineChoice.name}; follow it from that machine.
+                    </p>
+                  ) : null}
                 </div>
               )}
               <div className="mb-3">

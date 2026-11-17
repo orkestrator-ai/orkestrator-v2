@@ -29,6 +29,7 @@ const MACHINES: BuildLaunchMachine[] = [
   {
     key: "node:own",
     name: "Studio Mac",
+    colorToken: "violet",
     machine: undefined,
     nodeId: "own",
     projectId: "project-own",
@@ -39,6 +40,7 @@ const MACHINES: BuildLaunchMachine[] = [
   {
     key: "node:builder",
     name: "Builder",
+    colorToken: "teal",
     machine: "builder",
     nodeId: "builder",
     projectId: "project-builder",
@@ -49,6 +51,7 @@ const MACHINES: BuildLaunchMachine[] = [
   {
     key: "node:laptop",
     name: "Laptop",
+    colorToken: "amber",
     machine: "laptop",
     nodeId: "laptop",
     projectId: "project-laptop",

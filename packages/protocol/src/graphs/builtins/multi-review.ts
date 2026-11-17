@@ -27,7 +27,7 @@ export const MULTI_REVIEW_TEMPLATE_STAGES = Object.freeze({
   review: "reviewer",
   consolidate: "consolidate",
   "has-findings": "after-consolidation",
-  fix: "fix",
+  fix: "address-findings",
   "fix-complete": "after-fix",
   "describe-pr": "pr",
   pr: "pr",

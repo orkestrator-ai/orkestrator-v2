@@ -947,8 +947,8 @@ describe("BuildChatTab agent messaging", () => {
 
   test.each([
     ["reviewing", "Restart Review Stage"],
-    ["addressing", "Restart Address Findings Stage"],
-    ["fixing", "Restart Rework Stage"],
+    ["addressing-findings", "Restart Address Findings Stage"],
+    ["reworking", "Restart Rework Stage"],
     ["creating-pr", "Restart PR Stage"],
     ["resolving-conflicts", "Restart Conflict Resolution"],
   ] as const)("names the %s header restart", (phase, label) => {
@@ -960,7 +960,7 @@ describe("BuildChatTab agent messaging", () => {
     expect(screen.getByRole("button", { name: label })).toBeTruthy();
   });
 
-  test.each(["building", "fixing"] as const)("names validation during the %s phase", (phase) => {
+  test.each(["building", "reworking"] as const)("names validation during the %s phase", (phase) => {
     pipelineStore()
       .getState()
       .replacePipeline({
@@ -985,7 +985,7 @@ describe("BuildChatTab agent messaging", () => {
         .getState()
         .replacePipeline({
           ...running,
-          phase: "fixing",
+          phase: "reworking",
           validationRun: validationRun({
             status: reason === "cancelled" ? "cancelled" : "running",
           }),
@@ -1002,12 +1002,12 @@ describe("BuildChatTab agent messaging", () => {
       .getState()
       .replacePipeline({
         ...running,
-        phase: "fixing",
+        phase: "reworking",
         sessions: [
           ...running.sessions,
           {
             ...running.sessions[0]!,
-            phase: "fix",
+            phase: "rework",
             sessionKey: "preparation-key",
             sdkSessionId: "preparation-session",
             status: "running",

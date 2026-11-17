@@ -65,7 +65,7 @@ function pipeline(overrides: Record<string, unknown> = {}, buildSession: object 
         startedAt: "2026-11-14T00:00:00.000Z",
         label: "Build",
         messageRevision: 1,
-        fixResult: { summary: "f".repeat(1_000) },
+        addressFindingsResult: { summary: "f".repeat(1_000) },
         interactionPolicy: { mode: "unattended" },
         ...buildSession,
       },
@@ -133,7 +133,7 @@ describe("get_build_pipeline detail fingerprint", () => {
       expect("taskSnapshot" in second.record.snapshot).toBe(false);
       expect("structuredReview" in second.record.snapshot).toBe(false);
       const sessions = second.record.snapshot.sessions as Array<Record<string, unknown>>;
-      expect("fixResult" in sessions[0]!).toBe(false);
+      expect("addressFindingsResult" in sessions[0]!).toBe(false);
       expect("reviewReport" in sessions[1]!).toBe(false);
       expect(sessions[0]!.messageRevision).toBe(2);
       const full = await fullRecord(storage);
@@ -155,7 +155,7 @@ describe("get_build_pipeline detail fingerprint", () => {
       })) as DetailAnswer;
       // A per-session heavy field changes, and separately a top-level one.
       for (const changed of [
-        pipeline({}, { fixResult: { summary: "second fix" } }),
+        pipeline({}, { addressFindingsResult: { summary: "second fix" } }),
         pipeline({ keyInformation: { summary: "updated" } }),
       ]) {
         await save(storage, changed);
@@ -293,7 +293,7 @@ describe("get_build_pipeline detail fingerprint", () => {
         "proj-1",
         "",
         1,
-        pipeline({}, { fixResult: { summary: "written elsewhere" } }),
+        pipeline({}, { addressFindingsResult: { summary: "written elsewhere" } }),
       );
 
       const after = (await invoke("get_build_pipeline", {
@@ -307,7 +307,7 @@ describe("get_build_pipeline detail fingerprint", () => {
       expect(after.detailFingerprint).not.toBe(first.detailFingerprint);
       expect(after.record.revision).toBeGreaterThan(warm.record.revision);
       const sessions = after.record.snapshot.sessions as Array<Record<string, unknown>>;
-      expect(sessions[0]!.fixResult).toEqual({ summary: "written elsewhere" });
+      expect(sessions[0]!.addressFindingsResult).toEqual({ summary: "written elsewhere" });
       expect(after.record).toEqual(await fullRecord(storage));
       // The new fingerprint is the one the writer computed at its save path.
       expect(after.detailFingerprint).toBe(

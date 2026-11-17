@@ -93,15 +93,15 @@ const ADDRESS_FINDINGS_SESSION = {
  * outright, which would make the phase under test vacuous.
  */
 function phaseFields(phase: MultiReviewPhase): Record<string, unknown> {
-  const settled = ["ready", "fixing", "interactive", "completed"].includes(phase)
-    ? { consolidatedReport: report, fixSession: ADDRESS_FINDINGS_SESSION }
+  const settled = ["ready", "addressing-findings", "interactive", "completed"].includes(phase)
+    ? { consolidatedReport: report, addressFindingsSession: ADDRESS_FINDINGS_SESSION }
     : {};
   return {
     ...settled,
-    ...(phase === "fixing"
+    ...(phase === "addressing-findings"
       ? {
           activeRequest: {
-            kind: "fix",
+            kind: "address-findings",
             requestId: "request-fix",
             state: "sent",
             createdAt: TIMESTAMP,
@@ -128,7 +128,7 @@ function entry(id: string, phase: MultiReviewPhase, revision = 1) {
       projectId: "project-1",
       targetBranch: "main",
       reviewers: [{ id: `${id}-r1`, agent: "claude", model: "opus", status: "completed", report }],
-      fixModel: { agent: "claude", model: "opus" },
+      addressFindingsModel: { agent: "claude", model: "opus" },
       phase,
       ...phaseFields(phase),
       createdAt: TIMESTAMP,
@@ -150,15 +150,12 @@ beforeEach(() => {
 });
 
 describe("findActiveMultiReviewWorkflow", () => {
-  test("normalizes future live snapshots and restores authoritative state after reload", async () => {
-    const { review, futureReview } = workflowVocabularyFixtures();
+  test("reads current live snapshots and restores authoritative state after reload", async () => {
+    const { review } = workflowVocabularyFixtures();
     expect(isMultiReviewWorkflow(review)).toBe(true);
-    expect(isMultiReviewWorkflow(futureReview)).toBe(false);
-    const incoming = JSON.parse(JSON.stringify(futureReview)) as MultiReviewWorkflow;
+    const incoming = JSON.parse(JSON.stringify(review)) as MultiReviewWorkflow;
     appCommandStore(multiReviewStore).getState().replaceWorkflow(incoming);
-    const projected = appCommandStore(multiReviewStore).getState().workflows.get(review.id);
-    expect(projected).toEqual(review);
-    expect(isMultiReviewWorkflow(projected)).toBe(true);
+    expect(appCommandStore(multiReviewStore).getState().workflows.get(review.id)).toEqual(review);
 
     const persisted = {
       id: review.id,
@@ -172,7 +169,6 @@ describe("findActiveMultiReviewWorkflow", () => {
     getMultiReviewWorkflowMock.mockResolvedValue(persisted);
     const restored = await hydrateMultiReviewWorkflow(review.id);
     expect(restored).toEqual({ ...review, backendRevision: 8 });
-    expect(isMultiReviewWorkflow(restored)).toBe(true);
     expect<unknown>(appCommandStore(multiReviewStore).getState().workflows.get(review.id)).toEqual(
       restored,
     );
@@ -182,18 +178,20 @@ describe("findActiveMultiReviewWorkflow", () => {
     expect(await hydrateMultiReviewWorkflowsForEnvironment(review.environmentId)).toEqual([
       { ...review, backendRevision: 9 },
     ]);
-    expect<unknown>(incoming).toEqual(futureReview);
   });
 
-  test("future vocabulary still rejects malformed authoritative snapshots", async () => {
-    const { review, futureReview } = workflowVocabularyFixtures();
+  test("refuses an authoritative snapshot in the former vocabulary", async () => {
+    // Stored records are migrated once by the backend (to-do 4740); the
+    // renderer keeps no reader for the former names.
+    const { review, formerReview } = workflowVocabularyFixtures();
+    expect(isMultiReviewWorkflow(formerReview)).toBe(false);
     getMultiReviewWorkflowMock.mockResolvedValue({
       id: review.id,
       environmentId: review.environmentId,
       version: 1,
       revision: 8,
       updatedAt: TIMESTAMP,
-      snapshot: { ...futureReview, reviewers: "invalid" },
+      snapshot: formerReview,
     });
     expect(await hydrateMultiReviewWorkflow(review.id)).toBeNull();
     expect(appCommandStore(multiReviewStore).getState().workflows.has(review.id)).toBe(false);
@@ -211,7 +209,7 @@ describe("findActiveMultiReviewWorkflow", () => {
     "reviewing",
     "consolidating",
     "ready",
-    "fixing",
+    "addressing-findings",
     "paused",
     "cancelling",
     "failed",

@@ -265,7 +265,7 @@ export interface RoutingPipeline {
 export interface RoutingReview {
   id: string;
   environmentId?: string;
-  autoFix?: boolean;
+  autoAddressFindings?: boolean;
   autoPr?: boolean;
 }
 
@@ -547,11 +547,11 @@ export function evaluateRoutingReview(input: RoutingReviewInput): CoordinatorLiv
         launches.every((call) => call.args !== undefined) &&
         askedAutomation.length === 0 &&
         input.review !== undefined &&
-        input.review.autoFix !== true &&
+        input.review.autoAddressFindings !== true &&
         input.review.autoPr !== true,
       launches.some((call) => call.args === undefined)
         ? "a launch's arguments were unreadable"
-        : `requested ${askedAutomation.join(", ") || "neither"}; workflow autoFix ${input.review?.autoFix ?? "absent"}, autoPr ${input.review?.autoPr ?? "absent"}`,
+        : `requested ${askedAutomation.join(", ") || "neither"}; workflow autoAddressFindings ${input.review?.autoAddressFindings ?? "absent"}, autoPr ${input.review?.autoPr ?? "absent"}`,
     ),
     check(
       "review-no-other-workflow",

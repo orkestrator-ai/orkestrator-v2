@@ -95,7 +95,7 @@ function reviewingWorkflow(): MultiReviewWorkflow {
         startedAt: timestamp,
       },
     ],
-    fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+    addressFindingsModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
     createdAt: timestamp,
     updatedAt: timestamp,
     backendRevision: 7,

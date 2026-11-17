@@ -17,10 +17,6 @@ import {
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import {
-  canonicalBuildPipeline,
-  canonicalMultiReview,
-} from "@orkestrator/protocol/workflow-vocabulary";
-import {
   isLaunchMultiReviewActionInput,
   isMultiReviewModelSelection,
   isMultiReviewTerminalPhase,
@@ -255,7 +251,7 @@ export function registerControllerWorkflowCommands(
     }
     // Choices the coordinator left out run this node's Build button defaults.
     const input = buildPipelineInputWithDefaults(
-      canonicalBuildPipeline(args.input),
+      args.input,
       savedLaunchSettings(await context.storage.loadConfig(), projectId),
     );
     if (!isStartBuildPipelineInput(input) || input.projectId !== projectId) {
@@ -300,7 +296,7 @@ export function registerControllerWorkflowCommands(
   ): Promise<MultiReviewActionResult> => {
     if (!context.multiReviews) throw new Error("Multi Review supervisor is unavailable");
     const service = context.multiReviews;
-    const input = canonicalMultiReview(args.input);
+    const input: unknown = args.input;
     if (!isLaunchMultiReviewActionInput(input)) {
       throw new Error("Invalid Multi Review button action");
     }
@@ -387,9 +383,9 @@ export function registerControllerWorkflowCommands(
     return {
       reviewers: start.reviewers,
       // Always filled for omitted rows; the fallback only satisfies the type.
-      reviewModel: start.reviewModel ?? start.fixModel,
-      fixModel: start.fixModel,
-      autoFix: start.autoFix ?? false,
+      reviewModel: start.reviewModel ?? start.addressFindingsModel,
+      addressFindingsModel: start.addressFindingsModel,
+      autoAddressFindings: start.autoAddressFindings ?? false,
       autoPr: start.autoPr ?? false,
     };
   });
@@ -431,7 +427,7 @@ export function registerControllerWorkflowCommands(
       // A command node's retry after a lost answer can arrive once that fix is
       // past its handoff, when the review is no longer ready: report the fix
       // this instruction started instead of refusing it.
-      const launch = saved.snapshot.fixLaunch;
+      const launch = saved.snapshot.addressFindingsLaunch;
       if (
         saved.snapshot.phase !== "ready" &&
         !saved.snapshot.addressPromptPending &&
@@ -448,7 +444,7 @@ export function registerControllerWorkflowCommands(
         instruction,
         // Omitted, the custom fix runs the review's own fix model, as the
         // dialog's model picker starts on it.
-        fixModel: fixModel ?? saved.snapshot.fixModel,
+        addressFindingsModel: fixModel ?? saved.snapshot.addressFindingsModel,
       });
     }
     return runMultiReviewSurface(context, review, surface as "root" | "fix" | "address");
@@ -476,11 +472,12 @@ export function registerControllerWorkflowCommands(
         "Multi-review can start only after the associated build pipeline completed successfully",
       );
     }
-    const requested = canonicalMultiReview(args.input);
+    const requested = args.input;
     // Validate explicit automation before defaults: the resolver treats an
     // omitted flag as a saved preference, which must not repair malformed input.
     if (
-      (requested.autoFix !== undefined && typeof requested.autoFix !== "boolean") ||
+      (requested.autoAddressFindings !== undefined &&
+        typeof requested.autoAddressFindings !== "boolean") ||
       (requested.autoPr !== undefined && typeof requested.autoPr !== "boolean")
     ) {
       throw new Error("Invalid multi-review request");

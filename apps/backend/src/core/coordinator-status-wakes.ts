@@ -218,7 +218,9 @@ export function multiReviewStatus(
   const phase = text(snapshot.phase);
   const read = `get_multi_review { "workflowId": "${workflowId}" }`;
   const errorLine = text(snapshot.error) ? [`Error: ${boundedLine(snapshot.error as string)}`] : [];
-  const fixSession = record(snapshot.fixSession) ? snapshot.fixSession : undefined;
+  const fixSession = record(snapshot.addressFindingsSession)
+    ? snapshot.addressFindingsSession
+    : undefined;
   const autoPr = snapshot.autoPr === true;
   // On the graph engine (item 301) a system step opens the pull request.
   const graphEngine = snapshot.engine === "graph";
@@ -235,9 +237,10 @@ export function multiReviewStatus(
       ? phase === "ready" &&
         record(snapshot.consolidatedReport) &&
         findingCounts(snapshot.consolidatedReport).total === 0
-      : recordedPrLaunch.fixIdentity === undefined
+      : recordedPrLaunch.addressFindingsIdentity === undefined
         ? recordedPrLaunch.state !== "launched"
-        : recordedPrLaunch.fixIdentity === multiReviewAddressFindingsIdentity(fixSession))
+        : recordedPrLaunch.addressFindingsIdentity ===
+          multiReviewAddressFindingsIdentity(fixSession))
       ? recordedPrLaunch
       : undefined;
   const prLaunchMessage = text(prLaunch?.message)
@@ -324,7 +327,7 @@ export function multiReviewStatus(
   if (phase === "completed") {
     // A structured Address Findings completes the review and queues its PR in the same save.
     if (prLaunch?.state === "pending") return null;
-    const fix = record(snapshot.fixResult) ? snapshot.fixResult : undefined;
+    const fix = record(snapshot.addressFindingsResult) ? snapshot.addressFindingsResult : undefined;
     return {
       key: "completed",
       state: "completed",
@@ -389,7 +392,9 @@ export function multiReviewStatus(
   ]);
   if (
     stalled &&
-    ["preparing", "reviewing", "consolidating", "fixing", "interactive"].includes(phase ?? "")
+    ["preparing", "reviewing", "consolidating", "addressing-findings", "interactive"].includes(
+      phase ?? "",
+    )
   ) {
     return {
       key: `stalled:${hash(`${stalled.key}:${stalled.since}`)}`,
@@ -426,7 +431,7 @@ export function multiReviewStatus(
             ? [
                 "An earlier PR session started; review and update it manually after this Address Findings.",
               ]
-            : snapshot.autoFix === true && findings.total === 0
+            : snapshot.autoAddressFindings === true && findings.total === 0
               ? [
                   "Auto-address findings is on, but there was nothing to fix, so no Address Findings or PR session started.",
                 ]

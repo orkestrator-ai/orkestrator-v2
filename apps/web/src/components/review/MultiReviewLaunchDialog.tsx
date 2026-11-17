@@ -483,7 +483,11 @@ export function MultiReviewLaunchDialog({
   );
   const lensError = reviewers.some((row) => reviewLensDraftError(row.lens) !== null);
   const workSummary = multiReviewWorkSummary(
-    multiReviewWorkEstimate({ reviewerCount: reviewers.length, autoFix, autoPr }),
+    multiReviewWorkEstimate({
+      reviewerCount: reviewers.length,
+      autoAddressFindings: autoFix,
+      autoPr,
+    }),
   );
 
   // Only the closed -> open edge reconfigures the rows, and it runs as a layout

@@ -53,7 +53,7 @@ function graphReviewing(settled = false): MultiReviewWorkflow {
         startedAt: timestamp,
       },
     ],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
     createdAt: timestamp,
     updatedAt: timestamp,
     backendRevision: 3,
@@ -165,7 +165,7 @@ test("graph-engine steps: a failed Address Findings, and a pull request opened b
     ...graphReviewing(true),
     phase: "failed",
     consolidatedReport: report,
-    stepRuntimes: { fix: { startedAt: timestamp } },
+    stepRuntimes: { "address-findings": { startedAt: timestamp } },
   };
   expect(addressFindingsStep(failedFix)).toMatchObject({ state: "failed" });
   expect(

@@ -47,7 +47,6 @@ import {
 } from "@orkestrator/protocol/contract/domains/pipelines";
 import { isBuildPipeline, isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
-import { canonicalBuildPipeline } from "@orkestrator/protocol/workflow-vocabulary";
 import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { isBuildPipelineRestartSelection } from "@orkestrator/protocol/build-pipeline-restart-selection";
 import {
@@ -115,7 +114,7 @@ export function registerBuildPipelineCommands(
   );
   register(startBuildPipelineCommand, (args, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
-    const input = canonicalBuildPipeline(args);
+    const input: unknown = args;
     if (!isStartBuildPipelineInput(input)) {
       throw new Error("Invalid build pipeline start request");
     }

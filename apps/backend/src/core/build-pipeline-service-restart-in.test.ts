@@ -63,7 +63,7 @@ describe("restarting a step in another agent or model", () => {
         const { started } = await startBuilding(service, storage, {
           reviewPreparation: { agent: "claude" },
         });
-        provider.runningPhases.add("fix");
+        provider.runningPhases.add("rework");
         await service.advanceNow(started.id);
         const preparation = (await pipeline(storage, started.id)).sessions.at(-1)!;
         expect(preparation.label).toBe(REVIEW_PACKAGE_SESSION_LABEL);

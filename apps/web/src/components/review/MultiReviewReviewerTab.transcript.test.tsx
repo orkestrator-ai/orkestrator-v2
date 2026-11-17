@@ -62,7 +62,7 @@ function workflow(backendRevision: number): MultiReviewWorkflow {
         startedAt: STARTED_AT,
       },
     ],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
     createdAt: STARTED_AT,
     updatedAt: STARTED_AT,
     backendRevision,

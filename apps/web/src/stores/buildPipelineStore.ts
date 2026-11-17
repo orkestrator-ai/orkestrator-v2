@@ -1,6 +1,5 @@
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
-import { canonicalBuildPipeline } from "@orkestrator/protocol/workflow-vocabulary";
 import {
   BUILD_PIPELINE_VERSION,
   isActiveBuildPhase,
@@ -117,7 +116,7 @@ export const buildPipelineStore = defineScopedStore<BuildPipelineState>(
     viewedSessionIds: new Map(),
 
     replacePipeline: (incoming) => {
-      const pipeline = canonicalBuildPipeline(incoming);
+      const pipeline: unknown = incoming;
       if (!isBuildPipeline(pipeline)) {
         throw new Error("Invalid backend build pipeline snapshot");
       }

@@ -342,7 +342,9 @@ describe("Multi Review template ↔ multi-review-service", () => {
     expect(nodeResultKinds(plan, "consolidate")).toEqual([
       MULTI_REVIEW_STEP_TURNS.consolidate.result,
     ]);
-    expect(nodeResultKinds(plan, "fix")).toEqual([MULTI_REVIEW_STEP_TURNS.fix.result]);
+    expect(nodeResultKinds(plan, "fix")).toEqual([
+      MULTI_REVIEW_STEP_TURNS["address-findings"].result,
+    ]);
     expect(nodeResultKinds(plan, "describe-pr")).toEqual([]);
     // A consolidated report is a review report that cites its sources, under
     // today's provenance contract.
@@ -386,7 +388,11 @@ describe("Multi Review template ↔ multi-review-service", () => {
       for (const autoPr of [false, true]) {
         for (const report of FINDINGS) {
           for (const complete of [false, true]) {
-            const workflow = { autoFix, autoPr, consolidatedReport: report } as MultiReviewWorkflow;
+            const workflow = {
+              autoAddressFindings: autoFix,
+              autoPr,
+              consolidatedReport: report,
+            } as MultiReviewWorkflow;
             const fixes = multiReviewAutoAddressFindingsDue(workflow);
             if (!fixes) queueCleanReviewAutoPr(workflow);
             else if (addressFindingsResultCompletes({ complete })) queueAutoPr(workflow);
@@ -428,7 +434,7 @@ describe("Multi Review template ↔ multi-review-service", () => {
       expect({
         reviewers: rows.reviewers.map(sourceOf),
         preparer: sourceOf(rows.reviewModel),
-        fixer: sourceOf(rows.fixModel),
+        fixer: sourceOf(rows.addressFindingsModel),
       }).toEqual({
         reviewers: rows.reviewers.map((_, index) =>
           roleSource(roles.get("reviewer")!, index, set, additional),
@@ -513,7 +519,7 @@ describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
       const stage = stageOf(id);
       if (!stage || node(plan, id).kind !== "agent") continue;
       const expected =
-        (stage.key === "build" || stage.key === "fix") && usesPackagePreparationSession(panel)
+        (stage.key === "build" || stage.key === "rework") && usesPackagePreparationSession(panel)
           ? []
           : stage.result === null
             ? []
@@ -547,9 +553,9 @@ describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
     for (const phase of [
       "build",
       "review",
-      "address",
+      "address-findings",
       "verify",
-      "fix",
+      "rework",
       "pr",
       "resolve-conflicts",
     ] as const) {
@@ -557,7 +563,7 @@ describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
         expect(executionModeForSessionPhase(phase, agentName)).toBe("build");
       }
     }
-    expect(executionModeOverrideForPhase("addressing")).toBe("build");
+    expect(executionModeOverrideForPhase("addressing-findings")).toBe("build");
     const withPackage = { reviewPackage: { kind: "file" } } as unknown as BuildPipeline;
     expect(readsReviewPackage(withPackage, "review")).toBe(true);
     expect(readsReviewPackage(withPackage, "verify")).toBe(false);
@@ -573,7 +579,7 @@ describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
       const ran = route(plan, { values: { "consolidate.report": report } });
       expect({ report, address: ran.has("address"), verify: ran.has("verify") }).toEqual({
         report,
-        address: stageAfterReview(report).sessionPhase === "address",
+        address: stageAfterReview(report).sessionPhase === "address-findings",
         verify: true,
       });
     }
@@ -612,8 +618,8 @@ describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
   });
 
   test("Fix runs from the second round", () => {
-    expect(buildPipelineStage("fix").round).toBe("later");
-    expect(loop.laterOnly).toEqual(nodesFor(plan, stages, "fix"));
+    expect(buildPipelineStage("rework").round).toBe("later");
+    expect(loop.laterOnly).toEqual(nodesFor(plan, stages, "rework"));
     const values = { "consolidate.report": findings(0, 0) };
     expect(route(plan, { iteration: 1, values }).has("fix")).toBe(false);
     expect(route(plan, { iteration: 2, values }).has("fix")).toBe(true);
@@ -682,7 +688,7 @@ describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
       expect({
         reviewers: defaults.reviewers.map(source),
         preparer: source(defaults.reviewPreparation),
-        fixer: source(defaults.steps.address),
+        fixer: source(defaults.steps["address-findings"]),
         verifier: source(defaults.steps.verify),
         describer: source(defaults.steps.pr),
         resolver: source(defaults.steps["resolve-conflicts"]),

@@ -345,10 +345,10 @@ async function startMultiReview(): Promise<void> {
     projectId: project.id,
     targetBranch: "main",
     reviewInstruction: `Review the fixture change. ${ORIGINAL}`,
-    autoFix: false,
+    autoAddressFindings: false,
     autoPr: false,
     reviewers: [model, model],
-    fixModel: model,
+    addressFindingsModel: model,
   });
 }
 

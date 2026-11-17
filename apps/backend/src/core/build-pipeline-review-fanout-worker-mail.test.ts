@@ -33,8 +33,8 @@ describe("review workers' mail identity", () => {
           },
           settle: async () => {},
         });
-        const addressing = await advanceUntil(service, read, started.id, "addressing");
-        expect(addressing.error ?? addressing.phase).toBe("addressing");
+        const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+        expect(addressing.error ?? addressing.phase).toBe("addressing-findings");
 
         const reviewSessions = addressing.sessions.filter((session) => session.phase === "review");
         // Three reviewers and the consolidation, each its own worker.

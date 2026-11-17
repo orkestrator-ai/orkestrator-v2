@@ -367,7 +367,7 @@ describe("Orkestrator control MCP server", () => {
       steps: {
         build: { agent: "claude" },
         review: { agent: "codex", model: "gpt-5.6" },
-        address: { agent: "codex" },
+        "address-findings": { agent: "codex" },
       },
       reviewers: [{ agent: "codex", model: "gpt-5.6" }],
     }));
@@ -380,7 +380,11 @@ describe("Orkestrator control MCP server", () => {
         baseCommit: "a".repeat(40),
         taskTitle: "Task",
         taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "" },
-        steps: { build: { agent: "claude" }, review: { agent: "codex", model: "gpt-5.6" } },
+        steps: {
+          build: { agent: "claude" },
+          review: { agent: "codex", model: "gpt-5.6" },
+          address: { agent: "codex" },
+        },
       },
     });
     expect(build.body.result?.isError).not.toBe(true);
@@ -388,13 +392,24 @@ describe("Orkestrator control MCP server", () => {
       invocations.findLast((entry) => entry.command === "start_coordinator_build_pipeline")?.args
         .input,
     ).toMatchObject({
-      steps: { build: { agent: "claude" }, review: { agent: "codex", model: "gpt-5.6" } },
+      steps: {
+        build: { agent: "claude" },
+        review: { agent: "codex", model: "gpt-5.6" },
+        "address-findings": { agent: "codex" },
+      },
     });
+    expect(build.body.result?.structuredContent?.selection).not.toHaveProperty(
+      "steps.address-findings",
+    );
+    expect(build.body.result?.structuredContent?.selection).not.toHaveProperty(
+      "source.steps.address-findings",
+    );
     expect(build.body.result?.structuredContent?.selection).toMatchObject({
       agentType: "claude",
+      steps: { address: { agent: "codex" } },
       source: {
         agentType: "requested",
-        steps: { build: "requested", review: "requested", address: "default" },
+        steps: { build: "requested", review: "requested", address: "requested" },
         reviewers: "default",
         reviewPreparation: "default",
       },
@@ -485,7 +500,7 @@ describe("Orkestrator control MCP server", () => {
         phase: "preparing",
         reviewers: [{ id: "reviewer-0", agent: "claude", model: "default", status: "pending" }],
         reviewModel: { agent: "claude", model: "default" },
-        fixModel: { agent: "claude", model: "default", reasoningEffort: "high" },
+        addressFindingsModel: { agent: "claude", model: "default", reasoningEffort: "high" },
       },
       ui: { status: "opened" },
     }));
@@ -526,7 +541,7 @@ describe("Orkestrator control MCP server", () => {
         projectId: "project-1",
         environmentId: "env-1",
         phase: "preparing",
-        autoFix: true,
+        autoAddressFindings: true,
         autoPr: true,
       },
       ui: { status: "opened" },

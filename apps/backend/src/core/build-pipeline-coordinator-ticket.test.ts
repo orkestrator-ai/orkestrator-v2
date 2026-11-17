@@ -53,7 +53,7 @@ function verdicts(provider: FakeProvider): void {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : phase === "build" || phase === "fix"
+        : phase === "build" || phase === "rework"
           ? TEST_REVIEW_PREPARATION
           : {
               complete: true,

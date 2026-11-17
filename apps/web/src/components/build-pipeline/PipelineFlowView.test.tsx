@@ -71,7 +71,7 @@ describe("pipeline inspector controls", () => {
         sessions: [
           session("build", "work", 0),
           ...(dedicated
-            ? [session("fix", "prep", 60, { label: "Package Preparation Session" })]
+            ? [session("rework", "prep", 60, { label: "Package Preparation Session" })]
             : []),
         ],
         validationRun: run,
@@ -96,7 +96,7 @@ describe("pipeline inspector controls", () => {
       sessions: [
         session("build", "build", 0),
         session("review", "review", 240),
-        session("fix", "fix", 300, { iteration: 1 }),
+        session("rework", "fix", 300, { iteration: 1 }),
         session("review", "review-1", 400, { iteration: 1 }),
       ],
       validationHistory: [
@@ -153,9 +153,9 @@ describe("pipeline inspector controls", () => {
             sessions: [
               session("build", "work", 0),
               session("review", "review", 60),
-              session("address", "address", 120, {
-                addressReportKind: "fix-result",
-                fixResult: {
+              session("address-findings", "address", 120, {
+                addressFindingsReportKind: "address-findings-result",
+                addressFindingsResult: {
                   complete: false,
                   summary: "Fixed the inverted branch.",
                   filesChanged: ["src/app.ts"],
@@ -360,7 +360,7 @@ describe("pipeline inspector controls", () => {
             sessions: [
               session("build", "work", 0),
               ...(dedicated
-                ? [session("fix", "prep", 60, { label: "Package Preparation Session" })]
+                ? [session("rework", "prep", 60, { label: "Package Preparation Session" })]
                 : []),
             ],
             validationRun: run,
@@ -584,7 +584,7 @@ describe("pipeline inspector controls", () => {
       phase: "reviewing",
       sessions: [
         session("build", "build", 0),
-        session("fix", "prep", 60, { label: "Package Preparation Session" }),
+        session("rework", "prep", 60, { label: "Package Preparation Session" }),
       ],
       validationRun: validationRun({ status: "running", completedAt: undefined }),
     });

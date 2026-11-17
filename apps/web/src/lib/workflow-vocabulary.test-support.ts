@@ -4,7 +4,7 @@ import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/struc
 
 const timestamp = "2026-11-04T00:00:00.000Z";
 
-/** Complete wire snapshots, deliberately independent of the translation maps. */
+/** Complete wire snapshots in the current names, and the same records in the former names. */
 export function workflowVocabularyFixtures() {
   const pipeline: BuildPipeline = {
     id: "r",
@@ -13,18 +13,18 @@ export function workflowVocabularyFixtures() {
     environmentId: "e",
     environmentType: "local",
     agentType: "codex",
-    phase: "fixing",
-    steps: { address: { agent: "codex", model: "default" } },
+    phase: "reworking",
+    steps: { "address-findings": { agent: "codex", model: "default" } },
     sessions: [
       {
-        phase: "fix",
+        phase: "rework",
         iteration: 1,
         sessionKey: "existing-fix-key",
         sdkSessionId: "existing-provider-id",
         status: "running",
         startedAt: timestamp,
         label: "Rework",
-        fixWorktreeFingerprintAtStart: "a".repeat(64),
+        reworkWorktreeFingerprintAtStart: "a".repeat(64),
       },
     ],
     currentSessionIndex: 0,
@@ -49,7 +49,7 @@ export function workflowVocabularyFixtures() {
     projectId: "p",
     environmentId: "e",
     targetBranch: "main",
-    phase: "fixing",
+    phase: "addressing-findings",
     reviewers: [
       {
         id: "reviewer-1",
@@ -59,55 +59,59 @@ export function workflowVocabularyFixtures() {
         report: TEST_STRUCTURED_REVIEW_REPORT,
       },
     ],
-    fixModel: { agent: "codex", model: "default" },
-    autoFix: true,
-    fixSessionKey: "existing-fix-key",
-    fixSession: {
+    addressFindingsModel: { agent: "codex", model: "default" },
+    autoAddressFindings: true,
+    addressFindingsSessionKey: "existing-fix-key",
+    addressFindingsSession: {
       agent: "codex",
       model: "default",
       sessionKey: "existing-fix-key",
       providerSessionId: "existing-provider-id",
-      openedFor: "fix",
+      openedFor: "address-findings",
       requestIds: ["existing-request"],
       status: "running",
       startedAt: timestamp,
     },
     activeRequest: {
-      kind: "fix",
+      kind: "address-findings",
       requestId: "existing-request",
       state: "sent",
       createdAt: timestamp,
     },
-    stepRuntimes: { fix: { startedAt: timestamp } },
+    stepRuntimes: { "address-findings": { startedAt: timestamp } },
     consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
     reviewInstruction: "Only address-findings in the report",
     createdAt: timestamp,
     updatedAt: timestamp,
     backendRevision: 7,
   };
-  const { fixWorktreeFingerprintAtStart, ...session } = pipeline.sessions[0]!;
-  const futurePipeline = {
+  const { reworkWorktreeFingerprintAtStart, ...session } = pipeline.sessions[0]!;
+  // The names builds before to-do 4740 stored and sent. Only the backend's
+  // one-way storage migration reads them; the renderer refuses them.
+  const formerPipeline = {
     ...pipeline,
-    phase: "reworking",
-    steps: { "address-findings": pipeline.steps!.address },
+    phase: "fixing",
+    steps: { address: pipeline.steps!["address-findings"] },
     sessions: [
-      {
-        ...session,
-        phase: "rework",
-        reworkWorktreeFingerprintAtStart: fixWorktreeFingerprintAtStart,
-      },
+      { ...session, phase: "fix", fixWorktreeFingerprintAtStart: reworkWorktreeFingerprintAtStart },
     ],
   };
-  const { fixModel, autoFix, fixSessionKey, fixSession, ...rest } = review;
-  const futureReview = {
+  const {
+    addressFindingsModel,
+    autoAddressFindings,
+    addressFindingsSessionKey,
+    addressFindingsSession,
+    ...rest
+  } = review;
+  const formerReview = {
     ...rest,
-    phase: "addressing-findings",
-    addressFindingsModel: fixModel,
-    autoAddressFindings: autoFix,
-    addressFindingsSessionKey: fixSessionKey,
-    addressFindingsSession: { ...fixSession, openedFor: "address-findings" },
-    activeRequest: { ...review.activeRequest, kind: "address-findings" },
-    stepRuntimes: { "address-findings": review.stepRuntimes!.fix },
+    phase: "fixing",
+    fixModel: addressFindingsModel,
+    autoFix: autoAddressFindings,
+    fixSessionKey: addressFindingsSessionKey,
+    fixSession: { ...addressFindingsSession, openedFor: "fix" },
+    activeRequest: { ...review.activeRequest, kind: "fix" },
+    stepRuntimes: { fix: review.stepRuntimes!["address-findings"] },
   };
-  return { pipeline, review, futurePipeline, futureReview };
+  return { pipeline, review, formerPipeline, formerReview };
 }

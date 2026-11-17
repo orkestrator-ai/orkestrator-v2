@@ -85,7 +85,7 @@ export const EFFICIENCY_PHASES = [
   "validation",
   "reviewing",
   "consolidating",
-  "fixing",
+  "addressing-findings",
   "ui",
   "other",
 ] as const;

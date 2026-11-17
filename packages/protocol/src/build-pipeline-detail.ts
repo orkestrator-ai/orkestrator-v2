@@ -38,7 +38,7 @@ export const BUILD_PIPELINE_DETAIL_FIELDS = [
 /** Per-session fields that make up a pipeline's detail. */
 export const BUILD_PIPELINE_SESSION_DETAIL_FIELDS = [
   "reviewReport",
-  "fixResult",
+  "addressFindingsResult",
   "acceptanceCriteriaResults",
   "verificationFeedback",
   "interactionTranscript",

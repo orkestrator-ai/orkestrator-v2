@@ -106,7 +106,7 @@ interface ReviewMeasurement {
   reviewerReports: string[];
   consolidatedReport: string;
   packageId: string;
-  fixResult: string;
+  addressFindingsResult: string;
 }
 
 /**
@@ -136,7 +136,7 @@ async function measureReview(width: number): Promise<ReviewMeasurement> {
   };
   const launchSaves = w.efficiency.count("workflow.save");
   const workflow = await w.start({
-    autoFix: true,
+    autoAddressFindings: true,
     reviewers: Array.from({ length: width }, (_, index) => ({
       agent: "claude" as const,
       model: `model-${index + 1}`,
@@ -218,7 +218,7 @@ async function measureReview(width: number): Promise<ReviewMeasurement> {
         .map((activation) => activation.outputs.report!),
       consolidatedReport: output("consolidate", "report"),
       packageId: output("package", "package"),
-      fixResult: output("fix", "result"),
+      addressFindingsResult: output("fix", "result"),
     };
   } finally {
     for (const spy of Object.values(spies)) spy.mockRestore();
@@ -230,7 +230,7 @@ function expectRecordBudgets(result: ReviewMeasurement): void {
   expect(final.phase).toBe("completed");
   expect(final.reviewers.every((reviewer) => reviewer.status === "completed")).toBe(true);
   expect(final.consolidatedReport).toBeDefined();
-  expect(final.fixResult?.complete).toBe(true);
+  expect(final.addressFindingsResult?.complete).toBe(true);
   expect(final.reviewPackage).toBeDefined();
 
   for (const pass of passes) {
@@ -279,7 +279,7 @@ function expectRecordBudgets(result: ReviewMeasurement): void {
   // producer, which the record does not keep.
   expect(result.readsById.get(result.packageId)).toBe(1);
   expect(result.readsById.get(result.consolidatedReport)).toBe(1);
-  expect(result.readsById.get(result.fixResult)).toBe(1);
+  expect(result.readsById.get(result.addressFindingsResult)).toBe(1);
   expect(result.reviewerReports).toHaveLength(width);
   for (const report of result.reviewerReports) expect(result.readsById.get(report)).toBe(2);
   expect([...result.readsById.values()].reduce((total, reads) => total + reads, 0)).toBe(

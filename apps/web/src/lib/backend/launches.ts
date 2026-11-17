@@ -22,8 +22,8 @@ import { commandBackendClient, type BackendClient } from "./client";
 export interface MultiReviewLaunchDefaultRows {
   reviewers: MultiReviewModelSelection[];
   reviewModel: MultiReviewModelSelection;
-  fixModel: MultiReviewModelSelection;
-  autoFix: boolean;
+  addressFindingsModel: MultiReviewModelSelection;
+  autoAddressFindings: boolean;
   autoPr: boolean;
 }
 

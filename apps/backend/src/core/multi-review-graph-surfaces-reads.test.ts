@@ -75,6 +75,7 @@ describe("CLI review commands on a graph-engine review", () => {
       environmentId: w.environmentId,
       reviewers: [opus, sonnet],
       reviewModel: opus,
+      // The CLI's public wire name (to-do 4740 task 3).
       fixModel: opus,
     };
     const launched = ok<{ workflowId: string; phase: string; outcome: string; ui: string }>(
@@ -238,7 +239,7 @@ describe("the review-pass tab's reads on a graph-engine review", () => {
       `${settled.reviewSession!.providerSessionId} step 0`,
     );
     // No Address Findings ran: the step has no session to read.
-    expect(await w.service.stepTranscript(settled.id, "fix")).toMatchObject({
+    expect(await w.service.stepTranscript(settled.id, "address-findings")).toMatchObject({
       session: "none",
       messages: [],
     });

@@ -57,9 +57,9 @@ const PHASE_LABELS: Record<string, string> = {
   "waiting-for-setup": "Running setup",
   building: "Building",
   reviewing: "Reviewing",
-  addressing: "Addressing findings",
+  "addressing-findings": "Addressing findings",
   verifying: "Verifying",
-  fixing: "Reworking",
+  reworking: "Reworking",
   "creating-pr": "Creating pull request",
   "resolving-conflicts": "Resolving conflicts",
   paused: "Paused",
@@ -79,9 +79,9 @@ const RETRY_STAGE_LABELS: Record<ResumableBuildPhase, string> = {
   "waiting-for-setup": "Retry Setup",
   building: "Retry Build Stage",
   reviewing: "Retry Review Stage",
-  addressing: "Retry Address Findings Stage",
+  "addressing-findings": "Retry Address Findings Stage",
   verifying: "Retry Verification Stage",
-  fixing: "Retry Rework Stage",
+  reworking: "Retry Rework Stage",
   "creating-pr": "Retry PR Stage",
   "resolving-conflicts": "Retry Conflict Resolution",
 };
@@ -90,9 +90,9 @@ const RETRY_STAGE_LABELS: Record<ResumableBuildPhase, string> = {
 const RESTART_STAGE_LABELS: Partial<Record<ResumableBuildPhase, string>> = {
   building: "Restart Build Stage",
   reviewing: "Restart Review Stage",
-  addressing: "Restart Address Findings Stage",
+  "addressing-findings": "Restart Address Findings Stage",
   verifying: "Restart Verification Stage",
-  fixing: "Restart Rework Stage",
+  reworking: "Restart Rework Stage",
   "creating-pr": "Restart PR Stage",
   "resolving-conflicts": "Restart Conflict Resolution",
 };
@@ -169,8 +169,8 @@ export function BuildChatTab({
   const validationRestartTarget = reviewValidationStage(pipeline, currentStagePhase);
   const currentStageSession = pipeline.sessions[pipeline.currentSessionIndex];
   const dedicatedPreparationRunning =
-    (currentStagePhase === "building" || currentStagePhase === "fixing") &&
-    currentStageSession?.phase === (currentStagePhase === "building" ? "build" : "fix") &&
+    (currentStagePhase === "building" || currentStagePhase === "reworking") &&
+    currentStageSession?.phase === (currentStagePhase === "building" ? "build" : "rework") &&
     currentStageSession.label === REVIEW_PACKAGE_SESSION_LABEL;
   const restartCurrentStageLabel =
     validationRestartTarget === "validation"

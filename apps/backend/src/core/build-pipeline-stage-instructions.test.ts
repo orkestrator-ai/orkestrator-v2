@@ -40,7 +40,7 @@ function framed(text: string): string {
 const STEP_RULES = {
   build: "BUILD-RULES: write the failing test first.",
   review: "REVIEW-RULES: look hard at error handling.",
-  address: "ADDRESS-RULES: fix every nit.",
+  "address-findings": "ADDRESS-RULES: fix every nit.",
   verify: "VERIFY-RULES: check the CLI help text.",
   pr: "PR-RULES: title the pull request in English.",
   "resolve-conflicts": "RESOLVE-RULES: keep the target branch's lockfile.",
@@ -71,9 +71,9 @@ function scriptRound(provider: FakeProvider): void {
     const value =
       phase === "review"
         ? reportFor("One finding.", "Inverted branch")
-        : phase === "build" || phase === "fix"
+        : phase === "build" || phase === "rework"
           ? TEST_REVIEW_PREPARATION
-          : phase === "address"
+          : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
             : phase === "verify"
               ? (verifications += 1) === 1
@@ -167,11 +167,11 @@ describe("per-stage instructions in the stage prompts", () => {
       expect(phases).toEqual([
         "build",
         "review",
-        "address",
+        "address-findings",
         "verify",
-        "fix",
+        "rework",
         "review",
-        "address",
+        "address-findings",
         "verify",
         "pr",
         "resolve-conflicts",
@@ -180,9 +180,9 @@ describe("per-stage instructions in the stage prompts", () => {
       const expected: Array<[PipelineSessionPhase, string]> = [
         ["build", STEP_RULES.build],
         // Fix runs on the Build step, so it reads Build's instructions.
-        ["fix", STEP_RULES.build],
+        ["rework", STEP_RULES.build],
         ["review", STEP_RULES.review],
-        ["address", STEP_RULES.address],
+        ["address-findings", STEP_RULES["address-findings"]],
         ["verify", STEP_RULES.verify],
         ["pr", STEP_RULES.pr],
         ["resolve-conflicts", STEP_RULES["resolve-conflicts"]],
@@ -201,7 +201,7 @@ describe("per-stage instructions in the stage prompts", () => {
         }
       }
       // Address keeps its system contract, and the frame comes after it.
-      const address = openingPromptsFor(provider, "address")[0]!;
+      const address = openingPromptsFor(provider, "address-findings")[0]!;
       expect(
         address.indexOf("Report your work in the Address Findings result you submit"),
       ).toBeLessThan(address.indexOf(BUILD_STEP_INSTRUCTIONS_FRAME_OPEN));
@@ -320,7 +320,7 @@ describe("the review panel and its preparation", () => {
         ]),
         steps: {
           build: { agent: "claude", instructions: STEP_RULES.build },
-          address: { agent: "claude", instructions: STEP_RULES.address },
+          "address-findings": { agent: "claude", instructions: STEP_RULES["address-findings"] },
         },
         reviewers: [
           { agent: "claude", model: "opus", instructions: "REVIEWER-1-RULES: security." },
@@ -331,8 +331,13 @@ describe("the review panel and its preparation", () => {
       // A fresh service is the backend after a restart: it reads the record.
       const restarted = createService();
       try {
-        const addressing = await advanceFanoutUntil(restarted, read, started.id, "addressing");
-        expect(addressing.phase).toBe("addressing");
+        const addressing = await advanceFanoutUntil(
+          restarted,
+          read,
+          started.id,
+          "addressing-findings",
+        );
+        expect(addressing.phase).toBe("addressing-findings");
       } finally {
         await restarted.shutdown();
       }
@@ -373,7 +378,7 @@ describe("the review panel and its preparation", () => {
 
       const address = bySession("address-findings-session-");
       expect(address).toHaveLength(1);
-      expect(address[0]).toContain(framed(STEP_RULES.address));
+      expect(address[0]).toContain(framed(STEP_RULES["address-findings"]));
     });
   });
 
@@ -385,8 +390,8 @@ describe("the review panel and its preparation", () => {
           { agent: "claude", model: "sonnet" },
         ]),
       );
-      const addressing = await advanceFanoutUntil(service, read, started.id, "addressing");
-      expect(addressing.phase).toBe("addressing");
+      const addressing = await advanceFanoutUntil(service, read, started.id, "addressing-findings");
+      expect(addressing.phase).toBe("addressing-findings");
       expect(provider.sent.length).toBeGreaterThan(4);
       for (const { prompt } of provider.sent) {
         expect(prompt).not.toContain(BUILD_STEP_INSTRUCTIONS_FRAME_OPEN);

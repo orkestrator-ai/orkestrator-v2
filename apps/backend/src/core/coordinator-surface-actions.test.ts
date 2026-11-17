@@ -867,7 +867,7 @@ describe("Multi Review custom fix and reviewer tabs", () => {
         { id: "reviewer-b", agent: "claude", model: "default", status: "pending" },
       ],
       reviewModel: { agent: "codex", model: "default" },
-      fixModel: { agent: "codex", model: "default" },
+      addressFindingsModel: { agent: "codex", model: "default" },
       phase: "ready",
       consolidatedReport: cleanReport,
       backendRevision: 0,
@@ -884,7 +884,7 @@ describe("Multi Review custom fix and reviewer tabs", () => {
       ...workflow,
       phase: "interactive",
       addressPromptPending: true,
-      customFixInstruction: input.instruction,
+      customAddressFindingsInstruction: input.instruction,
     }));
     context = {
       ...context,
@@ -901,7 +901,7 @@ describe("Multi Review custom fix and reviewer tabs", () => {
     expect(customAddressFindings.mock.calls[0]![0]).toEqual({
       workflowId: workflow.id,
       instruction: "Only the tests",
-      fixModel: { agent: "codex", model: "default" },
+      addressFindingsModel: { agent: "codex", model: "default" },
     });
     const replay = await call<MultiReviewActionResult & { replayed?: boolean }>(
       "custom_fix_coordinator_multi_review_action",

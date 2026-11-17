@@ -127,7 +127,7 @@ class FakeProvider implements BuildPipelineProvider {
   reviewReport: StructuredReviewReport = cleanReview;
   verificationComplete = true;
   preparationResult = TEST_REVIEW_PREPARATION;
-  fixResult: unknown = TEST_ADDRESS_FINDINGS_RESULT;
+  addressFindingsResult: unknown = TEST_ADDRESS_FINDINGS_RESULT;
   dispatchStatus?: BuildPipelineProvider["dispatchStatus"];
   settleTurn?: BuildPipelineProvider["settleTurn"];
   observeSession?: BuildPipelineProvider["observeSession"];
@@ -194,10 +194,10 @@ class FakeProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? this.reviewReport
-        : phase === "build" || phase === "fix"
+        : phase === "build" || phase === "rework"
           ? this.preparationResult
-          : phase === "address"
-            ? this.fixResult
+          : phase === "address-findings"
+            ? this.addressFindingsResult
             : {
                 complete: this.verificationComplete,
                 rationale: this.verificationComplete
@@ -811,7 +811,7 @@ describe("BuildPipelineService", () => {
     });
   });
 
-  for (const phase of ["reviewing", "addressing"] as const) {
+  for (const phase of ["reviewing", "addressing-findings"] as const) {
     test(`rejects corrupted recorded evidence after ${phase}`, async () => {
       await withService(async (service, storage, provider, invocations, controls) => {
         provider.reviewReport = {
@@ -843,7 +843,7 @@ describe("BuildPipelineService", () => {
           provider.sent.some(
             (call) =>
               provider.phases.get(call.sessionId) ===
-              (phase === "reviewing" ? "address" : "verify"),
+              (phase === "reviewing" ? "address-findings" : "verify"),
           ),
         ).toBe(false);
       });
@@ -872,7 +872,7 @@ describe("BuildPipelineService", () => {
         testCoverageGaps: [{ file: "src/app.ts", untestedBehavior: "Missing regression" }],
         verdict: { ready: "with-fixes", reasoning: "Add coverage" },
       };
-      provider.fixResult = {
+      provider.addressFindingsResult = {
         complete: false,
         summary: "Added the missing regression test.",
         filesChanged: ["src/app.test.ts"],
@@ -901,7 +901,7 @@ describe("BuildPipelineService", () => {
       );
       await service.advanceNow(started.id);
       const fixing = await pipeline(storage, started.id);
-      expect(fixing.phase).toBe("fixing");
+      expect(fixing.phase).toBe("reworking");
       expect(fixing.iteration).toBe(1);
       expect(fixing.verificationResult).toBe("fail");
       const oldVerify = verifying.sessions[verifying.currentSessionIndex]!;
@@ -1550,21 +1550,21 @@ describe("BuildPipelineService", () => {
     }> = [
       { name: "build", phase: "building", nextPhase: "reviewing" },
       { name: "review", phase: "reviewing", nextPhase: "verifying" },
-      { name: "address", phase: "addressing", nextPhase: "verifying" },
+      { name: "address-findings", phase: "addressing-findings", nextPhase: "verifying" },
       { name: "verify", phase: "verifying", nextPhase: "creating-pr" },
-      { name: "fix", phase: "fixing", nextPhase: "reviewing" },
+      { name: "rework", phase: "reworking", nextPhase: "reviewing" },
       { name: "PR creation", phase: "creating-pr", nextPhase: "complete" },
       { name: "conflict resolution", phase: "resolving-conflicts", nextPhase: "complete" },
       {
         name: "build with review preparation",
         phase: "building",
-        nextPhase: "fixing",
+        nextPhase: "reworking",
         overrides: { reviewPreparation: { agent: "claude" } },
       },
       {
         name: "build with review fan-out",
         phase: "building",
-        nextPhase: "fixing",
+        nextPhase: "reworking",
         overrides: { reviewers: [{ agent: "claude" }, { agent: "claude" }] },
       },
     ];
@@ -1573,7 +1573,7 @@ describe("BuildPipelineService", () => {
       for (const { name, phase, nextPhase, overrides } of stages) {
         test(`holds ${name} for ${signalName} and advances successfully once cleared`, async () => {
           await withService(async (service, storage, provider, invocations, controls) => {
-            if (phase === "addressing") {
+            if (phase === "addressing-findings") {
               provider.reviewReport = {
                 ...cleanReview,
                 testCoverageGaps: [
@@ -1582,7 +1582,7 @@ describe("BuildPipelineService", () => {
                 verdict: { ready: "with-fixes", reasoning: "Add the boundary test." },
               };
             }
-            if (phase === "fixing") provider.verificationComplete = false;
+            if (phase === "reworking") provider.verificationComplete = false;
             if (phase === "resolving-conflicts") controls.detection!.hasMergeConflicts = true;
             const { started } = await startBuilding(service, storage, overrides);
             for (let pass = 0; pass < 6; pass++) {
@@ -1626,7 +1626,7 @@ describe("BuildPipelineService", () => {
             expect(advanced.failureContext).toBeUndefined();
             if (overrides) {
               expect(advanced.sessions[advanced.currentSessionIndex]).toMatchObject({
-                phase: "fix",
+                phase: "rework",
                 label: REVIEW_PACKAGE_SESSION_LABEL,
                 status: "running",
               });
@@ -1714,7 +1714,7 @@ describe("BuildPipelineService", () => {
             expect(resumed.error).toBeUndefined();
             expect(resumed.failureContext).toBeUndefined();
             expect(provider.sent).toHaveLength(sentCount + 1);
-            expect(resumed.phase).toBe("fixing");
+            expect(resumed.phase).toBe("reworking");
             expect(resumed.reviewRetryRequested).toBeUndefined();
             expect(resumed.pendingUserMessages).toEqual(queued.pendingUserMessages);
             expect(resumed.sessions[resumed.currentSessionIndex]?.label).toBe(

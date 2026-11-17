@@ -41,20 +41,22 @@ describe("queueAutoPr", () => {
     const fix = {
       sessionKey: "fix-a",
       startedAt: "2026-10-16T10:10:00Z",
-    } as MultiReviewWorkflow["fixSession"];
-    const target = workflow({ autoPr: true, fixSession: fix });
+    } as MultiReviewWorkflow["addressFindingsSession"];
+    const target = workflow({ autoPr: true, addressFindingsSession: fix });
     queueAutoPr(target);
-    expect(target.autoPrLaunch?.fixIdentity).toBe(multiReviewAddressFindingsIdentity(fix));
-    expect(target.autoPrLaunch?.fixIdentity).toMatch(/^[0-9a-f]{64}$/);
+    expect(target.autoPrLaunch?.addressFindingsIdentity).toBe(
+      multiReviewAddressFindingsIdentity(fix),
+    );
+    expect(target.autoPrLaunch?.addressFindingsIdentity).toMatch(/^[0-9a-f]{64}$/);
     target.autoPrLaunch!.state = "launched";
     const original = { ...target.autoPrLaunch! };
     for (const laterAddressFindings of [
       { ...fix!, sessionKey: "fix-b" },
       { ...fix!, startedAt: "2026-10-16T11:10:00Z" },
     ]) {
-      target.fixSession = laterAddressFindings;
+      target.addressFindingsSession = laterAddressFindings;
       expect(multiReviewAddressFindingsIdentity(laterAddressFindings)).not.toBe(
-        original.fixIdentity,
+        original.addressFindingsIdentity,
       );
       supersedePendingAutoPr(target);
       queueAutoPr(target);

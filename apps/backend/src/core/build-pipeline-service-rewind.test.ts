@@ -36,7 +36,7 @@ describe("rewinding to an earlier step", () => {
       requestId,
       value: (provider.phases.get(sessionId) === "review"
         ? cleanReview
-        : provider.phases.get(sessionId) === "build" || provider.phases.get(sessionId) === "fix"
+        : provider.phases.get(sessionId) === "build" || provider.phases.get(sessionId) === "rework"
           ? TEST_REVIEW_PREPARATION
           : { complete: false, rationale: `Still failing (${sessionId}).` }) as T,
     });
@@ -129,13 +129,13 @@ describe("rewinding to an earlier step", () => {
         "build:0",
         "review:0",
         "verify:0",
-        "fix:1",
+        "rework:1",
         "review:1",
         "verify:1",
-        "fix:2",
+        "rework:2",
         "review:2",
         "verify:2",
-        "fix:3",
+        "rework:3",
         "review:3",
         "verify:3",
       ]);
@@ -167,14 +167,14 @@ describe("rewinding to an earlier step", () => {
       const firstVerify = failed.sessions.find(
         (session) => session.phase === "verify" && session.iteration === 0,
       )!;
-      const firstRework = failed.sessions.find((session) => session.phase === "fix")!;
+      const firstRework = failed.sessions.find((session) => session.phase === "rework")!;
       expect(firstRework.iteration).toBe(1);
 
       const restarted = await service.restartStep(started.id, firstRework.sessionKey);
 
-      expect(restarted).toMatchObject({ phase: "fixing", iteration: 1 });
+      expect(restarted).toMatchObject({ phase: "reworking", iteration: 1 });
       expect(restarted.verificationFeedback).toBe(`Still failing (${firstVerify.sdkSessionId}).`);
-      expect(shape(live(restarted))).toEqual(["build:0", "review:0", "verify:0", "fix:1"]);
+      expect(shape(live(restarted))).toEqual(["build:0", "review:0", "verify:0", "rework:1"]);
       const replacement = restarted.sessions.at(-1)!;
       expect(replacement.sessionKey).not.toBe(firstRework.sessionKey);
       const sent = provider.sent.find((entry) => entry.sessionId === replacement.sdkSessionId);
@@ -224,13 +224,13 @@ describe("rewinding to an earlier step", () => {
       );
       expect(shape(live(refailed))).toEqual([
         "build:0",
-        "fix:0",
+        "rework:0",
         "review:0",
         "verify:0",
-        "fix:1",
+        "rework:1",
         "review:1",
         "verify:1",
-        "fix:2",
+        "rework:2",
         "review:2",
         "verify:2",
       ]);
@@ -382,7 +382,8 @@ describe("rewinding to an earlier step", () => {
             return;
           // Leave the later round's reviewers in flight when rewinding.
           if (!rewound && current.iteration === 1 && phase === "review") return;
-          if (phase === "address" || phase === "pr" || phase === "resolve-conflicts") return;
+          if (phase === "address-findings" || phase === "pr" || phase === "resolve-conflicts")
+            return;
           const result =
             phase === "review"
               ? cleanReview
@@ -577,7 +578,7 @@ describe("rewinding to an earlier step", () => {
         started.id,
         (snapshot) => snapshot.phase === "failed",
       );
-      const firstRework = failed.sessions.find((entry) => entry.phase === "fix")!;
+      const firstRework = failed.sessions.find((entry) => entry.phase === "rework")!;
       const latestFeedback = failed.verificationFeedback!;
       await mutateStored(storage, started.id, (snapshot) => {
         for (const entry of snapshot.sessions) {
@@ -746,7 +747,7 @@ describe("rewinding to an earlier step", () => {
     });
   });
 
-  test.each(["build", "review", "address", "pr", "resolve-conflicts"] as const)(
+  test.each(["build", "review", "address-findings", "pr", "resolve-conflicts"] as const)(
     "an earlier %s restart restores its round and correct downstream boundary",
     async (phase) => {
       await withService(async (service, storage, provider) => {
@@ -785,7 +786,7 @@ describe("rewinding to an earlier step", () => {
           });
           snapshot.sessions.push({
             ...old,
-            phase: "fix",
+            phase: "rework",
             iteration: 2,
             sessionKey: "later-fix",
             sdkSessionId: "later-fix",
@@ -801,7 +802,7 @@ describe("rewinding to an earlier step", () => {
         ).toBeDefined();
         expect(
           restarted.sessions.find((entry) => entry.phase === "verify")?.supersededBy !== undefined,
-        ).toBe(phase === "address" || phase === "build" || phase === "review");
+        ).toBe(phase === "address-findings" || phase === "build" || phase === "review");
         expect(
           restarted.sessions.find((entry) => entry.sessionKey === old.sessionKey)?.supersededBy !==
             undefined,
@@ -835,11 +836,11 @@ describe("rewinding to an earlier step", () => {
           });
         }
         // Round 0's accepted report was kept, so Address reruns alone on it.
-        if (phase === "address") expect(restarted.structuredReview).toEqual(cleanReview);
+        if (phase === "address-findings") expect(restarted.structuredReview).toEqual(cleanReview);
         else expect(restarted.structuredReview).toBeUndefined();
         expect(restarted.verificationResult).toBeUndefined();
         expect(restarted.verificationFeedback).toBeUndefined();
-        expect(restarted.sessions.at(-1)?.phase).toBe(phase === "review" ? "fix" : phase);
+        expect(restarted.sessions.at(-1)?.phase).toBe(phase === "review" ? "rework" : phase);
         expect(provider.sent.at(-1)?.sessionId).toBe(restarted.sessions.at(-1)?.sdkSessionId);
         const finished = await advanceUntil(
           service,
@@ -877,7 +878,7 @@ describe("rewinding to an earlier step", () => {
         await mutateStored(storage, started.id, (snapshot) => {
           snapshot.iteration = 2;
           for (const [key, phase, label] of [
-            ["later-fix", "fix", "Fix Session"],
+            ["later-fix", "rework", "Fix Session"],
             ["later-reviewer", "review", "Review 1"],
             ["later-consolidation", "review", "Consolidation"],
             ["later-verify", "verify", "Verification Session"],

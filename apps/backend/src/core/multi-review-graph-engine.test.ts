@@ -229,7 +229,7 @@ describe("a graph-engine Multi Review", () => {
     scriptReview(w, { findings: false });
     const workflow = await w.start({
       reviewInstruction: "Look at the parser",
-      autoFix: true,
+      autoAddressFindings: true,
       reviewers: [
         { agent: "claude", model: "opus", lens: { label: "Security", instruction: "Injection" } },
         { agent: "claude", model: "sonnet" },
@@ -308,7 +308,7 @@ describe("a graph-engine Multi Review", () => {
       consolidatedFindings: 2,
       singleSourceFindings: 1,
     });
-    expect(settled.fixSession).toBeUndefined();
+    expect(settled.addressFindingsSession).toBeUndefined();
     expect(settled.autoPrLaunch).toBeUndefined();
   });
 

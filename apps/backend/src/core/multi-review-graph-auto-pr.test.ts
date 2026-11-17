@@ -87,18 +87,18 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     const w = await world(true);
     const { settled, prStates, phases } = await settleWatchingPr(
       w,
-      (await w.start({ autoFix: true, autoPr: true })).id,
+      (await w.start({ autoAddressFindings: true, autoPr: true })).id,
     );
     expect(phases).toEqual(
-      expect.arrayContaining(["reviewing", "consolidating", "fixing", "completed"]),
+      expect.arrayContaining(["reviewing", "consolidating", "addressing-findings", "completed"]),
     );
-    expect(phases.indexOf("fixing")).toBeLessThan(phases.indexOf("completed"));
+    expect(phases.indexOf("addressing-findings")).toBeLessThan(phases.indexOf("completed"));
     expect(settled.phase).toBe("completed");
-    expect(settled.fixResult?.complete).toBe(true);
+    expect(settled.addressFindingsResult?.complete).toBe(true);
     expect(prStates).toEqual(["none", "pending", "launched"]);
     expect(settled.autoPrLaunch).toMatchObject({
       state: "launched",
-      fixIdentity: multiReviewAddressFindingsIdentity(settled.fixSession),
+      addressFindingsIdentity: multiReviewAddressFindingsIdentity(settled.addressFindingsSession),
     });
     expect(settled.autoPrLaunch?.basis).toBeUndefined();
 
@@ -121,7 +121,7 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     const w = await world(true, false);
     const { settled, prStates } = await settleWatchingPr(
       w,
-      (await w.start({ autoFix: true, autoPr: true })).id,
+      (await w.start({ autoAddressFindings: true, autoPr: true })).id,
     );
     expect(settled.phase).toBe("failed");
     expect(settled.error).toBe(
@@ -133,11 +133,11 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     expect(only(run, "describe-pr").state).toBe("skipped");
   });
 
-  test("a clean report goes straight to the pull request whatever autoFix says", async () => {
+  test("a clean report goes straight to the pull request whatever autoAddressFindings says", async () => {
     const w = await world(false);
     const { settled, prStates } = await settleWatchingPr(
       w,
-      (await w.start({ autoFix: false, autoPr: true })).id,
+      (await w.start({ autoAddressFindings: false, autoPr: true })).id,
     );
     expect(settled.phase).toBe("ready");
     expect(prStates).toEqual(["none", "pending", "launched"]);
@@ -148,11 +148,11 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     expect(only(run, "pr").inputs.code).toBe(only(run, "plan").outputs.code);
   });
 
-  test("findings without autoFix end ready; the manual Address Findings then runs as on any review", async () => {
+  test("findings without autoAddressFindings end ready; the manual Address Findings then runs as on any review", async () => {
     const w = await world(true);
     const { settled, prStates } = await settleWatchingPr(
       w,
-      (await w.start({ autoFix: false, autoPr: true })).id,
+      (await w.start({ autoAddressFindings: false, autoPr: true })).id,
     );
     expect(settled.phase).toBe("ready");
     expect(prStates).toEqual(["none"]);
@@ -174,7 +174,7 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     const w = await world(true);
     const { settled, prStates } = await settleWatchingPr(
       w,
-      (await w.start({ autoFix: true, autoPr: false })).id,
+      (await w.start({ autoAddressFindings: true, autoPr: false })).id,
     );
     expect(settled.phase).toBe("completed");
     expect(prStates).toEqual(["none"]);

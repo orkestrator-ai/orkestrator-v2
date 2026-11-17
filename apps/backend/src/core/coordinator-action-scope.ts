@@ -1,3 +1,4 @@
+import type { LaunchMultiReviewActionInput } from "@orkestrator/protocol/multi-review";
 import { createHash } from "node:crypto";
 import { coordinatorConversationRunnable } from "@orkestrator/protocol/coordinator";
 import type { CoordinatorSurfaceAction } from "@orkestrator/protocol/coordinator-surfaces";
@@ -164,4 +165,21 @@ async function admitAndRun(
     result,
   );
   return result;
+}
+
+/** Durable launch identity uses the public vocabulary, including receipts from before migration 11. */
+export function coordinatorMultiReviewLaunchHash(
+  input: LaunchMultiReviewActionInput,
+  nodeId?: string,
+): string {
+  const { addressFindingsModel, autoAddressFindings, ...rest } = input;
+  return actionHash({
+    action: "launch-multi-review",
+    ...(nodeId === undefined ? {} : { nodeId }),
+    input: {
+      ...rest,
+      ...(addressFindingsModel === undefined ? {} : { fixModel: addressFindingsModel }),
+      ...(autoAddressFindings === undefined ? {} : { autoFix: autoAddressFindings }),
+    },
+  });
 }

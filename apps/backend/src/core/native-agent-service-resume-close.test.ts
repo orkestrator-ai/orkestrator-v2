@@ -74,7 +74,7 @@ function reviewOwning(providerSessionId: string): MultiReviewWorkflow {
       status: "running",
       startedAt: new Date(0).toISOString(),
     },
-    fixModel: { agent: "codex", model: "gpt-6" },
+    addressFindingsModel: { agent: "codex", model: "gpt-6" },
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
     backendRevision: 1,

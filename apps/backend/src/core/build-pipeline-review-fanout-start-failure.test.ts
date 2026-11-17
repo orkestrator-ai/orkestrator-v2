@@ -56,8 +56,8 @@ describe("a pipeline reviewer whose agent cannot start", () => {
       expect(providers.get("cursor")!.created).toEqual([]);
 
       provider.runningModels.delete("opus");
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
-      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+      expect(addressing.error ?? addressing.phase).toBe("addressing-findings");
       // The surviving reviewer's report was consolidated without the missing one.
       expect(addressing.structuredReview?.reviewSummary).toBe("Merged review.");
       expect(
@@ -126,7 +126,7 @@ test("allocated sessions whose first send is refused retain startup diagnostics 
     expect(failed.providerSessionId).toBeDefined();
     expect(reviewing.reviewFanout!.reviewers[0]!.status).toBe("running");
     provider.runningModels.delete("opus");
-    const retired = await advanceUntil(service, read, started.id, "addressing");
+    const retired = await advanceUntil(service, read, started.id, "addressing-findings");
     expect(retired.sessions.find((s) => s.label === "Consolidation")?.sessionlessReviewers).toEqual(
       [expect.objectContaining({ startFailed: true, error: "Cursor credentials unavailable" })],
     );
@@ -172,7 +172,7 @@ test("a failure before the first observation preserves a generic classification 
     });
     expect(reviewing.reviewFanout!.reviewers[1]!.startFailed).toBeUndefined();
     provider.runningModels.delete("opus");
-    const retired = await advanceUntil(service, read, started.id, "addressing");
+    const retired = await advanceUntil(service, read, started.id, "addressing-findings");
     expect(
       retired.sessions.find((entry) => entry.label === "Consolidation")?.sessionlessReviewers,
     ).toEqual([
@@ -212,7 +212,7 @@ for (const persistent of [false, true]) {
       expect(reviewer.error).toBe(persistent ? "MCP registration unavailable" : undefined);
       expect(attempts).toBe(persistent ? REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS : 2);
       provider.runningModels.delete("opus");
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
       expect(addressing.structuredReview?.reviewSummary).toBe("Merged review.");
     });
   });

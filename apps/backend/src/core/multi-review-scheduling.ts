@@ -15,7 +15,9 @@ export function reviewSession(
 ): MultiReviewAddressFindingsSession | undefined {
   return (
     workflow.reviewSession ??
-    (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession)
+    (workflow.reviewModel || workflow.consolidationModel
+      ? undefined
+      : workflow.addressFindingsSession)
   );
 }
 
@@ -24,14 +26,17 @@ export function isSupervisedPhase(phase: MultiReviewPhase): boolean {
     phase === "preparing" ||
     phase === "reviewing" ||
     phase === "consolidating" ||
-    phase === "fixing" ||
+    phase === "addressing-findings" ||
     phase === "cancelling"
   );
 }
 
 export function needsPausedStopReconciliation(workflow: MultiReviewWorkflow): boolean {
   if (workflow.phase !== "paused" || !workflow.pausedStep) return false;
-  const session = workflow.pausedStep === "fix" ? workflow.fixSession : reviewSession(workflow);
+  const session =
+    workflow.pausedStep === "address-findings"
+      ? workflow.addressFindingsSession
+      : reviewSession(workflow);
   return (
     (workflow.pausedStep === "prepare" &&
       (workflow.validationRun?.status === "planned" ||
@@ -148,8 +153,9 @@ export function needsInteractiveAddressFindingsObservation(workflow: MultiReview
   return (
     workflow.phase === "interactive" &&
     workflow.addressPromptPending !== true &&
-    (workflow.fixSession?.status === "running" || workflow.fixSession?.status === "idle") &&
-    workflow.stepRuntimes?.fix?.completedAt === undefined
+    (workflow.addressFindingsSession?.status === "running" ||
+      workflow.addressFindingsSession?.status === "idle") &&
+    workflow.stepRuntimes?.["address-findings"]?.completedAt === undefined
   );
 }
 

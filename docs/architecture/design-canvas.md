@@ -373,6 +373,23 @@ items run after it closes, so focus returns to its trigger. **Preview** mode
 routes scroll and hover into the frame while links, forms, navigation, scripts
 and network stay blocked; Escape inside the frame returns to Inspect.
 
+Pointer gestures (`design-canvas-gestures.tsx`, geometry in
+`design-snapping.ts`): the background dots sit on a canvas-space grid whose
+step is a multiple of the 10 px snap pitch (never denser than 12 screen px),
+and grid lines show while a frame is held. Dragging a frame title snaps the
+frame's corner to that grid; an edge within 6 screen px of another frame's
+edge (top/bottom on one axis, left/right on the other) snaps to it instead and
+draws a red guide running between the two frames, two guides when a
+neighbour of the same height matches top and bottom. Resizing from the corner
+snaps the right and bottom edges the same way; holding Alt moves or resizes
+freely. Shift-drag on the background or a frame's body draws a selection box
+that adds every frame it touches to the board selection (a Shift-click
+without a drag still inspects the element; Escape restores the earlier
+selection). Dragging one frame of a several-frame board selection moves them
+all by the same snapped offset, one `update_frame` per frame (each its own
+undo step); pressing one of them without dragging selects only it. Keyboard
+nudges never snap.
+
 Inspector fields are named by their visible label ("Fill", "Align items"),
 not the CSS property, so speech input can use what it sees (WCAG 2.5.3); the
 property is in the field's `data-property` and the label's tooltip, and tests

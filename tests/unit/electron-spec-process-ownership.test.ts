@@ -1,7 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -246,6 +246,63 @@ describe("Electron spec process ownership", () => {
       killIfAlive(electronProcess.pid);
     }
   });
+
+  test("a helper that leaves shortly after a settled close counts as closed, not killed", async () => {
+    // Linux CI: Electron exited with code 0, but its helpers were still alive
+    // the instant close() resolved, and the clean quit was reported "killed".
+    const root = await mkdtemp(path.join(os.tmpdir(), "process-cleanup-natural-exit-"));
+    const release = path.join(root, "release-helper");
+    const helperSource = `
+      const { existsSync } = require("node:fs");
+      const gate = setInterval(() => {
+        if (!existsSync(${JSON.stringify(release)})) return;
+        clearInterval(gate);
+        setTimeout(() => process.exit(0), 100);
+      }, 10);
+      console.log("ready");
+    `;
+    const electronProcess = spawn(
+      process.execPath,
+      [
+        "--eval",
+        `
+        const helper = require("node:child_process").spawn(process.execPath, ["--eval", ${JSON.stringify(helperSource)}], {
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        process.stdin.once("data", () => process.exit(0));
+        helper.stdout.once("data", () => console.log(helper.pid));
+      `,
+      ],
+      { stdio: ["pipe", "pipe", "ignore"] },
+    );
+    const exited = new Promise((resolve) => electronProcess.once("exit", resolve));
+    let helper: number | undefined;
+    let helperAliveAtClose = false;
+    try {
+      helper = Number(await firstLine(electronProcess));
+      // Readiness and process enumeration must not spend the helper's lifetime.
+      // This deliberately exceeds the old fixture's entire one-second lifetime.
+      await Bun.sleep(1_200);
+      const app = {
+        close: async () => {
+          electronProcess.stdin!.end("quit\n");
+          await exited;
+          helperAliveAtClose = !processAlive(electronProcess.pid!) && processAlive(helper!);
+          // Release only after observing the orphan: scheduling before this
+          // handshake cannot turn the scenario into a trivial clean close.
+          await writeFile(release, "");
+        },
+        process: () => electronProcess,
+      };
+      expect(await closeElectronWithin(app as never, 1_000)).toBe("closed");
+      expect(helperAliveAtClose).toBe(true);
+      expect(processAlive(helper)).toBe(false);
+    } finally {
+      killIfAlive(helper);
+      killIfAlive(electronProcess.pid);
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   test.each([false, true])(
     "retains orphaned descendants when close exits the root (pending=%s)",

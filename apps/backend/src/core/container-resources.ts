@@ -286,8 +286,8 @@ let warnedRootlessLiveRestore = false;
  * rootless restart replaces RootlessKit, its namespaces, containerd and the
  * shims, so the new daemon reports every container exited while the old
  * containers' processes keep running, unreachable by Docker and with no
- * network, on the same volumes the restarted containers then mount (to-do
- * 7390 task 1, 2026-11-11). Nothing in the backend can stop them, so the
+ * network, on the same volumes the restarted containers then mount (#2142,
+ * 2026-11-11). Nothing in the backend can stop them, so the
  * user is told to turn the setting off; the backend restarts containers as
  * it does for any daemon whose live-restore is off.
  */

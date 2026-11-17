@@ -164,4 +164,4 @@ new log line marks a recurrence, which is what task 1 now needs.
 - [Container qualification](../../development/container-qualification.md#docker-daemon-restart-during-launch-and-rebuild-copy-task-5) (the run that found it).
 - [7549-rootless-docker-cp-refusals.md](7549-rootless-docker-cp-refusals.md) (another rootless `docker cp` behaviour).
 - [Container lifecycle](../../architecture/container-lifecycle.md) (the drain window, under the preserving rebuild's copy).
-- [7390-rootless-restart-remaining-settings.md](7390-rootless-restart-remaining-settings.md) (rootless daemon restarts).
+- 7390 (retired 2026-11-17; rootless daemon restarts, summarised in [container lifecycle](../../architecture/container-lifecycle.md) and recorded in [container qualification](../../development/container-qualification.md#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17)).

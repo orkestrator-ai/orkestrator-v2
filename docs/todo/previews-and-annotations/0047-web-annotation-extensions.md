@@ -615,8 +615,9 @@ unsupported, as before. Main rebuilds the scope from known fields
 ### Task 5: what the agent receives
 
 The brief names each frame step as `{ frame, cssPath, documentPath, stableId? }` and
-each host as `{ shadowHost, cssPath, stableId? }`, outermost first, with a note that `cssPath`
-and `stableId` are scoped to the innermost document or root. The document
+each host as `{ shadowHost, cssPath, stableId? }`, outermost first. The note
+explains that each root step resolves inside its containing root; the target
+selectors resolve inside the innermost document or root. The document
 path is what an agent can find in the code (a route or a static file); frame
 and host selectors remain available to resolve the ordered root path. The brief's
 same-target conflict check now keys a frame target by its path too, so a

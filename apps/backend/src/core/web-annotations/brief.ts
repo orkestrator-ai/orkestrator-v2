@@ -297,7 +297,7 @@ function sectionValues(
                             ...(step.stableId ? { stableId: step.stableId } : {}),
                           },
                     ),
-                    note: "cssPath and stableId are scoped to the innermost frame document or shadow root",
+                    note: "Resolve path steps outermost first in each containing root; target cssPath and stableId resolve in the innermost frame document or shadow root",
                   },
                 }
               : {}),

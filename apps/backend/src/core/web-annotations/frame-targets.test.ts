@@ -145,6 +145,7 @@ describe("frame targets in the brief", () => {
         body: "Pad it.",
       },
     ]);
+    expect(brief.body).toContain("Resolve path steps outermost first in each containing root");
     expect(brief.body).toContain('"cssPath":"iframe#editor"');
     expect(brief.body).toContain('"cssPath":"html \\u003e body \\u003e rich-editor"');
     expect(brief.body).toContain('"stableId":{"kind":"id","value":"editor"}');

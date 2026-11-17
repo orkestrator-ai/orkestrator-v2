@@ -364,8 +364,8 @@ own selection, which Text mode does not read. The backend advertises
 scope only to a backend that advertises it and otherwise sends the older
 `{ kind: "unsupported", reason: "iframe" }`. The brief gives the agent each
 frame's `documentPath`, CSS selector and stable id, and each host's tag, CSS selector and stable id, outermost first,
-with a note that `cssPath` and `stableId` are scoped to the innermost document
-or root. Each root step retains its selector so sibling frames can be distinguished.
+with a note to resolve root steps outermost first in each containing root,
+then target `cssPath` and `stableId` in the innermost document or root. Each root step retains its selector so sibling frames can be distinguished.
 
 A text range stores its quote with context plus the anchor of its containing
 element, whose scope says which tree the quote is in. Text mode reads a selection

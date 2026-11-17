@@ -1113,7 +1113,8 @@ Four things can move it:
   account's usage (cached for two minutes, as for Settings) and move to the top of
   the order. That is a move when the active account's weekly or 5-hour limit reaches
   98% used, and also when another login with room (below 98% on both limits; see
-  [One threshold](#one-threshold)) resets more than an hour sooner,
+  [One threshold](#one-threshold)) resets more than an hour sooner on every
+  reading lately taken of either login ([Disputed resets](#disputed-resets)),
   or the active account's own tick is off. A running turn finishes on the old account, as with any switch. A native
   tab's next turn moves over. Workflow providers resolve the local bridge before
   creating a session or preparing each new turn, so an idle bridge moves over
@@ -1268,6 +1269,43 @@ first in the order. `agent-accounts-auto-switch-flap-replay.test.ts` replays bot
 machines' sequences, with the reset-only reading, a failed read, an older reading
 below 98% and a stale lower one, and checks that a later fresh reading below 98%
 or the weekly reset still lets the login back.
+
+### Disputed resets
+
+A login's general weekly limit ends at one time, and that time only ever moves
+later: the week ends and the next begins, or a limit reset is spent. So fresh
+readings of one login that name weekly resets more than the reset tolerance
+apart (an hour, `AUTO_SWITCH_RESET_TOLERANCE_MS`), each still ahead, cannot all
+be that login's. The switcher remembers, per login, the weekly resets fresh
+readings named, whichever machine took them (`disputedResets` in
+`agent-accounts-auto-switch.ts`). While they disagree, each entry of the login
+carries the earliest and latest of them (`resetRange` on its reading), and a
+`soonest-reset` move goes only where it is better on every one: the active
+account's earliest reset against the destination's latest
+(`decideAutoSwitch`). A disputed login is passed over, not a reason to stay, so
+a third account sooner on every reading is still a move. `threshold`,
+`five-hour`, `limit`, `signed-out` and `not-included` moves ignore the range.
+
+A reset is remembered until it passes, or for a day
+(`RESET_CLAIM_MEMORY_MS`) after a reading last named it, and the switcher logs
+`auto-switch.reset-disputed` (provider and spread only) when a login becomes
+disputed. Like the hold, the memory is in the backend process and bounded; after a
+restart the first contradicting reading can still move the machine once before
+the second one disputes it. Every automatic move is now logged too, as
+`auto-switch.moved` with its reason, in the essential log
+([logging.md](logging.md#the-essential-event-log)), so a machine's own record says
+why it moved.
+
+On 2026-11-17, on 2.39.3-beta, mbp3 shared a reading filed under one login
+(84% weekly, its week ending on the 21st on every other machine) that matched a
+different login to the digit: 0%, ending on the 24th, with the other login's
+limit-reset grants. Whichever of the two was newest won
+([Shared readings](#shared-readings)), so machines with that login and one whose
+week ended between the two moved off it and back (`soonest-reset` both ways)
+every time the newest reading changed sides; neither reading was near 98%, so the
+hold did not apply. `agent-accounts-auto-switch-reset-dispute.test.ts` replays
+it on Claude and Codex. How mbp3 came to read the other login's usage was not
+established; this rule keeps any such reading from moving machines back and forth.
 
 ### Paid overage
 

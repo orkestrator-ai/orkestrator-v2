@@ -8,10 +8,13 @@
  * The rule itself is in `@orkestrator/protocol/agent-account-auto-switch`. This
  * class owns the reads, the switch and the waits, and remembers which logins a
  * fresh reading put past the threshold, so leaving an account and choosing it
- * again use one threshold ("One threshold"). Nothing here sees a credential:
+ * again use one threshold ("One threshold"), and which weekly resets fresh
+ * readings named for each login, so readings of one login that contradict each
+ * other never move the machine back and forth ("Disputed resets"). Nothing here sees a credential:
  * every switch only records which existing login is active.
  */
 import {
+  AUTO_SWITCH_RESET_TOLERANCE_MS,
   AUTO_SWITCH_THRESHOLD_PERCENT,
   MAX_USAGE_LIMIT_RESENDS,
   confirmedLimitResetsAt,
@@ -205,6 +208,31 @@ function boundedUsageReading(
 const WEEK_MS = 7 * 24 * 60 * 60_000;
 const FIVE_HOUR_MS = 5 * 60 * 60_000;
 
+/**
+ * How long a weekly reset a fresh reading named for a login is remembered after
+ * it was last named. Readings that disagree have come hours apart, so a shorter
+ * memory would forget one before the other came back and move the machine again.
+ */
+export const RESET_CLAIM_MEMORY_MS = 24 * 60 * 60_000;
+/** Distinct weekly resets remembered per login; the most recently named are kept. */
+const MAX_RESET_CLAIMS = 4;
+
+/** A weekly reset a fresh reading named for a login, and when one last named it. */
+interface ResetClaim {
+  resetsAt: number;
+  seenAt: number;
+}
+
+/** The earliest and latest of some resets, when they are further apart than the tolerance. */
+function spreadBeyondTolerance(
+  claims: readonly ResetClaim[],
+): { earliest: number; latest: number } | undefined {
+  if (claims.length < 2) return undefined;
+  const earliest = Math.min(...claims.map((claim) => claim.resetsAt));
+  const latest = Math.max(...claims.map((claim) => claim.resetsAt));
+  return latest - earliest > AUTO_SWITCH_RESET_TOLERANCE_MS ? { earliest, latest } : undefined;
+}
+
 /** One limit a fresh reading put at or past the threshold, held until it resets. */
 interface HeldLimit {
   usedPercent: number;
@@ -336,6 +364,13 @@ export class AgentAccountAutoSwitcher {
    * like it has room again before a fresh reading says so or the limit resets.
    */
   private readonly held = new Map<string, HeldLogin>();
+  /**
+   * The weekly resets fresh readings of each login named lately, keyed by
+   * `heldLoginKey`. A login's week ends once; readings that name resets hours
+   * apart cannot all be its own, so neither is trusted to move the machine
+   * ("Disputed resets").
+   */
+  private readonly resetClaims = new Map<string, ResetClaim[]>();
   /** When each reading `readings` took was fetched, so a hold can tell newer news from older. */
   private readonly readAt = new WeakMap<UsageLimitReading, number>();
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -773,6 +808,7 @@ export class AgentAccountAutoSwitcher {
       reason: target.reason,
     });
     if (!moved) return false;
+    log.info("auto-switch.moved", { provider: platform, reason: target.reason });
     this.recentMoves.set(platform, { from: activeId, to: target.accountId, at: this.now() });
     try {
       await this.deps.notify({
@@ -892,7 +928,99 @@ export class AgentAccountAutoSwitcher {
         }),
     )
       .then((entries) => (mode === "probe" ? this.renewUnread(platform, entries, read) : entries))
-      .then((entries) => this.holdPastThreshold(platform, entries, state.activeId, confirmedOut));
+      .then((entries) => {
+        // From the readings as taken, before a hold stands in for any of them.
+        const disputed = this.disputedResets(platform, entries, confirmedOut);
+        const held = this.holdPastThreshold(platform, entries, state.activeId, confirmedOut);
+        if (disputed.size === 0) return held;
+        return held.map((entry) => {
+          const resetRange = disputed.get(heldLoginKey(platform, entry));
+          return resetRange ? { ...entry, reading: { ...entry.reading, resetRange } } : entry;
+        });
+      });
+  }
+
+  /**
+   * Remember the weekly reset each fresh reading names for its login, and answer
+   * the logins whose remembered resets disagree, with the earliest and latest.
+   *
+   * A login's week ends at one time, and a reset only ever moves later (the week
+   * ends, or a limit reset is spent). So fresh readings of one login naming
+   * resets more than the tolerance apart, each still ahead, cannot all be
+   * right: one is another login's reading filed under this one. On 2026-11-17
+   * mbp3 shared a reading of one login that was another login's to the digit,
+   * and machines moved off that login and back each time the newest reading
+   * changed sides (`soonest-reset` both ways). A disputed login is judged on
+   * every reset it was given, which leaves the machine where it is.
+   *
+   * A reset is remembered until it passes or for {@link RESET_CLAIM_MEMORY_MS}
+   * after a reading last named it. In memory and bounded, like the hold.
+   */
+  private disputedResets(
+    platform: AgentAccountPlatform,
+    entries: readonly AutoSwitchAccount[],
+    confirmedOut: ReadonlySet<string>,
+  ): Map<string, { earliest: number; latest: number }> {
+    const now = this.now();
+    const named = new Map<string, number[]>();
+    for (const entry of entries) {
+      const key = heldLoginKey(platform, entry);
+      const resets = named.get(key) ?? [];
+      named.set(key, resets);
+      // A confirmed stop's reading is made up for it and names no reset.
+      if (confirmedOut.has(entry.account.id)) continue;
+      const { reading } = entry;
+      if (reading.freshness === "fresh" && reading.resetsAt !== undefined) {
+        resets.push(reading.resetsAt);
+      }
+    }
+    const disputed = new Map<string, { earliest: number; latest: number }>();
+    for (const [key, resets] of named) {
+      const before = (this.resetClaims.get(key) ?? []).filter(
+        (claim) => claim.resetsAt > now && now - claim.seenAt < RESET_CLAIM_MEMORY_MS,
+      );
+      const claims = before.map((claim) => ({ ...claim }));
+      for (const resetsAt of resets) {
+        let nearest: ResetClaim | undefined;
+        for (const claim of claims) {
+          const distance = Math.abs(claim.resetsAt - resetsAt);
+          if (
+            distance <= AUTO_SWITCH_RESET_TOLERANCE_MS &&
+            (!nearest || distance < Math.abs(nearest.resetsAt - resetsAt))
+          ) {
+            nearest = claim;
+          }
+        }
+        if (nearest) {
+          nearest.resetsAt = resetsAt;
+          nearest.seenAt = now;
+        } else {
+          claims.push({ resetsAt, seenAt: now });
+        }
+      }
+      const kept = claims
+        .sort((left, right) => right.seenAt - left.seenAt)
+        .slice(0, MAX_RESET_CLAIMS);
+      if (kept.length === 0) {
+        this.resetClaims.delete(key);
+        continue;
+      }
+      if (!this.resetClaims.has(key) && this.resetClaims.size >= MAX_TRACKED_STOPS) {
+        this.resetClaims.clear();
+      }
+      this.resetClaims.set(key, kept);
+      const range = spreadBeyondTolerance(kept);
+      if (!range) continue;
+      disputed.set(key, range);
+      const { earliest, latest } = range;
+      if (!spreadBeyondTolerance(before)) {
+        log.warn("auto-switch.reset-disputed", {
+          provider: platform,
+          spreadMinutes: Math.round((latest - earliest) / 60_000),
+        });
+      }
+    }
+    return disputed;
   }
 
   /**

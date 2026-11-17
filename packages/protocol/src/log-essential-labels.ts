@@ -1,3 +1,4 @@
+import { AUTO_SWITCH_REASONS } from "./agent-account-auto-switch.js";
 import { LOG_VOCABULARY, type LogAreaSpec } from "./log-vocabulary/index.js";
 import {
   isRendererErrorBoundary,
@@ -253,6 +254,13 @@ export function isEssentialLabel(
   ) {
     if (field === "provider") return PROVIDERS.has(value);
     if (field === "reason") return BRIDGE_LISTENER_REASONS.has(value);
+  }
+  if (
+    area === "agent-accounts" &&
+    (event === "auto-switch.moved" || event === "auto-switch.reset-disputed")
+  ) {
+    if (field === "provider") return value === "claude" || value === "codex";
+    if (field === "reason") return (AUTO_SWITCH_REASONS as readonly string[]).includes(value);
   }
   if (area === "bridge.claude" && event === "query.failed") {
     if (field === "subtype") return CLAUDE_RESULT_SUBTYPES.has(value);

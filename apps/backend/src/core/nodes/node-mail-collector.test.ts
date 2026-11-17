@@ -88,6 +88,148 @@ for (const failure of ["collect", "deliver", "ack"])
     collector.dispose();
   });
 
+describe("collectFrom", () => {
+  test.each([false, true])(
+    "a joined caller waits for the final pass (worker still failing: %s) and can retry later",
+    async (stillFailing) => {
+      const firstRead = Promise.withResolvers<void>();
+      const releaseFirst = Promise.withResolvers<void>();
+      const finalRead = Promise.withResolvers<void>();
+      const releaseFinal = Promise.withResolvers<void>();
+      let reads = 0;
+      let workerFails = true;
+      // Two tabs in the same environment must have independent outcomes.
+      let pending = [item(1), { ...item(2), fromTabId: "unrelated-tab" }];
+      const collector = new NodeMailCollector({
+        retryDelayMs: 60_000,
+        selfId: async () => "bk_cmd" as never,
+        nodeName: async () => "Leaf",
+        link: () => ({
+          connected: true,
+          invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
+            if (command === "collect_node_outbox") {
+              reads++;
+              if (reads === 1) {
+                firstRead.resolve();
+                await releaseFirst.promise;
+              } else if (reads === 2) {
+                finalRead.resolve();
+                await releaseFinal.promise;
+                workerFails = stillFailing;
+              }
+              return { items: pending, more: false } as T;
+            }
+            const sequences = args.sequences as number[];
+            pending = pending.filter((entry) => !sequences.includes(entry.seq));
+            return {} as T;
+          },
+        }),
+        deliver: async ({ from }) => {
+          if (from.tabId === "unrelated-tab" || workerFails) throw new Error("mailbox full");
+        },
+      });
+      try {
+        const background = collector.collect("bk_leaf" as never);
+        await firstRead.promise;
+        let settled = false;
+        const joined = collector
+          .collectFrom("bk_leaf" as never, {
+            environmentId: "e",
+            tabId: "t",
+          })
+          .then((result) => {
+            settled = true;
+            return result;
+          });
+        releaseFirst.resolve();
+        await finalRead.promise;
+        expect(settled).toBe(false);
+        expect(reads).toBe(2);
+        releaseFinal.resolve();
+        expect(await joined).toBe(!stillFailing);
+        // collect retains the earlier failure, while collectFrom uses the final pass.
+        expect(await background).toBe(false);
+        expect(pending.map((entry) => entry.seq)).toEqual(stillFailing ? [1, 2] : [2]);
+
+        workerFails = false;
+        expect(
+          await collector.collectFrom("bk_leaf" as never, {
+            environmentId: "e",
+            tabId: "t",
+          }),
+        ).toBe(true);
+        expect(pending.map((entry) => entry.seq)).toEqual([2]);
+        expect(
+          await collector.collectFrom("bk_leaf" as never, {
+            environmentId: "e",
+            tabId: "unrelated-tab",
+          }),
+        ).toBe(false);
+      } finally {
+        releaseFirst.resolve();
+        releaseFinal.resolve();
+        collector.dispose();
+      }
+    },
+  );
+
+  const from = (seq: number, environmentId: string): OutboxItem => ({
+    ...item(seq),
+    fromEnvironmentId: environmentId,
+  });
+  function collecting(
+    items: OutboxItem[],
+    options: { failFrom?: string; more?: boolean; connected?: boolean } = {},
+  ) {
+    let pending = items;
+    const collector = new NodeMailCollector({
+      retryDelayMs: 60_000,
+      selfId: async () => "bk_cmd" as never,
+      nodeName: async () => "Leaf",
+      link: () => ({
+        connected: options.connected ?? true,
+        invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
+          if (command === "collect_node_outbox")
+            return { items: pending, more: options.more ?? false } as T;
+          const acked = (args.sequences as number[] | undefined) ?? [];
+          pending = pending.filter((entry) => !acked.includes(entry.seq));
+          return {} as T;
+        },
+      }),
+      deliver: async (input) => {
+        if (input.from.environmentId === options.failFrom) throw new Error("mailbox-backlog-full");
+      },
+    });
+    return { collector, pending: () => pending.map((entry) => entry.seq) };
+  }
+
+  test("is true for a sender whose mail arrived though another sender's failed", async () => {
+    const world = collecting([from(1, "other"), from(2, "worker")], { failFrom: "other" });
+    const sender = { environmentId: "worker", tabId: "t" };
+    expect(await world.collector.collectFrom("bk_leaf" as never, sender)).toBe(true);
+    expect(await world.collector.collect("bk_leaf" as never)).toBe(false);
+    expect(world.pending()).toEqual([1]);
+    world.collector.dispose();
+  });
+
+  test("is false while the sender's own mail fails to deliver", async () => {
+    const world = collecting([from(1, "worker")], { failFrom: "worker" });
+    const sender = { environmentId: "worker", tabId: "t" };
+    expect(await world.collector.collectFrom("bk_leaf" as never, sender)).toBe(false);
+    world.collector.dispose();
+  });
+
+  test("is false when the outbox was not read to its end", async () => {
+    const sender = { environmentId: "worker", tabId: "t" };
+    const bounded = collecting([from(1, "worker")], { more: true });
+    expect(await bounded.collector.collectFrom("bk_leaf" as never, sender)).toBe(false);
+    bounded.collector.dispose();
+    const offline = collecting([from(1, "worker")], { connected: false });
+    expect(await offline.collector.collectFrom("bk_leaf" as never, sender)).toBe(false);
+    offline.collector.dispose();
+  });
+});
+
 describe("a repository with no coordinator on this node", () => {
   const noCoordinator = () =>
     Object.assign(new Error("No open coordinator"), { code: "no-coordinator" });

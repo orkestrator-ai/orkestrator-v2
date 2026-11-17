@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import type { AgentMailMailboxSnapshot, AgentMailMessage } from "@orkestrator/protocol/agent-mail";
+import {
+  AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX,
+  type AgentMailMailboxSnapshot,
+  type AgentMailMessage,
+} from "@orkestrator/protocol/agent-mail";
 import { invoke } from "@/lib/native/backend";
 import { waitFor } from "@testing-library/react";
 import {
@@ -163,6 +167,33 @@ describe("agentMailStore authoritative adoption", () => {
 });
 
 describe("transcript mailbox requests", () => {
+  test("refresh requests the complete bounded mailbox rather than the default page", async () => {
+    const snapshot = mailbox(1);
+    snapshot.messages = Array.from({ length: 120 }, (_, index) => ({
+      ...snapshot.messages[0]!,
+      id: `rider-${index}`,
+      placement: "pending-inject" as const,
+      rideAlong: true,
+    }));
+    snapshot.total = 120;
+    snapshot.limit = AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX;
+    const invokeMock = invoke as ReturnType<typeof mock>;
+    invokeMock.mockImplementationOnce((_command: string, args: { limit?: number }) => {
+      const limit = args.limit ?? 100;
+      return Promise.resolve({ ...snapshot, limit, messages: snapshot.messages.slice(0, limit) });
+    });
+    await appCommandStore(agentMailStore).getState().refreshMailbox("env-1", "tab-1");
+    expect(invokeMock).toHaveBeenCalledWith("get_agent_mail_mailbox", {
+      environmentId: "env-1",
+      tabId: "tab-1",
+      unreadOnly: false,
+      limit: AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX,
+    });
+    expect(
+      appCommandStore(agentMailStore).getState().mailboxes.get("env-1\0tab-1")?.messages,
+    ).toHaveLength(120);
+  });
+
   test("clear fences an in-flight mailbox response", async () => {
     let finish!: (snapshot: AgentMailMailboxSnapshot) => void;
     const invokeMock = invoke as ReturnType<typeof mock>;

@@ -73,11 +73,42 @@ export function AgentMailBanner({
     void refreshMailbox(environmentId, tabId).catch(() => undefined);
   }, [entry, environmentId, refreshMailbox, tabId]);
 
-  if (!entry || dismissedRevision === entry.revision) return null;
-  const messages = mailbox?.messages ?? [];
+  // The API requests the complete bounded mailbox. A cached/default page is
+  // insufficient both to count riders and to find an older held report.
+  if (
+    !entry ||
+    dismissedRevision === entry.revision ||
+    !mailbox ||
+    mailbox.offset !== 0 ||
+    mailbox.messages.length < mailbox.total
+  )
+    return null;
+  const messages = mailbox.messages;
   const failed = messages.find((message) => message.placement === "inject_failed");
+  const failedCount = messages.filter((message) => message.placement === "inject_failed").length;
   const paused = messages.find(isAgentMailBudgetHeld);
-  const pending = messages.find((message) => message.placement === "pending-inject");
+  // Awareness notices (an account switch) wait to ride along with the next
+  // turn something else starts, and the transcript already lists them. They
+  // are not mail the person is waiting on, so they never speak for the card or
+  // take its Deliver now: on a coordinator holding a worker's report, they
+  // used to name the switch and release it instead of the report.
+  const riders = messages.filter(
+    (message) =>
+      message.placement === "pending-inject" &&
+      message.rideAlong === true &&
+      !message.userReleasedAt,
+  );
+  const pending = messages.find(
+    (message) => message.placement === "pending-inject" && !riders.includes(message),
+  );
+  const pendingCount = messages.filter(
+    (message) =>
+      (message.placement === "pending-inject" ||
+        (message.placement === "inject-held" &&
+          (isAgentMailBudgetHeld(message) ||
+            message.placementReason === COORDINATOR_DELEGATION_HOLD_REASON))) &&
+      !riders.includes(message),
+  ).length;
   const delegationHeld = messages.find(
     (message) =>
       message.placement === "inject-held" &&
@@ -112,8 +143,8 @@ export function AgentMailBanner({
     !pending &&
     inInbox.length === 0 &&
     awaitingAgent.length === 0 &&
-    entry.pendingInjectCount === 0 &&
-    entry.failedInjectCount === 0
+    pendingCount === 0 &&
+    failedCount === 0
   )
     return null;
   const descriptor = mailbox?.descriptor;
@@ -199,7 +230,7 @@ export function AgentMailBanner({
   else if (descriptor?.presence === "draft")
     text = "Delivery waiting: you have unsent text in the composer";
   else if (pending)
-    text = `${entry.pendingInjectCount} message${entry.pendingInjectCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
+    text = `${pendingCount} message${pendingCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
   else if (releasable.length > 0) {
     const count = releasable.length;
     text = `${count} message${count === 1 ? "" : "s"} in inbox · pull only`;
@@ -207,7 +238,7 @@ export function AgentMailBanner({
   } else if (blockedCount > 0)
     text = `${blockedCount} message${blockedCount === 1 ? "" : "s"} in inbox · ${refusalOf(inInbox[0]!)}`;
   else
-    text = `${entry.pendingInjectCount} message${entry.pendingInjectCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
+    text = `${pendingCount} message${pendingCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
 
   if (deliveryHeldReason && (failed || paused)) text += ` · ${deliveryHeldReason}`;
 
@@ -216,10 +247,7 @@ export function AgentMailBanner({
     : paused || awaitingAgent.length > 0 || undeliverable
       ? "warning"
       : "info";
-  const count = Math.max(
-    1,
-    awaitingAgent.length || inInbox.length || entry.pendingInjectCount + entry.failedInjectCount,
-  );
+  const count = Math.max(1, awaitingAgent.length || inInbox.length || pendingCount + failedCount);
   const newest =
     failed ??
     paused ??

@@ -746,7 +746,12 @@ remain and use the same paths.
   and the worker's report wakes the coordinator or is held while the
   coordinator waits on that worker. A remote delegation closes when the
   node shows the worker's turn has ended, or its environment failed,
-  stopped or disappeared; build pipelines, Multi Reviews and pull requests
+  stopped or disappeared. Before closing on a turn end it collects the node's
+  outbox and waits only for that worker's own mail: the outbox must have been
+  read to its end with none of the worker's items failing to deliver
+  (`NodeMailCollector.collectFrom`). Another item that keeps failing, such as
+  a notice for a coordinator whose mailbox is full, does not hold it open;
+  build pipelines, Multi Reviews and pull requests
   the coordinator follows on a node send status wakes whose suggested calls
   carry the `nodeId`. A followed pull request is read from the node's
   `get_environment` and the PR monitor health its summaries relay (check

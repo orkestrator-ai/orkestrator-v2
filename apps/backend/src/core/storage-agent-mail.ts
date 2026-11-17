@@ -66,7 +66,11 @@ import {
   pairBudgetEpoch,
   pairMessagesInLastHour,
 } from "./storage-agent-mail-budgets.js";
-import { coalescingWindow, expireStaleRiders } from "./storage-agent-mail-injects.js";
+import {
+  coalescingWindow,
+  expireStaleRiders,
+  oldestEvictableAwareness,
+} from "./storage-agent-mail-injects.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("agent-mail");
@@ -708,12 +712,18 @@ export class AgentMailRepository {
               message.ackedAt || message.discardedAt || SETTLED_PLACEMENTS.has(message.placement),
           )
           .sort((a, b) => a.message.createdAt.localeCompare(b.message.createdAt))[0];
-        if (!eligible)
+        // Nothing settled: the oldest waiting awareness notice gives way
+        // rather than refusing mail that needs an answer.
+        const index = eligible?.index ?? oldestEvictableAwareness(store, recipient);
+        if (index < 0)
           throw new AgentMailError(
             "mailbox-backlog-full",
             "Recipient mailbox has too many unsettled messages",
           );
-        recipient.messages.splice(eligible.index, 1);
+        const [evicted] = recipient.messages.splice(index, 1);
+        store.pendingInject = store.pendingInject.filter(
+          (entry) => entry.mailboxId !== destinationId || entry.messageId !== evicted!.id,
+        );
       }
 
       const now = new Date().toISOString();

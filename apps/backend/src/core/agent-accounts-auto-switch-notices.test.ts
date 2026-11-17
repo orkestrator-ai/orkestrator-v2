@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import { mailAutoSwitchNotice } from "./agent-accounts-auto-switch-notices.js";
 
 const NOTICE = {
@@ -118,5 +119,16 @@ describe("who the notice skips", () => {
     await expect(
       mailAutoSwitchNotice(storageWith(send), NOTICE, "leaf", { requireDelivery: true }),
     ).rejects.toThrow("mail is off");
+  });
+
+  test("a full mailbox is not a failure to retry: the others still hear, and it resolves", async () => {
+    const send = mock(async (...args: unknown[]) => {
+      const message = args[1] as { toTabId: string };
+      if (message.toTabId === "main-tab")
+        throw new AgentMailError("mailbox-backlog-full", "Recipient mailbox is full");
+      return {};
+    });
+    await mailAutoSwitchNotice(storageWith(send), NOTICE, "leaf", { requireDelivery: true });
+    expect(send).toHaveBeenCalledTimes(2);
   });
 });

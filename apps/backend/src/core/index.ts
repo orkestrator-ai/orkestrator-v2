@@ -993,7 +993,10 @@ export class OrkestratorBackend {
       new NodeCoordinatorRemote({
         invokeOnNode: (input) => this.nodePortal.invokeOnNode(input),
         summaries: (nodeIds) => this.nodePortal.summaries(nodeIds),
-        collectMail: (nodeId) => this.nodeCoordination.collector.collect(nodeId as BackendId),
+        collectMail: (nodeId, from) =>
+          from
+            ? this.nodeCoordination.collector.collectFrom(nodeId as BackendId, from)
+            : this.nodeCoordination.collector.collect(nodeId as BackendId),
         registeredNodeIds: () => this.nodes.registeredNodeIds(),
       }),
     );

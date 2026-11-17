@@ -85,8 +85,13 @@ export interface CoordinatorRemoteAccess {
     environmentId: string,
   ): Promise<RemotePullRequestReading | null | "unavailable">;
   nodeName(nodeId: string): Promise<string>;
-  /** True only after a complete outbox drain, including coalesced follow-ups. */
-  collectMail?(nodeId: string): Promise<boolean>;
+  /**
+   * Collect a node's outbox. Without `from`, true only after a complete drain,
+   * including coalesced follow-ups. With it, true once the outbox was read to
+   * its end and none of that sender's mail failed to deliver, whatever else
+   * did: one undeliverable item must not hold every delegation on the node.
+   */
+  collectMail?(nodeId: string, from?: { environmentId: string; tabId: string }): Promise<boolean>;
   /**
    * Every node this command node still controls. A record naming any other
    * node is released on the sweep (`coordinator-node-release.ts`).

@@ -796,6 +796,14 @@ export function isAgentAccountAutoSwitchedEvent(
   );
 }
 
+/**
+ * The `resourceId` prefix of an automatic switch's coordinator notice
+ * (`account-auto-switch:<platform>`). It names the notice's sender, so mail
+ * retention can tell awareness of a switch from mail that needs an answer,
+ * including notices an older build filed before they rode along.
+ */
+export const ACCOUNT_AUTO_SWITCH_NOTICE_RESOURCE_PREFIX = "account-auto-switch:";
+
 /** The notice a coordinator receives for an automatic switch. Names and reasons only. */
 export function autoSwitchNoticeText(input: {
   platformLabel: string;

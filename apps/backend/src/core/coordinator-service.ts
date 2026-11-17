@@ -1396,10 +1396,17 @@ export class CoordinatorService {
     this.applyBackgroundHold(association, first);
     if (first.action === "stay-open") return;
     // The worker's report may still be in its node's outbox: collect it first,
-    // so it is held for this delegation and released as the wake.
+    // so it is held for this delegation and released as the wake. Only this
+    // worker's mail has to have arrived; another item on the node that keeps
+    // failing must not hold this delegation open.
     if (
       this.remote.collectMail &&
-      !(await this.remote.collectMail(association.nodeId).catch(() => false))
+      !(await this.remote
+        .collectMail(association.nodeId, {
+          environmentId: association.resourceId,
+          tabId: delegation.workerTabId,
+        })
+        .catch(() => false))
     )
       return;
     await this.storage.withAgentMailWorkerAdmission(

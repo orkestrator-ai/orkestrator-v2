@@ -23,8 +23,11 @@ import { rpc, useControlMcpServerHarness } from "./server-test-support.js";
 // 2026-11-16: 124,990 bytes once acceptance criteria were asked for as
 // user-facing Given/When/Then requirements; the ticket sections guidance that
 // carries the rule was trimmed to pay for it.
-const MAX_TOOLS = 93;
-const MAX_SCHEMA_BYTES = 125_000;
+// 2026-11-17: 94 tools and 125,615 bytes with delete_ticket, so a coordinator
+// can remove a duplicate or mistaken ticket (docs/architecture/tickets.md,
+// "Deleting a ticket").
+const MAX_TOOLS = 94;
+const MAX_SCHEMA_BYTES = 125_700;
 
 const harness = useControlMcpServerHarness();
 

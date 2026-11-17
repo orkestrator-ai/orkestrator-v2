@@ -807,6 +807,85 @@ describe("Orkestrator control MCP server", () => {
     expect(rejected.body.result?.isError).toBe(true);
   });
 
+  test("a coordinator deletes its project's tickets, but not one with work attached", async () => {
+    const base = {
+      projectId: "project-1",
+      description: "",
+      acceptanceCriteria: "",
+      comments: [],
+      images: [],
+      createdAt: new Date(0).toISOString(),
+      order: 0,
+    };
+    const tickets = [
+      { ...base, id: "ticket-dup", title: "Duplicate", status: "backlog" },
+      {
+        ...base,
+        id: "ticket-building",
+        title: "Building",
+        status: "in-progress",
+        buildPipelineId: "pipeline-1",
+        environmentId: "env-1",
+      },
+      { ...base, id: "ticket-shipped", title: "Shipped", status: "done", environmentId: "env-2" },
+    ];
+    overrides.set("get_kanban_tasks", ({ projectId }) => {
+      if (projectId !== "project-1") throw new Error("Project not found");
+      return tickets;
+    });
+    overrides.set("delete_kanban_task", () => undefined);
+    const deletes = () =>
+      invocations.filter(({ command }) => command === "delete_kanban_task").map(({ args }) => args);
+    const descriptor = coordinatorCredential(["discovery", "tickets"]);
+    const call = (args: Record<string, unknown>) =>
+      rpc(descriptor.url, descriptor.token, "tools/call", {
+        name: "delete_ticket",
+        arguments: args,
+      });
+
+    const listed = await rpc(descriptor.url, descriptor.token, "tools/list");
+    const tool = listed.body.result?.tools?.find(({ name }) => name === "delete_ticket");
+    expect(tool?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+
+    const deleted = await call({ projectId: "project-1", ticketId: "ticket-dup" });
+    expect(deleted.body.result?.isError).toBeFalsy();
+    expect(deleted.body.result?.structuredContent).toEqual({
+      deleted: true,
+      ticket: { id: "ticket-dup", projectId: "project-1", title: "Duplicate", status: "backlog" },
+    });
+    expect(deletes()).toEqual([{ taskId: "ticket-dup" }]);
+
+    // A done ticket keeps its environment link, but nothing is working on it.
+    const shipped = await call({ projectId: "project-1", ticketId: "ticket-shipped" });
+    expect(shipped.body.result?.isError).toBeFalsy();
+    expect(deletes()).toEqual([{ taskId: "ticket-dup" }, { taskId: "ticket-shipped" }]);
+
+    const building = await call({ projectId: "project-1", ticketId: "ticket-building" });
+    expect(building.body.result?.isError).toBe(true);
+    expect(JSON.stringify(building.body.result)).toContain("build pipeline pipeline-1");
+
+    const missing = await call({ projectId: "project-1", ticketId: "ticket-unknown" });
+    expect(missing.body.result?.isError).toBe(true);
+    expect(JSON.stringify(missing.body.result)).toContain("not found");
+
+    // Another project's ticket is refused at the scope boundary before any read.
+    const elsewhere = await call({ projectId: "project-2", ticketId: "ticket-dup" });
+    expect(elsewhere.body.result?.isError).toBe(true);
+    expect(deletes()).toHaveLength(2);
+
+    // Without the tickets capability the tool is neither listed nor callable.
+    const reader = coordinatorCredential(["discovery"]);
+    const readerTools = await rpc(reader.url, reader.token, "tools/list");
+    expect(readerTools.body.result?.tools?.map(({ name }) => name)).not.toContain("delete_ticket");
+
+    // Operator credentials have no public action that deletes a ticket.
+    const operator = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const operatorTools = await rpc(operator.url, operator.token, "tools/list");
+    expect(operatorTools.body.result?.tools?.map(({ name }) => name)).not.toContain(
+      "delete_ticket",
+    );
+  });
+
   test("a coordinator re-listing unchanged environments is told it is polling", async () => {
     let worker: Record<string, unknown> = {
       id: "env-worker",

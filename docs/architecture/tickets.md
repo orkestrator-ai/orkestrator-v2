@@ -190,6 +190,23 @@ are `orkestrator:tickets.read` (list) and `orkestrator:tickets.write` (create,
 set). A command node coordinator's ticket tools also take a
 `nodeId` ([Sync across machines](#sync-across-machines)).
 
+### Deleting a ticket
+
+Coordinators delete a ticket with `delete_ticket` (`projectId`, `ticketId`;
+`control-mcp/ticket-tools.ts`), for a ticket the user asked to remove or one
+the coordinator made by mistake or merged into another. It reads the ticket
+through the project first, because the `delete_kanban_task` command behind it
+takes only the ticket id, then deletes it the way the board's Delete button
+does: comments and images go with it, and the deletion syncs to every machine
+with the project. The tool refuses a ticket that is `in-progress` or `review`
+with a build pipeline or environment attached, so a running build never loses
+its ticket; the coordinator finishes or cancels that work first. It takes no
+`nodeId` (a ticket made only on a leaf cannot be deleted from here) and no
+`requestId`: deleting is keyed by the ticket id, and a retry after the ticket
+is gone answers "not found". Worker agent tools, graph activations and
+operator credentials have no delete tool; operators' ticket tools are adapters
+over public actions, and there is no `ticket.delete` action.
+
 ## Verify
 
 When a pipeline starts, the backend stores the criteria in the task snapshot

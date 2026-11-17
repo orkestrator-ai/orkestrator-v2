@@ -102,6 +102,31 @@ function subagentEnvelope(output: string | undefined): { sessionId?: string; sta
   return match ? { sessionId: match[1], ...(match[2] ? { state: match[2] } : {}) } : {};
 }
 
+/**
+ * A `subagent` call that returned while its child still runs: every call
+ * since 2.3.0 (`metadata.status: "running"`), and a 2.2.6 call made with
+ * `background: true`. Its outcome arrives later as a report row in the
+ * parent (`transcript.ts`). Undefined for any other tool call.
+ */
+export function openCode2BackgroundSubagentLaunch(
+  raw: unknown,
+): { callId: string; childId: string; launchedAt?: number } | undefined {
+  const part = asRecord(raw);
+  if (part?.type !== "tool" || part.name !== "subagent") return undefined;
+  const state = asRecord(part.state);
+  if (state?.status !== "completed") return undefined;
+  const metadata = asRecord(state.metadata);
+  const callId = nonEmptyString(part.id);
+  const childId =
+    nonEmptyString(metadata?.sessionID) ?? subagentEnvelope(contentText(state.content)).sessionId;
+  const status =
+    nonEmptyString(metadata?.status) ?? subagentEnvelope(contentText(state.content)).state;
+  if (!callId || !childId || status !== "running") return undefined;
+  const time = asRecord(part.time);
+  const launchedAt = typeof time?.completed === "number" ? time.completed : undefined;
+  return { callId, childId, ...(launchedAt === undefined ? {} : { launchedAt }) };
+}
+
 /** One tool call as a transcript part; null for a value that is not a tool call at all. */
 export function openCode2ToolPart(raw: unknown): Record<string, unknown> | null {
   const part = asRecord(raw);

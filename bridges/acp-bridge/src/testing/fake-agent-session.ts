@@ -127,7 +127,10 @@ export function handleSessionMessage(message: JsonObject): boolean {
         // silently reattached to a session they have never heard of.
         agentCapabilities: {
           loadSession: process.env.FAKE_ACP_NO_LOAD_SESSION !== "1",
-          sessionCapabilities: process.env.FAKE_ACP_NO_LIST_SESSION === "1" ? {} : { list: {} },
+          sessionCapabilities: {
+            ...(process.env.FAKE_ACP_NO_LIST_SESSION === "1" ? {} : { list: {} }),
+            ...(process.env.FAKE_ACP_SYSTEM_PROMPT_CAPABILITY === "1" ? { systemPrompt: {} } : {}),
+          },
           promptCapabilities: {
             image: process.env.FAKE_ACP_IMAGE_CAPABILITY !== "false",
             embeddedContext: process.env.FAKE_ACP_EMBEDDED_CONTEXT === "true",
@@ -612,6 +615,7 @@ function recordSessionRequest(message: JsonObject): void {
       ...(typeof params.sessionId === "string" ? { sessionId: params.sessionId } : {}),
       mcpServers: params.mcpServers,
       ...(isObject(params._meta) ? { meta: params._meta } : {}),
+      ...(isObject(params.systemPrompt) ? { systemPrompt: params.systemPrompt } : {}),
     })}\n`,
   );
 }

@@ -17,7 +17,7 @@
  *
  * The bridge never reads `/etc` itself: app-server answers
  * `configRequirements/read` with the effective requirements. Verified against
- * Codex 0.167.0, which reports `network` there even without the experimental
+ * Codex 0.167.0 and 0.169.0, which report `network` there even without the experimental
  * API, although the generated bindings do not declare it.
  */
 import {

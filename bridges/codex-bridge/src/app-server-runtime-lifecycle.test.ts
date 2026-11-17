@@ -31,6 +31,7 @@ import {
   writeRolloutWithTurns,
 } from "./app-server-runtime-test-harness.js";
 import type { Harness } from "./app-server-runtime-test-harness.js";
+import { CODEX_TOOL_HISTORY_FEATURES_OFF } from "./codex-config.js";
 
 test("late command measurements patch nested subagent actions", () => {
   const command: NormalizedPart = {
@@ -3024,7 +3025,7 @@ describe("session lifecycle", () => {
         "config/read": () => ({
           config: {
             web_search: "disabled",
-            features: { standalone_web_search: false, incremental_tools: false },
+            features: { standalone_web_search: false, ...CODEX_TOOL_HISTORY_FEATURES_OFF },
           },
           origins: {},
           layers: null,

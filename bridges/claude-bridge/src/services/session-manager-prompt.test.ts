@@ -71,6 +71,11 @@ describe("Claude startup failure diagnostics", () => {
       "command sandbox",
     );
     expect(claudeStartupFailureMessage("initialize_not_first")).toContain("wrapper script");
+    // 0.3.326: the fix is in the host or a wrapper, never a retry.
+    const managedSettings = claudeStartupFailureMessage("managed_settings_not_delivered");
+    expect(managedSettings).toContain("managed settings");
+    expect(managedSettings).toContain("wrapper script");
+    expect(managedSettings).not.toContain("retry");
     // A retry alone cannot help: the CLI refuses every start until the file is repaired.
     const invalidConfig = claudeStartupFailureMessage("config_file_invalid");
     expect(invalidConfig).toContain("not valid JSON");

@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import { loadAcpProviderConfig, sessionInstructionsMeta } from "./acp-provider-config.js";
+import {
+  loadAcpProviderConfig,
+  sessionInstructionsCarrier,
+  sessionInstructionsParams,
+} from "./acp-provider-config.js";
 import { sessionInstructions } from "./acp-session-instructions.js";
 
 const policy = (overrides: Partial<NativeAgentExecutionPolicy>): NativeAgentExecutionPolicy => ({
@@ -45,17 +49,45 @@ describe("sessionInstructions", () => {
   });
 });
 
-describe("sessionInstructionsMeta", () => {
-  test("Grok takes them as session/new `_meta.rules`", () => {
-    const grok = loadAcpProviderConfig({ ACP_PROVIDER: "grok", ACP_AGENT_PATH: "/bin/grok" });
-    expect(sessionInstructionsMeta(grok, "rules text")).toEqual({ _meta: { rules: "rules text" } });
-    expect(sessionInstructionsMeta(grok, undefined)).toEqual({});
+describe("session instruction carriers", () => {
+  const grok = loadAcpProviderConfig({ ACP_PROVIDER: "grok", ACP_AGENT_PATH: "/bin/grok" });
+  const generic = loadAcpProviderConfig({
+    ACP_PROVIDER_CONFIG: JSON.stringify({ id: "gemini", executable: "gemini", argv: ["--acp"] }),
   });
 
-  test("a provider with no known field gets none", () => {
-    const generic = loadAcpProviderConfig({
-      ACP_PROVIDER_CONFIG: JSON.stringify({ id: "gemini", executable: "gemini", argv: ["--acp"] }),
+  test("Grok takes them as session/new `_meta.rules`, and none on load", () => {
+    for (const systemPromptSupported of [false, true]) {
+      expect(sessionInstructionsCarrier(grok, { lifecycle: "new", systemPromptSupported })).toBe(
+        "rules-meta",
+      );
+      expect(
+        sessionInstructionsCarrier(grok, { lifecycle: "load", systemPromptSupported }),
+      ).toBeUndefined();
+    }
+    expect(sessionInstructionsParams(grok, "rules-meta", "rules text")).toEqual({
+      _meta: { rules: "rules text" },
     });
-    expect(sessionInstructionsMeta(generic, "rules text")).toEqual({});
+    expect(sessionInstructionsParams(grok, "rules-meta", undefined)).toEqual({});
+  });
+
+  test("an agent advertising systemPrompt gets them in append mode on new and load", () => {
+    for (const lifecycle of ["new", "load"] as const) {
+      expect(sessionInstructionsCarrier(generic, { lifecycle, systemPromptSupported: true })).toBe(
+        "system-prompt",
+      );
+    }
+    expect(sessionInstructionsParams(generic, "system-prompt", "rules text")).toEqual({
+      systemPrompt: { mode: "append", content: [{ type: "text", text: "rules text" }] },
+    });
+    expect(sessionInstructionsParams(generic, "system-prompt", undefined)).toEqual({});
+  });
+
+  test("a provider with no known field and no capability gets none", () => {
+    for (const lifecycle of ["new", "load"] as const) {
+      expect(
+        sessionInstructionsCarrier(generic, { lifecycle, systemPromptSupported: false }),
+      ).toBeUndefined();
+    }
+    expect(sessionInstructionsParams(generic, undefined, "rules text")).toEqual({});
   });
 });

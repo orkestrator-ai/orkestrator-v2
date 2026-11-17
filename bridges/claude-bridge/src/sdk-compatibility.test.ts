@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { READ_ONLY_TOOLS, WAITING_TOOLS } from "./services/read-only-policy.js";
 import { CLAUDE_RESUME_ORPHAN_SUMMARY } from "./services/session-manager-background-tasks.js";
+import { NATIVE_GOAL_TOOL_NAMES } from "./services/session-manager-prompt-query.js";
 
 type PackageManifest = {
   dependencies?: Record<string, string>;
@@ -216,8 +217,13 @@ describe("Claude Agent SDK runtime compatibility", () => {
       // Both are @alpha exports; an SDK that drops them skips the guard.
       if (!builtin || !aliases) return;
       const known = new Set([...builtin, ...Object.keys(aliases)]);
-      const unknown = [...READ_ONLY_TOOLS, ...WAITING_TOOLS].filter((name) => !known.has(name));
+      const unknown = [...READ_ONLY_TOOLS, ...WAITING_TOOLS, ...NATIVE_GOAL_TOOL_NAMES].filter(
+        (name) => !known.has(name),
+      );
       expect(unknown).toEqual([]);
+      // The native goal tool is closed by its current name, not only an alias
+      // the CLI may one day drop.
+      expect(builtin).toContain(NATIVE_GOAL_TOOL_NAMES[0]);
     },
     15_000,
   );

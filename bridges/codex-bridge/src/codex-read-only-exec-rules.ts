@@ -4,7 +4,7 @@
  * A read-only turn in a container runs without Codex's command sandbox under
  * the `untrusted` approval policy (`codex-read-only-sandbox.ts`), and the
  * bridge declines every approval that turn asks for. The pinned Codex
- * (0.167.0) has no list of known-safe commands under `untrusted`: a command
+ * (0.169.0) has no list of known-safe commands under `untrusted`: a command
  * that matches no exec-policy rule always asks
  * (`render_decision_for_unmatched_command` in `core/src/exec_policy.rs`). So
  * without a rule every read was declined and the reviewer read nothing.

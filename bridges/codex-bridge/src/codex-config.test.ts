@@ -18,6 +18,7 @@ import {
   CODEX_COORDINATOR_SHELL_EXCLUDE,
   CODEX_MAX_CONCURRENT_THREADS_ENV,
   CODEX_SESSION_SHELL_EXCLUDE,
+  CODEX_TOOL_HISTORY_FEATURES_OFF,
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   MAX_CODEX_CONCURRENT_THREADS,
   MAX_CODEX_DISABLED_SKILLS,
@@ -76,8 +77,11 @@ describe("Codex app-server configuration", () => {
     expect(codexAppServerConfigOverrides({})).toEqual({
       "agents.max_concurrent_threads_per_session": "5",
       "features.multi_agent_v2.max_concurrent_threads_per_session": "6",
-      // Tools stay out of thread history, on every bridge (codex 0.164).
+      // Tools stay out of thread history, on every bridge (codex 0.164), and
+      // on every model route (codex 0.169).
       "features.incremental_tools": "false",
+      "features.incremental_tools_legacy": "false",
+      "features.incremental_tools_legacy_gcp": "false",
       // No goal tools: Orkestrator has no goal surface (codex 0.166).
       "features.goals": "false",
       // Every session's commands lose the bridge-control credentials (M13).
@@ -97,6 +101,8 @@ describe("Codex app-server configuration", () => {
       "agents.max_concurrent_threads_per_session": "8",
       "features.multi_agent_v2.max_concurrent_threads_per_session": "9",
       "features.incremental_tools": "false",
+      "features.incremental_tools_legacy": "false",
+      "features.incremental_tools_legacy_gcp": "false",
       "features.goals": "false",
       "shell_environment_policy.exclude": JSON.stringify(CODEX_SESSION_SHELL_EXCLUDE),
     });
@@ -521,7 +527,7 @@ describe("Codex app-server configuration", () => {
   });
 
   test("reads the hosted web search mode back from an effective configuration", () => {
-    const off = { incremental_tools: false };
+    const off = CODEX_TOOL_HISTORY_FEATURES_OFF;
     expect(
       codexHostedNetworkLockGaps({
         web_search: "disabled",
@@ -552,10 +558,20 @@ describe("Codex app-server configuration", () => {
     // Tools declared into history would outlive the mode (codex 0.164).
     expect(codexHostedNetworkLockGaps({ web_search: "disabled" })).toEqual([
       "features.incremental_tools is null, not false",
+      "features.incremental_tools_legacy is null, not false",
+      "features.incremental_tools_legacy_gcp is null, not false",
     ]);
-    expect(codexToolHistoryGaps({ features: { incremental_tools: true } })).toEqual([
+    expect(codexToolHistoryGaps({ features: { ...off, incremental_tools: true } })).toEqual([
       "features.incremental_tools is true, not false",
     ]);
+    // Bedrock and GCP routes each have their own switch (codex 0.169).
+    expect(codexToolHistoryGaps({ features: { incremental_tools: false } })).toEqual([
+      "features.incremental_tools_legacy is null, not false",
+      "features.incremental_tools_legacy_gcp is null, not false",
+    ]);
+    expect(
+      codexToolHistoryGaps({ features: { ...off, incremental_tools_legacy_gcp: true } }),
+    ).toEqual(["features.incremental_tools_legacy_gcp is true, not false"]);
     expect(codexToolHistoryGaps({ features: off })).toEqual([]);
     for (const malformed of [undefined, null, "disabled", ["disabled"]]) {
       expect(codexHostedNetworkLockGaps(malformed)).toEqual([

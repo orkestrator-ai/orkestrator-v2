@@ -654,9 +654,10 @@ reason.
 - **Pi `meta` provider hosts.** They fall outside the Pi allowlist's
   mainstream-provider policy. Users can add `api.meta.ai` through the
   environment's `allowedDomains`.
-- **Pi prompt-cache warming.** It is on by default in streaming mode and already
-  attributed to the running turn's cost, and the shared layer has no setting for
-  it.
+- **Pi prompt-cache warming.** It is on by default, in idle mode since Pi 1.5.1
+  (also between runs, until the bridge's idle detach disposes the session). A
+  refresh is attributed to the running turn's cost, or to the next turn's when
+  it ran between turns, and the shared layer has no setting for it.
 - **Grok private `plan_kept` / `plan_cleared` / `plan_executing` updates.** The
   supported `x.ai/exit_plan_mode` reverse request covers plan review; these stay
   private.

@@ -14,7 +14,10 @@
  *   never re-posted here.
  * - **Activity comes from one cheap read.** `GET /api/session/active` names
  *   every running session, so the activity sweep never reads histories. A run
- *   waiting on a permission or form reads as `waiting`.
+ *   waiting on a permission or form reads as `waiting`. A session whose run
+ *   settled while a background sub-agent of its own still runs reads
+ *   `working` (2.3.0; `background-subagents.ts`), and its workflows wait for
+ *   the run that sub-agent's report wakes.
  * - **Steer.** A run is identified by the newest `idle` row before it (the
  *   snapshot's run boundary). A steer aimed at a run that has already
  *   settled answers `idle`/`mismatch` before anything is sent; the backend
@@ -65,11 +68,13 @@ import {
   type ProviderReadOptions,
   type ProviderRuntimeHealth,
   type ProviderSendOptions,
+  type ProviderSessionObservation,
   type ProviderSessionRegistration,
   type ProviderStatus,
   type ProviderSteerDispatchStatus,
 } from "../agent-provider-contract.js";
 import { OpenCode2Client, OpenCode2RequestError } from "./client.js";
+import { OpenCode2BackgroundWork } from "./background-subagents.js";
 import { readOpenCode2ModelCatalogue } from "./models.js";
 import { attachOpenCode2Instructions } from "./instructions.js";
 import { noteOpenCode2LocationsReloaded } from "./reload-gate.js";
@@ -178,6 +183,8 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   private readonly grants: OpenCode2TurnGrants;
   /** A coordinator's server: its rules, tools, agent and commands (`coordinator.ts`). */
   readonly coordinator: OpenCode2CoordinatorSessions | undefined;
+  /** Background sub-agents: activity, workflow waits and stop (`background-subagents.ts`). */
+  private readonly background: OpenCode2BackgroundWork;
   /**
    * When this provider, and so this server generation's view, began. A run
    * busy since before it that the server no longer lists as active was cut
@@ -190,7 +197,15 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     private readonly dependencies: OpenCode2ProviderDependencies = {},
   ) {
     this.startedAt = this.now();
-    this.reads = new OpenCode2SessionReads(client, () => this.streamConnected);
+    this.reads = new OpenCode2SessionReads(
+      client,
+      () => this.streamConnected,
+      () => this.runningSessions([]),
+    );
+    this.background = new OpenCode2BackgroundWork(client, {
+      running: (fresh) => this.runningSessions([], fresh),
+      now: () => this.now(),
+    });
     this.interactions = this.reads.interactions;
     const mcp = new OpenCode2McpServers(client, dependencies.mcp);
     const coordinator = dependencies.coordinator
@@ -371,10 +386,11 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   }
 
   async status(sessionId: string): Promise<ProviderStatus> {
-    const activity = await this.activity(sessionId);
-    if (activity === "missing") return "missing";
-    if (activity === "waiting") return "blocked";
-    if (activity === "working") return "running";
+    // The session's own run: a background sub-agent's leaves the turn idle.
+    if ((await this.runningSessions([sessionId])).has(sessionId)) {
+      const waiting = await this.waitingOnUser(sessionId).catch(() => false);
+      return waiting ? "blocked" : "running";
+    }
     const session = await this.client.getSession(sessionId).catch((error: unknown) => {
       if (error instanceof OpenCode2RequestError && error.status === 404) return undefined;
       throw error;
@@ -426,13 +442,39 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return (await this.activityBatch([sessionId])).get(sessionId) ?? "missing";
   }
 
-  /** One `/api/session/active` read for every session; never touches histories. */
+  /**
+   * The session's own run, plus `backgroundWorkLive` while its run has
+   * settled but a background sub-agent of its will still report and wake it
+   * (2.3.0): a workflow awaiting this turn keeps supervising it, as it does a
+   * Claude turn released to background agents.
+   */
+  async observeSession(sessionId: string): Promise<ProviderSessionObservation> {
+    const status = await this.status(sessionId);
+    if (status !== "idle") return { status };
+    return (await this.background.live(sessionId))
+      ? { status, backgroundWorkLive: true }
+      : { status };
+  }
+
+  /**
+   * One `/api/session/active` read for every session; never touches
+   * histories. A session that is not running but owns a running descendant
+   * (a background sub-agent, 2.3.0) reads `working`: that is still work in
+   * the environment, as a Claude session's live background agent is. Its
+   * composer stays free (`status` is its own run's).
+   */
   async activityBatch(sessionIds: readonly string[]): Promise<Map<string, ProviderActivityState>> {
     const running = await this.runningSessions(sessionIds);
+    const owners = await this.background
+      .owners(
+        sessionIds.filter((id) => !running.has(id)),
+        running,
+      )
+      .catch(() => new Set<string>());
     const result = new Map<string, ProviderActivityState>();
     for (const sessionId of sessionIds) {
       if (!running.has(sessionId)) {
-        result.set(sessionId, "idle");
+        result.set(sessionId, owners.has(sessionId) ? "working" : "idle");
         continue;
       }
       const waiting = await this.waitingOnUser(sessionId).catch(() => false);
@@ -484,10 +526,14 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     sessionId: string,
     requestId: string,
   ): Promise<StructuredOutputResult<T> | null> {
-    return openCode2StructuredResult<T>(
+    const result = openCode2StructuredResult<T>(
       await this.history(sessionId, OPENCODE2_EVIDENCE_SCAN_LIMIT),
       requestId,
     );
+    // A background sub-agent's report will wake a run that belongs to this
+    // request, and that run's answer is the result.
+    if (result && (await this.background.live(sessionId))) return null;
+    return result;
   }
 
   /**
@@ -505,6 +551,8 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
         if (!session) return false;
         return (await this.restartCut(sessionId, session).catch(() => undefined)) !== undefined;
       },
+      // A background sub-agent still owes this request a run.
+      () => this.background.live(sessionId),
     );
   }
 
@@ -534,8 +582,13 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
       await this.workflow.afterAbort(sessionId);
     } finally {
       // Before the cards: answering one is a step boundary that could still
-      // deliver a held steer into the run being stopped.
+      // deliver a held steer into the run being stopped. Before the children
+      // too: a run their reports wake would deliver it.
       await this.withdrawUserSteers(sessionId);
+      // 2.3.0 leaves a parent's background sub-agents running when the
+      // parent is interrupted, and their reports would wake it again; a stop
+      // ends them and any run they wake (`background-subagents.ts`).
+      await this.background.stop(sessionId).finally(() => this.markDirty(sessionId));
       await this.rejectPendingRequests(sessionId);
     }
   }
@@ -773,15 +826,19 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
       });
       // The reload answers before the location is rebuilt, and a catalogue
       // read in between answers an empty command list (seen on 2.2.6), which
-      // would be cached as the truth. The agent list waits for the rebuilt
-      // location, so the gate is held until reads see its new state.
-      await this.client
-        .api("GET", "/api/agent", "OpenCode agent list", { signal: AbortSignal.timeout(30_000) })
+      // would be cached as the truth. Since 2.2.7 no read waits for the
+      // rebuilt location; its plugin list stays empty until the rebuild has
+      // loaded, and its commands with it (observed on 2.3.0), so the gate is
+      // held until that list fills.
+      const rebuilt = await this.client
+        .awaitPlugins({ timeoutMs: 30_000 })
         .catch((error: unknown) => {
           log.debug("location.reload-unconfirmed", {
             error: formatLogError(error, { message: false }),
           });
+          return undefined;
         });
+      if (rebuilt === "timeout") log.debug("location.reload-unconfirmed", { plugins: "timeout" });
     } finally {
       // Even an ambiguous failure may have rebuilt the location and dropped
       // every runtime MCP server on it: no provider trusts its registrations.

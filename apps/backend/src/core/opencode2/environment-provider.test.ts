@@ -431,6 +431,25 @@ describe("openCode2TurnTerminalError", () => {
     ).toBeNull();
   });
 
+  test("a run a sub-agent's report woke is the request's, and its boundary decides (2.3.0)", () => {
+    const report = {
+      id: "s",
+      type: "synthetic",
+      time: { created: 1 },
+      metadata: { source: "subagent", childID: "ses_c", state: "completed" },
+      text: '<subagent sessionID="ses_c" state="completed">\nok\n</subagent>',
+    } as unknown as OpenCode2Message;
+    expect(
+      openCode2TurnTerminalError(
+        [user("a", "r"), idle("b", "succeeded"), report, idle("c", "failed")],
+        "r",
+      ),
+    ).toMatch(/failed/);
+    expect(() =>
+      openCode2TurnTerminalError([user("a", "r"), idle("b", "succeeded"), report], "r"),
+    ).toThrow(ProviderUnavailableError);
+  });
+
   test("throws while the run has not settled; an unknown request proves nothing", () => {
     expect(() => openCode2TurnTerminalError([user("a", "r")], "r")).toThrow(
       ProviderUnavailableError,

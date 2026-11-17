@@ -28,9 +28,10 @@ import {
   type OpenCode2RunBoundary,
   type OpenCode2SessionState,
 } from "./session-state.js";
-import { normalizeOpenCode2Transcript } from "./transcript.js";
+import { normalizeOpenCode2Transcript, openCode2HeadContext } from "./transcript.js";
 import {
   OPENCODE2_TRANSCRIPT_READ_LIMIT,
+  type OpenCode2LiveSessions,
   OpenCode2TranscriptState,
   openCode2TranscriptPage,
   openCode2HistoryCursor,
@@ -55,9 +56,15 @@ export class OpenCode2SessionReads {
   readonly transcript: OpenCode2TranscriptState;
   private readonly unknown = new Set<string>();
 
+  /**
+   * `liveSessions` reads the server's running sessions, so a background
+   * sub-agent's card at the head of a transcript reads Active only while its
+   * child runs (`transcript.ts`).
+   */
   constructor(
     private readonly client: OpenCode2Client,
     live: () => boolean,
+    private readonly liveSessions?: OpenCode2LiveSessions,
   ) {
     this.interactions = new OpenCode2InteractionAdapter(client, client.directory);
     this.transcript = new OpenCode2TranscriptState(live);
@@ -79,8 +86,13 @@ export class OpenCode2SessionReads {
     sessionId: string,
     options: OpenCode2TranscriptReadOptions,
   ): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
-    return openCode2TranscriptSnapshot(this.client, this.transcript, sessionId, options, (type) =>
-      this.recordUnknown(type),
+    return openCode2TranscriptSnapshot(
+      this.client,
+      this.transcript,
+      sessionId,
+      options,
+      (type) => this.recordUnknown(type),
+      this.liveSessions,
     );
   }
 
@@ -118,9 +130,10 @@ export class OpenCode2SessionReads {
     const complete = rows.length <= OPENCODE2_TRANSCRIPT_READ_LIMIT;
     const window = rows.slice(-OPENCODE2_TRANSCRIPT_READ_LIMIT);
     const state = await openCode2SessionState(this.client, sessionId, status, window, runBoundary);
+    const context = await openCode2HeadContext(window, this.liveSessions);
     const messages = await hydrateOpenCode2Subagents(
       this.client,
-      normalizeOpenCode2Transcript(window, (type) => this.recordUnknown(type)),
+      normalizeOpenCode2Transcript(window, (type) => this.recordUnknown(type), context),
     );
     return { ...state, messages, messagesComplete: complete };
   }

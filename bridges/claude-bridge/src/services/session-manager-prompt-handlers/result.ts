@@ -86,6 +86,12 @@ export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): st
       return "Claude Code did not receive its start-up handshake first. Something between Orkestrator and Claude Code (such as a wrapper script for the claude executable) changed its input; remove the wrapper or restart the agent.";
     case "config_file_invalid":
       return "A Claude Code configuration file is not valid JSON, and Claude will not start until it is repaired. The provider error names the file; fix or restore it, then retry.";
+    // Only reachable when the SDK launches the CLI with
+    // `--managed-settings-in-initialize`, which the bridge's default
+    // `managedSettingsDelivery` ("argv") does not do; mapped so a wrapper or a
+    // later delivery change still gets guidance rather than a bare reason.
+    case "managed_settings_not_delivered":
+      return "Claude Code did not receive the managed settings Orkestrator sends at start-up, so it refused to start. Something between Orkestrator and Claude Code (such as a wrapper script for the claude executable) changed its input or arguments; remove the wrapper or restart the agent.";
   }
 }
 

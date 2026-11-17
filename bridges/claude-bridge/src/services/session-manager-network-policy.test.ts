@@ -28,8 +28,9 @@ const NETWORK_DENIED: NativeAgentExecutionPolicy = {
 
 describe("native goals", () => {
   test("Claude's own goal tool is closed whatever the policy denies", () => {
-    expect(withNativeGoalClosed(undefined)).toEqual(["ProposeGoal"]);
-    expect(withNativeGoalClosed(["WebFetch"])).toEqual(["WebFetch", "ProposeGoal"]);
+    // `SetGoal` at 2.1.326; `ProposeGoal` for an older CLI on PATH.
+    expect(withNativeGoalClosed(undefined)).toEqual(["SetGoal", "ProposeGoal"]);
+    expect(withNativeGoalClosed(["WebFetch"])).toEqual(["WebFetch", "SetGoal", "ProposeGoal"]);
   });
 });
 

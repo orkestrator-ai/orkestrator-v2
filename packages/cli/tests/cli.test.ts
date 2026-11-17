@@ -344,7 +344,7 @@ describe("orkestrator CLI package", () => {
       "resources/cursor-bridge/runtime/bun.lock",
       "resources/cursor-bridge/runtime/install.json",
       "resources/cursor-bridge/runtime/package.json",
-      "resources/cursor-bridge/runtime/patches/@cursor%2Fsdk@1.3.1.patch",
+      "resources/cursor-bridge/runtime/patches/@cursor%2Fsdk@1.4.1.patch",
       "resources/pi-bridge/dist/index.js",
       "resources/pi-bridge/runtime/bun.lock",
       "resources/pi-bridge/runtime/install.json",

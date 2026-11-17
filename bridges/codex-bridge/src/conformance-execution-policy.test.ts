@@ -15,7 +15,7 @@ import {
   runExecutionPolicyConformance,
   type AdapterEffects,
 } from "../../../tests/conformance/execution-policy/suite.js";
-import { codexAppServerConfigOverrides } from "./codex-config.js";
+import { CODEX_TOOL_HISTORY_FEATURES_OFF, codexAppServerConfigOverrides } from "./codex-config.js";
 import { harness, threadPayload } from "./app-server-runtime-test-harness.js";
 
 const COORDINATOR_ENV = {
@@ -105,7 +105,7 @@ runExecutionPolicyConformance({
         "config/read": () => ({
           config: {
             web_search: "disabled",
-            features: { standalone_web_search: false, incremental_tools: false },
+            features: { standalone_web_search: false, ...CODEX_TOOL_HISTORY_FEATURES_OFF },
           },
           origins: {},
           layers: null,

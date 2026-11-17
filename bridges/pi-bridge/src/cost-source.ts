@@ -19,6 +19,12 @@ import type { NativeAgentCostSource } from "@orkestrator/protocol/native-agent";
  * when every part it added says so; one part that does not makes it an
  * estimate. A part that reported nothing at all (no tokens and no cost: an
  * aborted or failed response) adds nothing to the sum and is not counted.
+ *
+ * Since Pi 1.5.1 `cacheWarming` defaults to `"idle"`: an SDK session may also
+ * refresh its prompt cache between runs (for up to 30 minutes, until the
+ * bridge's idle detach disposes the session), each refresh a `usage` entry.
+ * The delta then charges that spend to the next turn, so it reaches the
+ * per-turn usage history instead of a session total no turn accounts for.
  */
 export interface PiCostParts {
   /** Usage-bearing session entries that reported anything. */

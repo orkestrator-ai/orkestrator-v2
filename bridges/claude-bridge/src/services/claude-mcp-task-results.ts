@@ -19,10 +19,13 @@
 
 /**
  * The two placeholder openings the 2.1.319 CLI writes for a call it moved to
- * the background: one when the server sent a status note with the task handle,
- * one when it did not. Anchored to the start of the whole result, and only read
- * from an MCP tool's successful result, so ordinary tool output that happens to
- * quote the wording elsewhere cannot claim a task.
+ * the background (unchanged at 2.1.326): one when the server sent a status note
+ * with the task handle, one when it did not. Anchored to the start of the whole
+ * result, and only read from an MCP tool's successful result, so ordinary tool
+ * output that happens to quote the wording elsewhere cannot claim a task. In
+ * 2.1.326 (not 2.1.319) a note carrying Artifact content by other authors gets an
+ * `<artifact-content-authored-by-others/>` notice ahead of `MCP tool`; such a
+ * call is not recognised and its card keeps the placeholder.
  *
  * The registry id is the CLI's own (`k` and eight base-36 characters for an MCP
  * task); the class is wider so a format change still matches, but excludes `.`

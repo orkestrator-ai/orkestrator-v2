@@ -4,6 +4,7 @@ import { AppServerEngine } from "./app-server-engine.js";
 import type { AppServerSupervisorOptions } from "../app-server/process-supervisor.js";
 import { FakeReadable, FakeWritable } from "../app-server/testing/fake-app-server.js";
 import type { EngineEvent, EngineTurnConfig } from "./types.js";
+import { CODEX_TOOL_HISTORY_FEATURES_OFF } from "../codex-config.js";
 
 export const BUILD: EngineTurnConfig = {
   mode: "build",
@@ -16,7 +17,7 @@ export const PLAN: EngineTurnConfig = { mode: "plan", cwd: "/tmp/workspace" };
 export const HOSTED_NETWORK_LOCKED = () => ({
   config: {
     web_search: "disabled",
-    features: { standalone_web_search: false, incremental_tools: false },
+    features: { standalone_web_search: false, ...CODEX_TOOL_HISTORY_FEATURES_OFF },
   },
   origins: {},
   layers: null,
@@ -150,7 +151,7 @@ export function harness(
   const merged = {
     initialize: INITIALIZE,
     "skills/list": () => ({ data: [{ errors: [], skills: [] }] }),
-    "config/read": () => ({ config: { features: { incremental_tools: false } } }),
+    "config/read": () => ({ config: { features: CODEX_TOOL_HISTORY_FEATURES_OFF } }),
     ...handlers,
   };
   let index = 0;

@@ -20,10 +20,10 @@
  *   mirrored into it read-only and without plugins (`user-config.ts`), and
  *   the backend's `OPENCODE_CONFIG` is passed as its mirror.
  * - **Pinned behaviour.** `OPENCODE_DISABLE_AUTOUPDATE` keeps the pinned
- *   binary, and `OPENCODE_FLAGS` names every 2.2.6 feature flag explicitly.
- *   Scheduled tasks stay off, because they wake sessions with prompts
- *   Orkestrator never sent. A flag added by a later pin is off in releases
- *   unless named here.
+ *   binary, and `OPENCODE_FLAGS` names every feature flag of the pin
+ *   explicitly. Scheduled tasks and Console watches stay off, because they
+ *   wake sessions with prompts Orkestrator never sent. A flag added by a
+ *   later pin is off in releases unless named here.
  * - **No file watchers.** `OPENCODE_DISABLE_FILEWATCHER` turns off the
  *   watchers each location boots: one per ancestor directory of the worktree
  *   up to `/`, the config directory and `.git/HEAD`. On macOS each one took
@@ -47,8 +47,15 @@ import { mirrorOpenCodeUserConfig } from "./user-config.js";
 const log = createLogger("native-agent.opencode2");
 
 export const OPENCODE2_CREDENTIAL_PLUGIN_ID = "orkestrator-credential";
-/** Every 2.2.6 feature flag, on or off by name (`packages/schema/src/config/flag.ts`). */
-export const OPENCODE2_FLAGS = "todo,-schedules,-background_compaction,-artifacts,-media_blob";
+/**
+ * Every 2.3.0 feature flag, on or off by name (`packages/schema/src/config/flag.ts`).
+ * 2.3.0 added three, all off: `shell_timeout_background` (a timed-out shell
+ * moves to the background and reports later, waking its session),
+ * `console_watches` (OpenCode Console watches that wake sessions) and
+ * `mcp_events` (a draft MCP extension Orkestrator does not read).
+ */
+export const OPENCODE2_FLAGS =
+  "todo,-schedules,-background_compaction,-artifacts,-media_blob,-shell_timeout_background,-console_watches,-mcp_events";
 /**
  * Set on every 2.x process Orkestrator starts (servers and terminal TUIs).
  * Measured on 2.2.6 in a worktree on macOS: location boot 6,183 ms with the

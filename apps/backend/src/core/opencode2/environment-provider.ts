@@ -52,6 +52,7 @@ import {
   type ProviderReadOptions,
   type ProviderRuntimeHealth,
   type ProviderSendOptions,
+  type ProviderSessionObservation,
   type ProviderSessionRegistration,
   type ProviderSessionStateSnapshot,
   type ProviderStatus,
@@ -69,7 +70,7 @@ import {
   openCode2ReloadGateKey,
   withinOpenCode2Dispatch,
 } from "./reload-gate.js";
-import { normalizeOpenCode2Transcript } from "./transcript.js";
+import { normalizeOpenCode2Transcript, openCode2SubagentReport } from "./transcript.js";
 import { isOpenCode2IdleMessage, type OpenCode2Message } from "./types.js";
 
 const log = createLogger("native-agent.opencode2");
@@ -269,6 +270,11 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
   async activity(sessionId: string): Promise<ProviderActivityState> {
     const provider = await this.observed();
     return provider ? provider.activity(sessionId) : "idle";
+  }
+
+  /** {@link status} plus `backgroundWorkLive` (`OpenCode2Provider.observeSession`). */
+  async observeSession(sessionId: string): Promise<ProviderSessionObservation> {
+    return (await this.required()).observeSession(sessionId);
   }
 
   async activityBatch(sessionIds: readonly string[]): Promise<Map<string, ProviderActivityState>> {
@@ -654,8 +660,10 @@ function carriesRequest(row: OpenCode2Message, requestId: string): boolean {
 /**
  * The failure of one request's run, read from the run boundary after its
  * input: `null` for a run that succeeded (or a request not in the scanned
- * history), the user's stop for an interrupted one. Throws while the run has
- * not settled, so an early idle read is never taken as success.
+ * history), the user's stop for an interrupted one. A run a background
+ * sub-agent's report woke right after it is the same request's (2.3.0), so
+ * its boundary decides. Throws while the run has not settled, so an early
+ * idle read is never taken as success.
  */
 export function openCode2TurnTerminalError(
   rows: readonly OpenCode2Message[],
@@ -663,11 +671,19 @@ export function openCode2TurnTerminalError(
 ): string | null {
   const start = rows.findIndex((row) => carriesRequest(row, requestId));
   if (start < 0) return null;
+  let boundary: OpenCode2Message | undefined;
   for (const row of rows.slice(start + 1)) {
-    if (!isOpenCode2IdleMessage(row)) continue;
-    if (row.outcome === "succeeded") return null;
-    if (row.outcome === "interrupted") return TURN_STOPPED_BY_USER_MESSAGE;
-    return "OpenCode 2 reported that the turn failed";
+    if (boundary) {
+      if (!openCode2SubagentReport(row)) break;
+      boundary = undefined;
+      continue;
+    }
+    if (isOpenCode2IdleMessage(row)) boundary = row;
   }
-  throw new ProviderUnavailableError("The OpenCode 2 turn has not settled yet");
+  if (!boundary || !isOpenCode2IdleMessage(boundary)) {
+    throw new ProviderUnavailableError("The OpenCode 2 turn has not settled yet");
+  }
+  if (boundary.outcome === "succeeded") return null;
+  if (boundary.outcome === "interrupted") return TURN_STOPPED_BY_USER_MESSAGE;
+  return "OpenCode 2 reported that the turn failed";
 }

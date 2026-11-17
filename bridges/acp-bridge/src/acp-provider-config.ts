@@ -1,6 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { SystemPrompt } from "@agentclientprotocol/sdk";
 import {
   withheldGitHubCredentialEnvironment,
   type AgentConversationMode,
@@ -176,8 +177,16 @@ const PROJECT_TRUST: Readonly<
  * new process still has them. Both verified live on 1.0.70. Its `--rules`
  * flag is not an alternative: under `agent stdio` it is ignored (also
  * verified live), and a command-line argument could not hold a large
- * AGENTS.md anyway. ACP itself has no such field, so a provider without an
- * entry here gets none.
+ * AGENTS.md anyway.
+ *
+ * Any other provider gets them through standard ACP `systemPrompt` (stable
+ * since schema 1.30, SDK 2.5.0) when its `initialize` advertises
+ * `sessionCapabilities.systemPrompt`, in `append` mode, which every agent
+ * advertising the capability must accept. ACP asks a client to send the same
+ * value again on `session/load`, so the standard carrier rides on load too.
+ * Grok 1.0.88 does not advertise the capability; while it is listed here its
+ * verified `_meta.rules` path wins, so a release that starts advertising it
+ * cannot get the instructions twice.
  *
  * Keyed by provider id for the same reason as `NETWORK_DENIED_ARGUMENTS`.
  */
@@ -185,13 +194,37 @@ const SESSION_RULES_META_FIELD: Readonly<Record<string, string>> = {
   grok: "rules",
 };
 
-/** The `_meta` a `session/new` carries for these instructions, if the provider takes them. */
-export function sessionInstructionsMeta(
+/** Where one session lifecycle request carries the session instructions, if anywhere. */
+export type SessionInstructionsCarrier = "rules-meta" | "system-prompt";
+
+/**
+ * Pick the carrier before reading the instructions, so a request that carries
+ * none (a Grok `session/load`, an agent without the capability) never reads
+ * AGENTS.md.
+ */
+export function sessionInstructionsCarrier(
   config: AcpProviderConfig,
+  options: { lifecycle: "new" | "load"; systemPromptSupported: boolean },
+): SessionInstructionsCarrier | undefined {
+  if (Object.hasOwn(SESSION_RULES_META_FIELD, config.id)) {
+    // Grok keeps `_meta.rules` with the session, so a load needs none.
+    return options.lifecycle === "new" ? "rules-meta" : undefined;
+  }
+  return options.systemPromptSupported ? "system-prompt" : undefined;
+}
+
+/** The fields a `session/new` or `session/load` adds for these instructions. */
+export function sessionInstructionsParams(
+  config: AcpProviderConfig,
+  carrier: SessionInstructionsCarrier | undefined,
   instructions: string | undefined,
-): { _meta: Record<string, string> } | Record<string, never> {
-  if (!instructions || !Object.hasOwn(SESSION_RULES_META_FIELD, config.id)) return {};
-  return { _meta: { [SESSION_RULES_META_FIELD[config.id]!]: instructions } };
+): { _meta: Record<string, string> } | { systemPrompt: SystemPrompt } | Record<string, never> {
+  if (!carrier || !instructions) return {};
+  if (carrier === "rules-meta") {
+    const field = SESSION_RULES_META_FIELD[config.id];
+    return field ? { _meta: { [field]: instructions } } : {};
+  }
+  return { systemPrompt: { mode: "append", content: [{ type: "text", text: instructions }] } };
 }
 
 /**
@@ -206,7 +239,8 @@ export function sessionInstructionsMeta(
  * this process only; the main checkout's "never allow" answers still apply.
  *
  * `GROK_STORAGE_MODE=local` keeps a session out of Grok's writeback, which
- * syncs session history to code.grok.com once signed in. Grok 1.0.77 documents
+ * syncs session history to code.grok.com once signed in. Grok 1.0.77 (re-checked
+ * signed out on 1.0.88, unchanged) documents
  * the variable beside its hidden `--storage-mode` ("Session storage mode: local
  * or writeback"; `features.writeback` in the bundled config reference), and
  * `agent stdio` reads the variable, not the flag: signed out, `writeback` logs

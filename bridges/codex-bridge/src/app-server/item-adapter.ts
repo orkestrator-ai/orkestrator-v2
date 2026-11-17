@@ -223,6 +223,9 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
         raw.phase === "commentary" || raw.phase === "partial_answer" || raw.phase === "final_answer"
           ? raw.phase
           : undefined;
+      // `moderation` (0.169) is a ChatGPT presentation hint on a final answer
+      // ("unknown actions must be left for the producing client"). Codex's own
+      // TUI ignores it and the text is unchanged, so it is not read here.
       return {
         item: {
           id,

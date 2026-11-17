@@ -396,9 +396,7 @@ export function planComposerApply(
         },
       });
     } else {
-      const value =
-        resolveSelectValue(fastOption, patch.fastMode ? "fast" : "normal") ??
-        (patch.fastMode ? "true" : "false");
+      const value = fastSelectValue(fastOption, patch.fastMode);
       calls.push({
         method: "session/set_config_option",
         params: { sessionId, configId: fastOption.configId, value },
@@ -1110,17 +1108,43 @@ function optionCurrentString(option: AcpConfigOption | undefined): string | unde
 function optionIsEnabled(option: AcpConfigOption): boolean {
   if (option.currentValue === true) return true;
   const current = optionCurrentString(option);
+  const ordered = speedSelectValues(option);
+  if (ordered) return current !== undefined && current !== ordered[0];
   return current !== undefined && isFastValue(current);
 }
 
+/**
+ * The option behind the shared fast-mode toggle. ACP schema 1.32 (SDK 2.7.0)
+ * names a `speed` config option category, the standard home for it, so it
+ * wins over the older `model_config` and id-pattern guesses.
+ */
 function selectFastOption(options: AcpConfigOption[]): AcpConfigOption | undefined {
   return (
+    options.find((option) => option.category === "speed") ??
     options.find(
       (option) => option.category === "model_config" && /fast|speed|variant/i.test(option.configId),
     ) ??
     options.find((option) => option.category === "model_config" && option.type === "boolean") ??
     options.find((option) => /fast|speed/i.test(option.configId))
   );
+}
+
+/**
+ * The select value that turns fast mode on or off. ACP asks an agent to list a
+ * `speed` select from slowest to fastest, so off is its first value and on its
+ * last; any other select keeps the `fast` / `normal` names.
+ */
+function fastSelectValue(option: AcpConfigOption, enabled: boolean): string {
+  const ordered = speedSelectValues(option);
+  if (ordered) return enabled ? ordered.at(-1)! : ordered[0]!;
+  return resolveSelectValue(option, enabled ? "fast" : "normal") ?? (enabled ? "true" : "false");
+}
+
+/** A `speed` select's values, slowest first, when it offers a choice at all. */
+function speedSelectValues(option: AcpConfigOption): string[] | undefined {
+  if (option.category !== "speed" || option.type !== "select") return undefined;
+  const values = (option.options ?? []).map((entry) => entry.value);
+  return values.length >= 2 ? values : undefined;
 }
 
 function resolveSelectValue(option: AcpConfigOption, requested: string): string | undefined {
@@ -1144,9 +1168,10 @@ function reasoningFromOptions(thoughtOption: AcpConfigOption | undefined): {
 
 function fastModeFromOption(fastOption: AcpConfigOption | undefined): boolean {
   if (!fastOption) return false;
-  return fastOption.type === "boolean"
-    ? fastOption.currentValue === true
-    : isFastValue(optionCurrentString(fastOption) ?? "");
+  if (fastOption.type === "boolean") return fastOption.currentValue === true;
+  // Anything faster than a `speed` select's slowest value counts as fast.
+  if (speedSelectValues(fastOption)) return optionIsEnabled(fastOption);
+  return isFastValue(optionCurrentString(fastOption) ?? "");
 }
 
 function reasoningOption(id: string, label?: string): AgentReasoningOption {

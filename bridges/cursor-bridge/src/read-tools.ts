@@ -11,12 +11,19 @@ import { fileURLToPath } from "node:url";
  *
  * `@cursor/sdk` lets a host replace these executors but not wrap them, so a
  * path check needs an implementation to delegate to. These follow the SDK
- * 1.3.1 host executors closely enough for the model: the argument and result
+ * 1.4.1 host executors closely enough for the model: the argument and result
  * messages are the SDK's own (`ReadArgs`/`ReadResult`, `GrepArgs`/`GrepResult`,
  * `LsArgs`/`LsResult`), returned as plain objects that the SDK's protobuf
  * runtime turns into its message classes when it serialises them. Its
  * executor interfaces are unpublished, so every SDK bump has to recheck these
  * shapes (`read-tools.test.ts` pins them).
+ *
+ * 1.4.1 added two optional fields this executor leaves unset on purpose.
+ * `ReadArgs.maxVideoBytes` caps a video read, and this Read refuses every
+ * binary file other than an image or a PDF. `ReadSuccess.redacted` says a
+ * read replaced a saved secret; this Read replaces nothing, and leaving it
+ * unset keeps the SDK's fallback, which scans the text for its redaction
+ * marker before expanding a `$file:` MCP argument from it.
  *
  * Known differences from the host executors: only the workspace root's
  * `.cursorignore` is honoured, by Grep and LS, and a Grep or Glob `glob`

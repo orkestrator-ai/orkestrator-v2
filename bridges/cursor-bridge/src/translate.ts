@@ -113,6 +113,10 @@ const HANDLED_UPDATE_TYPES: Record<InteractionUpdate["type"] | NestedTaskUpdate[
     // count ahead of the calls themselves, each of which already renders as
     // its own card, so it carries nothing the transcript lacks.
     "tool-requests-listed": true,
+    // SDK 1.4.1: one model call's exact usage, as that call finishes. It is
+    // the live context-occupancy reading the gauge wants (`inputTokens` is the
+    // whole prompt), where `turn-ended` reports the turn's total.
+    "model-call-completed": true,
   };
 
 /**
@@ -235,6 +239,13 @@ function applyUpdate(state: SessionState, update: unknown, context: UpdateContex
         // fallback for a stream that reports no step frames.
         endAssistantStep(state);
       }
+      break;
+    case "model-call-completed":
+      // Not a row boundary: the step frames and `turn-ended` already end
+      // rows. The SDK does not forward it for a sub-agent (it is not in
+      // `NestedTaskUpdate`); a nested one would belong to the child's model
+      // context, as with `turn-ended`.
+      if (!context.parentTaskUseId) applyModelCallUsage(state, update.usage);
       break;
     case "step-started":
       // A sub-agent's steps stay on the row holding its launch card.
@@ -867,9 +878,10 @@ function applyAppendedUserMessage(
   rowChanged(state, message);
 }
 
-function applyTurnUsage(state: SessionState, usage: unknown): void {
-  if (!isObject(usage)) return;
-  const turn: TurnUsage = {};
+/** The exact categories of one SDK usage object; undefined when it has none. */
+function readDeltaUsage(usage: unknown): TurnUsage | undefined {
+  if (!isObject(usage)) return undefined;
+  const read: TurnUsage = {};
   for (const key of [
     "inputTokens",
     "outputTokens",
@@ -878,14 +890,44 @@ function applyTurnUsage(state: SessionState, usage: unknown): void {
     "reasoningTokens",
   ] as const) {
     const value = usage[key];
-    if (typeof value === "number" && Number.isFinite(value)) turn[key] = value;
+    if (typeof value === "number" && Number.isFinite(value)) read[key] = value;
   }
-  if (Object.keys(turn).length === 0) return;
+  return Object.keys(read).length === 0 ? undefined : read;
+}
+
+function applyTurnUsage(state: SessionState, usage: unknown): void {
+  const turn = readDeltaUsage(usage);
+  if (!turn) return;
   // The provider-reported turn total supersedes the heuristic deltas collected
   // for this call. A later token-delta therefore starts the next call at zero.
   state.currentTurnOutputTokenEstimate = undefined;
-  state.currentTurnUsage = mergeLatestUsage(state.currentTurnUsage, turn);
+  // Once the run has reported a model call of its own, that call stays the
+  // occupancy reading: `turn-ended` is the turn's total, which on a turn of
+  // several calls is a multiple of anything the window held.
+  state.currentTurnUsage =
+    state.currentRunModelCalls?.last ?? mergeLatestUsage(state.currentTurnUsage, turn);
   state.currentRunDeltaUsage = sumUsage(state.currentRunDeltaUsage, turn);
+  publishRunUsage(state);
+}
+
+/**
+ * One model call's exact usage (`model-call-completed`, SDK 1.4.1).
+ *
+ * The call is the occupancy snapshot the live context gauge reads, and it is
+ * exact, so it replaces the call's token-delta estimate as `turn-ended` does.
+ * The calls are also summed into an accumulator of their own; publication
+ * takes the larger of each category across the accumulators, so a stream that
+ * reports both this and a per-call `turn-ended` counts each call once.
+ */
+function applyModelCallUsage(state: SessionState, usage: unknown): void {
+  const call = readDeltaUsage(usage);
+  if (!call) return;
+  state.currentTurnOutputTokenEstimate = undefined;
+  state.currentRunModelCalls = {
+    total: sumUsage(state.currentRunModelCalls?.total, call),
+    last: call,
+  };
+  state.currentTurnUsage = call;
   publishRunUsage(state);
 }
 
@@ -893,7 +935,8 @@ function applyTurnUsage(state: SessionState, usage: unknown): void {
 export function applyStreamUsage(state: SessionState, total: TurnUsage, latest: TurnUsage): void {
   state.currentTurnOutputTokenEstimate = undefined;
   state.currentRunStreamUsage = total;
-  state.currentTurnUsage = latest;
+  // The stream's usage message is built from `turn-ended`; see `applyTurnUsage`.
+  state.currentTurnUsage = state.currentRunModelCalls?.last ?? latest;
   publishRunUsage(state);
 }
 
@@ -952,7 +995,11 @@ function usageLowerBound(...sources: Array<TurnUsage | undefined>): TurnUsage | 
 }
 
 function publishRunUsage(state: SessionState): void {
-  const projected = usageLowerBound(state.currentRunDeltaUsage, state.currentRunStreamUsage);
+  const projected = usageLowerBound(
+    state.currentRunDeltaUsage,
+    state.currentRunStreamUsage,
+    state.currentRunModelCalls?.total,
+  );
   if (!projected) return;
   state.currentRunUsage = projected;
   state.currentRunUsageUpdatedAt = new Date().toISOString();

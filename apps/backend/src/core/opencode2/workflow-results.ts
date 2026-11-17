@@ -43,6 +43,7 @@ import {
 import type { OpenCode2McpServers } from "./mcp.js";
 import { OPENCODE2_ARTIFACTS_MCP_PREFIX, OPENCODE2_DESIGN_MCP_PREFIX } from "./permissions.js";
 import type { OpenCode2TurnGrants } from "./turn-grants.js";
+import { openCode2SubagentReport } from "./transcript.js";
 import {
   isOpenCode2IdleMessage,
   type OpenCode2AssistantMessage,
@@ -202,12 +203,18 @@ export class OpenCode2WorkflowTurns {
     history: () => Promise<readonly OpenCode2Message[]>,
     /** True when the session's open run was cut short by a server stop (`restart-cut.ts`). */
     cutByStop?: () => Promise<boolean>,
+    /**
+     * True while a background sub-agent will still report and wake a run that
+     * belongs to this request (`background-subagents.ts`): the grant stays.
+     */
+    backgroundLive?: () => Promise<boolean>,
   ): Promise<boolean> {
     return this.grants.runExclusive(sessionId, async () => {
       const owner = await this.grants.owner(sessionId);
       const holdsGrant = owner?.requestId === requestId && !owner.settled;
       const run = openCode2RequestRun(await history(), requestId);
       if (run ? !run.idle && !(await cutByStop?.()) : holdsGrant) return false;
+      if (run?.idle && (await backgroundLive?.())) return false;
       if (holdsGrant) await this.grants.settle(sessionId, requestId);
       return true;
     });
@@ -232,7 +239,13 @@ export class OpenCode2WorkflowTurns {
   }
 }
 
-/** One request's run in a session's history (oldest first), once its input is there. */
+/**
+ * One request's run in a session's history (oldest first), once its input is
+ * there. A run that a background sub-agent's report wakes after the request's
+ * run settled (2.3.0: the next row after an `idle` row is that report) is the
+ * same request's continuation, as a Claude turn's continuation after its
+ * background agents is: its responses count and its `idle` row ends the run.
+ */
 export function openCode2RequestRun(
   rows: readonly OpenCode2Message[],
   requestId: string,
@@ -240,11 +253,17 @@ export function openCode2RequestRun(
   const start = rows.findIndex((row) => carriesRequest(row, requestId));
   if (start < 0) return undefined;
   const assistants: OpenCode2AssistantMessage[] = [];
+  let idle: OpenCode2IdleMessage | undefined;
   for (const row of rows.slice(start + 1)) {
-    if (isOpenCode2IdleMessage(row)) return { assistants, idle: row };
-    if (row.type === "assistant") assistants.push(row as OpenCode2AssistantMessage);
+    if (idle) {
+      if (!openCode2SubagentReport(row)) break;
+      idle = undefined;
+      continue;
+    }
+    if (isOpenCode2IdleMessage(row)) idle = row;
+    else if (row.type === "assistant") assistants.push(row as OpenCode2AssistantMessage);
   }
-  return { assistants };
+  return idle ? { assistants, idle } : { assistants };
 }
 
 /**

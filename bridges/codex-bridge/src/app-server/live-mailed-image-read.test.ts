@@ -383,7 +383,14 @@ describeLive("live mailed image read on app-server", () => {
       // The grant is that directory alone: a file beside it is not returned.
       expect(read.images.read_2 ?? []).toHaveLength(0);
       // Answered, and refused by the sandbox (macOS: "Operation not permitted").
-      expect(read.text.read_2).toMatch(/not permitted|permission denied/i);
+      // Linux bubblewrap mounts only the grants and `:minimal`'s system
+      // directories, so the file written beside the grant does not exist
+      // there: "No such file or directory" (0.167.0 and 0.169.0 alike).
+      expect(read.text.read_2).toMatch(
+        process.platform === "linux"
+          ? /no such file or directory/i
+          : /not permitted|permission denied/i,
+      );
     } finally {
       if (previousPolicy === undefined) delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
       else process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = previousPolicy;

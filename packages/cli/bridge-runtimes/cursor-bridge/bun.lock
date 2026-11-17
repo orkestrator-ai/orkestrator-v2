@@ -5,12 +5,12 @@
     "": {
       "name": "orkestrator-cursor-bridge-runtime",
       "dependencies": {
-        "@cursor/sdk": "1.3.1",
+        "@cursor/sdk": "1.4.1",
       },
     },
   },
   "patchedDependencies": {
-    "@cursor/sdk@1.3.1": "patches/@cursor%2Fsdk@1.3.1.patch",
+    "@cursor/sdk@1.4.1": "patches/@cursor%2Fsdk@1.4.1.patch",
   },
   "packages": {
     "@bufbuild/protobuf": ["@bufbuild/protobuf@1.10.0", "", {}, "sha512-QDdVFLoN93Zjg36NoQPZfsVH9tZew7wKDKyV5qRdj8ntT4wQCOradQjRaTdwMhWUYsgKsvCINKKm87FdEk96Ag=="],
@@ -19,17 +19,17 @@
 
     "@connectrpc/connect-web": ["@connectrpc/connect-web@1.7.0", "", { "peerDependencies": { "@bufbuild/protobuf": "^1.10.0", "@connectrpc/connect": "1.7.0" } }, "sha512-qyP0YOnUPRWwCc/VfsoydMJvkb7EyUPr2q9sHgBuJzbADjiqck1gKH5V5ZPzPhTLBvmz5UvG+wiZ5sMRQHU1MQ=="],
 
-    "@cursor/sdk": ["@cursor/sdk@1.3.1", "", { "dependencies": { "@bufbuild/protobuf": "1.10.0", "@connectrpc/connect": "^1.6.1", "@connectrpc/connect-web": "^1.6.1", "@statsig/js-client": "3.31.0" }, "optionalDependencies": { "@cursor/sdk-darwin-arm64": "1.3.1", "@cursor/sdk-darwin-x64": "1.3.1", "@cursor/sdk-linux-arm64": "1.3.1", "@cursor/sdk-linux-x64": "1.3.1", "@cursor/sdk-win32-x64": "1.3.1" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-Mn0gK8V+5BkOqm22J2ocU+1BrqnNH8QcK9kmA7SkRuawDOeq2ABC2BIZq9gRnF3z68x/I7J/ZU8jl6DcshCVUA=="],
+    "@cursor/sdk": ["@cursor/sdk@1.4.1", "", { "dependencies": { "@bufbuild/protobuf": "1.10.0", "@connectrpc/connect": "^1.6.1", "@connectrpc/connect-web": "^1.6.1", "@statsig/js-client": "3.31.0" }, "optionalDependencies": { "@cursor/sdk-darwin-arm64": "1.4.1", "@cursor/sdk-darwin-x64": "1.4.1", "@cursor/sdk-linux-arm64": "1.4.1", "@cursor/sdk-linux-x64": "1.4.1", "@cursor/sdk-win32-x64": "1.4.1" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-+/be5Dh+MSk3KHwVWv2l7rCKemxd6ducLO+X7u43GE+jL9Md00bxwMciP+WMzVu4qcn5Yh0y/Ij+UT+W5FbtQg=="],
 
-    "@cursor/sdk-darwin-arm64": ["@cursor/sdk-darwin-arm64@1.3.1", "", { "os": "darwin", "cpu": "arm64", "bin": { "rg": "./bin/rg" } }, "sha512-5JXgVJYeFPxXjDqnu1ha/rAmH+ATFh4abdx199x8E/RcYYM++9b55oJXO3GYv1/9/4Qa9RsE5JkHRY6FYc5vQw=="],
+    "@cursor/sdk-darwin-arm64": ["@cursor/sdk-darwin-arm64@1.4.1", "", { "os": "darwin", "cpu": "arm64", "bin": { "rg": "./bin/rg" } }, "sha512-iR5v8dQSF574WC4S/hgqXvDjMdLQlXbu9hJnhmUUferHVjI2v1RPoX/HvXFvke3SbPD2sLaTAB69rn3jpyuSFg=="],
 
-    "@cursor/sdk-darwin-x64": ["@cursor/sdk-darwin-x64@1.3.1", "", { "os": "darwin", "cpu": "x64", "bin": { "rg": "./bin/rg" } }, "sha512-yHzIRER8IpOpIH/CUigquuwqvcjCEe62xV6OiJHzRfgApdnzxCjC8JMhLZP2M08/dofyZu9xeo7yr43H6oSRTA=="],
+    "@cursor/sdk-darwin-x64": ["@cursor/sdk-darwin-x64@1.4.1", "", { "os": "darwin", "cpu": "x64", "bin": { "rg": "./bin/rg" } }, "sha512-nvmA1+rRI/enhbA9P5xKW1sicbSdjN3WkOM0JTIzkjee/A/UQ7YaLBcZjrTqSIna+/tqyNdSupVa41/BL+NM7A=="],
 
-    "@cursor/sdk-linux-arm64": ["@cursor/sdk-linux-arm64@1.3.1", "", { "os": "linux", "cpu": "arm64", "bin": { "rg": "./bin/rg" } }, "sha512-8wI7DUSQtJ7Rkyj5AhNONeR0M+5bjhR0qo8GJEEmRs6isi072sNPsFXwfhlzX7bhbtsX/FCtvsTG/vpam48ObA=="],
+    "@cursor/sdk-linux-arm64": ["@cursor/sdk-linux-arm64@1.4.1", "", { "os": "linux", "cpu": "arm64", "bin": { "rg": "./bin/rg" } }, "sha512-92HIbKzlILBMLUso6a8IlnbUysNi6jJvbkuZX45/T3+C/rkYe5RheIaytdz53crKMleH00Lz2fy9l0MK5aOrOQ=="],
 
-    "@cursor/sdk-linux-x64": ["@cursor/sdk-linux-x64@1.3.1", "", { "os": "linux", "cpu": "x64", "bin": { "rg": "./bin/rg" } }, "sha512-jIwzTr3KhMtU4aJc8x0i1RlcBKttqcVYhor9FI/h1qJQm03yTgSwhyZjsMvfBHPQ5KoYDFVdu47S1dIhwaSWZA=="],
+    "@cursor/sdk-linux-x64": ["@cursor/sdk-linux-x64@1.4.1", "", { "os": "linux", "cpu": "x64", "bin": { "rg": "./bin/rg" } }, "sha512-lUpG6G7qkOh9cC5IMOWr8sGrlOpnEH7s0nw/Mdg0o6DpJFkouyXk6Cy+RMaQKQeilTPIy5RW87zWgBwRKnj8KQ=="],
 
-    "@cursor/sdk-win32-x64": ["@cursor/sdk-win32-x64@1.3.1", "", { "os": "win32", "cpu": "x64", "bin": { "rg": "./bin/rg.exe" } }, "sha512-hqYllGgY27eaq+w035PebKdoc/JswcrvOSNCniqq/nicLXgWdK5zdKiAs5MyWUr73HGGL1sK0aiE7WdxbIKKVw=="],
+    "@cursor/sdk-win32-x64": ["@cursor/sdk-win32-x64@1.4.1", "", { "os": "win32", "cpu": "x64", "bin": { "rg": "./bin/rg.exe" } }, "sha512-8x8hIPyVu6ChyzGPryOSFVJVbLe7nTvXBUKKia9/SEtzSonQLYPoj5pjpkWOpLxhyHkWnwxQfkSC0mO9+9pW1w=="],
 
     "@statsig/client-core": ["@statsig/client-core@3.31.0", "", {}, "sha512-SuxQD6TmVszPG7FoMKwTk/uyBuVFk7XnxI3T/E0uyb7PL7GNjONtfsoh+NqBBVUJVse0CUeSFfgJPoZy1ZOslQ=="],
 

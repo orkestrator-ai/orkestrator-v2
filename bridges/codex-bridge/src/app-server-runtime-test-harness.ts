@@ -41,6 +41,7 @@ import type { CodexChangeEvidence } from "./change-evidence.js";
 import type { CapacityRetryPolicy } from "./sessions/capacity-retry.js";
 
 import { setHydrateMessagesFromPersistedSessionGateForTesting } from "./history/rollout.js";
+import { CODEX_TOOL_HISTORY_FEATURES_OFF } from "./codex-config.js";
 
 /**
  * Returned by a handler to model a request app-server never answers — the exact
@@ -210,7 +211,7 @@ export function threadPayload(
 
 export const BASE_HANDLERS: Record<string, (params: Record<string, unknown>) => unknown> = {
   "skills/list": () => ({ data: [{ errors: [], skills: [] }] }),
-  "config/read": () => ({ config: { features: { incremental_tools: false } } }),
+  "config/read": () => ({ config: { features: CODEX_TOOL_HISTORY_FEATURES_OFF } }),
   initialize: () => ({
     userAgent: "orkestrator/0.145.0 (test)",
     codexHome: "/tmp/codex-home",

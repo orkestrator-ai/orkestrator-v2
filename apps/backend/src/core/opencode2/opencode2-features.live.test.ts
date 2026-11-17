@@ -9,6 +9,7 @@ import {
 import { OpenCode2Client } from "./client.js";
 import { keepActiveOpenCode2Credential, removeOpenCode2Credentials } from "./credentials.js";
 import { OpenCode2Provider } from "./provider.js";
+import { OPENCODE2_FLAGS } from "./server.js";
 
 /**
  * The 2.x session features (`features.ts`) against a real pinned 2.x server
@@ -30,7 +31,7 @@ let provider: OpenCode2Provider | undefined;
 beforeAll(async () => {
   if (!live) return;
   fixture = await startOpenCode2Fixture(binary!, {
-    env: { OPENCODE_FLAGS: "todo,-schedules,-background_compaction,-artifacts,-media_blob" },
+    env: { OPENCODE_FLAGS: OPENCODE2_FLAGS },
   });
   // Staged revert restores files from 2.x's snapshots, which track a git worktree.
   const git = (...args: string[]) =>

@@ -244,8 +244,10 @@ function validSharedFields(value: Record<string, unknown>): boolean {
 
 /**
  * The transport Pi's own validator (`validateMcpServerConfig` in
- * `core/mcp-servers.js`) reads an entry as, or `undefined` when Pi rejects the
- * entry. Two bridge extensions remain: a `transport` key spells the type, and
+ * `core/mcp-servers.js`, which since 1.5.1 checks the shared `mcpServers`
+ * fields through `@earendil-works/pi-mcp`'s `validateMcpServerConfig` in its
+ * `dist/config.js` and then Pi's own `exposure`/`toolExposure`/`auth`) reads an
+ * entry as, or `undefined` when Pi rejects the entry. Two bridge extensions remain: a `transport` key spells the type, and
  * `sse` connects over Streamable HTTP (Pi rejects it). `oauth` is not checked:
  * the bridge never signs in.
  */

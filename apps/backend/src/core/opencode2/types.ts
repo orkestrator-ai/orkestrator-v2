@@ -1,6 +1,8 @@
 /**
  * The slice of OpenCode 2.x's wire shapes the 2.x provider reads, from the
- * pinned release's `packages/protocol/openapi.json` (2.2.6). Fields the
+ * pinned release's `packages/protocol/openapi.json` (2.2.6; the slice is
+ * unchanged at 2.3.0, whose rows add `time.firstToken` on a response and a
+ * tool's `native` field, neither read). Fields the
  * provider does not read are left out; unknown variants stay representable so
  * a newer server degrades instead of throwing (the server is a pinned
  * dependency, but a message row from a newer minor must not crash a read).

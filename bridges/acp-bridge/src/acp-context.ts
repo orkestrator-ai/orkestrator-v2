@@ -991,6 +991,13 @@ export class AcpProcess {
    * session before the child is terminated.
    */
   sessionCloseSupported = false;
+  /**
+   * Whether this child's `initialize` advertised
+   * `sessionCapabilities.systemPrompt` (stable since ACP schema 1.30, SDK
+   * 2.5.0), so session instructions may travel as the standard `systemPrompt`
+   * (`sessionInstructionsCarrier`).
+   */
+  systemPromptSupported = false;
 
   constructor(spawnOptions: AcpSpawnOptions = {}) {
     if (!executable) {
@@ -1108,6 +1115,7 @@ export class AcpProcess {
     }
     rememberAgentRuntime(initialized);
     this.sessionCloseSupported = supportsSessionCapability(initialized, "close");
+    this.systemPromptSupported = supportsSessionCapability(initialized, "systemPrompt");
     await this.authenticateIfRequired(initialized, signal);
     return initialized;
   }

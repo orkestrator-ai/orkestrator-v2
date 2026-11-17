@@ -27,7 +27,7 @@ export { CLAUDE_HOST_REFRESH_MODEL } from "./claude-host-login-refresh-command.j
  * already saved, and a compare-and-swap save. The API then refuses the model
  * before any inference, so it costs no usage (since 2.1.314 the CLI sends the
  * unknown model rather than refusing it itself). Checked with a fake login
- * against Claude Code 2.1.314 and 2.1.319; rerun
+ * against Claude Code 2.1.314, 2.1.319 and 2.1.326; rerun
  * scripts/claude-host-refresh-trigger-probe.ts on every Claude Code bump
  * (docs/development/upgrade-agents.md, "Re-check OAuth refresh-token rotation").
  *

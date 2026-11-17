@@ -129,7 +129,7 @@ import {
   effectiveTurnExecutionPolicy,
   liveExecutionPolicy,
 } from "./acp-policy.js";
-import { sessionInstructionsMeta } from "./acp-provider-config.js";
+import { sessionInstructionsCarrier, sessionInstructionsParams } from "./acp-provider-config.js";
 import { sessionInstructions } from "./acp-session-instructions.js";
 import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
@@ -377,6 +377,7 @@ export async function resumeSessionReserved(
         additionalDirectories: [],
         mcpServers: configuredAcpMcpServers(state.agentMcp),
         sessionId: acpSessionId,
+        ...(await sessionInstructionFields(child, "load", effectiveTurnExecutionPolicy(state))),
       },
       RPC_TIMEOUT_MS,
       signal,
@@ -515,16 +516,14 @@ export async function createSessionReserved(
         cwd: workingDirectory,
         additionalDirectories: [],
         mcpServers: configuredAcpMcpServers(spawnOptions.agentMcp),
-        ...sessionInstructionsMeta(
-          providerConfig,
-          await sessionInstructions(
-            effectiveTurnExecutionPolicy({
-              policy: spawnOptions.policy,
-              readOnly: spawnOptions.readOnly,
-            }),
-            workingDirectory,
-          ),
-        ),
+        ...(await sessionInstructionFields(
+          child,
+          "new",
+          effectiveTurnExecutionPolicy({
+            policy: spawnOptions.policy,
+            readOnly: spawnOptions.readOnly,
+          }),
+        )),
       },
       RPC_TIMEOUT_MS,
       signal,
@@ -697,10 +696,7 @@ async function startDeferredSession(state: SessionState): Promise<AcpProcess> {
         cwd: workingDirectory,
         additionalDirectories: [],
         mcpServers: configuredAcpMcpServers(state.agentMcp),
-        ...sessionInstructionsMeta(
-          providerConfig,
-          await sessionInstructions(effectiveTurnExecutionPolicy(state), workingDirectory),
-        ),
+        ...(await sessionInstructionFields(child, "new", effectiveTurnExecutionPolicy(state))),
       },
       RPC_TIMEOUT_MS,
     );
@@ -1209,6 +1205,29 @@ export async function setSessionReadOnly(state: SessionState, readOnly: boolean)
   await previous?.close();
 }
 
+/**
+ * The session instructions one `session/new` or `session/load` carries:
+ * Grok's `_meta.rules` on create, or standard ACP `systemPrompt` on both for
+ * an agent that advertises it (`sessionInstructionsCarrier`). AGENTS.md is
+ * read only when the request will carry it.
+ */
+async function sessionInstructionFields(
+  child: AcpProcess,
+  lifecycle: "new" | "load",
+  policy: NativeAgentExecutionPolicy | undefined,
+): Promise<ReturnType<typeof sessionInstructionsParams>> {
+  const carrier = sessionInstructionsCarrier(providerConfig, {
+    lifecycle,
+    systemPromptSupported: child.systemPromptSupported,
+  });
+  if (!carrier) return {};
+  return sessionInstructionsParams(
+    providerConfig,
+    carrier,
+    await sessionInstructions(policy, workingDirectory),
+  );
+}
+
 export async function spawnAndLoadSession(state: SessionState): Promise<AcpProcess> {
   if (state.child) return state.child;
   if (!state.acpSessionId) return startDeferredSession(state);
@@ -1231,6 +1250,7 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
         additionalDirectories: [],
         mcpServers: configuredAcpMcpServers(state.agentMcp),
         sessionId: state.acpSessionId,
+        ...(await sessionInstructionFields(child, "load", effectiveTurnExecutionPolicy(state))),
       },
       RPC_TIMEOUT_MS,
     );

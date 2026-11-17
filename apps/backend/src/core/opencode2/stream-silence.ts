@@ -6,10 +6,10 @@
 
 /**
  * Longest silence the `/api/event` stream may have once it has proved it
- * heartbeats. `opencode serve` 2.2.6 writes a `: heartbeat` SSE comment on
- * connect and then every 15 s (measured 2026-11-11 on Linux x64, unbuffered,
- * idle server), so this is three missed heartbeats plus 5 s of slack for a
- * busy event loop on either side.
+ * heartbeats. `opencode serve` writes a `: heartbeat` SSE comment on connect
+ * and then every 15 s (2.2.6 measured 2026-11-11, 2.3.0 measured 2026-11-17,
+ * both on Linux x64, unbuffered, idle server), so this is three missed
+ * heartbeats plus 5 s of slack for a busy event loop on either side.
  */
 export const OPENCODE2_EVENT_STREAM_SILENCE_MS = 50_000;
 

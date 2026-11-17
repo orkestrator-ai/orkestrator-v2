@@ -473,3 +473,179 @@ describe("openCode2ToolPart", () => {
     expect(withFile.toolOutput).toBe("[image/png: inline data]");
   });
 });
+
+/** A 2.3.0 `subagent` call: it returns at once with its child still running. */
+function launchRow(id: string, callId: string, childId: string, completedAt = 1_000) {
+  return {
+    id,
+    type: "assistant",
+    content: [
+      {
+        type: "tool",
+        id: callId,
+        name: "subagent",
+        state: {
+          status: "completed",
+          input: { agent: "general", description: "probe child", prompt: "Look" },
+          content: [
+            {
+              type: "text",
+              text: `The subagent is working in the background (sessionID: ${childId}).`,
+            },
+          ],
+          metadata: { sessionID: childId, status: "running", truncated: false },
+        },
+        time: { created: completedAt - 10, ran: completedAt - 5, completed: completedAt },
+      },
+    ],
+    time: { created: completedAt - 20 },
+  };
+}
+
+/** The `<subagent>` report 2.3.0 delivers to the parent each time the child goes idle. */
+function reportRow(id: string, childId: string, state: string, body: string) {
+  return {
+    id,
+    type: "synthetic",
+    description: "probe child",
+    metadata: { source: "subagent", childID: childId, agent: "General", state },
+    text: `<subagent sessionID="${childId}" state="${state}" description="probe child">\n${body}\n</subagent>`,
+    time: { created: 5_000 },
+  };
+}
+
+describe("background sub-agent reports (OpenCode 2.3.0)", () => {
+  const cardOf = (result: Record<string, unknown>[], callId: string) =>
+    result.flatMap((row) => partsOf(row)).find((part) => part.toolUseId === callId);
+
+  test("a report folds onto its launch: the card takes its answer and settles, the row shows nothing", () => {
+    const result = rows([
+      { id: "u1", type: "user", text: "go", time: { created: 1 } },
+      launchRow("a1", "call_1", "ses_child"),
+      { id: "i1", type: "idle", outcome: "succeeded", time: { created: 2 } },
+      reportRow("r1", "ses_child", "completed", "found it"),
+      {
+        id: "a2",
+        type: "assistant",
+        content: [{ type: "text", text: "done" }],
+        time: { created: 6 },
+      },
+    ]);
+    expect(result.map((row) => row.id)).toEqual(["u1", "a1", "a2"]);
+    expect(cardOf(result, "call_1")).toMatchObject({
+      type: "subagent",
+      subagentId: "ses_child",
+      agentState: "finished",
+      toolState: "success",
+      toolOutput: "found it",
+    });
+  });
+
+  test("an error or a cancel fails the card with the report's text", () => {
+    for (const [state, body] of [
+      ["error", "model refused"],
+      ["cancelled", "Subagent cancelled"],
+    ] as const) {
+      const result = rows([
+        launchRow("a1", "call_1", "ses_c"),
+        reportRow("r1", "ses_c", state, body),
+      ]);
+      expect(cardOf(result, "call_1")).toMatchObject({ agentState: "failed", toolError: body });
+    }
+  });
+
+  test("a child still running background work of its own stays active, and its next report settles it", () => {
+    const still = "partial\n\nBackground work still running:\n- shell (sh_1): sleep 9";
+    const first = rows([
+      launchRow("a1", "call_1", "ses_c"),
+      reportRow("r1", "ses_c", "completed", still),
+    ]);
+    expect(cardOf(first, "call_1")).toMatchObject({ agentState: "active", toolOutput: still });
+    const second = rows([
+      launchRow("a1", "call_1", "ses_c"),
+      reportRow("r1", "ses_c", "completed", still),
+      reportRow("r2", "ses_c", "completed", "all done"),
+    ]);
+    expect(cardOf(second, "call_1")).toMatchObject({
+      agentState: "finished",
+      toolOutput: "all done",
+    });
+  });
+
+  test("a follow-up that joins a running child is settled by the same report", () => {
+    const result = rows([
+      launchRow("a1", "call_1", "ses_c"),
+      launchRow("a2", "call_2", "ses_c"),
+      reportRow("r1", "ses_c", "completed", "both"),
+      launchRow("a3", "call_3", "ses_c"),
+    ]);
+    expect(cardOf(result, "call_1")).toMatchObject({ agentState: "finished", toolOutput: "both" });
+    expect(cardOf(result, "call_2")).toMatchObject({ agentState: "finished", toolOutput: "both" });
+    // A later follow-up has no report yet; with no running sessions to read it reads Ended.
+    expect(cardOf(result, "call_3")).toMatchObject({ agentState: "ended" });
+  });
+
+  test("a launch with no report reads by the running sessions at the head, Ended elsewhere", () => {
+    const messages = [launchRow("a1", "call_1", "ses_c", 1_000)] as unknown as OpenCode2Message[];
+    const at = (liveSessions: ReadonlySet<string> | "unknown" | undefined, now: number) =>
+      cardOf(
+        normalizeOpenCode2Transcript(messages, undefined, {
+          ...(liveSessions ? { liveSessions } : {}),
+          now,
+        }),
+        "call_1",
+      )?.agentState;
+    expect(at(new Set(["ses_c"]), 60_000)).toBe("active");
+    // Just launched: admitted before it starts draining.
+    expect(at(new Set(), 2_000)).toBe("active");
+    // Not running long after its launch (a restarted server did not resume it).
+    expect(at(new Set(), 60_000)).toBe("ended");
+    expect(at("unknown", 60_000)).toBe("active");
+    expect(at(undefined, 2_000)).toBe("ended");
+  });
+
+  test("a report whose launch is not among the rows read keeps a row of its own", () => {
+    const result = rows([reportRow("r1", "ses_c", "error", "it broke")]);
+    expect(result).toHaveLength(1);
+    expect(partsOf(result[0])[0]).toMatchObject({
+      type: "status",
+      severity: "error",
+      content: "Sub-agent failed: probe child\nit broke",
+    });
+    // Groups stay aligned with their input rows.
+    const groups = normalizeOpenCode2Groups([
+      launchRow("a1", "call_1", "ses_c"),
+      reportRow("r1", "ses_c", "completed", "ok"),
+    ] as unknown as OpenCode2Message[]);
+    expect(groups.map((group) => group.length)).toEqual([1, 0]);
+  });
+
+  test("a 2.2.6 foreground call settles from its own output and is never folded", () => {
+    const result = rows([
+      {
+        id: "a1",
+        type: "assistant",
+        content: [
+          {
+            type: "tool",
+            id: "call_f",
+            name: "subagent",
+            state: {
+              status: "completed",
+              input: { agent: "general", description: "fg", prompt: "x" },
+              content: [
+                {
+                  type: "text",
+                  text: '<subagent sessionID="ses_f" state="completed">\nok\n</subagent>',
+                },
+              ],
+              metadata: { sessionID: "ses_f", status: "completed" },
+            },
+          },
+        ],
+        time: { created: 1 },
+      },
+    ]);
+    expect(cardOf(result, "call_f")).toMatchObject({ agentState: "finished" });
+  });
+});

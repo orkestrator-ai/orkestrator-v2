@@ -197,7 +197,7 @@ mkdir -p "node_modules/$(dirname "$name")" && cp -R "${fixtures}/$name" "node_mo
         }),
     });
     const client = started.client;
-    await client.api("GET", "/api/agent", "OpenCode agents", {});
+    await client.awaitPlugins({ timeoutMs: 30_000 });
 
     for (const id of Object.keys(providers)) {
       const session = await client.createSession({ model: { providerID: id, id: "m" } });

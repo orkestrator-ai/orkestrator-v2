@@ -15,6 +15,7 @@ import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-ag
 import { BUILD, harness, thread } from "./app-server-engine-test-harness.js";
 import type { EngineTurnConfig } from "./types.js";
 import { codexReadOnlyExecRulesInstructions } from "../codex-read-only-exec-rules.js";
+import { CODEX_TOOL_HISTORY_FEATURES_OFF } from "../codex-config.js";
 
 function policy(overrides: Partial<NativeAgentExecutionPolicy> = {}): NativeAgentExecutionPolicy {
   return {
@@ -46,7 +47,7 @@ function sent(h: ReturnType<typeof harness>, method: string) {
 
 describe("developer instructions on Codex threads", () => {
   test("start, resume and fork carry the shared instructions", async () => {
-    const h = reading(() => ({ config: { features: { incremental_tools: false } } }));
+    const h = reading(() => ({ config: { features: CODEX_TOOL_HISTORY_FEATURES_OFF } }));
     const config: EngineTurnConfig = { ...BUILD, policy: policy() };
     try {
       await h.engine.start();

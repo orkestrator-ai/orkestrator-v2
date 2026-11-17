@@ -820,7 +820,14 @@ async function handleSteer(
     await persistBarrier().catch(() => undefined);
     return json(response, 503, { outcome: "unknown", requestId });
   }
-  setSteerEntry(state, record(outcome === "complete_delivered" ? "delivered" : "absent"));
+  // SDK 1.4.1 adds `{ outcome: "queued" }`: the server queued the text as
+  // the follow-up that starts the next run. Ownership has transferred, so it
+  // counts as delivered: answering `idle` would invite the caller to resend
+  // it as a prompt and the agent would get it twice. Only the cloud run
+  // returns it (a local run answers one of the two strings), and this bridge
+  // drives local runs, so it is a guard rather than a path in use.
+  const delivered = outcome === "complete_delivered" || typeof outcome === "object";
+  setSteerEntry(state, record(delivered ? "delivered" : "absent"));
   // Delivery already happened (or provably did not); a failed write of that
   // outcome must not turn it into an error the caller would resend on. The
   // file keeps the request as ambiguous, and this process answers retries
@@ -828,10 +835,8 @@ async function handleSteer(
   await persistBarrier().catch(() => undefined);
   return json(
     response,
-    outcome === "complete_delivered" ? 202 : 409,
-    outcome === "complete_delivered"
-      ? { outcome: "applied", requestId }
-      : { outcome: "idle", requestId },
+    delivered ? 202 : 409,
+    delivered ? { outcome: "applied", requestId } : { outcome: "idle", requestId },
   );
 }
 
@@ -1257,6 +1262,7 @@ async function dispatchClaimedPrompt(
   state.currentTurnOutputTokenEstimate = undefined;
   state.currentRunDeltaUsage = undefined;
   state.currentRunStreamUsage = undefined;
+  state.currentRunModelCalls = undefined;
   state.currentRunUsageUpdatedAt = undefined;
   state.currentRunModelId = state.composer.selectedModelId;
   state.currentTurnUsage = {};
@@ -1298,6 +1304,7 @@ async function dispatchClaimedPrompt(
     state.currentTurnOutputTokenEstimate = undefined;
     state.currentRunDeltaUsage = undefined;
     state.currentRunStreamUsage = undefined;
+    state.currentRunModelCalls = undefined;
     state.currentRunUsageUpdatedAt = undefined;
     state.currentRunModelId = undefined;
     state.currentTurnUsage = undefined;
@@ -1387,6 +1394,7 @@ async function handleCompact(response: ServerResponse, state: SessionState): Pro
     state.currentTurnOutputTokenEstimate = undefined;
     state.currentRunDeltaUsage = undefined;
     state.currentRunStreamUsage = undefined;
+    state.currentRunModelCalls = undefined;
     state.currentRunUsageUpdatedAt = undefined;
     state.currentRunModelId = state.composer.selectedModelId;
     state.currentTurnUsage = {};

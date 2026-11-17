@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CODEX_SIGN_IN_EXPIRED_NOTICE, ROOT_THREAD_SOURCE_KINDS } from "./app-server-engine.js";
 import type { EngineTurnConfig } from "./types.js";
-import { codexCoordinatorPolicy } from "../codex-config.js";
+import { CODEX_TOOL_HISTORY_FEATURES_OFF, codexCoordinatorPolicy } from "../codex-config.js";
 import {
   AUTH_SECRET_CANARIES,
   captureOutput,
@@ -1207,7 +1207,7 @@ describe("thread lifecycle", () => {
     const started = (webSearch: string) =>
       harness({
         "config/read": () => ({
-          config: { web_search: webSearch, features: { incremental_tools: false } },
+          config: { web_search: webSearch, features: CODEX_TOOL_HISTORY_FEATURES_OFF },
           origins: {},
           layers: null,
         }),

@@ -944,7 +944,7 @@ export interface ClaudeCumulativeUsage {
 
 /**
  * Every Claude dollar figure is the CLI's own estimate, never a bill. The Agent
- * SDK says so of each carrier the bridge reads (sdk.d.ts, 0.3.319):
+ * SDK says so of each carrier the bridge reads (sdk.d.ts, 0.3.319; unchanged at 0.3.326):
  * `total_cost_usd` on a result is "Cumulative estimated cost in USD … An
  * estimate, not a billing statement", `modelUsage` (whose `costUSD` it sums)
  * is to be treated "as an estimate, not a billing statement", and the managed

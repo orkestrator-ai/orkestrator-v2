@@ -208,7 +208,7 @@ the renderer.
   never sent this way.
 - Direct history pages are cached as provider rows and overlaid on the way
   out, so a ledger change never leaves a stale cached page.
-- The sync-v1 and whole-transcript projections (`getProjection`, read by
+- The whole-transcript projection and its detail-recovery tail (`getProjection`, read by
   Control MCP, web annotations and the agent information panel) are
   overlaid the same way. The public API's `session transcript` reads the
   progressive view and direct pages, so the CLI sees the parts too.

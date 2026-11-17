@@ -37,7 +37,6 @@ import type {
   NativeAgentMessagePage,
   NativeAgentMcpServerAction,
   NativeAgentLiveWindow,
-  NativeAgentProjectionUpdate,
   NativeAgentTranscriptUpdate,
   NativeAgentSessionStateUpdate,
   NativeAgentDiscoveryUpdate,
@@ -50,7 +49,6 @@ import type {
 import type { NativeAgentGoal, NativeAgentGoalView } from "@orkestrator/protocol/native-agent-goal";
 import {
   isNativeAgentMessagePage,
-  isNativeAgentProjectionUpdate,
   isNativeAgentTranscriptUpdate,
   isNativeAgentSessionStateUpdate,
   isNativeAgentDiscoveryUpdate,
@@ -237,7 +235,6 @@ export function createWorkflowsApi(client: BackendClient) {
   }
 
   async function getNativeAgentSyncCapabilities(): Promise<{
-    projectionSyncVersions: number[];
     historyPagingVersions: number[];
     progressiveViewVersions?: number[];
     /** Stamped, session-scoped activity announcements (step 07). */
@@ -254,9 +251,6 @@ export function createWorkflowsApi(client: BackendClient) {
     }
     const candidate = response as Record<string, unknown>;
     if (
-      !Array.isArray(candidate.projectionSyncVersions) ||
-      candidate.projectionSyncVersions.length > 16 ||
-      !candidate.projectionSyncVersions.every(Number.isSafeInteger) ||
       !Array.isArray(candidate.historyPagingVersions) ||
       candidate.historyPagingVersions.length > 16 ||
       !candidate.historyPagingVersions.every(Number.isSafeInteger) ||
@@ -280,7 +274,6 @@ export function createWorkflowsApi(client: BackendClient) {
       throw new Error("Invalid native agent sync capabilities response");
     }
     return response as {
-      projectionSyncVersions: number[];
       historyPagingVersions: number[];
       progressiveViewVersions?: number[];
       observationEventVersions?: number[];
@@ -366,28 +359,6 @@ export function createWorkflowsApi(client: BackendClient) {
       throw new Error("Invalid native agent discovery update response");
     }
     return response;
-  }
-
-  async function getNativeAgentProjectionUpdate<TMessage = unknown>(input: {
-    environmentId: string;
-    agent: NativeAgentClientPlatform;
-    logicalSessionKey: string;
-    syncVersion: 1;
-    liveWindow: NativeAgentLiveWindow;
-    knownToken?: string;
-    forceSnapshot?: boolean;
-  }): Promise<NativeAgentProjectionUpdate<TMessage>> {
-    const response = await native().get_native_agent_projection_update(input);
-    if (
-      new TextEncoder().encode(JSON.stringify(response)).byteLength >
-      NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
-    ) {
-      throw new Error("Native agent projection update response exceeded 20 MiB");
-    }
-    if (!isNativeAgentProjectionUpdate(response)) {
-      throw new Error("Invalid native agent projection update response");
-    }
-    return response as NativeAgentProjectionUpdate<TMessage>;
   }
 
   async function getNativeAgentMessagePage<TMessage = unknown>(input: {
@@ -926,7 +897,6 @@ export function createWorkflowsApi(client: BackendClient) {
     getNativeAgentSessionStateUpdate,
     getNativeAgentLiveUpdate,
     getNativeAgentDiscoveryUpdate,
-    getNativeAgentProjectionUpdate,
     getNativeAgentMessagePage,
     getNativeAgentToolDetails,
     refreshNativeAgentModels,
@@ -990,7 +960,6 @@ export const {
   getNativeAgentSessionStateUpdate,
   getNativeAgentLiveUpdate,
   getNativeAgentDiscoveryUpdate,
-  getNativeAgentProjectionUpdate,
   getNativeAgentMessagePage,
   getNativeAgentToolDetails,
   refreshNativeAgentModels,

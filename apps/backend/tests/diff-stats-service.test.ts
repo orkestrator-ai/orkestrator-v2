@@ -537,6 +537,54 @@ describe("DiffStatsService", () => {
     }
   });
 
+  // Flake 2404; docs/architecture/git-scan-caches.md, "The establishing hint
+  // and the second scan of a track". A newly started watcher's no-path hint
+  // lands while the track scan, begun before coverage was qualified, is still
+  // running. It queues exactly one rerun, and that rerun is the entry's first
+  // scan under qualified coverage: the track scan's list could never be current.
+  test("the establishing watcher's hint during the track scan buys the first qualified list", async () => {
+    const harness = createHarness({ pendingCoverage: true });
+    try {
+      let release: () => void = () => {};
+      harness.setScan(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ stats: stats(), changes: [] });
+          }),
+      );
+      harness.service.track(localTarget());
+      harness.qualifyWatch("env-local");
+      harness.signalChange("env-local");
+      expect(harness.scans).toHaveLength(1);
+      expect(harness.service.fileListCurrency("env-local")).toMatchObject({
+        scannedEpoch: null,
+        dirtyEpoch: 2,
+        scanning: true,
+        watcherQualified: true,
+      });
+
+      release();
+      await settle();
+      expect(harness.scans).toHaveLength(2);
+      expect(harness.service.fileListCurrency("env-local")).toMatchObject({
+        scannedEpoch: 1,
+        scanning: true,
+        current: false,
+      });
+
+      release();
+      await settle();
+      expect(harness.scans).toHaveLength(2);
+      expect(harness.service.fileListCurrency("env-local")).toMatchObject({
+        scannedEpoch: 2,
+        dirtyEpoch: 2,
+        current: true,
+      });
+    } finally {
+      harness.service.shutdown();
+    }
+  });
+
   test("reports a held-back file list until the trailing scan finishes", async () => {
     const harness = createHarness({ localScanMinGapMs: 100 });
     try {

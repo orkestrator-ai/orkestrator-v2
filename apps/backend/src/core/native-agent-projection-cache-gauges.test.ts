@@ -94,7 +94,6 @@ test("deleting an environment releases its sessions' projection caches, and only
       service.forgetEnvironmentProjections("env-1");
       expect(gauges()).toMatchObject({
         projections: 0,
-        projectionSync: 0,
         projectionRevisions: 0,
         projectionEpochs: 0,
         projectionMissingSince: 0,
@@ -109,7 +108,7 @@ test("deleting an environment releases its sessions' projection caches, and only
   );
 });
 
-for (const mode of ["legacy", "sync-v1", "transcript", "state"] as const) {
+for (const mode of ["legacy", "detail-recovery", "transcript", "state"] as const) {
   for (const inFlight of [false, true]) {
     test(`deletion releases a first ${mode} read (${inFlight ? "in flight" : "settled"})`, async () => {
       let release!: () => void;
@@ -160,7 +159,9 @@ for (const mode of ["legacy", "sync-v1", "transcript", "state"] as const) {
                   })
                 : service.getProjection({
                     ...identity,
-                    ...(mode === "sync-v1" ? { representation: "sync-v1" as const } : {}),
+                    ...(mode === "detail-recovery"
+                      ? { representation: "detail-recovery" as const }
+                      : {}),
                   });
           const pending = read();
           try {
@@ -184,7 +185,6 @@ for (const mode of ["legacy", "sync-v1", "transcript", "state"] as const) {
           expect(gauges()).toMatchObject({
             projections: 0,
             projectionRefreshes: 0,
-            projectionSync: 0,
             projectionRevisions: 0,
             projectionEpochs: 0,
             progressiveReads: 0,

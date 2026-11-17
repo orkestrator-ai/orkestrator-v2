@@ -418,7 +418,7 @@ describe("artifact publications in the transcript projection", () => {
           });
         const first = await read();
         if (first.status !== "snapshot") throw new Error("expected a snapshot");
-        expect(first.value.historyPaging).toBe("direct");
+        expect(first.value.historyCursor).toBeDefined();
         const cursor = first.value.historyCursor;
         const before = await pageAll(service, sessionA, cursor);
         expect(artifactParts(rowById(before, "m10"))).toEqual([]);
@@ -619,14 +619,12 @@ describe("artifact publications in the transcript projection", () => {
         expect(
           artifactParts(rowById(projection!.messages, "m1")).map((part) => part.sourcePartId),
         ).toEqual([`artifact:${publication.publicationId}`]);
-        const sync = await service.getProjectionUpdate({
+        const recovery = await service.getProjection({
           ...sessionA,
-          syncVersion: 1,
-          liveWindow,
-          forceSnapshot: true,
+          messageLimit: 100,
+          representation: "detail-recovery",
         });
-        if (sync.status !== "snapshot") throw new Error("expected a snapshot");
-        expect(artifactParts(rowById(sync.projection.messages, "m1"))).toHaveLength(1);
+        expect(artifactParts(rowById(recovery!.messages, "m1"))).toHaveLength(1);
       },
     );
   });

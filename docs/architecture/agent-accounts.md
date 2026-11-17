@@ -1112,7 +1112,8 @@ Four things can move it:
   and a five-minute timer for work no turn-end edge reports, read each included
   account's usage (cached for two minutes, as for Settings) and move to the top of
   the order. That is a move when the active account's weekly or 5-hour limit reaches
-  98% used, and also when another login with room resets more than an hour sooner,
+  98% used, and also when another login with room (below 98% on both limits; see
+  [One threshold](#one-threshold)) resets more than an hour sooner,
   or the active account's own tick is off. A running turn finishes on the old account, as with any switch. A native
   tab's next turn moves over. Workflow providers resolve the local bridge before
   creating a session or preparing each new turn, so an idle bridge moves over
@@ -1221,6 +1222,32 @@ is off. Regular checks share a thirty-minute renewal backoff, doubling after
 failures up to six hours. Limit stops use the existing urgent two-minute
 spacing. Removing an account refuses while its renewal runs, because the CLI
 would recreate a directory deleted underneath it.
+
+### One threshold
+
+Between turns, the rule that moves the machine off an account and the rule that
+chooses where to go use one threshold, 98% (`AUTO_SWITCH_THRESHOLD_PERCENT`), on
+both the general weekly limit and the 5-hour limit. An account counts as having
+room only below it; the 100% bar applies only after a refusal
+([above](#after-a-refusal)).
+
+A reading alone could not hold that line, because the reading of an idle account
+can say less than the one that moved the machine off it: an earlier, lower last
+known reading, or nothing at all. So the switcher remembers each login a fresh
+reading put at or past 98% on either limit, and until that limit resets
+(its reset time, or the window's length from the reading when none was given)
+every idle entry of the login reads as held past 98% with that reset ahead,
+wherever no fresh reading of it says otherwise (`holdPastThreshold` in
+`agent-accounts-auto-switch.ts`). It becomes a place to go again as soon as a
+fresh reading puts it below 98% or the limit resets. The active entry keeps its
+own reading, because only a fresh one moves the machine. The memory is in the
+backend process and bounded; after a restart the next fresh reading rebuilds it.
+
+On 2026-11-16 two machines moved between two logins every few minutes: a fresh
+98% weekly reading moved each off one login (`threshold`), and the next check,
+reading it idle from an earlier, lower reading, moved back because its week ended
+sooner (`soonest-reset`). `agent-accounts-auto-switch-flap.test.ts` replays that
+for both limits on Claude and Codex.
 
 ### Paid overage
 

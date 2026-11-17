@@ -85,7 +85,6 @@ const identity: NativeAgentViewIdentity = {
 };
 
 const getNativeAgentSyncCapabilitiesMock = mock(async () => ({
-  projectionSyncVersions: [1],
   historyPagingVersions: [1],
   progressiveViewVersions: [1],
   transcriptPatchVersions: patchCapability ? [2] : [],
@@ -148,10 +147,6 @@ const getNativeAgentMessagePageMock = mock(async (input: { before: string }) => 
   if (!next) throw new Error("Unexpected history page request");
   return next();
 });
-// Joined paging retired (0232 task 4): nothing reads the sync-v1 projection.
-const getNativeAgentProjectionUpdateMock = mock(async () => {
-  throw new Error("Unexpected sync-v1 projection request");
-});
 const getNativeAgentProjectionMock = mock(async () => null);
 const updateNativeAgentControlsMock = mock(
   async (_input: {
@@ -178,7 +173,6 @@ mock.module("@/lib/backend", () => ({
   updateNativeAgentControls: updateNativeAgentControlsMock,
   resumeNativeAgentSession: async () => null,
   getNativeAgentProjection: getNativeAgentProjectionMock,
-  getNativeAgentProjectionUpdate: getNativeAgentProjectionUpdateMock,
 }));
 
 const {
@@ -279,7 +273,7 @@ function directTail(
   historyCursor: string,
   extras: Partial<NativeAgentTranscriptView<TestMessage>> = {},
 ): NativeAgentTranscriptUpdate<TestMessage> {
-  return truncatedTail(token, messages, { historyCursor, historyPaging: "direct", ...extras });
+  return truncatedTail(token, messages, { historyCursor, ...extras });
 }
 
 function historyPage(
@@ -351,7 +345,6 @@ beforeEach(() => {
   getNativeAgentSessionStateUpdateMock.mockClear();
   getNativeAgentDiscoveryUpdateMock.mockClear();
   getNativeAgentMessagePageMock.mockClear();
-  getNativeAgentProjectionUpdateMock.mockClear();
   getNativeAgentProjectionMock.mockClear();
   stopNativeAgentSessionMock.mockClear();
   updateNativeAgentControlsMock.mockReset();
@@ -378,9 +371,8 @@ describe("a backend without progressive views", () => {
    */
   test.each([
     [
-      "advertises sync v1 only",
+      "advertises no progressive views",
       async () => ({
-        projectionSyncVersions: [1],
         historyPagingVersions: [1],
         progressiveViewVersions: [] as number[],
         transcriptPatchVersions: [] as number[],
@@ -402,7 +394,6 @@ describe("a backend without progressive views", () => {
     expect(result.current.hasCompletedRead).toBe(true);
     expect(getNativeAgentTranscriptUpdateMock).not.toHaveBeenCalled();
     expect(getNativeAgentSessionStateUpdateMock).not.toHaveBeenCalled();
-    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
     expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
   });
 });
@@ -1603,7 +1594,6 @@ describe("useNativeAgentSession progressive view", () => {
       () =>
         transcriptSnapshot("transcript-2", [message("m2"), message("m3"), message("m4")], {
           historyCursor: "cursor-before-m2",
-          historyPaging: "direct",
           historyComplete: false,
           messageWindow: {
             limit: 3,
@@ -2156,7 +2146,6 @@ describe("useNativeAgentSession progressive view", () => {
       await result.current.loadEarlierMessages();
     });
 
-    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
     expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
     expect(messagePageCalls).toEqual([]);
     expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m3", "m4"]);
@@ -2205,7 +2194,6 @@ describe("useNativeAgentSession progressive view", () => {
       () =>
         truncatedTail("transcript-1", [message("m3"), message("m4")], {
           historyCursor: "direct-before-m3",
-          historyPaging: "direct",
         }),
     ];
     stateUpdates = [() => stateSnapshot("state-1")];
@@ -2221,7 +2209,6 @@ describe("useNativeAgentSession progressive view", () => {
       await result.current.loadEarlierMessages();
     });
 
-    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
     expect(messagePageCalls).toEqual([{ before: "direct-before-m3" }]);
     expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
       "m1",
@@ -2236,7 +2223,6 @@ describe("useNativeAgentSession progressive view", () => {
       () =>
         truncatedTail("transcript-1", [message("m3"), message("m4")], {
           historyCursor: "direct-before-m3",
-          historyPaging: "direct",
         }),
     ];
     stateUpdates = [() => stateSnapshot("state-1")];
@@ -2273,7 +2259,6 @@ describe("useNativeAgentSession progressive view", () => {
       () =>
         truncatedTail("transcript-2", [message("m4"), message("m5")], {
           historyCursor: "direct-before-m4",
-          historyPaging: "direct",
         }),
     ];
     stateUpdates = [];
@@ -2326,7 +2311,6 @@ describe("useNativeAgentSession progressive view", () => {
         historyEpoch: "epoch-1",
         historyComplete: false,
         historyCursor: "direct-before-u143",
-        historyPaging: "direct",
         messageWindow: {
           limit: 2,
           truncated: true,
@@ -2359,7 +2343,6 @@ describe("useNativeAgentSession progressive view", () => {
       () =>
         truncatedTail("transcript-2", [message("a142", "turn", turn.slice(2))], {
           historyCursor: "direct-before-a142",
-          historyPaging: "direct",
           messageWindow: {
             limit: 1,
             truncated: true,
@@ -2423,7 +2406,6 @@ describe("useNativeAgentSession progressive view", () => {
       () =>
         truncatedTail("transcript-1", [message("u141"), message("a142", "turn", turn)], {
           historyCursor: "direct-before-u141",
-          historyPaging: "direct",
           messageWindow: {
             limit: 2,
             truncated: true,
@@ -2506,7 +2488,6 @@ describe("useNativeAgentSession progressive view", () => {
       () =>
         truncatedTail("transcript-2", [message("u3"), message("a4")], {
           historyCursor: "direct-before-u3",
-          historyPaging: "direct",
         }),
     ];
     stateUpdates = [];
@@ -2714,7 +2695,6 @@ describe("useNativeAgentSession progressive view", () => {
     await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
     expect(result.current.projection?.messageWindow?.truncated).toBe(true);
     expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(false);
-    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
   });
 
   test("keeps a non-pageable hydrating preview suppressed across a remount", async () => {
@@ -2741,7 +2721,6 @@ describe("useNativeAgentSession progressive view", () => {
     await waitFor(() => expect(remount.result.current.sessionStateAvailability).toBe("current"));
 
     expect(remount.result.current.projection?.messageWindow?.canLoadEarlier).toBe(false);
-    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
   });
 
   test("offers the control once a hydrated view names a cursor", async () => {
@@ -2979,7 +2958,6 @@ test("revised-row overflow while inactive keeps held history on screen and re-re
     () =>
       truncatedTail("tail", tail, {
         historyCursor: "recover-before-live",
-        historyPaging: "direct",
       }),
   ];
   await act(async () => {
@@ -2992,7 +2970,6 @@ test("revised-row overflow while inactive keeps held history on screen and re-re
     () =>
       truncatedTail("revised", tail, {
         historyCursor: "recover-before-live",
-        historyPaging: "direct",
         revisedMessages: updated.slice(0, 32),
         historyReconciliationToken: "missed-eight-rows",
       }),
@@ -3012,7 +2989,6 @@ test("revised-row overflow while inactive keeps held history on screen and re-re
     () =>
       truncatedTail("revised", tail, {
         historyCursor: "recover-before-live",
-        historyPaging: "direct",
         historyReconciliationToken: "missed-eight-rows",
       }),
   ];
@@ -3031,9 +3007,7 @@ test("an overflow delta keeps a remount's reconstructed held view and re-reads i
   stateUpdates = [() => stateSnapshot("state-1")];
   const first = renderSession();
   await waitFor(() => expect(first.result.current.projection?.messages).toHaveLength(42));
-  transcriptUpdates = [
-    () => truncatedTail("tail", tail, { historyCursor: "recover", historyPaging: "direct" }),
-  ];
+  transcriptUpdates = [() => truncatedTail("tail", tail, { historyCursor: "recover" })];
   await act(async () => {
     await first.result.current.refresh();
   });
@@ -3053,7 +3027,6 @@ test("an overflow delta keeps a remount's reconstructed held view and re-reads i
         historyEpoch: "epoch-1",
         historyComplete: false,
         historyCursor: "recover",
-        historyPaging: "direct",
         historyReconciliationToken: "missed-revisions",
       },
     }),
@@ -3076,7 +3049,6 @@ describe("a held row too large to travel as a revision keeps changing", () => {
   const tailAt = (token: string, reconciliation?: string, extras = {}) =>
     truncatedTail(token, tail, {
       historyCursor: "before-tail",
-      historyPaging: "direct",
       ...(reconciliation ? { historyReconciliationToken: reconciliation } : {}),
       ...extras,
     });
@@ -3491,7 +3463,6 @@ describe("a held row too large to travel as a revision keeps changing", () => {
     await waitFor(() => expect(debt()).toBe(false));
     expect(messagePageCalls).toEqual([{ before: "before-tail" }, { before: "before-tail" }]);
     expect(remount.result.current.projection?.messages[0]?.text).toBe("changed while away");
-    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
   });
 
   test("load-earlier landing during a walk keeps prepended rows and refreshes held copies", async () => {
@@ -3542,9 +3513,7 @@ describe("a held row too large to travel as a revision keeps changing", () => {
 
   test("with no direct cursor to re-read from, the stale rows drop", async () => {
     const session = await startWithPagedHistory();
-    transcriptUpdates = [
-      () => tailAt("t1", "digest-1", { historyCursor: undefined, historyPaging: undefined }),
-    ];
+    transcriptUpdates = [() => tailAt("t1", "digest-1", { historyCursor: undefined })];
     await act(async () => {
       await session.result.current.refresh();
     });
@@ -3575,7 +3544,6 @@ describe("direct cursors a bounded view names", () => {
       () =>
         truncatedTail("transcript-1", [message("m4"), message("m5")], {
           historyCursor: "direct-before-m4",
-          historyPaging: "direct",
           messageWindow: boundedWindow(2, 4),
         }),
     ];
@@ -3605,7 +3573,6 @@ describe("direct cursors a bounded view names", () => {
       await result.current.loadEarlierMessages();
     });
 
-    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
     expect(messagePageCalls).toEqual([
       { before: "direct-before-m4" },
       { before: "direct-before-m2" },
@@ -3631,7 +3598,6 @@ describe("direct cursors a bounded view names", () => {
         truncatedTail("transcript-1", [message("error-opencode-m3"), message("m4")], {
           identity: openCode,
           historyCursor: "direct-before-m4",
-          historyPaging: "direct",
           messageWindow: boundedWindow(2, 3),
         }),
     ];
@@ -3662,7 +3628,6 @@ describe("direct cursors a bounded view names", () => {
       await result.current.loadEarlierMessages();
     });
 
-    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
     expect(messagePageCalls).toEqual([{ before: "direct-before-m4" }]);
     expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
       "m1",
@@ -3678,7 +3643,6 @@ describe("direct cursors a bounded view names", () => {
       () =>
         truncatedTail("transcript-1", [message("m4"), message("m5")], {
           historyCursor: "direct-before-m4",
-          historyPaging: "direct",
           messageWindow: boundedWindow(2, 4),
         }),
     ];
@@ -3702,7 +3666,6 @@ describe("direct cursors a bounded view names", () => {
       () =>
         truncatedTail("transcript-2", [message("m8"), message("m9")], {
           historyCursor: "direct-before-m8",
-          historyPaging: "direct",
           messageWindow: boundedWindow(2, 8),
         }),
     ];
@@ -3724,7 +3687,6 @@ describe("direct cursors a bounded view names", () => {
       await result.current.loadEarlierMessages();
     });
 
-    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
     expect(messagePageCalls).toEqual([{ before: "direct-before-m8" }]);
     expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
       "m6",
@@ -3740,7 +3702,6 @@ describe("direct cursors a bounded view names", () => {
       () =>
         truncatedTail("transcript-1", onScreen, {
           historyCursor: "direct-before-m4",
-          historyPaging: "direct",
           messageWindow: boundedWindow(2, 4),
         }),
     ];
@@ -3765,6 +3726,5 @@ describe("direct cursors a bounded view names", () => {
     const after = result.current.projection!.messages;
     expect(after.slice(-before.length)).toEqual(before);
     expect(after.slice(0, -before.length).map(({ id }) => id)).toEqual(["m2", "m3"]);
-    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
   });
 });

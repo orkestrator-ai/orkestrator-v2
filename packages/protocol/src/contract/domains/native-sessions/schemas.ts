@@ -728,7 +728,6 @@ const VersionList = Schema.Array(Schema.Int);
  * clients.
  */
 export const SyncCapabilitiesSchema = openRecord({
-  projectionSyncVersions: VersionList,
   historyPagingVersions: VersionList,
   progressiveViewVersions: Schema.optional(VersionList),
   observationEventVersions: Schema.optional(VersionList),
@@ -773,17 +772,6 @@ export const LiveUpdateSchema = openRecord({
   viewVersion: Schema.optional(Schema.Finite),
   transcript: Schema.optional(ViewUpdateSchema),
   state: Schema.optional(ViewUpdateSchema),
-});
-
-/** `NativeAgentProjectionUpdate` (native-agent.ts), the sync-v1 projection read. */
-export const ProjectionUpdateSchema = openRecord({
-  syncVersion: Schema.optional(Schema.Finite),
-  status: Schema.String,
-  token: optionalString,
-  baseToken: optionalString,
-  projection: Schema.optional(NativeAgentProjectionSchema),
-  delta: optionalObject,
-  resetReason: optionalString,
 });
 
 /** `NativeAgentMessagePage` (native-agent.ts): one page of older transcript rows. */

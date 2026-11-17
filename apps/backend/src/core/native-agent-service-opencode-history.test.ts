@@ -88,7 +88,7 @@ describe("OpenCode history through the native projection", () => {
           forceSnapshot: true,
         });
         if (update.status !== "snapshot") throw new Error("expected a snapshot");
-        expect(update.value.historyPaging).toBe("direct");
+        expect(update.value.historyCursor).toBeDefined();
         expect(update.value.historyComplete).toBe(false);
         expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
 
@@ -145,7 +145,7 @@ describe("OpenCode history through the native projection", () => {
         const expected = expectedIds(fake, session.providerSessionId);
         const held = update.value.messages.map((entry) => (entry as { id: string }).id);
         expect(held).toEqual(expected.slice(-1));
-        expect(update.value.historyPaging).toBe("direct");
+        expect(update.value.historyCursor).toBeDefined();
         expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
 
         const ids = [...held];
@@ -202,7 +202,7 @@ describe("OpenCode history through the native projection", () => {
           const expected = expectedIds(fake, session.providerSessionId);
           const held = update.value.messages.map((entry) => (entry as { id: string }).id);
           expect(held).toEqual(expected.slice(-1));
-          expect(update.value.historyPaging).toBe("direct");
+          expect(update.value.historyCursor).toBeDefined();
           const ids = [...held];
           let cursor = update.value.historyCursor;
           let pages = 0;

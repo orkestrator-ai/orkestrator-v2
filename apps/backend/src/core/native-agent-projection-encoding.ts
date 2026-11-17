@@ -4,7 +4,7 @@
  * A changed transcript read used to stringify the same window five times: to
  * hash the view token, to size the cache entry, to compare every message with
  * its previous version (twice per message), and to size both the delta and
- * the snapshot it chose between. The sync-v1 and history paths did the same
+ * the snapshot it chose between. The retired sync-v1 read and the history paths did the same
  * again for their own tokens, fingerprints and byte budgets.
  *
  * Projected values are immutable once `projectionMessages` returns them — the

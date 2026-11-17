@@ -9,7 +9,7 @@
  * (`api.get_native_agent_session(args)`), plus the domain's two capability
  * reads:
  *
- * - **Versions 3, 2 and 1** (a node whose hello advertises `native-sessions`): calls are
+ * - **Versions 4, 3, 2 and 1** (a node whose hello advertises `native-sessions`): calls are
  *   typed by their definitions, carry the envelope (version and the critical
  *   keys the arguments hold), and results are decoded with the command's
  *   schema. Both capability commands are folded into the version: every
@@ -75,12 +75,11 @@ export const NATIVE_SESSIONS_HANDOFF_CAPABILITIES: NativeSessionsHandoffCapabili
 
 /**
  * The sync protocols `native-sessions` version 1 includes: the versions of
- * `get_native_agent_sync_capabilities` this build knows (projection sync and
- * history paging 1, progressive views 1, stamped activity events, part-level
+ * `get_native_agent_sync_capabilities` this build knows (history paging 1,
+ * progressive views 1, stamped activity events, part-level
  * transcript patches, the combined live update).
  */
 export const NATIVE_SESSIONS_SYNC_CAPABILITIES = Object.freeze({
-  projectionSyncVersions: Object.freeze([1]),
   historyPagingVersions: Object.freeze([1]),
   progressiveViewVersions: Object.freeze([1]),
   observationEventVersions: Object.freeze([NATIVE_AGENT_OBSERVATION_EVENT_VERSION]),
@@ -156,6 +155,12 @@ function legacyApi(_call: CommandCall, context: DomainAdapterContext): NativeSes
 }
 
 export const nativeSessionsClient = domainClient(nativeSessionsDomain, {
+  4: (call) => currentApi(call),
+  // Version 4 only removed `get_native_agent_projection_update`, which no
+  // client called once joined history paging retired (2026-11-16), and the
+  // `projectionSyncVersions` capability no version-1-or-later client reads,
+  // so version 3 peers take the same API. Adapter 3 goes when the support
+  // floor passes the first Stable release with version 4.
   3: (call) => currentApi(call),
   // Version 3 only removed the interaction monitor's commands, which no client
   // called (2026-11-15), so version 2 peers take the same API. Adapter 2 goes

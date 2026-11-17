@@ -3792,7 +3792,6 @@ describe("AgentNativeTab", () => {
         ),
       ).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
-      expect(sessionBackend.api.getNativeAgentProjectionUpdate).not.toHaveBeenCalled();
     });
 
     test.each(["removal", "refresh"] as const)(

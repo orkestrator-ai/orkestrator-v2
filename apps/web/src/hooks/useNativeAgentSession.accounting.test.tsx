@@ -63,7 +63,6 @@ const identity: NativeAgentViewIdentity = {
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getNativeAgentSyncCapabilities: async () => ({
-    projectionSyncVersions: [1],
     historyPagingVersions: [1],
     progressiveViewVersions: [1],
   }),
@@ -91,9 +90,6 @@ mock.module("@/lib/backend", () => ({
     const next = messagePages.shift();
     if (!next) throw new Error("Unexpected history page request");
     return next();
-  },
-  getNativeAgentProjectionUpdate: async () => {
-    throw new Error("Unexpected sync-v1 projection request");
   },
   ensureNativeAgentSession: async () => ({
     providerSessionId: "session-1",
@@ -565,7 +561,6 @@ describe("useNativeAgentSession retained-history accounting", () => {
         transcriptSnapshot("t1", [message("m5"), message("m6")], {
           historyComplete: false,
           historyCursor: "cursor-before-m5",
-          historyPaging: "direct",
           messageWindow: {
             limit: 2,
             truncated: true,

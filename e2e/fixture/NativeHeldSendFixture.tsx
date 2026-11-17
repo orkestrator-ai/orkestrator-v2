@@ -65,7 +65,6 @@ function installBackend() {
       switch (command) {
         case "get_native_agent_sync_capabilities":
           result = {
-            projectionSyncVersions: [1],
             historyPagingVersions: [1],
             progressiveViewVersions: [1],
           };

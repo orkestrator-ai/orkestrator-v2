@@ -103,12 +103,12 @@ in `DirectHistoryPageCache`, dropped when the session's epoch changes:
 `NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_ENTRIES` (16) and
 `NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_BYTES` (8 MiB) per session, with a
 `NATIVE_DIRECT_PAGE_CACHE_TTL_MS` (5 min) backstop for a provider that edits
-history without rotating its epoch (`native-agent-service-shared.ts`). The
-sync-v1 projection names no history cursor.
+history without rotating its epoch (`native-agent-service-shared.ts`).
 
-A progressive view carries a direct cursor (`historyPaging: "direct"`)
-whenever its provider pages and it has older history to load. The
-provider's `historyCursor` names the position of its snapshot's first row,
+A progressive view carries a direct cursor (`historyCursor`; every cursor is
+direct, so the `historyPaging` flag that once marked one was removed on
+2026-11-16 by to-do 8173 (retired) task 2) whenever its provider pages and
+it has older history to load. The provider's `historyCursor` names the position of its snapshot's first row,
 which is usable while the view starts at or before it. When the view's own
 byte bound drops leading rows the provider sent, the view names its first
 kept row instead through the snapshot's `historyCursorBefore`: a bridge
@@ -231,11 +231,14 @@ client falls back to a snapshot. Other clients keep whole-message deltas.
 
 ### Response encoding
 
-Four transcript reads mark their result (`markSpliceableResult`), and the
-gateway writes those with `spliceEncodedJsonBytes`, copying each row's
-memoised JSON instead of serialising it again:
-`get_native_agent_transcript_update`, `get_native_agent_live_update`,
-`get_native_agent_projection_update` and `get_native_agent_message_page`.
+Three transcript reads and the legacy whole projection mark their result
+(`markSpliceableResult`), and the gateway writes those with
+`spliceEncodedJsonBytes`, copying each row's memoised JSON instead of
+serialising it again: `get_native_agent_transcript_update`,
+`get_native_agent_live_update`, `get_native_agent_message_page` and
+`get_native_agent_projection`. The sync-v1 read
+`get_native_agent_projection_update` was removed on 2026-11-16 (to-do 8173
+(retired) task 1).
 Everything except the rows is serialised natively in one `JSON.stringify`,
 with a random per-process placeholder string where each memoised row goes;
 the rows are then written straight into one buffer sized from their memoised
@@ -576,6 +579,15 @@ provider pages now names a direct cursor (above), so the joined path, its v1
 cursor namespace, the renderer's mint and the `history.joined-v1-page*`
 counters were removed, with no adapter for an older peer
 ([version-compatibility.md](version-compatibility.md#retired)).
+
+The sync-v1 projection read itself, `get_native_agent_projection_update`, went
+on the same day (to-do 8173 (retired) task 1): its renderer wrapper, the
+backend's per-session revision store and delta builder, and the
+`projectionSyncVersions` capability, with a `native-sessions` bump to version
+4. Tool-detail recovery still re-projects the session's live tail from its
+whole transcript, now under the `"detail-recovery"` representation of
+`refreshProjection` (`NATIVE_DETAIL_RECOVERY_TAIL_*`), so a paged row's detail
+reference resolves again after cache eviction.
 
 The `/messages` fallback of progressive reads retired on 2026-11-15
 (to-do 0050 task 1; the to-do retired the same day: `git show a8b89f154:docs/todo/transcripts-and-observation/0050-transcript-history-efficiency.md`). Every bridge serves `/transcript`, and the Claude summary route loads

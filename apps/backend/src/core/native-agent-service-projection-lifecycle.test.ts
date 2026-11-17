@@ -342,7 +342,7 @@ describe("NativeAgentService projection lifecycle", () => {
   });
 
   for (const initial of ["pending", "empty", "absent"] as const) {
-    for (const representation of [undefined, "sync-v1"] as const) {
+    for (const representation of [undefined, "detail-recovery"] as const) {
       test(`stop fences a refresh with ${initial} projection (${representation ?? "legacy"})`, async () => {
         let pending = initial === "pending";
         let interactionsRead = false;

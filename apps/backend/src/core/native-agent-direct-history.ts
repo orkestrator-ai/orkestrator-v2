@@ -1,11 +1,11 @@
 /**
  * Direct history paging: backend cursors that wrap a provider page cursor.
  *
- * The joined sync-v1 paging path (`getMessagePage` v1 cursors) refreshes and
- * fingerprints the whole retained projection before it can serve one page.
- * When a provider serves its own pages (bridge transcript v2), a page request
- * instead validates who the cursor belongs to and asks the provider for
- * exactly that range.
+ * The joined sync-v1 paging path (`getMessagePage` v1 cursors, retired by
+ * 0232 task 4) refreshed and fingerprinted the whole retained projection
+ * before it could serve one page. A provider serves its own pages (bridge
+ * transcript v2), so a page request validates who the cursor belongs to and
+ * asks the provider for exactly that range.
  *
  * The two cursor namespaces never mix: a v1 cursor names a message id inside
  * the backend's own joined history, a v2 cursor carries the provider's opaque

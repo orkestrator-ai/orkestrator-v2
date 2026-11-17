@@ -183,7 +183,6 @@ describe("native agent projection history cache", () => {
       transcriptHistoryEpoch: "epoch-1",
       transcriptHistoryMetadata: {
         historyCursor: "before-head",
-        historyPaging: "direct",
         historyComplete: false,
         historyReconciliationToken: "row-digest",
       },

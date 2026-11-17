@@ -12,9 +12,14 @@ test.each([
   { cores: 8, grant: "2", review: "1", workers: 2, retries: 1 },
   { cores: 8, grant: "8", review: "1", workers: 4, retries: 1 },
   { cores: 1, grant: "8", review: "1", workers: 1, retries: 1 },
-  { cores: 8, grant: "", review: "", workers: null, retries: 0 },
-  { cores: 8, grant: "0", review: "", workers: null, retries: 0 },
-  { cores: 8, grant: "invalid", review: "", workers: null, retries: 0 },
+  { cores: 16, grant: "8", review: "1", workers: 8, retries: 1 },
+  // A person's run (no grant) starts a third of the cores, at least one.
+  { cores: 16, grant: "", review: "", workers: 5, retries: 0 },
+  { cores: 12, grant: "", review: "", workers: 4, retries: 0 },
+  { cores: 8, grant: "", review: "", workers: 2, retries: 0 },
+  { cores: 2, grant: "", review: "", workers: 1, retries: 0 },
+  { cores: 8, grant: "0", review: "", workers: 2, retries: 0 },
+  { cores: 8, grant: "invalid", review: "", workers: 2, retries: 0 },
 ])("Playwright worker cap and retry policy: %j", ({ cores, grant, review, workers, retries }) => {
   const run = spawnSync(
     process.execPath,

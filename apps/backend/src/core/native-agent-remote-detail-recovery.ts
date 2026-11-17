@@ -4,7 +4,7 @@
  * A summary row's heavy body stays with the provider behind a locator, and the
  * backend hands the renderer a reference minted from that locator. A raw row
  * has no locator, so its reference is hashed from the body. The two kinds of
- * reference never match, which is why a raw `sync-v1` refresh cannot rebuild
+ * reference never match, which is why a raw `detail-recovery` refresh cannot rebuild
  * an evicted remote reference however much it reads.
  *
  * So remote references carry a prefix no inline reference can have (inline

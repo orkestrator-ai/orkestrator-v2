@@ -113,7 +113,7 @@ async function withProjection(
 }
 
 describe("NativeAgentTranscriptProjection", () => {
-  test.each([undefined, "sync-v1"] as const)(
+  test.each([undefined, "detail-recovery"] as const)(
     "a late generated title cannot change a replacement conversation's cached title or revision (%s)",
     async (representation) => {
       const readIdentity = { ...identity, ...(representation ? { representation } : {}) };

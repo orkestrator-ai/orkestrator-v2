@@ -124,19 +124,16 @@ type Environment = {
 };
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type Row = { id?: unknown; role?: unknown; content?: unknown; parts?: unknown };
-type ProjectionUpdate = {
+type StateUpdate = {
   status: string;
-  projection?: {
-    turn: { phase: string; error?: string };
-    messages: Row[];
-    messageWindow?: { truncated?: boolean; omittedMessages?: number; canLoadEarlier?: boolean };
-  };
+  value?: { turn: { phase: string; error?: string } };
 };
 /** The transcript view's snapshot: its live window and the direct cursor before it. */
 type TranscriptUpdate = {
   status: string;
   value?: {
     messages: Row[];
+    messageWindow?: { truncated?: boolean; omittedMessages?: number; canLoadEarlier?: boolean };
     historyCursor?: string;
     historyEpoch: string;
     historyComplete: boolean;
@@ -1328,11 +1325,10 @@ test.describe("live transcript paging", () => {
         },
       });
 
-      const snapshot = () =>
-        invoke<ProjectionUpdate>("get_native_agent_projection_update", {
+      const state = () =>
+        invoke<StateUpdate>("get_native_agent_session_state_update", {
           ...identity,
-          syncVersion: 1,
-          liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+          viewVersion: 1,
           forceSnapshot: true,
         });
       /**
@@ -1385,13 +1381,11 @@ test.describe("live transcript paging", () => {
         await expect(composer).toHaveText("", { timeout: 30_000 });
       };
       const waitForIdle = async () => {
-        let settled: ProjectionUpdate | undefined;
         await page.waitForTimeout(3_000);
         await expect
           .poll(
             async () => {
-              settled = await snapshot();
-              const turn = settled.projection?.turn;
+              const turn = (await state()).value?.turn;
               if (turn?.phase === "error") {
                 throw new Error(`${NATIVE_LABEL} turn failed: ${turn.error ?? "no error"}`);
               }
@@ -1400,7 +1394,6 @@ test.describe("live transcript paging", () => {
             { timeout: TURN_TIMEOUT_MS, intervals: [5_000] },
           )
           .toBe("idle");
-        return settled!;
       };
 
       // Claude reads with its Read tool, one response per read, and the
@@ -1432,7 +1425,7 @@ test.describe("live transcript paging", () => {
         "When you reach the file that ends the trail, reply with only its closing word.",
       ].join(" ");
       await send(firstPrompt);
-      let settled = await waitForIdle();
+      await waitForIdle();
       for (let attempt = 0; attempt < MAX_CONTINUATIONS; attempt += 1) {
         const { rows } = await wholeTranscript();
         const reachedEnd = rows.some(
@@ -1443,7 +1436,7 @@ test.describe("live transcript paging", () => {
         await send(
           "Continue following the trail from the last file you read, one file per response, until it ends. Then reply with only the closing word.",
         );
-        settled = await waitForIdle();
+        await waitForIdle();
       }
 
       // Backend truth: a bounded live window that says history is incomplete.
@@ -1454,7 +1447,7 @@ test.describe("live transcript paging", () => {
         tail: whole.tail.length,
         apiPages: whole.pages.map((rows) => rows.length),
         complete: whole.complete,
-        messageWindow: settled.projection?.messageWindow,
+        messageWindow: whole.live.messageWindow,
         ...order,
       });
       expect(order.highest, `${NATIVE_LABEL} never reached the end of the trail`).toBe(trail.stops);

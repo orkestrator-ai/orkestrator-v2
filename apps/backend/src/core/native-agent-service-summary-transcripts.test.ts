@@ -279,7 +279,9 @@ describe("summary transcripts", () => {
           forceSnapshot: true,
         });
         if (update.status !== "snapshot") throw new Error("expected a snapshot");
-        expect(update.value.historyPaging).toBe("direct");
+        expect(update.value.historyCursor).toBeDefined();
+        // Every cursor is direct; the flag that once said so is gone (8173, retired).
+        expect(update.value).not.toHaveProperty("historyPaging");
         expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
         let cursor = update.value.historyCursor;
         const seen: string[] = [];
@@ -349,7 +351,7 @@ describe("summary transcripts", () => {
         // The bound dropped rows the bridge sent; the cursor names the first kept one.
         expect(ids.length).toBeLessThan(sent.messages.length);
         expect(ids[0]).not.toBe((sent.messages[0] as TestMessage).id);
-        expect(update.value.historyPaging).toBe("direct");
+        expect(update.value.historyCursor).toBeDefined();
         expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
         let cursor = update.value.historyCursor;
         let pages = 0;
@@ -376,10 +378,9 @@ describe("summary transcripts", () => {
     );
   });
 
-  // Joined paging retired (0232 task 4): the sync-v1 projection names no
-  // history cursor, and a v1 cursor an older client still holds is refused
-  // without a projection refresh or a page read.
-  test("the sync-v1 projection mints no history cursor, and a v1 cursor is refused", async () => {
+  // Joined paging retired (0232 task 4): a v1 cursor an older client still
+  // holds is refused without a projection refresh or a page read.
+  test("a joined v1 cursor is refused", async () => {
     const history = {
       messages: Array.from({ length: 250 }, (_, index) => message(`m${index}`)),
       epoch: 1,
@@ -398,16 +399,6 @@ describe("summary transcripts", () => {
       { prefix: "orkestrator-summary-sync-", provider: async () => provider },
       async ({ service }) => {
         await service.ensureSession(identity);
-        const update = await service.getProjectionUpdate({
-          ...identity,
-          syncVersion: 1,
-          liveWindow,
-          forceSnapshot: true,
-        });
-        if (update.status !== "snapshot") throw new Error("expected a snapshot");
-        expect(update).not.toHaveProperty("historyCursor");
-        expect(update).not.toHaveProperty("historyEpoch");
-        expect(update).not.toHaveProperty("historyComplete");
         const reads = interactiveSnapshot.mock.calls.length;
         const joinedCursor = Buffer.from(
           JSON.stringify({ v: 1, key: "k", session: "s", epoch: "e", before: "b" }),
@@ -431,8 +422,7 @@ describe("summary transcripts", () => {
       toolState: "completed",
     }));
   // Every real provider pages and names a cursor for its views (8110). For one
-  // that could not, nothing older can be loaded: the view offers no cursor and
-  // the sync-v1 projection mints none to page through instead.
+  // that could not, nothing older can be loaded: the view offers no cursor.
   for (const [name, rows, options] of [
     ["a source without direct pages", (index: number) => message(`m${index}`), { pages: false }],
     [
@@ -472,15 +462,6 @@ describe("summary transcripts", () => {
           // Older history exists, and nothing names a way to it.
           expect(view.value.historyComplete).toBe(false);
           expect(view.value.historyCursor).toBeUndefined();
-          expect(view.value.historyPaging).toBeUndefined();
-          const update = await service.getProjectionUpdate({
-            ...identity,
-            syncVersion: 1,
-            liveWindow,
-            forceSnapshot: true,
-          });
-          if (update.status !== "snapshot") throw new Error("expected a snapshot");
-          expect(update).not.toHaveProperty("historyCursor");
           expect(summaryStub.transcriptPage).not.toHaveBeenCalled();
         },
       );
@@ -496,11 +477,7 @@ describe("summary transcripts", () => {
       getMessagePage: (input: never) => Promise<unknown>;
     },
     history: { messages: TestMessage[] },
-    expectView: (view: {
-      messages: unknown[];
-      historyCursor?: string;
-      historyPaging?: string;
-    }) => void,
+    expectView: (view: { messages: unknown[]; historyCursor?: string }) => void,
   ) => {
     const update = (await service.getTranscriptUpdate({
       ...identity,
@@ -512,14 +489,13 @@ describe("summary transcripts", () => {
       value: {
         messages: unknown[];
         historyCursor?: string;
-        historyPaging?: string;
         historyEpoch: string;
         messageWindow?: { canLoadEarlier?: boolean };
       };
     };
     if (update.status !== "snapshot") throw new Error("expected a snapshot");
     expectView(update.value);
-    expect(update.value.historyPaging).toBe("direct");
+    expect(update.value.historyCursor).toBeDefined();
     expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
     const held = update.value.messages.map((entry) => (entry as TestMessage).id);
     const ids: string[] = [...held];
@@ -1059,7 +1035,7 @@ describe("remote detail reads", () => {
   });
 
   /*
-   * An evicted provider-held reference (0110). A raw `sync-v1` refresh cannot
+   * An evicted provider-held reference (0110). A raw `detail-recovery` refresh cannot
    * rebuild one, and the summary provider here throws on that path, so each
    * test also proves no raw transcript read was made.
    */

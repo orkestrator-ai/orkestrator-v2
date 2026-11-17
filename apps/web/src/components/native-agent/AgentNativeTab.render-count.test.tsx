@@ -154,7 +154,6 @@ mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   listHumanPrompts: async () => ({ prompts: humanPrompts }),
   getNativeAgentSyncCapabilities: async () => ({
-    projectionSyncVersions: [1],
     historyPagingVersions: [1],
     progressiveViewVersions: [1],
   }),

@@ -100,7 +100,6 @@ describe("progressive history boundaries after byte bounding", () => {
           "m3",
         ]);
         expect(cursorBefore.mock.calls.map(([id]) => id)).toEqual(["m1", "m2"]);
-        expect(update.value.historyPaging).toBe("direct");
         expect(providerCursor(update.value.historyCursor!)).toBe("before:m2");
         const page = await service.getMessagePage({
           ...identity,
@@ -186,7 +185,7 @@ describe("progressive history boundaries after byte bounding", () => {
             truncationReason: "bytes",
             omittedMessages: 1,
           });
-          expect(update.value.historyPaging).toBe("direct");
+          expect(update.value.historyCursor).toBeDefined();
           // A retained prefix can safely reuse the snapshot cursor. When the
           // bound cuts into snapshot rows, skip m1, which cannot name one.
           // Both first pages repeat m1, which the reader deduplicates.

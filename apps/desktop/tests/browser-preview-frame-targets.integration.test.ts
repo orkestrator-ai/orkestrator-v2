@@ -435,6 +435,44 @@ describe.skipIf(!CHROMIUM)("element targets inside iframes, in Chromium", () => 
     }
   });
 
+  test("scrolling a frame clips pins at every edge and restores them", async () => {
+    await isolated.load();
+    await isolated.page.evaluate(() => {
+      const frame = document.getElementById("editor") as HTMLIFrameElement;
+      const doc = frame.contentDocument!;
+      doc.body.style.cssText = "width:2000px;height:2000px;margin:0";
+      doc.getElementById("save")!.style.cssText =
+        "position:absolute;left:500px;top:500px;width:140px;height:30px;margin:0";
+      frame.contentWindow!.scrollTo(480, 480);
+    });
+    await isolated.page.waitForTimeout(80);
+    const { target } = await isolated.capture(await topRect(isolated.page, ["editor"], "save"));
+    await isolated.showPins(target);
+    for (const [x, y] of [
+      [0, 480],
+      [900, 480],
+      [480, 0],
+      [480, 900],
+    ]) {
+      await isolated.page.evaluate(
+        ({ x, y }) =>
+          (document.getElementById("editor") as HTMLIFrameElement).contentWindow!.scrollTo(x, y),
+        { x, y },
+      );
+      await isolated.page.waitForTimeout(80);
+      expect((await isolated.pinSnapshot()).rect).toBeNull();
+      await isolated.page.evaluate(() =>
+        (document.getElementById("editor") as HTMLIFrameElement).contentWindow!.scrollTo(480, 480),
+      );
+      await isolated.page.waitForTimeout(80);
+      expectNear(
+        (await isolated.pinSnapshot()).rect,
+        await topRect(isolated.page, ["editor"], "save"),
+      );
+    }
+    await isolated.run(BROWSER_PREVIEW_PINS_CLEAR_SCRIPT);
+  });
+
   test("fully clipped pins hide on each edge and recover, with frame layout redraws", async () => {
     await isolated.load();
     const { target } = await isolated.capture(await topRect(isolated.page, ["editor"], "save"));

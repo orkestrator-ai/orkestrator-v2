@@ -51,6 +51,10 @@ export type LinearIssueListItem = {
   teamKey?: string;
   teamName?: string;
   assigneeName?: string;
+  /** The assignee's Linear avatar image (`https:` only); absent when they have none. */
+  assigneeAvatarUrl?: string;
+  /** Linear's colour (`#rrggbb`) for an assignee with no avatar image, behind their initials. */
+  assigneeAvatarColor?: string;
   priorityLabel?: string;
   /** The issue's labels with their colours, in Linear's order; absent from an older backend. */
   issueLabels?: LinearIssueLabel[];
@@ -204,6 +208,27 @@ function readViewer(value: unknown): LinearViewer | undefined {
 
 const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
+/** A Linear colour when it is a hex value, so the renderer never gets an arbitrary style. */
+function hexColor(value: unknown): string | undefined {
+  const color = optionalString(value);
+  return color && HEX_COLOR.test(color) ? color : undefined;
+}
+
+/**
+ * A user's avatar image URL when it is a well-formed `https:` URL. Linear accepts
+ * HTTP or HTTPS avatars; a plain `http:` one would load insecurely, so the card
+ * shows the user's initials instead.
+ */
+function linearAvatarUrl(value: unknown): string | undefined {
+  const raw = optionalString(value);
+  if (!raw || raw.length > 2048) return undefined;
+  try {
+    return new URL(raw).protocol === "https:" ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** An issue's `labels { nodes { id name color } }`, or undefined when the read did not ask. */
 export function issueLabelsFromNode(value: unknown): LinearIssueLabel[] | undefined {
   if (!isRecord(value) || !isRecord(value.labels)) return undefined;
@@ -213,12 +238,12 @@ export function issueLabelsFromNode(value: unknown): LinearIssueLabel[] | undefi
     const name = optionalString(node.name);
     if (!name) return [];
     const id = optionalString(node.id);
-    const color = optionalString(node.color);
+    const color = hexColor(node.color);
     return [
       {
         ...(id ? { id } : {}),
         name,
-        ...(color && HEX_COLOR.test(color) ? { color } : {}),
+        ...(color ? { color } : {}),
       },
     ];
   });
@@ -237,6 +262,9 @@ export function issueFromNode(value: unknown): LinearIssueListItem | null {
   const updatedAt = asString(value.updatedAt);
   if (!id || !identifier || !title || !updatedAt) return null;
   const issueLabels = issueLabelsFromNode(value);
+  const assigneeName = optionalString(assignee.name);
+  const assigneeAvatarUrl = assigneeName ? linearAvatarUrl(assignee.avatarUrl) : undefined;
+  const assigneeAvatarColor = assigneeName ? hexColor(assignee.avatarBackgroundColor) : undefined;
 
   return {
     id,
@@ -253,7 +281,9 @@ export function issueFromNode(value: unknown): LinearIssueListItem | null {
     url: optionalString(value.url),
     teamKey: optionalString(team.key),
     teamName: optionalString(team.name),
-    assigneeName: optionalString(assignee.name),
+    assigneeName,
+    ...(assigneeAvatarUrl ? { assigneeAvatarUrl } : {}),
+    ...(assigneeAvatarColor ? { assigneeAvatarColor } : {}),
     priorityLabel: optionalString(value.priorityLabel),
     ...(issueLabels ? { issueLabels } : {}),
   };
@@ -375,7 +405,7 @@ export async function listLinearIssues(
             priorityLabel
             state { name type position }
             team { key name }
-            assignee { name }
+            assignee { name avatarUrl avatarBackgroundColor }
             labels(first: ${ISSUE_LABEL_LIMIT}) {
               nodes { id name color }
               pageInfo { hasNextPage endCursor }
@@ -457,7 +487,7 @@ export async function getLinearIssue(apiKey: string, issueId: string): Promise<L
         priorityLabel
         state { name type position }
         team { key name }
-        assignee { name }
+        assignee { name avatarUrl avatarBackgroundColor }
         creator { name }
         project { name }
         cycle { name }

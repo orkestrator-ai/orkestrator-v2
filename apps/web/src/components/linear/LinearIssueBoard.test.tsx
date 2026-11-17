@@ -185,3 +185,84 @@ describe("LinearIssueBoard card labels", () => {
     expect(dots.every((dot) => dot.className.includes("bg-muted-foreground"))).toBe(true);
   });
 });
+
+describe("LinearIssueBoard card assignee", () => {
+  function renderCards(issues: LinearIssueListItem[]) {
+    render(
+      <LinearIssueBoard
+        lanes={[{ status: "Todo", type: "unstarted", stateId: "s-todo", issues }]}
+        hidden={new Set()}
+        onShowAll={() => undefined}
+        onSelectIssue={() => undefined}
+        pipelinePhase={() => undefined}
+      />,
+    );
+  }
+
+  const avatarOf = (title: string) =>
+    (
+      screen.getByText(title).closest("[data-testid='linear-board-card']") as HTMLElement
+    ).querySelector("[data-testid='linear-assignee-avatar']") as HTMLElement | null;
+
+  test("an assigned card shows the assignee's Linear avatar in its corner", () => {
+    renderCards([
+      {
+        ...issue("eng-1", "Pictured", "Todo"),
+        assigneeName: "Ada Lovelace",
+        assigneeAvatarUrl: "https://public.linear.app/avatars/ada.png",
+        priorityLabel: "High",
+      },
+    ]);
+    const avatar = avatarOf("Pictured")!;
+    expect(avatar.tagName).toBe("IMG");
+    expect(avatar.getAttribute("src")).toBe("https://public.linear.app/avatars/ada.png");
+    expect(avatar.getAttribute("alt")).toBe("Assigned to Ada Lovelace");
+    expect(avatar.getAttribute("title")).toBe("Ada Lovelace");
+    // The name is the avatar now, not a second line of text.
+    expect(screen.queryByText("Ada Lovelace")).toBeNull();
+    expect(screen.getByText("High")).toBeTruthy();
+  });
+
+  test("an assignee without an image shows their initials on Linear's colour", () => {
+    renderCards([
+      {
+        ...issue("eng-2", "Initials", "Todo"),
+        assigneeName: "Grace Brewster Hopper",
+        assigneeAvatarColor: "#eb5757",
+      },
+      {
+        ...issue("eng-3", "Odd colour", "Todo"),
+        assigneeName: "mallory",
+        assigneeAvatarColor: "red; background: url(x)",
+      },
+    ]);
+    const initials = avatarOf("Initials")!;
+    expect(initials.tagName).toBe("SPAN");
+    expect(initials.textContent).toBe("GB");
+    expect(initials.getAttribute("aria-label")).toBe("Assigned to Grace Brewster Hopper");
+    expect(initials.style.backgroundColor).toBe("#eb5757");
+    const odd = avatarOf("Odd colour")!;
+    expect(odd.textContent).toBe("M");
+    expect(odd.style.backgroundColor).toBe("");
+    expect(odd.className.includes("bg-muted")).toBe(true);
+  });
+
+  test("an avatar image that fails to load falls back to initials", () => {
+    renderCards([
+      {
+        ...issue("eng-4", "Broken image", "Todo"),
+        assigneeName: "Ada",
+        assigneeAvatarUrl: "https://public.linear.app/avatars/missing.png",
+      },
+    ]);
+    fireEvent.error(avatarOf("Broken image")!);
+    const fallback = avatarOf("Broken image")!;
+    expect(fallback.tagName).toBe("SPAN");
+    expect(fallback.textContent).toBe("A");
+  });
+
+  test("an unassigned card shows no avatar", () => {
+    renderCards([issue("eng-5", "Nobody", "Todo")]);
+    expect(avatarOf("Nobody")).toBeNull();
+  });
+});

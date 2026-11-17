@@ -83,6 +83,7 @@ import {
   compareStatusOrder,
   type IssueOrder,
 } from "./linear-issue-order";
+import { LinearAssigneeAvatar } from "./LinearAssigneeAvatar";
 import { LinearIssueBoard, LinearLanesMenu } from "./LinearIssueBoard";
 import {
   DEFAULT_LINEAR_PROJECT_VIEW,
@@ -159,7 +160,12 @@ function IssueMetadata({ issue }: { issue: LinearIssueListItem | LinearIssueDeta
       <span className="font-medium text-foreground">{issue.identifier}</span>
       <span>{issue.status}</span>
       {issue.teamKey && <span>{issue.teamKey}</span>}
-      {issue.assigneeName && <span>{issue.assigneeName}</span>}
+      {issue.assigneeName && (
+        <span className="inline-flex items-center gap-1">
+          <LinearAssigneeAvatar issue={issue} decorative className="size-4 text-[8px]" />
+          {issue.assigneeName}
+        </span>
+      )}
       {issue.priorityLabel && <span>{issue.priorityLabel}</span>}
       <span className="inline-flex items-center gap-1">
         <CalendarClock className="h-3 w-3" />

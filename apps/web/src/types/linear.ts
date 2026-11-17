@@ -82,6 +82,10 @@ export interface LinearIssueListItem {
   teamKey?: string;
   teamName?: string;
   assigneeName?: string;
+  /** The assignee's Linear avatar image (`https:` only); absent when they have none. */
+  assigneeAvatarUrl?: string;
+  /** Linear's colour (`#rrggbb`) behind the assignee's initials when they have no image. */
+  assigneeAvatarColor?: string;
   priorityLabel?: string;
   /** The issue's labels with their colours, in Linear's order; absent from an older backend. */
   issueLabels?: LinearIssueLabel[];

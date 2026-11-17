@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import type { LinearIssueLabel, LinearIssueListItem } from "@/types/linear";
+import { LinearAssigneeAvatar } from "./LinearAssigneeAvatar";
 import type { LinearLane } from "./linear-issue-order";
 
 /** A lane's dot and a card's edge, by Linear's state type (the Kanban board's colours). */
@@ -160,7 +161,8 @@ function LinearCardContent({
   type?: string;
   pipelinePhase?: string;
 }) {
-  const details = [issue.priorityLabel, issue.assigneeName].filter(
+  // The assignee shows as the avatar in the corner, as on Linear's own board.
+  const details = [issue.priorityLabel].filter(
     (value): value is string => Boolean(value) && value !== "No priority",
   );
   return (
@@ -171,9 +173,14 @@ function LinearCardContent({
       />
       <div className="flex items-start justify-between gap-2">
         <span className="text-xs font-medium text-muted-foreground">{issue.identifier}</span>
-        {pipelinePhase && (
-          <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-wide text-muted-foreground">
-            {pipelinePhase}
+        {(pipelinePhase || issue.assigneeName) && (
+          <span className="flex shrink-0 items-center gap-1.5">
+            {pipelinePhase && (
+              <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-wide text-muted-foreground">
+                {pipelinePhase}
+              </span>
+            )}
+            <LinearAssigneeAvatar issue={issue} />
           </span>
         )}
       </div>

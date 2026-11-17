@@ -261,6 +261,10 @@ const linearIssueFields = {
   teamKey: optionalString,
   teamName: optionalString,
   assigneeName: optionalString,
+  /** The assignee's Linear avatar image (`https:`), for the board's cards. */
+  assigneeAvatarUrl: optionalString,
+  /** Linear's colour behind an assignee's initials when they have no avatar image. */
+  assigneeAvatarColor: optionalString,
   priorityLabel: optionalString,
   /** The issue's labels with their colours, for the board's cards. */
   issueLabels: Schema.optional(mutableArray(LinearIssueLabelSchema)),

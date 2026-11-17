@@ -2913,10 +2913,10 @@ collide with other tasks' decisions.
   (done; trial-limit tuning)
 - `docs/improvements/recurring-processes/plan/03-shared-worktree-snapshots.md`
   (qualification, macOS watcher, re-prioritisation; container read cost is in
-  `container-state-observation.md`)
+  0020 (retired 2026-11-17))
 - `docs/improvements/recurring-processes/plan/04-container-git-fetch-policy.md`
   (app qualification, failure ladder; the inline revert fetch is in
-  `container-state-observation.md`)
+  0020 (retired 2026-11-17))
 - `docs/improvements/recurring-processes/plan/05-pr-monitoring-policy.md`
   (live GitHub evidence, rollup backoff, container cooldown, rollback)
 - `docs/improvements/recurring-processes/plan/06-client-read-coordination.md`
@@ -2940,7 +2940,7 @@ collide with other tasks' decisions.
 - `docs/imrovements/recurring-processes.md` (inventory moved to
   `../architecture/recurring-work.md` with current cadences; findings F01 to
   F10 shipped; B19 and B20 are measured candidates above; B18 is in
-  `container-state-observation.md`)
+  0020 (retired 2026-11-17))
 
 ## Assumptions and decisions
 

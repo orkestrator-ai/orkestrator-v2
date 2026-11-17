@@ -553,7 +553,10 @@ async function main() {
       coveredBy.set(index, coveredBy.get(first) ?? first);
       repeats.add(index);
     }
-    const pending = new Set(commands.map((_, i) => i));
+    // The change's own tests (scope "changed") are admitted ahead of the rest,
+    // so their result exists even when an unrelated suite later stalls or the
+    // host runs out of capacity. Otherwise plan order.
+    const pending = new Set(commands.map((_, i) => i).sort((a, b) => (commands[b].scope === "changed") - (commands[a].scope === "changed") || a - b));
     const readyAt = new Map();
     const exclusive = resources => resources.some(resource => ["*", "workspace:*", "host:*"].includes(resource));
     const conflicts = (a, b) => exclusive(a.resources) || exclusive(b.resources) || a.resources.some(resource => b.resources.includes(resource));

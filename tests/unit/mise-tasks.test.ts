@@ -339,9 +339,13 @@ test("suites that launch Playwright's Chromium install it first without pruning 
 // (flake 2340); both suites need only loopback, so they run in their own network.
 test("the component and public-site browser suites run in a loopback-only network", () => {
   const run = miseTasks()["test:browser"]!.run as string;
-  for (const config of ["e2e/playwright.config.ts", "e2e/public-site/playwright.config.ts"])
+  for (const [variable, config] of [
+    ["ORKESTRATOR_E2E_PORT", "e2e/playwright.config.ts"],
+    ["ORKESTRATOR_PUBLIC_E2E_PORT", "e2e/public-site/playwright.config.ts"],
+  ])
+    // Review validation on the host network takes its own port for each suite.
     expect(run).toContain(
-      `bun scripts/loopback-network.ts -- bunx playwright test --config ${config}`,
+      `bun scripts/loopback-network.ts --free-port ${variable} -- bunx playwright test --config ${config}`,
     );
   expect(run).not.toMatch(/&& bunx playwright/);
 });

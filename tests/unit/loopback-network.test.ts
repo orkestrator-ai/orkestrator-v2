@@ -5,9 +5,13 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import {
   HOST_NETWORK_ENV,
+  REVIEW_VALIDATION_ENV,
   canIsolateNetwork,
   classifyIsolationProbe,
+  freeLoopbackPort,
   loopbackNamespacePlan,
+  parseLoopbackArgs,
+  portsToAssign,
 } from "../../scripts/loopback-network";
 
 const root = path.resolve(import.meta.dir, "../..");
@@ -141,6 +145,64 @@ describe("classifyIsolationProbe", () => {
         reason: `the namespace probe was terminated by ${signal}`,
       });
     }
+  });
+});
+
+// Review validation on the host network failed before any test ran when port
+// 1422 was already taken (another checkout's fixture server, a dev server).
+describe("a review validation run's own port", () => {
+  test("reads repeatable --free-port options ahead of the command", () => {
+    expect(
+      parseLoopbackArgs(["--free-port", "A_PORT", "--free-port", "B_PORT", "--", ...command]),
+    ).toEqual({ freePorts: ["A_PORT", "B_PORT"], command });
+    expect(parseLoopbackArgs(["--", ...command])).toEqual({ freePorts: [], command });
+    expect(parseLoopbackArgs(command)).toEqual({ freePorts: [], command });
+    expect(() => parseLoopbackArgs(["--free-port", "--", ...command])).toThrow(
+      "--free-port needs an environment variable name",
+    );
+  });
+
+  test("assigns ports only to review validation on the host network, never over a chosen one", () => {
+    const review = { [REVIEW_VALIDATION_ENV]: "1" };
+    expect(portsToAssign(["A_PORT", "A_PORT"], { isolated: false, env: review })).toEqual([
+      "A_PORT",
+    ]);
+    // A private namespace has every port free.
+    expect(portsToAssign(["A_PORT"], { isolated: true, env: review })).toEqual([]);
+    // A person's run keeps the default so it can reuse a server left running.
+    expect(portsToAssign(["A_PORT"], { isolated: false, env: {} })).toEqual([]);
+    expect(
+      portsToAssign(["A_PORT"], { isolated: false, env: { ...review, A_PORT: "5000" } }),
+    ).toEqual([]);
+  });
+
+  test("hands out a loopback port nothing listens on", async () => {
+    const port = await freeLoopbackPort();
+    expect(port).toBeGreaterThan(0);
+    expect(port).toBeLessThan(65_536);
+  });
+
+  test("the script sets the variable for the command it runs", () => {
+    const result = spawnSync(
+      "bun",
+      [script, "--free-port", "ORK_TEST_FREE_PORT", "--", "sh", "-c", 'echo "$ORK_TEST_FREE_PORT"'],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          [HOST_NETWORK_ENV]: "1",
+          [REVIEW_VALIDATION_ENV]: "1",
+          ORK_TEST_FREE_PORT: "",
+        },
+      },
+    );
+    expect(result.status).toBe(0);
+    const port = Number(result.stdout.trim());
+    expect(Number.isSafeInteger(port) && port > 0).toBe(true);
+    expect(result.stderr).toContain(
+      `[loopback-network] review validation: ORK_TEST_FREE_PORT=${port} for this run`,
+    );
   });
 });
 

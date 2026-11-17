@@ -184,6 +184,16 @@ line, because Docker Desktop keeps its networks inside its VM; it creates no
 namespace and changes nothing in the Mac's network configuration (qualified
 2026-11-13).
 
+On the host network, a review validation run (`ORKESTRATOR_REVIEW_VALIDATION=1`)
+gives each suite its own port: the task passes `--free-port
+ORKESTRATOR_E2E_PORT` and `--free-port ORKESTRATOR_PUBLIC_E2E_PORT`, and the
+wrapper sets each unset variable to a port the kernel just handed out and
+prints `[loopback-network] review validation: NAME=PORT for this run`. The fixed
+defaults (1422 and 4423) were otherwise taken by another checkout's fixture
+server or a dev server, and the suite failed before any test ran. A person's run
+keeps the defaults so it can reuse a server they left running, and inside the
+namespace every port is free already.
+
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli:test`, which sets no build commit and so
 keeps its Turbo cache across commits), because `cli-ui.spec.ts` drives

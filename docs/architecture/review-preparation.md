@@ -96,8 +96,14 @@ does not use a fixed list of configuration filenames as a freshness heuristic.
 An explicit preparation retry also discovers a new plan.
 
 The plan identifies the exact committed HEAD, commands, relative working
-directories, prerequisites, exclusive resources, weights, timeouts, and coverage
-limitations. Runtime validation bounds the plan to 32 commands and 24,000 UTF-8
+directories, prerequisites, exclusive resources, weights, timeouts, scopes and
+coverage limitations. Each command's `scope` is `changed` when it runs only the
+tests the change adds or edits (or the tests that own the files it changes) and
+`general` otherwise; discovery lists a `changed` command first and never lets it
+replace a required suite. Plans from before scopes existed read as `general`.
+The discovery schema requires `scope`; graph type `validation-plan@1` keeps the
+earlier shape (`REVIEW_VALIDATION_PLAN_V1_SCHEMA`), because a versioned graph
+type never gains a required field. Runtime validation bounds the plan to 32 commands and 24,000 UTF-8
 bytes. Dependencies must refer to earlier commands, so cycles are rejected.
 Missing prerequisites are limitations, not implicit permission to install tools.
 
@@ -131,7 +137,9 @@ between grant and prompt, successful submission, and provider recreation.
 
 ### Validation commands
 
-Commands with satisfied prerequisites can overlap. The initial concurrency
+Commands with satisfied prerequisites can overlap. `changed`-scope commands are
+admitted first, so the change's own result exists even when an unrelated suite
+later stalls or the host runs out of capacity; the rest keep plan order. The initial concurrency
 budget is two: weight-one commands can run together, while internally parallel
 or memory-heavy commands use weight two. Overlapping resource names serialize;
 `*` reserves the runner exclusively. Discovery must explicitly assess parallel
@@ -280,6 +288,29 @@ classifier cannot run, the package is sealed without it and a limitation says
 so. Its input travels as one `bash -lc` argument inside containers, so the
 changed-file list is cut to fit (`MAX_TRIAGE_PAYLOAD_BASE64_BYTES`) and a cut
 list stops any failure being called unrelated on import evidence alone.
+
+### The validation report
+
+Package generation also writes `validationReport`
+(`packages/protocol/src/validation-report.ts`), derived from the package's own
+`validation`, `validationPlan` and `failureTriage` and never from a new run. It
+is what every reader starts with:
+
+- `changedTests`: the result of each `changed`-scope command, apart from every
+  other suite, so a failing unrelated suite cannot hide whether the change's
+  own tests passed. When it is empty, `changedTestsNote` says why (no plan, no
+  `changed` command, or validation that does not line up with the plan).
+- `failures`: every failing test the triage listed, with one label:
+  `caused-by-change` (verdict `related`), `pre-existing` (it also failed on the
+  merge base: `failed-on-target-ci` or `failed-on-same-base`), `flaky`
+  (passed on retry), `unrelated` or `undetermined`. Merge-base evidence decides
+  the label first, as it decides the triage verdict.
+- `unexplainedCommands`: commands that did not pass without a listed test
+  accounting for it, to be judged from their output.
+
+Reviewer, Address Findings and Verify prompts point at it before the triage
+(`VALIDATION_REPORT_GUIDE`, `PACKAGED_REVIEW_WORKING_RULES`), and the
+validation table tags `changed` rows and prints their result on its own line.
 
 ### The loop breaker
 

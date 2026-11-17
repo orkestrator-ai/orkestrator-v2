@@ -27,6 +27,7 @@ import { runCommand } from "./command-capture.js";
 import { configureLogger } from "@orkestrator/protocol/logger";
 import * as shell from "./shell.js";
 import { validationStallReason } from "./build-pipeline-validation-stall.js";
+import { CHANGED_TESTS_NOTE_NO_PLAN } from "@orkestrator/protocol/validation-report";
 
 const temporaryDirectories: string[] = [];
 
@@ -886,11 +887,95 @@ test("sealed triage includes incomplete commands with no artifacts", async () =>
       unattributed: true,
     });
     expect(reference.failureSummary).toMatchObject({ unrelated: 1, unattributedCommands: 1 });
+    // No plan: the report says why it has no changed-tests result.
+    expect(written.validationReport).toMatchObject({
+      changedTests: [],
+      changedTestsNote: CHANGED_TESTS_NOTE_NO_PLAN,
+      unexplainedCommands: ["never started"],
+    });
     expect(
       validationStallReason({ reviewPackage: reference, iteration: 0 }, [
         { id: "criterion", status: "passed", evidence: "done" },
       ]),
     ).toBeNull();
+  } finally {
+    runtime.shutdown();
+  }
+});
+
+// A failing unrelated suite used to bury whether the change's own tests passed.
+test("the sealed package reports the changed tests on their own and labels each failure", async () => {
+  const { worktree, storage } = await reviewEnvironment();
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  await fs.writeFile(path.join(worktree, "a.test.ts"), 'test("already failing", () => {});');
+  await git(worktree, "add", "a.test.ts");
+  await git(worktree, "commit", "-m", "base test");
+  await git(worktree, "update-ref", "refs/remotes/origin/main", "HEAD");
+  await writeValidationArtifacts(worktree, "pairing passed\n", "");
+  await fs.writeFile(
+    path.join(worktree, ARTIFACT_DIRECTORY, "validation-02.stdout.txt"),
+    "a.test.ts:\n(fail) already failing\n 1 fail\n",
+  );
+  await fs.writeFile(path.join(worktree, ARTIFACT_DIRECTORY, "validation-02.stderr.txt"), "");
+  const head = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: worktree })
+    .stdout.toString()
+    .trim();
+  const planned = (id: string, command: string, scope: "changed" | "general") => ({
+    id,
+    command,
+    cwd: ".",
+    dependsOn: [],
+    resources: [],
+    weight: 1 as const,
+    timeoutMs: 60_000,
+    scope,
+  });
+  try {
+    const reference = await generateReviewPackage(
+      "env-1",
+      "package-1",
+      1,
+      "main",
+      [
+        validationEntry({ command: "cd . && bun test pairing.test.ts" }),
+        validationEntry({
+          command: "cd . && bun test",
+          status: "failed",
+          exitCode: 1,
+          stdoutPath: `${ARTIFACT_DIRECTORY}/validation-02.stdout.txt`,
+          stderrPath: `${ARTIFACT_DIRECTORY}/validation-02.stderr.txt`,
+        }),
+      ],
+      [],
+      [],
+      { storage, runtime, appRoot: "/missing-app", resourceRoot: "/missing-resources" } as never,
+      {
+        validationPlan: {
+          headRef: head,
+          commands: [
+            planned("changed", "bun test pairing.test.ts", "changed"),
+            planned("suite", "bun test", "general"),
+          ],
+          limitations: [],
+        },
+      },
+    );
+    const written = JSON.parse(
+      await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
+    ) as ReviewPackage;
+    expect(written.validationReport!.changedTests).toEqual([
+      { id: "changed", command: "cd . && bun test pairing.test.ts", status: "passed", exitCode: 0 },
+    ]);
+    expect(written.validationReport!.failures).toEqual([
+      {
+        command: "cd . && bun test",
+        runner: "bun",
+        file: "a.test.ts",
+        name: "already failing",
+        label: "unrelated",
+      },
+    ]);
+    expect(written.validationReport!.mergeBase).toBe(written.failureTriage!.mergeBase);
   } finally {
     runtime.shutdown();
   }

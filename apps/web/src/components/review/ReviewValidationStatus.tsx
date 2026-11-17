@@ -325,6 +325,31 @@ const UNSETTLED_RESULT_STATUSES: ReadonlySet<ReviewValidationResult["status"]> =
 ]);
 
 /** Snapshot projection plus an on-demand bounded log reader; lifecycle remains backend-owned. */
+/** Ids of the commands the plan scoped to the change's own tests. */
+function changedTestIds(run: ReviewValidationRun): Set<string> {
+  return new Set(
+    run.plan.commands.filter((command) => command.scope === "changed").map((command) => command.id),
+  );
+}
+
+/**
+ * One line with the change's own tests' result, apart from every other suite,
+ * e.g. "Changed tests: passed" or "Changed tests: 1 passed, 1 running". Null
+ * when the plan scoped no command to them.
+ */
+export function changedTestsSummary(run: ReviewValidationRun): string | null {
+  const ids = changedTestIds(run);
+  if (ids.size === 0) return null;
+  const counts = new Map<string, number>();
+  for (const result of run.results) {
+    if (!ids.has(result.id)) continue;
+    const label = result.status === "queued" ? "waiting for capacity" : result.status;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  const parts = [...counts].map(([label, count]) => (ids.size === 1 ? label : `${count} ${label}`));
+  return `Changed tests: ${parts.join(", ")}`;
+}
+
 export function ReviewValidationStatus({
   environmentId,
   run,
@@ -366,6 +391,8 @@ export function ReviewValidationStatus({
   const now = liveNow ?? clockNow;
   const validationElapsedMs = reviewValidationElapsedMs(run, now);
   const notes = run.plan.limitations;
+  const changedIds = changedTestIds(run);
+  const changedSummary = changedTestsSummary(run);
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
   const selectedResult = run.results.find((result) => result.id === selectedResultId);
   const runActive = run.status === "running";
@@ -470,6 +497,11 @@ export function ReviewValidationStatus({
         {run.sealingDurationMs !== undefined &&
           `Packaging: ${(run.sealingDurationMs / 1000).toFixed(1)}s.`}
       </p>
+      {changedSummary && (
+        <p data-slot="validation-changed-summary" className="mb-2 font-medium">
+          {changedSummary}
+        </p>
+      )}
       {run.queueReason && (
         <p role="status" className="mb-2 text-muted-foreground">
           {run.queueReason}
@@ -516,6 +548,15 @@ export function ReviewValidationStatus({
                   onClick={() => setSelectedResultId(result.id)}
                 >
                   <td className="cursor-pointer px-2 py-2 align-top">
+                    {changedIds.has(result.id) && (
+                      <span
+                        data-slot="validation-changed-tests"
+                        className="mb-1 mr-1 inline-block rounded border border-primary/40 px-1 py-px text-[10px] font-medium text-primary"
+                        title="Runs only the tests this change adds or edits; its result is reported on its own"
+                      >
+                        Changed tests
+                      </span>
+                    )}
                     <code className="break-all">{result.command}</code>
                     {result.queueReason && ["queued", "running"].includes(result.status) && (
                       <div

@@ -295,7 +295,9 @@ env = { NODE_ENV = false }
 # Both suites need only loopback, so on Linux they run in a private network
 # namespace where other builds' Docker networks cannot abort Chromium's requests
 # (flake 2340). ORKESTRATOR_E2E_HOST_NETWORK=1 keeps them on the host network.
-run = "bun check -p e2e/tsconfig.json && bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts && bun scripts/loopback-network.ts -- bunx playwright test --config e2e/public-site/playwright.config.ts"
+# Review validation on the host network gets free ports instead of the fixed
+# 1422/4423, which another checkout or a dev server may hold (--free-port).
+run = "bun check -p e2e/tsconfig.json && bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts && bun scripts/loopback-network.ts --free-port ORKESTRATOR_PUBLIC_E2E_PORT -- bunx playwright test --config e2e/public-site/playwright.config.ts"
 
 [tasks."test:agent:browser"]
 description = "Run browser agent tests against an already-running profile (use test:agent:browser:isolated for one-shot validation)"

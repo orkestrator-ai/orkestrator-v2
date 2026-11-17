@@ -7,6 +7,7 @@ import type {
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import {
+  changedTestsSummary,
   ReviewValidationStatus,
   VALIDATION_OUTPUT_POLL_INTERVAL_MS,
 } from "./ReviewValidationStatus";
@@ -93,6 +94,34 @@ describe("ReviewValidationStatus", () => {
     expect((stopping as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(stopping);
     expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  // An unrelated failing suite used to bury whether the change's own tests passed.
+  test("shows the changed tests' result on its own and tags their rows", () => {
+    const run = runningValidation();
+    run.plan.commands[0]!.scope = "changed";
+    run.plan.commands[1]!.scope = "general";
+    run.results[0]!.status = "passed";
+    run.results[0]!.exitCode = 0;
+    run.results[1]!.status = "failed";
+    run.results[1]!.exitCode = 1;
+    const view = render(
+      <ReviewValidationStatus environmentId="env-1" run={run} stopCommand={null} />,
+    );
+    expect(
+      view.container.querySelector('[data-slot="validation-changed-summary"]')!.textContent,
+    ).toBe("Changed tests: passed");
+    const tags = view.container.querySelectorAll('[data-slot="validation-changed-tests"]');
+    expect(tags).toHaveLength(1);
+    expect(tags[0]!.closest("tr")!.textContent).toContain("bun run check");
+  });
+
+  test("summarizes several changed-test commands by status, and none without a scope", () => {
+    const run = runningValidation();
+    expect(changedTestsSummary(run)).toBeNull();
+    run.plan.commands.forEach((command) => (command.scope = "changed"));
+    run.results[1]!.status = "queued";
+    expect(changedTestsSummary(run)).toBe("Changed tests: 1 running, 1 waiting for capacity");
   });
 
   test("does not render the stop control for a settled run", () => {

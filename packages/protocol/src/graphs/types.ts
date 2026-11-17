@@ -25,7 +25,7 @@ import {
   REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
   REVIEW_PR_RESULT_JSON_SCHEMA,
 } from "../review-results.js";
-import { REVIEW_VALIDATION_PLAN_SCHEMA } from "../review-workflow.js";
+import { REVIEW_VALIDATION_PLAN_V1_SCHEMA } from "../review-workflow.js";
 import {
   backfillLegacyReviewOutcome,
   STRUCTURED_REVIEW_MAX_FILES_REVIEWED,
@@ -484,7 +484,7 @@ const BUILT_IN_SPECS: readonly BuiltInSpec[] = [
     label: "Validation plan",
     description: "The repository's validation commands for one commit, in dependency order.",
     family: "report",
-    schema: REVIEW_VALIDATION_PLAN_SCHEMA,
+    schema: REVIEW_VALIDATION_PLAN_V1_SCHEMA,
     budgets: { maxBytes: 24_000, maxItems: 32 },
     items: { path: "commands", idPrefix: "command" },
     render: {

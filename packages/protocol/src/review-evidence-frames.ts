@@ -144,7 +144,9 @@ export const REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE = ` Usually
 
 Keep discovery focused on what must run and how it can overlap safely. Narrate concise ordinary-prose progress; only the final response is the schema-constrained plan. Do not return command results or read old validation artifacts.
 
-You are review preparation, not a pre-review implementation worker. Exemptions that let implementation workers defer full validation until review do not apply to this discovery task. Discover and schedule every applicable repository-required validation command, including required full suites, once against the committed branch; never defer them to a later review.`;
+You are review preparation, not a pre-review implementation worker. Exemptions that let implementation workers defer full validation until review do not apply to this discovery task. Discover and schedule every applicable repository-required validation command, including required full suites, once against the committed branch; never defer them to a later review.
+
+Give every command a scope. When the change adds or edits tests, or test files own the source files it changes, add one focused command that runs only those tests (the repository's focused test entrypoint given their exact paths), list it first, and set its scope to "changed"; every other command has scope "general". The backend starts "changed" commands first and reports their result on its own, so an unrelated failing suite cannot hide whether the change's own tests passed. The focused command never replaces a required suite. When the change has no tests of its own, plan no "changed" command.`;
 
 /**
  * Earlier official bodies, kept so unframed transcripts recorded before the

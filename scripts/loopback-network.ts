@@ -17,8 +17,18 @@
  * changes nothing on the host. Elsewhere (macOS, a kernel that refuses
  * unprivileged user namespaces, a host without `ip`), or with
  * `ORKESTRATOR_E2E_HOST_NETWORK=1`, the command runs on the host network.
+ *
+ * `--free-port NAME` (repeatable, before `--`) gives a review validation run
+ * on the host network its own port: when `ORKESTRATOR_REVIEW_VALIDATION=1` and
+ * `NAME` is unset, it sets `NAME` to a port the kernel just handed out. A
+ * suite's fixed default port (1422 for the component suite) is otherwise taken
+ * by whatever else on the host listens there: a person's dev server, another
+ * checkout's fixture server, and the run fails before a test starts. Inside
+ * the namespace every port is free, so nothing is set there; a person's own
+ * run keeps the default so it can reuse a server they left running.
  */
 import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:net";
 
 export const HOST_NETWORK_ENV = "ORKESTRATOR_E2E_HOST_NETWORK";
 
@@ -119,10 +129,56 @@ export function loopbackNamespacePlan(
   };
 }
 
+export const REVIEW_VALIDATION_ENV = "ORKESTRATOR_REVIEW_VALIDATION";
+
+/** Splits `--free-port NAME ... -- command...` into its options and the command. */
+export function parseLoopbackArgs(argv: readonly string[]): {
+  freePorts: string[];
+  command: string[];
+} {
+  const freePorts: string[] = [];
+  let index = 0;
+  while (index < argv.length && argv[index] !== "--") {
+    const option = argv[index]!;
+    if (option !== "--free-port") break;
+    const name = argv[index + 1];
+    if (!name || !/^[A-Z_][A-Z0-9_]*$/.test(name))
+      throw new Error("--free-port needs an environment variable name");
+    freePorts.push(name);
+    index += 2;
+  }
+  if (argv[index] === "--") index += 1;
+  return { freePorts, command: argv.slice(index) };
+}
+
+/**
+ * The `--free-port` variables this run must set: only for review validation
+ * on the host network, and never one the caller already chose.
+ */
+export function portsToAssign(
+  names: readonly string[],
+  options: { isolated: boolean; env: Record<string, string | undefined> },
+): string[] {
+  if (options.isolated || options.env[REVIEW_VALIDATION_ENV] !== "1") return [];
+  return [...new Set(names)].filter((name) => !options.env[name]);
+}
+
+/** A loopback port that was free a moment ago. The suite's server binds it with `--strictPort`. */
+export function freeLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => (port > 0 ? resolve(port) : reject(new Error("no port was assigned"))));
+    });
+  });
+}
+
 if (import.meta.main) {
-  const argv = process.argv.slice(2);
-  if (argv[0] === "--") argv.shift();
-  const plan = loopbackNamespacePlan(argv, {
+  const { freePorts, command } = parseLoopbackArgs(process.argv.slice(2));
+  const plan = loopbackNamespacePlan(command, {
     platform: process.platform,
     env: process.env,
     probe: probeNetworkIsolation,
@@ -133,6 +189,11 @@ if (import.meta.main) {
     console.error(
       `[loopback-network] running on the host network (${plan.reason}); host interface changes can abort browser requests (flake 2340)`,
     );
+  const env = { ...process.env };
+  for (const name of portsToAssign(freePorts, { isolated: plan.isolated, env })) {
+    env[name] = String(await freeLoopbackPort());
+    console.error(`[loopback-network] review validation: ${name}=${env[name]} for this run`);
+  }
   // Forwarding handlers exist before the command does (AGENTS.md invariant 16):
   // the command can announce readiness as soon as it starts, and a signal that
   // reached this script before its handlers would kill it with the default
@@ -140,7 +201,7 @@ if (import.meta.main) {
   let child: ReturnType<typeof spawn> | undefined;
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
     process.on(signal, () => child?.kill(signal));
-  child = spawn(plan.command, plan.args, { stdio: "inherit" });
+  child = spawn(plan.command, plan.args, { stdio: "inherit", env });
   child.on("error", (error) => {
     console.error(`[loopback-network] ${error.message}`);
     process.exit(127);

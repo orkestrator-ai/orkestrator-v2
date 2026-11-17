@@ -434,6 +434,9 @@ describe("prompt contract edge cases", () => {
     expect(prompt).toContain("When this session refuses Git commands");
     expect(prompt).toContain("`diffArtifact.path`");
     expect(prompt).toContain("Do not rerun the full test suite");
+    // Reviewers report the change's own tests apart from unrelated suites.
+    expect(prompt).toContain("Read the package's `validationReport` first");
+    expect(prompt).toContain("do not attribute a `pre-existing` failure to this change");
     expect(prompt).toContain("Do not modify, create, or delete files");
   });
 

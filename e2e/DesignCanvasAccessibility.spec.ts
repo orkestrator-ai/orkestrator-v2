@@ -273,6 +273,50 @@ async function typeStyle(page: Page, value: string) {
   await page.keyboard.press("Enter");
 }
 
+test("toolbar tooltips describe focused controls and preserve rename and compact layout", async ({
+  page,
+}, testInfo) => {
+  await withCanvas(page, async ({ canvasId }) => {
+    await openCanvas(page, canvasId);
+    const toolbar = page.getByRole("toolbar", { name: "Design tools" });
+    const undo = toolbar.getByRole("button", { name: "Undo design change" });
+    await undo.focus();
+    await expect(undo).toHaveAccessibleDescription(/Undo.+Ctrl\/⌘\+Z/);
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toContainText("Ctrl/⌘+Z");
+    const previews = join(import.meta.dirname, "../output/visual-previews");
+    await mkdir(previews, { recursive: true });
+    await page.screenshot({ path: join(previews, `toolbar-fixed-${testInfo.project.name}.png`) });
+    await page.keyboard.press("Escape");
+    const fit = toolbar.getByRole("button", { name: "Zoom to selection" });
+    await expect(fit).toBeDisabled();
+    await fit.locator("..").hover();
+    await expect(tooltip).toContainText("select a frame first");
+    await page.screenshot({
+      path: join(previews, `toolbar-disabled-fixed-${testInfo.project.name}.png`),
+    });
+    await page.mouse.move(0, 0);
+    await toolbar.getByRole("button", { name: /^Design name:/ }).click();
+    const longName = "A long design name for checking toolbar truncation ".repeat(2);
+    await page.getByRole("textbox", { name: "Design name", exact: true }).fill(longName);
+    await page.keyboard.press("Enter");
+    const rename = toolbar.getByRole("button", { name: `Design name: ${longName.trim()}. Rename` });
+    await expect(rename).toBeVisible();
+    expect(await toolbar.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+    await page.setViewportSize({ width: 320, height: 225 });
+    const more = toolbar.getByRole("button", { name: "More design tools" });
+    await expect(more).toBeVisible();
+    expect(await rename.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
+    expect((await toolbar.boundingBox())!.height).toBeLessThan(225 / 4);
+    expect(await toolbar.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+    await more.focus();
+    await expect(more).toHaveAccessibleDescription("More design tools");
+    await page.screenshot({
+      path: join(previews, `toolbar-compact-fixed-${testInfo.project.name}.png`),
+    });
+  });
+});
+
 test("keyboard-only journey keeps focus through acknowledgement, panels, culling and errors", async ({
   page,
 }) => {

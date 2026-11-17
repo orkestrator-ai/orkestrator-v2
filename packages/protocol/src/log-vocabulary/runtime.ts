@@ -7,13 +7,14 @@ export const RUNTIME_LOG_AREAS = defineLogAreas({
     events: {
       stalled: {
         description:
-          "A timer fired late, so every request in that window waited. In the backend the line also names what ran: `storageMs` and the `storage*` fields describe the slow SQLite calls in the window (`operation.slow` in `storage`), `storageCalls` and `storageCallMs` every SQLite call that ended in it, slow or not (`storageMainCallMs` and `storageLedgerCallMs` per database; `storageWrites` those that committed a change; `storageTopCaller` and `storageCallers` whose they were, by store, lease or table family), `commandsInFlight` and `commands` the commands running, `blockingCommand` one whose synchronous part overlapped it, and `jobsInWindow` and `jobs` the recurring jobs that ran around it. `cpuMs` is the CPU time the process used in the window: near `lagMs` its own thread was busy, far below it the thread waited.",
+          "A timer fired late, so every request in that window waited. In the backend the line also names what ran: `storageMs` and the `storage*` fields describe the slow SQLite calls in the window (`operation.slow` in `storage`), `storageCalls` and `storageCallMs` every SQLite call that ended in it, slow or not (`storageMainCallMs` and `storageLedgerCallMs` per database; `storageWrites` those that committed a change; `storageTopCaller` and `storageCallers` whose they were, by store, lease or table family), `commandsInFlight` and `commands` the commands running, `blockingCommand` one whose synchronous part overlapped it, and `jobsInWindow` and `jobs` the recurring jobs that ran around it. `cpuMs` is the CPU time the process used in the window: near `lagMs` its own thread was busy, far below it the thread waited. Time the host slept is not in `lagMs` (see `host-suspended`); `hostSuspendedMs` says how much was taken out of a stall that remained.",
         essential: true,
         minLevel: "error",
         fields: {
           lagMs: "number",
           intervalMs: "number",
           cpuMs: "number",
+          hostSuspendedMs: "number",
           storageMs: "number",
           storageDatabase: "label",
           storageOp: "label",
@@ -31,6 +32,17 @@ export const RUNTIME_LOG_AREAS = defineLogAreas({
           commandsInFlight: "number",
           blockingCommandMs: "number",
           jobsInWindow: "number",
+        },
+      },
+      "host-suspended": {
+        description:
+          "A timer fired late because the machine slept (its CPU time counters stopped), not because this process was held, so it is not a stall. `suspendedMs` is the sleep, `lagMs` the whole lateness and `suppressed` the suspensions not written since the last line.",
+        essential: true,
+        fields: {
+          suspendedMs: "number",
+          lagMs: "number",
+          intervalMs: "number",
+          suppressed: "number",
         },
       },
     },

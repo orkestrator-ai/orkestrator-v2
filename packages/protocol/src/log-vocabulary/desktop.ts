@@ -31,10 +31,26 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
       "instance.already-running": "Another instance holds this data directory; this one will quit.",
       "main-thread.stalled": {
         description:
-          "A timer fired late, so windows, IPC and the stdout reader waited. `cpuMs` is the CPU time the process used in the window: near `lagMs` the main thread was busy, far below it the thread waited.",
+          "A timer fired late, so windows, IPC and the stdout reader waited. `cpuMs` is the CPU time the process used in the window: near `lagMs` the main thread was busy, far below it the thread waited. Time the host slept is not in `lagMs` (see `main-thread.host-suspended`); `hostSuspendedMs` says how much was taken out of a stall that remained.",
         essential: true,
         minLevel: "error",
-        fields: { lagMs: "number", intervalMs: "number", cpuMs: "number" },
+        fields: {
+          lagMs: "number",
+          intervalMs: "number",
+          cpuMs: "number",
+          hostSuspendedMs: "number",
+        },
+      },
+      "main-thread.host-suspended": {
+        description:
+          "A main-thread timer fired late because the machine slept (its CPU time counters stopped), not because the thread was held, so it is not a stall. `suspendedMs` is the sleep, `lagMs` the whole lateness and `suppressed` the suspensions not written since the last line.",
+        essential: true,
+        fields: {
+          suspendedMs: "number",
+          lagMs: "number",
+          intervalMs: "number",
+          suppressed: "number",
+        },
       },
       "process-memory":
         "Development only: working set per Electron process type, sampled on an interval.",

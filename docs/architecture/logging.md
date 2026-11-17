@@ -538,8 +538,10 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `storage` | `snapshot.failed` | `retryAt`, error | The hourly database snapshot failed. |
 | `storage` | `snapshot.integrity-failed` | none | A snapshot failed its integrity check. |
 | `storage` | `operation.slow` | `database`, `op`, `table`, `mode`, `durationMs`, `beginMs`, `sqlMs`, `commitMs`, `busy`, `folded`, `foldedMaxMs` | A synchronous SQLite call held the event loop for 250 ms or more; see [what ran during a stall](#what-ran-during-a-stall). |
-| `event-loop` | `stalled` | `lagMs`, `intervalMs`, `cpuMs`, `storageMs`, `storageDatabase`, `storageOp`, `storageTable`, `storageLongestMs`, `storageBusy`, `commandsInFlight`, `blockingCommandMs`, `jobsInWindow` | A stall of 10 seconds or more: only at `error`, not the routine `warn`. The `storage*` and command fields are the backend's [stall context](#what-ran-during-a-stall). |
-| `desktop` | `main-thread.stalled` | `lagMs`, `intervalMs`, `cpuMs` | The same, for the main process. |
+| `event-loop` | `stalled` | `lagMs`, `intervalMs`, `cpuMs`, `hostSuspendedMs`, `storageMs`, `storageDatabase`, `storageOp`, `storageTable`, `storageLongestMs`, `storageBusy`, `commandsInFlight`, `blockingCommandMs`, `jobsInWindow` | A stall of 10 seconds or more: only at `error`, not the routine `warn`. The `storage*` and command fields are the backend's [stall context](#what-ran-during-a-stall). Time the host slept is not counted; see [host sleep is not a stall](#host-sleep-is-not-a-stall). |
+| `event-loop` | `host-suspended` | `suspendedMs`, `lagMs`, `intervalMs`, `suppressed` | A timer was late because the machine slept, at `info`. At most one line per 30 s; `suppressed` counts the ones between. |
+| `desktop` | `main-thread.stalled` | `lagMs`, `intervalMs`, `cpuMs`, `hostSuspendedMs` | The same, for the main process. |
+| `desktop` | `main-thread.host-suspended` | `suspendedMs`, `lagMs`, `intervalMs`, `suppressed` | The same, for the main process. |
 | `backend` | `previous-run` | `outcome`, `ranForMs`, `lastSeenAgoMs` | This start read how the previous run ended, from the [health summary](#health-summary-and-the-clean-exit-marker). |
 | `logging` | `essential.started` | `owner` | This process began writing the file. |
 | `logging` | `essential.stopped` | `owner` | It stopped, in an orderly exit. |
@@ -1322,6 +1324,34 @@ inherit vendor debug switches from the shell that launched Orkestrator
 `error` cannot be filtered, because no level is below it. A stall of 10 seconds or
 more uses that: `event-loop` `stalled`, and the desktop's `main-thread.stalled`, are
 written at `error` whatever the configured level, and at `warn` below 10 seconds.
+
+### Host sleep is not a stall
+
+The stall monitor measures a timer's lateness on the monotonic clock. Where
+that clock counts sleep (macOS's `CLOCK_MONOTONIC`), a machine that sleeps
+used to be reported as a stall as long as the sleep, at `error` once it
+reached 10 seconds, with no process held at all. Self-improvement digest
+20261117T091310Z-edf16d93 counted 41 such lines on two days, one of 128 s at
+01:50 UTC; that they were sleeps is inferred from their timing and length,
+since those records carry no CPU evidence.
+
+The backend and the desktop pass the monitor a reader of the host's per-CPU
+time counters (`packages/protocol/src/node/host-cpu-times.ts`: `/proc/stat`
+on Linux, which counts I/O wait and steal; `os.cpus()` elsewhere). Those
+counters stop while the machine sleeps. The monitor reads them every 5 s and
+on every late tick; the part of the lateness that no CPU was counted awake for
+(the monotonic time passed minus the longest any one CPU advanced) is a
+suspension. It is written as `host-suspended` (desktop:
+`main-thread.host-suspended`) at `info`, essential, and is kept out of
+`stalls`, `maxLagMs` and `lateTicks`, so the health summary's `worstStallMs`
+does not report it either; the snapshot counts it as `suspensions` and
+`maxSuspendedMs`. What remains is still a stall, with `hostSuspendedMs` saying
+how much sleep was taken out. Two guards keep a held process from passing as a
+sleeping host: the longest CPU, not the average, so one CPU whose idle time is
+accounted late cannot hide an awake host, and a process that used CPU for half
+the lateness or more (`cpuMs`) was running, so nothing is taken out. On Linux
+`CLOCK_MONOTONIC` already stops during suspend, so a sleep there was never
+late and this changes nothing.
 
 ## The Electron relay
 

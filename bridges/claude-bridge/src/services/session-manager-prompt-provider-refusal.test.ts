@@ -147,6 +147,48 @@ describe("provider refusal log level", () => {
     }
   });
 
+  // The other refusals behind `bridge.claude:prompt.failed` on 2.38.2-beta
+  // (self-improvement digest 20261117T091310Z-edf16d93): a coordinator that
+  // starts signed out after an account switch, and an account whose login was
+  // revoked. Neither carries a usage-limit text; the first has no HTTP status.
+  for (const { name, text, status } of [
+    { name: "signed out", text: "Not logged in · Please run /login", status: undefined },
+    {
+      name: "revoked login",
+      text: "Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
+      status: 401,
+    },
+  ]) {
+    test(`a ${name} is a warning, not prompt.failed`, async () => {
+      const logs = captureConsole();
+      try {
+        const { session, rejection } = await runFailedTurn(
+          `provider-refusal-${name.replace(" ", "-")}`,
+          [
+            apiErrorReply("authentication_failed", text),
+            {
+              type: "result",
+              subtype: "success",
+              is_error: true,
+              ...(status === undefined ? {} : { api_error_status: status }),
+              result: text,
+            },
+          ],
+        );
+
+        expect(session.status).toBe("error");
+        expect(session.error).toBe("Claude ended the turn on an API error.");
+        expect((rejection as { providerRefused?: unknown }).providerRefused).toBe(true);
+        expect(logs.bridgeErrorLines()).toEqual([]);
+        expect(logs.warnLines()).toContain(
+          "[bridge.claude] prompt.provider-refused errorClass=Error reason=authentication_failed",
+        );
+      } finally {
+        logs.restore();
+      }
+    });
+  }
+
   test("a startup failure stays query.failed even when it carries a provider-state code", async () => {
     const logs = captureConsole();
     try {

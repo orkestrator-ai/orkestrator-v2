@@ -45,8 +45,6 @@ export const EVENT_LOOP_STALL_LOG_INTERVAL_MS = 30_000;
 export const EVENT_LOOP_STALL_ALWAYS_LOG_MS = 10_000;
 /** Recent stalls kept for diagnostics. */
 export const EVENT_LOOP_RECENT_STALLS = 20;
-/** How often the host's CPU times are read while ticks are on time. */
-export const EVENT_LOOP_HOST_SAMPLE_INTERVAL_MS = 5_000;
 
 /** Lateness buckets (ms, lower bounds) counted over the process lifetime. */
 const LAG_BUCKETS_MS = [100, 1_000, 5_000, 30_000] as const;
@@ -91,7 +89,6 @@ export interface EventLoopStallMonitorOptions {
   hostCpuTimes?: () => readonly number[] | null;
   /** Takes each host suspension instead of the `event-loop` logger. */
   reportSuspension?: (suspension: EventLoopSuspensionReport) => void;
-  hostSampleIntervalMs?: number;
   /** Monotonic milliseconds. */
   now?: () => number;
   wallClock?: () => number;
@@ -274,7 +271,6 @@ export function startEventLoopStallMonitor(
       return null;
     }
   };
-  const hostSampleIntervalMs = options.hostSampleIntervalMs ?? EVENT_LOOP_HOST_SAMPLE_INTERVAL_MS;
   const suspensionReport = options.reportSuspension ?? reportSuspension;
   const wallClock = options.wallClock ?? Date.now;
   const setTimer =
@@ -305,22 +301,27 @@ export function startEventLoopStallMonitor(
   let timer: { unref?: () => unknown } | null = null;
 
   /**
-   * How much of a late tick the host slept through. Reads the host's CPU times
-   * every `hostSampleIntervalMs` and on every late tick, so the comparison
-   * spans at most that much on-time running plus the late tick itself.
+   * Read on every tick so the host and process counters cover the same window
+   * as rawLagMs. Keeping a baseline across ticks can charge an earlier sleep
+   * against a later, genuinely awake stall.
    */
   const suspendedWithin = (at: number, rawLagMs: number, cpuMs: number | undefined): number => {
     if (!hostCpuTimes) return 0;
-    const late = rawLagMs >= thresholdMs;
-    if (!late && hostBaseline && at - hostBaseline.at < hostSampleIntervalMs) return 0;
     const times = readHost();
     let sleptMs = 0;
-    if (late && hostBaseline && times) {
+    if (rawLagMs >= thresholdMs && hostBaseline && times) {
       const slept = hostSleptMs(hostBaseline.times, times, at - hostBaseline.at);
-      // A process that ran for most of the lateness was not on a sleeping host,
-      // whatever the counters say.
-      const ran = cpuMs !== undefined && cpuMs * 2 >= rawLagMs;
-      if (slept !== null && slept >= thresholdMs && !ran) sleptMs = Math.min(rawLagMs, slept);
+      // Process CPU sums all threads. Compare it with the total host capacity
+      // actually counted awake, not with lateness (which can include sleep).
+      // Allow 100 ms per CPU for counter quantisation and read skew.
+      const capacityMs = times.reduce(
+        (total, time, index) => total + Math.max(0, time - (hostBaseline!.times[index] ?? time)),
+        0,
+      );
+      const inconsistent = cpuMs !== undefined && cpuMs > capacityMs + times.length * 100;
+      if (slept !== null && slept >= thresholdMs && !inconsistent) {
+        sleptMs = Math.min(rawLagMs, slept);
+      }
     }
     hostBaseline = times ? { at, times } : null;
     return sleptMs;

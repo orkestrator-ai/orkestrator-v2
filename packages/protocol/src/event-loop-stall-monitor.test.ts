@@ -386,6 +386,33 @@ describe("event loop stall monitor", () => {
       expect(run.monitor.snapshot()).toMatchObject({ stalls: 1, maxLagMs: 12_000, suspensions: 1 });
     });
 
+    test("short earlier sleeps are never subtracted from a later awake stall", () => {
+      const run = hostHarness({ cpuUsage: () => 0 });
+      monitor = run.monitor;
+      run.tickAfter({ asleepMs: 600 });
+      run.tickAfter({ asleepMs: 600 });
+      run.tickAfter({ awakeMs: 10_000 });
+      expect(run.logs).toEqual([expect.objectContaining({ lagMs: 10_000, level: "error" })]);
+      expect(run.logs[0]?.hostSuspendedMs).toBeUndefined();
+      expect(run.suspensions).toEqual([]);
+    });
+
+    for (const cpuMs of [0, 9_000, 18_000]) {
+      test(`mixed sleep and work preserves sleep with ${cpuMs} ms process CPU`, () => {
+        let cpuMicros = 0;
+        const run = hostHarness({ cpuUsage: () => cpuMicros });
+        monitor = run.monitor;
+        cpuMicros += cpuMs * 1_000;
+        run.tickAfter({ awakeMs: 9_000, asleepMs: 9_000 });
+        expect(run.logs).toEqual([
+          expect.objectContaining({ lagMs: 9_000, level: "warn", cpuMs, hostSuspendedMs: 9_000 }),
+        ]);
+        expect(run.suspensions).toEqual([
+          expect.objectContaining({ suspendedMs: 9_000, lagMs: 18_000 }),
+        ]);
+      });
+    }
+
     test("a stall on an awake host is reported as before", () => {
       const run = hostHarness();
       monitor = run.monitor;
@@ -481,16 +508,16 @@ describe("event loop stall monitor", () => {
       });
     });
 
-    test("reads the host's CPU times every few seconds while ticks are on time", () => {
+    test("reads host counters on every tick to align the accounting windows", () => {
       const run = hostHarness();
       monitor = run.monitor;
       // One read at start.
       expect(run.machine.reads()).toBe(1);
       for (let index = 0; index < 20; index += 1) run.tickAfter({});
-      // 10 s of on-time ticks: one read every 5 s.
-      expect(run.machine.reads()).toBe(3);
+      // Every tick refreshes the baseline, including on-time ticks.
+      expect(run.machine.reads()).toBe(21);
       run.tickAfter({ asleepMs: 2_000 });
-      expect(run.machine.reads()).toBe(4);
+      expect(run.machine.reads()).toBe(22);
     });
   });
 });

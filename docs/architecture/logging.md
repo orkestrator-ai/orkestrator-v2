@@ -1338,8 +1338,9 @@ since those records carry no CPU evidence.
 The backend and the desktop pass the monitor a reader of the host's per-CPU
 time counters (`packages/protocol/src/node/host-cpu-times.ts`: `/proc/stat`
 on Linux, which counts I/O wait and steal; `os.cpus()` elsewhere). Those
-counters stop while the machine sleeps. The monitor reads them every 5 s and
-on every late tick; the part of the lateness that no CPU was counted awake for
+counters stop while the machine sleeps. The monitor reads them on every timer
+tick so the host counters and timer lateness cover the same interval; the part
+of the lateness that no CPU was counted awake for
 (the monotonic time passed minus the longest any one CPU advanced) is a
 suspension. It is written as `host-suspended` (desktop:
 `main-thread.host-suspended`) at `info`, essential, and is kept out of
@@ -1348,10 +1349,24 @@ does not report it either; the snapshot counts it as `suspensions` and
 `maxSuspendedMs`. What remains is still a stall, with `hostSuspendedMs` saying
 how much sleep was taken out. Two guards keep a held process from passing as a
 sleeping host: the longest CPU, not the average, so one CPU whose idle time is
-accounted late cannot hide an awake host, and a process that used CPU for half
-the lateness or more (`cpuMs`) was running, so nothing is taken out. On Linux
+accounted late cannot hide an awake host, and process CPU (`cpuMs`, summed
+across threads) must not exceed the total advance across all host CPUs,
+allowing 100 ms per CPU for quantisation and read
+skew. Inconsistent readings leave the whole stall intact. CPU work and sleep
+can share a tick; CPU work alone does not veto suspension. On Linux
 `CLOCK_MONOTONIC` already stops during suspend, so a sleep there was never
 late and this changes nothing.
+
+
+The real-counter integration test
+(`packages/protocol/src/node/host-cpu-times.integration.test.ts`) checks that
+the current OS reader advances at wall-clock rate while the process waits on
+a timer with the host awake. This is not a suspend/resume qualification.
+Actual macOS suspend/resume remains unverified: on a disposable profile on
+that platform, capture monotonic elapsed time and host-counter advances across
+a manually initiated sleep, and check that their difference matches the
+reported suspension. Also check an awake busy block and a blocking wait remain
+stalls. Do not infer hardware qualification from the injected-clock tests.
 
 ## The Electron relay
 

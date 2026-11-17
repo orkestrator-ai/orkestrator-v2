@@ -3180,7 +3180,7 @@ environment records `prUrl` with `prState: open`; the PR monitor sets them, and
 the next workflow save or the 60-second sweep reports it. A retained URL whose
 state is closed, merged or unknown is reported as that state, never as open.
 Each PR launch records the identity of Address Findings attempt that authorized it
-(`autoPrLaunch.fixIdentity`, a hash of the Address Findings session key and start time). A
+(`autoPrLaunch.addressFindingsIdentity`, a hash of the Address Findings session key and start time). A
 later Address Findings, for example after a reviewer restart, is reported as `fix-done`,
 noting that the earlier PR does not confirm it includes the new changes. A
 launched record without an identity, from before this change, is treated the

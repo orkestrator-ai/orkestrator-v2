@@ -9,7 +9,7 @@ import {
   WATCH_PLAN_MAX_TARGETS,
   WHOLE_WORKTREE,
   type WatchTarget,
-} from "./worktree-watch-plan.js";
+} from "./watch-plan.js";
 
 const tree: Record<string, readonly string[]> = {
   "": [".git", "apps", "node_modules", "src"],

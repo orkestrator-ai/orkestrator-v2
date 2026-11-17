@@ -114,12 +114,10 @@ describe("build pipeline read model", () => {
     expect(isBuildPipelineKnownUnavailable("pipeline-2")).toBe(true);
   });
 
-  test("normalizes future wire vocabulary in live updates and rehydrates it after a reload", async () => {
-    const { pipeline, futurePipeline } = workflowVocabularyFixtures();
+  test("reads the current wire vocabulary in live updates and after a reload", async () => {
+    const { pipeline } = workflowVocabularyFixtures();
     expect(isBuildPipeline(pipeline)).toBe(true);
-    expect(isBuildPipeline(futurePipeline)).toBe(false);
-    // The transport is unknown at runtime; its static type describes this build's vocabulary.
-    const incoming = JSON.parse(JSON.stringify(futurePipeline)) as BuildPipeline;
+    const incoming = JSON.parse(JSON.stringify(pipeline)) as BuildPipeline;
     appCommandStore(buildPipelineStore).getState().replacePipeline(incoming);
     expect<unknown>(
       appCommandStore(buildPipelineStore).getState().pipelines.get(pipeline.id),
@@ -128,25 +126,20 @@ describe("build pipeline read model", () => {
     appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
     const restored = await hydrateBuildPipeline(pipeline.id, async () => record(incoming, 8));
     expect(restored).toEqual({ ...pipeline, backendRevision: 8 });
-    expect(isBuildPipeline(restored)).toBe(true);
-    expect<unknown>(
-      appCommandStore(buildPipelineStore).getState().pipelines.get(pipeline.id),
-    ).toEqual(restored);
 
     appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
     const listed = await hydrateBuildPipelinesForProject(pipeline.projectId, async () => [
       record(incoming, 9),
     ]);
     expect(listed).toEqual([{ ...pipeline, backendRevision: 9 }]);
-    expect<unknown>(incoming).toEqual(futurePipeline);
   });
 
-  test("future vocabulary does not bypass snapshot validation", async () => {
-    const { futurePipeline } = workflowVocabularyFixtures();
-    const incoming = {
-      ...futurePipeline,
-      sessions: [{ ...futurePipeline.sessions[0], status: "invalid" }],
-    } as unknown as BuildPipeline;
+  test("refuses a snapshot in the former vocabulary rather than misreading it", async () => {
+    // Stored records are migrated once by the backend (to-do 4740); nothing
+    // current sends the former names, and the renderer keeps no reader for them.
+    const { formerPipeline } = workflowVocabularyFixtures();
+    const incoming = formerPipeline as unknown as BuildPipeline;
+    expect(isBuildPipeline(incoming)).toBe(false);
     expect(() => appCommandStore(buildPipelineStore).getState().replacePipeline(incoming)).toThrow(
       "Invalid backend build pipeline snapshot",
     );

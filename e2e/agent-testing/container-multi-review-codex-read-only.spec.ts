@@ -247,7 +247,7 @@ test("Docker fixture Multi Review with Codex read-only reviewers runs without Co
       targetBranch: "main",
       reviewers: [reviewer, reviewer],
       reviewModel: reviewer,
-      fixModel: reviewer,
+      addressFindingsModel: reviewer,
     });
     let workflow = started;
     await expect

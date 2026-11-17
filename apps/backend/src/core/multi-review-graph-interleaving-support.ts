@@ -401,7 +401,7 @@ export async function multiReviewInterleavingWorld(
         projectId,
         targetBranch: "main",
         reviewers: [opus, { agent: "claude", model: "sonnet" }],
-        fixModel: opus,
+        addressFindingsModel: opus,
         ...input,
       });
     },

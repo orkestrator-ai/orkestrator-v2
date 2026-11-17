@@ -461,7 +461,7 @@ class MultiReviewCycle {
       ["claude", expect.any(String)],
       ["codex", expect.any(String)],
     ]);
-    expect(workflow.autoFix ?? false).toBe(false);
+    expect(workflow.autoAddressFindings ?? false).toBe(false);
     return workflow;
   }
 
@@ -1031,7 +1031,7 @@ test.describe("live Multi Review inactive-environment cycle", () => {
         targetBranch,
         reviewers: panel.map((platform) => selections.get(platform)!),
         reviewModel: stepModel,
-        fixModel: stepModel,
+        addressFindingsModel: stepModel,
       });
       cycle.workflowId = started.id;
       const launchedAt = Date.now();

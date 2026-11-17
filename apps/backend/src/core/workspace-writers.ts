@@ -133,7 +133,7 @@ export function multiReviewWorkspaceUse(snapshot: unknown): WorkspaceUse | null 
   if (workflow.engine === "graph") return null;
   switch (workflow.phase) {
     case "preparing":
-    case "fixing":
+    case "addressing-findings":
       return "write";
     case "reviewing":
     case "consolidating":

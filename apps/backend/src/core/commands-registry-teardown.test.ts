@@ -167,7 +167,7 @@ async function mapTab(
 const retained = () => Response.json({ closed: true, retained: true });
 
 function ownedWorkflow(
-  owner: "preparationSession" | "reviewSession" | "fixSession" | "reviewer",
+  owner: "preparationSession" | "reviewSession" | "addressFindingsSession" | "reviewer",
 ): MultiReviewWorkflow {
   const session = {
     agent: "codex" as const,
@@ -200,7 +200,7 @@ function ownedWorkflow(
           ]
         : [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
     ...(owner === "reviewer" ? {} : { [owner]: session }),
-    fixModel: { agent: "codex", model: "gpt-6" },
+    addressFindingsModel: { agent: "codex", model: "gpt-6" },
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
     backendRevision: 1,
@@ -208,7 +208,12 @@ function ownedWorkflow(
 }
 
 describe("tab close retains conversation history", () => {
-  for (const owner of ["preparationSession", "reviewSession", "fixSession", "reviewer"] as const) {
+  for (const owner of [
+    "preparationSession",
+    "reviewSession",
+    "addressFindingsSession",
+    "reviewer",
+  ] as const) {
     test(`closing an adopted ${owner} tab preserves its workflow owner`, async () => {
       await withTeardown(retained, async ({ invoke, storage, calls, released }) => {
         const workflow = ownedWorkflow(owner);
@@ -838,7 +843,7 @@ describe("tab close retains conversation history", () => {
         targetBranch: "main",
         phase: "preparing",
         reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
-        fixModel: { agent: "codex", model: "gpt-5.6" },
+        addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
         reviewSession: {
           agent: "claude",
           model: "opus",

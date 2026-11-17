@@ -1,7 +1,7 @@
 import { promises as fs, type Dirent } from "node:fs";
 import path from "node:path";
-import { HARDENED_GIT_CONFIG } from "./git-fsmonitor.js";
-import { CommandFailedError, runCommand } from "./shell.js";
+import { HARDENED_GIT_CONFIG } from "../git-fsmonitor.js";
+import { CommandFailedError, runCommand } from "../shell.js";
 
 /**
  * Which directories a worktree watcher may leave out, and what to watch instead.

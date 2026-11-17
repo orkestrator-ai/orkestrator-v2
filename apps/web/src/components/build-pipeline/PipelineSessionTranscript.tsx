@@ -287,7 +287,7 @@ export function PipelineSessionTranscript({
         trailingPayloadRootKeys: REVIEW_PACKAGE_PLAN_ROOT_KEYS,
       });
     }
-    if (session?.phase === "build" || session?.phase === "fix") {
+    if (session?.phase === "build" || session?.phase === "rework") {
       return hideReviewPackagePlanText(transcript);
     }
     if (session?.phase === "review") {

@@ -88,12 +88,15 @@ describe("reviewer selections", () => {
         { agent: "claude", model: "opus", lens },
         { agent: "codex", model: "gpt" },
       ],
-      fixModel: { agent: "claude", model: "opus" },
+      addressFindingsModel: { agent: "claude", model: "opus" },
     };
     expect(isStartMultiReviewInput(input)).toBe(true);
-    expect(isStartMultiReviewInput({ ...input, fixModel: { ...input.fixModel, lens } })).toBe(
-      false,
-    );
+    expect(
+      isStartMultiReviewInput({
+        ...input,
+        addressFindingsModel: { ...input.addressFindingsModel, lens },
+      }),
+    ).toBe(false);
     expect(
       isLaunchMultiReviewActionInput({
         requestId: "r",

@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { FSWatcher } from "node:fs";
-import type { WorktreeWatchPlanIo } from "./worktree-watch-plan.js";
+import type { WorktreeWatchPlanIo } from "./watch-plan.js";
 import {
   startWorktreeWatcher,
   WATCH_BURST_OVERFLOW_EVENTS,
   type StartWatch,
   type WorktreeChangeHint,
   type WorktreeWatcher,
-} from "./worktree-watcher.js";
+} from "./watcher.js";
 
 const ROOT = "/wt";
 

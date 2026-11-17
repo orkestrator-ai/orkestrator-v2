@@ -13,6 +13,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 | `apps/backend/src/core/storage-database-rows.ts` | How a value splits into rows under its layout, row ids and positions; no SQLite |
 | `apps/backend/src/core/storage-stores.ts` | Store registry and layouts, migrations, the legacy JSON import, archive retention and scrubbing, the native-session owner backfill |
 | `apps/backend/src/core/storage-record-upgrades.ts` | One-shot upgrades of record shapes only older builds wrote |
+| `apps/backend/src/core/storage-workflow-vocabulary-upgrade.ts` | The one-shot rename of stored build pipeline and Multi Review names to Rework and Address Findings (version 11) |
 | `apps/backend/src/core/storage-retired-features.ts` | The migrations that remove data of retired features (Looped Review, the OpenCode 2 preview's session record) |
 | `apps/backend/src/core/storage-backups.ts` | Pre-migration and daily snapshots, rotation |
 | `apps/backend/src/core/storage-context.ts` | `StorageContext`, the state every store shares: database handle, `loadJson`/`saveJson` routing, `updateStore`, `serialize` (with the lease order), `atomically` |
@@ -1038,6 +1039,21 @@ manual pass dated at the ticket's creation. A row whose text fields are not
 strings is left verbatim. Reads keep only the `sectionsBasis` check
 (`normalizeKanbanTask`): when a writer changes a text mirror without the
 sections, they are rebuilt from the text ([tickets.md](tickets.md#mirrors-and-migration)).
+
+Version 11 (`rename-workflow-vocabulary`,
+`storage-workflow-vocabulary-upgrade.ts`) rewrites every stored build pipeline
+and Multi Review snapshot from the former step names to the Rework and Address
+Findings names (to-do 4740 task 1): in a pipeline `fixing`/`fix` become
+`reworking`/`rework`, `addressing`/`address` become
+`addressing-findings`/`address-findings`, and `fixResult`,
+`addressReportKind` and `fixWorktreeFingerprintAtStart` take their
+`addressFindings…`/`rework…` names; in a Multi Review, where "fix" meant
+Address Findings, `fixing`/`fix` become `addressing-findings`/`address-findings`
+and `fixModel`, `fixSession`, `autoFix` and the other `fix…` fields take their
+`addressFindings…` names. Values are renamed only in the fields that hold
+them (phases, step kinds, authors), never in free text, and session keys are
+kept as written because transcript paths and worker mail tab ids derive from
+them. Readers have no legacy branch, and the version is the downgrade fence.
 
 Every startup also extracts identities from stray `looped-reviews.json` files
 and their retained `legacy-json/` copies, including backups and interrupted

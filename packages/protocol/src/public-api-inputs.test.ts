@@ -1,3 +1,4 @@
+import { buildStepKeyForPublicStep, PUBLIC_BUILD_STEPS } from "./public-api-inputs-build.js";
 import { describe, expect, test } from "bun:test";
 import { PUBLIC_ACTION_NAMES, PUBLIC_ACTIONS, type PublicActionName } from "./public-api.js";
 import {
@@ -264,4 +265,10 @@ describe("public action input contract", () => {
       if (!PUBLIC_ACTIONS[action].mutation) expect(contract.confirmation).toBe("never");
     }
   });
+});
+
+test("public build steps map Address Findings to the internal vocabulary", () => {
+  for (const step of PUBLIC_BUILD_STEPS) {
+    expect(buildStepKeyForPublicStep(step)).toBe(step === "address" ? "address-findings" : step);
+  }
 });

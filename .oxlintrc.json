@@ -423,6 +423,14 @@
               {
                 "group": ["**/previews/*", "!**/previews/index.js", "!**/previews/test-support.js"],
                 "message": "Import the previews domain through previews/index.js."
+              },
+              {
+                "group": [
+                  "**/worktrees/*",
+                  "!**/worktrees/index.js",
+                  "!**/worktrees/removal-reads.js"
+                ],
+                "message": "Import the worktrees domain through worktrees/index.js."
               }
             ]
           }
@@ -560,6 +568,13 @@
                   "!**/backend/src/core/previews/index.js"
                 ],
                 "message": "Import the previews domain through previews/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/worktrees/*",
+                  "!**/backend/src/core/worktrees/index.js"
+                ],
+                "message": "Import the worktrees domain through worktrees/index.js."
               }
             ]
           }

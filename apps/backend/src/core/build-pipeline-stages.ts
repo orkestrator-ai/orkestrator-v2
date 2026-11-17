@@ -41,12 +41,12 @@ export type BuildPipelineStageRound = "before" | "every" | "later" | "after";
 export type BuildPipelineStageKey =
   | "setup"
   | "build"
-  | "fix"
+  | "rework"
   | "preparation"
   | "validation"
   | "review"
   | "consolidation"
-  | "address"
+  | "address-findings"
   | "verify"
   | "pr"
   | "resolve-conflicts";
@@ -82,11 +82,11 @@ export const BUILD_PIPELINE_STAGES: readonly BuildPipelineStage[] = Object.freez
         session: { phase: "build", buildPhase: "building", label: "Build Session" },
       },
       {
-        key: "fix",
+        key: "rework",
         round: "later",
         turn: "write",
         result: "review-preparation",
-        session: { phase: "fix", buildPhase: "fixing", label: "Rework Session" },
+        session: { phase: "rework", buildPhase: "reworking", label: "Rework Session" },
       },
       {
         key: "preparation",
@@ -94,7 +94,7 @@ export const BUILD_PIPELINE_STAGES: readonly BuildPipelineStage[] = Object.freez
         turn: "write",
         result: "validation-plan",
         only: "preparation-session",
-        session: { phase: "fix", buildPhase: "fixing", label: REVIEW_PACKAGE_SESSION_LABEL },
+        session: { phase: "rework", buildPhase: "reworking", label: REVIEW_PACKAGE_SESSION_LABEL },
       },
       { key: "validation", round: "every", turn: "system", result: null },
       {
@@ -112,11 +112,15 @@ export const BUILD_PIPELINE_STAGES: readonly BuildPipelineStage[] = Object.freez
         only: "review-fanout",
       },
       {
-        key: "address",
+        key: "address-findings",
         round: "every",
         turn: "write",
         result: "fix-result",
-        session: { phase: "address", buildPhase: "addressing", label: "Address Findings Session" },
+        session: {
+          phase: "address-findings",
+          buildPhase: "addressing-findings",
+          label: "Address Findings Session",
+        },
       },
       {
         key: "verify",
@@ -154,8 +158,8 @@ export function buildPipelineStage(key: BuildPipelineStageKey): BuildPipelineSta
 }
 
 /**
- * The stage a session phase names. `fix` is the Fix stage; the dedicated
- * package preparation also runs as a `fix` session, under its own label.
+ * The stage a session phase names. `rework` is the Rework stage; the dedicated
+ * package preparation also runs as a `rework` session, under its own label.
  */
 export function buildPipelineSessionStage(phase: PipelineSessionPhase): BuildPipelineStage {
   return buildPipelineStage(phase);

@@ -58,7 +58,7 @@ function rerunAfterConsolidation(overrides: Partial<BuildPipeline> = {}): BuildP
         reviewPassId: "panel",
         ...SUPERSEDED,
       }),
-      session("address", "address", 180, SUPERSEDED),
+      session("address-findings", "address", 180, SUPERSEDED),
       reviewer(1, "p:review:0:panel:1:attempt-2", 300, {
         status: "running",
         completedAt: undefined,
@@ -163,7 +163,7 @@ describe("one reviewer rerun after consolidation", () => {
   test("a reviewer of a retired pass offers Restart reviewer while its round is current", () => {
     const pipeline = build({
       phase: "paused",
-      pausedFromPhase: "addressing",
+      pausedFromPhase: "addressing-findings",
       reviewers: PANEL,
       reviewPackage: PACKAGE,
       currentSessionIndex: 3,
@@ -184,7 +184,7 @@ describe("one reviewer rerun after consolidation", () => {
             },
           ],
         }),
-        session("address", "address", 180),
+        session("address-findings", "address", 180),
       ],
     });
     const model = pipelineFlowModel(pipeline);

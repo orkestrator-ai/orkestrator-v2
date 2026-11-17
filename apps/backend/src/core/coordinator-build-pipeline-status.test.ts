@@ -31,7 +31,7 @@ describe("a cancelled build's coordinator notice", () => {
         error: "Build cancelled",
         taskTitle: "Add clampPercent",
         // A step failure before the cancel does not make it restartable.
-        failureContext: { phase: "fixing", kind: "stage-transition" },
+        failureContext: { phase: "reworking", kind: "stage-transition" },
       },
       "pipeline-1",
     )!;
@@ -87,7 +87,7 @@ describe("a cancelled build's coordinator notice", () => {
       {
         phase: "failed",
         error: "Claude usage limit reached",
-        failureContext: { phase: "fixing", kind: "stage-transition" },
+        failureContext: { phase: "reworking", kind: "stage-transition" },
       },
       "p",
     )!;

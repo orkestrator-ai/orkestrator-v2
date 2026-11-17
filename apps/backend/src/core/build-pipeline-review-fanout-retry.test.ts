@@ -50,7 +50,7 @@ describe("build pipeline reviewer retry", () => {
         }
         expect(later.iteration).toBe(1);
         const firstAddressFindings = later.sessions.find(
-          (s) => s.phase === "address" && s.iteration === 0,
+          (s) => s.phase === "address-findings" && s.iteration === 0,
         )!;
         const firstConsolidation = later.sessions.find(
           (s) => s.label === "Consolidation" && s.iteration === 0,
@@ -80,13 +80,15 @@ describe("build pipeline reviewer retry", () => {
           const created = provider.created.length;
           const restarted = await service.restartStep(started.id, firstAddressFindings.sessionKey);
           expect(restarted.structuredReview).toBeUndefined();
-          expect(provider.created.slice(created).some((s) => s.phase === "address")).toBe(false);
+          expect(provider.created.slice(created).some((s) => s.phase === "address-findings")).toBe(
+            false,
+          );
         } else {
           const created = provider.created.length;
           const restarted = await service.restartStep(started.id, firstAddressFindings.sessionKey);
           expect(restarted.iteration).toBe(0);
           expect(restarted.structuredReview?.reviewSummary).toBe("Merged review.");
-          expect(provider.created.slice(created).map((s) => s.phase)).toEqual(["address"]);
+          expect(provider.created.slice(created).map((s) => s.phase)).toEqual(["address-findings"]);
           expect(provider.sent.at(-1)?.prompt).toContain("Consolidated finding");
         }
       });
@@ -207,19 +209,19 @@ describe("build pipeline reviewer retry", () => {
     await withPipeline(async ({ service, read, provider }) => {
       const send = provider.send.bind(provider);
       provider.send = async (...args) => {
-        if (args[0].includes("address")) throw new Error("Address dispatch rejected");
+        if (args[0].includes("address-findings")) throw new Error("Address dispatch rejected");
         return send(...args);
       };
       const started = await service.start(startInput(PANEL));
       const failed = await advanceUntil(service, read, started.id, "failed");
       expect(failed.phase).toBe("failed");
       expect(isBuildPipeline(failed)).toBe(true);
-      const address = failed.sessions.find((session) => session.phase === "address");
+      const address = failed.sessions.find((session) => session.phase === "address-findings");
       const consolidation = failed.sessions.find((session) => session.label === "Consolidation");
       expect(address?.status).toBe("error");
       expect(address?.error).toBe("Address dispatch rejected");
       expect(failed.failureContext?.sessionId).toBe(address?.sdkSessionId);
-      expect(failed.failureContext?.phase).toBe("addressing");
+      expect(failed.failureContext?.phase).toBe("addressing-findings");
       expect(consolidation?.status).toBe("idle");
       expect(consolidation?.error).toBeUndefined();
     });
@@ -229,8 +231,8 @@ describe("build pipeline reviewer retry", () => {
     await withPipeline(async ({ service, read, provider, createService }) => {
       provider.failingCreateLabels.add(pipelineIndependentReviewLabel(1));
       const started = await service.start(startInput(PANEL));
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
-      expect(addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+      expect(addressing.phase).toBe("addressing-findings");
       const reloaded = createService();
       try {
         await reloaded.init();
@@ -261,7 +263,7 @@ describe("build pipeline reviewer retry", () => {
         ...startInput(PANEL),
         reviewPreparation: { agent: "claude", model: "opus", reasoningEffort: "high" },
       });
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
 
       const completed = addressing.sessions.find(
         (session) => session.label === pipelineIndependentReviewLabel(0),
@@ -314,8 +316,8 @@ describe("build pipeline reviewer retry", () => {
       expect(provider.aborted).not.toContain(runningSession);
 
       provider.runningModels.delete("opus");
-      const addressing = await advanceUntil(service, read, started.id, "addressing", 20);
-      expect(addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings", 20);
+      expect(addressing.phase).toBe("addressing-findings");
       // Two attempts in the second slot: the failed one stays as history.
       const slotSessions = addressing.sessions.filter(
         (session) => session.label === pipelineIndependentReviewLabel(1),
@@ -347,8 +349,8 @@ describe("build pipeline reviewer retry", () => {
       expect(retried.error).toBeUndefined();
       expect(retried.failureContext).toBeUndefined();
 
-      const addressing = await advanceUntil(service, read, started.id, "addressing", 20);
-      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings", 20);
+      expect(addressing.error ?? addressing.phase).toBe("addressing-findings");
       expect(addressing.reviewFanout?.reviewers[0]?.status ?? "settled").not.toBe("pending");
     });
   });
@@ -473,7 +475,7 @@ describe("build pipeline reviewer retry", () => {
             ),
           ).toMatchObject({ ok: true });
         }
-        const addressing = await advanceUntil(service, read, started.id, "addressing", 24);
+        const addressing = await advanceUntil(service, read, started.id, "addressing-findings", 24);
         const attempts = addressing.sessions.filter(
           (session) => session.label === pipelineIndependentReviewLabel(0),
         );

@@ -28,9 +28,9 @@ import type { CoordinatorStatus } from "./coordinator-status-wakes.js";
 
 const BUILD_STAGE_LABELS: Record<string, string> = {
   reviewing: "build",
-  addressing: "review",
+  "addressing-findings": "review",
   verifying: "address",
-  fixing: "verification",
+  reworking: "verification",
   // Successful verification starts PR creation; a fix loops back through review.
   "creating-pr": "verification",
   "resolving-conflicts": "pull request",

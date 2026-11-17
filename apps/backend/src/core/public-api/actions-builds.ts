@@ -15,7 +15,11 @@ import {
 } from "@orkestrator/protocol/build-pipeline-stage-instructions";
 import { kanbanTaskBuildTicket } from "@orkestrator/protocol/build-pipeline-tickets";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
-import { PUBLIC_BUILD_STEPS } from "@orkestrator/protocol/public-api-inputs-build";
+import {
+  buildStepKeyForPublicStep,
+  PUBLIC_BUILD_STEPS,
+  type PublicBuildStepKey,
+} from "@orkestrator/protocol/public-api-inputs-build";
 import type {
   PublicBuildPipelineActionResult,
   PublicBuildPipelineDetail,
@@ -86,7 +90,8 @@ export interface BuildLaunchInput {
   baseBranch?: string;
   baseCommit?: string;
   agent?: AgentPlatform;
-  steps?: Partial<Record<BuildStepKey, StepInput>>;
+  /** Keyed by the public step names; the build's own keys are set at launch. */
+  steps?: Partial<Record<PublicBuildStepKey, StepInput>>;
   reviewers?: StepInput[];
   reviewPreparation?: StepInput;
   maxIterations?: number;
@@ -325,7 +330,16 @@ async function requestedStart(
     projectId: input.projectId,
     environmentType,
     ...(input.agent ? { agentType: input.agent } : {}),
-    ...(input.steps ? { steps: input.steps } : {}),
+    ...(input.steps
+      ? {
+          steps: Object.fromEntries(
+            Object.entries(input.steps).map(([key, step]) => [
+              buildStepKeyForPublicStep(key as PublicBuildStepKey),
+              step,
+            ]),
+          ) as Partial<Record<BuildStepKey, StepInput>>,
+        }
+      : {}),
     ...(input.reviewers ? { reviewers: input.reviewers } : {}),
     ...(input.reviewPreparation ? { reviewPreparation: input.reviewPreparation } : {}),
     taskTitle: build.title,
@@ -467,7 +481,7 @@ export function publicBuildPipelineDetail(
   const pipeline = record.snapshot as BuildPipeline;
   const steps: PublicBuildPipelineDetail["steps"] = {};
   for (const key of PUBLIC_BUILD_STEPS) {
-    const summary = stepSummary(pipeline.steps?.[key]);
+    const summary = stepSummary(pipeline.steps?.[buildStepKeyForPublicStep(key)]);
     if (summary) steps[key] = summary;
   }
   return {

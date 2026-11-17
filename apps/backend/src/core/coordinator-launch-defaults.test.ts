@@ -67,7 +67,7 @@ describe("multiReviewDefaultRows", () => {
       // Reviewer 2 takes Claude's own platform model, matched through its alias.
       reviewers: [review, { agent: "claude", model: "sonnet" }, review],
       reviewModel: review,
-      fixModel: { agent: "claude", model: "opus", reasoningEffort: "xhigh" },
+      addressFindingsModel: { agent: "claude", model: "opus", reasoningEffort: "xhigh" },
     });
   });
 
@@ -84,7 +84,7 @@ describe("multiReviewDefaultRows", () => {
     const resolved = rows({
       actionDefaults: { review: { platform: "claude", model: "retired-model" } },
     });
-    expect(resolved.fixModel).toEqual({ agent: "claude", model: "sonnet" });
+    expect(resolved.addressFindingsModel).toEqual({ agent: "claude", model: "sonnet" });
   });
 
   test("keeps a saved model when the platform has no catalogue to check it against", () => {
@@ -121,7 +121,11 @@ describe("multiReviewDefaultRows", () => {
     test("resolves every row to the model a Pi tab would start on", () => {
       const resolved = piRows({ actionDefaults: { review: { platform: "pi" } } });
       const row = { agent: "pi", model: "openai/gpt-6.1-sol" } as const;
-      expect(resolved).toEqual({ reviewers: [row, row], reviewModel: row, fixModel: row });
+      expect(resolved).toEqual({
+        reviewers: [row, row],
+        reviewModel: row,
+        addressFindingsModel: row,
+      });
     });
 
     test("keeps an effort the session default offers", () => {
@@ -152,7 +156,7 @@ describe("multiReviewDefaultRows", () => {
         "openai/gpt-4",
         "openai/gpt-5.5",
       ]);
-      expect(resolved.fixModel.model).toBe("openai/gpt-5.5");
+      expect(resolved.addressFindingsModel.model).toBe("openai/gpt-5.5");
     });
 
     test("a stale saved model also falls back to the session default", () => {
@@ -187,7 +191,7 @@ describe("multiReviewDefaultRows", () => {
         model: "default",
         reasoningEffort: "high",
       });
-      expect(resolved.fixModel).toEqual({ agent: "pi", model: "default" });
+      expect(resolved.addressFindingsModel).toEqual({ agent: "pi", model: "default" });
       // A saved model the catalogue offers still wins.
       expect(
         piRows(
@@ -206,7 +210,7 @@ describe("multiReviewDefaultRows", () => {
         { agent: "codex", model: "gpt-5.6-codex" },
       ],
       reviewModel: { agent: "codex", model: "gpt-5.6-codex" },
-      fixModel: { agent: "codex", model: "gpt-5.6-codex" },
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6-codex" },
     });
   });
 });
@@ -326,7 +330,7 @@ describe("coordinator launch overrides", () => {
     expect(reviewers.map((row) => row.lens)).toEqual([security, undefined, tests]);
     // Preparation and fix never take a lens.
     expect(review.reviewModel).not.toHaveProperty("lens");
-    expect(review.fixModel).not.toHaveProperty("lens");
+    expect(review.addressFindingsModel).not.toHaveProperty("lens");
     const explicit = await multiReviewInputWithDefaults(
       { reviewers: [{ agent: "codex", model: "gpt-5.6-codex" }] },
       lensSettings,
@@ -345,54 +349,67 @@ describe("coordinator launch overrides", () => {
     expect(isStartBuildPipelineInput({ ...startFields, ...build })).toBe(true);
   });
   test("partial Multi Review overrides preserve explicit rows and false auto-actions", async () => {
-    const fixModel = { agent: "codex", model: "explicit-fix" };
+    const addressFindingsModel = { agent: "codex", model: "explicit-fix" };
     const reviewers = [{ agent: "claude", model: "explicit-review" }];
     const resolved = await multiReviewInputWithDefaults(
-      { reviewers, fixModel, autoFix: false, autoPr: false },
+      { reviewers, addressFindingsModel, autoAddressFindings: false, autoPr: false },
       settings,
       async () => catalog,
     );
-    expect(resolved).toMatchObject({ reviewers, fixModel });
+    expect(resolved).toMatchObject({ reviewers, addressFindingsModel });
     // The stale preparation preference falls back to the first offered Claude model.
     expect(resolved.reviewModel).toEqual({ agent: "claude", model: "sonnet" });
-    expect(resolved.autoFix).toBe(false);
+    expect(resolved.autoAddressFindings).toBe(false);
     expect(resolved.autoPr).toBe(false);
     const saved = await multiReviewInputWithDefaults(
-      { reviewModel: fixModel },
+      { reviewModel: addressFindingsModel },
       settings,
       async () => [],
     );
-    expect(saved).toMatchObject({ reviewModel: fixModel, autoFix: true, autoPr: true });
+    expect(saved).toMatchObject({
+      reviewModel: addressFindingsModel,
+      autoAddressFindings: true,
+      autoPr: true,
+    });
   });
-  test("auto-fix and auto-PR follow the saved settings unless requested", () => {
+  test("auto-address findings and auto-PR follow the saved settings unless requested", () => {
+    // The request and the review use the Address Findings name; saved settings keep `autoFix`.
     const cases: Array<
       [
-        { autoFix?: boolean; autoPr?: boolean },
+        { autoAddressFindings?: boolean; autoPr?: boolean },
         { autoFix?: boolean; autoPr?: boolean } | undefined,
-        { autoFix: boolean; autoPr: boolean },
+        { autoAddressFindings: boolean; autoPr: boolean },
       ]
     > = [
-      [{}, undefined, { autoFix: false, autoPr: false }],
-      [{}, { autoFix: true, autoPr: true }, { autoFix: true, autoPr: true }],
+      [{}, undefined, { autoAddressFindings: false, autoPr: false }],
+      [{}, { autoFix: true, autoPr: true }, { autoAddressFindings: true, autoPr: true }],
       // Saved Auto-PR alone keeps the button's meaning: a PR after a Fix the user starts.
-      [{}, { autoPr: true }, { autoFix: false, autoPr: true }],
+      [{}, { autoPr: true }, { autoAddressFindings: false, autoPr: true }],
       [
-        { autoFix: false, autoPr: false },
+        { autoAddressFindings: false, autoPr: false },
         { autoFix: true, autoPr: true },
-        { autoFix: false, autoPr: false },
+        { autoAddressFindings: false, autoPr: false },
       ],
       // A requested auto-PR asks for the whole flow, so an omitted auto-fix turns on.
-      [{ autoPr: true }, undefined, { autoFix: true, autoPr: true }],
-      [{ autoPr: true }, { autoFix: false }, { autoFix: true, autoPr: true }],
-      [{ autoFix: false, autoPr: true }, undefined, { autoFix: false, autoPr: true }],
-      [{ autoPr: false }, { autoFix: true, autoPr: true }, { autoFix: true, autoPr: false }],
+      [{ autoPr: true }, undefined, { autoAddressFindings: true, autoPr: true }],
+      [{ autoPr: true }, { autoFix: false }, { autoAddressFindings: true, autoPr: true }],
+      [
+        { autoAddressFindings: false, autoPr: true },
+        undefined,
+        { autoAddressFindings: false, autoPr: true },
+      ],
+      [
+        { autoPr: false },
+        { autoFix: true, autoPr: true },
+        { autoAddressFindings: true, autoPr: false },
+      ],
     ];
     for (const [input, saved, expected] of cases)
       expect(multiReviewAutomation(input, saved)).toEqual(expected);
   });
   test("complete explicit Multi Review rows skip catalogue reads", async () => {
     const row = { agent: "codex", model: "explicit" };
-    const input = { reviewers: [row], reviewModel: row, fixModel: row };
+    const input = { reviewers: [row], reviewModel: row, addressFindingsModel: row };
     expect(
       await multiReviewInputWithDefaults(input, settings, async () => {
         throw new Error("must not read catalogue");

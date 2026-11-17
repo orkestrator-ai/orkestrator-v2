@@ -216,14 +216,14 @@ async function setup(
     environmentId: ENVIRONMENT_ID,
     projectId: "project-1",
     targetBranch: "main",
-    autoFix: false,
+    autoAddressFindings: false,
     reviewers: Array.from({ length: reviewerCount }, (_, index) => ({
       id: `reviewer-${index + 1}`,
       agent: "codex",
       model: "default",
       status: "pending",
     })),
-    fixModel: { agent: "codex", model: "default" },
+    addressFindingsModel: { agent: "codex", model: "default" },
     reviewWorktreeSnapshot: {
       status: "clean",
       head: HEAD,

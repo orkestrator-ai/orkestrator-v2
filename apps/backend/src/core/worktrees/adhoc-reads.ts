@@ -1,7 +1,7 @@
 import path from "node:path";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
-import { measuredResponseDigest, responseDigest } from "./worktree-snapshot-digest.js";
-import type { WorkAdmissionPool } from "./work-admission.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { measuredResponseDigest, responseDigest } from "./snapshot-digest.js";
+import type { WorkAdmissionPool } from "../work-admission.js";
 
 /**
  * Reads for scan identities no tracked owner covers.

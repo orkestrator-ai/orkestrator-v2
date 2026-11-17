@@ -4539,7 +4539,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(request.steps).toEqual({
       build: { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
       review: { agent: "claude", model: "opus[1m]", reasoningEffort: "high" },
-      address: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
+      "address-findings": { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
       verify: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
       pr: { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "low" },
       "resolve-conflicts": { agent: "claude", model: "haiku" },
@@ -4852,7 +4852,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(request.steps).toEqual({
       build: { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
       review: { agent: "claude", model: "opus[1m]", reasoningEffort: "high" },
-      address: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
+      "address-findings": { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
       verify: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
       pr: { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "low" },
       "resolve-conflicts": { agent: "claude", model: "haiku" },

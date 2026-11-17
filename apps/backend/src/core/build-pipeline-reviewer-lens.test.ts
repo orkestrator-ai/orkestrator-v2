@@ -63,8 +63,8 @@ describe("the review panel's lenses", () => {
       // A fresh service is the backend after a restart: it reads the record.
       const restarted = createService();
       try {
-        const addressing = await advanceUntil(restarted, read, started.id, "addressing");
-        expect(addressing.phase).toBe("addressing");
+        const addressing = await advanceUntil(restarted, read, started.id, "addressing-findings");
+        expect(addressing.phase).toBe("addressing-findings");
       } finally {
         await restarted.shutdown();
       }
@@ -121,7 +121,7 @@ describe("the review panel's lenses", () => {
       const retried = await service.retryReviewer(started.id, failed.id);
       expect(retried.reviewFanout!.reviewers[1]!.lens).toEqual(TESTS);
       provider.runningModels.delete("opus");
-      await advanceUntil(service, read, started.id, "addressing", 20);
+      await advanceUntil(service, read, started.id, "addressing-findings", 20);
       const retriedPrompts = provider.sent
         .slice(sentBefore)
         .map((entry) => entry.prompt)
@@ -150,15 +150,15 @@ describe("the single reviewer's lens", () => {
         startInput({
           steps: {
             review: { agent: "claude", lens: SECURITY, instructions: "REVIEW-RULES" },
-            address: { agent: "claude", lens: TESTS },
+            "address-findings": { agent: "claude", lens: TESTS },
           },
         }),
       );
       expect(started.steps?.review?.lens).toEqual(SECURITY);
-      expect(started.steps?.address).toEqual({ agent: "claude" });
+      expect(started.steps?.["address-findings"]).toEqual({ agent: "claude" });
       for (let pass = 0; pass < 40; pass += 1) {
         const snapshot = await pipeline(storage, started.id);
-        if (snapshot.phase === "addressing" || snapshot.phase === "failed") break;
+        if (snapshot.phase === "addressing-findings" || snapshot.phase === "failed") break;
         await service.advanceNow(started.id);
       }
       const review = provider.sent.find(

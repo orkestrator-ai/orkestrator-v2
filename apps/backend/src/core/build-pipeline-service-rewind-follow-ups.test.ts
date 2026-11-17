@@ -82,9 +82,9 @@ const reviewAndFailEveryRound = (provider: FakeProvider) => {
       requestId,
       value: (phase === "review"
         ? reviewNaming(sessionId)
-        : phase === "build" || phase === "fix"
+        : phase === "build" || phase === "rework"
           ? TEST_REVIEW_PREPARATION
-          : phase === "address"
+          : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
             : { complete: false, rationale: `Still failing (${sessionId}).` }) as T,
     };
@@ -108,21 +108,26 @@ describe("restarting an earlier round's Address", () => {
         (session) => session.phase === "review" && session.iteration === 0,
       )!;
       const firstAddressFindings = failed.sessions.find(
-        (session) => session.phase === "address" && session.iteration === 0,
+        (session) => session.phase === "address-findings" && session.iteration === 0,
       )!;
       expect(failed.structuredReview?.issues[0]?.title).not.toContain(firstReview.sdkSessionId);
       const created = provider.created.length;
 
       const restarted = await service.restartStep(started.id, firstAddressFindings.sessionKey);
 
-      expect(restarted).toMatchObject({ phase: "addressing", iteration: 0 });
+      expect(restarted).toMatchObject({ phase: "addressing-findings", iteration: 0 });
       expect(restarted.structuredReview?.issues[0]?.title).toBe(
         `Finding from ${firstReview.sdkSessionId}`,
       );
       // Only Address started: no review package preparation, no review.
-      expect(provider.created.slice(created).map((entry) => entry.phase)).toEqual(["address"]);
+      expect(provider.created.slice(created).map((entry) => entry.phase)).toEqual([
+        "address-findings",
+      ]);
       expect(provider.sent.at(-1)?.prompt).toContain(`Finding from ${firstReview.sdkSessionId}`);
-      expect(restarted.rewinds?.at(-1)?.step).toEqual({ kind: "session", phase: "address" });
+      expect(restarted.rewinds?.at(-1)?.step).toEqual({
+        kind: "session",
+        phase: "address-findings",
+      });
       // Later rounds' copies went with their superseded reviews.
       expect(restarted.roundReviewReports?.map((entry) => entry.iteration)).toEqual([0]);
       expect(isBuildPipeline(restarted)).toBe(true);
@@ -136,15 +141,15 @@ describe("restarting an earlier round's Address", () => {
       expect(live(refailed).map((session) => `${session.phase}:${session.iteration}`)).toEqual([
         "build:0",
         "review:0",
-        "address:0",
+        "address-findings:0",
         "verify:0",
-        "fix:1",
+        "rework:1",
         "review:1",
-        "address:1",
+        "address-findings:1",
         "verify:1",
-        "fix:2",
+        "rework:2",
         "review:2",
-        "address:2",
+        "address-findings:2",
         "verify:2",
       ]);
     });
@@ -164,7 +169,7 @@ describe("restarting an earlier round's Address", () => {
         delete snapshot.roundReviewReports;
       });
       const firstAddressFindings = failed.sessions.find(
-        (session) => session.phase === "address" && session.iteration === 0,
+        (session) => session.phase === "address-findings" && session.iteration === 0,
       )!;
       const restarted = await service.restartStep(started.id, firstAddressFindings.sessionKey);
       expect(restarted.iteration).toBe(0);
@@ -196,7 +201,7 @@ describe("restarting an earlier round's Address", () => {
         });
       });
       const firstAddressFindings = failed.sessions.find(
-        (session) => session.phase === "address" && session.iteration === 0,
+        (session) => session.phase === "address-findings" && session.iteration === 0,
       )!;
       const restarted = await service.restartStep(started.id, firstAddressFindings.sessionKey);
       expect(restarted.structuredReview).toBeUndefined();
@@ -221,7 +226,7 @@ describe("package-only restart on the single-review path", () => {
 
       const restarted = await service.restartStep(started.id, `review-package:${build.sessionKey}`);
 
-      expect(restarted.phase).toBe("fixing");
+      expect(restarted.phase).toBe("reworking");
       expect(restarted.sessions.find((s) => s.sessionKey === build.sessionKey)?.supersededBy).toBe(
         undefined,
       );
@@ -233,15 +238,15 @@ describe("package-only restart on the single-review path", () => {
         REVIEW_PACKAGE_SESSION_LABEL,
       ]);
       // Every step after the plan is history: review, verify and Ship.
-      expect(live(restarted).map((session) => session.phase)).toEqual(["build", "fix"]);
+      expect(live(restarted).map((session) => session.phase)).toEqual(["build", "rework"]);
 
       // A repeat of the same request while preparation runs is a no-op.
-      provider.runningPhases.add("fix");
+      provider.runningPhases.add("rework");
       await service.advanceNow(started.id);
       const repeated = await service.restartStep(started.id, `review-package:${build.sessionKey}`);
       expect(repeated.rewinds).toHaveLength(restarted.rewinds!.length);
       expect(provider.created.length).toBe(created + 1);
-      provider.runningPhases.delete("fix");
+      provider.runningPhases.delete("rework");
 
       const finished = await advanceUntil(
         service,
@@ -251,7 +256,7 @@ describe("package-only restart on the single-review path", () => {
       );
       expect(live(finished).map((session) => session.phase)).toEqual([
         "build",
-        "fix",
+        "rework",
         "review",
         "verify",
         "pr",
@@ -395,7 +400,7 @@ describe("rewinding the code to a step", () => {
           const target = completed.sessions.find((session) => session.phase === phase)!;
           await mutateStored(storage, started.id, (snapshot) => {
             snapshot.iteration = 2;
-            snapshot.phase = "fixing";
+            snapshot.phase = "reworking";
             recordReviewIssuesInKeyInformation(
               snapshot,
               { iteration: 0 },

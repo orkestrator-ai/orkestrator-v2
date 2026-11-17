@@ -695,7 +695,7 @@ test("node replies, review addressing and workflow controls are each counted und
     targetBranch: "main",
     phase: "reviewing",
     reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
-    fixModel: { agent: "codex", model: "gpt-6" },
+    addressFindingsModel: { agent: "codex", model: "gpt-6" },
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
     backendRevision: 1,

@@ -137,7 +137,7 @@ describe("build pipeline activity", () => {
     const observer = new BuildPipelineActivity(storage, { timers: NO_TIMERS });
     await observer.start();
 
-    await save(storage, pipeline("p1", "e1", "fixing"));
+    await save(storage, pipeline("p1", "e1", "reworking"));
     await observer.observe("p1");
     expect(await activity(storage, "e1")).toEqual({ source: "working", aggregate: "working" });
     expect(await activity(storage, "e2")).toEqual({ source: undefined, aggregate: "idle" });
@@ -337,7 +337,7 @@ describe("build pipeline activity", () => {
     test(`${transition} keeps the environment working while another pipeline runs`, async () => {
       const storage = await store();
       await save(storage, pipeline("p1", "e1", "building"));
-      await save(storage, pipeline("p2", "e1", "fixing"));
+      await save(storage, pipeline("p2", "e1", "reworking"));
       const { observer, timers } = watched(storage);
       await observer.start();
       if (transition === "delete") await storage.deleteBuildPipeline("p1");
@@ -391,7 +391,7 @@ describe("build pipeline activity", () => {
     const observed = spyOn(observer, "observe");
     try {
       await save(storage, pipeline("p1", "e1", "building"));
-      await save(storage, pipeline("p1", "e1", "fixing"));
+      await save(storage, pipeline("p1", "e1", "reworking"));
       await save(storage, pipeline("p1", "e1", "complete"));
       await timers.advance(499, observer);
       expect(observed).not.toHaveBeenCalled();
@@ -402,7 +402,7 @@ describe("build pipeline activity", () => {
       observer.stop();
       expect(timers.pending.size).toBe(0);
       await timers.advance(30_000, observer);
-      await save(storage, pipeline("p1", "e1", "fixing"));
+      await save(storage, pipeline("p1", "e1", "reworking"));
       expect(timers.pending.size).toBe(0);
       expect(observed).toHaveBeenCalledTimes(1);
     } finally {
@@ -457,7 +457,7 @@ describe("what a pipeline's end rings", () => {
     test(`a ${pauseCause} pause rings nothing`, async () => {
       expect(
         await ended(
-          pipeline("p1", "e1", "paused", { pausedFromPhase: "fixing", pauseCause, error: "x" }),
+          pipeline("p1", "e1", "paused", { pausedFromPhase: "reworking", pauseCause, error: "x" }),
         ),
       ).toBeNull();
     });
@@ -607,7 +607,7 @@ describe("what a pipeline's end rings", () => {
     const storage = await store();
     const observer = new BuildPipelineActivity(storage, { timers: NO_TIMERS });
     await save(storage, pipeline("p1", "e1", "building"));
-    await save(storage, pipeline("p2", "e1", "fixing"));
+    await save(storage, pipeline("p2", "e1", "reworking"));
     await observer.start();
     await save(storage, pipeline("p1", "e1", "failed", { error: "Build stage failed" }));
     await observer.observe("p1");

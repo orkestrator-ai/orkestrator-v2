@@ -34,7 +34,7 @@ async function world(): Promise<GraphCoordinatorWorld> {
 
 const opus = { agent: "claude", model: "opus" } as const;
 const sonnet = { agent: "claude", model: "sonnet" } as const;
-const rows = { reviewers: [opus, sonnet], reviewModel: opus, fixModel: opus };
+const rows = { reviewers: [opus, sonnet], reviewModel: opus, addressFindingsModel: opus };
 
 /** The coordinator's Multi Review button, as `launch_multi_review` invokes it. */
 async function launch(
@@ -78,7 +78,10 @@ describe("coordinator launch on the graph engine", () => {
     const result = await c.tool("launch_multi_review", {
       requestId: "mcp-launch",
       environmentId: c.w.environmentId,
-      ...rows,
+      // The tool's public field names (to-do 4740 task 3).
+      reviewers: rows.reviewers,
+      reviewModel: rows.reviewModel,
+      fixModel: rows.addressFindingsModel,
       autoPr: true,
     });
     expect(result.isError).not.toBe(true);
@@ -99,7 +102,7 @@ describe("coordinator launch on the graph engine", () => {
     expect(stored).toMatchObject({
       engine: "graph",
       graphRun: { runId: multiReviewGraphRunId(content.workflow.id) },
-      autoFix: true,
+      autoAddressFindings: true,
       autoPr: true,
     });
     // The run is bound from the same automation the record holds.
@@ -118,9 +121,9 @@ describe("coordinator launch on the graph engine", () => {
   test("an explicit auto-fix override wins over the saved default on the graph engine", async () => {
     const c = await world();
     await saveAutomationDefaults(c, { autoFix: true, autoPr: true });
-    const workflow = await launch(c, { autoFix: false });
+    const workflow = await launch(c, { autoAddressFindings: false });
     const stored = await c.w.workflow(workflow.id);
-    expect(stored).toMatchObject({ engine: "graph", autoFix: false, autoPr: true });
+    expect(stored).toMatchObject({ engine: "graph", autoAddressFindings: false, autoPr: true });
     const run = await c.w.run(
       await c.drive(workflow.id, (current) => current.phase !== "preparing"),
     );
@@ -202,7 +205,7 @@ describe("get_multi_review on a graph-engine record", () => {
   test("completed with its pull request reads exactly as a bespoke record", async () => {
     const c = await world();
     scriptGraphReview(c.w, { findings: true });
-    const workflow = await launch(c, { autoFix: true, autoPr: true });
+    const workflow = await launch(c, { autoAddressFindings: true, autoPr: true });
     const completed = await c.drive(workflow.id, (current) => current.graphRun?.settled === true);
     expect(completed.phase).toBe("completed");
     const both = await readBoth(c, completed);
@@ -260,7 +263,7 @@ describe("status wakes for a coordinator-launched graph-engine review", () => {
   test("auto-fix and auto-PR end in one completed wake that names the pull request", async () => {
     const c = await world();
     scriptGraphReview(c.w, { findings: true });
-    const workflow = await launch(c, { autoFix: true, autoPr: true });
+    const workflow = await launch(c, { autoAddressFindings: true, autoPr: true });
     const completed = await c.drive(workflow.id, (current) => current.graphRun?.settled === true);
     expect(completed.phase).toBe("completed");
     expect(await c.notices()).toEqual(["completed"]);
@@ -278,7 +281,7 @@ describe("status wakes for a coordinator-launched graph-engine review", () => {
   test("a clean report under auto-PR wakes once, for the pull request, not for ready", async () => {
     const c = await world();
     scriptGraphReview(c.w, { findings: false });
-    const workflow = await launch(c, { autoFix: false, autoPr: true });
+    const workflow = await launch(c, { autoAddressFindings: false, autoPr: true });
     const settled = await c.drive(workflow.id, (current) => current.graphRun?.settled === true);
     expect(settled.phase).toBe("ready");
     expect(settled.autoPrLaunch?.state).toBe("launched");
@@ -292,7 +295,7 @@ describe("status wakes for a coordinator-launched graph-engine review", () => {
   test("an Address Findings run that does not complete wakes once, failed", async () => {
     const c = await world();
     scriptGraphReview(c.w, { findings: true, complete: false });
-    const workflow = await launch(c, { autoFix: true, autoPr: true });
+    const workflow = await launch(c, { autoAddressFindings: true, autoPr: true });
     const failed = await c.drive(workflow.id, (current) => current.graphRun?.settled === true);
     expect(failed.phase).toBe("failed");
     expect(await c.notices()).toEqual(["failed"]);
@@ -347,7 +350,7 @@ describe("no saved revision of the run reads as an end the bespoke engine never 
   test("auto-fix: consolidation goes on to Address Findings and a completed Address Findings run to its pull request", async () => {
     const c = await world();
     scriptGraphReview(c.w, { findings: true });
-    const workflow = await launch(c, { autoFix: true, autoPr: true });
+    const workflow = await launch(c, { autoAddressFindings: true, autoPr: true });
     const revisions = watchRevisions(c, workflow.id);
     await c.drive(workflow.id, (current) => current.graphRun?.settled === true);
     // Not `ready:none:ready` after consolidation, and not
@@ -356,7 +359,7 @@ describe("no saved revision of the run reads as an end the bespoke engine never 
       "preparing:none:quiet",
       "reviewing:none:quiet",
       "consolidating:none:reviews-finished",
-      "fixing:none:quiet",
+      "addressing-findings:none:quiet",
       "completed:pending:quiet",
       "completed:launched:completed",
     ]);
@@ -365,7 +368,7 @@ describe("no saved revision of the run reads as an end the bespoke engine never 
   test("a clean report under auto-PR is pending its pull request from the save that holds it", async () => {
     const c = await world();
     scriptGraphReview(c.w, { findings: false });
-    const workflow = await launch(c, { autoFix: true, autoPr: true });
+    const workflow = await launch(c, { autoAddressFindings: true, autoPr: true });
     const revisions = watchRevisions(c, workflow.id);
     await c.drive(workflow.id, (current) => current.graphRun?.settled === true);
     // Not `ready:none:ready` ("found nothing to fix ... no Address Findings or PR session started").

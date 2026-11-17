@@ -4,6 +4,7 @@ import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
 import { resolveActionDefaults, resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import {
   isLaunchMultiReviewActionInput,
+  launchActionInputFromPublicFields,
   isMultiReviewWorkflow,
   type LaunchMultiReviewActionInput,
   type MultiReviewActionResult,
@@ -123,7 +124,14 @@ async function saveReviewOutcome(operation: OperationHandle, value: MultiReviewA
   return outcome;
 }
 
-type LaunchInput = Omit<LaunchMultiReviewActionInput, "requestId">;
+/** The CLI's `review.launch` input: the button action with the public Address Findings names. */
+type LaunchInput = Omit<
+  LaunchMultiReviewActionInput,
+  "requestId" | "addressFindingsModel" | "autoAddressFindings"
+> & {
+  fixModel?: LaunchMultiReviewActionInput["addressFindingsModel"];
+  autoFix?: boolean;
+};
 
 const reviewLaunch: MutationActionHandler<LaunchInput> = {
   kind: "mutation",
@@ -134,7 +142,14 @@ const reviewLaunch: MutationActionHandler<LaunchInput> = {
     const value = { ...input, environmentId } as LaunchInput;
     // The protocol's own validator of the button's request, as the
     // coordinator tool uses it.
-    if (!isLaunchMultiReviewActionInput({ ...value, requestId: "validate" })) {
+    // The CLI's wire fields keep the public names (`fixModel`, `autoFix`;
+    // to-do 4740 task 3), so the intent and its replay key stay as sent.
+    if (
+      !isLaunchMultiReviewActionInput({
+        ...launchActionInputFromPublicFields(value),
+        requestId: "validate",
+      })
+    ) {
       throw invalid(
         "Multi Review input is invalid: reviewers take {agent, model, reasoningEffort?, lens?: {label, instruction}} (label at most 64 characters, instruction at most 4 KiB); reviewModel and fixModel take {agent, model, reasoningEffort?}",
       );
@@ -150,7 +165,13 @@ const reviewLaunch: MutationActionHandler<LaunchInput> = {
         const reservedId = reviewLaunchId(operation.operationId);
         const launched = await context.invoke<MultiReviewActionResult>(
           "launch_controller_multi_review",
-          { input: { ...input, requestId: operation.operationId }, reservedId },
+          {
+            input: {
+              ...launchActionInputFromPublicFields(input),
+              requestId: operation.operationId,
+            },
+            reservedId,
+          },
         );
         return saveReviewOutcome(operation, launched);
       },

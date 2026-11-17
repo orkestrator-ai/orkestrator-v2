@@ -50,9 +50,9 @@ const failVerification = (provider: FakeProvider) => {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : phase === "build" || phase === "fix"
+        : phase === "build" || phase === "rework"
           ? TEST_REVIEW_PREPARATION
-          : phase === "address"
+          : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
             : { complete: false, rationale: "Still failing." }) as T,
     };
@@ -82,16 +82,16 @@ describe("restart_build_pipeline_step at the service", () => {
         service,
         storage,
         started.id,
-        (snapshot) => snapshot.phase === "fixing",
+        (snapshot) => snapshot.phase === "reworking",
       );
       expect(fixing.iteration).toBe(1);
       const failedFix = fixing.sessions[fixing.currentSessionIndex]!;
-      expect(failedFix.phase).toBe("fix");
+      expect(failedFix.phase).toBe("rework");
       const roundOne = fixing.sessions.filter((session) => session.iteration === 0);
       await failCurrentStep(storage, started.id, "Claude usage limit reached");
       const created = provider.created.length;
       // The new Fix keeps running, so later sessions come only from restarts.
-      provider.runningPhases.add("fix");
+      provider.runningPhases.add("rework");
 
       const {
         pipeline: restarted,
@@ -100,8 +100,8 @@ describe("restart_build_pipeline_step at the service", () => {
       } = await service.restartForCoordinator(started.id, undefined);
 
       expect(alreadyRestarted).toBe(false);
-      expect(step).toMatchObject({ phase: "fix", round: 2, sessionKey: failedFix.sessionKey });
-      expect(restarted.phase).toBe("fixing");
+      expect(step).toMatchObject({ phase: "rework", round: 2, sessionKey: failedFix.sessionKey });
+      expect(restarted.phase).toBe("reworking");
       expect(restarted.iteration).toBe(1);
       expect(restarted.error).toBeUndefined();
       expect(restarted.failureContext).toBeUndefined();
@@ -114,7 +114,7 @@ describe("restart_build_pipeline_step at the service", () => {
       expect(
         restarted.sessions.find((item) => item.sessionKey === failedFix.sessionKey)?.supersededBy,
       ).toBeDefined();
-      expect(provider.created.slice(created).map((entry) => entry.phase)).toEqual(["fix"]);
+      expect(provider.created.slice(created).map((entry) => entry.phase)).toEqual(["rework"]);
 
       // The same named step again is the restart already done: nothing reruns.
       const repeated = await service.restartForCoordinator(started.id, failedFix.sessionKey);
@@ -215,7 +215,7 @@ describe("restart_build_pipeline_step at the service", () => {
   });
 });
 
-test.each(["building", "fixing", "reviewing"] as const)(
+test.each(["building", "reworking", "reviewing"] as const)(
   "changes selection after a pre-session %s failure and deduplicates saved restarts",
   async (phase) => {
     await withService(async (service, storage, provider) => {
@@ -230,7 +230,7 @@ test.each(["building", "fixing", "reviewing"] as const)(
       });
       const earlier = (await pipeline(storage, started.id)).sessions;
       provider.runningPhases.add(
-        phase === "building" ? "build" : phase === "reviewing" ? "review" : "fix",
+        phase === "building" ? "build" : phase === "reviewing" ? "review" : "rework",
       );
       const selection = { agent: "claude" as const, model: "sonnet" };
       const first = await service.restartForCoordinator(
@@ -281,11 +281,11 @@ test("failed targets ignore a session from another phase and distinguish validat
     const snapshot = await pipeline(storage, started.id);
     snapshot.phase = "failed";
     snapshot.failureContext = {
-      phase: "fixing",
+      phase: "reworking",
       kind: "stage-transition",
       sessionId: session.sdkSessionId,
     };
-    expect(failedStepTarget(snapshot)).toEqual({ kind: "session", phase: "fix" });
+    expect(failedStepTarget(snapshot)).toEqual({ kind: "session", phase: "rework" });
     snapshot.failureContext = { phase: "building", kind: "stage-transition" };
     snapshot.validationRun = {
       id: "validation",

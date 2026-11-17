@@ -18,9 +18,18 @@ function deferred() {
 const rows = (model: string): MultiReviewLaunchDefaultRows => ({
   reviewers: [{ agent: "codex", model }],
   reviewModel: { agent: "codex", model },
-  fixModel: { agent: "codex", model },
-  autoFix: false,
+  addressFindingsModel: { agent: "codex", model },
+  autoAddressFindings: false,
   autoPr: false,
+});
+
+/** The dialog's selection, which keeps its own names for the Address Findings row. */
+const selection = (defaults: MultiReviewLaunchDefaultRows) => ({
+  reviewers: defaults.reviewers,
+  reviewModel: defaults.reviewModel,
+  fixModel: defaults.addressFindingsModel,
+  autoFix: defaults.autoAddressFindings,
+  autoPr: defaults.autoPr,
 });
 
 for (const transition of ["close", "reopen", "environment"] as const) {
@@ -54,9 +63,9 @@ for (const transition of ["close", "reopen", "environment"] as const) {
       rerender({ open: true, environmentId: transition === "environment" ? "second" : "first" });
       expect(result.current).toEqual({ status: "loading" });
       await act(async () => fresh.resolve(rows("current")));
-      expect(result.current).toEqual({ status: "ready", selection: rows("current") });
+      expect(result.current).toEqual({ status: "ready", selection: selection(rows("current")) });
       await act(async () => old.resolve(rows("obsolete")));
-      expect(result.current).toEqual({ status: "ready", selection: rows("current") });
+      expect(result.current).toEqual({ status: "ready", selection: selection(rows("current")) });
       expect(
         client.calls("get_multi_review_launch_defaults").map((call) => call.args.environmentId),
       ).toEqual(["first", transition === "environment" ? "second" : "first"]);

@@ -194,7 +194,7 @@ interface TreeSnapshots {
 export async function fileTreeCacheWorkload(context: WorkloadContext): Promise<WorkloadDefinition> {
   const trees = await context.loadOptional<{
     WorktreeTreeSnapshots: new (options: Json) => TreeSnapshots;
-  }>("apps/backend/src/core/worktree-tree-snapshots.ts");
+  }>("apps/backend/src/core/worktrees/tree-snapshots.ts");
   const metricsModule = await context.loadOptional<{
     RecurringWorkMetrics: new () => {
       snapshot(): { kinds: Record<string, Record<string, number>> };

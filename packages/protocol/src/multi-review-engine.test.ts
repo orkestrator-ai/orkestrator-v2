@@ -61,7 +61,7 @@ const bespoke = {
   projectId: "project-1",
   targetBranch: "main",
   reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
-  fixModel: { agent: "claude", model: "opus" },
+  addressFindingsModel: { agent: "claude", model: "opus" },
   phase: "reviewing",
   createdAt: new Date(0).toISOString(),
   updatedAt: new Date(0).toISOString(),
@@ -98,7 +98,7 @@ describe("stored Multi Review records", () => {
         ...bespoke,
         phase: "completed",
         consolidatedReport: report,
-        fixSession: session,
+        addressFindingsSession: session,
       }),
     ).toBe(true);
     // The graph engine's relaxations are graph-only: a bespoke Address Findings still needs
@@ -109,9 +109,9 @@ describe("stored Multi Review records", () => {
     expect(
       isMultiReviewWorkflow({
         ...bespoke,
-        phase: "fixing",
+        phase: "addressing-findings",
         consolidatedReport: report,
-        fixSession: session,
+        addressFindingsSession: session,
       }),
     ).toBe(false);
   });
@@ -138,15 +138,15 @@ describe("stored Multi Review records", () => {
   });
 
   test("a graph Address Findings is fixing from admission and completes without a journaled request", () => {
-    expect(isMultiReviewWorkflow({ ...graph, phase: "fixing", consolidatedReport: report })).toBe(
-      true,
-    );
+    expect(
+      isMultiReviewWorkflow({ ...graph, phase: "addressing-findings", consolidatedReport: report }),
+    ).toBe(true);
     expect(
       isMultiReviewWorkflow({
         ...graph,
         phase: "completed",
         consolidatedReport: report,
-        fixSession: session,
+        addressFindingsSession: session,
       }),
     ).toBe(true);
     // The report is still required, as for any review past consolidation.

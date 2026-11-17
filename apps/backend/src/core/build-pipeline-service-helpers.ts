@@ -174,10 +174,10 @@ export function discardSessionReviewReports(pipeline: BuildPipeline): void {
 export function stageAfterReview(
   report: StructuredReviewFindings,
 ):
-  | { sessionPhase: "address"; phase: "addressing" }
+  | { sessionPhase: "address-findings"; phase: "addressing-findings" }
   | { sessionPhase: "verify"; phase: "verifying" } {
   return report.issues.length > 0 || report.testCoverageGaps.length > 0
-    ? { sessionPhase: "address", phase: "addressing" }
+    ? { sessionPhase: "address-findings", phase: "addressing-findings" }
     : { sessionPhase: "verify", phase: "verifying" };
 }
 
@@ -474,12 +474,12 @@ export function sessionPhaseFor(phase: ResumableBuildPhase): PipelineSessionPhas
 export function executionModeOverrideForPhase(
   phase: ResumableBuildPhase,
 ): ProviderExecutionMode | undefined {
-  return phase === "addressing" ? "build" : undefined;
+  return phase === "addressing-findings" ? "build" : undefined;
 }
 
 /**
  * @param options.addressFindingsResult The Address session submits a typed fix result
- *   (`addressReportKind`); an older Address session has no result slot.
+ *   (`addressFindingsReportKind`); an older Address session has no result slot.
  */
 export function resumePromptFor(
   phase: ResumableBuildPhase,
@@ -490,11 +490,11 @@ export function resumePromptFor(
       return `Resume the build pipeline from where you left off. Continue implementing the original ticket, incorporate any messages sent while the pipeline was paused, validate the work as appropriate, and stop when the implementation is ready for review. ${REVIEW_PREPARATION_OUTPUT_CONTRACT} Do not ask questions; make sensible assumptions.`;
     case "reviewing":
       return "Resume the build pipeline review from where you left off. Continue reviewing the current changes against the original ticket and target branch, incorporate any messages sent while the pipeline was paused, and finish with the required structured review result. Use ordinary prose for interim progress and make the final assistant message the only structured report. Do not ask questions; make sensible assumptions.";
-    case "addressing":
+    case "addressing-findings":
       return `Resume addressing the review findings from where you left off. Incorporate any messages sent while the pipeline was paused, make the required code and test changes, and validate the result as appropriate.${options.addressFindingsResult ? " Commit every fix, then finish with the required fix result: the files you changed, the checks you ran with their results, the failures you fixed, and anything you left with its evidence." : ""} Do not ask questions; make sensible assumptions.`;
     case "verifying":
       return "Resume verification from where you left off. Re-check the current codebase against the original ticket and incorporate any messages sent while the pipeline was paused. Use ordinary prose for interim progress, never emit a provisional verdict, and make the final assistant message the only JSON object required by the verification instructions.";
-    case "fixing":
+    case "reworking":
       return `Resume fixing the verification failures from where you left off. Incorporate any messages sent while the pipeline was paused, finish the requested fixes, and validate the result as appropriate. ${REVIEW_PREPARATION_OUTPUT_CONTRACT} Do not ask questions; make sensible assumptions.`;
     case "creating-pr":
       if (options.deliveryPolicy === "push-no-pr") {

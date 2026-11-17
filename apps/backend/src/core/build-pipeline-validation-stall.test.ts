@@ -136,23 +136,23 @@ describe("a failed Verify the next round cannot fix", () => {
       const paused = await pipeline(storage, verifying.id);
       expect(paused).toMatchObject({
         phase: "paused",
-        pausedFromPhase: "fixing",
+        pausedFromPhase: "reworking",
         pauseCause: "supervisor",
         error: UNRELATED_FAILURES_PAUSE_MESSAGE,
         iteration: 1,
         verificationResult: "fail",
-        restartRequest: { kind: "session", phase: "fix" },
+        restartRequest: { kind: "session", phase: "rework" },
       });
       expect(paused.reviewPackage).toBeUndefined();
-      expect(provider.created.some((session) => session.phase === "fix")).toBe(false);
+      expect(provider.created.some((session) => session.phase === "rework")).toBe(false);
 
       await service.resume(verifying.id);
       await service.advanceNow(verifying.id);
 
       const fixing = await pipeline(storage, verifying.id);
-      expect(fixing.phase).toBe("fixing");
+      expect(fixing.phase).toBe("reworking");
       expect(fixing.restartRequest).toBeUndefined();
-      expect(fixing.sessions.at(-1)).toMatchObject({ phase: "fix", iteration: 1 });
+      expect(fixing.sessions.at(-1)).toMatchObject({ phase: "rework", iteration: 1 });
     });
   });
 });

@@ -110,7 +110,7 @@ export function routingDeliveryPrompt(probe: RoutingProbe): string {
  * Saved defaults for the case: every step, reviewer and Multi Review row on
  * this platform with the fewest reviewers a panel allows (as `status` does),
  * and the Multi Review auto-actions explicitly off, so the review workflow's
- * `autoFix` and `autoPr` record what the coordinator asked for.
+ * `autoAddressFindings` and `autoPr` record what the coordinator asked for.
  */
 export function routingAgentSettings(
   current: unknown,
@@ -269,7 +269,7 @@ export interface RoutingPipeline {
 export interface RoutingReview {
   id: string;
   environmentId?: string;
-  autoFix?: boolean;
+  autoAddressFindings?: boolean;
   autoPr?: boolean;
 }
 
@@ -654,11 +654,11 @@ export function evaluateRoutingReview(input: RoutingReviewInput): CoordinatorLiv
           launches.every((call) => call.args !== undefined) &&
           askedAutomation.length === 0 &&
           input.review !== undefined &&
-          input.review.autoFix !== true &&
+          input.review.autoAddressFindings !== true &&
           input.review.autoPr !== true,
         launches.some((call) => call.args === undefined)
           ? "a launch's arguments were unreadable"
-          : `requested ${askedAutomation.join(", ") || "neither"}; workflow autoFix ${input.review?.autoFix ?? "absent"}, autoPr ${input.review?.autoPr ?? "absent"}`,
+          : `requested ${askedAutomation.join(", ") || "neither"}; workflow autoAddressFindings ${input.review?.autoAddressFindings ?? "absent"}, autoPr ${input.review?.autoPr ?? "absent"}`,
       ),
     );
   } else {

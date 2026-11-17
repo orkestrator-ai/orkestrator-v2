@@ -27,7 +27,8 @@ export function findMultiReviewAddressFindingsReport(
 ): StructuredReviewReport | undefined {
   for (const workflow of workflows) {
     if (workflow.environmentId !== environmentId) continue;
-    if (!isMultiReviewAddressFindingsTabId(tabId, workflow.id, workflow.fixTabId)) continue;
+    if (!isMultiReviewAddressFindingsTabId(tabId, workflow.id, workflow.addressFindingsTabId))
+      continue;
     return workflow.consolidatedReport;
   }
   return undefined;

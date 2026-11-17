@@ -1,4 +1,4 @@
-import { eventSink } from "./backend-emit.js";
+import { eventSink } from "../backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import { DIFF_STATS_CHANGED_EVENT } from "@orkestrator/protocol/diff-stats";
 import {
@@ -19,21 +19,21 @@ import {
   type DiffScanResult,
   type DiffStatsServiceOptions,
   type DiffStatsTarget,
-} from "./diff-stats-service.js";
-import { ManualTime, deferred, flushMicrotasks, type Deferred } from "./recurring-test-support.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
-import { WorkAdmissionPool } from "./work-admission.js";
+} from "../diff-stats-service.js";
+import { ManualTime, deferred, flushMicrotasks, type Deferred } from "../recurring-test-support.js";
+import { RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { WorkAdmissionPool } from "../work-admission.js";
 import {
   startWorktreeWatcher,
   type WorktreeChangeHint,
   type WorktreeWatcherOptions,
-} from "./worktree-watcher.js";
+} from "./watcher.js";
 
 /**
  * The shared worktree snapshot owner: scan identity, joined reads, epoch
  * freshness, publication fences, file-list/tree revisions, failure and watcher
  * fallback, admission and lifecycle. Git and the filesystem are fakes here;
- * `worktree-snapshots-git.test.ts` drives real repositories.
+ * `snapshots-git.test.ts` drives real repositories.
  */
 
 type FakeWatcher = {

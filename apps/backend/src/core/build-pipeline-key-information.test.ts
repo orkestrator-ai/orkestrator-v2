@@ -109,7 +109,9 @@ describe("pipelineRecordForEnvironment", () => {
 
 describe("keyInformationAuthor", () => {
   test("follows the running phase, the paused phase, then the current session", () => {
-    expect(keyInformationAuthor(pipeline({ phase: "addressing" }))).toBe("address");
+    expect(keyInformationAuthor(pipeline({ phase: "addressing-findings" }))).toBe(
+      "address-findings",
+    );
     expect(keyInformationAuthor(pipeline({ phase: "paused", pausedFromPhase: "verifying" }))).toBe(
       "verify",
     );
@@ -119,14 +121,14 @@ describe("keyInformationAuthor", () => {
 
 describe("the key information host", () => {
   test("reads the owning pipeline's view and records an update as its stage and round", async () => {
-    const { host, store } = memoryHost([pipeline({ phase: "fixing", iteration: 1 })]);
+    const { host, store } = memoryHost([pipeline({ phase: "reworking", iteration: 1 })]);
 
     const before = await host.read(SCOPE);
     expect(before).toMatchObject({
       pipelineId: "pipeline-1",
       round: 2,
       maxRounds: 3,
-      author: "fix",
+      author: "rework",
       keyInformation: null,
     });
 
@@ -138,7 +140,7 @@ describe("the key information host", () => {
     expect(after.keyInformation?.issues).toEqual([
       { round: 1, issue: "A", resolution: "Done", status: "resolved" },
     ]);
-    expect(after.keyInformation?.updates.at(-1)).toMatchObject({ author: "fix", round: 1 });
+    expect(after.keyInformation?.updates.at(-1)).toMatchObject({ author: "rework", round: 1 });
     expect(store.get("pipeline-1")!.keyInformation).toEqual(after.keyInformation!);
   });
 
@@ -298,7 +300,7 @@ describe("what the supervisor records", () => {
       { iteration: 0 },
       { issues: [{ title: "Round one issue", severity: "P2" } as never] },
     );
-    subject.phase = "addressing";
+    subject.phase = "addressing-findings";
     applyAgentKeyInformationUpdate(subject, {
       issues: [{ issue: "Round one issue", resolution: "Fixed it", status: "resolved" }],
     });
@@ -357,7 +359,7 @@ describe("what the supervisor records", () => {
 
   test("a restart of Address keeps the round's issues and resolutions for it to revise", () => {
     const subject = briefedPipeline();
-    pruneKeyInformationAfterRewind(subject, 0, { kind: "session", phase: "address" });
+    pruneKeyInformationAfterRewind(subject, 0, { kind: "session", phase: "address-findings" });
     expectBuildNarrativeKept(subject);
     expect(subject.keyInformation?.issues.map((issue) => issue.resolution)).toEqual(["Fixed it"]);
     expect(subject.keyInformation?.verifications).toEqual([]);
@@ -368,7 +370,7 @@ describe("what the supervisor records", () => {
       { kind: "session", phase: "review" },
       { kind: "review-package", implementationPhase: "build" },
       { kind: "validation", implementationPhase: "build" },
-      { kind: "session", phase: "fix" },
+      { kind: "session", phase: "rework" },
     ] as const) {
       const subject = briefedPipeline();
       pruneKeyInformationAfterRewind(subject, 0, restart);
@@ -398,7 +400,7 @@ describe("what the supervisor records", () => {
     expect(subject.keyInformation?.solution).toBeUndefined();
   });
 
-  test.each(["review", "address", "verify", "pr", "resolve-conflicts"] as const)(
+  test.each(["review", "address-findings", "verify", "pr", "resolve-conflicts"] as const)(
     "a code rewind to %s clears sections without commit provenance",
     (phase) => {
       const subject = briefedPipeline();
@@ -593,7 +595,7 @@ describe("AgentToolsServer with a key information host", () => {
 
 describe("keyInformationInstruction", () => {
   test("requests evidence-based decision summaries and excludes private reasoning in every brief stage", () => {
-    for (const phase of ["build", "fix", "address", "verify"] as const) {
+    for (const phase of ["build", "rework", "address-findings", "verify"] as const) {
       const instruction = keyInformationInstruction(phase);
       expect(instruction).toContain("material technical decisions");
       expect(instruction).toContain("Do not perform reasoning extraction");
@@ -621,11 +623,11 @@ describe("keyInformationInstruction", () => {
     );
     expect(keyInformationInstruction("build")).toContain("never one long block");
     expect(keyInformationInstruction("build")).toContain("plain language");
-    expect(keyInformationInstruction("fix")).toContain("`summary`");
-    expect(keyInformationInstruction("address")).toContain("`summary`");
+    expect(keyInformationInstruction("rework")).toContain("`summary`");
+    expect(keyInformationInstruction("address-findings")).toContain("`summary`");
     expect(keyInformationInstruction("build")).toContain("pros and cons");
-    expect(keyInformationInstruction("fix")).toContain("update_key_information");
-    expect(keyInformationInstruction("address")).toContain("`issues`");
+    expect(keyInformationInstruction("rework")).toContain("update_key_information");
+    expect(keyInformationInstruction("address-findings")).toContain("`issues`");
     expect(keyInformationInstruction("verify")).toContain("`verification`");
     for (const phase of ["review", "pr", "resolve-conflicts"] as const) {
       expect(keyInformationInstruction(phase)).toBe("");

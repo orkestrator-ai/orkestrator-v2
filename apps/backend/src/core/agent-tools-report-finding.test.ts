@@ -77,7 +77,7 @@ function reviewing(resultKey: string): MultiReviewWorkflow {
         providerSessionId: "session-1",
       },
     ],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
     createdAt: "2026-10-16T00:00:00.000Z",
     updatedAt: "2026-10-16T00:00:00.000Z",
     backendRevision: 1,

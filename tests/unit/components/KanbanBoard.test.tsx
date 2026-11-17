@@ -163,9 +163,9 @@ describe("canClearTaskBuildStatus", () => {
     "waiting-for-setup",
     "building",
     "reviewing",
-    "addressing",
+    "addressing-findings",
     "verifying",
-    "fixing",
+    "reworking",
     "creating-pr",
     "resolving-conflicts",
   ])("is false while actively building (phase %s) even with links", (phase) => {

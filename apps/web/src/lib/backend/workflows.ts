@@ -188,7 +188,7 @@ export function createWorkflowsApi(client: BackendClient) {
     /** Only inherited defaults may be substituted when their provider is disconnected. */
     modelSource?: "default" | "explicit";
     reasoningEffort?: string;
-    phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
+    phase?: "build" | "review" | "verify" | "rework" | "pr" | "resolve-conflicts";
     /**
      * Overrides the mode the phase would imply, for a session whose phase-derived
      * mode does not match what it must do (a review session that has to commit
@@ -633,7 +633,7 @@ export function createWorkflowsApi(client: BackendClient) {
     model?: string;
     modelSource?: "default" | "explicit";
     reasoningEffort?: string;
-    phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
+    phase?: "build" | "review" | "verify" | "rework" | "pr" | "resolve-conflicts";
     prompt: string;
     requestId: string;
     images?: Array<{ filename: string; data: string }>;

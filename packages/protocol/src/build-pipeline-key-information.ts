@@ -38,9 +38,9 @@ export type KeyInformationIssueStatus = (typeof KEY_INFORMATION_ISSUE_STATUSES)[
 /** The stage that wrote an update; `system` is the backend's own record. */
 export const KEY_INFORMATION_AUTHORS = [
   "build",
-  "fix",
+  "rework",
   "review",
-  "address",
+  "address-findings",
   "verify",
   "pr",
   "resolve-conflicts",

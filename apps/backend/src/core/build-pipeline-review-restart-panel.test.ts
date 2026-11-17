@@ -57,7 +57,7 @@ describe("build pipeline restart keeps the panel", () => {
   test("restarting consolidation after the review moved on rebuilds the panel from its sessions", async () => {
     await withPipeline(async ({ service, read, provider }) => {
       const started = await service.start(startInput(PANEL));
-      const addressing = await advanceUntil(service, read, started.id, "addressing", 30);
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings", 30);
       expect(addressing.reviewFanout).toBeUndefined();
       const original = addressing.sessions.find((s) => s.label === "Consolidation")!;
       expect(original.reviewWorkspaceBaseline).toBeDefined();
@@ -67,7 +67,7 @@ describe("build pipeline restart keeps the panel", () => {
       original.reviewWorktreeChanged = true;
       expect(panelFromSessions(addressing, original)?.snapshotStale).toBe(true);
       const first = addressing.sessions.find((s) => s.label === "Consolidation")!;
-      const address = addressing.sessions.find((s) => s.phase === "address")!;
+      const address = addressing.sessions.find((s) => s.phase === "address-findings")!;
       provider.runningConsolidation = true;
 
       const restarted = await service.restartStep(started.id, first.sessionKey);
@@ -87,8 +87,8 @@ describe("build pipeline restart keeps the panel", () => {
       expect(restarted.structuredReview).toBeUndefined();
 
       provider.runningConsolidation = false;
-      expect((await advanceUntil(service, read, started.id, "addressing", 10)).phase).toBe(
-        "addressing",
+      expect((await advanceUntil(service, read, started.id, "addressing-findings", 10)).phase).toBe(
+        "addressing-findings",
       );
       expect(reviewerSessionCreates(provider)).toHaveLength(2);
     });
@@ -97,7 +97,7 @@ describe("build pipeline restart keeps the panel", () => {
   test("restarting a consolidation with a new model keeps the panel too", async () => {
     await withPipeline(async ({ service, read, provider }) => {
       const started = await service.start(startInput(PANEL));
-      const addressing = await advanceUntil(service, read, started.id, "addressing", 30);
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings", 30);
       const first = addressing.sessions.find((s) => s.label === "Consolidation")!;
 
       await service.restartStep(started.id, first.sessionKey, { agent: "claude", model: "haiku" });
@@ -181,11 +181,11 @@ describe("build pipeline restart keeps the panel", () => {
   test("restarting a reviewer after the review moved on rewinds to the panel", async () => {
     await withPipeline(async ({ service, read, provider }) => {
       const started = await service.start(startInput(PANEL));
-      await advanceUntil(service, read, started.id, "addressing", 30);
+      await advanceUntil(service, read, started.id, "addressing-findings", 30);
       // A running Address refuses the rerun; the user pauses first.
       const addressing = await service.pause(started.id);
       const reviewer = reviewerSession(addressing, "opus");
-      const address = addressing.sessions.find((s) => s.phase === "address")!;
+      const address = addressing.sessions.find((s) => s.phase === "address-findings")!;
 
       const restarted = await service.restartReviewer(started.id, reviewer.sessionKey);
 
@@ -196,8 +196,8 @@ describe("build pipeline restart keeps the panel", () => {
       ).toBeDefined();
       expect(reviewerSession(restarted, "sonnet").supersededBy).toBeUndefined();
 
-      expect((await advanceUntil(service, read, started.id, "addressing", 15)).phase).toBe(
-        "addressing",
+      expect((await advanceUntil(service, read, started.id, "addressing-findings", 15)).phase).toBe(
+        "addressing-findings",
       );
       expect(reviewerSessionCreates(provider)).toHaveLength(3);
     });
@@ -206,7 +206,7 @@ describe("build pipeline restart keeps the panel", () => {
   test("a reviewer of an earlier round cannot restart alone", async () => {
     await withPipeline(async ({ service, read, storage, provider }) => {
       const started = await service.start(startInput(PANEL));
-      const addressing = await advanceUntil(service, read, started.id, "addressing", 30);
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings", 30);
       const reviewer = reviewerSession(addressing, "opus");
       const record = await storage.getBuildPipeline(started.id);
       const pipeline = record!.snapshot as BuildPipeline;

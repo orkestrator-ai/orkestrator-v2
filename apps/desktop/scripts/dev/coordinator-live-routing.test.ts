@@ -283,7 +283,7 @@ describe("review case", () => {
     const checks = evaluateRoutingReview({
       ...base,
       messages: [row("launch_multi_review", { environmentId: "env-1" })],
-      review: { id: "r1", environmentId: "env-1", autoFix: false, autoPr: false },
+      review: { id: "r1", environmentId: "env-1", autoAddressFindings: false, autoPr: false },
     });
     expect(failedNames(checks)).toEqual([]);
   });

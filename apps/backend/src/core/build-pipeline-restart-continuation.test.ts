@@ -52,7 +52,7 @@ for (const toolMode of [false, true]) {
           await service.advanceNow(started.id);
           current = await read(started.id);
           if (outcome === "accepted") {
-            expect(current.phase).toBe("addressing");
+            expect(current.phase).toBe("addressing-findings");
             expect(current.structuredReview).toBeDefined();
             expect(
               provider.sent.filter((entry) => entry.sessionId === first.providerSessionId),
@@ -93,9 +93,9 @@ for (const toolMode of [false, true]) {
                 strictReport(result.value),
               );
             }
-            expect((await advanceUntil(service, read, started.id, "addressing")).phase).toBe(
-              "addressing",
-            );
+            expect(
+              (await advanceUntil(service, read, started.id, "addressing-findings")).phase,
+            ).toBe("addressing-findings");
           }
         },
         { toolMode },

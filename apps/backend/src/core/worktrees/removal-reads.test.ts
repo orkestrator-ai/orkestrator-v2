@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { WorktreeRemovalReads } from "./worktree-removal-reads.js";
+import { WorktreeRemovalReads } from "./removal-reads.js";
 
 test("removal fences path aliases and drains only that physical root", async () => {
   const reads = new WorktreeRemovalReads();

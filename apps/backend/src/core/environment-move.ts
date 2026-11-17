@@ -27,7 +27,7 @@ import { stopEnvironmentReviewValidation } from "./review-validation-service.js"
 import { pathExists, runCommand } from "./shell.js";
 import type { StorageService } from "./storage.js";
 import { cleanupEnvironmentTmux } from "./tmux-commands.js";
-import { getWorktreeBaseDir, validateWorktreeLocation } from "./worktree-locations.js";
+import { getWorktreeBaseDir, validateWorktreeLocation } from "./worktrees/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("environment");

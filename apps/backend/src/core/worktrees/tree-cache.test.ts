@@ -1,4 +1,4 @@
-import { eventSink } from "./backend-emit.js";
+import { eventSink } from "../backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import { WORKTREE_SNAPSHOT_CHANGED_EVENT } from "@orkestrator/protocol/worktree-snapshots";
 import {
@@ -8,22 +8,18 @@ import {
   type DiffScanResult,
   type DiffStatsServiceOptions,
   type DiffStatsTarget,
-} from "./diff-stats-service.js";
-import { ManualTime, deferred, flushMicrotasks, type Deferred } from "./recurring-test-support.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
-import {
-  measuredResponseDigest,
-  responseDigest,
-  treeMembershipDigest,
-} from "./worktree-snapshot-digest.js";
-import type { TreeWalkRequest } from "./worktree-adhoc-reads.js";
+} from "../diff-stats-service.js";
+import { ManualTime, deferred, flushMicrotasks, type Deferred } from "../recurring-test-support.js";
+import { RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { measuredResponseDigest, responseDigest, treeMembershipDigest } from "./snapshot-digest.js";
+import type { TreeWalkRequest } from "./adhoc-reads.js";
 
 /**
  * File-tree caching beyond the watched local case (plan step 18): container
  * trees bounded by a TTL plus the file list's membership signal, the ad hoc
  * tree value cache, identity/lifecycle fences and single serialization. Walks
  * and scans are counted fakes standing in for the directory walk and the
- * container `docker exec`s. `worktree-snapshots.test.ts` covers the shared
+ * container `docker exec`s. `snapshots.test.ts` covers the shared
  * owner's watched-tree behavior.
  */
 

@@ -233,7 +233,11 @@ async function fixture(script: Script = {}) {
     }
     const automation = script.reviewAutomation ? { autoFix: true, autoPr: true } : {};
     const reviewId = id("review");
-    reviews.push({ id: reviewId, environmentId, ...automation });
+    reviews.push({
+      id: reviewId,
+      environmentId,
+      ...(script.reviewAutomation ? { autoAddressFindings: true, autoPr: true } : {}),
+    });
     workflows.push({ kind: "multi-review", conversationId: "conversation", resourceId: reviewId });
     messages.push(
       tool("launch_multi_review", { requestId: id("request"), environmentId, ...automation }),
@@ -552,7 +556,7 @@ test("a review launched with auto-fix and auto-PR fails, from the call and the w
   const { checks } = await run({ reviewAutomation: true });
   expect(failed(checks)).toEqual(["review-auto-actions-off"]);
   expect(checks.find((item) => item.name === "review-auto-actions-off")?.detail).toBe(
-    "requested autoFix, autoPr; workflow autoFix true, autoPr true",
+    "requested autoFix, autoPr; workflow autoAddressFindings true, autoPr true",
   );
 });
 

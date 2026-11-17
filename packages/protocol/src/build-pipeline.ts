@@ -176,9 +176,9 @@ export type BuildPhase =
   | "waiting-for-setup"
   | "building"
   | "reviewing"
-  | "addressing"
+  | "addressing-findings"
   | "verifying"
-  | "fixing"
+  | "reworking"
   | "creating-pr"
   | "resolving-conflicts"
   | "paused"
@@ -187,13 +187,13 @@ export type BuildPhase =
 
 export type ResumableBuildPhase = Exclude<BuildPhase, "paused" | "complete" | "failed">;
 export type PipelineSessionPhase =
-  "build" | "review" | "address" | "verify" | "fix" | "pr" | "resolve-conflicts";
+  "build" | "review" | "address-findings" | "verify" | "rework" | "pr" | "resolve-conflicts";
 
 /** Durable handoff from an explicit UI restart to the background supervisor. */
 export type PipelineRestartRequest =
   | { kind: "session"; phase: PipelineSessionPhase }
-  | { kind: "review-package"; implementationPhase: "build" | "fix" }
-  | { kind: "validation"; implementationPhase: "build" | "fix" };
+  | { kind: "review-package"; implementationPhase: "build" | "rework" }
+  | { kind: "validation"; implementationPhase: "build" | "rework" };
 
 /**
  * Durable handoff from an explicit UI skip to the background supervisor: the
@@ -372,12 +372,13 @@ export function isSupersededPipelineSession(
 }
 
 /** The steps a launcher can configure independently. */
-export type BuildStepKey = "build" | "review" | "address" | "verify" | "pr" | "resolve-conflicts";
+export type BuildStepKey =
+  "build" | "review" | "address-findings" | "verify" | "pr" | "resolve-conflicts";
 
 export const BUILD_STEP_KEYS: readonly BuildStepKey[] = Object.freeze([
   "build",
   "review",
-  "address",
+  "address-findings",
   "verify",
   "pr",
   "resolve-conflicts",
@@ -484,13 +485,13 @@ export function isPipelineIndependentReviewLabel(label: string): boolean {
 /**
  * Which configured step owns a session phase.
  *
- * Every phase maps to its own step except `fix`: it re-implements against
+ * Every phase maps to its own step except `rework`: it re-implements against
  * verification feedback, which is build work, and it has no launcher control of
  * its own. Falling back to a repository default there would ignore the harness
  * the user just chose for the build.
  */
 export function stepKeyForSessionPhase(phase: PipelineSessionPhase): BuildStepKey {
-  if (phase === "fix") return "build";
+  if (phase === "rework") return "build";
   return phase;
 }
 
@@ -1032,18 +1033,18 @@ export interface PipelineSession {
   /**
    * The result kind this Address session was opened to submit
    * (`build-pipeline-address-findings-report.ts`). It is the recorded marker of the
-   * typed Address → Verify handoff: Verify reads {@link fixResult} from a
+   * typed Address → Verify handoff: Verify reads {@link addressFindingsResult} from a
    * session that has it, and the last assistant text from an Address session
    * without it (one started before the typed handoff existed). Absent on other
    * phases.
    */
-  addressReportKind?: PipelineAddressFindingsReportKind;
+  addressFindingsReportKind?: PipelineAddressFindingsReportKind;
   /**
    * The bounded copy of the `fix-result` this Address session submitted and
    * the backend accepted. Absent until then, on other phases, and on Address
-   * sessions without {@link addressReportKind}.
+   * sessions without {@link addressFindingsReportKind}.
    */
-  fixResult?: PipelineAddressFindingsResult;
+  addressFindingsResult?: PipelineAddressFindingsResult;
   /**
    * Why this session's attempt failed, at most
    * {@link MAX_PIPELINE_SESSION_ERROR_LENGTH} characters. Set for a fan-out
@@ -1086,7 +1087,7 @@ export interface PipelineSession {
    * and absent when the initial probe could not establish a fingerprint, which
    * disables the check for that stage.
    */
-  fixWorktreeFingerprintAtStart?: string;
+  reworkWorktreeFingerprintAtStart?: string;
   /**
    * First tick at which this session was idle with no structured result yet.
    * A turn that ends without ever producing one would otherwise poll forever.
@@ -1211,7 +1212,7 @@ export function isReviewPackagePreparationSession(
 ): boolean {
   if (!session) return false;
   if (session.label === REVIEW_PACKAGE_SESSION_LABEL) return true;
-  if (session.phase !== "build" && session.phase !== "fix") return false;
+  if (session.phase !== "build" && session.phase !== "rework") return false;
   if (session.producedReviewPackagePlan === true) return true;
   if (pipeline && (usesReviewFanout(pipeline) || pipeline.reviewPreparation)) {
     return false;
@@ -1230,7 +1231,7 @@ export function reviewValidationStage(
   if (
     !pipeline.validationRun ||
     pipeline.reviewPackage ||
-    (phase !== "building" && phase !== "fixing")
+    (phase !== "building" && phase !== "reworking")
   ) {
     return null;
   }
@@ -1632,9 +1633,9 @@ const BUILD_PHASES = new Set<BuildPhase>([
   "waiting-for-setup",
   "building",
   "reviewing",
-  "addressing",
+  "addressing-findings",
   "verifying",
-  "fixing",
+  "reworking",
   "creating-pr",
   "resolving-conflicts",
   "paused",
@@ -1646,9 +1647,9 @@ const ENVIRONMENT_TYPES = new Set<BuildPipelineEnvironmentType>(["containerized"
 const SESSION_PHASES = new Set<PipelineSessionPhase>([
   "build",
   "review",
-  "address",
+  "address-findings",
   "verify",
-  "fix",
+  "rework",
   "pr",
   "resolve-conflicts",
 ]);
@@ -1949,13 +1950,13 @@ function isPipelineSession(value: unknown): value is PipelineSession {
         value.verificationFeedback.length <= MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH)) &&
     (value.acceptanceCriteriaResults === undefined ||
       (value.phase === "verify" && isPipelineCriterionResults(value.acceptanceCriteriaResults))) &&
-    (value.addressReportKind === undefined ||
-      (value.phase === "address" &&
-        value.addressReportKind === PIPELINE_ADDRESS_FINDINGS_REPORT_KIND)) &&
-    (value.fixResult === undefined ||
-      (value.phase === "address" &&
-        value.addressReportKind !== undefined &&
-        isPipelineAddressFindingsResult(value.fixResult))) &&
+    (value.addressFindingsReportKind === undefined ||
+      (value.phase === "address-findings" &&
+        value.addressFindingsReportKind === PIPELINE_ADDRESS_FINDINGS_REPORT_KIND)) &&
+    (value.addressFindingsResult === undefined ||
+      (value.phase === "address-findings" &&
+        value.addressFindingsReportKind !== undefined &&
+        isPipelineAddressFindingsResult(value.addressFindingsResult))) &&
     (value.error === undefined ||
       (isNonBlankString(value.error) && value.error.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH)) &&
     (value.structuredResultStatus === undefined ||
@@ -1964,9 +1965,9 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.producedReviewPackagePlan === undefined ||
       typeof value.producedReviewPackagePlan === "boolean") &&
     hasValidValidationWorktreeBaseline(value) &&
-    (value.fixWorktreeFingerprintAtStart === undefined ||
-      (typeof value.fixWorktreeFingerprintAtStart === "string" &&
-        /^[0-9a-f]{64}$/i.test(value.fixWorktreeFingerprintAtStart))) &&
+    (value.reworkWorktreeFingerprintAtStart === undefined ||
+      (typeof value.reworkWorktreeFingerprintAtStart === "string" &&
+        /^[0-9a-f]{64}$/i.test(value.reworkWorktreeFingerprintAtStart))) &&
     (value.structuredWaitStartedAt === undefined || isIsoDate(value.structuredWaitStartedAt)) &&
     (value.restartContinuationSent === undefined ||
       typeof value.restartContinuationSent === "boolean") &&
@@ -2239,7 +2240,7 @@ function isPipelineRestartRequest(value: unknown): value is PipelineRestartReque
   return (
     (value.kind === "review-package" || value.kind === "validation") &&
     Object.keys(value).every((key) => key === "kind" || key === "implementationPhase") &&
-    (value.implementationPhase === "build" || value.implementationPhase === "fix")
+    (value.implementationPhase === "build" || value.implementationPhase === "rework")
   );
 }
 

@@ -4,6 +4,8 @@ Status: Living — the evidence log and design rationale of the live
 coordinator suite. Folded in from to-do 0024 (retired 2026-11-13, once its
 last agent tasks were built; read it with
 `git show 17d28238c:docs/todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md`).
+The `routing` scenario's evidence and decisions are folded in from to-do 7545
+(retired 2026-11-17), under "Routing scenario: evidence and decisions".
 How to run the suite and what each scenario checks is under
 [Live coordinator suite](agent-testing.md#live-coordinator-suite); the tiers it
 qualifies are in [`coordinator.md`](../architecture/coordinator.md#provider-qualification).
@@ -881,7 +883,11 @@ Made on 2026-10-25 while adding the `status` scenario and the tile checks.
   "Tests that exist today"), [`agent-messaging.md`](../architecture/agent-messaging.md)
   ("Routes", "Budgets", "Mail tools and approval settings", "Provider notes"),
   [`agent-testing.md`](agent-testing.md).
-- [Manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md): the human-only parts of to-do 0024 (tasks 1 to 5, the Cursor and Grok runs of task 6), cited as `0024 (retired)`. Record their results in this file.
+- [Manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md): the human-only parts of to-do 0024 (tasks 1 to 5, the Cursor and Grok runs of task 6), cited as `0024 (retired)`, and the billed `routing` reruns of to-do 7545, cited as `7545 (retired)`. Record their results in this file.
+- [4900-coordinator-over-delegation-and-read-rule.md](../todo/coordinator-and-multi-review/4900-coordinator-over-delegation-and-read-rule.md),
+  the opposite routing risk (a worker launched for a read).
+- [4920-coordinator-tool-surface-live-follow-ups.md](../todo/coordinator-and-multi-review/4920-coordinator-tool-surface-live-follow-ups.md)
+  task 3, launches that leave defaults alone (checked by the routing scenario).
 
 ## Replaces
 
@@ -925,3 +931,140 @@ Made on 2026-11-13 while building to-do 0024 tasks 6 and 7.
 - **Pin lines (task 7).** Options: correct them with the next live run, or
   now. The live runs moved to the checklist, so they were corrected now, in
   this file's Facts and Qualification sections.
+
+## Routing scenario: evidence and decisions
+
+Folded in from to-do 7545 (retired 2026-11-17, once its last agent task was
+built; read it with
+`git show 0265e7882:docs/todo/coordinator-and-multi-review/7545-coordinator-routing-live-scenario.md`).
+What each case checks and how to run it is under "Live coordinator suite" in
+[`agent-testing.md`](agent-testing.md#live-coordinator-suite); the loopback
+run is under
+[Coordinator routing (fake model)](agent-testing.md#coordinator-routing-fake-model).
+The billed reruns still owed (Codex, Pi and OpenCode) are on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md),
+cited as `7545 (retired)`; record their results here.
+
+### Live runs
+
+First run, 2026-11-08 against `main` at `30bce6895`, with
+`mise run test:agent:coordinator --credential-source <platform> --scenario routing`:
+
+| Case | Claude (`qa-coordinator-claude-b6c52667`, 5.5 min) | Codex 0.167.0 (`qa-coordinator-codex-b8dab28b`, 6.5 min) |
+| --- | --- | --- |
+| `build` | Passed: `create_ticket`, then `start_build_pipeline` on that ticket, no overrides | Passed, same calls |
+| `investigate` | Passed: one `launch_environment` | Passed: one `launch_environment` |
+| `review` | Failed as then written: `list_environments`, `get_worker_changes`, then an answer; no Multi Review | Failed as then written: `list_environments`, `get_worker_changes`, `launch_job`; no Multi Review |
+| `delivery` | Passed: build `complete` under `commit-only`, no PR session, no `create_pr` | Routing passed; the build failed in its review stage on an unsupported model for a ChatGPT login (to-do 7546, retired 2026-11-10) |
+
+Codex's wake turn after the harness cancelled case 1's build called
+`get_build_pipeline`, `restart_build_pipeline_step` and then
+`start_build_pipeline` again, which led to the cancel wording below.
+
+Repair-round run, 2026-11-09, one disposable profile per platform:
+
+- Claude (`qa-coordinator-claude-0100c814`): build, investigation and
+  commit-only delivery passed; review launched no Multi Review.
+- Codex (`qa-coordinator-codex-8dd0e54b`): build and investigation passed;
+  review launched a job instead of a Multi Review; delivery failed on to-do
+  7546's review model.
+- Pi (`qa-coordinator-pi-13f29ccd`): build, investigation and a Multi Review
+  of the named environment with auto-fix and auto-PR off passed; delivery's
+  review returned no structured result.
+- OpenCode (`qa-coordinator-opencode-3b006570`): started no ticket, build,
+  worker or Multi Review in any case (reads and listings only).
+- Cursor (`qa-coordinator-cursor-a44ee894`, run alone): passed every check,
+  including the Multi Review and commit-only delivery.
+
+Run one platform per `test:logged` command: the five-platform command hit its
+group's single 30-minute deadline during Cursor's first case.
+
+Under the relaxed `review` case (below), Claude's 2026-11-08 and 2026-11-09
+reviews would pass as `own-review`; Codex's would still fail
+`review-no-other-workflow`, because it also launched a job.
+
+### Loopback fake-model runs
+
+`mise run test:agent:coordinator:routing-fake` (Pi coordinator on a scripted
+model, credential-free profile):
+
+- 2026-11-10, `build` case only, profile `qa-coordinator-routing-fake-9891a106`:
+  passed, including `build-cancel-notice` and `build-cancel-respected`; the
+  fake saw exactly one wake, which called the cancel the user's decision and
+  offered no restart. A control with the cancel-wording backend files put back
+  to `04639b12b` failed `build-cancel-notice` as expected.
+- 2026-11-17, `build` and `review` cases, on `main` at `0265e7882` plus the
+  relaxed `review` case, profile `qa-coordinator-routing-fake-833abc05`
+  (beelink, Linux, headless): passed (`test:logged` 79.7 s; the cases 63.8 s;
+  Pi tier `enforced`). Every check passed; `review-handled` read "path
+  own-review: no Multi Review launched; 1 reads of the named environment's
+  changes, then a written answer", and the summary recorded
+  `review-path:own-review` 1. The fake served 9 completions, refused none,
+  called `list_environments` and `get_worker_changes` once each in the review
+  case, launched no Multi Review, and saw the one cancelled wake from the
+  build case. The runner stopped and removed the profile.
+
+### Decisions
+
+- **How far each case runs.** Cases 1 and 3 judge the first workflow call and
+  the records it made, then the harness cancels the build or review; case 4
+  runs its build to the end. Case 2's worker is let run to its report, so its
+  wake cannot land in a later case. Between cases the harness waits until the
+  coordinator has been idle, with nothing queued or held, for 20 seconds.
+- **One scenario.** One `routing` scenario with four ordered cases (one
+  profile boot); each case records its checks and a `<case>-finished` check
+  before the next starts.
+- **Who sets `commit-only` in case 4.** The harness patches the new ticket's
+  delivery once the build has started; asking for it in words would test a
+  different claim.
+- **What case 2 asks.** A question only a run of the fixture project's check script can answer,
+  so reading the source cannot answer it.
+- **"Go ahead without checking with me".** Every request ends with it, and a
+  unit test fails if a request names a workflow, ticket, launch tool or pull
+  request.
+- **Saved defaults.** Every step and reviewer on the platform under test,
+  the fewest reviewers a panel allows, and the Multi Review auto-actions off,
+  so the review record shows what the coordinator asked for. The project's
+  `coordinatorOtherEnvironments` opt-in is on from case 3 only.
+- **Evidence.** A delegation needs a successful worker call plus exactly one
+  new backend delegation request; case transcripts accumulate by stable
+  message id and fail closed on a projection gap.
+- **A cancelled build is the user's decision (task 4).** The status wake
+  reports a cancelled build as its own `cancelled` notice, never `failed`,
+  says a cancel the coordinator did not make is the user's, and offers only
+  `get_build_pipeline`; `restart_build_pipeline_step` and
+  `resume_build_pipeline` refuse in the same words (#2001, #2057; see
+  [coordinator.md](../architecture/coordinator.md#status-wakes)). Refusing a
+  coordinator's rebuild outright was not built: it needs a way for the user
+  to lift it and cannot tell the user's cancel from the coordinator's own.
+
+### The review case accepts the coordinator's own review
+
+Decided by the user on 2026-11-14: leave `COORDINATOR_ENVIRONMENT_CHOICE_RULE`
+as it is and let the coordinator choose by the size of the change. The other
+option, a rule sentence telling the coordinator to launch a Multi Review for
+every review request, was not taken: it costs context on every turn and a
+reviewer panel for a change one read can cover.
+
+Built on 2026-11-17. The `review` case now passes on either path and records
+which one it took:
+
+- `multi-review`: exactly one Multi Review launched on the named environment,
+  with auto-fix and auto-PR off in the call and the record (as before).
+  `review-auto-actions-off` is judged only on this path.
+- `own-review`: no Multi Review, at least one successful `get_worker_changes`
+  call on the named environment, and assistant text written after the first
+  such read.
+- Anything else is `none` and fails `review-handled`. `review-no-other-workflow`
+  still fails a ticket, build, worker, job, feature plan or graph on either
+  path: a job can change the reviewed branch, so it is not counted as the
+  coordinator's own review.
+
+The summary records `review-path:<path>` and `review:own-reads`. The loopback
+fake model now reviews the harness's change itself, so
+`mise run test:agent:coordinator:routing-fake` runs the `build` and `review`
+cases and requires `review-path:own-review` (passed on 2026-11-17, above).
+The do-nothing path is covered by the verdict's unit tests and the scripted
+transport (`coordinator-live-routing-orchestration.test.ts`), which fail
+`review-handled` with path `none`. Which path a real model picks needs the
+billed reruns on the checklist.

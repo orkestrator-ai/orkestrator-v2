@@ -46,6 +46,12 @@ type Script = {
   investigateBuilds?: boolean;
   /** The review is launched with auto-fix and auto-PR on. */
   reviewAutomation?: boolean;
+  /**
+   * The review request is answered without a Multi Review: `own` reads the
+   * named environment's changes and writes an answer; `neither` only lists
+   * environments and answers.
+   */
+  reviewWithoutMultiReview?: "own" | "neither";
   /** The finished build opens a PR whatever its ticket says. */
   ignoresDelivery?: boolean;
   /** One case's coordinator turn fails. */
@@ -217,6 +223,14 @@ async function fixture(script: Script = {}) {
     const environmentId = environments.find((item) =>
       String(item.name).startsWith("routing-review-"),
     )!.id as string;
+    if (script.reviewWithoutMultiReview) {
+      messages.push(tool("mcp__orkestrator__list_environments", { projectId: "project" }));
+      if (script.reviewWithoutMultiReview === "own") {
+        messages.push(tool("mcp__orkestrator__get_worker_changes", { environmentId }));
+      }
+      messages.push({ role: "assistant", parts: [{ type: "text", content: "Looks fine." }] });
+      return;
+    }
     const automation = script.reviewAutomation ? { autoFix: true, autoPr: true } : {};
     const reviewId = id("review");
     reviews.push({ id: reviewId, environmentId, ...automation });
@@ -540,6 +554,32 @@ test("a review launched with auto-fix and auto-PR fails, from the call and the w
   expect(checks.find((item) => item.name === "review-auto-actions-off")?.detail).toBe(
     "requested autoFix, autoPr; workflow autoFix true, autoPr true",
   );
+});
+
+test("a coordinator that reviews the change itself passes, and the path is recorded", async () => {
+  const { checks, observed, commands } = await run({ reviewWithoutMultiReview: "own" });
+  expect(failed(checks)).toEqual([]);
+  expect(checks.find((item) => item.name === "review-handled")?.detail).toBe(
+    "path own-review: no Multi Review launched; 1 reads of the named environment's changes, then a written answer",
+  );
+  expect(checks.some((item) => item.name === "review-auto-actions-off")).toBe(false);
+  expect(observed).toMatchObject({ "review-path:own-review": 1, "review:own-reads": 1 });
+  expect(observed["review-path:multi-review"]).toBeUndefined();
+  expect(commands.some((item) => item.command === "cancel_multi_review")).toBe(false);
+});
+
+test("a Multi Review records its path", async () => {
+  const { observed } = await run();
+  expect(observed).toMatchObject({ "review-path:multi-review": 1, "review:own-reads": 0 });
+});
+
+test("a coordinator that neither reviews nor launches a Multi Review fails the review case", async () => {
+  const { checks, observed } = await run({ reviewWithoutMultiReview: "neither" });
+  expect(failed(checks)).toEqual(["review-handled"]);
+  expect(checks.find((item) => item.name === "review-handled")?.detail).toBe(
+    "path none: no Multi Review launched; 0 reads of the named environment's changes, no written answer after them",
+  );
+  expect(observed).toMatchObject({ "review-path:none": 1, "review:own-reads": 0 });
 });
 
 test("a commit-only build that opens a PR fails", async () => {

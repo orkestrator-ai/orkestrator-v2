@@ -559,7 +559,7 @@ they move many files that other work in flight touches.
   `opencode-display-transcript.ts`, which its `opencode2/` scan now covers;
   bare names in source comments in and outside the folder, the root
   `AGENTS.md` OpenCode row (its `opencode2-*.ts` glob no longer names any
-  root file), seven architecture docs, to-do 7545, the `opencode2/index.ts`
+  root file), seven architecture docs, to-do 7545 (since retired), the `opencode2/index.ts`
   header and `linting.md`. Flake records keep the codemod's path rewrites, as
   in the earlier slices. `apps/backend/tests/opencode2-container-server.test.ts`
   and the `opencode2/opencode2-*.live.test.ts` files keep their names: they

@@ -374,7 +374,7 @@ description = "Auto-pipeline launch flow end to end on a disposable Pi-only prof
 run = "bun apps/desktop/scripts/test-agent-auto-pipeline.ts"
 
 [tasks."test:agent:coordinator:routing-fake"]
-description = "Coordinator routing build case (a cancelled build is not restarted) on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
+description = "Coordinator routing build and review cases (a cancelled build is not restarted; a coordinator's own review of a small change passes) on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
 run = "bun apps/desktop/scripts/test-agent-coordinator-routing-fake.ts"
 
 [tasks."test:agent:coordinator:surfaces-fake"]

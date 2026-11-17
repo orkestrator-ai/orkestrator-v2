@@ -26,6 +26,7 @@ import {
   routingDeliveryPrompt,
   routingEnvironmentName,
   routingInvestigatePrompt,
+  routingReviewPath,
   routingReviewPrompt,
   routingRestartCallCounts,
   routingToolCalls,
@@ -285,7 +286,7 @@ export async function runRoutingScenario(input: {
   const steps: Record<RoutingCase, () => Promise<void>> = {
     // 1. A specified change: ticket, then build. Cancelled once the call is
     // judged, as the user's Cancel does; the wake that follows must not
-    // restart it (to-do 7545 task 4).
+    // restart it (to-do 7545 (retired) task 4, #2057).
     async build() {
       const { fresh } = await buildCase("build");
       const judged = new Set(caseRows().map((row) => row.id));
@@ -370,7 +371,9 @@ export async function runRoutingScenario(input: {
       await settle("the coordinator after the investigation");
     },
 
-    // 3. A review request: one Multi Review, its auto-actions off. Cancelled once judged.
+    // 3. A review request: one Multi Review with its auto-actions off
+    // (cancelled once judged), or the coordinator's own review of the change.
+    // The path taken is recorded (to-do 7545 (retired) task 3).
     async review() {
       const previousOtherEnvironments =
         config.repositories[projectId]?.coordinatorOtherEnvironments;
@@ -421,16 +424,18 @@ export async function runRoutingScenario(input: {
       const review = (await reads.reviews(target.environmentId)).find(
         (workflow) => workflow.id === fresh.reviews[0],
       );
-      checks.push(
-        ...evaluateRoutingReview({
-          messages: rows,
-          target,
-          newReviewIds: fresh.reviews,
-          ...(review ? { review } : {}),
-          newTickets: fresh.tickets.length,
-          newPipelines: fresh.pipelines.length,
-        }),
-      );
+      const reviewInput = {
+        messages: rows,
+        target,
+        newReviewIds: fresh.reviews,
+        ...(review ? { review } : {}),
+        newTickets: fresh.tickets.length,
+        newPipelines: fresh.pipelines.length,
+      };
+      const taken = routingReviewPath(reviewInput);
+      observed[`review-path:${taken.path}`] = 1;
+      observed["review:own-reads"] = taken.reads;
+      checks.push(...evaluateRoutingReview(reviewInput));
       for (const workflowId of fresh.reviews) {
         await invoke("cancel_multi_review", { workflowId });
       }

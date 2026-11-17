@@ -1,7 +1,8 @@
 /**
  * A cancelled build or review is reported to its coordinator as someone's
- * decision to stop the work, never as a failure to recover from (to-do 7545
- * task 4: a Codex coordinator restarted a build the user had cancelled).
+ * decision to stop the work, never as a failure to recover from (#2057, to-do
+ * 7545 (retired) task 4: a Codex coordinator restarted a build the user had
+ * cancelled).
  */
 import { describe, expect, test } from "bun:test";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
@@ -107,7 +108,7 @@ describe("refusals a coordinator gets on a cancelled build", () => {
     expect(message).toContain("was cancelled, so it cannot be restarted");
     expect(message).toContain("the user did");
     expect(message).toContain("do not start another build for this ticket unless the user asks");
-    // The wording Codex followed into a second build (to-do 7545 task 4).
+    // The wording Codex followed into a second build (to-do 7545 (retired) task 4, #2057).
     expect(message).not.toContain("Start a new build if the work is still wanted");
   });
 

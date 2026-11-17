@@ -1,6 +1,6 @@
 /**
  * The script of the coordinator routing fake model
- * (`coordinator-routing-fake-model.ts`, to-do 7545 task 4): what a Pi
+ * (`coordinator-routing-fake-model.ts`, to-do 7545 (retired) task 4): what a Pi
  * coordinator on a loopback model does with the routing scenario's `build`
  * request, and with the status wake that follows when the harness cancels the
  * build. Pure, so the rules have unit tests that need no provider.
@@ -14,6 +14,11 @@
  *   come from the conversation itself: the project id from the coordinator
  *   context, the base from the launch options, the ticket id from the
  *   `create_ticket` result.
+ * - The review request (it begins "Review the work on the branch"; to-do
+ *   7545 (retired) task 3): the coordinator's own review of the small change,
+ *   as the user decided a coordinator may choose for a small diff. `list_environments`,
+ *   then `get_worker_changes` on the environment the request names (its id
+ *   from the list), then a written answer. No Multi Review is launched.
  * - A wake (a peer-message carrier): one line of text, and nothing else. What
  *   the wake said is counted (`WakeFacts`) so the spec can prove the cancelled
  *   notice reached the model's prompt with the wording the backend sends. The
@@ -53,9 +58,12 @@ export interface ScriptedTurn {
 export const FAKE_REPLY = "Done.";
 export const FAKE_BUILD_REPLY = "Started a build for it.";
 export const FAKE_WAKE_REPLY = "Noted.";
+export const FAKE_REVIEW_REPLY = "Reviewed the change: one new file, nothing needs attention.";
 
 const CARRIER = "<orkestrator-peer-message";
 const BUILD_MARKER = "clampPercent";
+const REVIEW_MARKER = "Review the work on the branch";
+const REVIEW_TARGET = /\(environment ([^)\n]{1,200})\)/;
 const PROJECT_ID = /Project: [^\n]*?\(id ([A-Za-z0-9_-]{1,200})\)/;
 const COMMIT = /^[0-9a-f]{40}$/i;
 
@@ -146,7 +154,10 @@ export function scriptedTurn(request: { messages: unknown; tools?: unknown }): S
       ...(results.length === 0 ? { wake: wakeFacts(prompt) } : {}),
     };
   }
-  if (!prompt.includes(BUILD_MARKER)) return { step: { kind: "text", text: FAKE_REPLY } };
+  const review = prompt.includes(REVIEW_MARKER);
+  if (!review && !prompt.includes(BUILD_MARKER)) {
+    return { step: { kind: "text", text: FAKE_REPLY } };
+  }
 
   const context = list
     .slice(0, lastUser + 1)
@@ -162,6 +173,7 @@ export function scriptedTurn(request: { messages: unknown; tools?: unknown }): S
       : { step: { kind: "text", text: `The ${name} tool is not offered.` } };
   };
   if (!projectId) return { step: { kind: "text", text: "No project id in the context." } };
+  if (review) return reviewTurn(prompt, projectId, results, tool);
   if (results.length === 0) return tool("get_launch_options", { projectId });
   if (results.length === 1)
     return tool("create_ticket", {
@@ -194,4 +206,26 @@ export function scriptedTurn(request: { messages: unknown; tools?: unknown }): S
     });
   }
   return { step: { kind: "text", text: FAKE_BUILD_REPLY } };
+}
+
+/** The review request: list, read the named environment's change, answer. */
+function reviewTurn(
+  prompt: string,
+  projectId: string,
+  results: readonly string[],
+  tool: (name: string, input: Record<string, unknown>) => ScriptedTurn,
+): ScriptedTurn {
+  if (results.length === 0) return tool("list_environments", { projectId });
+  if (results.length === 1) {
+    const name = REVIEW_TARGET.exec(prompt)?.[1];
+    const environments = resultJson(results[0]!)?.environments;
+    const target = (Array.isArray(environments) ? environments : [])
+      .map(record)
+      .find((environment) => environment?.name === name);
+    const environmentId = typeof target?.id === "string" ? target.id : undefined;
+    if (!environmentId)
+      return { step: { kind: "text", text: "The named environment is not listed." } };
+    return tool("get_worker_changes", { environmentId });
+  }
+  return { step: { kind: "text", text: FAKE_REVIEW_REPLY } };
 }

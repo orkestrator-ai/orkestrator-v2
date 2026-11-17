@@ -186,7 +186,7 @@ function findingCounts(report: unknown): { line: string; total: number } {
 /**
  * What a cancelled Multi Review's notice tells its coordinator; the build
  * pipeline's counterpart is `BUILD_CANCELLED_NOTICE`. A cancel is someone's
- * decision to stop the work, whoever sent it (to-do 7545 task 4).
+ * decision to stop the work, whoever sent it (to-do 7545 (retired) task 4, #2057).
  */
 export const MULTI_REVIEW_CANCELLED_NOTICE =
   "It was stopped on purpose, not by an error. If you did not cancel it yourself, the user did: that is their decision to stop this review. Do not launch it again unless the user asks you to.";

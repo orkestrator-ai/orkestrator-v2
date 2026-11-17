@@ -7,7 +7,7 @@
  *
  * A cancelled build is reported as cancelled, never as failed: a cancel is
  * someone's decision to stop the work, and a coordinator that read it as a
- * failure restarted it (to-do 7545 task 4).
+ * failure restarted it (to-do 7545 (retired) task 4, #2057).
  */
 import {
   BUILD_CANCELLED_ERROR,

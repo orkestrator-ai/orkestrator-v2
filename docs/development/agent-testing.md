@@ -1971,6 +1971,27 @@ Its Vite-served renderer is exposed to
 [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
 while other work starts or stops containers; the `file://` renderer is not.
 
+Two things a spec has to do the way the app does (to-do 8301, retired
+2026-11-17, found both on mbp3's display):
+
+- **Reload a window after switching its connection.** A Local window's
+  `window.orkestrator` uses the direct gateway transport by default, and its
+  address is fixed when the page loads. The app reloads after a connect or
+  switch (`reloadAfterConnectionChange`); a spec that calls
+  `orkestrator.connections.connect` or `use` and then sends commands from the
+  same page must `reload()` it and wait for the API first. Otherwise the
+  commands still go to the Local backend, which no longer authorizes that
+  window, and fail with `TypeError: Failed to fetch` (the renderer console says
+  CORS). `service-preview-electron.spec.ts`'s remote terminal link case does
+  this.
+- **Do not wait for `document.exitFullscreen()` right after entering
+  fullscreen on macOS.** On a real display `requestFullscreen()` resolves
+  while the window is still animating into its own Space, and an exit issued
+  then never settles (3 of 3 runs; it settled 2 of 2 after a 5 s wait).
+  `renderer-permissions-electron.spec.ts` bounds that cleanup and runs each
+  in-page step as its own `executeJavaScript` with a 20 s budget, so a step
+  that hangs is named in the failure.
+
 `window-visibility-polls-electron.spec.ts` checks that a real window pauses
 the renderer's polls (`startCoordinatedPoll`) while its document is hidden.
 It spawns Electron itself rather than through `electron.launch()`: a page

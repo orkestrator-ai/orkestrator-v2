@@ -9,12 +9,12 @@ import {
   WATCH_PLAN_MAX_IGNORED_CANDIDATES,
   WATCH_PLAN_MAX_IGNORED_TREE_DIRECTORIES,
   type WorktreeWatchPlanIo,
-} from "../src/core/worktree-watch-plan";
+} from "../src/core/worktrees/watch-plan";
 import {
   startWorktreeWatcher,
   type WorktreeChangeHint,
   type WorktreeWatcherOptions,
-} from "../src/core/worktree-watcher";
+} from "../src/core/worktrees/watcher";
 
 /**
  * Real Git, real `fs.watch`, on whatever platform this runs on: this file is how

@@ -305,7 +305,7 @@ lost the selection to a seeded terminal; fixed (decision 23). See
 
 **Context.** Under `dev:test` a save was detected at p50 516 to 649 ms. Batched in 0031 under macOS and the Electron window.
 
-**Investigation.** `apps/backend/src/core/worktree-watcher.ts:150` still calls `watch(target, { recursive, persistent: false }, ...)` and degrades when recursion is unavailable (`:19`). The injectable `watch` (`:73`) allows a deterministic failure test; the live gap is the real FSEvents behaviour.
+**Investigation.** `apps/backend/src/core/worktrees/watcher.ts:150` still calls `watch(target, { recursive, persistent: false }, ...)` and degrades when recursion is unavailable (`:19`). The injectable `watch` (`:73`) allows a deterministic failure test; the live gap is the real FSEvents behaviour.
 
 **Decisions.**
 

@@ -20,7 +20,7 @@ import {
   SharedScanQueue,
   SharedWatcherRegistry,
 } from "./change-tracking/index.js";
-import { startWorktreeWatcher } from "./worktree-watcher.js";
+import { startWorktreeWatcher } from "./worktrees/index.js";
 import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import { localGitScanCacheGauges } from "./local-git-scan-caches.js";

@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
-import type { WorktreeWatchPlanIo } from "./worktree-watch-plan.js";
-import type { WatchHandle } from "./watch-host.js";
+import type { WorktreeWatchPlanIo } from "./watch-plan.js";
+import type { WatchHandle } from "../watch-host.js";
 import {
   startWorktreeWatcher,
   type StartWatch,
   type WorktreeChangeHint,
   type WorktreeWatcher,
-} from "./worktree-watcher.js";
+} from "./watcher.js";
 
 /**
  * A rebuilt macOS FSEvents stream loses events under every other watch

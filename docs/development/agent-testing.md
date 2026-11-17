@@ -4282,7 +4282,8 @@ mise run test:agent:coordinator --credential-source codex --scenario routing
    workflow record has both off (the run's saved Multi Review defaults are off,
    so the record shows what the coordinator asked for); the harness cancels the
    review. `own-review`: no Multi Review, a successful `get_worker_changes` on
-   that environment, and a written answer after it. Doing neither fails, and
+   that environment with diff output enabled (neither `includeDiff: false` nor
+   `maxDiffFiles: 0`), and a written answer after it. Doing neither fails, and
    on either path `review-no-other-workflow` fails any ticket, build, worker
    or job. The summary records `review-path:<multi-review|own-review|none>`
    and `review:own-reads`.

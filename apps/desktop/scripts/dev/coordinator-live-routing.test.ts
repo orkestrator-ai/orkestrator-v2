@@ -368,6 +368,36 @@ describe("review case", () => {
       expect(routingReviewPath(input)).toEqual({ path: "own-review", reads: 1, answered: true });
     });
 
+    test.each([{ includeDiff: false }, { maxDiffFiles: 0 }])(
+      "a metadata-only read does not qualify: %j",
+      (options) => {
+        const metadata = row("get_worker_changes", { environmentId: "env-1", ...options });
+        const input = { ...own, messages: [metadata, text("Looks fine.")] };
+        expect(failedNames(evaluateRoutingReview(input))).toEqual(["review-handled"]);
+        expect(routingReviewPath(input)).toEqual({ path: "none", reads: 0, answered: false });
+        // The metadata read must not anchor an answer before a later qualifying read.
+        expect(routingReviewPath({ ...own, messages: [...input.messages, read("env-1")] })).toEqual(
+          { path: "none", reads: 1, answered: false },
+        );
+      },
+    );
+
+    test("plain string assistant content counts only after a qualifying read", () => {
+      const answer: CoordinatorTranscriptMessage = { role: "assistant", content: "Looks fine." };
+      const input = { ...own, messages: [read("env-1"), answer] };
+      expect(failedNames(evaluateRoutingReview(input))).toEqual([]);
+      expect(routingReviewPath(input)).toEqual({ path: "own-review", reads: 1, answered: true });
+      for (const messages of [
+        [answer, read("env-1")],
+        [read("env-1"), { role: "assistant", content: "  \n " }],
+        [read("env-1"), { role: "user", content: "Looks fine." }],
+      ]) {
+        expect(failedNames(evaluateRoutingReview({ ...own, messages }))).toEqual([
+          "review-handled",
+        ]);
+      }
+    });
+
     test("an answer in the read's own row counts only when it follows the read", () => {
       const after: CoordinatorTranscriptMessage = {
         role: "assistant",

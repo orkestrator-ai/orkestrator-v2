@@ -30,8 +30,8 @@ import { carrierRowIndex, statusReviewAgentSettings } from "./coordinator-live-s
  *    passes: `launch_multi_review` on that environment with `autoFix` and
  *    `autoPr` absent or false, which the backend's workflow record must
  *    confirm (the harness cancels the review), or its own review, a
- *    successful `get_worker_changes` on that environment followed by a
- *    written answer. Doing neither fails, and the path taken is recorded.
+ *    successful `get_worker_changes` on that environment with diff output enabled,
+ *    followed by a written answer. Doing neither fails, and the path taken is recorded.
  * 4. `delivery`: case 1 again, with the harness setting the new ticket's
  *    delivery to `commit-only` once the build has started. Expected: the same
  *    routing as case 1, then the build runs to `complete` with no PR stage.
@@ -566,23 +566,25 @@ function textAfter(
 /** The path a review case took, read from its calls and records. */
 export function routingReviewPath(input: RoutingReviewInput): {
   path: RoutingReviewPath;
-  /** Successful reads of the named environment's changes. */
+  /** Successful reads of the named environment's changes with diff output enabled. */
   reads: number;
   /** Whether a written answer followed the first of those reads. */
   answered: boolean;
 } {
   const calls = routingToolCalls(input.messages);
-  const reads = named(calls, OWN_REVIEW_TOOLS).filter(
-    (call) => call.state === "success" && call.args?.environmentId === input.target.environmentId,
-  );
+  const qualifies = (state: unknown, args: Record<string, unknown> | undefined): boolean =>
+    state === "success" &&
+    args?.environmentId === input.target.environmentId &&
+    args.includeDiff !== false &&
+    args.maxDiffFiles !== 0;
+  const reads = named(calls, OWN_REVIEW_TOOLS).filter((call) => qualifies(call.state, call.args));
   // A read inside a grouped or sub-agent call counts at its parent part.
   const isRead = (part: Record<string, unknown>, depth: number): boolean => {
     if (depth > 8) return false;
     if (
       typeof part.toolName === "string" &&
       OWN_REVIEW_TOOLS.includes(toolBaseName(part.toolName)) &&
-      part.toolState === "success" &&
-      toolArgsRecord(part.toolArgs)?.environmentId === input.target.environmentId
+      qualifies(part.toolState, toolArgsRecord(part.toolArgs))
     ) {
       return true;
     }

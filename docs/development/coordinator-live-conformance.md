@@ -1053,8 +1053,9 @@ which one it took:
   with auto-fix and auto-PR off in the call and the record (as before).
   `review-auto-actions-off` is judged only on this path.
 - `own-review`: no Multi Review, at least one successful `get_worker_changes`
-  call on the named environment, and assistant text written after the first
-  such read.
+  call on the named environment with diff output enabled (neither
+  `includeDiff: false` nor `maxDiffFiles: 0`), and assistant text written after
+  the first such read.
 - Anything else is `none` and fails `review-handled`. `review-no-other-workflow`
   still fails a ticket, build, worker, job, feature plan or graph on either
   path: a job can change the reviewed branch, so it is not counted as the

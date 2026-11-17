@@ -71,3 +71,31 @@ stalled. This is a raised budget for genuinely heavy work, which is weaker
 evidence than a fix, so the case stays `open`. Why Chromium starts so slowly
 on the runner (first-run work, the binary chosen from the candidate list) is
 not known; the next recurrence or a timed launch on a runner should show it.
+
+## Review execution evidence (2026-11-17)
+
+The changed integration file was explicitly executed on macOS, outside the
+default tier (which excludes it):
+
+```sh
+mise run test:logged -- --name fix-shadow-text -- bun --cwd=apps/desktop test ./tests/browser-preview-shadow-text.integration.test.ts --parallel=1 --only-failures
+```
+
+It passed in 3.8 s. A second run exercised the same real spec and Chromium
+with `chromium.launch` wrapped by a test preload: the wrapper awaits 46,000 ms,
+then invokes the original launch with its original arguments. This keeps
+the suite's own phase timer and `beforeAll` budget active throughout the delay;
+no watchdogs or assertions are replaced. The measured launch phase was
+46,331 ms, exceeding the former 45 s watchdog. All 19 tests and 76 assertions
+passed, with zero skips, in 49.8 s.
+
+```sh
+mise run test:logged -- --name fix-shadow-text-delayed -- bun --cwd=apps/desktop test --preload ../../output/agent-testing/address-review/delayed-chromium.ts ./tests/browser-preview-shadow-text.integration.test.ts --parallel=1 --reporter=junit --reporter-outfile=../../output/agent-testing/address-review/shadow-delayed.xml
+```
+
+The preload, `delayed-launch.json` and `shadow-delayed.xml` are retained in
+the ignored `output/agent-testing/address-review/` directory. This proves
+that the real suite executes without skipping and that setup can exceed
+45 s within the new 120 s / 180 s budgets. The delay is injected, not an
+observed slow OS launch, and this is not a Linux slow-launch reproduction.
+The original runner-specific cause remains unknown and the case stays open.

@@ -40,8 +40,42 @@
 - **Reproduced:** yes — the new unit test `a helper that leaves shortly after
   a settled close counts as closed, not killed`
   (`tests/unit/electron-spec-process-ownership.test.ts`) closes a fake whose
-  helper outlives the root by about a second. Without the fix it fails with
+  helper outlives the root. Without the fix it fails with
   `Expected: "closed"`, `Received: "killed"`; with it, it passes. The real
   Electron run on Linux was not repeated here (macOS host).
 - **Stress:** not run; the unit file passed alone
   (`bun test tests/unit/electron-spec-process-ownership.test.ts`).
+
+## Review repair and qualification (2026-11-17)
+
+The original fixture's `sleep 1` began before process enumeration and close,
+so scheduling could spend the helper's lifetime before the assertion. The
+helper now waits on an explicit release file. The fake close observes the
+root's exit and the helper still alive, then releases the helper to exit
+naturally after 100 ms. The test deliberately waits 1,200 ms after readiness
+before invoking close, longer than the original helper's entire lifetime.
+The intermediate liveness assertion and final `closed` assertion are retained.
+
+- **Focused:** `mise run test:logged -- --name fix-helper-ownership -- bun test ./tests/unit/electron-spec-process-ownership.test.ts --parallel=1 --only-failures`
+  passed (12.8 s).
+- **CPU contention:** five repetitions of the whole owner, with four owned
+  Python busy-loop processes running throughout, passed: 65 tests, 250
+  assertions, zero failures or skips (62.8 s). Each load process was stopped
+  through its recorded process handle in `finally`.
+  Command: `mise run test:logged -- --name fix-helper-cpu-load -- python3 output/agent-testing/address-review/helper-cpu-load.py`.
+  The ignored wrapper runs `bun test ./tests/unit/electron-spec-process-ownership.test.ts --parallel=1 --rerun-each=5 --reporter=junit --reporter-outfile=output/agent-testing/address-review/helper-load.xml`.
+- **Real Linux/Xvfb evidence:** the already-completed
+  [Native menu run 43971417069](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/43971417069/job/133664246277)
+  tested branch commit `ca513ae7fdf63372899721a296d4fb1ecb176da5`, including
+  the two-second helper grace, with five repeats and no retries. Its
+  [artifact 14279815596](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/43971417069/artifacts/14279815596)
+  reports four complete passes of the renderer-log case (22.839, 22.452,
+  22.134 and 21.767 s), each including the clean-close and code-zero checks.
+  The remaining repeat failed earlier in the DevTools check with `Object
+  has been destroyed`, before shutdown. The job overall had 23 passes and
+  two failures; this evidence qualifies the clean-quit path, not the whole
+  job. No additional Linux execution was launched from this macOS host.
+
+Evidence is saved locally under `output/agent-testing/address-review/`:
+`helper-load.xml`, `linux-native-menu-43971417069.zip` and
+`linux-quit-evidence.json`. Original review-validation artifacts are unchanged.

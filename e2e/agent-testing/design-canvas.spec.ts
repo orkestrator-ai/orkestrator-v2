@@ -399,7 +399,7 @@ test("private canvases survive reload and can be retired to recover quota", asyn
     await expect(
       page.frameLocator('iframe[title="Private screen"]').getByRole("heading"),
     ).toHaveText("Private changes");
-    await page.getByRole("button", { name: /^Close Design/ }).click();
+    await page.getByRole("button", { name: /^Close Private canvas \d+$/ }).click();
     await page.reload();
     await selectEnvironment();
     await openLibrary();
@@ -409,12 +409,12 @@ test("private canvases survive reload and can be retired to recover quota", asyn
     await expect(
       page.frameLocator('iframe[title="Private screen"]').getByRole("heading"),
     ).toHaveText("Private changes");
-    await page.getByRole("button", { name: /^Close Design/ }).click();
+    await page.getByRole("button", { name: /^Close Private canvas \d+$/ }).click();
     await openLibrary();
     await page.getByRole("button", { name: /^Existing private canvas/ }).click();
     await page.getByRole("button", { name: "Open beside", exact: true }).click();
     await expect(page.getByText("Existing private canvas", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: /^Close Design/ }).click();
+    await page.getByRole("button", { name: /^Close Existing private canvas \d+$/ }).click();
     await page.getByRole("button", { name: "New design workspace" }).click();
     await page.getByRole("tab", { name: "Open design", exact: true }).click();
     const importPath = join(status.testProject, "private-import.orkdes");
@@ -436,7 +436,7 @@ test("private canvases survive reload and can be retired to recover quota", asyn
     await writeFile(importPath, JSON.stringify({ ...existing, name: "Imported private canvas" }));
     await chooseFile();
     await expect(page.getByText("Imported private canvas", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: /^Close Design/ }).click();
+    await page.getByRole("button", { name: /^Close Imported private canvas \d+$/ }).click();
     await page.reload();
     await selectEnvironment();
     await page.setViewportSize({ width: 720, height: 900 });
@@ -449,7 +449,7 @@ test("private canvases survive reload and can be retired to recover quota", asyn
     await page.getByRole("button", { name: /^Imported private renamed/ }).click();
     await page.getByRole("button", { name: "Open beside", exact: true }).click();
     await expect(page.getByText("Imported private renamed", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: /^Close Design/ }).click();
+    await page.getByRole("button", { name: /^Close Imported private renamed \d+$/ }).click();
     await page.setViewportSize({ width: 1440, height: 900 });
 
     const result = await invoke<{ value: { quota: { live: number; liveLimit: number } } }>(

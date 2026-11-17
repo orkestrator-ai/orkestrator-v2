@@ -1,4 +1,5 @@
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
+import { sanitizeDesignAgentPanel } from "@/stores/pane-layout-embedded";
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { parseChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import { isGitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
@@ -176,8 +177,11 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     value.initialConversationMode === "plan" || value.initialConversationMode === "build"
       ? value.initialConversationMode
       : undefined;
+  const embeddedIn = nonEmptyString(value.embeddedIn);
   const common = {
     id,
+    // The pane store drops it again if the design tab is not in the same pane.
+    ...(embeddedIn ? { embeddedIn } : {}),
     displayTitle: optionalString(value.displayTitle),
     isReviewTab: optionalBoolean(value.isReviewTab),
     ...(value.jobCompletionAction === "refresh-pr-after-agent-completion"
@@ -226,7 +230,12 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     if (!isRecord(value.designCanvasData)) return null;
     const canvasId = nonEmptyString(value.designCanvasData.canvasId);
     if (!canvasId || !/^[0-9a-f-]{36}$/i.test(canvasId)) return null;
-    return { id, type: "design-canvas", designCanvasData: { canvasId } };
+    const agentPanel = sanitizeDesignAgentPanel(value.designCanvasData.agentPanel);
+    return {
+      id,
+      type: "design-canvas",
+      designCanvasData: { canvasId, ...(agentPanel ? { agentPanel } : {}) },
+    };
   }
 
   if (type === "graph-designer") {

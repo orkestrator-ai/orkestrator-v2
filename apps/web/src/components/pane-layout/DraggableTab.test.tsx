@@ -23,6 +23,8 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { appCommandStore } from "@/test/app-command-store";
+import { designStore, emptyProjection } from "@/stores/designStore";
+import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
 
 const realSortableSnapshot = { ...realSortable };
 
@@ -101,6 +103,43 @@ describe("DraggableTab title precedence", () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  test("a design tab is named after its design, with the tab number after it", () => {
+    const canvasId = "00000000-0000-4000-8000-000000000001";
+    const tab: TabInfo = { id: "design", type: "design-canvas", designCanvasData: { canvasId } };
+    const render = () =>
+      renderInAppCommandScope(
+        <DraggableTab
+          tab={tab}
+          environmentId="env-1"
+          paneId="pane-1"
+          index={0}
+          isActive={false}
+          canClose
+          onSelect={() => {}}
+        />,
+      );
+    appCommandStore(designStore).setState({ projections: new Map() });
+    render();
+    // Until the canvas has loaded there is no name to show.
+    expect(screen.getByText("Design 1")).toBeTruthy();
+    cleanup();
+    const key = `local|env-1|${canvasId}`;
+    appCommandStore(designStore).setState({
+      projections: new Map([
+        [
+          key,
+          {
+            ...emptyProjection(key, "env-1", canvasId),
+            canvas: { name: "Checkout flow" } as DesignCanvas,
+          },
+        ],
+      ]),
+    });
+    render();
+    expect(screen.getByText("Checkout flow 1")).toBeTruthy();
+    appCommandStore(designStore).setState({ projections: new Map() });
   });
 
   test("key-information uses the pipeline title and amber document icon", () => {

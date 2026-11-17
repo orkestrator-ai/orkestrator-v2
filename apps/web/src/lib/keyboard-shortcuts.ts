@@ -72,6 +72,12 @@ export const DESIGN_KEYBOARD_SHORTCUTS: readonly KeyboardShortcut[] = [
     other: ["Ctrl", "0"],
   },
   {
+    id: "design-agent-panel",
+    description: "Show or hide the agent panel",
+    mac: ["⌘", "."],
+    other: ["Ctrl", "."],
+  },
+  {
     id: "design-preview",
     description: "Toggle preview mode",
     mac: ["P"],

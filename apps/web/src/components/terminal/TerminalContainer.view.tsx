@@ -52,6 +52,7 @@ import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { isDesignFilePath, openDesignFile } from "@/components/design/design-open-file";
 import { designApiFor } from "@/lib/design-client";
 import { openDesignCanvasTab } from "@/components/design/design-open-tab";
+import { visibleTabsOf } from "@/stores/pane-layout-embedded";
 import { openGraphDesignerTab } from "@/components/graph-designer/graph-designer-open-tab";
 import { openGraphRunTab } from "@/components/graph-run/graph-run-open-tab";
 import { openAutoPipelineTab } from "@/components/review/auto-pipeline-open-tab";
@@ -1870,8 +1871,10 @@ export function TerminalContainer({
   const handleSelectTab = useCallback(
     (index: number) => {
       const activePane = getActivePane(environmentId);
-      if (activePane && index >= 0 && index < activePane.tabs.length) {
-        const tab = activePane.tabs[index];
+      // Numbered like the strip, which hides agents embedded in a design.
+      const tabs = activePane ? visibleTabsOf(activePane.tabs) : [];
+      if (activePane && index >= 0 && index < tabs.length) {
+        const tab = tabs[index];
         if (tab) {
           paneLayouts.getState().setActiveTab(activePaneId, tab.id, environmentId);
         }

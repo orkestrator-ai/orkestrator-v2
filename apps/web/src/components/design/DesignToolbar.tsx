@@ -1,7 +1,9 @@
 import { useRef, useState, type Ref } from "react";
 import {
+  BotMessageSquare,
   Download,
   Eye,
+  Focus,
   History,
   Keyboard,
   Layers,
@@ -15,7 +17,6 @@ import {
   Plus,
   Redo2,
   Save,
-  Scan,
   SquarePlus,
   Undo2,
   type LucideIcon,
@@ -64,6 +65,9 @@ export interface DesignToolbarProps {
   onRename: (name: string) => void;
   onAskAgent: () => void;
   onShortcuts: () => void;
+  /** Whether the design tab's agent panel shows; omitted when the tab has none. */
+  agentPanelOpen?: boolean;
+  onToggleAgentPanel?: () => void;
 }
 
 function RenameField({
@@ -171,7 +175,8 @@ function toolsOf(props: DesignToolbarProps): DesignTool[] {
     {
       id: "fit-selection",
       label: "Zoom to selection",
-      icon: Scan,
+      // Fit all is the bare frame corners; this one has a target inside them.
+      icon: Focus,
       title: "Zoom to selection (Shift+2)",
       disabled: !props.hasSelection,
       onSelect: props.onFitSelection,
@@ -352,6 +357,19 @@ export function DesignToolbar(props: DesignToolbarProps) {
       >
         <Layers className="size-4" />
       </Button>
+      {props.onToggleAgentPanel && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className={iconClass}
+          aria-label={props.agentPanelOpen ? "Hide agent panel" : "Show agent panel"}
+          aria-pressed={props.agentPanelOpen}
+          title={`${props.agentPanelOpen ? "Hide" : "Show"} agent panel (Ctrl/⌘+.)`}
+          onClick={props.onToggleAgentPanel}
+        >
+          <BotMessageSquare className="size-4" />
+        </Button>
+      )}
       {canvas ? (
         <RenameField
           key={canvas.name}

@@ -10,10 +10,10 @@ import {
 } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
-import { paneLayoutStore, usePaneLayoutStore } from "@/stores";
+import { usePaneLayoutStore } from "@/stores";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useTerminalPortalNodeId, useTerminalPortalStore } from "@/stores/terminalPortalStore";
-import type { MultiReviewTabData, PaneLeaf } from "@/types/paneLayout";
+import type { MultiReviewTabData, NativeAgentData, PaneLeaf, TabInfo } from "@/types/paneLayout";
 import {
   createPaneTabElementId,
   createTabbarDroppableId,
@@ -40,10 +40,8 @@ import {
   type LazyLoadErrorDetails,
 } from "@/components/LazyLoadBoundary";
 import { LazyAgentNativeTab } from "@/components/native-agent/LazyAgentNativeTab";
+import { DesignCanvasPaneTab, type EmbeddedAgentView } from "./DesignCanvasPaneTab";
 
-const LazyDesignCanvasTab = lazy(async () => ({
-  default: (await import("@/components/design/DesignCanvasTab")).DesignCanvasTab,
-}));
 const LazyFileViewerTab = lazy(async () => ({
   default: (await import("@/components/terminal/FileViewerTab")).FileViewerTab,
 }));
@@ -265,6 +263,60 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
     [],
   );
 
+  const renderNativeAgentTab = (
+    tab: TabInfo,
+    nativeAgentData: NativeAgentData,
+    view: EmbeddedAgentView & { laidOut: boolean },
+  ) => (
+    <div
+      key={`${environmentId}:${tab.id}`}
+      className={cn(
+        "absolute inset-0 flex flex-col",
+        view.laidOut ? "z-10 pointer-events-auto" : "hidden",
+      )}
+    >
+      {/*
+        App reuses the foreground TerminalContainer when the user
+        selects another environment. Pane and tab ids are only
+        unique inside an environment, so the whole stateful subtree
+        must be remounted to avoid carrying banner, error-boundary,
+        or optimistic prompt state into the next environment.
+      */}
+      <FloatingNoticeLayer
+        columnRem={TRANSCRIPT_COLUMN_REM}
+        anchorClassName={AGENT_TAB_NOTICE_POSITION}
+      >
+        <AgentMailBanner environmentId={environmentId} tabId={tab.id} />
+        <div className="relative min-h-0 flex-1">
+          <LazyLoadBoundary
+            loadingFallback={renderTabFallback(view.isActive)}
+            renderError={renderTabError(view.isActive)}
+          >
+            <LazyAgentNativeTab
+              tabId={tab.id}
+              data={nativeAgentData}
+              isActive={view.isActive}
+              hiddenByLayout={view.hiddenByLayout}
+              ownsGlobalShortcuts={view.ownsGlobalShortcuts}
+              initialPrompt={tab.initialPrompt}
+              isReviewTab={tab.isReviewTab}
+              hideStructuredOutput={tab.hideStructuredOutput}
+              initialAgentPlatform={tab.initialAgentPlatform}
+              initialAgentModel={tab.initialAgentModel}
+              initialReasoningEffort={tab.initialReasoningEffort}
+              initialConversationMode={tab.initialConversationMode}
+              initialFastMode={tab.initialFastMode}
+              initialExecutionProfileId={tab.initialExecutionProfileId}
+              agentHandoffId={tab.agentHandoffId}
+              consumedAgentHandoffId={tab.consumedAgentHandoffId}
+              refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
+            />
+          </LazyLoadBoundary>
+        </div>
+      </FloatingNoticeLayer>
+    </div>
+  );
+
   return (
     <div
       ref={containerRef}
@@ -338,26 +390,26 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
             );
           }
 
+          // An agent embedded in a design tab is rendered by that tab's panel.
+          if (tab.embeddedIn && pane.tabs.some((host) => host.id === tab.embeddedIn)) return null;
+
           if (tab.type === "design-canvas" && tab.designCanvasData) {
             return (
-              <LazyLoadBoundary
+              <DesignCanvasPaneTab
                 key={tab.id}
+                tab={{ ...tab, designCanvasData: tab.designCanvasData }}
+                paneTabs={pane.tabs}
+                environmentId={environmentId}
+                isTabActive={isTabActive}
+                isActive={isActive}
+                hiddenByLayout={hiddenByLayout}
+                ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
                 loadingFallback={renderTabFallback(isTabActive && isActive)}
                 renderError={renderTabError(isTabActive && isActive)}
-              >
-                <LazyDesignCanvasTab
-                  canvasId={tab.designCanvasData.canvasId}
-                  environmentId={environmentId}
-                  isActive={isTabActive && isActive}
-                  ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
-                  onClose={() => {
-                    // Closing the tab never deletes the design.
-                    const layoutStore = launchScope.store(paneLayoutStore).getState();
-                    const owner = layoutStore.findPaneWithTab(tab.id, environmentId);
-                    if (owner) layoutStore.removeTab(owner.id, tab.id, environmentId);
-                  }}
-                />
-              </LazyLoadBoundary>
+                renderAgent={(embedded, data, view) =>
+                  renderNativeAgentTab(embedded, data, { ...view, laidOut: true })
+                }
+              />
             );
           }
 
@@ -448,55 +500,12 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
 
           const nativeAgentData = getNativeAgentData(tab);
           if (nativeAgentData) {
-            return (
-              <div
-                key={`${environmentId}:${tab.id}`}
-                className={cn(
-                  "absolute inset-0 flex flex-col",
-                  isTabLaidOut ? "z-10 pointer-events-auto" : "hidden",
-                )}
-              >
-                {/*
-                  App reuses the foreground TerminalContainer when the user
-                  selects another environment. Pane and tab ids are only
-                  unique inside an environment, so the whole stateful subtree
-                  must be remounted to avoid carrying banner, error-boundary,
-                  or optimistic prompt state into the next environment.
-                */}
-                <FloatingNoticeLayer
-                  columnRem={TRANSCRIPT_COLUMN_REM}
-                  anchorClassName={AGENT_TAB_NOTICE_POSITION}
-                >
-                  <AgentMailBanner environmentId={environmentId} tabId={tab.id} />
-                  <div className="relative min-h-0 flex-1">
-                    <LazyLoadBoundary
-                      loadingFallback={renderTabFallback(isTabActive && isActive)}
-                      renderError={renderTabError(isTabActive && isActive)}
-                    >
-                      <LazyAgentNativeTab
-                        tabId={tab.id}
-                        data={nativeAgentData}
-                        isActive={isTabActive && isActive}
-                        hiddenByLayout={isTabActive && hiddenByLayout}
-                        ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
-                        initialPrompt={tab.initialPrompt}
-                        isReviewTab={tab.isReviewTab}
-                        hideStructuredOutput={tab.hideStructuredOutput}
-                        initialAgentPlatform={tab.initialAgentPlatform}
-                        initialAgentModel={tab.initialAgentModel}
-                        initialReasoningEffort={tab.initialReasoningEffort}
-                        initialConversationMode={tab.initialConversationMode}
-                        initialFastMode={tab.initialFastMode}
-                        initialExecutionProfileId={tab.initialExecutionProfileId}
-                        agentHandoffId={tab.agentHandoffId}
-                        consumedAgentHandoffId={tab.consumedAgentHandoffId}
-                        refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
-                      />
-                    </LazyLoadBoundary>
-                  </div>
-                </FloatingNoticeLayer>
-              </div>
-            );
+            return renderNativeAgentTab(tab, nativeAgentData, {
+              isActive: isTabActive && isActive,
+              hiddenByLayout: isTabActive && hiddenByLayout,
+              ownsGlobalShortcuts: isTabActive && isActive && isPaneFocused,
+              laidOut: isTabLaidOut,
+            });
           }
 
           // Claude tmux chat tabs

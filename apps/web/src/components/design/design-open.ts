@@ -101,7 +101,8 @@ export type DesignLaunchPlan =
 
 /**
  * Preflight for creating a new design: checked before any durable resource
- * exists so a refusal never leaves an orphan canvas behind.
+ * exists so a refusal never leaves an orphan canvas behind. The agent tab is
+ * embedded in the design tab but is still a tab, so it counts toward the limit.
  */
 export function planDesignLaunch(options: {
   environmentReady: boolean;
@@ -123,7 +124,7 @@ export function planDesignLaunch(options: {
     };
   if (!options.facts.hasCurrentPane)
     return { ok: false, reason: "no-pane", message: "There is no pane to open the design in." };
-  if (!options.facts.canSplit)
-    return { ok: true, placement: "current", notice: SPLIT_FALLBACK_MESSAGE };
-  return { ok: true, placement: "split" };
+  // The agent sits inside the design tab, so a new design needs no split:
+  // it opens as a tab of the current pane.
+  return { ok: true, placement: "current" };
 }

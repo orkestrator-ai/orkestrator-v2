@@ -853,7 +853,7 @@ describe("DesignWorkspaceDialog", () => {
     expect(createTab.mock.calls).toHaveLength(1);
     expect(createTab.mock.calls[0]?.[1]).toMatchObject({
       canvasId: canvas.id,
-      designPlacement: "split",
+      designPlacement: "current",
     });
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });

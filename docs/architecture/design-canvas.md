@@ -39,7 +39,7 @@ while the pane layout deliberately never stores prompts.
 Images pasted into the **New design** brief are written into the environment
 (`.orkestrator/clipboard/`, like a composer paste). They travel as attachments
 of the queued prompt, and are also seeded into the new agent tab's draft for
-the fallback until the queue write lands. The chat beside the canvas is an ordinary native conversation, so
+the fallback until the queue write lands. The chat in the design tab's agent panel is an ordinary native conversation, so
 pasting an image into its composer attaches it as usual. New design and Ask
 agent reserve attachment slots as paste events arrive and disable confirmation
 until decoding and file writes settle. Submission freezes further image pastes;
@@ -50,7 +50,41 @@ touch devices.
 The chat keeps the existing approval, question, cancellation, transcript and
 background-session behavior. Closing or hiding the canvas does not stop its
 agent or any admitted edit. A canvas tab stores only
-`designCanvasData: { canvasId }`; HTML never enters the pane layout.
+`designCanvasData: { canvasId, agentPanel? }`; HTML never enters the pane layout.
+
+## The design tab and its agent panel
+
+A new design opens as one tab in the current pane, named after the design
+with the tab number after it (`Checkout flow 3`; `Design 3` until the canvas
+has loaded). Its agent is not a tab of its own: it is a panel inside the
+design tab.
+
+- **Embedding.** The agent stays an ordinary native tab in the design tab's
+  pane, marked `embeddedIn: <design tab id>`, so the backend, agent mail, tab
+  teardown and every tab lookup still find it. The tab strip and Ctrl+1–9
+  skip it and its host renders it. After every pane-store change
+  `normalizeEmbeddedTabs` (`apps/web/src/stores/pane-layout-embedded.ts`)
+  keeps three facts true: the agent follows its design to another pane (a
+  pane left with nothing else closes), a pane never selects an embedded tab
+  (it selects the design), and a design shows at most one agent; an agent
+  whose design is gone becomes an ordinary tab again rather than vanishing.
+- **Closing.** Closing the design tab closes its agent first, through the
+  ordinary tab teardown, so the conversation is retained as for any closed
+  agent tab. Selecting the embedded tab from elsewhere (agent mail, a link)
+  selects the design and shows the panel.
+- **The panel.** It docks to the left (default), right, top or bottom: drag
+  its grip handle to any edge (a preview shows where it lands; Escape
+  abandons the drag), use the arrow keys on the handle, or pick a position from
+  its menu. The separator resizes it (15–80% of the tab along the dock axis;
+  arrow keys step 2%, Home and End jump to the bounds). The toolbar's agent
+  button, the panel's close button and Ctrl/⌘+. hide and show it; hiding keeps
+  the conversation mounted and running. Dock, size and visibility are kept on
+  the design tab (`designCanvasData.agentPanel`). Shortcuts go to whichever
+  side, canvas or agent, last had the pointer or focus.
+- **Pop out and bring in.** The panel's **Open agent in its own tab** makes the
+  agent an ordinary tab again. A design with no agent (a blank canvas, or one
+  reopened from Saved designs) shows an empty panel that offers **Show here**
+  for open conversations linked to the design.
 
 ## Documents, records and identities
 
@@ -356,7 +390,8 @@ move chrome only. The layer tree is lazy, paged (≤200 nodes/128 KiB per page,
 cursors bound to structure) and virtualized, always keeping the focused and
 selected rows mounted so keyboard focus survives scrolling.
 
-Navigation: Fit all (Shift+1), Zoom to selection (Shift+2), 100% (Ctrl/⌘+0),
+Navigation: Fit all (Shift+1, the bare frame-corners icon), Zoom to selection
+(Shift+2, the frame corners with a target inside), 100% (Ctrl/⌘+0),
 pointer-anchored wheel/pinch zoom, Shift+wheel and middle-drag pan, keyboard
 move/resize of frames (Arrow, Alt+Arrow, Shift for 10 px), numeric frame
 fields and device presets, frame selection (clicking a frame title outlines

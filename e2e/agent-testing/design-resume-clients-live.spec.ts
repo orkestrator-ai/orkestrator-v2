@@ -234,6 +234,11 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
             }
 
             // -- 2. Close the conversation's tab ----------------------------
+            // The conversation sits in the design tab's agent panel: pop it
+            // out into a tab of its own, then close that tab.
+            await page
+              .getByRole("button", { name: "Open agent in its own tab", exact: true })
+              .click({ timeout: 30_000 });
             await page
               .getByRole("button", { name: new RegExp(`^Close ${label} \\d+`) })
               .first()
@@ -257,7 +262,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
               await client.goto(status.browserUrl!, { waitUntil: "domcontentloaded" });
               await sidebarNavigator(client, fixture!.name)(target.name);
               await client
-                .getByRole("tab", { name: /^Design \d+$/ })
+                .getByRole("tab", { name: new RegExp(`^Resume ${label} design \\d+$`) })
                 .first()
                 .click({ timeout: 30_000 });
               await client

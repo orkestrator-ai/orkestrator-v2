@@ -43,6 +43,8 @@ import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { agentMailCapabilities, resolveTabDisplayName } from "@orkestrator/protocol/agent-mail";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { visibleTabsOf } from "@/stores/pane-layout-embedded";
+import { designCanvasName, useDesignStore } from "@/stores/designStore";
 import type { TabType } from "@/contexts";
 import { getWorkflowTabTitle } from "./workflow-tab-title";
 import { TabLaunchOverrideMarker } from "./TabLaunchOverrideMarker";
@@ -128,7 +130,7 @@ export function DraggableTab({
   const tabOrdinal = usePaneLayoutStore((state) => {
     const paneState = owningEnvironmentId ? state.environments.get(owningEnvironmentId) : undefined;
     if (!paneState) return index + 1;
-    const allTabs = getAllLeaves(paneState.root).flatMap((leaf) => leaf.tabs);
+    const allTabs = getAllLeaves(paneState.root).flatMap((leaf) => visibleTabsOf(leaf.tabs));
     const ordinal = allTabs.findIndex((candidate) => candidate.id === tab.id) + 1;
     return ordinal || index + 1;
   });
@@ -178,6 +180,11 @@ export function DraggableTab({
     if (target.kind !== "service") return undefined;
     return state.service(target.ref.environmentId, target.ref.serviceId)?.definition.label;
   });
+
+  // A design tab is named after its design once the canvas has loaded.
+  const designName = useDesignStore((state) =>
+    tab.type === "design-canvas" ? designCanvasName(state, owningEnvironmentId, tab) : undefined,
+  );
 
   // Check if file tab has unsaved changes
   const isDirty = useFileDirtyStore((state) =>
@@ -281,7 +288,7 @@ export function DraggableTab({
         ? "Multi Review ✓"
         : `Multi Review ${tabNumber}`;
     }
-    if (tab.type === "design-canvas") return `Design ${tabNumber}`;
+    if (tab.type === "design-canvas") return `${designName?.trim() || "Design"} ${tabNumber}`;
     if (tab.type === "graph-designer") return `Graphs ${tabNumber}`;
     if (tab.type === "graph-run") {
       return `${tab.graphRunData?.title?.trim() || "Graph run"} ${tabNumber}`;

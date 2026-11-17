@@ -49,6 +49,11 @@ import {
 import type { FakeAnthropicModel, FakeModelCall } from "./fake-anthropic-model";
 
 const AGENT_DESIGN_NAME = "Agent design";
+/**
+ * A design tab's title: the design's name since the agent panel landed,
+ * "Design" before its canvas loads and on older renderers.
+ */
+const DESIGN_TAB_TITLE = `(?:Design|${AGENT_DESIGN_NAME})`;
 const CHAT_TITLE = "Design chat";
 const CLOSED_ENDED = "Closed — conversation ended";
 const CLOSED_RESUMABLE = "Closed — can be resumed";
@@ -188,7 +193,7 @@ export async function runAskAgentJourney({
     await expect(workspace).toHaveCount(0, { timeout: 30_000 });
     const title = window.getByRole("button", { name: "Move frame Mobile", exact: true });
     await expect(title).toBeVisible({ timeout: 30_000 });
-    await expect.poll(() => tagTab(window, "Design", "design")).toBe(true);
+    await expect.poll(() => tagTab(window, DESIGN_TAB_TITLE, "design")).toBe(true);
     const entries = (
       await invoke<{ value: { entries: Array<{ id: string }> } }>("design_library", {
         environmentId: environment.id,
@@ -341,7 +346,7 @@ export async function resumeLinkedConversation({
   const invoke = pageInvoke(window);
   await test.step("resume: the closed conversation reopens with its transcript", async () => {
     await selectEnvironment(window, asked.projectName, asked.environmentName);
-    await expect.poll(() => tagTab(window, "Design", "design"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => tagTab(window, DESIGN_TAB_TITLE, "design"), { timeout: 30_000 }).toBe(true);
     await taggedTab(window, "design").click();
     await expect(
       window.getByRole("button", { name: "Move frame Mobile", exact: true }),

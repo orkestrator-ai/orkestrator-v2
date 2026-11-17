@@ -271,6 +271,24 @@ export function sanitizeBrowserAnnotationPanelState(
   return result;
 }
 
+/** Which edge of the design tab its agent panel is docked to. */
+export type DesignAgentDock = "left" | "right" | "top" | "bottom";
+export const DESIGN_AGENT_DOCKS: readonly DesignAgentDock[] = ["left", "right", "top", "bottom"];
+
+/** The design tab's agent panel: where it sits, whether it shows, how big it is. */
+export interface DesignAgentPanelState {
+  dock: DesignAgentDock;
+  open: boolean;
+  /** Percentage of the design tab along the dock's axis. */
+  size?: number;
+}
+
+export interface DesignCanvasTabData {
+  canvasId: string;
+  /** Absent means the default: docked left and open. */
+  agentPanel?: DesignAgentPanelState;
+}
+
 // Tab information stored in pane leaves
 export interface TabInfo {
   id: string;
@@ -290,7 +308,14 @@ export interface TabInfo {
   browserData?: BrowserTabData;
   /** Data for pull request tabs */
   pullRequestData?: PullRequestTabData;
-  designCanvasData?: { canvasId: string };
+  designCanvasData?: DesignCanvasTabData;
+  /**
+   * The design canvas tab this agent tab is shown inside. An embedded tab
+   * stays an ordinary tab of the same pane (the backend, agent mail and tab
+   * teardown all find it there), but the tab bar hides it and its host
+   * renders it as the design's agent panel.
+   */
+  embeddedIn?: string;
   /** Data for the Graphs designer tab. */
   graphDesignerData?: GraphDesignerTabData;
   /** Data for a graph run tab. */

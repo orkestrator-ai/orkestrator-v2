@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   WEB_ANNOTATION_LIMITS,
+  WEB_ANNOTATION_FRAME_DOCUMENT_PATH_CHARS,
+  WEB_ANNOTATION_MAX_FRAME_DEPTH,
   WEB_ANNOTATION_MAX_SHADOW_DEPTH,
   WEB_ANNOTATION_REQUEST_STATES,
   WEB_ANNOTATION_REQUEST_STATE_LABELS,
@@ -190,6 +192,52 @@ describe("web annotation capture validation", () => {
     expect(isWebAnnotationTarget(withScope({ kind: "unsupported", reason: "shadow-root" }))).toBe(
       true,
     );
+  });
+
+  test("an element anchor may carry a bounded root path through same-origin frames", () => {
+    const frame = {
+      boundary: "frame",
+      tagName: "iframe",
+      cssPath: "iframe#editor",
+      documentPath: "/embed/editor.html",
+    };
+    const shadowStep = { boundary: "shadow", tagName: "app-shell", cssPath: "app-shell" };
+    const element = fixtureTargets.element as WebAnnotationElementTarget;
+    const withScope = (scope: unknown) => ({
+      ...element,
+      anchor: { ...element.anchor, scope },
+    });
+    for (const path of [
+      [frame],
+      [{ ...frame, documentPath: "about:srcdoc" }],
+      [{ ...frame, tagName: "frame", documentPath: "about:blank" }],
+      [shadowStep, frame, shadowStep],
+      [{ ...frame, stableId: { kind: "id", value: "editor" } }],
+      Array.from({ length: WEB_ANNOTATION_MAX_FRAME_DEPTH }, () => frame),
+      [frame, ...Array.from({ length: WEB_ANNOTATION_MAX_SHADOW_DEPTH }, () => shadowStep)],
+    ]) {
+      expect(isWebAnnotationTarget(withScope({ kind: "frame", path }))).toBe(true);
+    }
+    for (const path of [
+      [],
+      [shadowStep],
+      Array.from({ length: WEB_ANNOTATION_MAX_FRAME_DEPTH + 1 }, () => frame),
+      [frame, ...Array.from({ length: WEB_ANNOTATION_MAX_SHADOW_DEPTH + 1 }, () => shadowStep)],
+      [{ ...frame, tagName: "object" }],
+      [{ ...frame, cssPath: "" }],
+      [{ ...frame, documentPath: "" }],
+      [{ ...frame, documentPath: "https://other.test/embed" }],
+      [{ ...frame, documentPath: "/embed?token=1" }],
+      [{ ...frame, documentPath: "/embed#x" }],
+      [{ ...frame, documentPath: "/a/../b" }],
+      [{ ...frame, documentPath: "/a\\b" }],
+      [{ ...frame, documentPath: `/${"x".repeat(WEB_ANNOTATION_FRAME_DOCUMENT_PATH_CHARS)}` }],
+      [{ ...frame, boundary: "window" }],
+      [{ ...shadowStep, boundary: undefined }],
+    ]) {
+      expect(isWebAnnotationTarget(withScope({ kind: "frame", path }))).toBe(false);
+    }
+    expect(isWebAnnotationTarget(withScope({ kind: "frame" }))).toBe(false);
   });
 });
 

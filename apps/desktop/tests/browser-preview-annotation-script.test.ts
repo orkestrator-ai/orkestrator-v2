@@ -418,14 +418,17 @@ describe("bounded, sanitized evidence", () => {
     });
   });
 
-  test("an iframe is captured with unsupported scope; a shadow host is an ordinary element", () => {
+  test("an iframe page script cannot read is captured with unsupported scope; a shadow host is an ordinary element", () => {
+    // happy-dom gives a frame's document an opaque origin, which the kit
+    // refuses as it does a cross-origin or sandboxed frame. Same-origin
+    // frames are covered in real Chromium (browser-preview-frame-targets).
     const harness = page(`<iframe title="Embedded"></iframe><div id="host"></div>`);
     const host = harness.document.getElementById("host")!;
     host.attachShadow({ mode: "open" }).innerHTML = "<button>Inside</button>";
     expect(captureElement(harness, harness.document.querySelector("iframe")!).anchor.scope).toEqual(
       {
         kind: "unsupported",
-        reason: "iframe",
+        reason: "cross-origin",
       },
     );
     // The host lives in the document. Content inside its open root is

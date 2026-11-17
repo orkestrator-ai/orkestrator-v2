@@ -218,16 +218,56 @@ export interface WebAnnotationShadowHost {
   cssPath: string;
 }
 
+/**
+ * The most same-origin frames an anchor may sit inside. Deeper targets are
+ * `unsupported` (`iframe`), and the desktop frame kit mirrors this.
+ */
+export const WEB_ANNOTATION_MAX_FRAME_DEPTH = 4;
+
+/** Longest `documentPath` a frame step may carry. */
+export const WEB_ANNOTATION_FRAME_DOCUMENT_PATH_CHARS = 500;
+
+/**
+ * One same-origin `<iframe>` or `<frame>`, described inside the root that
+ * contains it like a shadow host. `documentPath` names the frame's document
+ * when captured: the path of its http(s) URL (no origin, query or fragment;
+ * opaque segments of 32 or more token characters read `:opaque`), or
+ * `about:srcdoc` / `about:blank`. Resolution needs a unique frame element
+ * whose document is still same-origin and still has that path, so a frame
+ * that navigated elsewhere is never mistaken for the one annotated.
+ */
+export interface WebAnnotationFrameStep {
+  boundary: "frame";
+  tagName: "iframe" | "frame";
+  /** Present only when unique within its containing root when captured. */
+  stableId?: { kind: "id" | "test-id"; value: string };
+  /** Structural path within the containing root. */
+  cssPath: string;
+  documentPath: string;
+}
+
+/** A step of a `frame` scope's root path: an open shadow root's host or a frame. */
+export type WebAnnotationRootStep =
+  ({ boundary: "shadow" } & WebAnnotationShadowHost) | WebAnnotationFrameStep;
+
 export type WebAnnotationAnchorScope =
   | { kind: "document" }
   /**
    * Inside open shadow roots: `hosts` is the root path, outermost first. The
    * rest of the anchor (stable id, semantics, path) is scoped to the
-   * innermost root. Closed roots and frames stay `unsupported`. A text range
+   * innermost root. Closed roots stay `unsupported`. A text range
    * at a root's top level has no element inside the root to name: its
    * container carries the host's semantics, no stable id, and the path `:host`.
    */
   | { kind: "shadow"; hosts: WebAnnotationShadowHost[] }
+  /**
+   * Inside at least one same-origin frame: `path` is the root path, outermost
+   * first, mixing frame steps (at most `WEB_ANNOTATION_MAX_FRAME_DEPTH`) and
+   * shadow hosts (at most `WEB_ANNOTATION_MAX_SHADOW_DEPTH`). The rest of the
+   * anchor is scoped to the innermost document or shadow root. Cross-origin
+   * and sandboxed frames stay `unsupported` (`cross-origin`).
+   */
+  | { kind: "frame"; path: WebAnnotationRootStep[] }
   | { kind: "unsupported"; reason: "iframe" | "shadow-root" | "closed-root" | "cross-origin" };
 
 /**
@@ -1149,6 +1189,12 @@ export interface WebAnnotationCapabilities {
      * `{ kind: "unsupported", reason: "shadow-root" }` instead.
      */
     shadowTargets?: boolean;
+    /**
+     * Anchors with a `frame` scope (element targets inside same-origin
+     * frames). Absent or false: clients send such a target with the scope
+     * `{ kind: "unsupported", reason: "iframe" }` instead.
+     */
+    frameTargets?: boolean;
   };
   /** Capture target kinds a client may submit (never `legacy-unresolved`). */
   targets: WebAnnotationTargetKind[];

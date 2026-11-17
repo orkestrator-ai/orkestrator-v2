@@ -9,8 +9,17 @@
  * All DOM work is bounded before serialization: visited nodes, children per
  * element, characters, attributes, and wall-clock time. Structural HTML is
  * rebuilt from whitelisted tags and attributes instead of reading `outerHTML`.
+ *
+ * Same-origin frames are entered through the frame kit it is built with
+ * (`browserPreviewAnchorKitSource` composes the two for the page).
  */
-export function browserPreviewAnchorKit() {
+import {
+  browserPreviewFrameKit,
+  type BrowserPreviewFrameKit,
+} from "./browser-preview-frame-kit.js";
+
+export function browserPreviewAnchorKit(frameKitFactory: () => BrowserPreviewFrameKit) {
+  const frames = frameKitFactory();
   const UI_ATTRIBUTE = "data-orkestrator-annotation-ui";
   const ANCHOR_TEXT_CHARS = 300;
   const QUOTE_CHARS = 1_200;
@@ -174,6 +183,15 @@ export function browserPreviewAnchorKit() {
   type Quote = { exact: string; prefix: string; suffix: string };
   type StableId = { kind: "id" | "test-id"; value: string };
   type ShadowHost = { tagName: string; stableId?: StableId; cssPath: string };
+  type RootStep =
+    | ({ boundary: "shadow" } & ShadowHost)
+    | {
+        boundary: "frame";
+        tagName: "iframe" | "frame";
+        stableId?: StableId;
+        cssPath: string;
+        documentPath: string;
+      };
   type Anchor = {
     stableId?: StableId;
     semantic: { tagName: string; role: string | null; name: string | null };
@@ -183,6 +201,7 @@ export function browserPreviewAnchorKit() {
     scope:
       | { kind: "document" }
       | { kind: "shadow"; hosts: ShadowHost[] }
+      | { kind: "frame"; path: RootStep[] }
       | { kind: "unsupported"; reason: "iframe" | "shadow-root" | "closed-root" | "cross-origin" };
   };
   /** The tree an anchor's ids, paths and candidates are scoped to. */
@@ -259,10 +278,16 @@ export function browserPreviewAnchorKit() {
       height: Math.max(0, round(rect.height)),
     };
   };
+  /** The document a node belongs to; the top document when it has none. */
+  const documentOf = (node: Node | null | undefined): Document =>
+    (node && node.nodeType === 9 ? (node as Document) : node?.ownerDocument) ?? document;
+  /** Viewport rectangle in the top document, mapped out of same-origin frames. */
   const rectOf = (target: Element | Range): Rect => {
     try {
       const rect = target.getBoundingClientRect();
-      return roundRect({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
+      const raw = { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+      const doc = documentOf("startContainer" in target ? target.startContainer : target);
+      return roundRect(doc === document ? raw : frames.toTopRect(raw, doc));
     } catch {
       return { x: 0, y: 0, width: 0, height: 0 };
     }
@@ -274,19 +299,33 @@ export function browserPreviewAnchorKit() {
     node && node.nodeType === 11 && isElement((node as ShadowRoot).host)
       ? (node as ShadowRoot)
       : null;
-  /** The document or shadow root `element` lives in; a detached element counts as the document. */
+  /** The document or shadow root `element` lives in; a detached element counts as its document. */
   const rootOf = (element: Element): Root => {
     try {
-      return asShadowRoot(element.getRootNode()) ?? document;
+      return asShadowRoot(element.getRootNode()) ?? documentOf(element);
     } catch {
-      return document;
+      return documentOf(element);
     }
   };
-  /** Parent in the composed tree: a shadow root's top-level elements lead to its host. */
+  /** Its own document's `<html>` or `<body>`: never a target, and skipped when crossing frames. */
+  const isDocumentRoot = (element: Element): boolean => {
+    const doc = element.ownerDocument;
+    return Boolean(doc) && (element === doc.documentElement || element === doc.body);
+  };
+  /**
+   * Parent in the composed tree: a shadow root's top-level elements lead to
+   * its host, and a same-origin frame document's `<html>` to its frame.
+   */
   const composedParent = (element: Element): Element | null => {
     if (element.parentElement) return element.parentElement;
-    return asShadowRoot(element.parentNode)?.host ?? null;
+    const host = asShadowRoot(element.parentNode)?.host;
+    if (host) return host;
+    const doc = element.ownerDocument;
+    return doc && element === doc.documentElement ? frames.frameElementOf(doc) : null;
   };
+  /** On the page now: connected, and its document is still shown in its frame chain. */
+  const isLive = (node: Node | null | undefined): boolean =>
+    Boolean(node?.isConnected) && frames.isLiveDocument(documentOf(node));
   /** The element holding `node`: itself, its parent, or the host of a shadow root's top level. */
   const elementOf = (node: Node | null | undefined): Element | null => {
     if (!node) return null;
@@ -482,7 +521,7 @@ export function browserPreviewAnchorKit() {
     const own = visibleText(current, 200, createBudget(600, 5));
     for (let level = 0; level < levels; level += 1) {
       const parent: Element | null = current.parentElement;
-      if (!parent || parent === document.documentElement) break;
+      if (!parent || parent === parent.ownerDocument.documentElement) break;
       current = parent;
       if (visibleText(current, 200, createBudget(600, 5)) !== own) break;
     }
@@ -714,7 +753,7 @@ export function browserPreviewAnchorKit() {
     let current: Element | null = element;
     while (current && parts.length < 24) {
       const tag = current.tagName.toLowerCase();
-      if (current === document.documentElement) {
+      if (current === current.ownerDocument.documentElement) {
         parts.unshift(tag);
         break;
       }
@@ -730,7 +769,7 @@ export function browserPreviewAnchorKit() {
       }
       const parent: Element | null = current.parentElement;
       let segment = tag;
-      if (parent || root !== document) {
+      if (parent || asShadowRoot(root)) {
         let count = 0;
         let position = 0;
         const siblings = (parent ?? root).children;
@@ -762,13 +801,20 @@ export function browserPreviewAnchorKit() {
         (normalize(element.getAttribute("title"), NAME_CHARS) || null),
     };
   };
-  /** Nearest ancestors in the composed tree, so a shadow target names its hosts too. */
+  /**
+   * Nearest ancestors in the composed tree, so a shadow target names its
+   * hosts and a frame target its frames too. A frame document's `<html>` and
+   * `<body>` are crossed without being listed; the top document's end the walk.
+   */
   const ancestorsFor = (element: Element, budget: Budget): Ancestor[] => {
     const ancestors: Ancestor[] = [];
     let current = composedParent(element);
-    while (current && ancestors.length < MAX_ANCESTORS) {
-      if (current === document.body || current === document.documentElement) break;
-      ancestors.push(ancestorDescriptor(current, budget));
+    for (let steps = 0; current && ancestors.length < MAX_ANCESTORS && steps < 64; steps += 1) {
+      if (isDocumentRoot(current)) {
+        if (current.ownerDocument === document) break;
+      } else {
+        ancestors.push(ancestorDescriptor(current, budget));
+      }
       current = composedParent(current);
     }
     return ancestors.reverse();
@@ -784,14 +830,16 @@ export function browserPreviewAnchorKit() {
   };
 
   /**
-   * The document, or the root path through open shadow roots (outermost host
-   * first). A page script can only reach an element inside a closed root if
-   * the page handed it over, so that, a detached tree and a path deeper than
-   * `MAX_SHADOW_DEPTH` stay unsupported. Frames are never entered.
+   * The document, or the root path through open shadow roots and same-origin
+   * frames (outermost first). A page script can only reach an element inside
+   * a closed root if the page handed it over, so that, a detached tree and a
+   * path deeper than `MAX_SHADOW_DEPTH` stay unsupported. A frame whose
+   * document page script cannot read (cross-origin or sandboxed) is itself
+   * the target, `unsupported` (`cross-origin`), exactly as far as it reaches.
    */
   const scopeFor = (element: Element): Anchor["scope"] => {
-    if (element.tagName === "IFRAME" || element.tagName === "FRAME") {
-      return { kind: "unsupported", reason: "iframe" };
+    if (frames.isFrameElement(element) && !frames.reachableDocument(element)) {
+      return { kind: "unsupported", reason: "cross-origin" };
     }
     try {
       return scopeOfRoot(element.getRootNode());
@@ -801,21 +849,50 @@ export function browserPreviewAnchorKit() {
   };
   /** `scopeFor` once the element's own root is known. */
   const scopeOfRoot = (start: Node): Anchor["scope"] => {
-    const hosts: ShadowHost[] = [];
+    const path: RootStep[] = [];
+    let shadowSteps = 0;
+    let frameSteps = 0;
     let root = start;
-    while (root !== document) {
+    for (let guard = 0; root !== document; guard += 1) {
+      if (guard > MAX_SHADOW_DEPTH + frames.MAX_FRAME_DEPTH) {
+        return { kind: "unsupported", reason: "shadow-root" };
+      }
+      if (root.nodeType === 9) {
+        // A same-origin frame's document: the frame is the next step out.
+        const frame = frames.frameElementOf(root as Document);
+        if (!frame || frames.reachableDocument(frame) !== root) {
+          return { kind: "unsupported", reason: "cross-origin" };
+        }
+        const documentPath = frames.documentPathOf(root as Document);
+        frameSteps += 1;
+        if (!documentPath || frameSteps > frames.MAX_FRAME_DEPTH) {
+          return { kind: "unsupported", reason: "iframe" };
+        }
+        const stableId = stableIdFor(frame);
+        path.unshift({
+          boundary: "frame",
+          tagName: frame.tagName === "FRAME" ? "frame" : "iframe",
+          ...(stableId ? { stableId } : {}),
+          cssPath: cssPathFor(frame),
+          documentPath,
+        });
+        root = frame.getRootNode();
+        continue;
+      }
       const shadow = asShadowRoot(root);
       if (!shadow) return { kind: "unsupported", reason: "shadow-root" };
       if (shadow.mode !== "open") return { kind: "unsupported", reason: "closed-root" };
-      if (hosts.length >= MAX_SHADOW_DEPTH) return { kind: "unsupported", reason: "shadow-root" };
-      hosts.unshift(shadowHostFor(shadow.host));
-      try {
-        root = shadow.host.getRootNode();
-      } catch {
-        return { kind: "unsupported", reason: "closed-root" };
-      }
+      shadowSteps += 1;
+      if (shadowSteps > MAX_SHADOW_DEPTH) return { kind: "unsupported", reason: "shadow-root" };
+      path.unshift({ boundary: "shadow", ...shadowHostFor(shadow.host) });
+      root = shadow.host.getRootNode();
     }
-    return hosts.length > 0 ? { kind: "shadow", hosts } : { kind: "document" };
+    if (frameSteps > 0) return { kind: "frame", path };
+    if (path.length === 0) return { kind: "document" };
+    return {
+      kind: "shadow",
+      hosts: path.map(({ boundary: _boundary, ...host }) => host as ShadowHost),
+    };
   };
 
   const elementQuote = (element: Element, budget: Budget): Quote & { complete: boolean } =>
@@ -865,7 +942,11 @@ export function browserPreviewAnchorKit() {
     return shorten(name ? `${kind} “${shorten(name, LABEL_NAME_CHARS)}”` : kind, 200);
   };
 
-  const sanitizeUrl = (value: string, counters: Counters | null): string | null => {
+  const sanitizeUrl = (
+    value: string,
+    counters: Counters | null,
+    base: string = document.baseURI,
+  ): string | null => {
     const trimmed = value.trim().slice(0, 4_000);
     if (!trimmed || UNSAFE_URL.test(trimmed)) {
       if (counters) counters.attributesRemoved += 1;
@@ -873,7 +954,7 @@ export function browserPreviewAnchorKit() {
     }
     let url: URL;
     try {
-      url = new URL(trimmed, document.baseURI);
+      url = new URL(trimmed, base);
     } catch {
       if (counters) counters.attributesRemoved += 1;
       return null;
@@ -941,7 +1022,8 @@ export function browserPreviewAnchorKit() {
         continue;
       }
       if (name === "href" || name === "src") {
-        const url = sanitizeUrl(raw, counters);
+        // Relative to the element's own document, which a frame may not share.
+        const url = sanitizeUrl(raw, counters, element.ownerDocument?.baseURI ?? document.baseURI);
         if (url !== null) kept.push([name, url]);
         continue;
       }
@@ -1025,7 +1107,7 @@ export function browserPreviewAnchorKit() {
   const computedStyles = (element: Element): Record<string, string> => {
     const styles: Record<string, string> = {};
     try {
-      const computed = getComputedStyle(element);
+      const computed = (element.ownerDocument?.defaultView ?? window).getComputedStyle(element);
       for (const property of STYLE_PROPERTIES) {
         const value = computed.getPropertyValue(property);
         if (typeof value === "string" && value) styles[property] = value.slice(0, 200);
@@ -1045,8 +1127,8 @@ export function browserPreviewAnchorKit() {
       : null;
   };
 
-  const metaContent = (name: string): string | null => {
-    const meta = document.querySelector(`meta[name="${name}"]`);
+  const metaContent = (name: string, doc: Document): string | null => {
+    const meta = doc.querySelector(`meta[name="${name}"]`);
     return meta ? (meta.getAttribute("content") ?? "").trim() : null;
   };
 
@@ -1054,13 +1136,16 @@ export function browserPreviewAnchorKit() {
    * Development source hints from the documented `data-orkestrator-source`
    * convention, nearest element first. Never reads framework internals. The
    * page declares these, so they are candidates: `verified` is always false
-   * here and only the backend's workspace check may set it.
+   * here and only the backend's workspace check may set it. A frame document
+   * declares its own producer and root, so the walk stays in the element's
+   * document.
    */
   const sourceHintsFor = (element: Element) => {
-    const rootValue = metaContent(SOURCE_ROOT_META)?.replace(/^\.\/+|\/+$/g, "") ?? "";
+    const doc = documentOf(element);
+    const rootValue = metaContent(SOURCE_ROOT_META, doc)?.replace(/^\.\/+|\/+$/g, "") ?? "";
     const root = rootValue === "" || rootValue === "." ? [] : sourceSegments(rootValue);
     if (!root) return [];
-    const declared = metaContent(SOURCE_PRODUCER_META) ?? "";
+    const declared = metaContent(SOURCE_PRODUCER_META, doc) ?? "";
     const producer = /^[\x21-\x7e][\x20-\x7e]{0,99}$/.test(declared)
       ? declared.trim()
       : SOURCE_ATTRIBUTE;
@@ -1093,6 +1178,7 @@ export function browserPreviewAnchorKit() {
         if (hints.length >= MAX_SOURCE_HINTS) break;
       }
       current = composedParent(current);
+      if (current && current.ownerDocument !== doc) break;
     }
     return hints;
   };
@@ -1294,12 +1380,14 @@ export function browserPreviewAnchorKit() {
 
   /**
    * Viewport rectangles of detectable sensitive fields, for opaque masks, in
-   * the document and every open shadow root down to `MAX_SHADOW_DEPTH`.
-   * `complete` is false when any field may have been missed: the budget ran
-   * out, roots nest deeper than the limit, a query failed, or more than
-   * `MAX_SENSITIVE_RECTS` fields are on screen. Main then drops the image
-   * rather than spool pixels it could not mask. Closed roots are invisible
-   * to page script and stay unmasked (a known limitation).
+   * the document, every open shadow root down to `MAX_SHADOW_DEPTH` and every
+   * same-origin frame down to `MAX_FRAME_DEPTH` (rectangles mapped into the
+   * top viewport). `complete` is false when any field may have been missed:
+   * the budget ran out, roots or frames nest deeper than the limit, a query
+   * failed, or more than `MAX_SENSITIVE_RECTS` fields are on screen. Main
+   * then drops the image rather than spool pixels it could not mask. Closed
+   * roots and cross-origin frames are invisible to page script and stay
+   * unmasked (a known limitation).
    */
   const sensitiveScan = (
     budget: Budget = createBudget(SENSITIVE_SCAN_VISITS, SENSITIVE_SCAN_MS),
@@ -1339,8 +1427,8 @@ export function browserPreviewAnchorKit() {
       }
       return true;
     };
-    /** Query `root`, then walk its elements in tree order and enter each open root. */
-    const scan = (root: Root, depth: number): boolean => {
+    /** Query `root`, then walk its elements in tree order and enter each open root and frame. */
+    const scan = (root: Root, depth: number, frameDepth: number): boolean => {
       if (!collect(root)) return false;
       let element: Element | null = root.firstElementChild;
       while (element) {
@@ -1349,7 +1437,15 @@ export function browserPreviewAnchorKit() {
           ? null
           : element.shadowRoot;
         if (shadow) {
-          if (depth >= MAX_SHADOW_DEPTH || !scan(shadow, depth + 1)) return false;
+          if (depth >= MAX_SHADOW_DEPTH || !scan(shadow, depth + 1, frameDepth)) return false;
+        }
+        const frameDocument = frames.isFrameElement(element)
+          ? frames.reachableDocument(element)
+          : null;
+        if (frameDocument) {
+          if (frameDepth >= frames.MAX_FRAME_DEPTH || !scan(frameDocument, 0, frameDepth + 1)) {
+            return false;
+          }
         }
         if (element.firstElementChild && !element.hasAttribute(UI_ATTRIBUTE)) {
           element = element.firstElementChild;
@@ -1361,7 +1457,7 @@ export function browserPreviewAnchorKit() {
       return true;
     };
     try {
-      complete = scan(document, 0);
+      complete = scan(document, 0, 0);
     } catch {
       complete = false;
     }
@@ -1456,7 +1552,7 @@ export function browserPreviewAnchorKit() {
     }
   };
   const elementsByTag = (root: Root, tagName: string): ArrayLike<Element> => {
-    if (root === document) return document.getElementsByTagName(tagName);
+    if (root.nodeType === 9) return (root as Document).getElementsByTagName(tagName);
     try {
       return root.querySelectorAll(escapeIdentifier(tagName));
     } catch {
@@ -1491,56 +1587,88 @@ export function browserPreviewAnchorKit() {
   };
 
   /**
-   * Rule 1, root path: each host must match exactly one element with its tag
-   * in the root that contains it (by stable id, then structural path) and
-   * still have an open shadow root. The later rules then run in the innermost
-   * root. A host that is gone, closed or not yet attached is `missing`.
+   * The one element in `root` a root-path step names: same tag, found by
+   * stable id when that is unique and otherwise by structural path. An empty
+   * list is `missing`; several are `ambiguous`.
+   */
+  const matchStep = (root: Root, step: ShadowHost): Element[] => {
+    const sameTag = (element: Element) => element.tagName.toLowerCase() === step.tagName;
+    const byId = step.stableId
+      ? queryPage(root, stableIdSelector(step.stableId)).filter(sameTag)
+      : [];
+    if (byId.length === 1) return byId;
+    return queryPage(root, step.cssPath).filter((candidate) => {
+      if (!sameTag(candidate)) return false;
+      // Structural paths without an ID start at the root's direct children.
+      // ShadowRoot querySelectorAll otherwise also accepts descendant suffixes.
+      if (asShadowRoot(root) && !step.cssPath.includes("#")) {
+        let top = candidate;
+        for (let index = 1; index < step.cssPath.split(" > ").length; index += 1) {
+          if (!top.parentElement) return false;
+          top = top.parentElement;
+        }
+        if (top.parentNode !== root) return false;
+      }
+      // Never substitute a different component or frame for a saved stable identity.
+      if (step.stableId) {
+        const attribute = step.stableId.kind === "test-id" ? "data-testid" : "id";
+        if (candidate.getAttribute(attribute) !== step.stableId.value) return false;
+      }
+      return true;
+    });
+  };
+
+  /**
+   * Rule 1, root path: each step must match exactly one element in the root
+   * that contains it (`matchStep`). A shadow host must still have an open
+   * shadow root; a frame must still show a same-origin document with the
+   * recorded path, so a frame that navigated elsewhere never stands in for
+   * the one annotated. The later rules then run in the innermost root. A
+   * step that is gone, closed, not yet attached or navigated away is
+   * `missing`; a frame that became cross-origin is `unsupported`.
    */
   const resolveRoot = (
     scope: Anchor["scope"],
     budget: Budget,
   ): { root: Root } | { failed: Resolution } => {
     if (scope.kind === "document") return { root: document };
-    if (
-      scope.kind !== "shadow" ||
-      !Array.isArray(scope.hosts) ||
-      scope.hosts.length === 0 ||
-      scope.hosts.length > MAX_SHADOW_DEPTH
-    ) {
-      return { failed: result("unsupported", "none", 0) };
+    let steps: RootStep[] | null = null;
+    if (scope.kind === "shadow" && Array.isArray(scope.hosts)) {
+      steps =
+        scope.hosts.length > 0 && scope.hosts.length <= MAX_SHADOW_DEPTH
+          ? scope.hosts.map((host) => ({ boundary: "shadow" as const, ...host }))
+          : null;
+    } else if (scope.kind === "frame" && Array.isArray(scope.path)) {
+      const frameCount = scope.path.filter((step) => step?.boundary === "frame").length;
+      steps =
+        frameCount > 0 &&
+        frameCount <= frames.MAX_FRAME_DEPTH &&
+        scope.path.length - frameCount <= MAX_SHADOW_DEPTH
+          ? scope.path
+          : null;
     }
+    if (!steps) return { failed: result("unsupported", "none", 0) };
     let root: Root = document;
-    for (const host of scope.hosts) {
+    for (const step of steps) {
       if (!spend(budget)) return { failed: tooComplex() };
-      const sameTag = (element: Element) => element.tagName.toLowerCase() === host.tagName;
-      let matches: Element[] = host.stableId
-        ? queryPage(root, stableIdSelector(host.stableId)).filter(sameTag)
-        : [];
-      if (matches.length !== 1) {
-        matches = queryPage(root, host.cssPath).filter((candidate) => {
-          if (!sameTag(candidate)) return false;
-          // Structural paths without an ID start at the root's direct children.
-          // ShadowRoot querySelectorAll otherwise also accepts descendant suffixes.
-          if (root !== document && !host.cssPath.includes("#")) {
-            let top = candidate;
-            for (let index = 1; index < host.cssPath.split(" > ").length; index += 1) {
-              if (!top.parentElement) return false;
-              top = top.parentElement;
-            }
-            if (top.parentNode !== root) return false;
-          }
-          // Never substitute a different component for a saved stable identity.
-          if (host.stableId) {
-            const attribute = host.stableId.kind === "test-id" ? "data-testid" : "id";
-            if (candidate.getAttribute(attribute) !== host.stableId.value) return false;
-          }
-          return true;
-        });
-      }
+      const matches = matchStep(root, step);
       if (matches.length > 1) return { failed: result("ambiguous", "none", matches.length) };
-      const shadow: ShadowRoot | null = matches[0]?.shadowRoot ?? null;
+      const match = matches[0];
+      if (step.boundary === "frame") {
+        if (!match || !frames.isFrameElement(match))
+          return { failed: result("missing", "none", 0) };
+        frames.noteFrame(match);
+        const frameDocument = frames.reachableDocument(match);
+        if (!frameDocument) return { failed: result("unsupported", "none", 0) };
+        if (frames.documentPathOf(frameDocument) !== step.documentPath) {
+          return { failed: result("missing", "none", 0) };
+        }
+        root = frameDocument;
+        continue;
+      }
+      const shadow: ShadowRoot | null = match?.shadowRoot ?? null;
       if (!shadow) {
-        if (matches[0]) noteUndefinedHost(matches[0]);
+        if (match) noteUndefinedHost(match);
         return { failed: result("missing", "none", 0) };
       }
       noteShadowRoot(shadow);
@@ -1650,7 +1778,10 @@ export function browserPreviewAnchorKit() {
       offsets.push(last.offset);
       previousSpace = true;
     };
-    const root: Node = scoped === document ? (document.body ?? document.documentElement) : scoped;
+    const root: Node =
+      scoped.nodeType === 9
+        ? ((scoped as Document).body ?? (scoped as Document).documentElement)
+        : scoped;
     const stack: Array<{ node: Node; exit: boolean }> = [{ node: root, exit: false }];
     while (stack.length > 0) {
       if (!spend(budget) || characters.length > limit) {
@@ -1780,8 +1911,15 @@ export function browserPreviewAnchorKit() {
   return {
     UI_ATTRIBUTE,
     MAX_SHADOW_DEPTH,
+    MAX_FRAME_DEPTH: frames.MAX_FRAME_DEPTH,
     createBudget,
     composedParent,
+    isDocumentRoot,
+    isLive,
+    /** A same-origin frame's document, or null (cross-origin, sandboxed, not a frame). */
+    frameDocument: (element: Element): Document | null =>
+      frames.isFrameElement(element) ? frames.reachableDocument(element) : null,
+    framePoint: frames.framePoint,
     composedContains,
     elementOf,
     hoverLabel,
@@ -1803,7 +1941,10 @@ export function browserPreviewAnchorKit() {
       cachedTextMaps.clear();
       seenShadowRoots = [];
       undefinedHosts = [];
+      frames.resetSeen();
     },
+    /** Frame elements the resolver matched since the last reset, at most 16. */
+    framesSeen: frames.framesSeen,
     /** Open shadow roots entered since the last reset, at most 64. */
     shadowRootsSeen: (): ShadowRoot[] => seenShadowRoots.slice(),
     /** Hosts found without a root before being defined since the last reset, at most 50. */
@@ -1812,3 +1953,11 @@ export function browserPreviewAnchorKit() {
 }
 
 export type BrowserPreviewAnchorKit = ReturnType<typeof browserPreviewAnchorKit>;
+
+/**
+ * A page-evaluable expression for a no-argument factory of the anchor kit
+ * built with its frame helpers. Page scripts receive this as `kitFactory`.
+ */
+export function browserPreviewAnchorKitSource(): string {
+  return `(() => (${browserPreviewAnchorKit.toString()})(${browserPreviewFrameKit.toString()}))`;
+}

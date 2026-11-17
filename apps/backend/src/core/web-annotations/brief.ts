@@ -149,8 +149,11 @@ function anchorOf(capture: WebAnnotationCapture | null): WebAnnotationAnchor | n
 function targetKey(capture: WebAnnotationCapture | null): string | null {
   const anchor = anchorOf(capture);
   if (!anchor) return null;
-  if (anchor.stableId) return `stable:${anchor.stableId.kind}:${anchor.stableId.value}`;
-  return anchor.cssPath ? `css:${anchor.cssPath}` : null;
+  // Ids and paths are scoped to their own document or root, so the same id
+  // inside a frame and in the top document names two different elements.
+  const root = anchor.scope.kind === "frame" ? `${JSON.stringify(anchor.scope.path)}|` : "";
+  if (anchor.stableId) return `${root}stable:${anchor.stableId.kind}:${anchor.stableId.value}`;
+  return anchor.cssPath ? `${root}css:${anchor.cssPath}` : null;
 }
 
 interface PlannedImage {
@@ -269,6 +272,27 @@ function sectionValues(
                   scope: {
                     kind: "shadow",
                     hosts: anchor.scope.hosts.map((host) => host.tagName),
+                  },
+                }
+              : {}),
+            // Inside same-origin frames: each frame's document path (the
+            // route or file the agent can find) and each host's tag, outermost
+            // first. `cssPath` and `stableId` resolve inside the innermost
+            // document or root, never from the top document.
+            ...(anchor.scope.kind === "frame"
+              ? {
+                  scope: {
+                    kind: "frame",
+                    path: anchor.scope.path.map((step) =>
+                      step.boundary === "frame"
+                        ? {
+                            frame: step.tagName,
+                            documentPath: step.documentPath,
+                            ...(step.stableId ? { stableId: step.stableId } : {}),
+                          }
+                        : { shadowHost: step.tagName },
+                    ),
+                    note: "cssPath and stableId are scoped to the innermost frame document or shadow root",
                   },
                 }
               : {}),

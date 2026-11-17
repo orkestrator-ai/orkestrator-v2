@@ -18,6 +18,11 @@
  * until its root attaches, which no observer sees; one pass is scheduled
  * when that host's custom element is defined.
  *
+ * A pin inside a same-origin frame is re-resolved when that frame loads a
+ * document (a navigation or reload replaces the document the observer and
+ * the resolved element belonged to), and the frame document the resolver
+ * entered is observed and redrawn on scroll like the top document.
+ *
  * Pins are redrawn (not re-resolved) on scroll, resize, a settled font load
  * and a change in the document's size, so a font swap that reflows the page
  * without touching the DOM still moves them.
@@ -27,7 +32,10 @@
  *
  * Serialized with `toString`: no module-level references inside the installer.
  */
-import { browserPreviewAnchorKit } from "./browser-preview-anchor-script.js";
+import {
+  browserPreviewAnchorKitSource,
+  type BrowserPreviewAnchorKit,
+} from "./browser-preview-anchor-script.js";
 
 export const BROWSER_PREVIEW_PINS_KEY = "__orkestratorPreviewPins__";
 export const BROWSER_PREVIEW_PINS_MAX_CHARS = 131_072;
@@ -66,7 +74,7 @@ export interface BrowserPreviewPinsScriptQuery {
 }
 
 function installBrowserPreviewPins(
-  kitFactory: typeof browserPreviewAnchorKit,
+  kitFactory: () => BrowserPreviewAnchorKit,
   config: {
     key: string;
     maxChars: number;
@@ -205,9 +213,9 @@ function installBrowserPreviewPins(
   const place = (): boolean => {
     let changed = false;
     for (const pin of pins) {
-      const connected = pin.element
-        ? pin.element.isConnected
-        : Boolean(pin.range?.startContainer.isConnected);
+      // Live, not just connected: a frame that navigated keeps its old
+      // document's nodes connected to that discarded document.
+      const connected = kit.isLive(pin.element ?? pin.range?.startContainer ?? null);
       const rect = pin.element ? kit.rectOf(pin.element) : pin.range ? kit.rectOf(pin.range) : null;
       // Ranges can render through display: contents parents with no own box.
       // Their rectangles establish rendering; check the nearest box ancestor
@@ -282,24 +290,31 @@ function installBrowserPreviewPins(
       diagnostics.byRule[next.rule] = (diagnostics.byRule[next.rule] ?? 0) + 1;
     }
     if (budget.exhausted) diagnostics.budgetExhausted += 1;
-    observeShadowRoots();
+    watchFrames();
+    observeRoots();
     awaitDefinitions();
     const moved = place();
     if (changed && !moved) revision += 1;
     return changed || moved;
   };
 
-  // A document observer never sees inside a shadow root, so each open root
-  // the resolver entered is observed too (the kit bounds how many it reports).
+  // A document observer never sees inside a shadow root or a frame's
+  // document, so each open root and frame document the resolver entered is
+  // observed too (the kit bounds how many it reports).
   let observer: MutationObserver | null = null;
-  const observedRoots: ShadowRoot[] = [];
+  const observedRoots: Node[] = [];
   const OBSERVE_OPTIONS = { childList: true, subtree: true, characterData: true };
-  const observeShadowRoots = (): void => {
+  const observeRoots = (): void => {
     if (!observer) return;
-    const current = kit
-      .shadowRootsSeen()
-      .filter((root) => root.host.isConnected)
-      .slice(0, 64);
+    const current: Node[] = [
+      ...kit
+        .shadowRootsSeen()
+        .filter((root) => root.host.isConnected)
+        .slice(0, 64),
+      ...watchedFrames.flatMap((entry) =>
+        entry.doc?.documentElement ? [entry.doc.documentElement] : [],
+      ),
+    ];
     if (
       current.length === observedRoots.length &&
       current.every((root, index) => root === observedRoots[index])
@@ -315,6 +330,42 @@ function installBrowserPreviewPins(
       } catch {
         // A root that cannot be observed still resolves on the next pass.
       }
+    }
+  };
+
+  // A frame on a pin's root path replaces its document on every navigation:
+  // its `load` re-resolves, the document it shows is observed for mutations,
+  // and scrolling it redraws. Bounded by the kit's 16 seen frames.
+  const watchedFrames: Array<{ frame: Element; doc: Document | null }> = [];
+  // Wrappers: the first pass runs before the scheduling helpers below exist.
+  const onFrameLoad = (): void => {
+    if (destroyed) return;
+    dirty = true;
+    schedulePass();
+  };
+  const onFrameScroll = (): void => schedulePlace();
+  const unwatchFrame = (entry: { frame: Element; doc: Document | null }): void => {
+    entry.frame.removeEventListener("load", onFrameLoad);
+    entry.doc?.removeEventListener("scroll", onFrameScroll, true);
+  };
+  const watchFrames = (): void => {
+    const current = kit
+      .framesSeen()
+      .filter((frameElement) => frameElement.isConnected)
+      .slice(0, 16);
+    for (let index = watchedFrames.length - 1; index >= 0; index -= 1) {
+      const entry = watchedFrames[index]!;
+      if (!current.includes(entry.frame) || kit.frameDocument(entry.frame) !== entry.doc) {
+        unwatchFrame(entry);
+        watchedFrames.splice(index, 1);
+      }
+    }
+    for (const frameElement of current) {
+      if (watchedFrames.some((entry) => entry.frame === frameElement)) continue;
+      const doc = kit.frameDocument(frameElement);
+      frameElement.addEventListener("load", onFrameLoad);
+      doc?.addEventListener("scroll", onFrameScroll, true);
+      watchedFrames.push({ frame: frameElement, doc });
     }
   };
 
@@ -479,7 +530,7 @@ function installBrowserPreviewPins(
       schedulePass();
     });
     observer.observe(document.documentElement, OBSERVE_OPTIONS);
-    observeShadowRoots();
+    observeRoots();
   }
   const onVisibility = (): void => {
     if (!hidden() && dirty) schedulePass();
@@ -514,6 +565,7 @@ function installBrowserPreviewPins(
   const destroy = (): void => {
     destroyed = true;
     observer?.disconnect();
+    for (const entry of watchedFrames.splice(0)) unwatchFrame(entry);
     if (timer !== null) clearTimeout(timer);
     if (definitionTimer !== null) clearTimeout(definitionTimer);
     window.removeEventListener("scroll", schedulePlace, true);
@@ -552,7 +604,7 @@ export function browserPreviewPinsShowScript(config: {
     scrollIntoView: config.scrollIntoView,
     limits: { ...BROWSER_PREVIEW_PINS_DEFAULT_LIMITS, ...config.limits },
   };
-  return `/*orkestrator:pins-show*/(${installBrowserPreviewPins.toString()})(${browserPreviewAnchorKit.toString()}, ${JSON.stringify(payload)});`;
+  return `/*orkestrator:pins-show*/(${installBrowserPreviewPins.toString()})(${browserPreviewAnchorKitSource()}, ${JSON.stringify(payload)});`;
 }
 
 /** Current results and counters of the installed layer, or null. */

@@ -122,6 +122,72 @@ describe("Key information summary layout", () => {
     expect(within(notDone).getByText("live").tagName).toBe("EM");
   });
 
+  test("renders Markdown throughout decisions, tests, issues and verification", () => {
+    const { container } = render(
+      <KeyInformationDocument
+        keyInformation={{
+          ...info,
+          decisions: [
+            {
+              decision: "**Decision title**",
+              options: [
+                { option: "**Option title**", pros: ["_Pro text_"], cons: ["~~Con text~~"] },
+              ],
+              chosen: "**Fallback choice**",
+              rationale: "Use `scanner`",
+            },
+          ],
+          tests: [
+            { name: "focused suite", result: "passed", details: "**Test details** and `command`" },
+          ],
+          issues: [
+            {
+              round: 0,
+              issue: "**Issue title**",
+              resolution: "_Resolution text_",
+              status: "resolved",
+            },
+          ],
+          verifications: [
+            {
+              round: 0,
+              passed: true,
+              summary: "**Verified summary**",
+              checks: [
+                {
+                  check: "_Check text_",
+                  passed: true,
+                  details: "Use `verification-code`",
+                },
+              ],
+            },
+          ],
+        }}
+        scrollRef={createRef()}
+      />,
+    );
+    for (const [label, tag, count] of [
+      ["Decision title", "STRONG", 1],
+      ["Option title", "STRONG", 1],
+      ["Pro text", "EM", 1],
+      ["Con text", "DEL", 1],
+      ["Fallback choice", "STRONG", 1],
+      ["scanner", "CODE", 1],
+      ["Test details", "STRONG", 2],
+      ["command", "CODE", 2],
+      ["Issue title", "STRONG", 1],
+      ["Resolution text", "EM", 1],
+      ["Verified summary", "STRONG", 1],
+      ["Check text", "EM", 1],
+      ["verification-code", "CODE", 1],
+    ] as const) {
+      const matches = within(container).getAllByText(label);
+      expect(matches).toHaveLength(count);
+      for (const match of matches) expect(match.tagName).toBe(tag);
+    }
+    expect(container.textContent).not.toMatch(/\*\*|~~|`/);
+  });
+
   test("the key information tab shows the summary as paragraphs and bullets", () => {
     render(<KeyInformationDocument keyInformation={info} scrollRef={createRef()} />);
     const summary = screen.getByRole("region", { name: "Summary" });

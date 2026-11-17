@@ -115,6 +115,67 @@ describe("keyInformationInline", () => {
     ]);
   });
 
+  test.each([
+    ["**", "strong"],
+    ["*", "em"],
+    ["~~", "strike"],
+  ] as const)("keeps code opaque inside %s", (marker, kind) => {
+    const text = `${marker}use \`a${marker} b\` now${marker}`;
+    expect(keyInformationInline(text)).toEqual([
+      {
+        kind,
+        children: [
+          { kind: "text", value: "use " },
+          { kind: "code", value: `a${marker} b` },
+          { kind: "text", value: " now" },
+        ],
+      },
+    ]);
+    const { container } = render(<KeyInformationText text={text} />);
+    expect(container.querySelector(`${kind === "strike" ? "del" : kind} > code`)?.textContent).toBe(
+      `a${marker} b`,
+    );
+    expect(container.textContent).toBe(`use a${marker} b now`);
+  });
+
+  test.each(["*", "_"])("resolves adjacent %s delimiter runs", (marker) => {
+    for (const [text, prefix] of [
+      [marker.repeat(3) + "important" + marker.repeat(3), ""],
+      [marker.repeat(2) + "bold and " + marker + "important" + marker.repeat(3), "bold and "],
+    ]) {
+      expect(keyInformationInline(text!)).toEqual([
+        {
+          kind: "strong",
+          children: [
+            ...(prefix ? [{ kind: "text", value: prefix }] : []),
+            { kind: "em", children: [{ kind: "text", value: "important" }] },
+          ],
+        },
+      ]);
+      const { container } = render(<KeyInformationText text={text!} />);
+      expect(container.querySelector("strong > em")?.textContent).toBe("important");
+      expect(container.textContent).toBe(prefix + "important");
+    }
+  });
+
+  test.each([
+    ["see __tests__/a.ts", "see ", "__tests__/a.ts"],
+    ["edit __init__.py", "edit ", "__init__.py"],
+  ])("preserves dunder path in %s", (text, prefix, path) => {
+    expect(keyInformationInline(text)).toEqual([
+      { kind: "text", value: prefix },
+      { kind: "code", value: path },
+    ]);
+  });
+
+  test("keeps word-leading and slash-preceded globs separate", () => {
+    expect(keyInformationInline("*.test.ts and src/*.spec.ts")).toEqual([
+      { kind: "code", value: "*.test.ts" },
+      { kind: "text", value: " and " },
+      { kind: "code", value: "src/*.spec.ts" },
+    ]);
+  });
+
   test("does not read glob stars as emphasis", () => {
     expect(keyInformationInline("globs src/**/*.ts and lib/*.js")).toEqual([
       { kind: "text", value: "globs " },

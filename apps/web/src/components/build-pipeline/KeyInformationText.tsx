@@ -114,64 +114,97 @@ export type KeyInformationInline =
   Segment | { kind: "strong" | "em" | "strike"; children: KeyInformationInline[] };
 
 /**
- * A delimiter opens only at the start, after whitespace or after opening
- * punctuation, and closes only before the end, whitespace or punctuation.
- * That is stricter than CommonMark, so globs (`src/**`), arithmetic
- * (`2 * 3 * 4`, `2**10`) and identifiers (`snake_case_name`) stay prose.
- */
-const OPEN = String.raw`(?<=^|[\s(\[{"'])`;
-const CLOSE = String.raw`(?=$|[\s)\]}"'.,;:!?/-])`;
-
-/**
- * The inline Markdown agents write in a brief, leftmost first. A code span
- * wins over emphasis, as in CommonMark, so `` `**x**` `` stays literal.
- * Groups: 1 code, 2 `**strong**`, 3 `__strong__`, 4 `*em*`, 5 `_em_`,
- * 6 `~~strike~~`.
- */
-const INLINE_MARKDOWN = new RegExp(
-  [
-    "`([^`\\n]+)`",
-    String.raw`${OPEN}\*\*(?=[^\s*])([^\n]*?[^\s*\\])\*\*${CLOSE}`,
-    String.raw`${OPEN}__(?=[^\s_])([^\n]*?[^\s_\\])__${CLOSE}`,
-    String.raw`${OPEN}\*(?=[^\s*])([^\n*]*?[^\s*\\])\*${CLOSE}`,
-    String.raw`${OPEN}_(?=[^\s_])([^\n_]*?[^\s_\\])_${CLOSE}`,
-    String.raw`${OPEN}~~(?=\S)([^\n]*?\S)~~${CLOSE}`,
-  ].join("|"),
-  "g",
-);
-
-/**
- * Splits brief text into the inline Markdown it uses: code spans, bold,
- * italic and strikethrough, nested as written. Prose between them goes
- * through {@link keyInformationSegments}, so bare file paths are still shown
- * as code.
+ * Scan code and path tokens before delimiter runs. A stack lets adjacent runs
+ * close nested emphasis without ever interpreting the contents of a code chip.
+ * Word-boundary guards deliberately keep arithmetic and identifiers literal.
  */
 export function keyInformationInline(text: string): KeyInformationInline[] {
-  const nodes: KeyInformationInline[] = [];
+  type Frame = {
+    marker: string;
+    kind: "strong" | "em" | "strike";
+    children: KeyInformationInline[];
+  };
+  const root: KeyInformationInline[] = [];
+  const stack: Frame[] = [];
+  const children = () => stack.at(-1)?.children ?? root;
   const push = (node: KeyInformationInline) => {
-    const last = nodes.at(-1);
+    const target = children();
+    const last = target.at(-1);
     if (node.kind === "text" && last?.kind === "text") last.value += node.value;
-    else nodes.push(node);
+    else target.push(node);
   };
-  const pushProse = (value: string) => {
-    for (const segment of keyInformationSegments(value)) push(segment);
+  const prose = (value: string) => {
+    for (const node of keyInformationSegments(value)) push(node);
   };
-  let index = 0;
-  for (const match of text.matchAll(INLINE_MARKDOWN)) {
-    pushProse(text.slice(index, match.index));
-    index = match.index + match[0].length;
-    const [, code, strong, underscoreStrong, em, underscoreEm, strike] = match;
-    if (code !== undefined) push({ kind: "code", value: code });
-    else if (strong !== undefined || underscoreStrong !== undefined) {
-      push({ kind: "strong", children: keyInformationInline(strong ?? underscoreStrong ?? "") });
-    } else if (em !== undefined || underscoreEm !== undefined) {
-      push({ kind: "em", children: keyInformationInline(em ?? underscoreEm ?? "") });
-    } else {
-      push({ kind: "strike", children: keyInformationInline(strike ?? "") });
+  const unwind = () => {
+    while (stack.length) {
+      const frame = stack.pop()!;
+      push({ kind: "text", value: frame.marker });
+      for (const node of frame.children) push(node);
     }
+  };
+  // Path candidates include surrounding punctuation, just as the legacy chip
+  // renderer does. Formatting-wrapped paths do not pass isBarePathToken.
+  const tokens = /`[^`\n]+`|[^\s`]+|\s+|`/g;
+  for (const token of text.matchAll(tokens)) {
+    const word = token[0];
+    if (word.startsWith("`") && word.length > 1 && word.endsWith("`")) {
+      push({ kind: "code", value: word.slice(1, -1) });
+      continue;
+    }
+    const segments = keyInformationSegments(word);
+    if (segments.some((node) => node.kind === "code")) {
+      for (const node of segments) push(node);
+      continue;
+    }
+    let start = 0;
+    for (const run of word.matchAll(/\*+|_+|~{2,}|\n/g)) {
+      prose(word.slice(start, run.index));
+      start = run.index + run[0].length;
+      const marker = run[0];
+      if (marker === "\n") {
+        unwind();
+        push({ kind: "text", value: marker });
+        continue;
+      }
+      const position = token.index + run.index;
+      const before = text[position - 1] ?? "";
+      const after = text[position + marker.length] ?? "";
+      let remaining = marker.length;
+      const canClose =
+        before !== "" &&
+        !/[\s\\]/.test(before) &&
+        (after === "" || /[\s)\]}"'.,;:!?/-]/.test(after));
+      if (canClose) {
+        while (remaining && stack.at(-1)?.marker[0] === marker[0]) {
+          const frame = stack.at(-1)!;
+          if (frame.marker.length > remaining) break;
+          stack.pop();
+          remaining -= frame.marker.length;
+          push({ kind: frame.kind, children: frame.children });
+        }
+      }
+      const canOpen =
+        (before === "" || /[\s([{"']/.test(before)) && after !== "" && !/\s/.test(after);
+      if (remaining && canOpen && stack.length < 64) {
+        while (remaining) {
+          const width = remaining >= 2 ? 2 : 1;
+          if (marker[0] === "~" && width === 1) break;
+          stack.push({
+            marker: marker[0]!.repeat(width),
+            kind: marker[0] === "~" ? "strike" : width === 2 ? "strong" : "em",
+            children: [],
+          });
+          remaining -= width;
+          if (stack.length >= 64) break;
+        }
+      }
+      if (remaining) push({ kind: "text", value: marker[0]!.repeat(remaining) });
+    }
+    prose(word.slice(start));
   }
-  pushProse(text.slice(index));
-  return nodes;
+  unwind();
+  return root;
 }
 
 function renderInline(nodes: KeyInformationInline[]): ReactNode[] {

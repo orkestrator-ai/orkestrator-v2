@@ -198,6 +198,25 @@ describe("interactive tmux terminal snapshots", () => {
     expect(harness.scheduled).toHaveLength(0);
   });
 
+  test("a clipboard client that cannot attach does not stop the terminal", async () => {
+    let attaches = 0;
+    const harness = createInteractiveHarness(["pane", "pane"], [], {
+      attachClipboard: async () => {
+        attaches += 1;
+        throw new Error("tmux clipboard pane unavailable");
+      },
+    });
+    try {
+      await harness.manager.start(harness.id, harness.context);
+      expect(harness.emitted.at(-1)?.payload).toMatchObject({ full: true });
+      expect(harness.scheduled).toHaveLength(1);
+      await harness.manager.start(harness.id, harness.context);
+      expect(attaches).toBe(2);
+    } finally {
+      harness.manager.detachAll();
+    }
+  });
+
   test("a lost clipboard client signals desync and can reattach", async () => {
     let exit: (() => void) | undefined;
     let attaches = 0;

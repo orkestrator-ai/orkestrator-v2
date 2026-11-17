@@ -3,6 +3,7 @@ import { render } from "@testing-library/react";
 import {
   isBarePathToken,
   KEY_INFORMATION_CODE_CLASS,
+  type KeyInformationInline,
   KeyInformationText,
   keyInformationInline,
   keyInformationSegments,
@@ -143,15 +144,11 @@ describe("keyInformationInline", () => {
       [marker.repeat(3) + "important" + marker.repeat(3), ""],
       [marker.repeat(2) + "bold and " + marker + "important" + marker.repeat(3), "bold and "],
     ]) {
-      expect(keyInformationInline(text!)).toEqual([
-        {
-          kind: "strong",
-          children: [
-            ...(prefix ? [{ kind: "text", value: prefix }] : []),
-            { kind: "em", children: [{ kind: "text", value: "important" }] },
-          ],
-        },
-      ]);
+      const children: KeyInformationInline[] = [
+        ...(prefix ? [{ kind: "text" as const, value: prefix }] : []),
+        { kind: "em", children: [{ kind: "text", value: "important" }] },
+      ];
+      expect(keyInformationInline(text!)).toEqual([{ kind: "strong", children }]);
       const { container } = render(<KeyInformationText text={text!} />);
       expect(container.querySelector("strong > em")?.textContent).toBe("important");
       expect(container.textContent).toBe(prefix + "important");

@@ -236,6 +236,13 @@ export class InteractiveTmuxTerminalManager {
             if (this.terminals.get(id) !== terminal) client.dispose();
             else terminal.clipboard = client;
           })
+          // Copy is an add-on to the pane: without it the terminal still
+          // works, and the next start tries again.
+          .catch((error) => {
+            log.warn("interactive.clipboard-unavailable", () => ({
+              error: formatLogError(error, { stack: false }),
+            }));
+          })
           .finally(() => {
             terminal.clipboardStarting = undefined;
           });

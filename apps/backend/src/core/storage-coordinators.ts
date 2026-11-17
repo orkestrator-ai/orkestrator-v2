@@ -557,30 +557,50 @@ export class CoordinatorsRepository {
   ): Promise<CoordinatorWorkflowAssociation> {
     return this.enqueueCoordinatorMutation(async () => {
       const store = await this.loadCoordinatorStore();
-      const duplicate = store.workflows.find(
-        (item) =>
-          item.coordinatorId === association.coordinatorId &&
-          item.requestId === association.requestId,
-      );
-      if (duplicate) {
-        if (
-          duplicate.kind !== association.kind ||
-          duplicate.resourceId !== association.resourceId ||
-          duplicate.nodeId !== association.nodeId ||
-          duplicate.projectId !== association.projectId ||
-          (duplicate.payloadHash &&
-            association.payloadHash &&
-            duplicate.payloadHash !== association.payloadHash)
-        ) {
-          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
-        }
-        return duplicate;
-      }
+      const duplicate = existingWorkflowAssociation(store.workflows, association);
+      if (duplicate) return duplicate;
       (await this.makeRoomForWorkflowAssociation(store))();
       store.workflows.push(association);
       store.revision += 1;
       await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
       return association;
+    });
+  }
+
+  /**
+   * Adds new workflow records in order under one lease and one write,
+   * stopping at the first one a full store refuses. A record whose request is
+   * already stored is left as it is, as {@link saveCoordinatorWorkflowAssociation}
+   * does. Seeding uses this: one write per record is thousands of commits.
+   */
+  async saveCoordinatorWorkflowAssociations(
+    associations: CoordinatorWorkflowAssociation[],
+  ): Promise<{ added: number; refused: number }> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let added = 0;
+      let refused = 0;
+      for (const [index, association] of associations.entries()) {
+        if (existingWorkflowAssociation(store.workflows, association)) continue;
+        try {
+          (await this.makeRoomForWorkflowAssociation(store))();
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            error.message !== COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR
+          )
+            throw error;
+          refused = associations.length - index;
+          break;
+        }
+        store.workflows.push(association);
+        added += 1;
+      }
+      if (added > 0) {
+        store.revision += 1;
+        await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      }
+      return { added, refused };
     });
   }
 
@@ -1544,6 +1564,7 @@ export type CoordinatorsStorage = Pick<
   | "mutateCoordinatorWorkspaceWithComposeDrafts"
   | "mutateCoordinatorWorkspace"
   | "saveCoordinatorWorkflowAssociation"
+  | "saveCoordinatorWorkflowAssociations"
   | "reserveCoordinatorWorkflowAssociation"
   | "completeCoordinatorWorkflowAssociation"
   | "releasePendingCoordinatorWorkflowAssociation"
@@ -1578,6 +1599,33 @@ export type CoordinatorsStorage = Pick<
   | "completeCoordinatorActionReceipt"
   | "releaseCoordinatorActionReceipt"
 >;
+
+/**
+ * The stored record for the same coordinator request, or `undefined`. Throws
+ * when that request id is already stored for a different resource.
+ */
+function existingWorkflowAssociation(
+  workflows: CoordinatorWorkflowAssociation[],
+  association: CoordinatorWorkflowAssociation,
+): CoordinatorWorkflowAssociation | undefined {
+  const duplicate = workflows.find(
+    (item) =>
+      item.coordinatorId === association.coordinatorId && item.requestId === association.requestId,
+  );
+  if (
+    duplicate &&
+    (duplicate.kind !== association.kind ||
+      duplicate.resourceId !== association.resourceId ||
+      duplicate.nodeId !== association.nodeId ||
+      duplicate.projectId !== association.projectId ||
+      (duplicate.payloadHash &&
+        association.payloadHash &&
+        duplicate.payloadHash !== association.payloadHash))
+  ) {
+    throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
+  }
+  return duplicate;
+}
 
 function isActionReceipt(value: unknown): value is CoordinatorActionReceipt {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;

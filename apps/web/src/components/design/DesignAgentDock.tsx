@@ -55,7 +55,7 @@ const DOCK_LABELS: Record<DesignAgentDock, string> = {
   bottom: "Bottom",
 };
 
-/** Smallest the panel gets along its axis, whatever the percentage says. */
+/** Smallest the panel gets along its axis, capped at half the pane so the canvas remains usable. */
 const PANEL_MIN_PX = { horizontal: 320, vertical: 160 } as const;
 
 export interface DesignAgentDockProps {
@@ -119,7 +119,15 @@ export function DesignAgentDock({
   const horizontal = isHorizontalDock(dock);
   const leads = panelLeads(dock);
   const size = liveSize ?? designAgentPanelSize(panel);
-  const agentOwns = ownsGlobalShortcuts && open && region === "agent";
+  const agentOwns = ownsGlobalShortcuts && open && Boolean(agent) && region === "agent";
+
+  const renderedSize = () => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    const panel = containerRef.current?.querySelector("section")?.getBoundingClientRect();
+    const extent = rect ? (horizontal ? rect.width : rect.height) : 0;
+    const pixels = panel ? (horizontal ? panel.width : panel.height) : 0;
+    return extent > 0 && pixels > 0 ? (pixels / extent) * 100 : size;
+  };
 
   const toggle = useCallback(() => onPanelChange({ open: !open }), [onPanelChange, open]);
   const moveTo = useCallback(
@@ -173,8 +181,14 @@ export function DesignAgentDock({
           order: leads ? 0 : 2,
           flexBasis: `${size}%`,
           ...(horizontal
-            ? { minWidth: PANEL_MIN_PX.horizontal, maxWidth: `${DESIGN_AGENT_PANEL_SIZE.max}%` }
-            : { minHeight: PANEL_MIN_PX.vertical, maxHeight: `${DESIGN_AGENT_PANEL_SIZE.max}%` }),
+            ? {
+                minWidth: `min(${PANEL_MIN_PX.horizontal}px, 50%)`,
+                maxWidth: `${DESIGN_AGENT_PANEL_SIZE.max}%`,
+              }
+            : {
+                minHeight: `min(${PANEL_MIN_PX.vertical}px, 50%)`,
+                maxHeight: `${DESIGN_AGENT_PANEL_SIZE.max}%`,
+              }),
         }}
         onPointerDownCapture={() => setRegion("agent")}
         onFocusCapture={() => setRegion("agent")}
@@ -312,7 +326,8 @@ export function DesignAgentDock({
             resizeStart.current = {
               x: event.clientX,
               y: event.clientY,
-              size,
+              // Start from rendered geometry when CSS constrained the saved percentage.
+              size: renderedSize(),
               container: horizontal ? rect.width : rect.height,
             };
           }}
@@ -341,7 +356,7 @@ export function DesignAgentDock({
             setLiveSize(null);
           }}
           onKeyDown={(event) => {
-            const next = keyboardPanelSize(dock, size, event.key);
+            const next = keyboardPanelSize(dock, renderedSize(), event.key);
             if (next === null) return;
             event.preventDefault();
             onPanelChange({ size: next });

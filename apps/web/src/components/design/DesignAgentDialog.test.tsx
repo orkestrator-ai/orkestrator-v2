@@ -440,7 +440,8 @@ describe("DesignAgentDialog", () => {
     seedTabs([]);
     const sessions = [link("kept", "agent-closed", { label: "Design chat" })];
     backendLinks(sessions, { kept: "missing" }, { kept: "provider-session-9" });
-    const { onOpenChange } = await renderDialog({ sessions });
+    const onConversationOpened = mock((_tabId: string) => {});
+    const { onOpenChange } = await renderDialog({ sessions, onConversationOpened });
 
     const row = screen.getByTestId("design-link-kept");
     expect(row.textContent).toContain("Closed — can be resumed");
@@ -470,6 +471,7 @@ describe("DesignAgentDialog", () => {
       resumeSessionId: "live-session-1",
       requireExistingResumeSession: true,
     });
+    expect(onConversationOpened).toHaveBeenCalledWith(options!.tabId!);
     expect(options?.initialPrompt).toBeUndefined();
     // Resuming alone leaves the reopened conversation's composer untouched.
     expect(

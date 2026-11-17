@@ -1,7 +1,12 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { listen } from "@/lib/native/events";
+import { toast } from "sonner";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { uiStore } from "@/stores/uiStore";
+import { nativeAgentAsyncQuestionEvent } from "@orkestrator/protocol/contract/domains/events";
+import { afterEach, describe, expect, spyOn, test, type Mock } from "bun:test";
 import { act, cleanup } from "@testing-library/react";
 import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
-import { useEnvironments } from "./useEnvironments";
+import { useEnvironmentLifecycleService, useEnvironments } from "./useEnvironments";
 import * as backend from "@/lib/backend";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { environmentStore } from "@/stores/environmentStore";
@@ -439,4 +444,60 @@ describe("HTTPS remedy lifecycle", () => {
       read.mockRestore();
     }
   });
+});
+
+test("Codex questions toast only when their embedded panel is hidden", async () => {
+  const listenMock = listen as unknown as Mock<(...args: unknown[]) => Promise<() => void>>;
+  listenMock.mockClear();
+  const info = spyOn(toast, "info");
+  const previous = appCommandStore(uiStore).getState().selectedEnvironmentId;
+  appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-question" });
+  try {
+    const { unmount } = renderHookInAppCommandScope(() => useEnvironmentLifecycleService());
+    await act(async () => {});
+    const call = listenMock.mock.calls.find(
+      ([event]) => event === nativeAgentAsyncQuestionEvent.name,
+    );
+    expect(call).toBeTruthy();
+    const handler = call![1] as (event: { payload: unknown }) => void;
+    for (const open of [true, false]) {
+      appCommandStore(paneLayoutStore).setState({
+        environments: new Map([
+          [
+            "env-question",
+            {
+              root: {
+                kind: "leaf",
+                id: "pane",
+                activeTabId: "design",
+                tabs: [
+                  {
+                    id: "design",
+                    type: "design-canvas",
+                    designCanvasData: { canvasId: "canvas", agentPanel: { dock: "left", open } },
+                  },
+                  {
+                    id: "agent",
+                    type: "agent-native",
+                    embeddedIn: "design",
+                    nativeAgentData: { platform: "codex", environmentId: "env-question" },
+                  },
+                ],
+              },
+              activePaneId: "pane",
+              containerId: null,
+            },
+          ],
+        ]),
+      });
+      handler({
+        payload: { environment_id: "env-question", session_key: "env-env-question:agent" },
+      });
+      expect(info.mock.calls.length).toBe(open ? 0 : 1);
+    }
+    unmount();
+  } finally {
+    info.mockRestore();
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: previous });
+  }
 });

@@ -20,10 +20,12 @@ function Harness({
   initial = { dock: "left", open: true },
   ownsGlobalShortcuts = true,
   onPopOut,
+  hasAgent = true,
 }: {
   initial?: DesignAgentPanelState;
   ownsGlobalShortcuts?: boolean;
   onPopOut?: () => void;
+  hasAgent?: boolean;
 }) {
   const [panel, setPanel] = useState<DesignAgentPanelState>(initial);
   return (
@@ -34,7 +36,7 @@ function Harness({
       }
       visible
       ownsGlobalShortcuts={ownsGlobalShortcuts}
-      agent={{ environmentId: "env-1", tabId: "agent-1", platform: "codex" }}
+      agent={hasAgent ? { environmentId: "env-1", tabId: "agent-1", platform: "codex" } : undefined}
       {...(onPopOut ? { onPopOut } : {})}
       renderCanvas={(view) => (
         <div data-testid="canvas" data-owns={String(view.ownsGlobalShortcuts)}>
@@ -155,6 +157,7 @@ describe("DesignAgentDock", () => {
 
     dock().getBoundingClientRect = () =>
       ({ left: 0, top: 0, width: 1000, height: 600, right: 1000, bottom: 600 }) as DOMRect;
+    panel().getBoundingClientRect = () => ({ width: 150, height: 600 }) as DOMRect;
     fireEvent.pointerDown(separator, { button: 0, pointerId: 1, clientX: 150, clientY: 10 });
     fireEvent.pointerMove(separator, { pointerId: 1, clientX: 400, clientY: 10 });
     expect(separator.getAttribute("aria-valuenow")).toBe("40");
@@ -171,6 +174,15 @@ describe("DesignAgentDock", () => {
     expect(screen.getByTestId("agent").dataset.owns).toBe("true");
     fireEvent.pointerDown(screen.getByTestId("canvas"));
     expect(screen.getByTestId("canvas").dataset.owns).toBe("true");
+  });
+
+  test("an empty open panel returns shortcuts to the canvas after pop out", () => {
+    const view = renderInAppCommandScope(<Harness />);
+    fireEvent.pointerDown(screen.getByTestId("agent"));
+    expect(screen.getByTestId("canvas").dataset.owns).toBe("false");
+    view.rerender(<Harness hasAgent={false} />);
+    expect(screen.getByTestId("canvas").dataset.owns).toBe("true");
+    expect(screen.getByTestId("agent").dataset.owns).toBe("false");
   });
 
   test("pop out is offered only when the caller can do it", () => {

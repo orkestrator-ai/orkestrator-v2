@@ -518,6 +518,44 @@ describe("PaneLeafContainer", () => {
     paneRenderCount = 0;
   });
 
+  test("renders an embedded agent once inside its design panel with active and focus ownership", async () => {
+    const pane: PaneLeaf = {
+      kind: "leaf",
+      id: "embedded-pane",
+      activeTabId: "design",
+      tabs: [
+        { id: "design", type: "design-canvas", designCanvasData: { canvasId: "canvas" } },
+        {
+          id: "embedded",
+          type: "agent-native",
+          embeddedIn: "design",
+          nativeAgentData: { platform: "codex", environmentId: "env-hidden" },
+        },
+      ],
+    };
+    appCommandStore(paneLayoutStore).setState({
+      environments: new Map([
+        ["env-hidden", { root: pane, activePaneId: pane.id, containerId: "container-hidden" }],
+      ]),
+    });
+    renderInAppCommandScope(
+      <PaneLeafContainer
+        pane={pane}
+        containerId="container-hidden"
+        environmentId="env-hidden"
+        isActive
+      />,
+    );
+    await waitFor(() => expect(screen.getAllByTestId("codex-tab")).toHaveLength(1));
+    const agent = screen.getByTestId("codex-tab");
+    expect(agent.closest('[aria-label="Agent panel"]')).toBeTruthy();
+    expect(agent.dataset.active).toBe("true");
+    expect(agent.dataset.ownsGlobalShortcuts).toBe("false");
+    fireEvent.pointerDown(agent);
+    expect(agent.dataset.ownsGlobalShortcuts).toBe("true");
+    fireEvent.click(screen.getAllByRole("button", { name: "Hide agent panel" })[0]!);
+  });
+
   test("routes diff tabs by their change target; legacy diff tabs show the environment's current file", async () => {
     const historical: ChangeDiffTarget = {
       kind: "historical",

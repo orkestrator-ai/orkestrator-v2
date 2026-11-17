@@ -992,8 +992,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             ? {
                 reviewers: selection.reviewers,
                 reviewModel: selection.reviewModel,
-                fixModel: selection.fixModel,
-                autoFix: selection.autoFix,
+                addressFindingsModel: selection.fixModel,
+                autoAddressFindings: selection.autoFix,
                 autoPr: selection.autoPr,
               }
             : {}),

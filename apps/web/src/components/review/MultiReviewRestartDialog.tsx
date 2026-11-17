@@ -31,7 +31,7 @@ import { flatCatalog } from "./MultiReviewLaunchDialog";
 const STEP_LABELS: Record<MultiReviewStepKind, string> = {
   prepare: "Preparation",
   consolidate: "Consolidation",
-  fix: "Address Findings",
+  "address-findings": "Address Findings",
 };
 
 interface ModelRestartDialogProps {

@@ -42,7 +42,7 @@ first wait, before the removal, passed.
 ## Resolution (2026-11-09)
 
 - **Root cause:** a product bug in the Linux (per-directory) strategy of
-  `apps/backend/src/core/worktree-watcher.ts`. A watch was replaced only when
+  `apps/backend/src/core/worktrees/watcher.ts`. A watch was replaced only when
   the directory's identity, `dev:ino` from `worktreeWatchPlanIo.directoryIdentity`,
   changed. Linux ext4 hands a removed directory's inode number to the next
   directory made, so after `rm -r src && mkdir src` the identity usually reads
@@ -69,7 +69,7 @@ first wait, before the removal, passed.
   failed without the fix with `no change noticed in src` after 90,434.97 ms,
   the CI signature, and passed with it in 776.80 ms.
 - **Stress:** the complete `tests/worktree-watcher-real.test.ts` plus
-  `src/core/worktree-watcher-split.test.ts` passed 3 of 3 runs in the same
+  `src/core/worktrees/watcher-split.test.ts` passed 3 of 3 runs in the same
   Linux container (59 pass each). On macOS the four watcher files
   (`worktree-watcher-split`, `worktree-watch-plan`, `worktree-watcher`,
   `worktree-watcher-real`) passed with `--parallel=4` (103 pass).

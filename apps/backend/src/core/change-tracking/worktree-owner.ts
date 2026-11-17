@@ -24,7 +24,7 @@ import { gitDockerScanPool } from "../git-docker-scan-pool.js";
 import { runCommand } from "../shell.js";
 import { CaptureError, captureErrorReason } from "./capture-error.js";
 import type { WorkAdmissionPool } from "../work-admission.js";
-import { resolveWorktreeGitPaths } from "../worktree-git-paths.js";
+import { resolveWorktreeGitPaths } from "../worktrees/index.js";
 import {
   captureWorktree,
   ContainerCaptureExecutor,

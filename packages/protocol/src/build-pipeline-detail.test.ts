@@ -20,7 +20,7 @@ function snapshot() {
         sessionKey: "build",
         messageRevision: 3,
         interactionPolicy: { mode: "unattended" },
-        fixResult: { summary: "fixed" },
+        addressFindingsResult: { summary: "fixed" },
       },
       { sessionKey: "review", messageRevision: 1 },
       {
@@ -49,9 +49,9 @@ describe("build pipeline detail", () => {
 
   test("the detail names each session by key, so moving a field between sessions changes it", () => {
     const moved = snapshot();
-    const fixResult = moved.sessions[0]!.fixResult;
-    delete (moved.sessions[0] as { fixResult?: unknown }).fixResult;
-    (moved.sessions[1] as Record<string, unknown>).fixResult = fixResult;
+    const addressFindingsResult = moved.sessions[0]!.addressFindingsResult;
+    delete (moved.sessions[0] as { addressFindingsResult?: unknown }).addressFindingsResult;
+    (moved.sessions[1] as Record<string, unknown>).addressFindingsResult = addressFindingsResult;
     expect(JSON.stringify(extractBuildPipelineDetail(moved))).not.toBe(
       JSON.stringify(extractBuildPipelineDetail(snapshot())),
     );

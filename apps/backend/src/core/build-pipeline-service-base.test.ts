@@ -850,7 +850,7 @@ describe("BuildPipelineService", () => {
         for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
         const staged = await mutateStored(storage, started.id, (snapshot) => {
           snapshot.sessions.push({
-            phase: "fix",
+            phase: "rework",
             agent: "claude",
             iteration: snapshot.iteration,
             sessionKey: "previous-fix",
@@ -861,7 +861,7 @@ describe("BuildPipelineService", () => {
           });
           snapshot.verificationFeedback = "Repair the failed verification";
         });
-        provider.runningPhases.add("fix");
+        provider.runningPhases.add("rework");
         const fixing = await service.restartStep(started.id, staged.sessions.at(-1)!.sdkSessionId);
         const session = fixing.sessions.at(-1)!;
         expect(session.producedReviewPackagePlan).toBe(true);
@@ -869,9 +869,9 @@ describe("BuildPipelineService", () => {
         const restarted = await service.restartCurrentStep(started.id);
 
         expect(provider.aborted).toContain(session.sdkSessionId);
-        expect(restarted.phase).toBe("fixing");
+        expect(restarted.phase).toBe("reworking");
         expect(restarted.sessions.at(-1)).toMatchObject({
-          phase: "fix",
+          phase: "rework",
           label: "Rework Session",
           status: "running",
         });
@@ -936,9 +936,9 @@ describe("BuildPipelineService", () => {
 
           const restarted = await service.restartCurrentStep(started.id);
 
-          expect(restarted.phase).toBe("fixing");
+          expect(restarted.phase).toBe("reworking");
           expect(restarted.sessions.at(-1)).toMatchObject({
-            phase: "fix",
+            phase: "rework",
             label: REVIEW_PACKAGE_SESSION_LABEL,
             status: "running",
           });
@@ -955,7 +955,7 @@ describe("BuildPipelineService", () => {
         const { started } = await startBuilding(service, storage, {
           reviewPreparation: { agent: "claude" },
         });
-        provider.runningPhases.add("fix");
+        provider.runningPhases.add("rework");
         await service.advanceNow(started.id);
         const preparation = (await pipeline(storage, started.id)).sessions.at(-1)!;
         expect(preparation.label).toBe(REVIEW_PACKAGE_SESSION_LABEL);
@@ -964,7 +964,7 @@ describe("BuildPipelineService", () => {
 
         expect(provider.aborted).toContain(preparation.sdkSessionId);
         expect(restarted.sessions.at(-1)).toMatchObject({
-          phase: "fix",
+          phase: "rework",
           label: REVIEW_PACKAGE_SESSION_LABEL,
           status: "running",
         });
@@ -974,7 +974,7 @@ describe("BuildPipelineService", () => {
 
     test.each([
       ["review", "reviewing"],
-      ["address", "addressing"],
+      ["address-findings", "addressing-findings"],
       ["pr", "creating-pr"],
       ["resolve-conflicts", "resolving-conflicts"],
     ] as const)("restarts the running %s session", async (sessionPhase, phase) => {
@@ -1137,7 +1137,7 @@ describe("BuildPipelineService", () => {
       expect(restarted.reviewPackage).toBeUndefined();
       expect(restarted.validationRun).toBeUndefined();
       expect(restarted.sessions.at(-1)).toMatchObject({
-        phase: "fix",
+        phase: "rework",
         label: REVIEW_PACKAGE_SESSION_LABEL,
         status: "running",
       });
@@ -1151,7 +1151,7 @@ describe("BuildPipelineService", () => {
     });
   });
 
-  test.each(["build", "fix", "verify", "pr", "resolve-conflicts"] as const)(
+  test.each(["build", "rework", "verify", "pr", "resolve-conflicts"] as const)(
     "restarts a completed %s stage through the durable supervisor request",
     async (phase) => {
       await withService(async (service, storage) => {
@@ -1175,7 +1175,7 @@ describe("BuildPipelineService", () => {
               completedAt: new Date().toISOString(),
               label: `${phase} session`,
             });
-            if (phase === "fix") snapshot.verificationFeedback = "Apply the requested repair";
+            if (phase === "rework") snapshot.verificationFeedback = "Apply the requested repair";
           });
           target = completed.sessions.at(-1)!;
         }
@@ -1600,7 +1600,8 @@ describe("BuildPipelineService", () => {
         requestId,
         value: (provider.phases.get(sessionId) === "review"
           ? cleanReview
-          : provider.phases.get(sessionId) === "build" || provider.phases.get(sessionId) === "fix"
+          : provider.phases.get(sessionId) === "build" ||
+              provider.phases.get(sessionId) === "rework"
             ? TEST_REVIEW_PREPARATION
             : { complete: false, rationale: "Still failing acceptance checks." }) as T,
       });
@@ -1619,7 +1620,7 @@ describe("BuildPipelineService", () => {
         "build",
         "review",
         "verify",
-        "fix",
+        "rework",
         "review",
         "verify",
       ]);

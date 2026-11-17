@@ -44,7 +44,7 @@ function workflow(overrides: Partial<MultiReviewWorkflow>): MultiReviewWorkflow 
     targetBranch: "main",
     phase: "consolidating",
     reviewers: [],
-    fixModel: { agent: "codex", model: "gpt-6" },
+    addressFindingsModel: { agent: "codex", model: "gpt-6" },
     reviewModel: { agent: "claude", model: "opus" },
     createdAt: STARTED,
     updatedAt: STARTED,
@@ -186,12 +186,20 @@ describe("step transcript reads", () => {
       undefined,
     );
     await readMultiReviewStepTranscript(
-      host([workflow({ phase: "fixing", fixSession: session("fix") })], fake.provider),
+      host(
+        [
+          workflow({
+            phase: "addressing-findings",
+            addressFindingsSession: session("address-findings"),
+          }),
+        ],
+        fake.provider,
+      ),
       "multi-1",
-      "fix",
+      "address-findings",
       consolidation.sourceToken,
     );
-    expect(fake.calls[1]).toMatchObject({ sessionId: "fix" });
+    expect(fake.calls[1]).toMatchObject({ sessionId: "address-findings" });
     expect(fake.calls[1]?.knownSourceToken).toBeUndefined();
   });
 
@@ -214,7 +222,12 @@ describe("step transcript reads", () => {
   test("does not read a step that has no session yet", async () => {
     const fake = snapshotProvider([row(1)]);
     const reader = host([workflow({ phase: "reviewing" })], fake.provider);
-    const answer = await readMultiReviewStepTranscript(reader, "multi-1", "fix", undefined);
+    const answer = await readMultiReviewStepTranscript(
+      reader,
+      "multi-1",
+      "address-findings",
+      undefined,
+    );
     expect(answer).toMatchObject({ session: "none", messages: [], transcript: "snapshot" });
     expect(reader.reads).toEqual([]);
   });
@@ -226,11 +239,11 @@ describe("step transcript reads", () => {
       workflow({
         phase,
         reviewModel: undefined,
-        fixSession: shared,
-        ...(phase === "fixing"
+        addressFindingsSession: shared,
+        ...(phase === "addressing-findings"
           ? {
               activeRequest: {
-                kind: "fix" as const,
+                kind: "address-findings" as const,
                 requestId: "fix-1",
                 state: "sent" as const,
                 createdAt: STARTED,
@@ -241,24 +254,29 @@ describe("step transcript reads", () => {
     const fake = snapshotProvider([row(1, "fixing the findings")]);
 
     const consolidating = host([legacy("consolidating")], fake.provider);
-    const fix = await readMultiReviewStepTranscript(consolidating, "multi-1", "fix", undefined);
+    const fix = await readMultiReviewStepTranscript(
+      consolidating,
+      "multi-1",
+      "address-findings",
+      undefined,
+    );
     expect(fix).toMatchObject({ session: "other-step", sessionStep: "consolidate", messages: [] });
     expect(fix.sourceToken).toBeUndefined();
     expect(consolidating.reads).toEqual([]);
 
-    const fixing = host([legacy("fixing")], fake.provider);
+    const fixing = host([legacy("addressing-findings")], fake.provider);
     const consolidation = await readMultiReviewStepTranscript(
       fixing,
       "multi-1",
       "consolidate",
       undefined,
     );
-    expect(consolidation).toMatchObject({ session: "other-step", sessionStep: "fix" });
+    expect(consolidation).toMatchObject({ session: "other-step", sessionStep: "address-findings" });
     expect(fixing.reads).toEqual([]);
     const addressFindingsTail = await readMultiReviewStepTranscript(
       fixing,
       "multi-1",
-      "fix",
+      "address-findings",
       undefined,
     );
     expect(addressFindingsTail).toMatchObject({
@@ -342,14 +360,19 @@ describe("step deferred tool details", () => {
     };
   }
 
-  for (const step of ["prepare", "consolidate", "fix"] as const) {
+  for (const step of ["prepare", "consolidate", "address-findings"] as const) {
     test(`${step} resolves a summary-only row against the workflow's owned session`, async () => {
       const fake = provider();
       const target = workflow({
-        phase: step === "prepare" ? "preparing" : step === "fix" ? "fixing" : "consolidating",
+        phase:
+          step === "prepare"
+            ? "preparing"
+            : step === "address-findings"
+              ? "addressing-findings"
+              : "consolidating",
         preparationSession: session("prepare-session"),
         reviewSession: session("consolidate-session"),
-        fixSession: session("fix-session"),
+        addressFindingsSession: session("address-findings-session"),
       });
       const reader = host([target], fake.provider);
       const loadWorkflow = mock(reader.loadWorkflow);
@@ -388,7 +411,7 @@ describe("step deferred tool details", () => {
         ...target,
         preparationSession: session("new-prepare"),
         reviewSession: session("new-consolidate"),
-        fixSession: session("new-fix"),
+        addressFindingsSession: session("new-fix"),
       };
       await expect(
         readMultiReviewStepToolDetails(
@@ -404,12 +427,17 @@ describe("step deferred tool details", () => {
   test("refuses details before and after a shared session handoff", async () => {
     const fake = provider();
     const shared = session("shared");
-    const before = workflow({ reviewModel: undefined, fixSession: shared });
+    const before = workflow({ reviewModel: undefined, addressFindingsSession: shared });
     const after = workflow({
       reviewModel: undefined,
-      fixSession: shared,
-      phase: "fixing",
-      activeRequest: { kind: "fix", requestId: "fix-1", state: "sent", createdAt: STARTED },
+      addressFindingsSession: shared,
+      phase: "addressing-findings",
+      activeRequest: {
+        kind: "address-findings",
+        requestId: "fix-1",
+        state: "sent",
+        createdAt: STARTED,
+      },
     });
     const tail = await readMultiReviewStepTranscript(
       host([before], fake.provider),

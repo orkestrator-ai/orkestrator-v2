@@ -418,14 +418,17 @@ describe("bounded, sanitized evidence", () => {
     });
   });
 
-  test("an iframe is captured with unsupported scope; a shadow host is an ordinary element", () => {
+  test("an iframe page script cannot read is captured with unsupported scope; a shadow host is an ordinary element", () => {
+    // happy-dom gives a frame's document an opaque origin, which the kit
+    // refuses as it does a cross-origin or sandboxed frame. Same-origin
+    // frames are covered in real Chromium (browser-preview-frame-targets).
     const harness = page(`<iframe title="Embedded"></iframe><div id="host"></div>`);
     const host = harness.document.getElementById("host")!;
     host.attachShadow({ mode: "open" }).innerHTML = "<button>Inside</button>";
     expect(captureElement(harness, harness.document.querySelector("iframe")!).anchor.scope).toEqual(
       {
         kind: "unsupported",
-        reason: "iframe",
+        reason: "cross-origin",
       },
     );
     // The host lives in the document. Content inside its open root is
@@ -446,6 +449,14 @@ describe("page-side anchor resolver", () => {
 
   test("matches a unique stable id and draws a numbered pin only for matched targets", () => {
     const harness = page(`<button data-testid="save">Save</button><button>Other</button>`);
+    // happy-dom has no layout; visible pins require a non-empty rendered box.
+    const button = harness.document.querySelector("button")!;
+    const renderedBox = button.getBoundingClientRect();
+    renderedBox.x = 10;
+    renderedBox.y = 10;
+    renderedBox.width = 80;
+    renderedBox.height = 30;
+    button.getBoundingClientRect = () => renderedBox;
     const target = captureElement(harness, harness.document.querySelector("button")!);
     const results = harness.pins([
       { annotationId: "annotation-1", number: 7, target },

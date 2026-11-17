@@ -41,7 +41,7 @@ describe("pipelineRestartSlot", () => {
       kind: "step",
       step: "build",
     });
-    expect(pipelineRestartSlot(pipeline, { phase: "fix", label: "Fix Session" })).toEqual({
+    expect(pipelineRestartSlot(pipeline, { phase: "rework", label: "Fix Session" })).toEqual({
       kind: "step",
       step: "build",
     });
@@ -57,7 +57,7 @@ describe("pipelineRestartSlot", () => {
       kind: "review-preparation",
     });
     expect(
-      pipelineRestartSlot(pipeline, { phase: "fix", label: REVIEW_PACKAGE_SESSION_LABEL }),
+      pipelineRestartSlot(pipeline, { phase: "rework", label: REVIEW_PACKAGE_SESSION_LABEL }),
     ).toEqual({ kind: "review-preparation" });
   });
 

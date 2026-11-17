@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { promises as fs, watch, type FSWatcher } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { startWorktreeWatcher, type WorktreeWatcher } from "./worktree-watcher.js";
-import { worktreeWatchPlanIo } from "./worktree-watch-plan.js";
+import { startWorktreeWatcher, type WorktreeWatcher } from "./watcher.js";
+import { worktreeWatchPlanIo } from "./watch-plan.js";
 
 // Opt in ONLY with a small, private inotify quota: a disposable Linux VM with a
 // dedicated user and a small fs.inotify.max_user_watches, or a private user

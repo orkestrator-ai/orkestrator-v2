@@ -205,7 +205,7 @@ const BUILD_STEPS: Array<{
     icon: <ScanSearch className="size-4" />,
   },
   {
-    key: "address",
+    key: "address-findings",
     title: "Address Findings",
     description: "Continues from the review and addresses its findings.",
     icon: <ListChecks className="size-4" />,

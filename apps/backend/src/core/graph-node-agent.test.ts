@@ -507,7 +507,7 @@ for (const failure of ["setup", "lost"] as const) {
       createdAt: run.createdAt,
       updatedAt: run.updatedAt,
       reviewers: [{ id: "reviewer", agent: "opencode", model: "model", status: "pending" }],
-      fixModel: { agent: "opencode", model: "model" },
+      addressFindingsModel: { agent: "opencode", model: "model" },
     };
     const projected = await projectMultiReviewGraphRun(workflow, done, (id) =>
       world!.artifacts.get(run.id, id),

@@ -202,7 +202,7 @@ export function featureBuildStepConfigs(models: FeatureBuildModelState): {
     steps: {
       build: stepConfig(models.build),
       review: reviewers[0],
-      address: stepConfig(models.address),
+      "address-findings": stepConfig(models.address),
       verify: stepConfig(models.verify),
       pr: stepConfig(models.pr),
       "resolve-conflicts": stepConfig(models.resolve),

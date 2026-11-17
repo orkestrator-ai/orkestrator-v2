@@ -224,7 +224,7 @@ export class Provider implements BuildPipelineProvider {
   private readonly sessionIdsByClientKey = new Map<string, string>();
   constructor(public returnStructured = true) {}
   async createSession(
-    _phase: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts",
+    _phase: "build" | "review" | "verify" | "address-findings" | "pr" | "resolve-conflicts",
     _label: string,
     options?: ProviderCreateSessionOptions,
   ) {
@@ -589,8 +589,8 @@ export const autoPrAddressFindingsDispatch: NonNullable<
   MultiReviewServiceOptions["dispatchAddressFindingsPrompt"]
 > = async (workflow) => ({
   tabId: workflow.addressTabId!,
-  fixSession: {
-    ...workflow.fixModel,
+  addressFindingsSession: {
+    ...workflow.addressFindingsModel,
     sessionKey: workflow.addressSessionKey!,
     providerSessionId: `provider-auto-pr-${workflow.id}`,
     requestIds: [workflow.addressRequestId!],
@@ -620,17 +620,18 @@ export async function runInteractiveAddressFindings(
   provider.statusValue = "running";
   await service.advanceNow(workflowId);
   if (abortBeforeIdle) {
-    await provider.abort((await snapshot(workflowId))!.fixSession!.providerSessionId);
+    await provider.abort((await snapshot(workflowId))!.addressFindingsSession!.providerSessionId);
   }
   provider.statusValue = finalStatus;
   await service.advanceNow(workflowId);
   await waitUntil(async () => {
-    if ((await snapshot(workflowId))?.stepRuntimes?.fix?.completedAt !== undefined) return true;
+    if ((await snapshot(workflowId))?.stepRuntimes?.["address-findings"]?.completedAt !== undefined)
+      return true;
     await service.advanceNow(workflowId);
     return false;
   });
   const settled = (await snapshot(workflowId))!;
-  expect(settled.stepRuntimes?.fix?.completedAt).toEqual(expect.any(String));
+  expect(settled.stepRuntimes?.["address-findings"]?.completedAt).toEqual(expect.any(String));
   return settled;
 }
 
@@ -651,7 +652,7 @@ export async function restoreCompletedAutoPr(
 ): Promise<void> {
   await mutateStoredWorkflow(storage, workflowId, (workflow) => {
     workflow.phase = "completed";
-    workflow.fixResult = {
+    workflow.addressFindingsResult = {
       complete: true,
       summary: "Addressed every finding",
       filesChanged: [],
@@ -694,7 +695,7 @@ export function orderedAutoFlow(events: string[]) {
   const dispatchAddressFindingsPrompt: NonNullable<
     MultiReviewServiceOptions["dispatchAddressFindingsPrompt"]
   > = (workflow, ...rest) => {
-    events.push("fix");
+    events.push("address-findings");
     return autoPrAddressFindingsDispatch(workflow, ...rest);
   };
   return { pr, invoke, dispatchAddressFindingsPrompt };
@@ -773,7 +774,7 @@ export async function withInteractiveFixes(
           targetBranch: "main",
           reviewers: [{ agent: "claude", model: "opus" }],
           reviewModel: { agent: "claude", model: "opus" },
-          fixModel: { agent: "codex", model: "gpt-5.6" },
+          addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
         });
         await waitUntil(async () => {
           await service.advanceNow(started.id);
@@ -798,8 +799,8 @@ export async function withInteractiveFixes(
         activityReadCoalesceWindowMs: 250,
         dispatchAddressFindingsPrompt: async (workflow) => ({
           tabId: workflow.addressTabId!,
-          fixSession: {
-            ...workflow.fixModel,
+          addressFindingsSession: {
+            ...workflow.addressFindingsModel,
             sessionKey: workflow.addressSessionKey!,
             providerSessionId: `http-fix-${workflow.id}-${environmentIds.indexOf(workflow.environmentId)}`,
             requestIds: [workflow.addressRequestId!],
@@ -823,14 +824,14 @@ export async function withService(
     storage: StorageService;
     start: (
       reviewers?: MultiReviewModelSelection[],
-      fixModel?: MultiReviewModelSelection,
+      addressFindingsModel?: MultiReviewModelSelection,
     ) => Promise<MultiReviewWorkflow>;
     snapshot: (workflowId: string) => Promise<MultiReviewWorkflow | undefined>;
     workflowResults?: WorkflowResultService;
   }) => Promise<void>,
   options: {
     packageFlow?: boolean;
-    autoFix?: boolean;
+    autoAddressFindings?: boolean;
     autoPr?: boolean;
     createProvider?: NonNullable<MultiReviewServiceOptions["provider"]>;
     serviceOptions?: Partial<MultiReviewServiceOptions>;
@@ -887,7 +888,7 @@ export async function withService(
       workflowResults,
       start: (
         reviewers = [{ agent: "claude", model: "opus" }],
-        fixModel = { agent: "claude", model: "opus" },
+        addressFindingsModel = { agent: "claude", model: "opus" },
       ) =>
         (options.packageFlow
           ? service.start.bind(service)
@@ -896,10 +897,10 @@ export async function withService(
           environmentId,
           projectId: "project-1",
           targetBranch: "main",
-          autoFix: options.autoFix,
+          autoAddressFindings: options.autoAddressFindings,
           ...(options.autoPr !== undefined ? { autoPr: options.autoPr } : {}),
           reviewers,
-          fixModel,
+          addressFindingsModel,
         }),
       snapshot: async (workflowId) =>
         (await storage.getMultiReviewWorkflow(workflowId))?.snapshot as
@@ -933,7 +934,7 @@ export async function waitUntil(
 // Start the two step runners directly: Address Findings here exercises the persisted legacy
 // structured-step path, rather than the newer interactive addressing handoff.
 export async function startFollowUpStep(
-  kind: "prepare" | "fix",
+  kind: "prepare" | "address-findings",
   context: {
     service: MultiReviewService;
     storage: StorageService;
@@ -953,15 +954,15 @@ export async function startFollowUpStep(
         targetBranch: "main",
         reviewers: [codex],
         reviewModel: codex,
-        fixModel: codex,
+        addressFindingsModel: codex,
       })
     ).id;
   } else {
     id = await seedLegacyFixingWorkflow(storage, environmentId);
     const stored = (await storage.getMultiReviewWorkflow(id))!;
     const workflow = stored.snapshot as MultiReviewWorkflow;
-    workflow.fixModel = codex;
-    workflow.fixSession!.agent = "codex";
+    workflow.addressFindingsModel = codex;
+    workflow.addressFindingsSession!.agent = "codex";
     workflow.activeRequest!.resultTransport = toolMode ? "tool-v1" : "structured-output-v1";
     await storage.saveMultiReviewWorkflow(id, environmentId, 1, workflow, stored.revision);
   }
@@ -1032,9 +1033,9 @@ export async function seedLegacyFixingWorkflow(
         providerSessionId: "session-1",
       },
     ],
-    fixModel: { agent: "claude", model: "opus" },
+    addressFindingsModel: { agent: "claude", model: "opus" },
     consolidatedReport,
-    fixSession: {
+    addressFindingsSession: {
       agent: "claude",
       model: "opus",
       sessionKey: `multi-review:${workflowId}:fix`,
@@ -1043,8 +1044,13 @@ export async function seedLegacyFixingWorkflow(
       status: "running",
       startedAt: timestamp,
     },
-    activeRequest: { kind: "fix", requestId: "fix-1", state: "prepared", createdAt: timestamp },
-    phase: "fixing",
+    activeRequest: {
+      kind: "address-findings",
+      requestId: "fix-1",
+      state: "prepared",
+      createdAt: timestamp,
+    },
+    phase: "addressing-findings",
     autoPr,
     createdAt: timestamp,
     updatedAt: timestamp,

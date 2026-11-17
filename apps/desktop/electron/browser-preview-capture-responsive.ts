@@ -27,7 +27,10 @@ import {
   validateWebAnnotationCaptureInput,
 } from "@orkestrator/protocol/web-annotations-validation";
 import { randomUUID } from "node:crypto";
-import { browserPreviewAnchorKit } from "./browser-preview-anchor-script.js";
+import {
+  browserPreviewAnchorKitSource,
+  type BrowserPreviewAnchorKit,
+} from "./browser-preview-anchor-script.js";
 import {
   boundedScreenshotPng,
   captureImageRepresentation,
@@ -61,7 +64,7 @@ export const RESPONSIVE_SETTLE = Object.freeze({ deadlineMs: 1_500, quietMs: 150
  * target's rectangle when it still resolves. Serialized with `toString`.
  */
 function responsiveProbe(
-  kitFactory: typeof browserPreviewAnchorKit,
+  kitFactory: () => BrowserPreviewAnchorKit,
   config: { target: Record<string, unknown> | null; deadlineMs: number; quietMs: number },
 ): Promise<string> {
   const kit = kitFactory();
@@ -122,7 +125,7 @@ export function browserPreviewResponsiveProbeScript(config: {
   deadlineMs: number;
   quietMs: number;
 }): string {
-  return `/*orkestrator:responsive-probe*/(${responsiveProbe.toString()})(${browserPreviewAnchorKit.toString()}, ${JSON.stringify(config)});`;
+  return `/*orkestrator:responsive-probe*/(${responsiveProbe.toString()})(${browserPreviewAnchorKitSource()}, ${JSON.stringify(config)});`;
 }
 
 interface ResponsiveProbe {

@@ -56,7 +56,7 @@ export class BuildPipelinePromptDispatch {
       return;
     }
     const schema = attempt.structuredReview
-      ? attempt.phase === "building" || attempt.phase === "fixing"
+      ? attempt.phase === "building" || attempt.phase === "reworking"
         ? attempt.validationPlan === true
           ? REVIEW_VALIDATION_PLAN_SCHEMA
           : REVIEW_PREPARATION_RESULT_JSON_SCHEMA
@@ -64,7 +64,7 @@ export class BuildPipelinePromptDispatch {
           ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
           : attempt.phase === "verifying"
             ? VERIFICATION_SCHEMA
-            : attempt.phase === "addressing"
+            : attempt.phase === "addressing-findings"
               ? REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA
               : undefined
       : undefined;

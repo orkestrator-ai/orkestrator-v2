@@ -165,7 +165,7 @@ function fanout(): BuildPipeline {
     currentSessionIndex: 2,
     sessions: [
       stage("build", "build", 30, 600),
-      stage("fix", "prep", 640, 120, { label: "Package Preparation Session" }),
+      stage("rework", "prep", 640, 120, { label: "Package Preparation Session" }),
       stage("review", "rev-1", 800, null, { label: "Review 1", tokenCount: 81_000 }),
       stage("review", "rev-2", 800, 60, {
         label: "Review 2",
@@ -217,9 +217,9 @@ function loops(): BuildPipeline {
         label: "Review Session",
         reviewIssueCounts: { P0: 0, P1: 2, P2: 1 },
       }),
-      stage("address", "address", 770, 200),
+      stage("address-findings", "address", 770, 200),
       stage("verify", "verify", 980, 90),
-      stage("fix", "fix", 1080, 300, { iteration: 1 }),
+      stage("rework", "fix", 1080, 300, { iteration: 1 }),
       stage("review", "review-2", 1390, 100, {
         iteration: 1,
         label: "Review Session",
@@ -339,16 +339,16 @@ function validationHistory(): BuildPipeline {
     completedAt: undefined,
   });
   return base({
-    phase: "fixing",
+    phase: "reworking",
     iteration: 1,
     currentSessionIndex: 5,
     sessions: [
       stage("build", "build", 0, 50),
-      stage("fix", "prep-0", 60, 50, { label: "Package Preparation Session" }),
+      stage("rework", "prep-0", 60, 50, { label: "Package Preparation Session" }),
       stage("review", "review", 200, 50),
       stage("verify", "verify", 300, 50),
-      stage("fix", "fix", 400, 50, { iteration: 1 }),
-      stage("fix", "prep-1", 460, 50, { iteration: 1, label: "Package Preparation Session" }),
+      stage("rework", "fix", 400, 50, { iteration: 1 }),
+      stage("rework", "prep-1", 460, 50, { iteration: 1, label: "Package Preparation Session" }),
     ],
     validationRun: run,
     validationHistory: [
@@ -387,7 +387,7 @@ function reviewerRerun(): BuildPipeline {
   const pass = { reviewPassId: RERUN_PASS };
   return base({
     phase: "paused",
-    pausedFromPhase: "addressing",
+    pausedFromPhase: "addressing-findings",
     reviewers: PANEL.slice(0, 2),
     // The smallest package the snapshot validator accepts (a legacy inline one).
     reviewPackage: {
@@ -408,7 +408,7 @@ function reviewerRerun(): BuildPipeline {
     currentSessionIndex: 4,
     sessions: [
       stage("build", "build", 30, 600),
-      stage("fix", "prep", 640, 120, { label: "Package Preparation Session" }),
+      stage("rework", "prep", 640, 120, { label: "Package Preparation Session" }),
       stage("review", "rerun-rev-1", 800, 200, {
         ...pass,
         label: "Review 1",
@@ -422,7 +422,7 @@ function reviewerRerun(): BuildPipeline {
         reviewerOutcome: "completed",
       }),
       stage("review", "rerun-consolidation", 1030, 90, { ...pass, label: "Consolidation" }),
-      stage("address", "rerun-address", 1130, 60),
+      stage("address-findings", "rerun-address", 1130, 60),
     ],
   });
 }
@@ -436,7 +436,7 @@ function rerunReviewerSlot(current: BuildPipeline, reviewerId: string): Partial<
   const rewindId = "reviewer-rerun";
   const supersededAt = at(1300);
   const sessions = current.sessions.map((session) =>
-    session.sessionKey === "rerun-consolidation" || session.phase === "address"
+    session.sessionKey === "rerun-consolidation" || session.phase === "address-findings"
       ? { ...session, supersededBy: rewindId, supersededAt }
       : session,
   );
@@ -633,7 +633,7 @@ function scenario(): BuildPipeline {
         stage("build", "build", 30, 300),
         stage("review", "review", 340, 200),
         stage("verify", "verify-1", 560, 100, { ...previous, verificationResult: "fail" }),
-        stage("fix", "fix-2", 680, 200, { ...previous, iteration: 1 }),
+        stage("rework", "fix-2", 680, 200, { ...previous, iteration: 1 }),
         stage("review", "review-2", 900, 200, { ...previous, iteration: 1 }),
         stage("verify", "verify-2", 1120, 100, {
           ...previous,

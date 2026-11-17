@@ -1,18 +1,18 @@
 import { afterEach, expect, test } from "bun:test";
-import { installControlledTimeout } from "../../../../tests/helpers/controlled-timeout.js";
-import type { WatchHandle } from "./watch-host.js";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
+import type { WatchHandle } from "../watch-host.js";
 import {
   WATCH_PLAN_MAX_IGNORED_TREE_DIRECTORIES,
   type IgnoredTrees,
   type WorktreeWatchPlanIo,
-} from "./worktree-watch-plan.js";
+} from "./watch-plan.js";
 import {
   startWorktreeWatcher,
   WATCH_DISTRUST_MS,
   WATCH_IGNORED_REMEASURE_MS,
   type StartWatch,
   type WorktreeWatcher,
-} from "./worktree-watcher.js";
+} from "./watcher.js";
 
 /**
  * On Linux Bun walks a recursive watch's whole tree on the event loop, so a large

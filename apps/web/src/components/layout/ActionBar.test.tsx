@@ -181,8 +181,8 @@ const defaultLaunchDefaults = async (
     { agent: "claude", model: "sonnet" },
   ],
   reviewModel: { agent: "codex", model: "gpt-6.1-sol" },
-  fixModel: { agent: "codex", model: "gpt-6.1-sol" },
-  autoFix: currentMultiReviewSettings?.autoFix ?? false,
+  addressFindingsModel: { agent: "codex", model: "gpt-6.1-sol" },
+  autoAddressFindings: currentMultiReviewSettings?.autoFix ?? false,
   autoPr: currentMultiReviewSettings?.autoPr ?? false,
 });
 const getMultiReviewLaunchDefaultsMock = mock(defaultLaunchDefaults);
@@ -4858,7 +4858,13 @@ describe("ActionBar workflow tabs", () => {
       expect(input).not.toHaveProperty("reviewInstruction");
       // The environment's node picks every model from its own saved settings
       // and catalogue; the window's copy of the catalogue never decides one.
-      for (const key of ["reviewers", "reviewModel", "fixModel", "autoFix", "autoPr"]) {
+      for (const key of [
+        "reviewers",
+        "reviewModel",
+        "addressFindingsModel",
+        "autoAddressFindings",
+        "autoPr",
+      ]) {
         expect(input).not.toHaveProperty(key);
       }
       await waitFor(() =>
@@ -4881,8 +4887,8 @@ describe("ActionBar workflow tabs", () => {
             { agent: "claude", model: "default" },
           ],
           reviewModel: { agent: "codex", model: "gpt-6-luna", reasoningEffort: "medium" },
-          fixModel: { agent: "codex", model: "gpt-6-luna" },
-          autoFix: true,
+          addressFindingsModel: { agent: "codex", model: "gpt-6-luna" },
+          autoAddressFindings: true,
           autoPr: false,
         }),
       );
@@ -4905,8 +4911,8 @@ describe("ActionBar workflow tabs", () => {
           { agent: "claude", model: "default" },
         ],
         reviewModel: { agent: "codex", model: "gpt-6-luna", reasoningEffort: "medium" },
-        fixModel: { agent: "codex", model: "gpt-6-luna" },
-        autoFix: true,
+        addressFindingsModel: { agent: "codex", model: "gpt-6-luna" },
+        autoAddressFindings: true,
         autoPr: false,
       });
     });
@@ -5001,7 +5007,7 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
     await waitFor(() =>
       expect(launchMultiReviewMock).toHaveBeenCalledWith(
-        expect.objectContaining({ autoFix: false }),
+        expect.objectContaining({ autoAddressFindings: false }),
       ),
     );
     expect(currentMultiReviewSettings.autoFix).toBe(true);

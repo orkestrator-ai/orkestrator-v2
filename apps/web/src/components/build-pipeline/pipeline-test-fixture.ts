@@ -147,7 +147,7 @@ export function rewoundToFirstVerify(overrides: Partial<BuildPipeline> = {}): Bu
       session("build", "build-1", 0),
       session("review", "review-1", 60),
       session("verify", "verify-1", 120, { ...superseded, verificationResult: "fail" }),
-      session("fix", "fix-2", 180, { ...superseded, iteration: 1 }),
+      session("rework", "fix-2", 180, { ...superseded, iteration: 1 }),
       session("review", "review-2", 240, { ...superseded, iteration: 1 }),
       session("verify", "verify-2", 300, {
         ...superseded,

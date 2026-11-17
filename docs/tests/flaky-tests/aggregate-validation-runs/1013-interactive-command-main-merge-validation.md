@@ -122,7 +122,7 @@ changed for this merge.
 | merge-worktree-watcher-owner | `apps/backend/tests/worktree-watcher.test.ts` | 33 passed, one failed, 3.7 s logged; real-file write still receives zero changes (2008.43 ms). Evidence: `orkestrator-test-run.tts7bt`. |
 | merge-coordinator-owner | `apps/backend/src/core/coordinator-service.test.ts` | Passed, exit 0, 15.3 s; aggregate dirty-submodule deadline was 5113.39 ms. See 0945. |
 | merge-environment-fork-owner | `apps/backend/tests/commands-environment-fork.test.ts` | Passed, exit 0, 3.5 s; aggregate local-fork deadline was 26779.98 ms. See 1105. |
-| merge-worktree-snapshots-owner | `apps/backend/src/core/worktree-snapshots-git.test.ts` | Passed, exit 0, 6.1 s; aggregate unnamed hook deadline was 5000.79 ms. See 0957. |
+| merge-worktree-snapshots-owner | `apps/backend/src/core/worktrees/snapshots-git.test.ts` | Passed, exit 0, 6.1 s; aggregate unnamed hook deadline was 5000.79 ms. See 0957. |
 
 Only the three owners that passed their reruns establish aggregate-only
 recurrences in this run; their existing cases and indexes were updated.

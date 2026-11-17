@@ -1152,7 +1152,7 @@ export class BuildPipelineReviewFanout {
             effort: pipeline.reviewPreparation.reasoningEffort,
             fastMode: pipeline.reviewPreparation.fastMode,
           })
-        : await this.deps.stepSettings(pipeline, "address");
+        : await this.deps.stepSettings(pipeline, "address-findings");
       const provider = await this.deps.provider(pipeline, step.agent);
       const sessionKey = `${pipeline.id}:review-consolidation:${pipeline.iteration}:${randomUUID()}`;
       const providerSessionId = await provider.createSession("review", "Review · Consolidation", {

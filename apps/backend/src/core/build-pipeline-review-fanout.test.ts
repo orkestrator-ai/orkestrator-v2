@@ -149,7 +149,7 @@ describe("build pipeline multi-model review", () => {
             { agent: "claude", model: "sonnet" },
           ]),
         );
-        let current = await advanceUntil(service, read, started.id, "addressing");
+        let current = await advanceUntil(service, read, started.id, "addressing-findings");
         const reviewer = current.sessions.find((session) => session.label === "Review 1")!;
         await service.restartStep(started.id, reviewer.sdkSessionId, {
           agent: "claude",
@@ -157,7 +157,7 @@ describe("build pipeline multi-model review", () => {
           reasoningEffort: "high",
           fastMode,
         });
-        current = await advanceUntil(service, read, started.id, "addressing");
+        current = await advanceUntil(service, read, started.id, "addressing-findings");
         expect(
           provider.created.filter((entry) => entry.label === "Review 1").at(-1)?.options,
         ).toMatchObject({ model: "opus", effort: "high", fastMode });
@@ -170,7 +170,7 @@ describe("build pipeline multi-model review", () => {
           reasoningEffort: "high",
           fastMode,
         });
-        await advanceUntil(service, read, started.id, "addressing");
+        await advanceUntil(service, read, started.id, "addressing-findings");
         expect(
           provider.created.filter((entry) => entry.label === "Review · Consolidation").at(-1)
             ?.options,
@@ -215,7 +215,7 @@ describe("build pipeline multi-model review", () => {
       expect(reviewing.reviewers).toBeUndefined();
       expect(providers.get("codex")!.created).toContainEqual(
         expect.objectContaining({
-          phase: "fix",
+          phase: "rework",
           label: REVIEW_PACKAGE_SESSION_LABEL,
           options: expect.objectContaining({
             model: "review-coordinator",
@@ -248,8 +248,8 @@ describe("build pipeline multi-model review", () => {
       expect(reviewing.reviewFanout?.snapshot).toBeUndefined();
       expect(reviewing.reviewPackage?.headRef).toBe(HEAD);
 
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
-      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+      expect(addressing.error ?? addressing.phase).toBe("addressing-findings");
       // Both reviewers ran, and each is visible as its own pipeline session so
       // a user watching the build can read them.
       const reviewLabels = provider.created
@@ -365,8 +365,10 @@ describe("build pipeline multi-model review", () => {
         testCoverageGaps: [],
       });
       // The single-review path's rule: nothing to address, so no Address turn.
-      expect(verifying.sessions.some((session) => session.phase === "address")).toBe(false);
-      expect(provider.created.some((entry) => entry.phase === "address")).toBe(false);
+      expect(verifying.sessions.some((session) => session.phase === "address-findings")).toBe(
+        false,
+      );
+      expect(provider.created.some((entry) => entry.phase === "address-findings")).toBe(false);
       expect(verifying.sessions[verifying.currentSessionIndex]?.phase).toBe("verify");
       // The next stage opened before the fan-out record was dropped, as on the
       // Address route.
@@ -383,14 +385,14 @@ describe("build pipeline multi-model review", () => {
           { agent: "claude", model: "sonnet" },
         ]),
       );
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
-      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+      expect(addressing.error ?? addressing.phase).toBe("addressing-findings");
       expect(addressing.structuredReview?.issues).toEqual([]);
       expect(addressing.structuredReview?.testCoverageGaps).toHaveLength(1);
       expect(addressing.structuredReview?.testCoverageGaps[0]?.reviewModels).toEqual([
         "claude/opus",
       ]);
-      expect(addressing.sessions[addressing.currentSessionIndex]?.phase).toBe("address");
+      expect(addressing.sessions[addressing.currentSessionIndex]?.phase).toBe("address-findings");
       expect(addressing.reviewFanout).toBeUndefined();
     });
   });
@@ -408,7 +410,7 @@ describe("build pipeline multi-model review", () => {
           reasoningEffort: "medium",
         },
         steps: {
-          address: {
+          "address-findings": {
             agent: "opencode",
             model: "fixer",
             reasoningEffort: "high",
@@ -416,8 +418,8 @@ describe("build pipeline multi-model review", () => {
         },
       });
 
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
-      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+      expect(addressing.error ?? addressing.phase).toBe("addressing-findings");
       for (
         let attempt = 0;
         attempt < 3 && providers.get("opencode")!.created.length === 0;
@@ -430,7 +432,7 @@ describe("build pipeline multi-model review", () => {
       expect(coordinator.created).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            phase: "fix",
+            phase: "rework",
             label: REVIEW_PACKAGE_SESSION_LABEL,
             options: expect.objectContaining({
               model: "review-coordinator",
@@ -461,7 +463,7 @@ describe("build pipeline multi-model review", () => {
       expect(fixer.created).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            phase: "address",
+            phase: "address-findings",
             options: expect.objectContaining({
               model: "fixer",
               effort: "high",
@@ -485,8 +487,8 @@ describe("build pipeline multi-model review", () => {
           { agent: "claude", model: "sonnet" },
         ]),
       );
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
-      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+      expect(addressing.error ?? addressing.phase).toBe("addressing-findings");
       // The surviving reviewer's report is what got consolidated.
       expect(addressing.structuredReview?.reviewSummary).toBe("Merged review.");
       const failedSession = addressing.sessions.find(
@@ -834,8 +836,8 @@ describe("build pipeline multi-model review", () => {
             { agent: "claude", model: "haiku" },
           ]),
         );
-        const addressing = await advanceUntil(service, read, started.id, "addressing");
-        expect(addressing.error ?? addressing.phase).toBe("addressing");
+        const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+        expect(addressing.error ?? addressing.phase).toBe("addressing-findings");
         // One check for the whole three-reviewer wave, plus address's check.
         expect(packageGeneration.verificationCount).toBe(2);
       },
@@ -916,8 +918,8 @@ describe("build pipeline multi-model review", () => {
       ).toBe(true);
 
       provider.usagePending = false;
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
-      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+      expect(addressing.error ?? addressing.phase).toBe("addressing-findings");
     });
   });
 
@@ -962,7 +964,7 @@ describe("build pipeline multi-model review", () => {
         }
         await service.advanceNow(started.id);
         const addressed = await read(started.id);
-        expect(addressed.phase).toBe("addressing");
+        expect(addressed.phase).toBe("addressing-findings");
         const settled = addressed.sessions.find(
           (entry) => entry.sessionKey === session.sessionKey,
         )!;
@@ -1130,9 +1132,9 @@ describe("build pipeline multi-model review", () => {
         ]),
       );
 
-      const addressed = await advanceUntil(service, read, started.id, "addressing", 40);
+      const addressed = await advanceUntil(service, read, started.id, "addressing-findings", 40);
 
-      expect(addressed.phase).toBe("addressing");
+      expect(addressed.phase).toBe("addressing-findings");
       expect(
         provider.sent.filter((entry) => entry.sessionId.includes("consolidation")),
       ).toHaveLength(3);
@@ -1204,8 +1206,8 @@ describe("build pipeline multi-model review", () => {
       expect(provider.aborted).toContain(firstConsolidation.providerSessionId);
 
       provider.runningConsolidation = false;
-      const addressing = await advanceUntil(service, read, started.id, "addressing", 10);
-      expect(addressing.phase).toBe("addressing");
+      const addressing = await advanceUntil(service, read, started.id, "addressing-findings", 10);
+      expect(addressing.phase).toBe("addressing-findings");
     });
   });
 
@@ -1250,7 +1252,7 @@ describe("build pipeline multi-model review", () => {
 
       // Only the two the failure interrupted run again, and the review moves on.
       expect(reviewerSessionCreates(provider)).toHaveLength(6);
-      expect(retried.phase).toBe("addressing");
+      expect(retried.phase).toBe("addressing-findings");
       expect(retried.error).toBeUndefined();
     });
   });
@@ -1302,7 +1304,7 @@ describe("build pipeline multi-model review", () => {
       // No reviewer runs again: only consolidation does, and the review moves on.
       expect(reviewerSessionCreates(provider)).toHaveLength(4);
       expect(provider.created.filter((c) => c.label === "Review · Consolidation")).toHaveLength(1);
-      expect(retried.phase).toBe("addressing");
+      expect(retried.phase).toBe("addressing-findings");
     });
   });
 
@@ -1585,8 +1587,8 @@ describe("build pipeline multi-model review", () => {
 
       // The warning outlives the pass, on the session that filed the report.
       provider.runningModels.clear();
-      const after = await advanceUntil(service, read, started.id, "addressing", 10);
-      expect(after.phase).toBe("addressing");
+      const after = await advanceUntil(service, read, started.id, "addressing-findings", 10);
+      expect(after.phase).toBe("addressing-findings");
       expect(after.structuredReview?.reviewSummary).toBe("Merged review.");
       expect(after.sessions.find((s) => s.label === "Consolidation")?.reviewWorktreeChanged).toBe(
         true,
@@ -1653,9 +1655,9 @@ describe("build pipeline multi-model review", () => {
       worktree.head = "2".repeat(40);
       provider.runningConsolidation = false;
 
-      const after = await advanceUntil(service, read, started.id, "addressing", 5);
+      const after = await advanceUntil(service, read, started.id, "addressing-findings", 5);
 
-      expect(after.phase).toBe("addressing");
+      expect(after.phase).toBe("addressing-findings");
       expect(after.structuredReview?.reviewSummary).toBe("Merged review.");
       expect(after.sessions.find((s) => s.label === "Consolidation")?.reviewWorktreeChanged).toBe(
         true,
@@ -1698,8 +1700,8 @@ describe("build pipeline multi-model review", () => {
           await workflowResults!.submit(scope, consolidation.requestId, submission),
         ).toMatchObject({ ok: true });
         provider.runningConsolidation = false;
-        const addressing = await advanceUntil(service, read, started.id, "addressing", 5);
-        expect(addressing.error ?? addressing.phase).toBe("addressing");
+        const addressing = await advanceUntil(service, read, started.id, "addressing-findings", 5);
+        expect(addressing.error ?? addressing.phase).toBe("addressing-findings");
         expect(
           addressing.sessions.find((s) => s.label === "Consolidation")?.reviewWorktreeChanged,
         ).toBe(true);
@@ -1917,8 +1919,8 @@ test("pipeline fan-out evicts an unreachable generation and completes on reconne
       ]),
     ).toEqual(before.map((reviewer) => [reviewer.providerSessionId, reviewer.requestId]));
     dead.runningConsolidation = false;
-    const finished = await advanceUntil(service, read, started.id, "addressing");
-    expect(finished.phase).toBe("addressing");
+    const finished = await advanceUntil(service, read, started.id, "addressing-findings");
+    expect(finished.phase).toBe("addressing-findings");
     expect(dead.aborted).toEqual([]);
     expect(
       dead.sent.filter((sent) => before.some((reviewer) => reviewer.requestId === sent.requestId)),

@@ -173,8 +173,8 @@ export function createMultiReviewsApi(client: BackendClient) {
 
   async function restartMultiReviewStep(
     workflowId: string,
-    kind: "prepare" | "consolidate" | "fix",
-    model?: BackendMultiReviewWorkflow["fixModel"],
+    kind: "prepare" | "consolidate" | "address-findings",
+    model?: BackendMultiReviewWorkflow["addressFindingsModel"],
   ): Promise<BackendMultiReviewWorkflow> {
     return domain().restart_multi_review_step({
       workflowId,
@@ -185,14 +185,14 @@ export function createMultiReviewsApi(client: BackendClient) {
 
   async function pauseMultiReviewStep(
     workflowId: string,
-    kind: "prepare" | "consolidate" | "fix",
+    kind: "prepare" | "consolidate" | "address-findings",
   ): Promise<BackendMultiReviewWorkflow> {
     return domain().pause_multi_review_step({ workflowId, kind });
   }
 
   async function resumeMultiReviewStep(
     workflowId: string,
-    kind: "prepare" | "consolidate" | "fix",
+    kind: "prepare" | "consolidate" | "address-findings",
   ): Promise<BackendMultiReviewWorkflow> {
     return domain().resume_multi_review_step({ workflowId, kind });
   }

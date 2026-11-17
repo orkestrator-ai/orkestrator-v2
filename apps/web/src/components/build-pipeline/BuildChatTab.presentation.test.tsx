@@ -460,7 +460,7 @@ describe("BuildChatTab presentation", () => {
     });
     const packageSession: BuildPipeline["sessions"][number] = {
       ...pipeline.sessions[0]!,
-      phase: "fix",
+      phase: "rework",
       sessionKey: "package-key",
       sdkSessionId: "package-session",
       label: REVIEW_PACKAGE_SESSION_LABEL,
@@ -553,7 +553,7 @@ describe("BuildChatTab presentation", () => {
         pipeline.sessions[0]!,
         {
           ...pipeline.sessions[0]!,
-          phase: "fix",
+          phase: "rework",
           sessionKey: "legacy-fix-key",
           sdkSessionId: "legacy-fix-session",
           label: "Fix Session",

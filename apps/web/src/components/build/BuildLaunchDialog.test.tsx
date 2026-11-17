@@ -227,7 +227,7 @@ describe("BuildLaunchDialog", () => {
       Array.from(container.querySelectorAll("[data-build-step]")).map((node) =>
         node.getAttribute("data-build-step"),
       ),
-    ).toEqual(["build", "review", "address", "verify", "pr", "resolve-conflicts"]);
+    ).toEqual(["build", "review", "address-findings", "verify", "pr", "resolve-conflicts"]);
   });
 
   test("discloses access and Git check limits on Review and Verify cards", () => {
@@ -417,7 +417,7 @@ describe("BuildLaunchDialog", () => {
       steps: {
         build: shared,
         review: shared,
-        address: shared,
+        "address-findings": shared,
         verify: shared,
         pr: shared,
         "resolve-conflicts": shared,
@@ -519,7 +519,7 @@ describe("BuildLaunchDialog", () => {
           model: "acme/review",
           reasoningEffort: "high",
         },
-        address: { agent: "opencode" as const, model: "acme/address" },
+        "address-findings": { agent: "opencode" as const, model: "acme/address" },
         verify: {
           agent: "opencode" as const,
           model: "acme/verify",
@@ -651,7 +651,7 @@ describe("BuildLaunchDialog", () => {
             model: "claude-b",
             reasoningEffort: "xhigh",
           },
-          address: { agent: "codex", model: "codex-a" },
+          "address-findings": { agent: "codex", model: "codex-a" },
           verify: { agent: "codex", model: "codex-a", reasoningEffort: "high" },
           pr: { agent: "claude", model: "claude-a" },
           "resolve-conflicts": { agent: "claude", model: "claude-b" },
@@ -711,7 +711,7 @@ describe("BuildLaunchDialog", () => {
         pipelineDefaults: {
           steps: {
             review: inherited,
-            address: inherited,
+            "address-findings": inherited,
             verify: inherited,
             pr: inherited,
             "resolve-conflicts": inherited,
@@ -746,7 +746,7 @@ describe("BuildLaunchDialog", () => {
             model: "claude-b",
             reasoningEffort: "xhigh",
           },
-          address: { agent: "codex", model: "codex-a" },
+          "address-findings": { agent: "codex", model: "codex-a" },
           verify: { agent: "codex", model: "codex-a", reasoningEffort: "high" },
           pr: { agent: "claude", model: "claude-a" },
           "resolve-conflicts": { agent: "claude", model: "claude-b" },
@@ -799,7 +799,7 @@ describe("BuildLaunchDialog", () => {
     // Every other step keeps the provider default rather than inheriting the
     // one card the user touched.
     expect(steps.build.fastMode).toBeUndefined();
-    expect(steps.address.fastMode).toBeUndefined();
+    expect(steps["address-findings"].fastMode).toBeUndefined();
   });
 
   test("keeps a step's speed when its reasoning level changes", () => {
@@ -859,7 +859,7 @@ describe("BuildLaunchDialog", () => {
     expect(onConfirm.mock.calls[0]![0].steps).toEqual({
       build: { agent: "claude", model: "claude-a", reasoningEffort: undefined },
       review: { agent: "codex", model: "codex-a", reasoningEffort: "high" },
-      address: { agent: "claude", model: "claude-b", reasoningEffort: "xhigh" },
+      "address-findings": { agent: "claude", model: "claude-b", reasoningEffort: "xhigh" },
       verify: {
         agent: "opencode",
         model: "provider/model-a",
@@ -1297,7 +1297,7 @@ describe("BuildLaunchDialog step instructions", () => {
   const fanoutDefaults = {
     steps: {
       review: { agent: "claude" as const, model: "claude-b" },
-      address: { agent: "codex" as const, model: "codex-a" },
+      "address-findings": { agent: "codex" as const, model: "codex-a" },
       verify: { agent: "codex" as const, model: "codex-a" },
       pr: { agent: "claude" as const, model: "claude-a" },
       "resolve-conflicts": { agent: "claude" as const, model: "claude-b" },
@@ -1370,7 +1370,7 @@ describe("BuildLaunchDialog step instructions", () => {
     const selection = onConfirm.mock.calls[0]![0];
     expect(selection.steps.build.instructions).toBe("Write the failing test first.");
     expect(selection.steps.review.instructions).toBe("Security.");
-    expect(selection.steps.address.instructions).toBe("Fix every nit.");
+    expect(selection.steps["address-findings"].instructions).toBe("Fix every nit.");
     expect(selection.steps.verify.instructions).toBe("Check the help text.");
     expect(selection.steps.pr.instructions).toBe("Title it in English.");
     expect(selection.steps["resolve-conflicts"].instructions).toBe("Keep main's lockfile.");
@@ -1440,7 +1440,7 @@ describe("BuildLaunchDialog reviewer focus", () => {
   const fanoutDefaults = {
     steps: {
       review: { agent: "claude" as const, model: "claude-b", lens: security },
-      address: { agent: "codex" as const, model: "codex-a" },
+      "address-findings": { agent: "codex" as const, model: "codex-a" },
       verify: { agent: "codex" as const, model: "codex-a" },
       pr: { agent: "claude" as const, model: "claude-a" },
       "resolve-conflicts": { agent: "claude" as const, model: "claude-b" },
@@ -1470,7 +1470,7 @@ describe("BuildLaunchDialog reviewer focus", () => {
     ]);
     // Reviewer 1 is the review step.
     expect(selection.steps.review.lens).toEqual(security);
-    expect(selection.steps.address).not.toHaveProperty("lens");
+    expect(selection.steps["address-findings"]).not.toHaveProperty("lens");
     expect(selection.reviewPreparation).not.toHaveProperty("lens");
   });
 

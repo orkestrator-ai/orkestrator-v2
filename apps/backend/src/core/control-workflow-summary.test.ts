@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { workflowSummary } from "./control-workflow-summary.js";
 
 const findings = { issues: [{ severity: "P1" }], testCoverageGaps: [] };
-const auto = { autoFix: true, autoPr: true };
+const auto = { autoAddressFindings: true, autoPr: true };
 
 describe("Multi Review automation summary", () => {
   test("build pipelines carry no automation block", () => {
@@ -17,14 +17,19 @@ describe("Multi Review automation summary", () => {
     expect(next({ ...auto, phase: "reviewing" })).toBe(
       "Address Findings starts automatically if consolidation reports findings, then a PR session once Address Findings completes; a clean report starts the PR session directly.",
     );
-    expect(next({ autoFix: false, phase: "reviewing" })).toBe(
+    expect(next({ autoAddressFindings: false, phase: "reviewing" })).toBe(
       "Stops at ready; address_multi_review starts Address Findings.",
     );
     expect(next({ ...auto, phase: "ready", consolidatedReport: { issues: [] } })).toBe(
       "Consolidation found nothing to fix, so no Address Findings or PR session starts.",
     );
     expect(
-      next({ autoFix: false, autoPr: true, phase: "ready", consolidatedReport: findings }),
+      next({
+        autoAddressFindings: false,
+        autoPr: true,
+        phase: "ready",
+        consolidatedReport: findings,
+      }),
     ).toBe(
       "Waiting for address_multi_review to start Address Findings; a PR session starts once that Address Findings run completes.",
     );
@@ -40,27 +45,31 @@ describe("Multi Review automation summary", () => {
     expect(next(cleanLaunch("launched"))).toContain("The PR session started in tab agent-job-pr");
     // An Address Findings run started after the clean report's PR is not covered by that PR.
     expect(
-      next({ ...cleanLaunch("launched"), phase: "interactive", fixSession: fix("running") }),
+      next({
+        ...cleanLaunch("launched"),
+        phase: "interactive",
+        addressFindingsSession: fix("running"),
+      }),
     ).toBe(
       "Address Findings is running; the earlier PR does not confirm inclusion of this Address Findings run's changes, so review and update it manually.",
     );
-    expect(next({ autoFix: false, autoPr: true, phase: "reviewing" })).toBe(
+    expect(next({ autoAddressFindings: false, autoPr: true, phase: "reviewing" })).toBe(
       "Stops at ready if consolidation reports findings; address_multi_review starts Address Findings; a PR session starts once that Address Findings run completes. A clean report starts the PR session directly.",
     );
     expect(next({ ...auto, phase: "interactive", addressPromptPending: true })).toBe(
       "The Address Findings handoff is being delivered; a PR session starts once that Address Findings run completes.",
     );
-    expect(next({ ...auto, phase: "interactive", fixSession: fix("running") })).toBe(
+    expect(next({ ...auto, phase: "interactive", addressFindingsSession: fix("running") })).toBe(
       "Address Findings is running; a PR session starts once that Address Findings run completes.",
     );
-    expect(next({ ...auto, phase: "interactive", fixSession: fix("failed") })).toBe(
+    expect(next({ ...auto, phase: "interactive", addressFindingsSession: fix("failed") })).toBe(
       "Address Findings failed; no PR session starts.",
     );
     expect(
       next({
         ...auto,
         phase: "interactive",
-        fixSession: fix("idle"),
+        addressFindingsSession: fix("idle"),
         autoPrLaunch: { state: "pending", requestId: "r" },
       }),
     ).toBe("Address Findings completed; the PR session is starting.");
@@ -68,12 +77,12 @@ describe("Multi Review automation summary", () => {
       next({
         ...auto,
         phase: "interactive",
-        fixSession: fix("idle"),
+        addressFindingsSession: fix("idle"),
         autoPrLaunch: {
           state: "launched",
           requestId: "r",
           tabId: "pr-tab",
-          fixIdentity: multiReviewAddressFindingsIdentity(fix("idle")),
+          addressFindingsIdentity: multiReviewAddressFindingsIdentity(fix("idle")),
         },
       }),
     ).toContain("The PR session started in tab pr-tab");
@@ -82,7 +91,7 @@ describe("Multi Review automation summary", () => {
       next({
         ...auto,
         phase: "interactive",
-        fixSession: fix("running"),
+        addressFindingsSession: fix("running"),
         autoPrLaunch: { state: "skipped", requestId: "r", message: "stopped" },
       }),
     ).toBe(
@@ -92,7 +101,7 @@ describe("Multi Review automation summary", () => {
       next({
         ...auto,
         phase: "interactive",
-        fixSession: fix("idle"),
+        addressFindingsSession: fix("idle"),
         autoPrLaunch: { state: "failed", requestId: "r", message: "tab limit" },
       }),
     ).toBe("No PR session could start: tab limit");
@@ -102,7 +111,7 @@ describe("Multi Review automation summary", () => {
     "a retained clean-review launch does not hide current %s",
     (kind) => {
       const automation = workflowSummary({
-        autoFix: false,
+        autoAddressFindings: false,
         autoPr: true,
         phase: "ready",
         consolidatedReport: { issues: [], testCoverageGaps: [], [kind]: [{}] },
@@ -126,11 +135,11 @@ describe("Multi Review automation summary", () => {
         ...auto,
         phase: "interactive",
         addressPromptPending: pending,
-        fixSession: { sessionKey: "new-fix", status: "running" },
+        addressFindingsSession: { sessionKey: "new-fix", status: "running" },
         autoPrLaunch: {
           state: "launched",
           requestId: "pr",
-          fixIdentity: multiReviewAddressFindingsIdentity({ sessionKey: "old-fix" }),
+          addressFindingsIdentity: multiReviewAddressFindingsIdentity({ sessionKey: "old-fix" }),
         },
       }).automation as { next: string };
       expect(automation.next).toContain(
@@ -148,8 +157,8 @@ describe("Multi Review automation summary", () => {
         ...auto,
         phase: "interactive",
         addressPromptPending: status === "pending",
-        fixLaunch: { kind: "custom" },
-        fixSession: { sessionKey: "custom-fix", status },
+        addressFindingsLaunch: { kind: "custom" },
+        addressFindingsSession: { sessionKey: "custom-fix", status },
       }).automation as { next: string };
       expect(automation.next).toContain("review its result and start or update the PR manually");
       expect(automation.next).not.toContain("a PR session starts");
@@ -170,7 +179,7 @@ describe("Multi Review automation summary", () => {
         ...auto,
         autoPr,
         phase: "interactive",
-        fixSession: { sessionKey: "fix", status: "idle" },
+        addressFindingsSession: { sessionKey: "fix", status: "idle" },
       }).automation as { next: string };
       expect(automation.next).toBe(
         autoPr
@@ -196,7 +205,7 @@ describe("Multi Review automation summary", () => {
     const automation = workflowSummary({
       ...auto,
       phase: "interactive",
-      fixSession: { sessionKey: "new", status: "idle" },
+      addressFindingsSession: { sessionKey: "new", status: "idle" },
       autoPrLaunch: { state: "launched", requestId: "pr" },
     }).automation as { next: string };
     expect(automation.next).toContain("The Address Findings turn ended");

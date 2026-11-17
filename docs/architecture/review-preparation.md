@@ -51,7 +51,7 @@ no check still fails and `limitations` is empty.
   result the contract rejects fails the stage with the contract's error. The
   tool rejects it at submit time instead, so the model corrects it in its turn.
 - **Accepted.** `finishAddress` (`build-pipeline-service-recovery.ts`) copies
-  the result onto the Address Findings session as `fixResult`, bounded by
+  the result onto the Address Findings session as `addressFindingsResult`, bounded by
   `PIPELINE_ADDRESS_FINDINGS_RESULT_LIMITS` (`packages/protocol/src/build-pipeline-address-findings-report.ts`:
   4,000-character summary, 48 files, 20 checks with failed checks kept first,
   10 notes, 10 limitations, cut entries counted in `omitted`), opens Verify and
@@ -74,16 +74,15 @@ no check still fails and `limitations` is empty.
   (`validationAncestry` in `build-pipeline-stage-prompts.ts`). When Git cannot
   answer, the section is left out and the verifier checks the ancestry itself.
   A graph's Verify node captures no HEAD, so it always checks it itself.
-- **Older sessions.** `addressReportKind: "fix-result"` on the session is the
+- **Older sessions.** `addressFindingsReportKind: "address-findings-result"` on the session is the
   recorded marker of a typed Address Findings turn. An Address Findings session without it was
   started before the typed handoff. Its transcript is never read as a report:
   when its turn ends it fails the stage with an error naming the reason (a retry
   runs Address Findings again with a result slot), and a Verify already started
   after it is told no Address Findings report is available.
-- **Downgrade.** An older backend ignores `addressReportKind` and `fixResult`
-  and advances an idle Address Findings session to Verify without reading the result. A
-  pending tool-mode Address Findings dispatch it cannot bind fails the stage with "lost
-  its result-slot binding", which a retry restarts.
+- **Downgrade.** The storage migration that renamed the stored workflow names
+  (to-do 4740) is a downgrade fence: an older backend refuses the database
+  rather than reading these sessions.
 
 The pipeline inspector shows an Address Findings session's report above its transcript
 (`PipelineAddressFindingsReport.tsx`).
@@ -417,35 +416,37 @@ log hashes remain readable during upgrades.
 
 ## Auto-fix and auto-PR
 
-`autoFix` and `autoPr` are fixed on the workflow at launch. The launch dialog
-opens its two checkboxes on the saved app-level settings. Coordinator launches
-(`launch_multi_review`) take the same saved values unless
-the call sets them, and a requested `autoPr: true` turns an omitted `autoFix` on
+`autoAddressFindings` and `autoPr` are fixed on the workflow at launch. The
+launch dialog opens its two checkboxes on the saved app-level settings
+(`multiReview.autoFix` and `multiReview.autoPr`). Coordinator launches
+(`launch_multi_review`, whose fields are still `autoFix` and `autoPr` until
+to-do 4740 task 3) take the same saved values unless the call sets them, and a
+requested `autoPr: true` turns an omitted Auto-address findings on
 (`multiReviewAutomation` in `coordinator-launch-defaults.ts`). Both paths then
 run the same `MultiReviewService` code:
 
 | Step | Durable record | Recovery after restart |
 | --- | --- | --- |
-| Consolidation with findings and `autoFix` | report saved with `phase: interactive`, `addressPromptPending` (`queueDefaultFix`); no `ready` | The supervisor delivers the pending handoff under its reserved request id; failed attempts persist and fail the review after three |
+| Consolidation with findings and `autoAddressFindings` | report saved with `phase: interactive`, `addressPromptPending` (`queueDefaultFix`); no `ready` | The supervisor delivers the pending handoff under its reserved request id; failed attempts persist and fail the review after three |
 | Consolidation with nothing to fix and `autoPr` | report saved with `phase: ready` and `autoPrLaunch: { basis: clean-review, state: pending }` in one save (`queueCleanReviewAutoPr`); no Address Findings | The supervisor launches the PR as below while the review is still `ready` on that clean report |
-| Address Findings runs in its ordinary interactive tab | `fixSession` observed `running` | Observation resumes from the provider session |
-| Address Findings turn finished on its own, `autoPr` | `fixSession.status: idle` and `autoPrLaunch: pending` in one save (`queueAutoPr`) | The supervisor retries the launch under `multi-review-pr:<id>`, which the native-agent layer deduplicates |
+| Address Findings runs in its ordinary interactive tab | `addressFindingsSession` observed `running` | Observation resumes from the provider session |
+| Address Findings turn finished on its own, `autoPr` | `addressFindingsSession.status: idle` and `autoPrLaunch: pending` in one save (`queueAutoPr`) | The supervisor retries the launch under `multi-review-pr:<id>`, which the native-agent layer deduplicates |
 | PR session | `autoPrLaunch: launched` with its tab, or `failed` after three attempts | A launched PR is never repeated |
 
 Only proof that an Address Findings run completed, or a clean report, queues the PR: a complete
 structured result, an interactive handoff turn that finished on its own as its
 conversation's last turn, or a consolidated report with no issues and no
 coverage gaps. A clean report needs no Address Findings, so with `autoPr` on it goes
-straight to the PR whatever `autoFix` says, for button, coordinator and every
+straight to the PR whatever `autoAddressFindings` says, for button, coordinator and every
 other launch alike. Its intent is marked `basis: clean-review` and is
 delivered only while the review is still `ready` on that report; starting a
 Fix first drops it, and a review that moved on records `skipped`. An Address Findings run that fails, is stopped, is superseded or cannot be confirmed
 records `skipped` with its reason, or nothing when the session failed. The
 review stops there. A custom Address Findings never starts a PR, and a new Address Findings drops an
 undelivered PR intent so the PR cannot race it. Every PR intent records the
-Address Findings attempt that authorized it (`autoPrLaunch.fixIdentity`). Status notices and
+Address Findings attempt that authorized it (`autoPrLaunch.addressFindingsIdentity`). Status notices and
 `get_multi_review` therefore never present an earlier PR as the outcome of a
-later Address Findings; that the Address Findings step's changes need a manual PR update. `autoPr` without `autoFix`
+later Address Findings; that the Address Findings step's changes need a manual PR update. `autoPr` without `autoAddressFindings`
 means a PR after an Address Findings run the user (or `address_multi_review`) starts. The PR
 session pushes the branch and opens the pull request; nothing merges.
 
@@ -477,11 +478,12 @@ built-in Multi Review template inlined as a copy
 (`multi-review-graph-template.ts`): `engine` dropped, `targetBranch` and
 `reviewInstruction` added as parameters, and the target branch written onto the
 package and pull request system nodes. Roles are bound from the review's own
-input: the preparer is `reviewModel` (else `fixModel`), the reviewer panel is
-the reviewers in order with their lenses, the consolidator is
-`consolidationModel` (else the preparer), the fixer is `fixModel`, and the
-pull request describer takes the saved `pr` default. `autoFix` and `autoPr`
-are the run's parameters. The review instruction is the run's optional
+input: the preparer is `reviewModel` (else `addressFindingsModel`), the
+reviewer panel is the reviewers in order with their lenses, the consolidator is
+`consolidationModel` (else the preparer), the fixer is `addressFindingsModel`,
+and the pull request describer takes the saved `pr` default. The template's
+`autoFix` parameter (from `autoAddressFindings`) and `autoPr` are the run's
+parameters. The review instruction is the run's optional
 `reviewInstruction` input (`markdown@1`, up to 128 KiB encoded); a longer one
 refuses the start while the graph engine is selected, and never switches
 engines.
@@ -493,7 +495,7 @@ when its revision moved, projects it onto the record under the controller lease
 branch `panel.N` reviewer N (status, session, report attributed by the backend,
 `report_progress` issues as provisional findings), `consolidate` the
 `reviewSession`, `consolidatedReport` and `consolidationOverlap`, `fix` the
-`fixSession` and `fixResult`, and `describe-pr`/`pr` the `autoPrLaunch`. The
+`addressFindingsSession` and `addressFindingsResult`, and `describe-pr`/`pr` the `autoPrLaunch`. The
 consolidated report's graph source ids (`review/panel.2/issue-3`,
 `review/panel.2/coverage-gap-1`) are translated to `reviewer-2/issue-3` by the
 position of the report they name, so provenance and overlap are computed by the
@@ -505,7 +507,7 @@ What differs on the graph engine:
 
 - The automatic Address Findings is an unattended graph agent node that submits a fix
   result (it may `ask_human`), not the interactive Address Findings tab: the review shows
-  `fixing`, then `completed`, or `failed` when the result is incomplete, as a
+  `addressing-findings`, then `completed`, or `failed` when the result is incomplete, as a
   structured bespoke Address Findings does. The pull request is the `open-pull-request`
   system node after a `describe-pr` agent; only a complete Address Findings result or a clean
   report reaches them, the same rule as above.
@@ -522,7 +524,7 @@ What differs on the graph engine:
   progress shows in the graph run view.
 - Between two saves of the run, the record shows what the bespoke engine
   would at that point: a consolidation with findings under auto-fix reads
-  `fixing` (never a transient `ready`), and an authorized pull request reads
+  `addressing-findings` (never a transient `ready`), and an authorized pull request reads
   `pending` from the save that authorizes it, so no status wake reports an end
   the bespoke engine never shows.
 

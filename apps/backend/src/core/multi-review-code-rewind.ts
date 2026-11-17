@@ -33,7 +33,7 @@ export function multiReviewRewindStateBlocker(workflow: MultiReviewWorkflow): st
     workflow.phase === "preparing" ||
     workflow.phase === "reviewing" ||
     workflow.phase === "consolidating" ||
-    workflow.phase === "fixing" ||
+    workflow.phase === "addressing-findings" ||
     workflow.phase === "cancelling"
   ) {
     return "A running step could write to the worktree during the reset. Pause it or wait for it to finish.";
@@ -45,7 +45,7 @@ export function multiReviewRewindStateBlocker(workflow: MultiReviewWorkflow): st
   ) {
     return "The review session is still running. Stop it first.";
   }
-  if (workflow.fixSession?.status === "running") {
+  if (workflow.addressFindingsSession?.status === "running") {
     return "The Address Findings session is still running. Stop it first.";
   }
   if (

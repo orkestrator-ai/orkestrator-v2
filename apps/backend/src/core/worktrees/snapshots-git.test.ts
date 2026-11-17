@@ -1,15 +1,15 @@
-import { eventSink } from "./backend-emit.js";
+import { eventSink } from "../backend-emit.js";
 import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { DEFAULT_TEST_TIMEOUT_MS } from "../../../../tests/default-test-timeout.js";
+import { DEFAULT_TEST_TIMEOUT_MS } from "../../../../../tests/default-test-timeout.js";
 import { promises as fs, watch } from "node:fs";
 import path from "node:path";
 import { WORKTREE_SNAPSHOT_CHANGED_EVENT } from "@orkestrator/protocol/worktree-snapshots";
-import { getLocalGitStatusDetailed } from "./commands-files.js";
-import { DiffStatsService, LOCAL_SCAN_MIN_GAP_MS } from "./diff-stats-service.js";
-import { createGitFetchScheduler } from "./diff-stats-tracking.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
-import { worktreeWatchPlanIo } from "./worktree-watch-plan.js";
-import { startWorktreeWatcher } from "./worktree-watcher.js";
+import { getLocalGitStatusDetailed } from "../commands-files.js";
+import { DiffStatsService, LOCAL_SCAN_MIN_GAP_MS } from "../diff-stats-service.js";
+import { createGitFetchScheduler } from "../diff-stats-tracking.js";
+import { RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { worktreeWatchPlanIo } from "./watch-plan.js";
+import { startWorktreeWatcher } from "./watcher.js";
 
 /**
  * One change, one event, one short deadline holds on Linux. It does not on macOS:

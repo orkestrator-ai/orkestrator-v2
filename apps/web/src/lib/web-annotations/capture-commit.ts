@@ -16,6 +16,7 @@ import type {
 } from "@orkestrator/protocol/browser-preview";
 import {
   WEB_ANNOTATION_COMMANDS,
+  type WebAnnotationAnchor,
   type WebAnnotationCaptureInput,
   type WebAnnotationOperationReceipt,
   type WebAnnotationResultCaptureMetadata,
@@ -121,6 +122,35 @@ function sourceHintsAdvertised(environmentId: string, scope?: NodeScope): boolea
   return getWebAnnotationCache(environmentId, scope).capabilities?.operations.sourceHints === true;
 }
 
+/**
+ * Targets inside same-origin frames carry a `frame` scope only to a backend
+ * that advertises `operations.frameTargets`; an older backend would refuse
+ * the scope. There the note still saves, with the scope it had before frames
+ * were reachable (`unsupported`, `iframe`), and its pin reports unsupported.
+ */
+export function withAdvertisedFrameScope(
+  capture: WebAnnotationCaptureInput,
+  advertised: boolean,
+): WebAnnotationCaptureInput {
+  if (advertised) return capture;
+  const target = capture.target;
+  const downgrade = (anchor: WebAnnotationAnchor): WebAnnotationAnchor =>
+    anchor.scope.kind === "frame"
+      ? { ...anchor, scope: { kind: "unsupported", reason: "iframe" } }
+      : anchor;
+  if (target.kind === "element" && target.anchor.scope.kind === "frame") {
+    return { ...capture, target: { ...target, anchor: downgrade(target.anchor) } };
+  }
+  if (target.kind === "text-range" && target.container.scope.kind === "frame") {
+    return { ...capture, target: { ...target, container: downgrade(target.container) } };
+  }
+  return capture;
+}
+
+function frameTargetsAdvertised(environmentId: string, scope?: NodeScope): boolean {
+  return getWebAnnotationCache(environmentId, scope).capabilities?.operations.frameTargets === true;
+}
+
 /** Durably note the receipt, then clear the spool record (both idempotent). */
 export async function acknowledgeCommittedCapture(
   api: BrowserPreviewCaptureApi,
@@ -216,9 +246,9 @@ export async function commitPendingCapture({
         if (!assetIds.includes(cropped.asset.id)) assetIds.push(cropped.asset.id);
       }
     }
-    const advertised = withAdvertisedSourceHints(
-      record.capture,
-      sourceHintsAdvertised(environmentId, scope),
+    const advertised = withAdvertisedFrameScope(
+      withAdvertisedSourceHints(record.capture, sourceHintsAdvertised(environmentId, scope)),
+      frameTargetsAdvertised(environmentId, scope),
     );
     const target =
       advertised.target.kind === "region" && record.regionCrop

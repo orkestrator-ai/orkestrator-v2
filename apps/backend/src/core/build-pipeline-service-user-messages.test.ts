@@ -367,7 +367,7 @@ describe("BuildPipelineService steer", () => {
     });
   }
 
-  for (const phase of ["building", "fixing"] as const) {
+  for (const phase of ["building", "reworking"] as const) {
     for (const failure of ["throw", "unknown", "refused"] as const) {
       test(`${failure} steer delivery ${failure === "refused" ? "preserves" : "invalidates"} ${phase} preparation without requeueing`, async () => {
         await withService(async ({ service, storage, provider }) => {
@@ -375,7 +375,7 @@ describe("BuildPipelineService steer", () => {
           await updateStored(storage, built.id, (pipeline) => {
             pipeline.phase = phase;
             const session = pipeline.sessions.at(-1)!;
-            session.phase = phase === "building" ? "build" : "fix";
+            session.phase = phase === "building" ? "build" : "rework";
             session.structuredRequestId = "old-preparation";
             session.structuredResultStatus = "accepted";
             session.structuredWaitStartedAt = new Date().toISOString();

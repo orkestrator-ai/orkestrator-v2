@@ -118,7 +118,7 @@ export class BuildPipelineStagePrompts {
     // Address can mutate workspace evidence after review. Check the package
     // and its artifacts again at every consuming stage, especially verification.
     if (
-      (phase === "review" || phase === "address" || phase === "verify") &&
+      (phase === "review" || phase === "address-findings" || phase === "verify") &&
       pipeline.reviewPackage &&
       "kind" in pipeline.reviewPackage
     ) {
@@ -143,7 +143,7 @@ export class BuildPipelineStagePrompts {
         images: pipeline.taskSnapshot.images,
       };
     }
-    if (phase === "address") {
+    if (phase === "address-findings") {
       if (!pipeline.structuredReview) {
         throw new Error("Cannot address issues without the structured review");
       }
@@ -190,7 +190,7 @@ export class BuildPipelineStagePrompts {
         images: pipeline.taskSnapshot.images,
       };
     }
-    if (phase === "fix") {
+    if (phase === "rework") {
       return {
         prompt: reworkPrompt(
           pipeline,

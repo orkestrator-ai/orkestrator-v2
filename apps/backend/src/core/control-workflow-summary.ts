@@ -52,7 +52,8 @@ export function workflowSummary(
     error: workflow.error,
     presentationError: workflow.presentationError,
     addressPromptPending: workflow.addressPromptPending,
-    fixTabId: workflow.fixTabId,
+    // Coordinator tools still name the Address Findings tab `fixTabId` (to-do 4740 task 3).
+    fixTabId: workflow.addressFindingsTabId,
     // A cancelled build reads as `failed`; this says it was stopped on purpose.
     ...(typeof workflow.cancelledAt === "string" ? { cancelledAt: workflow.cancelledAt } : {}),
     ...("delivery" in workflow ? { delivery: workflow.delivery } : {}),
@@ -65,7 +66,7 @@ export function workflowSummary(
       ? { verificationResult: workflow.verificationResult }
       : {}),
     ...buildPipelineCriteria(workflow, options.criteriaDetail === true),
-    ...("autoFix" in workflow || "autoPr" in workflow
+    ...("autoAddressFindings" in workflow || "autoPr" in workflow
       ? { automation: multiReviewAutomation(workflow) }
       : {}),
     createdAt: workflow.createdAt,
@@ -79,10 +80,11 @@ const MAX_AUTOMATION_MESSAGE_CHARS = 400;
 /**
  * A Multi Review's auto-address findings and auto-PR, the automatic PR launch's state, and
  * one sentence on what happens next, so a coordinator can tell whether it is
- * expected to act. Only Multi Review snapshots carry `autoFix`/`autoPr`.
+ * expected to act. Only Multi Review snapshots carry `autoAddressFindings`/`autoPr`;
+ * the summary still answers them as `autoFix`/`autoPr` (to-do 4740 task 3).
  */
 export function multiReviewAutomation(workflow: Record<string, unknown>): Record<string, unknown> {
-  const autoFix = workflow.autoFix === true;
+  const autoFix = workflow.autoAddressFindings === true;
   const autoPr = workflow.autoPr === true;
   const launch = isRecord(workflow.autoPrLaunch) ? workflow.autoPrLaunch : undefined;
   const message =
@@ -101,13 +103,15 @@ export function multiReviewAutomation(workflow: Record<string, unknown>): Record
 }
 
 function automationNext(workflow: Record<string, unknown>): string {
-  const autoFix = workflow.autoFix === true;
+  const autoFix = workflow.autoAddressFindings === true;
   const autoPr = workflow.autoPr === true;
   const recordedLaunch = isRecord(workflow.autoPrLaunch) ? workflow.autoPrLaunch : undefined;
-  const fix = isRecord(workflow.fixSession) ? workflow.fixSession : undefined;
+  const fix = isRecord(workflow.addressFindingsSession)
+    ? workflow.addressFindingsSession
+    : undefined;
   const phase = workflow.phase;
   const customAddressFindings =
-    isRecord(workflow.fixLaunch) && workflow.fixLaunch.kind === "custom";
+    isRecord(workflow.addressFindingsLaunch) && workflow.addressFindingsLaunch.kind === "custom";
   const cleanReviewPr = recordedLaunch?.basis === "clean-review";
   const launch =
     cleanReviewPr &&
@@ -119,8 +123,8 @@ function automationNext(workflow: Record<string, unknown>): string {
   const earlierPr =
     recordedLaunch?.state === "launched" &&
     (cleanReviewPr ||
-      recordedLaunch.fixIdentity === undefined ||
-      recordedLaunch.fixIdentity !== multiReviewAddressFindingsIdentity(fix));
+      recordedLaunch.addressFindingsIdentity === undefined ||
+      recordedLaunch.addressFindingsIdentity !== multiReviewAddressFindingsIdentity(fix));
   const manualPr = "; review its result and start or update the PR manually";
   const thenPr = customAddressFindings
     ? manualPr

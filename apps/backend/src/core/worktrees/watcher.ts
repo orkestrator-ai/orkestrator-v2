@@ -1,19 +1,19 @@
 import path from "node:path";
-import { watchDirectory, type WatchHandle } from "./watch-host.js";
+import { watchDirectory, type WatchHandle } from "../watch-host.js";
 import {
   isRelevantCommonDirChange,
   isRelevantGitDirChange,
   relevantRefPaths,
   resolveWorktreeGitPaths,
   type WorktreeGitPaths,
-} from "./worktree-git-paths.js";
+} from "./git-paths.js";
 import {
   planWatchTargets,
   WATCH_PLAN_MAX_IGNORED_TREE_DIRECTORIES,
   worktreeWatchPlanIo,
   type WatchTarget,
   type WorktreeWatchPlanIo,
-} from "./worktree-watch-plan.js";
+} from "./watch-plan.js";
 
 /**
  * Turns "something in this worktree changed" into a debounced signal.
@@ -27,7 +27,7 @@ import {
  * fails: when the watch cannot be established the caller keeps its timer.
  *
  * A `node_modules` Git proves ignored and free of tracked files is left out
- * (`worktree-watch-plan.ts`). What that means depends on the platform. On Linux
+ * (`watch-plan.ts`). What that means depends on the platform. On Linux
  * a recursive watch costs one inotify watch per directory, so the subtree is not
  * watched at all, and new directories are noticed and watched as they appear.
  * On macOS one recursive watch has no per-directory cost, while each extra one

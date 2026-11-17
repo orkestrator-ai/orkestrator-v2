@@ -21,8 +21,13 @@ import {
 const workflow = {
   id: "multi-1",
   environmentId: "env-1",
-  fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high", fastMode: false },
-  fixSession: { providerSessionId: "provider-fix" },
+  addressFindingsModel: {
+    agent: "codex",
+    model: "gpt-5.6",
+    reasoningEffort: "high",
+    fastMode: false,
+  },
+  addressFindingsSession: { providerSessionId: "provider-fix" },
 } as MultiReviewWorkflow;
 
 test("dispatchMultiReviewAddressFindingsPrompt adopts and dispatches the stable production request", async () => {
@@ -49,7 +54,7 @@ test("dispatchMultiReviewAddressFindingsPrompt adopts and dispatches the stable 
     model: "gpt-5.6",
     reasoningEffort: "high",
     fastMode: false,
-    phase: "fix",
+    phase: "address-findings",
     sessionMode: "build",
   });
   expect(dispatchIntent).toHaveBeenCalledWith(
@@ -86,7 +91,7 @@ test("dispatchMultiReviewAddressFindingsPrompt creates an Address Findings sessi
       issues: [{ title: "Separate-session finding" }],
       testCoverageGaps: [{ untestedBehavior: "Separate-session coverage" }],
     } as MultiReviewWorkflow["consolidatedReport"],
-    fixSession: undefined,
+    addressFindingsSession: undefined,
   } as MultiReviewWorkflow;
 
   const dispatched = await dispatchMultiReviewAddressFindingsPrompt(
@@ -104,7 +109,7 @@ test("dispatchMultiReviewAddressFindingsPrompt creates an Address Findings sessi
       sessionMode: "build",
     }),
   );
-  expect(dispatched.fixSession).toMatchObject({
+  expect(dispatched.addressFindingsSession).toMatchObject({
     providerSessionId: "provider-fix-new",
     model: "gpt-5.6",
   });
@@ -131,7 +136,7 @@ test("dispatchMultiReviewAddressFindingsPrompt rejects a separate Address Findin
       {
         ...workflow,
         reviewModel: { agent: "claude", model: "review-coordinator" },
-        fixSession: undefined,
+        addressFindingsSession: undefined,
       },
     ),
   ).rejects.toBeInstanceOf(InvalidMultiReviewAddressFindingsStateError);
@@ -190,13 +195,13 @@ test("dispatchMultiReviewAddressFindingsPrompt creates, publishes and dispatches
   });
   const custom = {
     ...workflow,
-    customFixModel: {
+    customAddressFindingsModel: {
       agent: "codex" as const,
       model: "gpt-5.4",
       reasoningEffort: "high",
       fastMode: true,
     },
-    customFixInstruction: "Fix the reported regression",
+    customAddressFindingsInstruction: "Fix the reported regression",
     addressSessionKey: "multi-review:multi-1:interactive:launch-1",
     addressRequestId: "multi-review-address:multi-1:launch-1",
     addressTabId: "multi-review-fix:multi-1:launch-1",
@@ -236,7 +241,7 @@ test("dispatchMultiReviewAddressFindingsPrompt creates, publishes and dispatches
       requestId: "multi-review-address:multi-1:launch-1",
       prompt: multiReviewCustomAddressFindingsPrompt(
         custom.consolidatedReport!,
-        custom.customFixInstruction!,
+        custom.customAddressFindingsInstruction!,
       ),
     }),
   );
@@ -248,7 +253,7 @@ test("dispatchMultiReviewAddressFindingsPrompt creates, publishes and dispatches
   expect(events).toEqual(["dispatch", "publish"]);
   expect(session).toMatchObject({
     tabId: "multi-review-fix:multi-1:launch-1",
-    fixSession: {
+    addressFindingsSession: {
       providerSessionId: "provider-custom",
       sessionKey: "multi-review:multi-1:interactive:launch-1",
       status: "idle",
@@ -295,7 +300,7 @@ test("dispatchMultiReviewAddressFindingsPrompt does not let tab presentation blo
       },
     ),
   ).resolves.toMatchObject({
-    fixSession: { providerSessionId: "provider-fix" },
+    addressFindingsSession: { providerSessionId: "provider-fix" },
     presentationError: expect.stringContaining("tab could not be opened"),
   });
   expect(dispatchIntent).toHaveBeenCalledTimes(1);
@@ -341,8 +346,8 @@ test("dispatchMultiReviewAddressFindingsPrompt rejects a corrupt custom Address 
       },
       {
         ...workflow,
-        customFixInstruction: "Fix it",
-        customFixModel: workflow.fixModel,
+        customAddressFindingsInstruction: "Fix it",
+        customAddressFindingsModel: workflow.addressFindingsModel,
       },
     ),
   ).rejects.toBeInstanceOf(InvalidMultiReviewAddressFindingsStateError);
@@ -359,13 +364,13 @@ test("recoverMissingMultiReviewAddressFindingsSession adopts and seeds the repla
   const recoverable = {
     ...workflow,
     phase: "interactive",
-    fixTabId: "multi-review-fix:multi-1:launch-1",
+    addressFindingsTabId: "multi-review-fix:multi-1:launch-1",
     addressSessionKey: "multi-review:multi-1:interactive:launch-1",
     consolidatedReport: {
       issues: [{ title: "Lost-session regression" }],
       testCoverageGaps: [{ untestedBehavior: "Replacement recovery" }],
     },
-    fixSession: {
+    addressFindingsSession: {
       agent: "codex",
       model: "gpt-5.6",
       reasoningEffort: "high",
@@ -410,11 +415,11 @@ test("recoverMissingMultiReviewAddressFindingsSession adopts and seeds the repla
   expect(ensureSession).not.toHaveBeenCalled();
   expect(result).toMatchObject({
     tabId: "multi-review-fix:multi-1:launch-1",
-    fixSession: {
+    addressFindingsSession: {
       providerSessionId: "provider-replacement",
       sessionKey: "multi-review:multi-1:interactive:launch-1",
       status: "idle",
     },
   });
-  expect(result.fixSession.requestIds).toHaveLength(2);
+  expect(result.addressFindingsSession.requestIds).toHaveLength(2);
 });

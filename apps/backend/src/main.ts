@@ -42,6 +42,7 @@ import {
   addEventLoopStallContext,
   startEventLoopStallMonitor,
 } from "@orkestrator/protocol/event-loop-stall-monitor";
+import { readHostCpuTimes } from "@orkestrator/protocol/node/host-cpu-times";
 import { commandTimings } from "./core/command-timing.js";
 import { recurringWorkMetrics } from "./core/recurring-work-metrics.js";
 import { slowStorageOperations } from "./core/storage-slow-operations.js";
@@ -70,11 +71,14 @@ configureLoggerFromEnvironment(process.env, {
 });
 // A stall line says how much CPU this process used during it: near the stall's
 // length means its own thread was busy, far below means it waited.
+// The host's CPU time counters stop while it sleeps, so a sleep is reported as
+// `host-suspended` rather than as a stall (docs/architecture/logging.md).
 startEventLoopStallMonitor({
   cpuUsage: () => {
     const usage = process.cpuUsage();
     return usage.user + usage.system;
   },
+  hostCpuTimes: () => readHostCpuTimes(),
 });
 // A stall line names the slow SQLite calls, the commands and the recurring jobs
 // that ran during it.

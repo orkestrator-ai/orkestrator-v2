@@ -111,11 +111,8 @@ describe("remote build network choice", () => {
       }) as typeof portalStore.invokeOnNode);
       try {
         renderInAppCommandScope(<Launcher ownDefault={ownDefault} />);
-        fireEvent.click(
-          within(screen.getByRole("radiogroup", { name: "Machine" })).getByRole("radio", {
-            name: /Builder/,
-          }),
-        );
+        fireEvent.click(screen.getByRole("combobox", { name: "Machine" }));
+        fireEvent.click(await screen.findByRole("option", { name: /Builder/ }));
         await waitFor(() =>
           expect(
             (screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement).disabled,
@@ -131,11 +128,8 @@ describe("remote build network choice", () => {
         await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
         expect(saved).toBe("restricted");
         fireEvent.click(screen.getByRole("button", { name: "Reopen" }));
-        fireEvent.click(
-          within(screen.getByRole("radiogroup", { name: "Machine" })).getByRole("radio", {
-            name: /Builder/,
-          }),
-        );
+        fireEvent.click(screen.getByRole("combobox", { name: "Machine" }));
+        fireEvent.click(await screen.findByRole("option", { name: /Builder/ }));
         await waitFor(() =>
           expect(
             (screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement).disabled,

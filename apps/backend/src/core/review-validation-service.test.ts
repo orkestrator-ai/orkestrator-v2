@@ -1,3 +1,7 @@
+import {
+  ENVIRONMENT_ISOLATION_ENV_NAMES,
+  environmentIsolationVariables,
+} from "./environment-isolation.js";
 import { expect, test } from "bun:test";
 import { BackendRuntime } from "./backend-runtime.js";
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -167,112 +171,147 @@ test("validation output reader returns a bounded tail and rejects replaced artif
   }
 });
 
-test("real backend runner seals hashed evidence and refuses a moved head or replaced log", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "validation-service-"));
-  const git = (...args: string[]) =>
-    execFileSync("git", args, {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  git("init", "-b", "main");
-  git("config", "user.name", "Test");
-  git("config", "user.email", "test@example.invalid");
-  await writeFile(path.join(root, "source"), "fixture");
-  git("add", ".");
-  git("commit", "-m", "fixture");
-  const head = git("rev-parse", "HEAD");
-  git("update-ref", "refs/remotes/origin/main", head);
-  const environment = {
-    id: "env",
-    status: "running",
-    environmentType: "local",
-    worktreePath: root,
-  };
-  const reviews: unknown[] = [];
-  const context = {
-    storage: {
-      getEnvironment: async () => environment,
-      listMultiReviewWorkflows: async () => reviews,
-      listAllBuildPipelines: async () => [],
-    },
-    appRoot: root,
-    resourceRoot: root,
-    toolchainBinDir: path.dirname(process.execPath),
-    runtime: new BackendRuntime({ emit: () => undefined }),
-  } as unknown as CommandContext;
-  const initial = newReviewValidationRun("review-validation-fixture", {
-    headRef: head,
-    commands: [
-      {
-        id: "check",
-        command: "printf evidence",
-        cwd: ".",
-        dependsOn: [],
-        resources: [],
-        weight: 1,
-        timeoutMs: 1000,
+test.each(["reserved", "failed"])(
+  "real backend runner seals evidence with %s isolation and refuses changed artifacts",
+  async (reservationMode) => {
+    const root = await mkdtemp(path.join(tmpdir(), "validation-service-"));
+    const git = (...args: string[]) =>
+      execFileSync("git", args, {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    git("init", "-b", "main");
+    git("config", "user.name", "Test");
+    git("config", "user.email", "test@example.invalid");
+    await writeFile(path.join(root, "source"), "fixture");
+    git("add", ".");
+    git("commit", "-m", "fixture");
+    const head = git("rev-parse", "HEAD");
+    git("update-ref", "refs/remotes/origin/main", head);
+    const environment = {
+      id: "env",
+      status: "running",
+      environmentType: "local",
+      worktreePath: root,
+    };
+    const reviews: unknown[] = [];
+    let reservations = 0;
+    const context = {
+      storage: {
+        getEnvironment: async () => environment,
+        environmentIsolation: {
+          assignEnvironmentPortBase: async () => {
+            reservations++;
+            if (reservationMode === "failed") throw new Error("reservation failed");
+            return 21_000;
+          },
+        },
+        listMultiReviewWorkflows: async () => reviews,
+        listAllBuildPipelines: async () => [],
       },
-    ],
-    limitations: [],
-  });
-  const previousScheduler = process.env.ORKESTRATOR_TEST_SCHEDULER_DIR;
-  process.env.ORKESTRATOR_TEST_SCHEDULER_DIR = path.join(root, ".orkestrator", "test-scheduler");
-  try {
-    let run = await controlReviewValidation("env", initial, "start", context);
-    const deadline = Date.now() + 10000;
-    while (["planned", "running"].includes(run.status) && Date.now() < deadline) {
-      await Bun.sleep(50);
-      run = await controlReviewValidation("env", run, "status", context);
-    }
-    expect(run.status).toBe("completed");
-    const output = await readReviewValidationOutput("env", run.id, "check", context);
-    expect(Buffer.from(output.stdout!.contentBase64, "base64").toString()).toBe("evidence");
-    expect(output.stdout).toMatchObject({ totalBytes: 8, startOffset: 0 });
-    expect(output.stderr).toMatchObject({ contentBase64: "", totalBytes: 0, startOffset: 0 });
-    const preparation = validationPreparation(run);
-    const validation = parseReviewPreparationValidation(preparation.validation, run.id);
-    expect(validation[0]!.stdoutSha256).toHaveLength(64);
-    const pkg = await generateReviewPackage("env", run.id, 1, "main", validation, [], [], context, {
-      expectedHead: head,
-      validationPlan: run.plan,
+      appRoot: root,
+      resourceRoot: root,
+      toolchainBinDir: path.dirname(process.execPath),
+      runtime: new BackendRuntime({ emit: () => undefined }),
+    } as unknown as CommandContext;
+    const initial = newReviewValidationRun("review-validation-fixture", {
+      headRef: head,
+      commands: [
+        {
+          id: "check",
+          command: `test "$COMPOSE_PROJECT_NAME" = ork-env && test "$ORKESTRATOR_ENVIRONMENT_ID" = env && test "\${ORKESTRATOR_PORT_BASE-unset}" = ${reservationMode === "reserved" ? "21000" : "unset"} && test "\${ORKESTRATOR_PORT_COUNT-unset}" = ${reservationMode === "reserved" ? "20" : "unset"} && test "\${ORKESTRATOR_PORT_MAX-unset}" = ${reservationMode === "reserved" ? "21019" : "unset"} && printf evidence`,
+          cwd: ".",
+          dependsOn: [],
+          resources: [],
+          weight: 1,
+          timeoutMs: 1000,
+        },
+      ],
+      limitations: [],
     });
-    // Both streams were hashed; the report counts them and their bytes.
-    expect(await verifyEnvironmentReviewPackage("env", pkg, context)).toEqual({
-      valid: true,
-      artifacts: 2,
-      artifactBytes: 8,
-    });
-    const slow = newReviewValidationRun("review-validation-stop-fixture", {
-      ...initial.plan,
-      commands: [{ ...initial.plan.commands[0]!, command: "sleep 20", timeoutMs: 30000 }],
-    });
-    reviews.push({ environmentId: "env", snapshot: { environmentId: "env", validationRun: slow } });
-    await controlReviewValidation("env", slow, "start", context);
-    await stopEnvironmentReviewValidation("env", context);
-    expect((await controlReviewValidation("env", slow, "status", context)).status).toBe(
-      "cancelled",
+    const previousScheduler = process.env.ORKESTRATOR_TEST_SCHEDULER_DIR;
+    process.env.ORKESTRATOR_TEST_SCHEDULER_DIR = path.join(root, ".orkestrator", "test-scheduler");
+    const inherited = ENVIRONMENT_ISOLATION_ENV_NAMES.map(
+      (name) => [name, process.env[name]] as const,
     );
-    expect(
-      generateReviewPackage("env", run.id, 1, "main", validation, [], [], context, {
-        expectedHead: "0".repeat(40),
-      }),
-    ).rejects.toThrow("HEAD changed");
-    const stdout = path.join(root, run.results[0]!.stdoutPath!);
-    await chmod(stdout, 0o600);
-    await writeFile(stdout, "modified");
-    expect(await verifyEnvironmentReviewPackage("env", pkg, context)).toMatchObject({
-      valid: false,
-      reason: "Validation artifact SHA-256 changed",
-    });
-  } finally {
-    await stopEnvironmentReviewValidation("env", context).catch(() => {});
-    await controlReviewValidation("env", initial, "cancel", context).catch(() => {});
-    if (previousScheduler === undefined) delete process.env.ORKESTRATOR_TEST_SCHEDULER_DIR;
-    else process.env.ORKESTRATOR_TEST_SCHEDULER_DIR = previousScheduler;
-    await rm(root, { recursive: true, force: true });
-  }
-});
+    Object.assign(process.env, environmentIsolationVariables("parent", 20_000));
+    try {
+      let run = await controlReviewValidation("env", initial, "start", context);
+      const deadline = Date.now() + 10000;
+      while (["planned", "running"].includes(run.status) && Date.now() < deadline) {
+        await Bun.sleep(50);
+        run = await controlReviewValidation("env", run, "status", context);
+      }
+      expect(run.status).toBe("completed");
+      expect(reservations).toBe(1);
+      const output = await readReviewValidationOutput("env", run.id, "check", context);
+      expect(Buffer.from(output.stdout!.contentBase64, "base64").toString()).toBe("evidence");
+      expect(output.stdout).toMatchObject({ totalBytes: 8, startOffset: 0 });
+      expect(output.stderr).toMatchObject({ contentBase64: "", totalBytes: 0, startOffset: 0 });
+      const preparation = validationPreparation(run);
+      const validation = parseReviewPreparationValidation(preparation.validation, run.id);
+      expect(validation[0]!.stdoutSha256).toHaveLength(64);
+      const pkg = await generateReviewPackage(
+        "env",
+        run.id,
+        1,
+        "main",
+        validation,
+        [],
+        [],
+        context,
+        {
+          expectedHead: head,
+          validationPlan: run.plan,
+        },
+      );
+      // Both streams were hashed; the report counts them and their bytes.
+      expect(await verifyEnvironmentReviewPackage("env", pkg, context)).toEqual({
+        valid: true,
+        artifacts: 2,
+        artifactBytes: 8,
+      });
+      const slow = newReviewValidationRun("review-validation-stop-fixture", {
+        ...initial.plan,
+        commands: [{ ...initial.plan.commands[0]!, command: "sleep 20", timeoutMs: 30000 }],
+      });
+      reviews.push({
+        environmentId: "env",
+        snapshot: { environmentId: "env", validationRun: slow },
+      });
+      await controlReviewValidation("env", slow, "start", context);
+      await stopEnvironmentReviewValidation("env", context);
+      expect((await controlReviewValidation("env", slow, "status", context)).status).toBe(
+        "cancelled",
+      );
+      expect(reservations).toBe(2);
+      expect(
+        generateReviewPackage("env", run.id, 1, "main", validation, [], [], context, {
+          expectedHead: "0".repeat(40),
+        }),
+      ).rejects.toThrow("HEAD changed");
+      const stdout = path.join(root, run.results[0]!.stdoutPath!);
+      await chmod(stdout, 0o600);
+      await writeFile(stdout, "modified");
+      expect(await verifyEnvironmentReviewPackage("env", pkg, context)).toMatchObject({
+        valid: false,
+        reason: "Validation artifact SHA-256 changed",
+      });
+    } finally {
+      await stopEnvironmentReviewValidation("env", context).catch(() => {});
+      await controlReviewValidation("env", initial, "cancel", context).catch(() => {});
+      for (const [name, value] of inherited) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      context.runtime.shutdown();
+      if (previousScheduler === undefined) delete process.env.ORKESTRATOR_TEST_SCHEDULER_DIR;
+      else process.env.ORKESTRATOR_TEST_SCHEDULER_DIR = previousScheduler;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("stop-command stops one command through the backend runner and rejects foreign IDs", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "validation-service-stop-"));

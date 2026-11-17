@@ -67,6 +67,33 @@ export function MachineDot({
 }
 
 /**
+ * The machine's colour as a bare dot, with no tooltip, for a control that
+ * already names the machine beside it (a dropdown option, say). Decorative:
+ * the name is the identity, the colour only matches the sidebar.
+ */
+export function MachineColorDot({
+  colorToken,
+  className,
+}: {
+  colorToken: string | undefined;
+  className?: string;
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      data-testid="machine-color-dot"
+      data-machine-color={colorToken ?? "neutral"}
+      className={cn(
+        "inline-block size-2 shrink-0 rounded-full ring-1 ring-black/25 dark:ring-white/35",
+        "forced-colors:border forced-colors:border-[CanvasText] forced-colors:bg-[CanvasText]",
+        machineDotClass(colorToken),
+        className,
+      )}
+    />
+  );
+}
+
+/**
  * A project's own icon, chosen in its settings. The image may come from
  * another machine, so anything but a bounded raster data URL draws nothing.
  */

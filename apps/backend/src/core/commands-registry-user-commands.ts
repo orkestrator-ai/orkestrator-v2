@@ -17,6 +17,7 @@ import {
   stripInheritedAgentCredentials,
 } from "./agent-accounts-active.js";
 import { envWithManagedBinaries } from "./commands-agent-support.js";
+import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
 import type { CommandContext } from "./commands-context.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
@@ -177,7 +178,12 @@ async function resolveLaunch(
     if (!environment.worktreePath) {
       throw new UserCommandError("unavailable", "The environment has no workspace yet.");
     }
-    return localLaunch(context, "worktree", environment.worktreePath);
+    return localLaunch(
+      context,
+      "worktree",
+      environment.worktreePath,
+      await localEnvironmentIsolationEnv(environment, context.storage),
+    );
   }
   if (!environment.containerId || environment.status !== "running") {
     throw new UserCommandError("unavailable", "Start the environment's container first.");
@@ -187,7 +193,12 @@ async function resolveLaunch(
     target: "container",
     containerId,
     cwd: "/workspace",
-    spawn: (command) => spawnContainerUserCommand(containerId, command, terminalEnv()),
+    spawn: (command) =>
+      spawnContainerUserCommand(
+        containerId,
+        command,
+        terminalEnv(withEnvironmentIsolation(process.env)),
+      ),
   };
 }
 
@@ -195,11 +206,15 @@ async function localLaunch(
   context: CommandContext,
   target: "worktree" | "project-checkout",
   cwd: string,
+  isolation: Record<string, string> = {},
 ): Promise<UserCommandLaunch> {
   // The same environment a terminal tab gets: the user's own, plus managed
-  // binaries and the active agent accounts.
+  // binaries, a worktree's isolation variables and the active agent accounts.
   const accounts = await activeAgentAccountShellEnvironment(context).catch(() => ({}));
-  const env = { ...envWithManagedBinaries(context), ...accounts };
+  const env = {
+    ...withEnvironmentIsolation(envWithManagedBinaries(context), isolation),
+    ...accounts,
+  };
   if ("CLAUDE_CONFIG_DIR" in accounts || "CODEX_HOME" in accounts) {
     stripInheritedAgentCredentials(env);
   }

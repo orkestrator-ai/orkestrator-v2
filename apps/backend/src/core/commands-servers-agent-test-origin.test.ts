@@ -1,3 +1,7 @@
+import {
+  ENVIRONMENT_ISOLATION_ENV_NAMES,
+  environmentIsolationVariables,
+} from "./environment-isolation.js";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -31,6 +35,7 @@ const CAPTURING_BRIDGE = `
 await Bun.write(import.meta.dir + "/captured.json", JSON.stringify({
   baseUrl: process.env.ANTHROPIC_BASE_URL ?? null,
   nonessential: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC ?? null,
+  isolation: Object.fromEntries(${JSON.stringify(ENVIRONMENT_ISOLATION_ENV_NAMES)}.map(k => [k, process.env[k] ?? null])),
 }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
@@ -38,6 +43,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
 `;
 
 const SAVED_ENV = [
+  ...ENVIRONMENT_ISOLATION_ENV_NAMES,
   "ORKESTRATOR_AGENT_TEST_ISOLATED",
   AGENT_TEST_ANTHROPIC_ORIGIN_ENV,
   "ANTHROPIC_BASE_URL",
@@ -101,6 +107,7 @@ describe("agent-test Anthropic origin at bridge launch", () => {
     await fs.mkdir(codexHome);
     process.env.CODEX_HOME = codexHome;
     process.env.CODEX_BRIDGE_STATE_DIR = path.join(root, "codex-state");
+    Object.assign(process.env, environmentIsolationVariables("parent", 20_000));
     // Something the launch must not keep pointing at.
     process.env.ANTHROPIC_BASE_URL = INHERITED_BASE_URL;
     // Keep host credential discovery away from the real Keychain.
@@ -172,10 +179,17 @@ describe("agent-test Anthropic origin at bridge launch", () => {
     await fs.rm(captured, { force: true });
     await startLocalServerUnlocked(runtimeId, context, kind);
     started.push({ runtimeId, context, kind });
-    return JSON.parse(await fs.readFile(captured, "utf8")) as {
-      baseUrl: string | null;
-      nonessential: string | null;
-    };
+    const result = JSON.parse(await fs.readFile(captured, "utf8"));
+    const environment = await storage.getEnvironment(runtimeId);
+    const expected = environment
+      ? environmentIsolationVariables(environment.id, environment.isolationPortBase ?? null)
+      : {};
+    expect(result.isolation).toEqual(
+      Object.fromEntries(
+        ENVIRONMENT_ISOLATION_ENV_NAMES.map((name) => [name, expected[name] ?? null]),
+      ),
+    );
+    return { baseUrl: result.baseUrl, nonessential: result.nonessential };
   }
 
   test("a worker's Claude bridge is pointed at the loopback model, over an inherited base URL", async () => {
@@ -185,6 +199,32 @@ describe("agent-test Anthropic origin at bridge launch", () => {
       baseUrl: ORIGIN,
       nonessential: "1",
     });
+  });
+
+  test("a failed reservation drops inherited bridge ports", async () => {
+    isolate();
+    const id = await worker();
+    const reservation = spyOn(
+      storage.environmentIsolation,
+      "assignEnvironmentPortBase",
+    ).mockRejectedValue(new Error("reservation failed"));
+    try {
+      await launch(id, commandContext("agent-test"), "claude");
+    } finally {
+      reservation.mockRestore();
+    }
+  });
+
+  test("a bug-report bridge drops inherited isolation", async () => {
+    isolate();
+    await storage.bugReports.createBugReport({
+      id: "isolation-report",
+      createdAt: "t",
+      tabId: "t",
+      scratchDir: checkout,
+      agent: "codex",
+    });
+    await launch("bug-report:isolation-report", commandContext("agent-test"), "codex");
   });
 
   test("a coordinator's Claude bridge, with its private home, is pointed there too", async () => {

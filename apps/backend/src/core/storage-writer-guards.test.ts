@@ -351,6 +351,7 @@ describe("StorageService store writers", () => {
       "clientState",
       "coordinatorNotices",
       "coordinators",
+      "environmentIsolation",
       "graphDescribe",
       "graphEffects",
       "graphRuns",

@@ -15,9 +15,11 @@ import {
 import type { AccountMachine } from "@/lib/backend/client";
 
 export interface BuildLaunchMachine {
-  /** Stable key for React and the radio group. */
+  /** Stable key for React and the machine dropdown. */
   key: string;
   name: string;
+  /** The machine's colour token, shown beside its name; absent when unknown. */
+  colorToken?: string;
   /**
    * How to reach it (`AccountMachine`): `undefined` is this tab's machine,
    * `null` the window's command node, a node id any other machine.
@@ -50,6 +52,7 @@ export function buildLaunchMachines(targets: readonly LinearMachineTarget[]): Bu
   return targets.map((target) => ({
     key: target.key,
     name: target.name,
+    ...(target.colorToken ? { colorToken: target.colorToken } : {}),
     machine: target.machine,
     nodeId: target.nodeId,
     projectId: target.projectId,

@@ -113,6 +113,7 @@ describe("Electron backend environment lifecycle commands", () => {
       projectId: "project-one-snapshot",
       opencodePid: 123,
       pendingRenamePrompt: "secret prompt",
+      isolationPortBase: 20_000,
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
@@ -125,6 +126,7 @@ describe("Electron backend environment lifecycle commands", () => {
     expect(single).toEqual(toClientEnvironment(environment) as unknown as Record<string, unknown>);
     expect(single).not.toHaveProperty("opencodePid");
     expect(single).not.toHaveProperty("pendingRenamePrompt");
+    expect(single).not.toHaveProperty("isolationPortBase");
     await expect(
       commands.get("get_environment_snapshot")?.({ environmentId: "missing" }, context),
     ).resolves.toBeNull();

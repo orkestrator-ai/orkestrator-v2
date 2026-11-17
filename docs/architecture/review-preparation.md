@@ -112,6 +112,15 @@ The worker uses Orkestrator's Bun runtime and Bash, including inside Docker; the
 reviewed repository needs neither a JavaScript manifest nor application code to
 host the worker. Project commands still need their own declared tools installed.
 
+Discovery also plans provisioning: build artifacts a suite reads, a missing
+local environment file created from its committed example and throwaway
+services started by repository-owned tasks run as earlier commands the suites
+depend on, and a missing secret or credential becomes a limitation. In a local
+environment the worker hands every command the environment's own Docker
+Compose project name and reserved host port block, so services started for
+validation never reach another workspace's
+([environment isolation](environment-isolation.md)).
+
 ## Execution and parallelism
 
 ### OpenCode submission-tool ownership

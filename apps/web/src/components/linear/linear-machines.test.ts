@@ -7,11 +7,12 @@ function node(
   displayName: string,
   projects: Array<{ id: string; hint?: string; pathName?: string }>,
   available = true,
+  colorToken?: string,
 ): NodeSummary {
   return {
     nodeId,
     available,
-    view: { displayName },
+    view: { displayName, ...(colorToken ? { colorToken } : {}) },
     projects: projects.map((project) => ({
       ref: { backendId: nodeId, projectId: project.id },
       key: `${nodeId}:${project.id}`,
@@ -31,6 +32,48 @@ const nodes = [
 ];
 
 describe("linearMachineTargets", () => {
+  test("carries each machine's colour, the command node's from its own profile", () => {
+    const coloured = [
+      node(
+        "node-laptop",
+        "Laptop",
+        [{ id: "laptop-web", hint: "github.com/acme/web" }],
+        true,
+        "teal",
+      ),
+      node("node-ci", "CI box", [{ id: "ci-web", hint: "github.com/acme/web" }]),
+    ];
+    const onCommand = linearMachineTargets({
+      currentNodeId: "node-home",
+      currentRole: "command",
+      projectId: "project-1",
+      gitUrl: "https://github.com/acme/web",
+      commandNodeId: "node-home",
+      commandName: "Home server",
+      commandColorToken: "violet",
+      commandProjects: [],
+      nodes: coloured,
+    });
+    expect(onCommand.map((target) => target.colorToken)).toEqual(["violet", "teal", undefined]);
+
+    const onLeaf = linearMachineTargets({
+      currentNodeId: "node-laptop",
+      currentRole: "leaf",
+      projectId: "laptop-web",
+      gitUrl: "https://github.com/acme/web",
+      commandNodeId: "node-home",
+      commandName: "Home server",
+      commandColorToken: "violet",
+      commandProjects: [{ id: "home-web", gitUrl: "https://github.com/acme/web", localPath: "/w" }],
+      nodes: coloured,
+    });
+    expect(onLeaf.map((target) => [target.name, target.colorToken])).toEqual([
+      ["Laptop", "teal"],
+      ["Home server", "violet"],
+      ["CI box", undefined],
+    ]);
+  });
+
   test("offers only this machine for a project without a Git remote", () => {
     const targets = linearMachineTargets({
       currentNodeId: "node-home",

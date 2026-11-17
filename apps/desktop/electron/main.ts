@@ -1,5 +1,6 @@
 import { appShortcut } from "@orkestrator/protocol/keyboard-shortcuts";
 import { startEventLoopStallMonitor } from "@orkestrator/protocol/event-loop-stall-monitor";
+import { readHostCpuTimes } from "@orkestrator/protocol/node/host-cpu-times";
 import {
   app,
   BrowserWindow,
@@ -193,7 +194,11 @@ import {
   type CommandHandoverDeps,
 } from "./command-handover.js";
 import { ArtifactHostManager } from "./artifact-host-manager.js";
-import { reportArtifactHostDiagnostics, reportMainThreadStall } from "./diagnostic-logging.js";
+import {
+  reportArtifactHostDiagnostics,
+  reportMainThreadStall,
+  reportMainThreadSuspension,
+} from "./diagnostic-logging.js";
 import {
   processMemoryDiagnosticInterval,
   startProcessMemoryDiagnostic,
@@ -441,10 +446,13 @@ nativeDialogs.install();
 installUncaughtExceptionDialog(process, nativeDialogs);
 startEventLoopStallMonitor({
   report: (stall) => reportMainThreadStall(stall, (lagMs) => nativeDialogs.describeStall(lagMs)),
+  reportSuspension: reportMainThreadSuspension,
   cpuUsage: () => {
     const usage = process.cpuUsage();
     return usage.user + usage.system;
   },
+  // A sleeping host is a suspension, not a stall (docs/architecture/logging.md).
+  hostCpuTimes: () => readHostCpuTimes(),
 });
 const showNonBlockingError = (title: string, detail: string): void => {
   void showRestartPrompt({

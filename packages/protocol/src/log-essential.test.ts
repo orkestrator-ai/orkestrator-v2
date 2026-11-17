@@ -121,6 +121,28 @@ describe("what is kept", () => {
     ).toEqual({ droppedFields: 2 });
   });
 
+  test("the backend's start keeps the app version every release channel names", () => {
+    // Self-improvement dates each event by the last start's version; a version
+    // dropped here leaves every signal on "unknown" and no fix ever checkable.
+    for (const version of [
+      "2.39.2",
+      "2.39.2-beta",
+      "2.39.2-alpha",
+      "2.39.2-beta.2",
+      "2.39.2-alpha.10",
+      "2.39.2-rc.1",
+    ]) {
+      expect(
+        projectEssentialRecord(record("backend", "starting", "info", { version }), TS)?.fields,
+      ).toEqual({ version });
+    }
+    for (const version of ["2.39", "2.39.2-beta.", "2.39.2-nightly", "2.39.2-beta /Users/x"]) {
+      expect(
+        projectEssentialRecord(record("backend", "starting", "info", { version }), TS)?.fields,
+      ).toEqual({ droppedFields: 1 });
+    }
+  });
+
   test("an error keeps its identity and never its message, stack or cause", () => {
     const error = Object.assign(
       new Error(`ENOENT: open '${SECRET}'`, { cause: new Error(SECRET) }),

@@ -149,7 +149,13 @@ const CLAUDE_API_ERRORS = new Set([
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const SOURCE = new RegExp(`^(?:claude|codex|opencode|cursor|grok|acp|pi):${UUID}$`, "i");
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
-const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-(?:alpha|beta|rc)\.\d{1,6})?$/;
+/**
+ * An app version as releases name it (`hostUpdateChannelOfVersion`): a bare
+ * `2.39.2`, or a channel suffix that is usually unnumbered (`2.39.2-beta`)
+ * and may be numbered (`2.39.2-beta.2`). Requiring the number dropped every
+ * real release's version, so self-improvement saw only "unknown" versions.
+ */
+const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-(?:alpha|beta|rc)(?:\.\d{1,6})?)?$/;
 /** `storage-slow-operations.ts`: which file, the statement kind and a code-written table or pragma name. */
 const STORAGE_DATABASES = new Set(["main", "ledger", "other"]);
 const STORAGE_OPERATIONS = new Set([

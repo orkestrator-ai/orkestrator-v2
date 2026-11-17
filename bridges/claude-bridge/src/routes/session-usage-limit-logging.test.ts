@@ -92,6 +92,16 @@ const failures: Failure[] = [
     events: [{ type: "result", subtype: "success", is_error: true, errors: ["Overloaded"] }],
     usageLimited: false,
   },
+  {
+    // The shape behind every `prompt.processing-failed` the essential-log
+    // recorded on 2.38.2-beta (digest 20261117T091310Z-edf16d93): an error
+    // result carrying no errors, no wording and no API status, which the turn
+    // rejects as "Claude ended the turn on an API error." and logs as
+    // `prompt.failed`. Before 2.38.3-beta the route logged it a second time.
+    name: "a bare API-error result",
+    events: [{ type: "result", subtype: "success", is_error: true }],
+    usageLimited: false,
+  },
 ];
 
 for (const withRequestId of [true, false]) {

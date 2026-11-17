@@ -131,6 +131,36 @@ function checkNoCounts(todo: string) {
   expect(totals, "the top-level index has no total row").toEqual([]);
 }
 
+// Index summaries must not become another shared counter. Case evidence and
+// task descriptions can contain measurements, dates and IDs; check summary
+// prose and Covers cells, while enforcing each table's column count throughout.
+function checkIndexSummaries(directory: string, columns: number, caseRows = false) {
+  const index = readFileSync(path.join(directory, INDEX), "utf8");
+  const aggregate =
+    /(?<![\d-])\b\d+\s+(?:(?:manual\s+)?tests?(?:\s+and\s+live\s+checks?)?|files?|to-dos?|cases?|decisions?|answered)\b|\b(?:backlog|blocked|open|resolved|environmental|total)\s*:\s*\d+\b/i;
+  for (const line of index.split("\n")) {
+    const cells = tableCells(line);
+    if (cells) {
+      expect(cells.length, `${directory}: index table column count`).toBe(columns);
+      expect(cells[0], `${directory}: no total row`).not.toMatch(/^\**total\**$/i);
+      // Numeric rows hold individual tasks or flake evidence, not summaries.
+      if (/^\d+$/.test(cells[0]!)) {
+        if (caseRows) continue;
+        expect(cells[5], `${directory}: Covers has no aggregate counts`).not.toMatch(aggregate);
+        continue;
+      }
+    }
+    expect(line, `${directory}: no aggregate count sentences`).not.toMatch(aggregate);
+  }
+}
+
+function checkAllIndexSummaries(directory: string, caseRows = false) {
+  checkIndexSummaries(directory, 2);
+  for (const folder of areaFolders(directory)) {
+    checkIndexSummaries(path.join(directory, folder), caseRows ? 6 : 7, caseRows);
+  }
+}
+
 function checkTodoNumbers(todo: string) {
   const byNumber = new Map<string, string[]>();
   for (const folder of areaFolders(todo)) {
@@ -216,6 +246,11 @@ describe("todo folders", () => {
 
   test("the top-level index carries no status counts or total row", () => {
     checkNoCounts(todo);
+  });
+
+  test("all to-do and flake indexes carry no aggregate summaries or count columns", () => {
+    checkAllIndexSummaries(todo);
+    checkAllIndexSummaries(path.join(root, "docs/tests/flaky-tests"), true);
   });
 
   test("todo numbers are unique across folders, except the allowlisted duplicates", () => {
@@ -395,6 +430,69 @@ describe("todo guard negative fixtures", () => {
     const index = path.join(directory, INDEX);
     writeFileSync(index, mutate(readFileSync(index, "utf8")));
     expect(() => checkNoCounts(directory)).toThrow();
+  });
+
+  for (const folder of ["", "area", MANUAL_TEST, "flakes"]) {
+    test.each([
+      ["a total row", "| **Total** | 4 |"],
+      ["a count sentence", "There are 12 files blocked."],
+      ["a status summary", "Blocked: 12"],
+      ["manual-test totals", "364 manual tests and live checks, then 25 decisions (35 answered)."],
+      ["a count column", "| Count | Extra | Extra | Extra | Extra | Extra | Extra | Extra |"],
+    ])(`rejects %s in the ${folder || "root"} index`, (_name, addition) => {
+      const directory = fixture();
+      if (folder === "flakes") {
+        writeFixtureFile(
+          directory,
+          `flakes/${INDEX}`,
+          "| ID | Status | Test | File | Symptom | Case |",
+        );
+      }
+      const target = path.join(directory, folder, INDEX);
+      const columns = folder === "" ? 2 : folder === "flakes" ? 6 : 7;
+      const row =
+        _name === "a total row"
+          ? `| **Total** | ${Array.from({ length: columns - 1 }, () => "4").join(" | ")} |`
+          : addition;
+      writeFileSync(target, `${readFileSync(target, "utf8")}\n${row}`);
+      expect(() =>
+        checkIndexSummaries(path.dirname(target), columns, folder === "flakes"),
+      ).toThrow();
+    });
+  }
+
+  test("rejects totals embedded in the manual-test Covers cell", () => {
+    const directory = fixture();
+    const target = path.join(directory, MANUAL_TEST, INDEX);
+    writeFileSync(
+      target,
+      readFileSync(target, "utf8").replace("| Example |", "| 364 manual tests and live checks |"),
+    );
+    expect(() => checkAllIndexSummaries(directory)).toThrow();
+  });
+
+  test("allows structural invariants, task IDs, dates and individual flake evidence", () => {
+    const directory = fixture();
+    writeFixtureFile(
+      directory,
+      "flakes/0000-index.md",
+      [
+        "This folder holds exactly one checklist; task 25 follows the 2026-11-14 decision.",
+        "| ID | Status | Test | File | Symptom | Case |",
+        "| 1234 | open | test | file | 12 tests passed alone; 35 files were read. | case |",
+      ].join("\n"),
+    );
+    checkIndexSummaries(path.join(directory, "flakes"), 6, true);
+    rmSync(path.join(directory, "flakes"), { recursive: true });
+    const target = path.join(directory, MANUAL_TEST, INDEX);
+    writeFileSync(
+      target,
+      readFileSync(target, "utf8").replace(
+        "| Example |",
+        "| The 2026-11-14 decision follows flake 0440 resolved. |",
+      ),
+    );
+    checkAllIndexSummaries(directory);
   });
 
   test("a status change in a folder index needs no edit to the top-level index", () => {

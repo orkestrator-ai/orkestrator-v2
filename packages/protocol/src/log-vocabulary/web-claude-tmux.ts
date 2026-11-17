@@ -11,6 +11,7 @@ export const WEB_CLAUDE_TMUX_LOG_AREAS = defineLogAreas({
         "After an interrupt, the next queued prompt did not become the draft.",
       "files.load-failed": "The file list for @mentions could not be loaded.",
       "clipboard.image-failed": "An image pasted into the interactive terminal could not be saved.",
+      "clipboard.osc52-copy-failed": "A program's OSC 52 clipboard write could not be copied.",
       "terminal.resize-failed": "Resizing the interactive terminal's session failed.",
       "terminal.recover-failed": "The interactive terminal could not reattach to its session.",
       "terminal.lease-lapsed":

@@ -1,3 +1,4 @@
+import { bindOsc52ClipboardGestures, suppressOsc52Clipboard } from "@/lib/terminal-osc52";
 import { useEffect, useMemo, useRef, useCallback, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { writeText } from "@/lib/native/clipboard";
@@ -569,7 +570,7 @@ export function PersistentTerminal({
 
   // Handle terminal data from backend
   const handleData = useCallback(
-    (data: Uint8Array, onApplied?: () => void): Promise<void> => {
+    (data: Uint8Array, onApplied?: () => void, replay = false): Promise<void> => {
       const pendingReplay = pendingDurableReplayRef.current;
       if (pendingReplay && !pendingReplay.overflowed) {
         if (pendingReplay.byteLength + data.length <= MAX_PENDING_DURABLE_REPLAY_BYTES) {
@@ -588,8 +589,10 @@ export function PersistentTerminal({
         }
       }
 
+      const releaseClipboard = replay ? suppressOsc52Clipboard(terminal) : () => {};
       const applied = new Promise<void>((resolve) =>
         terminal.write(data, () => {
+          releaseClipboard();
           onApplied?.();
           resolve();
         }),
@@ -700,7 +703,7 @@ export function PersistentTerminal({
       }
 
       if (append) {
-        await handleData(data);
+        await handleData(data, undefined, true);
         terminal.scrollToBottom();
         return;
       }
@@ -715,7 +718,7 @@ export function PersistentTerminal({
         if (serializedBuffer && !hasRenderedOutputRef.current) {
           terminal.clear();
           terminal.reset();
-          await handleData(new TextEncoder().encode(serializedBuffer));
+          await handleData(new TextEncoder().encode(serializedBuffer), undefined, true);
         } else if (persistentBufferLoadPendingRef.current) {
           // Do not retain a truncated snapshot for the later reset. Only bytes
           // received after the snapshot cursor are safe to append to the durable
@@ -749,7 +752,7 @@ export function PersistentTerminal({
 
       terminal.clear();
       terminal.reset();
-      await handleData(replayData);
+      await handleData(replayData, undefined, true);
       if (trackUntilDurableHistoryLoads) {
         // Persistent storage can finish loading after the replacement session
         // attaches. Keep the snapshot and any subsequent live bytes so the
@@ -777,7 +780,7 @@ export function PersistentTerminal({
       if (!isBackendManagedSetupTab || existingSessionId || hasRenderedOutputRef.current) return;
       terminal.clear();
       terminal.reset();
-      handleData(new TextEncoder().encode(serializedBuffer));
+      handleData(new TextEncoder().encode(serializedBuffer), undefined, true);
       terminal.scrollToBottom();
       return;
     }
@@ -797,7 +800,7 @@ export function PersistentTerminal({
     }
     terminal.clear();
     terminal.reset();
-    handleData(replayData);
+    handleData(replayData, undefined, true);
     terminal.scrollToBottom();
   }, [existingSessionId, handleData, isBackendManagedSetupTab, serializedBuffer, terminal]);
 
@@ -1364,6 +1367,7 @@ export function PersistentTerminal({
       terminalRef.current.appendChild(containerElement);
 
       terminal.open(containerElement);
+      bindOsc52ClipboardGestures(terminal, containerElement);
 
       markTerminalOpened(terminalNodeId, environmentId, tabId);
       setTerminalContainer(terminalNodeId, environmentId, tabId, containerElement);

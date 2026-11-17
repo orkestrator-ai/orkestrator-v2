@@ -98,7 +98,13 @@ describe("interactive tmux terminal snapshots", () => {
   function createInteractiveHarness(
     captures: Array<string | Promise<string>>,
     resizes: Array<void | Promise<void>> = [],
-    options: { leased?: boolean; metrics?: RecurringWorkMetrics } = {},
+    options: {
+      leased?: boolean;
+      metrics?: RecurringWorkMetrics;
+      attachClipboard?: NonNullable<
+        ConstructorParameters<typeof InteractiveTmuxTerminalManager>[0]
+      >["attachClipboard"];
+    } = {},
   ) {
     let now = 1_000_000;
     const scheduled: Array<{ callback: () => void; delayMs: number; timer: object }> = [];
@@ -126,6 +132,7 @@ describe("interactive tmux terminal snapshots", () => {
       },
     };
     const manager = new InteractiveTmuxTerminalManager({
+      attachClipboard: options.attachClipboard ?? (async () => ({ dispose() {} })),
       schedule: (callback, delayMs) => {
         const timer = {};
         scheduled.push({ callback, delayMs, timer });
@@ -159,6 +166,64 @@ describe("interactive tmux terminal snapshots", () => {
       },
     };
   }
+
+  test("forwards live clipboard output only to its owner and disposes late attachments", async () => {
+    const attached = deferred<{ dispose(): void }>();
+    let emitClipboard: ((sequence: string) => void) | undefined;
+    let disposed = 0;
+    const harness = createInteractiveHarness(["pane"], [], {
+      attachClipboard: async (_session, _cols, _rows, emit) => {
+        emitClipboard = emit;
+        return attached.promise;
+      },
+    });
+    const starting = harness.manager.start(harness.id, harness.context);
+    emitClipboard?.("\x1b]52;c;YQ==\x07");
+    expect(harness.emitted).toEqual([
+      {
+        event: `terminal-output-${harness.id}`,
+        payload: { text: "\x1b]52;c;YQ==\x07", full: false },
+      },
+    ]);
+    harness.manager.detach(harness.id);
+    emitClipboard?.("\x1b]52;c;Yg==\x07");
+    attached.resolve({
+      dispose() {
+        disposed += 1;
+      },
+    });
+    await starting;
+    expect(disposed).toBe(1);
+    expect(harness.emitted).toHaveLength(1);
+    expect(harness.scheduled).toHaveLength(0);
+  });
+
+  test("a lost clipboard client signals desync and can reattach", async () => {
+    let exit: (() => void) | undefined;
+    let attaches = 0;
+    let disposed = 0;
+    const harness = createInteractiveHarness(["pane", "pane"], [], {
+      attachClipboard: async (_session, _cols, _rows, _emit, onExit) => {
+        attaches += 1;
+        exit = onExit;
+        return {
+          dispose() {
+            disposed += 1;
+          },
+        };
+      },
+    });
+    try {
+      await harness.manager.start(harness.id, harness.context);
+      exit?.();
+      expect(harness.emitted.at(-1)?.payload).toEqual({ text: "", desynced: true });
+      await harness.manager.start(harness.id, harness.context);
+      expect(attaches).toBe(2);
+    } finally {
+      harness.manager.detachAll();
+    }
+    expect(disposed).toBe(1);
+  });
 
   test("backs off on unchanged panes and resets on output or input", async () => {
     const harness = createInteractiveHarness(["same", "same", "changed"]);

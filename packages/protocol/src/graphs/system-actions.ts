@@ -175,7 +175,7 @@ export const GRAPH_SYSTEM_ACTION_SPECS: Readonly<Record<GraphSystemAction, Graph
       },
       inputs: [
         port(
-          "validation-plan@1",
+          "validation-plan@2",
           true,
           "The commands to run, for the commit they name or an ancestor of it (a repair loop's later commits reuse the plan).",
         ),
@@ -196,7 +196,7 @@ export const GRAPH_SYSTEM_ACTION_SPECS: Readonly<Record<GraphSystemAction, Graph
         "One validation run and one package per run, node, iteration and plan; a retry or restart reads them back.",
       params: { targetBranch: TARGET_BRANCH },
       inputs: [
-        port("validation-plan@1", true, "The commands to run, for the commit they name."),
+        port("validation-plan@2", true, "The commands to run, for the commit they name."),
         port("workspace@1", true, "The commit to validate; it must be the environment's HEAD."),
       ],
       outputs: [port("review-package@2", false, "The sealed package, by reference.")],

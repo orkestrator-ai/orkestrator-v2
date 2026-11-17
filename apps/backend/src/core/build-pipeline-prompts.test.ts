@@ -1100,6 +1100,12 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain(
       "**Failure triage**: the package's `failureTriage` lists each failing test",
     );
+    // The change's own tests and pre-existing failures are read first.
+    expect(prompt).toContain("**Validation report**: start with the package's `validationReport`.");
+    expect(prompt).toContain("`pre-existing` (the same test also failed on the merge base");
+    expect(prompt.indexOf("**Validation report**")).toBeLessThan(
+      prompt.indexOf("**Failure triage**"),
+    );
     expect(prompt).toContain("Report your work in the Address Findings result you submit");
     expect(prompt).toContain("Set `complete` to true only when no check you ran still fails");
     expect(prompt).toContain("The verifier does not rerun checks");

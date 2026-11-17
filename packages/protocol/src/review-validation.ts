@@ -1,3 +1,17 @@
+/**
+ * What a planned command checks.
+ *
+ * - `changed`: only the tests this change adds or edits, or the tests that own
+ *   the files it changes. The worker starts these first, and the sealed
+ *   package's `validationReport` lists their results on their own, so a
+ *   failing unrelated suite cannot hide whether the change's own tests passed.
+ * - `general`: everything else (suites, static checks, builds).
+ *
+ * Absent on plans discovered before scopes existed; read as `general`.
+ */
+export const REVIEW_VALIDATION_SCOPES = ["changed", "general"] as const;
+export type ReviewValidationScope = (typeof REVIEW_VALIDATION_SCOPES)[number];
+
 /** A fresh, repository-specific plan. Never inferred from a package-manager name. */
 export interface ReviewValidationPlan {
   headRef: string;
@@ -11,37 +25,67 @@ export interface ReviewValidationPlan {
     /** Internally parallel or memory-heavy commands (2) get a larger default reservation until measured. */
     weight: 1 | 2;
     timeoutMs: number;
+    /** {@link ReviewValidationScope}; absent means `general`. */
+    scope?: ReviewValidationScope;
   }>;
   limitations: string[];
 }
 
-/** Provider-facing schema for {@link ReviewValidationPlan}; {@link parseReviewValidationPlan} adds the domain checks. */
-export const REVIEW_VALIDATION_PLAN_SCHEMA: Record<string, unknown> = {
-  type: "object",
-  additionalProperties: false,
-  required: ["headRef", "commands", "limitations"],
-  properties: {
-    headRef: { type: "string" },
-    commands: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["id", "command", "cwd", "dependsOn", "resources", "weight", "timeoutMs"],
-        properties: {
-          id: { type: "string" },
-          command: { type: "string" },
-          cwd: { type: "string" },
-          dependsOn: { type: "array", items: { type: "string" } },
-          resources: { type: "array", items: { type: "string" } },
-          weight: { type: "integer", enum: [1, 2] },
-          timeoutMs: { type: "integer" },
+function validationPlanSchema(withScope: boolean): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["headRef", "commands", "limitations"],
+    properties: {
+      headRef: { type: "string" },
+      commands: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "id",
+            "command",
+            "cwd",
+            "dependsOn",
+            "resources",
+            "weight",
+            "timeoutMs",
+            ...(withScope ? ["scope"] : []),
+          ],
+          properties: {
+            id: { type: "string" },
+            command: { type: "string" },
+            cwd: { type: "string" },
+            dependsOn: { type: "array", items: { type: "string" } },
+            resources: { type: "array", items: { type: "string" } },
+            weight: { type: "integer", enum: [1, 2] },
+            timeoutMs: { type: "integer" },
+            ...(withScope
+              ? { scope: { type: "string", enum: [...REVIEW_VALIDATION_SCOPES] } }
+              : {}),
+          },
         },
       },
+      limitations: { type: "array", items: { type: "string" } },
     },
-    limitations: { type: "array", items: { type: "string" } },
-  },
-};
+  };
+}
+
+/**
+ * Provider-facing schema review preparation's discovery turn answers with:
+ * every command names its {@link ReviewValidationScope}.
+ * {@link parseReviewValidationPlan} adds the domain checks.
+ */
+export const REVIEW_VALIDATION_PLAN_SCHEMA: Record<string, unknown> = validationPlanSchema(true);
+
+/**
+ * The plan shape before scopes, frozen as graph type `validation-plan@1`: a
+ * versioned graph type never gains a required field, or its existing values
+ * and producers would stop validating.
+ */
+export const REVIEW_VALIDATION_PLAN_V1_SCHEMA: Record<string, unknown> =
+  validationPlanSchema(false);
 
 export interface ReviewValidationResult {
   id: string;
@@ -191,7 +235,9 @@ export function isReviewValidationPlan(value: unknown): value is ReviewValidatio
       (cmd.weight !== 1 && cmd.weight !== 2) ||
       !Number.isSafeInteger(cmd.timeoutMs) ||
       (cmd.timeoutMs as number) < 1000 ||
-      (cmd.timeoutMs as number) > 7_200_000
+      (cmd.timeoutMs as number) > 7_200_000 ||
+      (cmd.scope !== undefined &&
+        !REVIEW_VALIDATION_SCOPES.includes(cmd.scope as ReviewValidationScope))
     )
       return false;
     ids.add(cmd.id);

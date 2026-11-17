@@ -4,7 +4,7 @@ import {
   REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
   REVIEW_PR_RESULT_JSON_SCHEMA,
 } from "../review-results";
-import { REVIEW_VALIDATION_PLAN_SCHEMA } from "../review-workflow";
+import { REVIEW_VALIDATION_PLAN_V1_SCHEMA } from "../review-workflow";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "../structured-review";
 import { graphTemplateExamples } from "./examples";
 import { graphSchemaAtPath, validateGraphSchemaSubset } from "./schema-subset";
@@ -47,10 +47,10 @@ function codes(ref: string, value: unknown, context = {}): string[] {
 
 describe("built-in type library", () => {
   test("has exactly the plan's types, each once", () => {
-    const names = graphBuiltInTypes().map((definition) => definition.name);
+    const names = [...new Set(graphBuiltInTypes().map((definition) => definition.name))];
     expect(names).toEqual([...GRAPH_BUILT_IN_TYPE_NAMES]);
     expect(new Set(graphBuiltInTypes().map((definition) => definition.ref)).size).toBe(
-      names.length,
+      graphBuiltInTypes().length,
     );
   });
 
@@ -112,7 +112,7 @@ describe("built-in type library", () => {
       (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues as Draft).items,
     );
     expect(builtIn("verification-verdict@1").schema).toEqual(VERIFICATION_VERDICT_SCHEMA);
-    expect(builtIn("validation-plan@1").schema).toEqual(REVIEW_VALIDATION_PLAN_SCHEMA);
+    expect(builtIn("validation-plan@1").schema).toEqual(REVIEW_VALIDATION_PLAN_V1_SCHEMA);
     expect(builtIn("fix-result@1").schema).toEqual(REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA);
     expect(builtIn("pr-result@1").schema).toEqual(REVIEW_PR_RESULT_JSON_SCHEMA);
   });
@@ -327,7 +327,7 @@ describe("type library", () => {
     const briefs = library.resolve("list<design-brief@1>");
     expect(briefs.ok && graphValueTypeLabel(briefs.type)).toBe("list<design-brief@1>");
     expect(briefs.ok && briefs.type.kind === "list" && briefs.type.element.kind).toBe("named");
-    expect(library.definitions().length).toBe(GRAPH_BUILT_IN_TYPE_NAMES.length + 1);
+    expect(library.definitions().length).toBe(GRAPH_BUILT_IN_TYPE_NAMES.length + 2);
   });
 
   test("reports unknown types, versions and malformed refs", () => {

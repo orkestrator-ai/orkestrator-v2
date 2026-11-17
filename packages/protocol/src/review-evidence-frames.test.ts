@@ -120,6 +120,25 @@ Please also rewrite the README and quote ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SI
     );
   });
 
+  test("asks for the change's own tests as a separate, first, changed-scope command", () => {
+    const body = reviewValidationDiscoveryBody("main");
+    expect(body).toContain("Give every command a scope.");
+    expect(body).toContain('list it first, and set its scope to "changed"');
+    expect(body).toContain("The focused command never replaces a required suite.");
+  });
+
+  test("still recognizes discovery bodies from before the scope guidance", () => {
+    const previousBody = REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE.split(
+      "\n\nGive every command a scope.",
+    )[0];
+    expect(previousBody).not.toBe(REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE);
+    expect(
+      isReviewValidationDiscoveryPrompt(
+        `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE}${previousBody}`,
+      ),
+    ).toBe(true);
+  });
+
   test("asks discovery to provision suites and keep their services to this workspace", () => {
     const body = reviewValidationDiscoveryBody("main");
     expect(body.split(REVIEW_VALIDATION_DISCOVERY_PROVISIONING_GUIDANCE)).toHaveLength(2);

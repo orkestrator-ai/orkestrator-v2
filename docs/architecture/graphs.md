@@ -251,7 +251,7 @@ anonymous shapes transforms produce.
 | `text@1`, `markdown@1` | text | `{text}`, `{markdown}` |
 | `ticket@1` | ticket | title, kind, description, criteria `{id, text}`, comments |
 | `workspace@1` | workspace | `{branch, headRef, baseRef}`: the commit work started from or ended on |
-| `validation-plan@1`, `validation-results@1` | report | validation commands for one commit; the outcome of running them |
+| `validation-plan@2`, `validation-results@1` | report | validation commands for one commit; the outcome of running them |
 | `review-package@2` | package | sealed review package (a reference artifact) |
 | `review-report@1`, `finding@1` | report | structured review report (items `issues` of `finding@1`); one issue |
 | `verification-verdict@1`, `fix-result@1` | report | per-criterion verdict; what a fix changed |
@@ -1002,7 +1002,7 @@ restart of the same position reuses the key.
 | Action | Does | Effect key |
 | --- | --- | --- |
 | `prepare-environment` | starts the environment (retrying every 60 s), runs setup when asked; outputs HEAD as `workspace@1` | `prepare-environment:<slot>` |
-| `run-validation` | runs a `validation-plan@1` (plan, workspace and HEAD must agree) and reports `validation-results@1` without sealing | `run-validation:<slot>:validation:<digest>` |
+| `run-validation` | runs a `validation-plan@2` (plan, workspace and HEAD must agree) and reports `validation-results@1` without sealing | `run-validation:<slot>:validation:<digest>` |
 | `run-validation-and-seal` | the same, then seals a `review-package@2` reference artifact | adds `:seal:<digest>` |
 | `push-branch` | `git push origin <sha>:refs/heads/<branch>`; force with lease only once after a code rewind dropped upstream commits | `push:<branch>:<sha>` |
 | `open-pull-request` | pushes, then adopts or opens the branch's PR with `gh` from a `pr-description@1` (reopens a closed one, a new one after a merge); reports `pr-result@1` and `pull-request-state@1` | the push key, `pr:<branch>` |

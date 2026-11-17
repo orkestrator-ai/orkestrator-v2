@@ -61,7 +61,7 @@ export function systemTemplate(): GraphTemplateV1 {
     inputs: [
       { name: "code", type: "workspace@1" },
       { name: "description", type: "pr-description@1" },
-      { name: "plan", type: "validation-plan@1" },
+      { name: "plan", type: "validation-plan@2" },
       { name: "verdict", type: "verification-verdict@1" },
       { name: "pr", type: "pr-result@1" },
       { name: "ticket", type: "ticket@1" },
@@ -74,7 +74,7 @@ export function systemTemplate(): GraphTemplateV1 {
         kind: "system",
         action: "run-validation",
         inputs: [
-          { name: "plan", type: "validation-plan@1" },
+          { name: "plan", type: "validation-plan@2" },
           { name: "code", type: "workspace@1" },
         ],
         outputs: [
@@ -87,7 +87,7 @@ export function systemTemplate(): GraphTemplateV1 {
         kind: "system",
         action: "run-validation-and-seal",
         inputs: [
-          { name: "plan", type: "validation-plan@1" },
+          { name: "plan", type: "validation-plan@2" },
           { name: "code", type: "workspace@1" },
         ],
         outputs: [{ name: "package", type: "review-package@2" }],
@@ -745,7 +745,7 @@ export async function systemWorld(
     code: { branch: SYSTEM_BRANCH, headRef: head, baseRef: null },
     target: { branch: SYSTEM_BRANCH, headRef: head, baseRef: null },
     description: { title: "Add CSV export", body: "## Summary\n\nExports reports as CSV." },
-    plan: { ...(graphBuiltInType("validation-plan@1")!.example as object), headRef: head },
+    plan: { ...(graphBuiltInType("validation-plan@2")!.example as object), headRef: head },
     verdict: graphBuiltInType("verification-verdict@1")!.example,
     pr: { status: "created", url: `https://github.com/${SYSTEM_REPO}/pull/1`, summary: "Opened." },
     ticket: graphBuiltInType("ticket@1")!.example,

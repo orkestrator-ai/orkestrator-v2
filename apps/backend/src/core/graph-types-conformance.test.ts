@@ -13,7 +13,7 @@ describe("graph built-in types and workflow result kinds", () => {
 
   test("cover the result kinds a graph port can carry", () => {
     expect(mapped.map((definition) => [definition.ref, definition.resultKind])).toEqual([
-      ["validation-plan@1", "validation-plan"],
+      ["validation-plan@2", "validation-plan"],
       ["review-report@1", "review-report"],
       ["verification-verdict@1", "verification-result"],
       ["fix-result@1", "fix-result"],

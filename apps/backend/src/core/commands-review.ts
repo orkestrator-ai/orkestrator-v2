@@ -8,6 +8,7 @@ import {
 } from "./project-home-environment.js";
 import { verifyValidationArtifacts } from "./review-validation-artifacts.js";
 import { triageValidationFailures } from "./validation-failure-triage-service.js";
+import { buildValidationReport } from "@orkestrator/protocol/validation-report";
 import {
   MAX_REVIEW_DIFF_ARTIFACT_BYTES,
   reviewDiffArgs,
@@ -1178,6 +1179,13 @@ export async function generateReviewPackage(
     validation: hydratedValidation,
     ...(options.validationPlan ? { validationPlan: options.validationPlan } : {}),
     ...(triage.triage ? { failureTriage: triage.triage } : {}),
+    // What a reader needs first: the change's own tests' results apart from
+    // every other suite, and which failures also fail on the merge base.
+    validationReport: buildValidationReport({
+      validation: hydratedValidation,
+      validationPlan: options.validationPlan,
+      failureTriage: triage.triage,
+    }),
     uncommittedFiles: recordedUncommittedFiles,
     limitations: [
       ...packageLimitations,

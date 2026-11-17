@@ -73,6 +73,12 @@ describe("run-validation", () => {
     // One worker run, started once and read until it settled.
     expect(w.commands.validations.size).toBe(1);
     expect(w.commands.count("start_review_validation")).toBe(1);
+    const dispatched = w.commands.calls.find((call) => call.command === "start_review_validation")!;
+    expect(
+      (dispatched.args.run as { plan: { commands: { scope: string }[] } }).plan.commands.map(
+        (command) => command.scope,
+      ),
+    ).toEqual(["general", "changed"]);
   });
 
   test("a retry or restart reads the same validation run instead of running the commands again", async () => {
@@ -181,7 +187,7 @@ describe("run-validation", () => {
 });
 
 function planDigest(w: SystemWorld): string {
-  const plan = { ...(graphBuiltInType("validation-plan@1")!.example as object), headRef: w.head };
+  const plan = { ...(graphBuiltInType("validation-plan@2")!.example as object), headRef: w.head };
   return createHash("sha256").update(canonicalJson(plan, 64)).digest("hex").slice(0, 16);
 }
 

@@ -1746,7 +1746,7 @@ items (`cite`, `accountForAll`). Values whose type needs the environment are
 also checked there through the environment hook the backend installs
 (`workflow-result-environment-validator.ts`): a `workspace@1` commit must exist
 and be reachable from its branch, `file-list@1` paths must resolve inside the
-worktree, a `validation-plan@1` must name the workspace HEAD it validates, and a
+worktree, a `validation-plan@2` must name the workspace HEAD it validates, and a
 `review-package@2` reference must still match its sealed package
 (`verifyEnvironmentReviewPackage`, hashed inside the container for container
 environments). Without a hook, or when the environment cannot be read, the

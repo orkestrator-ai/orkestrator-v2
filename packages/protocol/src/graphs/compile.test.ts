@@ -396,3 +396,13 @@ describe("robustness", () => {
     expect(result.diagnostics.map((d) => d.code)).toContain("concurrency-capped");
   });
 });
+
+test("saved unscoped validation plans still compile", () => {
+  const legacy = JSON.parse(
+    JSON.stringify(graphTemplateExample("multi-review")).replaceAll(
+      "validation-plan@2",
+      "validation-plan@1",
+    ),
+  );
+  expect(errors(legacy)).toEqual([]);
+});

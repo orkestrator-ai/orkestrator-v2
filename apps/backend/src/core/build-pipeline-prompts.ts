@@ -603,7 +603,7 @@ export function recordedValidationSection(
     ? "If diagnostics are unavailable or insufficient, report that limitation in the rationale instead of rerunning the command."
     : "If diagnostics are unavailable or insufficient, report that limitation and run only the relevant failed or incomplete command when needed; do not rerun the broad validation plan.";
   if ("kind" in reviewPackage) {
-    return `${header} Each command's status, exit code, limitations and output artifact paths are in the review package at \`${reviewPackage.filePath}\` in the environment workspace; read its \`validation\` entries. ${artifactReading} ${insufficient}\n\n${FAILURE_TRIAGE_GUIDE}`;
+    return `${header} Each command's status, exit code, limitations and output artifact paths are in the review package at \`${reviewPackage.filePath}\` in the environment workspace; read its \`validation\` entries. ${artifactReading} ${insufficient}\n\n${VALIDATION_REPORT_GUIDE}\n\n${FAILURE_TRIAGE_GUIDE}`;
   }
   const results = reviewPackage.validation.map((result) => {
     const { command, status, exitCode, limitation } = result;
@@ -637,6 +637,13 @@ export function recordedValidationSection(
 ${promptCarrierJson({ results, limitations: reviewPackage.limitations })}
 </recorded-validation-json>`;
 }
+
+/**
+ * How to read the package's `validationReport` (`validation-report.ts`): the
+ * change's own tests apart from every other suite, and one label per failure.
+ */
+export const VALIDATION_REPORT_GUIDE =
+  "**Validation report**: start with the package's `validationReport`. `changedTests` lists the result of each command the plan scoped to this change's own tests, apart from every other suite; report that result on its own, and when it is empty `changedTestsNote` says why. `failures` gives each failing test one `label`: `caused-by-change` (the triage verdict is `related`), `pre-existing` (the same test also failed on the merge base `mergeBase`, on the target branch's CI or in another pipeline on that base), `flaky` (passed when the runner retried it), `unrelated` or `undetermined`. Call a failure pre-existing only when its label says so. `unexplainedCommands` lists commands that did not pass without a listed test explaining why; judge each from its diagnostics. A package without `validationReport` predates it: read `failureTriage` directly.";
 
 /**
  * How to read the package's `failureTriage` (`validation-failure-triage.ts`):

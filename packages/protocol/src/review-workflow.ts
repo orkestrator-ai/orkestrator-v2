@@ -17,6 +17,7 @@ import {
   type ValidationFailureSummary,
   type ValidationFailureTriage,
 } from "./validation-failure-triage.js";
+import { isValidationReport, type ValidationReport } from "./validation-report.js";
 import {
   REVIEW_CHANGE_TYPES,
   REVIEW_ISSUE_CATEGORIES,
@@ -146,6 +147,13 @@ export interface ReviewPackage {
    * not run (a limitation then says so).
    */
   failureTriage?: ValidationFailureTriage;
+  /**
+   * The reading summary of the two fields above (`validation-report.ts`):
+   * the change's own tests' results on their own, then every failing test
+   * with one label, `pre-existing` when it also failed on the merge base.
+   * Absent from packages sealed before it existed.
+   */
+  validationReport?: ValidationReport;
   uncommittedFiles: Array<{ path: string; reason: string }>;
   limitations: string[];
   context?: ReviewPackageContext;
@@ -382,7 +390,8 @@ export function isReviewPackage(value: unknown, round?: number): value is Review
     (value.validationPlan !== undefined &&
       (!isReviewValidationPlan(value.validationPlan) ||
         value.validationPlan.headRef !== value.headRef)) ||
-    (value.failureTriage !== undefined && !isValidationFailureTriage(value.failureTriage))
+    (value.failureTriage !== undefined && !isValidationFailureTriage(value.failureTriage)) ||
+    (value.validationReport !== undefined && !isValidationReport(value.validationReport))
   )
     return false;
   if (

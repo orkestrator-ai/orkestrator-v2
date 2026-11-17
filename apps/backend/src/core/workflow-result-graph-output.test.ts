@@ -640,15 +640,17 @@ describe("environment checks through the registry hook", () => {
     const slot = graphOutputSlotInput(
       { resultKey: crypto.randomUUID(), ...scope, provider: "claude" },
       { name: "plan" },
-      graphBuiltInType("validation-plan@1")!,
+      graphBuiltInType("validation-plan@2")!,
     );
     await workflowResults.prepare(slot);
-    const plan = graphBuiltInType("validation-plan@1")!.example;
+    const plan = graphBuiltInType("validation-plan@2")!.example;
     expect(await workflowResults.submit(scope, slot.resultKey, plan)).toMatchObject({
       ok: false,
       error: { code: "invalid_result", issues: [{ code: "head_mismatch" }] },
     });
     expect(requests.map((request) => request.validator)).toEqual(["validation-plan"]);
+    workflowResults.setEnvironmentValidator(async () => []);
+    expect(await workflowResults.submit(scope, slot.resultKey, plan)).toMatchObject({ ok: true });
   });
 });
 

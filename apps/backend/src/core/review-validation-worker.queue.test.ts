@@ -46,6 +46,32 @@ test("waiting for a shared workspace resource is reported as queue time with its
   expect(done.results[1]!.queueReason).toBeUndefined();
 });
 
+// The change's own tests run before the suites, so their result exists even
+// when an unrelated suite stalls or the host runs out of capacity.
+test("a changed-scope command is admitted ahead of earlier general commands", async () => {
+  const { root, run } = await fixture([
+    command("suite", "sleep 0.5", { resources: ["dist"], scope: "general" }),
+    // A different command line: an identical one would be covered by the first.
+    command("changed", "sleep 0.4", { resources: ["dist"], scope: "changed" }),
+  ]);
+  await control(root, run, "start");
+  const first = await observeUntil(
+    root,
+    run,
+    (next) => next.results.some((result) => result.status === "running"),
+    5000,
+  );
+  expect(first.results[1]!.status).toBe("running");
+  // Its queued state reaches disk with the next heartbeat; either way it has not started.
+  expect(["pending", "queued"]).toContain(first.results[0]!.status);
+  expect(first.results[0]!.startedAt).toBeUndefined();
+  const done = await completed(root, run);
+  expect(done.results.map((result) => result.status)).toEqual(["passed", "passed"]);
+  expect(Date.parse(done.results[1]!.startedAt!)).toBeLessThan(
+    Date.parse(done.results[0]!.startedAt!),
+  );
+});
+
 test("waiting for the local command budget reports queue time and clears its reason on start", async () => {
   const gate = (name: string) => `until [ -f .orkestrator/release-${name} ]; do sleep 0.02; done`;
   const { root, run, git } = await fixture([
@@ -476,3 +502,34 @@ test("review validation queues across worktrees and rehydrates hashed artifacts"
     await rm(schedulerDirectory, { recursive: true, force: true });
   }
 }, 30000);
+
+for (const duplicate of [false, true]) {
+  test(`changed evidence survives general ${duplicate ? "duplicate" : "coverage"}`, async () => {
+    const { root, run } = await fixture([
+      command("suite", duplicate ? "sleep 0.2" : "exit 1", {
+        scope: "general",
+        resources: ["dist"],
+      }),
+      command("changed", "sleep 0.2", { scope: "changed", resources: ["dist"] }),
+    ]);
+    await writeFile(
+      path.join(root, ".orkestrator-test-scheduler.json"),
+      JSON.stringify({
+        version: 1,
+        cooperativeCommands: [],
+        commandProfiles: {
+          [run.plan.commands[0]!.command]: { covers: [run.plan.commands[1]!.command] },
+        },
+      }),
+    );
+    const done = await completed(root, run);
+    expect(done.results[1]!.status).toBe("passed");
+    expect(done.results[1]!.exitCode).toBe(0);
+    expect(done.results[1]!.stdoutPath).toBeTruthy();
+    expect(done.results[0]!.status).toBe(duplicate ? "skipped" : "failed");
+    if (!duplicate)
+      expect(Date.parse(done.results[1]!.startedAt!)).toBeLessThan(
+        Date.parse(done.results[0]!.startedAt!),
+      );
+  });
+}

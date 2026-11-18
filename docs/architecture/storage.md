@@ -230,10 +230,42 @@ whole as a document; the row layout returns on the next keyable write.
 
 Rows carry an optional indexed `owner` (`projectId` for environments and
 Kanban, `environmentId` for sessions and native agent sessions).
-`loadStoreRowsByOwner` reads one project's board or one environment's sessions
-without assembling the store, and `loadStoreRow` reads one row by key the same
-way. `listStoreRowKeysByOwner` lists one owner's keys without reading a value,
-plus the store's rows that have no owner, for the caller to check.
+`loadStoreRowsByOwner` reads one project's environments or board, or one
+environment's sessions, without assembling the store. `loadStoreRow` reads one
+row by key the same way. `listStoreRowKeysByOwner` lists one owner's keys
+without reading a value, plus the store's rows that have no owner, for the
+caller to check.
+
+### Project environment reads
+
+`getEnvironmentsByProject` uses the existing `ProjectsRepository.loadProjectEnvironments`
+reader for the project list and snapshot payloads. SQLite supplies the owned
+rows in persisted order. The repository applies the same record normalization
+and stable sort by environment order as the full-store read, preserving
+persisted order on ties. Backend startup and lifecycle changes reconcile the
+node's diff watchers and PR monitors. Project list and snapshot requests do
+not trigger those scans. Health-enabled snapshots join the requested
+environments with the PR monitor's announced state.
+
+To-do 8309 (retired), task 1, is done. Reusing the indexed reader keeps
+project lookups current with storage mutations and avoids maintaining an
+in-memory project index and its revision state. The original performance
+review measured 20.49 ms for a batch of 50 full-store reads and 1.08 ms
+for the same batch through the owner-scoped reader.
+
+The 2026-11-18 rerun on Linux x64 with Bun 1.4.4 used temporary SQLite stores,
+10 environments per project and the median of seven warm samples for each
+workload. The before and after runs both invoked `getEnvironmentsByProject`
+and checked the returned row counts. Timings cover repository reads.
+
+| Workload | Before (ms) | After (ms) |
+| --- | ---: | ---: |
+| Batch of 50 project lookups, 500 rows returned in total | 20.1912 | 1.1696 |
+| Single project, 0 unrelated environments | 0.0452 | 0.0474 |
+| Single project, 490 unrelated environments | 0.3866 | 0.0222 |
+| Single project, 4,990 unrelated environments | 4.2053 | 0.0234 |
+
+### Row indexes
 
 Native agent sessions gained their owner after rows existed, and an older build
 sharing the directory writes rows without one. At every open

@@ -438,9 +438,8 @@ export function registerPullRequestCommands(
    * Authoritative PR-monitor snapshot.
    *
    * A client that mounts, remounts, or reconnects reads this rather than trying
-   * to reconstruct state from the events it happened to be listening for. It
-   * also arms tracking, so the first client to ask starts the polling even if
-   * no lifecycle command has run since the backend started.
+   * to reconstruct state from the events it happened to be listening for.
+   * This node-wide snapshot also reconciles the tracked set against storage.
    */
   registerDefined(getPrMonitorStateCommand, async (args, context) => {
     await context.runtime.prMonitor.sync(context);

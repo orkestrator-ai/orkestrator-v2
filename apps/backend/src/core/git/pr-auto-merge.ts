@@ -229,7 +229,7 @@ export class PrAutoMergeController {
   async resume(): Promise<void> {
     this.start();
     const environments = await this.options.storage.loadEnvironments();
-    if (this.closed || !environments.some((environment) => environment.autoMerge)) return;
+    if (this.closed) return;
     for (const environment of environments) {
       if (environment.autoMerge && !environment.autoMergePrUrl) {
         await this.options.storage.updateEnvironment(
@@ -243,6 +243,8 @@ export class PrAutoMergeController {
       }
     }
     if (this.closed) return;
+    // Restore monitoring for ordinary PRs too. Summary-only clients read the
+    // announced state and never trigger monitor recovery themselves.
     await this.options.resumeMonitoring?.();
     for (const environment of environments) {
       if (environment.autoMerge) await this.evaluate(environment.id);

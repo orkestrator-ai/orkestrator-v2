@@ -2542,6 +2542,9 @@ export class OrkestratorBackend {
       this.setupStartupReconciled = true;
       const ensureEnvironmentSetup = this.commands.get("ensure_environment_setup");
       for (const environment of environments) {
+        if (environment.cleanupAfterMergeRequestedAt) {
+          scheduleMergeCleanupRecovery(environment.id, this.context);
+        }
         if (
           environment.status !== "running" ||
           environment.setupScriptsComplete ||
@@ -2886,8 +2889,14 @@ export class OrkestratorBackend {
     this.scheduledJobs.start();
     // The daily self-improvement check; it runs nothing while its switch is off.
     this.selfImprovement.start();
-    // Acts on PR monitor readings for environments whose auto-merge is on.
-    await this.prAutoMerge.resume();
+    // Restore watchers and PR polling before clients can read their state.
+    // Auto-merge subscribes before PR monitoring resumes.
+    await Promise.all([
+      this.runtime.diffStats.sync(this.context).catch((error: unknown) => {
+        log.warn("startup.step-failed", { step: "diff-watchers", error: formatLogError(error) });
+      }),
+      this.prAutoMerge.resume(),
+    ]);
     // Agent shell commands waiting on the user (sign-in links, codes, ENTER).
     this.agentHumanPrompts.start();
     this.reserveOwnedPreviewPorts();

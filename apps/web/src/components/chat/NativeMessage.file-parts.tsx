@@ -484,7 +484,7 @@ export function TranscriptReferencePart({
       </div>
       <blockquote
         data-agent-chat-search-content="true"
-        className="max-h-56 overflow-y-auto border-l-2 border-primary/30 px-3 py-2 text-sm text-foreground/90"
+        className="max-h-56 overflow-y-auto border-l border-border px-3 py-2 text-sm text-foreground/90"
       >
         <MessageMarkdown content={part.content} components={markdownComponents} />
       </blockquote>

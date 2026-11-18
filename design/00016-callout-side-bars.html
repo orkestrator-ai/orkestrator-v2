@@ -11,11 +11,11 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00016</p>
       <h1>00016 · Replace thick coloured callout bars with the 1px callout frame</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-low">Low</span>
         <span class="pill">Components</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 6 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 6 / 6 images</span
         >
       </div>
 
@@ -220,53 +220,53 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Before images captured on <b>unmodified</b> code for every slot above, and committed
             under <code>design/images/00016/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “6 / 6”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Type-check and the owning tests pass (commands above);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -274,14 +274,47 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
-      </p>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <strong>Callouts.</strong> The pipeline summary, the decision rationale and the predicate
+          group use solid 1px frames at 30% opacity in their existing blue, success and indigo hues.
+          The rationale already used the success token on the baseline. The summary gains an
+          information icon, the rationale keeps its Why label and the predicate group keeps its
+          labelled group selector.
+        </li>
+        <li>
+          <strong>Quotations.</strong> The transcript reference and annotation response excerpt use
+          a neutral 1px <code>border-border</code> left rule. Their quote styling preserves the
+          reading hierarchy within the existing enclosing cards.
+        </li>
+        <li>
+          <strong>Other 2px rules.</strong> The settings, skills and plugin rows retain their
+          selection accents. The flow-graph connector, the schema nesting guide and the neutral
+          review-resolution inset are outside the coloured callout scope.
+        </li>
+        <li>
+          <strong>Pipeline key information pair.</strong> The summary trades its bright left bar for
+          a soft blue outline and information icon. The Why note has a green outline in place of its
+          left bar.
+        </li>
+        <li>
+          <strong>Predicate editor pair.</strong> The indigo frame now runs around the All of group.
+          The condition fields and group controls remain in the same order.
+        </li>
+        <li>
+          <strong>Transcript file part pair.</strong> The Reference header and surrounding card stay
+          in place. The blue quote bar becomes a neutral hairline. The annotation response excerpt
+          uses the same neutral rule.
+        </li>
+        <li>
+          <strong>Capture conditions.</strong> All three pairs use headless Chromium in the isolated
+          <code>design-00016</code> profile at 1440×900, dark theme and 100% zoom. The before images
+          use unmodified app code at <code>b2c91abb9</code>. The pipeline tab reads a seeded
+          finished pipeline from the profile backend. The predicate is opened in the graph designer.
+          The transcript reference and annotation excerpt use synthetic text in the real renderer
+          components through a temporary fixture page. Browser checks also covered reload and the
+          390×844 viewport.
+        </li>
       </ul>
 
       <footer>

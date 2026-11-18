@@ -1,7 +1,7 @@
 import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
 import { flushMicrotasks, ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import { configureLogger, createLogger, resetLogger } from "@orkestrator/protocol/logger";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   appendFile,
   chmod,
@@ -1053,6 +1053,7 @@ describe("production application log pruning", () => {
 
     const clock = new ManualClock();
     const sweeps: Promise<void>[] = [];
+    using reportError = spyOn(console, "error").mockImplementation(() => {});
     const logger = installProductionApplicationLogging({
       dataDir,
       cleanupIntervalMs: 5,
@@ -1074,13 +1075,22 @@ describe("production application log pruning", () => {
       await sweeps[1];
       expect(await readdir(logDirectory)).not.toContain("later.log");
 
-      // Removing the directory out from under the timer must not produce an
-      // unhandled rejection or stop later sweeps. A sweep never rejects, so
-      // awaiting each one proves the failure was handled.
+      // A regular file in place of the directory makes readdir fail with ENOTDIR.
       await rm(logDirectory, { recursive: true, force: true });
-      expect(clock.advance(10)).toBe(2);
+      await writeFile(logDirectory, "not a directory");
+      expect(clock.advance(5)).toBe(1);
+      expect(sweeps).toHaveLength(3);
+      await sweeps[2];
+      expect(reportError).toHaveBeenCalledWith(expect.stringMatching(/prune\.failed.*ENOTDIR/));
+
+      await rm(logDirectory);
+      await mkdir(logDirectory);
+      await writeFile(later, "stale after recovery");
+      await backdate(later, "2000-01-01T00:00:00Z");
+      expect(clock.advance(5)).toBe(1);
       expect(sweeps).toHaveLength(4);
-      await Promise.all(sweeps);
+      await sweeps[3];
+      expect(await readdir(logDirectory)).not.toContain("later.log");
     } finally {
       await logger?.stop();
     }

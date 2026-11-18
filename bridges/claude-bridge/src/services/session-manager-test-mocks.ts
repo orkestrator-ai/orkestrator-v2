@@ -165,24 +165,21 @@ export function nextQueryCall(timeoutMs = 1000): Promise<QueryCall> {
 
 export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["options"] }) => {
   const queue: unknown[] = [];
+  /** Set only while the consumer is parked waiting for a frame. */
   let pendingResolve: (() => void) | null = null;
   let finished = false;
   let closed = false;
   let error: Error | null = null;
-  /** The consumer is parked waiting for a frame, or the stream has ended. */
-  let idle = false;
-  const idleWaiters: Array<() => void> = [];
-  const becomeIdle = () => {
-    idle = true;
-    for (const resolve of idleWaiters.splice(0)) resolve();
+  let terminated = false;
+  const consumptionWaiters: Array<() => void> = [];
+  const settleConsumption = () => {
+    for (const resolve of consumptionWaiters.splice(0)) resolve();
   };
 
   const wake = () => {
-    if (pendingResolve) {
-      const r = pendingResolve;
-      pendingResolve = null;
-      r();
-    }
+    const resume = pendingResolve;
+    pendingResolve = null;
+    resume?.();
   };
 
   const call: QueryCall = {
@@ -191,7 +188,7 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
     push: (msg) => {
       // Match the SDK contract: close() terminates the process, so no later
       // assistant/result frame can be observed by the consumer.
-      if (closed) return;
+      if (closed || terminated) return;
       queue.push(msg);
       wake();
     },
@@ -201,9 +198,9 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
     },
     isClosed: () => closed,
     consumed: () =>
-      idle && queue.length === 0
+      terminated || pendingResolve !== null
         ? Promise.resolve()
-        : new Promise<void>((resolve) => idleWaiters.push(resolve)),
+        : new Promise<void>((resolve) => consumptionWaiters.push(resolve)),
     fail: (err) => {
       error = err;
       finished = true;
@@ -226,27 +223,26 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
 
   const beforeExit = queryControlOverrides.beforeExit as (() => Promise<void>) | undefined;
   async function* iter() {
-    while (true) {
-      if (error) {
-        const err = error;
-        error = null;
-        becomeIdle();
-        throw err;
+    try {
+      while (true) {
+        if (error) throw error;
+        if (queue.length > 0) {
+          yield queue.shift();
+          continue;
+        }
+        if (finished) {
+          await beforeExit?.();
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          pendingResolve = resolve;
+          settleConsumption();
+        });
       }
-      if (queue.length > 0) {
-        yield queue.shift();
-        continue;
-      }
-      if (finished) {
-        await beforeExit?.();
-        becomeIdle();
-        return;
-      }
-      await new Promise<void>((r) => {
-        pendingResolve = r;
-        becomeIdle();
-      });
-      idle = false;
+    } finally {
+      terminated = true;
+      queue.length = 0;
+      settleConsumption();
     }
   }
 

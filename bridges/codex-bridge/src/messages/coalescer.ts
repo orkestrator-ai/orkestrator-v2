@@ -40,7 +40,7 @@ export class UpdateCoalescer {
   /** A change arrived while a publish was in flight. */
   private dirty = false;
   private stopped = false;
-  private lastPublishedAt = 0;
+  private lastPublishedAt: number | undefined;
   private coalescedCount = 0;
   private publishedCount = 0;
 
@@ -67,8 +67,10 @@ export class UpdateCoalescer {
     if (this.timer !== null) return;
 
     const intervalMs = typeof this.intervalMs === "function" ? this.intervalMs() : this.intervalMs;
-    const elapsed = now - this.lastPublishedAt;
-    const delay = elapsed >= intervalMs ? 0 : intervalMs - elapsed;
+    const delay =
+      this.lastPublishedAt === undefined
+        ? 0
+        : Math.max(0, intervalMs - (now - this.lastPublishedAt));
     this.timer = this.clock.setTimeout(() => {
       this.timer = null;
       void this.run();

@@ -24,10 +24,10 @@ describe("UpdateCoalescer", () => {
     coalescer.stop();
   });
 
-  test("publishes eventually at the interval selected for a schedule", async () => {
+  test("publishes immediately at time zero, then respects the selected interval", async () => {
     const selectedIntervalMs = 40;
     const publishedAt: number[] = [];
-    const clock = new ManualClock({ start: 1_000 });
+    const clock = new ManualClock();
     const coalescer = new UpdateCoalescer({
       intervalMs: () => selectedIntervalMs,
       clock,
@@ -36,15 +36,18 @@ describe("UpdateCoalescer", () => {
       },
     });
 
-    await coalescer.flushNow();
+    coalescer.schedule();
+    expect(clock.pendingDelays()).toEqual([0]);
+    await clock.advanceAsync(0);
+
     coalescer.schedule();
     expect(clock.pendingDelays()).toEqual([selectedIntervalMs]);
 
     await clock.advanceAsync(selectedIntervalMs - 1);
-    expect(publishedAt).toEqual([1_000]);
+    expect(publishedAt).toEqual([0]);
     await clock.advanceAsync(1);
 
-    expect(publishedAt).toEqual([1_000, 1_000 + selectedIntervalMs]);
+    expect(publishedAt).toEqual([0, selectedIntervalMs]);
     coalescer.stop();
   });
 

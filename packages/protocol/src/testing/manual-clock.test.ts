@@ -109,6 +109,67 @@ describe("ManualClock", () => {
     expect(() => clock.advance(0)).toThrow(/re-arming a zero-delay timer/);
   });
 
+  test("rejects overlapping advances while async settling is paused", async () => {
+    const clock = new ManualClock();
+    const gate = Promise.withResolvers<void>();
+    const fired: number[] = [];
+    clock.setTimeout(() => fired.push(clock.now()), 5);
+    clock.setTimeout(() => fired.push(clock.now()), 15);
+    const advancing = clock.advanceAsync(10, () => gate.promise);
+
+    try {
+      expect(() => clock.advance(20)).toThrow(/advance is in progress/);
+      expect(() => clock.advanceToNext()).toThrow(/advance is in progress/);
+      await expect(clock.advanceAsync(20)).rejects.toThrow(/advance is in progress/);
+      expect(clock.now()).toBe(0);
+    } finally {
+      gate.resolve();
+      await advancing;
+    }
+    expect(clock.now()).toBe(10);
+    expect(clock.advance(10)).toBe(1);
+    expect(clock.now()).toBe(20);
+    expect(fired).toEqual([5, 15]);
+  });
+
+  test("rejects reentrant advances from a timer callback", () => {
+    const clock = new ManualClock();
+    const fired: number[] = [];
+    clock.setTimeout(() => {
+      fired.push(clock.now());
+      expect(() => clock.advance(100)).toThrow(/advance is in progress/);
+    }, 5);
+    clock.setTimeout(() => fired.push(clock.now()), 10);
+
+    expect(clock.advance(20)).toBe(2);
+    expect(clock.now()).toBe(20);
+    expect(fired).toEqual([5, 10]);
+  });
+
+  for (const method of ["advance", "advanceAsync"] as const) {
+    test(`${method} stops at a throwing callback and keeps its interval armed`, async () => {
+      const clock = new ManualClock();
+      const fired: number[] = [];
+      const failure = new Error("timer failed");
+      const interval = clock.setInterval(() => {
+        fired.push(clock.now());
+        if (clock.now() === 10) throw failure;
+      }, 10);
+      clock.setTimeout(() => fired.push(clock.now()), 15);
+
+      if (method === "advance") {
+        expect(() => clock.advance(30)).toThrow(failure);
+      } else {
+        await expect(clock.advanceAsync(30)).rejects.toThrow(failure);
+      }
+      expect(clock.now()).toBe(10);
+      expect(clock.pendingDelays()).toEqual([5, 10]);
+      expect(await clock[method](10)).toBe(2);
+      expect(fired).toEqual([10, 15, 20]);
+      clock.clearInterval(interval);
+    });
+  }
+
   test("advanceAsync lets each callback's promise chain settle before the next timer", async () => {
     const clock = new ManualClock();
     const log: string[] = [];
@@ -122,6 +183,22 @@ describe("ManualClock", () => {
     clock.setTimeout(() => log.push("second ran"), 20);
 
     expect(await clock.advanceAsync(20)).toBe(2);
+    expect(log).toEqual(["first settled", "second ran"]);
+  });
+
+  test("a custom settle step waits for callback work beyond the default microtask budget", async () => {
+    const clock = new ManualClock();
+    const log: string[] = [];
+    let completion = Promise.resolve();
+    clock.setTimeout(() => {
+      completion = (async () => {
+        await flushMicrotasks(100);
+        log.push("first settled");
+      })();
+    }, 10);
+    clock.setTimeout(() => log.push("second ran"), 20);
+
+    expect(await clock.advanceAsync(20, () => completion)).toBe(2);
     expect(log).toEqual(["first settled", "second ran"]);
   });
 

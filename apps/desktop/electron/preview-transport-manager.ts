@@ -254,10 +254,10 @@ export class PreviewTransportManager {
   private metricsTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
 
-  constructor(private readonly options: PreviewTransportManagerOptions) {}
+  private readonly leaseTimers: TimeoutTimers & IntervalTimers;
 
-  private get leaseTimers(): TimeoutTimers & IntervalTimers {
-    return this.options.leaseTimers ?? unrefTimers;
+  constructor(private readonly options: PreviewTransportManagerOptions) {
+    this.leaseTimers = options.leaseTimers ?? unrefTimers;
   }
 
   // -------------------------------------------------------------------------
@@ -284,7 +284,7 @@ export class PreviewTransportManager {
       this.groups.set(key, group);
     }
     group.holders.add(holderId);
-    if (group.retireTimer) {
+    if (group.retireTimer !== null) {
       this.leaseTimers.clearTimeout(group.retireTimer);
       group.retireTimer = null;
     }
@@ -332,7 +332,7 @@ export class PreviewTransportManager {
     const group = this.groups.get(serviceKey);
     if (!group) return;
     group.holders.delete(holderId);
-    if (group.holders.size > 0 || group.retireTimer) return;
+    if (group.holders.size > 0 || group.retireTimer !== null) return;
     group.retireTimer = this.leaseTimers.setTimeout(
       () => void this.retire(group),
       this.options.retirementMs ?? 30_000,
@@ -1134,8 +1134,8 @@ export class PreviewTransportManager {
 
   private async closeGroup(group: ServiceGroup): Promise<void> {
     group.disposed = true;
-    if (group.retireTimer) this.leaseTimers.clearTimeout(group.retireTimer);
-    if (group.renewTimer) this.leaseTimers.clearInterval(group.renewTimer);
+    if (group.retireTimer !== null) this.leaseTimers.clearTimeout(group.retireTimer);
+    if (group.renewTimer !== null) this.leaseTimers.clearInterval(group.renewTimer);
     this.drainPool(group);
     group.tunnel.close();
     const forward = group.forward;

@@ -381,27 +381,17 @@ export function visitSleepWindows(
   };
 }
 
-/** A known sleep or a Promise-wrapped `setTimeout` with a positive literal delay. */
-export const FIXED_SLEEP_TEXT =
-  /\b(?:[sS]leep|delay|delayMs|wait|waitMs|pause|waitForTimeout)\(\s*[1-9]|setTimeout\(\s*\w+\s*,\s*[1-9]/;
-/** A local helper that sleeps for a variable delay, e.g. `(ms) => new Promise((r) => setTimeout(r, ms))`. */
-export const SLEEP_HELPER_TEXT = /setTimeout\(\s*\w+\s*,\s*[a-zA-Z_]|\b[sS]leep\(\s*[a-zA-Z_]/;
-/** An awaited call with a positive literal argument, such as `await realTick(50)`. */
-export const AWAITED_LITERAL_CALL_TEXT = /await\s+[\w.$]+\(\s*(?:[\w.]+\s*,\s*)?[1-9]/;
-/** A relative import of a test-support module, which may define the file's sleep helpers. */
-export const SUPPORT_IMPORT_TEXT =
+// Leave literal delays and matcher syntax to the AST. Both guards must inspect
+// the same candidates so a mixed window always reaches the negative guard.
+const TIMER_TEXT = new RegExp(
+  `\\b(?:${[...SLEEP_NAMES, "setTimeout", "waitForTimeout"].join("|")})\\b`,
+);
+const SUPPORT_IMPORT_TEXT =
   /from\s+["']\.{1,2}\/[^"']*(?:test-harness|test-support|fixture)[^"']*["']/i;
-/** Cheap text test: the file may contain a fixed sleep the AST walk would recognise. */
-export function mayHaveFixedSleep(source: string): boolean {
-  return (
-    FIXED_SLEEP_TEXT.test(source) ||
-    ((SLEEP_HELPER_TEXT.test(source) || SUPPORT_IMPORT_TEXT.test(source)) &&
-      AWAITED_LITERAL_CALL_TEXT.test(source))
-  );
-}
 
-const NEGATIVE_MATCHER_TEXT =
-  /\.not\.|\.to(?:Be\((?:0|false)\)|HaveLength\(0\)|(?:Strict)?Equal\(\[\]\)|(?:HaveBeen|Be)CalledTimes|BeUndefined|BeNull|BeFalsy)/;
+export function mayHaveSleepAssertion(source: string): boolean {
+  return /\bexpect\b/.test(source) && (TIMER_TEXT.test(source) || SUPPORT_IMPORT_TEXT.test(source));
+}
 
 export const sleepBeforeNegativeAssertion: SourceGuard = {
   id: "sleep-before-negative-assertion",
@@ -413,6 +403,6 @@ export const sleepBeforeNegativeAssertion: SourceGuard = {
     "(tests/helpers/controlled-timeout.ts) and advance it past the deadline, or await the " +
     "event itself, then assert. See docs/development/testing-guide.md, 'Controlled time'.",
   appliesTo: () => true,
-  mayOffend: (source) => mayHaveFixedSleep(source) && NEGATIVE_MATCHER_TEXT.test(source),
+  mayOffend: mayHaveSleepAssertion,
   visit: (_program, file) => visitSleepWindows(file, (window) => window.negative),
 };

@@ -305,17 +305,48 @@ describe("sleep-before-positive-assertion", () => {
     expect(lines(guard, source)).toEqual([3, 6, 8, 10]);
   });
 
-  test("leaves a sleep a negative assertion follows to the negative guard", () => {
+  test("assigns a mixed window with a commented matcher to the negative guard once", () => {
+    const file = {
+      path: "fixture.test.ts",
+      isBunTest: true,
+      source: [
+        "test('a', async () => {",
+        "  await Bun.sleep(50);",
+        "  expect(spy).toHaveBeenCalled();",
+        "  expect(count).toBe( /* no more items */ 0);",
+        "});",
+      ].join("\n"),
+    };
+    expect(scanSource(file, [guard, sleepBeforeNegativeAssertion])).toEqual([
+      { file: file.path, guard: sleepBeforeNegativeAssertion.id, line: 2 },
+    ]);
+  });
+
+  test("flags a synchronous member-form assertion without a plain expect call", () => {
     const source = [
       "test('a', async () => {",
       "  await Bun.sleep(50);",
-      "  expect(spy).toHaveBeenCalled();",
-      "  expect(other).not.toHaveBeenCalled();",
+      "  expect.soft(result).toBeTruthy();",
       "});",
     ].join("\n");
-    expect(lines(guard, source)).toEqual([]);
-    expect(lines(sleepBeforeNegativeAssertion, source)).toEqual([2]);
+    expect(lines(guard, source)).toEqual([2]);
   });
+
+  for (const [importLine, sleepCall] of [
+    ["import { setTimeout } from 'node:timers/promises';", "setTimeout(50)"],
+    ["import { sleepMs } from './helpers';", "sleepMs(50)"],
+  ] as const) {
+    test(`flags an awaited ${sleepCall} with no other fixed sleep in the file`, () => {
+      const source = [
+        importLine,
+        "test('a', async () => {",
+        `  await ${sleepCall};`,
+        "  expect(result).toBeTruthy();",
+        "});",
+      ].join("\n");
+      expect(lines(guard, source)).toEqual([3]);
+    });
+  }
 
   test("does not flag awaited or promise assertions, awaited reads, zero or named delays", () => {
     const source = [

@@ -517,7 +517,9 @@ from `@orkestrator/protocol/timers`, or its own interface of the same shape)
 and uses the runtime's timers when none is given. Tests pass a `ManualClock`
 (`@orkestrator/protocol/testing/manual-clock`), which implements all of them:
 `advance(ms)` runs every timer due in that span in due order, `advanceAsync(ms)`
-also lets each callback's promise chain settle before the next timer runs, and
+yields a bounded 50 microtask turns before the first timer and after each
+callback. Pass a custom settle function that awaits an explicit completion
+signal when the next timer must wait for asynchronous work.
 `pendingCount()` and `pendingDelays()` show what is armed, which is the
 evidence a negative assertion needs. Adding the seam never changes a production
 default; `startPaneLayoutPersistence({ timers })` and the parent watchdogs are

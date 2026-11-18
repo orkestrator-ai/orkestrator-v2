@@ -28,6 +28,7 @@ import { connectionPreviewBackend } from "../electron/preview-connection-backend
 import { liveServicePartitionSuffixes } from "../electron/preview-partition-retention";
 import {
   PreviewTransportManager,
+  previewServiceKey,
   previewServicePartitionSuffix,
   type PreviewServiceSession,
 } from "../electron/preview-transport-manager";
@@ -141,7 +142,7 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     beforeAttach = undefined;
     invoked.length = 0;
     sessions.clear();
-    leaseClock = new ManualClock();
+    leaseClock = new ManualClock({ firstHandle: 0 });
     manager = new PreviewTransportManager({
       invoke: async <T>(command: string, args: Record<string, unknown>) => {
         invoked.push(command);
@@ -629,6 +630,28 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     expect(manager.stats().services).toBe(0);
   });
 
+  test("reacquiring clears a zero-valued retirement timer", async () => {
+    const attach = Promise.withResolvers<void>();
+    beforeAttach = () => attach.promise;
+    const service = target();
+    const key = previewServiceKey(service);
+    // Release while the attachment is pending so retirement owns handle 0.
+    const first = manager.acquire(service, "tab-1");
+    manager.release(key, "tab-1");
+    manager.release(key, "tab-1");
+    const delays = leaseClock.pendingDelays();
+    const reacquired = manager.acquire(service, "tab-2");
+    attach.resolve();
+    const [, descriptor] = await Promise.all([first, reacquired]);
+
+    expect(delays).toEqual([50]);
+    expect(leaseClock.advance(50)).toBe(0);
+    expect(manager.stats().services).toBe(1);
+    expect(harness.runtime.access.stats().attachments).toBe(1);
+    const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
+    expect((await get(`${descriptor.origin}/health`, headers)).status).toBe(200);
+  });
+
   test("hiding does not close the listener; the last release retires it and frees the attachment", async () => {
     const descriptor = await manager.acquire(target(), "tab-1");
     await manager.acquire(target("/other"), "tab-2");
@@ -736,7 +759,7 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
     const sessions = new Map<string, FakeSession>();
     const ports: number[] = [];
     let remote = true;
-    const clock = new ManualClock();
+    const clock = new ManualClock({ firstHandle: 0 });
     const manager = new PreviewTransportManager({
       invoke: async <T>(command: string, args: Record<string, unknown>) => {
         invoked.push({ command, args });
@@ -941,6 +964,21 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
       ],
       histograms: {},
     });
+  });
+
+  test("disposal clears a zero-valued renewal timer", async () => {
+    const { manager, invoked, clock } = setup();
+    try {
+      await manager.acquire(target, "tab-1");
+      expect(clock.intervalPeriods()).toEqual([5]);
+    } finally {
+      await manager.disposeAll();
+    }
+    expect(clock.advance(5)).toBe(0);
+    expect(invoked.map(({ command }) => command)).toEqual([
+      "create_preview_attachment",
+      "release_preview_attachment",
+    ]);
   });
 
   test("disposal while binding closes the listener and never starts renewal", async () => {

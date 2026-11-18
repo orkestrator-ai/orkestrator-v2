@@ -1,8 +1,5 @@
 import type { SourceGuard } from "./guard";
-import { mayHaveFixedSleep, visitSleepWindows } from "./sleep-before-negative-assertion";
-
-/** A synchronous `expect(` the AST walk may classify as a positive assertion. */
-const EXPECT_TEXT = /(?<!await\s+)\bexpect\(/;
+import { mayHaveSleepAssertion, visitSleepWindows } from "./sleep-before-negative-assertion";
 
 /**
  * The mirror of `sleep-before-negative-assertion`: a fixed sleep followed only
@@ -21,7 +18,7 @@ export const sleepBeforePositiveAssertion: SourceGuard = {
     "or installControlledTimeout (tests/helpers/controlled-timeout.ts), then assert. See " +
     "docs/development/testing-guide.md, 'Controlled time'.",
   appliesTo: () => true,
-  mayOffend: (source) => mayHaveFixedSleep(source) && EXPECT_TEXT.test(source),
+  mayOffend: mayHaveSleepAssertion,
   visit: (_program, file) =>
     visitSleepWindows(file, (window) => window.positive && !window.negative),
 };

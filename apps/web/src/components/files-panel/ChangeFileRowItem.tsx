@@ -108,7 +108,10 @@ export function ChangeFileRowItem({
       )}
     >
       <span
-        className={cn("w-3 shrink-0 text-center font-mono text-[10px]", STATUS_CLASSES[row.status])}
+        className={cn(
+          "w-3 shrink-0 text-center font-mono text-[11px] font-medium",
+          STATUS_CLASSES[row.status],
+        )}
         aria-label={row.status}
         title={row.status}
       >

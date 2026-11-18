@@ -130,3 +130,37 @@ On macOS, branch `image-copy-download-aeea21f2f5ef-r1`, pre-merge head
   `mise run flaky:recurrence -- 9959 --base 00a44c9eb581a28cc7c5462eda5028e0f96c68bf --registry-ref origin/main`
   reported the case open (registry `d3a85023ed`). No product code, assertion,
   timeout or skip was changed for this observation.
+
+## Observation 2026-11-18 (badge typography review repair)
+
+- **Branch and base:** `replace-badges-counts-76b9062d6cda-r1` at `863e9f1cc`,
+  base `b2c91abb94de8144c119aeccf4a31cf26b655d3b`. The branch changes
+  badge typography, plugin evidence and a Skills header layout.
+- **Command:** `ORKESTRATOR_VALIDATION_GRANTED_WORKERS=3 mise run test:logged -- --name browser -- mise run test:browser`.
+  The 30-minute watchdog stopped the three-worker run at case 1891 of 1932.
+  Six failures printed before the watchdog interrupted three active cases.
+  Playwright did not print final totals and the public-site suite did not start.
+- **Detached reflow:** mobile `a detached reader holds their place through a reflow in either direction`
+  at `e2e/StreamingTranscript.spec.ts:307` had a maximum offset error of
+  113.75px versus a 3px limit at line 346.
+  The unchanged owner passed all 26 cases in 105 seconds with
+  `env -u NODE_ENV mise run test:logged -- --name badges-streaming-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts StreamingTranscript.spec.ts --workers=1 --output output/00010/streaming-owner-results`.
+- **Restored fold:** desktop `short and restored open groups have no mount animation with no-preference motion`
+  at `e2e/ToolGroupFold.spec.ts:271` could not find the restored open body
+  within 30 seconds at line 290. It passed in the one-worker owner run
+  `env -u NODE_ENV mise run test:logged -- --name badges-fold-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts ToolGroupFold.spec.ts --workers=1 --output output/00010/fold-owner-results`.
+  That run finished in 158.9 seconds with 37 passed, one skipped and two
+  failures in a different test, `a live group crossing the fold threshold folds into its line with no-preference motion`
+  at line 127. Its fold-gap assertion failed in both the aggregate and the
+  owner run.
+- **Arrival animation:** desktop `a row arriving for a follower grows in while the transcript stays at its end`
+  at `e2e/TranscriptArrival.spec.ts:122` recorded a first frame of 75.15625px
+  against a 65.0625px limit at line 138. Its unchanged owner passed the
+  isolated 24-case run in 135.4 seconds with
+  `env -u NODE_ENV mise run test:logged -- --name badges-arrival-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts TranscriptArrival.spec.ts --workers=1 --output output/00010/arrival-owner-results`.
+- **Evidence:** `/tmp/orkestrator-test-run.XQb8AI/browser.log.gz` and
+  `/tmp/orkestrator-test-run.gRuIuw/badges-fold-owner.log.gz`.
+  `mise run flaky:recurrence -- 9959 --base b2c91abb94de8144c119aeccf4a31cf26b655d3b --registry-ref origin/main`
+  reported `open`. The watchdog and the isolated results establish the
+  observed run behavior. The causes of the viewport and remount failures
+  remain unconfirmed.

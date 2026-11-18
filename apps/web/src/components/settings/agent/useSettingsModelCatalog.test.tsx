@@ -1,7 +1,17 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, waitFor } from "@testing-library/react";
-import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanupNodeScopes,
+  FakeNodeClient,
+  renderHookInAppCommandScope,
+  renderInNodeScope,
+} from "@/test/render-in-node-scope";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { CreateEnvironmentDialog } from "@/components/environments/CreateEnvironmentDialog";
+import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+import { configStore } from "@/stores/configStore";
 import type { ReactNode } from "react";
+import * as machineViews from "@/components/federation/useMachineViews";
 import * as federation from "@/components/federation/FederationProvider";
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -19,6 +29,7 @@ const initialUI = appCommandStore(uiStore).getState();
 const initialPortal = portalStore.getState();
 afterEach(() => {
   cleanup();
+  cleanupNodeScopes();
   mock.restore();
   workspace.mockReset();
   appCommandStore(agentModelCatalogStore).setState(initialModels);
@@ -48,6 +59,7 @@ afterEach(() => {
         nodes: [{ nodeId: "other", projects: [project] }],
       },
     } as never);
+    spyOn(machineViews, "useRemoteMachineView").mockReturnValue(null);
     let revision = 1;
     const reads: Array<{ owner: string; command: string; args: Record<string, unknown> }> = [];
     const response = (target: string, command: string, args: Record<string, unknown> = {}) => {
@@ -91,6 +103,41 @@ afterEach(() => {
           }
         : response("command", command, args),
     );
+    const leaf = new FakeNodeClient({ nodeId: owner as BackendId })
+      .respond("get_agent_model_catalog_cache", () => ({
+        schemaVersion: 1,
+        codex: {
+          updatedAt: new Date(revision * 1000).toISOString(),
+          models: [{ id: `other-model-${revision}`, name: `Studio Codex ${revision}` }],
+        },
+      }))
+      .respond("get_opencode_model_catalog_cache", null);
+    const dialog = renderInNodeScope(<></>, { client: leaf, role: "leaf" });
+    const config = appCommandStore(configStore).getState().config;
+    dialog.scope.store(configStore).setState({
+      config: { ...config, global: { ...config.global, enabledAgentPlatforms: ["codex"] } },
+    });
+    dialog.rerender(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentDialog
+          open
+          projectId="other-project"
+          onOpenChange={() => {}}
+          onCreate={async () => true}
+        />
+      </DockerAvailabilityProvider>,
+    );
+    await waitFor(() =>
+      expect(dialog.scope.store(agentModelCatalogStore).getState().codexModels[0]?.id).toBe(
+        "other-model-1",
+      ),
+    );
+    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Agent, model and reasoning" }));
+    const modelMenu = () => within(screen.getByRole("group", { name: "Models", hidden: true }));
+    expect(
+      modelMenu().getByRole("menuitemradio", { name: /Studio Codex 1/, hidden: true }),
+    ).toBeTruthy();
+
     const wrapper = ({ children }: { children: ReactNode }) => (
       <AccountMachineProvider value={{ machine, name: owner }}>{children}</AccountMachineProvider>
     );
@@ -112,11 +159,18 @@ afterEach(() => {
       await result.current.refresh("codex");
     });
     expect(result.current.catalog.codex[0]?.id).toBe(`${owner}-model-3`);
+    await waitFor(() =>
+      expect(
+        modelMenu().getByRole("menuitemradio", { name: /Studio Codex 3/, hidden: true }),
+      ).toBeTruthy(),
+    );
     expect(appCommandStore(agentModelCatalogStore).getState().codexModels[0]?.id).toBe(
       "leaf-model",
     );
-    // Everything of the other machine went through the command node.
-    expect(workspace.mock.calls.filter(([command]) => command !== "invoke_on_node")).toEqual([]);
+    // All of the remote Settings catalogue calls went through the node proxy.
+    expect(workspace.mock.calls.filter(([command]) => command.includes("model_catalog"))).toEqual(
+      [],
+    );
     expect(await getAppVersion(machine)).toBe("3.0.0");
     expect(await getAppVersion()).toBe("2.0.0");
   });

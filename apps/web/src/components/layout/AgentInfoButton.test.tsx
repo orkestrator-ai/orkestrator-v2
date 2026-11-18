@@ -2772,8 +2772,9 @@ describe("AgentInfoButton Codex runtime panel", () => {
     renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
-    await waitFor(() => expect(screen.getByText("ready")).toBeTruthy());
-    expect(screen.getByText("Codex Native 0.144.1")).toBeTruthy();
+    const state = await screen.findByText("ready");
+    expect(Array.from(state.classList)).toEqual(["text-[11px]", "font-medium"]);
+    expect(screen.getByText("Codex Native 0.144.1").classList.contains("font-medium")).toBe(false);
   });
 
   test("renders the inventory counts the projection carries", async () => {

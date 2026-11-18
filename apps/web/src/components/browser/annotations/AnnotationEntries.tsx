@@ -225,7 +225,7 @@ export function AnnotationEntries({
                 {stateLabel ? ` (${stateLabel})` : ""} · {time}
               </span>
               {unread && (
-                <span className="rounded bg-primary/20 px-1 text-[10px] text-foreground">New</span>
+                <span className="rounded bg-primary/20 px-1 text-[11px] text-foreground">New</span>
               )}
               {entry.lifecycle?.relatedAnnotationId && (
                 <button
@@ -283,7 +283,7 @@ export function AnnotationEntries({
                 <span>· {entry.legacyVariantCount} imported copies</span>
               ) : null}
               {unread && (
-                <span className="rounded bg-primary/20 px-1 text-[10px] text-foreground">New</span>
+                <span className="rounded bg-primary/20 px-1 text-[11px] text-foreground">New</span>
               )}
             </div>
             {editing === entry.id ? (

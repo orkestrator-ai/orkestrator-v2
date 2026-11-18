@@ -1007,7 +1007,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       >
         <header className="flex items-start justify-between gap-4 border-b border-border/60 px-4 py-3.5">
           <div className="min-w-0">
-            <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/70">
+            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
               Active session
             </div>
             <h2 className="mt-1 truncate text-sm font-semibold text-foreground">
@@ -1088,7 +1088,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
               !isCoordinatorSession &&
               neutralProjection?.composer?.executionProfiles?.length ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
-                  <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                     Execution profile
                   </div>
                   <select
@@ -1123,7 +1123,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
               */}
               {!isWorkflowSession && activeSession.provider === "claude" ? (
                 <div className="space-y-1.5 border-t border-border/60 pt-4">
-                  <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                     Session options
                   </div>
                   {isCoordinatorSession ? null : (
@@ -1157,7 +1157,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
 
               {!isWorkflowSession && (canFork || canCompact || canHandoff) ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
-                  <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                     Session actions
                   </div>
                   <div className="grid grid-cols-2 gap-2">
@@ -1521,7 +1521,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
               neutralProjection.turn.phase === "running" &&
               !neutralProjection.recoverableDispatch ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
-                  <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                     Active turn
                   </div>
                   <div className="flex gap-2">
@@ -1616,7 +1616,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   task.status === "paused",
               ) ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
-                  <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                     Background tasks
                   </div>
                   {liveClaudeTasks
@@ -1656,7 +1656,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
               ) : null}
 
               <div className="space-y-2 border-t border-border/60 pt-4">
-                <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+                <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                   Runtime
                 </div>
                 {neutralProjection?.policy ? (

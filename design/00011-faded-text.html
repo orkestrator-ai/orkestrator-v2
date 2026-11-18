@@ -11,19 +11,19 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00011</p>
       <h1>00011 · Remove alpha fades from status text</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-low">Low</span>
         <span class="pill">Typography</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 4 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 4 / 4 images</span
         >
       </div>
 
       <h2>Problem</h2>
       <p>
-        <code>text-muted-foreground/40</code> to <code>/60</code> appears 21 times (for example
-        <code>TodoToolPart.tsx:153</code>, a todo item’s state). Disabled controls may drop to 50%
-        opacity, but readable state text may not.
+        The baseline had 21 uses of <code>text-muted-foreground</code> at 60% opacity or less,
+        including a pending todo item’s state. Readable state text needs the full muted color.
+        Disabled controls can use a lower opacity.
       </p>
       <div class="rule">
         <div>
@@ -47,11 +47,11 @@
         <tbody>
           <tr>
             <td><code>apps/web/src/components/todo/TodoToolPart.tsx:153</code></td>
-            <td>todo state text</td>
+            <td>todo state text and pending marker</td>
           </tr>
           <tr>
             <td><code>apps/web/src/components/claude/ClaudeTmuxChatTab.parts.tsx:1361</code></td>
-            <td>disabled control, likely keep</td>
+            <td>disabled attachment control</td>
           </tr>
           <tr>
             <td><code>every other hit of the grep above</code></td>
@@ -152,63 +152,65 @@
       <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
 NODE_ENV=test mise run test:logged -- --name todo -- bun --cwd=apps/web test src/components/todo --parallel=2 --only-failures
 mise run format:check
-mise run lint</code></pre>
+mise run lint
+NODE_ENV=test mise run test:logged -- --name status-readability-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/StatusReadability.spec.ts --workers=2</code></pre>
       <p class="note">
         React tests in this repo need <code>NODE_ENV=test</code> in build shells. Real-browser
         check: use a throwaway <code>dev:test</code> profile named <code>design-00011</code>, never
-        a production instance.
+        a production instance. The status readability browser test checks full muted color, the 11px
+        badge and duration floor, and the setup retry state at desktop and narrow widths.
       </p>
 
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Before images captured on <b>unmodified</b> code for every slot above, and committed
             under <code>design/images/00011/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
-            and file names, and committed beside the before images.</span
+            and zoom, and committed beside the before images under the required file names.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “4 / 4”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Type-check and the owning tests pass (commands below);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -217,14 +219,112 @@ mise run lint</code></pre>
 
       <h2>Notes</h2>
       <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
+        Baseline <code>b2c91abb9</code> had 21 matching lines. The table accounts for every hit.
+        Line numbers refer to that baseline.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Baseline hit</th>
+            <th>Classification and decision</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>TodoToolPart.tsx:139, 153, 158, 183, 189</code></td>
+            <td>
+              Completed item text, the pending marker, task IDs, and partial and truncated list
+              notices convey task or list state. Use plain <code>text-muted-foreground</code> and
+              bring the affected 10px labels up to 11px.
+            </td>
+          </tr>
+          <tr>
+            <td><code>criterion-status.tsx:15</code></td>
+            <td>
+              The circle is the visible “Not verified yet” state indicator. Use plain
+              <code>text-muted-foreground</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>NativeMessage.tool-group.tsx:670</code></td>
+            <td>
+              The elapsed span reports how long the tool group ran. Use plain
+              <code>text-muted-foreground</code> at 11px.
+            </td>
+          </tr>
+          <tr>
+            <td><code>GlobalSettings.sections.tsx:1020, 1429, 1711, 2470</code></td>
+            <td>
+              The extension requirement, Claude and Codex restart notes, and immediate logging
+              application note describe when settings apply. Use plain
+              <code>text-muted-foreground</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>AgentPlatformPane.tsx:280</code></td>
+            <td>
+              The note explains when the Tmux backend writes and restores its hooks. Use plain
+              <code>text-muted-foreground</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>ClaudeTmuxChatTab.parts.tsx:1350, 1361</code></td>
+            <td>Composer placeholder and disabled attachment control. Keep both fades.</td>
+          </tr>
+          <tr>
+            <td>
+              <code>KanbanTaskDialog.tsx:1109</code>, <code>PullRequestList.tsx:192</code>,
+              <code>PullRequestSummaryTab.tsx:137</code>
+            </td>
+            <td>
+              Empty description prompt and two search placeholders. Keep their placeholder
+              treatment.
+            </td>
+          </tr>
+          <tr>
+            <td><code>PullRequestDiff.tsx:152, 158</code></td>
+            <td>Old and new line numbers are diff metadata. Keep the gutter treatment.</td>
+          </tr>
+          <tr>
+            <td><code>PipelineKeyInformationTab.tsx:211</code></td>
+            <td>The file icon is decorative. The empty-state text uses separate classes.</td>
+          </tr>
+          <tr>
+            <td><code>SetupPendingOverlay.tsx:190</code></td>
+            <td>
+              The retry button reports progress while disabled. Use plain
+              <code>text-muted-foreground</code> for the setup actions and omit the disabled fade
+              while the button displays “Retrying setup...”.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Review also found todo status text outside the baseline search. Completion and tracked-count
+        summaries, cancelled items, and empty-list notices use the full muted color. The in-progress
+        and cancelled labels use 11px with their existing state colors.
+      </p>
+      <p>
+        Using the existing muted token gives status copy the documented contrast across themes.
+        Changing the palette would affect every consumer of that token.
       </p>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <b>Todo tool part.</b> The completed item and pending square are easier to read, and the
+          three task IDs meet the 11px label floor. The active item retains its amber marker.
+        </li>
+        <li>
+          <b>Codex settings.</b> The subagent limit’s restart note now uses the same muted tone as
+          the setting’s description. The value, wording and spacing match the baseline.
+        </li>
       </ul>
+      <p class="note">
+        Both pairs are element crops from the real renderer at 1440 × 900, 1× device scale, default
+        zoom and the same dark theme in the headless <code>design-00011</code> profile. A scripted
+        loopback Claude model wrote the three tasks in the fixture session. The credential-free
+        profile downloaded its toolchains. Both captures reopened that same saved transcript after a
+        browser reload.
+      </p>
 
       <footer>
         Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and

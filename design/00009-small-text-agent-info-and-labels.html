@@ -11,11 +11,11 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00009</p>
       <h1>00009 · Raise state and label text to 11px in agent info, environments and lists</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-medium">Medium</span>
         <span class="pill">Typography</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 10 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 10 / 10 images</span
         >
       </div>
 
@@ -73,7 +73,7 @@
           </tr>
           <tr>
             <td><code>apps/web/src/components/settings/SkillsSettings.tsx</code></td>
-            <td>6 uses</td>
+            <td>4 uses</td>
           </tr>
           <tr>
             <td>
@@ -83,7 +83,7 @@
           </tr>
           <tr>
             <td><code>apps/web/src/components/agent-mail/AgentMailPanel.tsx</code></td>
-            <td>5 uses</td>
+            <td>4 uses</td>
           </tr>
           <tr>
             <td><code>apps/web/src/components/sidebar/ProjectSearchBar.tsx</code></td>
@@ -118,7 +118,9 @@
 
       <section class="capture" id="cap-agent-info-popover-desktop">
         <h3>Agent info popover, all panels <span class="pill">desktop 1440×900</span></h3>
-        <p class="how">Open the agent info button and capture each panel.</p>
+        <p class="how">
+          Open Agent Info with populated usage and a running turn, then capture each panel.
+        </p>
         <div class="pair">
           <figure class="shot">
             <figcaption>
@@ -149,7 +151,9 @@
 
       <section class="capture" id="cap-agent-info-popover-narrow">
         <h3>Agent info popover, all panels <span class="pill">narrow 390×844</span></h3>
-        <p class="how">Open the agent info button and capture each panel.</p>
+        <p class="how">
+          Reload at 390px, open Agent Info with the same session fixture, and capture each panel.
+        </p>
         <div class="pair">
           <figure class="shot">
             <figcaption>
@@ -180,7 +184,9 @@
 
       <section class="capture" id="cap-create-environment-mobile-tabs-narrow">
         <h3>Create environment dialog mobile tabs <span class="pill">narrow 390×844</span></h3>
-        <p class="how">Open the dialog from a fixture project at a narrow width.</p>
+        <p class="how">
+          Open the dialog from a fixture project and select Ports in the five-tab container layout.
+        </p>
         <div class="pair">
           <figure class="shot">
             <figcaption>
@@ -295,54 +301,54 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Before images captured on <b>unmodified</b> code for every slot below, and committed
             under <code>design/images/00009/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “10 /
             10”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Type-check and the owning tests pass (commands below);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -350,15 +356,111 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
-      </p>
+      <h3>Classification</h3>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <code>AgentInfoButton.panels.tsx</code> — State and labels include System and Data
+          unavailable, metric labels, runtime state, steering saturation and capacity, Daily tokens,
+          daily and peak counts, reset timing, Account, Context, unavailable version or model, the
+          two reporting qualifiers, Approvals, and Connection. Reference metadata includes metric
+          detail, account identification, notice timestamps, bridge versions and process
+          generations, unknown event kinds, chart dates, and model IDs.
+        </li>
+        <li>
+          <code>AgentInfoButton.tsx</code> — State and labels include Active session, Execution
+          profile, Session options, Session actions, Active turn, Background tasks, and Runtime.
+          Fork and steering helper copy is supplementary metadata.
+        </li>
+        <li>
+          <code>CreateEnvironmentDialog.tsx</code> — The mobile configuration tabs are navigation
+          labels. <code>ChangeFileRowItem.tsx</code> — The status letter is state. Rename provenance
+          and the change reason are outside the scoped status-letter change.
+        </li>
+        <li>
+          <code>GraphLibraryList.tsx</code> — Trust, engine, compile state, compile counts, and
+          read-only are state. The source path or template ID is metadata.
+        </li>
+        <li>
+          <code>SkillsSettings.tsx</code> — Scan counts, scan progress and failure, and directory
+          scan errors are state. Skill locations and paths are metadata.
+        </li>
+        <li>
+          <code>MachineAgentAccountsSection.tsx</code> — Signed out, Preferred login signed out, No
+          preferred login, and Preferred are state labels, including when shown on a colored
+          background.
+        </li>
+        <li>
+          <code>AgentMailPanel.tsx</code> — The plain message count is a label. The
+          <em>need you</em> count is inside a filled pill. The message timestamp and the recipient's
+          environment and project are metadata.
+        </li>
+        <li>
+          <code>ProjectSearchBar.tsx</code> — Both availability markers are state, and the search
+          keycap labels the keyboard shortcut.
+        </li>
       </ul>
+
+      <h3>Decisions</h3>
+      <ul>
+        <li>
+          Use 11px for state and labels. Apply the documented full muted-foreground token to the
+          affected muted agent headings. Existing palette values and semantic status colors are
+          preserved.
+        </li>
+        <li>
+          Keep compact metadata and the filled mail count at 10px. This retains the hierarchy and
+          density specified by the design. Where state shares a row with model IDs, runtime
+          versions, or dates, size the state independently.
+        </li>
+        <li>
+          Keep the existing mobile tab labels. On the 390px fixture, the labels fit without
+          shortening. In the popover, existing wrapped explanatory copy and vertical scrolling
+          accommodate the narrow viewport.
+        </li>
+        <li>
+          Use the Scope table to define the change. The plugin browser appears in the original issue
+          description. Design and annotation components and 9px badges have their own tasks.
+        </li>
+      </ul>
+
+      <h3>Image comparisons</h3>
+      <ul>
+        <li>
+          Desktop agent information at 1440 × 900. Context, Account, Daily tokens, Provider
+          reported, and Active turn are visible with populated session data. The 11px steering
+          capacity counts use weight 500, and the explanatory sentence uses regular weight.
+        </li>
+        <li>
+          Narrow agent information at 390 × 844. The populated sections and steering readout fit
+          without horizontal overflow after reload. The full model identifier is available in the
+          truncated label’s tooltip.
+        </li>
+        <li>
+          Mobile container environment dialog at 390 × 844. Prompt, Setup, Agent, Access, and Ports
+          all render at 11px and fit on a single line. Access and Ports both open their panels.
+        </li>
+        <li>
+          Changed files at 1440 × 900. The modified, deleted, and added status letters are 11px. The
+          fixture filenames and line counts align in their existing columns.
+        </li>
+        <li>
+          Skills settings at 1440 × 900. The scan summary is 11px and medium weight, including the
+          zero counts shown by the isolated backend.
+        </li>
+      </ul>
+      <p class="note">
+        The Agent Info and container dialog pairs use the dark renderer on the headless
+        <code>design-00009-review</code> fixture profile at 100% scale, with the matching component
+        modules from <code>259e88d90</code> for the before captures. Playwright supplied the same
+        synthetic usage, quota, running turn, steering saturation, and Docker availability to each
+        version. No provider turn or container launch was needed. The Agent Info images combine
+        strips of the scrollable popover. Live system utilization can vary.
+      </p>
+      <p class="note">
+        The changed-files and Skills pairs use the original <code>design-00009</code> fixture
+        profile with <code>b2c91abb9</code> as the before revision. The isolated backend suppresses
+        host skill discovery.
+      </p>
 
       <footer>
         Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and

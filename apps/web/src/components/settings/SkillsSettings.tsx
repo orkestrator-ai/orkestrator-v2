@@ -571,7 +571,7 @@ export function SkillsSettings({
                             {skill.shadowed && (
                               <span
                                 title="A higher-precedence directory provides a skill with this name, so this copy is not loaded"
-                                className="shrink-0 rounded bg-zinc-800 px-1 text-[9px] uppercase tracking-wide text-muted-foreground"
+                                className="shrink-0 rounded bg-zinc-800 px-1 text-[11px] uppercase tracking-wide text-muted-foreground"
                               >
                                 Shadowed
                               </span>
@@ -594,7 +594,7 @@ export function SkillsSettings({
             {/* Gated on a completed scan: before one lands the counts are all
               zero, which reads as a definitive "no skills, no directories"
               rather than "not looked yet". */}
-            <div className="border-t border-zinc-800 px-3 py-1.5 text-[10px] text-muted-foreground">
+            <div className="border-t border-zinc-800 px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
               {state.scan ? (
                 <>
                   {needle && `${filtered.length} of `}
@@ -619,11 +619,14 @@ export function SkillsSettings({
               <>
                 <div className="flex items-start justify-between gap-3 border-b border-zinc-800 p-3">
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <h4 className="truncate text-sm font-medium text-foreground">
                         {selected.name}
                       </h4>
-                      <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
+                      <span
+                        className="max-w-full truncate rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground"
+                        title={selected.plugin}
+                      >
                         {selected.plugin
                           ? `Plugin · ${selected.plugin}`
                           : SCOPE_LABELS[selected.scope]}
@@ -742,7 +745,7 @@ export function SkillsSettings({
           </p>
           <ul className="mt-1 space-y-0.5">
             {state.scan.errors.map((entry) => (
-              <li key={entry.path} className="font-mono text-[10px] text-muted-foreground">
+              <li key={entry.path} className="font-mono text-[11px] text-muted-foreground">
                 {entry.path}: {entry.message}
               </li>
             ))}

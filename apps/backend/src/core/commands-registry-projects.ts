@@ -130,10 +130,17 @@ import {
 } from "./commands-helpers.js";
 import {
   persistHostCatalog,
+  persistCodexHostCatalog,
   seedEnabledHostModelCatalogs,
   HOST_OPENCODE_CATALOG_SCOPE,
   seedHostModelCatalogIfMissing,
+  refreshStaleHostModelCatalogs,
+  refreshStaleHostModelCatalogsInBackground,
 } from "./host-model-catalog-seed.js";
+import {
+  CODEX_LIVE_MODEL_FETCH_TIMEOUT_MS,
+  fetchCodexBridgeModels,
+} from "./codex-live-model-catalog.js";
 import { openCode2EnvironmentServer } from "./opencode2/container-server-lifecycle.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
@@ -159,17 +166,14 @@ export function firstUseCatalogFetchTimeoutMs(deadline: number, now = Date.now()
   return Math.max(1_000, deadline - now);
 }
 
-/** Wait for a host probe only while the picker still has first-use budget. */
-async function waitForFirstUseSeed(
-  seed: Promise<boolean>,
-  deadline: number,
-): Promise<boolean | undefined> {
+/** Wait for discovery only while the picker still has budget. */
+async function waitForCatalog<T>(discovery: Promise<T>, deadline: number): Promise<T | undefined> {
   const remaining = Math.max(0, deadline - Date.now());
   if (remaining === 0) return undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      seed,
+      discovery,
       new Promise<undefined>((resolve) => {
         timer = setTimeout(() => resolve(undefined), remaining);
         timer.unref?.();
@@ -630,9 +634,17 @@ export function registerProjectCommands(
     // control surface, the pickers) keeps the Pi first-use probe below.
     if (args.seed === true) {
       await seedEnabledHostModelCatalogs(context, refreshHostModelCatalog).catch(() => undefined);
+      // Startup's background read is the one that may wait for a download, so
+      // a window opened after a day away shows the provider's current list.
+      await refreshStaleHostModelCatalogs(context, refreshHostModelCatalog).catch(() => undefined);
     }
     let cache = await context.storage.getAgentModelCatalogCache();
     if (args.seed === false) return cache;
+    // Every other read (a launcher opening, often on another machine's node)
+    // answers from the cache and lets the next read see a refreshed list.
+    if (args.seed === undefined) {
+      refreshStaleHostModelCatalogsInBackground(context, refreshHostModelCatalog, cache);
+    }
     if (!cache.pi?.models.length) {
       const config = await context.storage.loadConfig();
       if (config.global.enabledAgentPlatforms?.includes("pi")) {
@@ -669,6 +681,7 @@ export function registerProjectCommands(
     const environment = await storage.getEnvironment(id);
     let cache = await storage.getAgentModelCatalogCache();
     if (!environment) {
+      refreshStaleHostModelCatalogsInBackground(context, refreshHostModelCatalog, cache);
       // A bug report, like a coordinator, has no environment row; it belongs
       // to no project and offers only the bug-report agents.
       const bugReportId = bugReportIdFromRuntimeId(id);
@@ -729,7 +742,7 @@ export function registerProjectCommands(
             : false;
       if (hostSeeded && qualified.has(ensureAgent) && !alreadyCatalogued) {
         const deadline = Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
-        const seeded = await waitForFirstUseSeed(
+        const seeded = await waitForCatalog(
           seedHostModelCatalogIfMissing(
             context,
             ensureAgent,
@@ -775,7 +788,14 @@ export function registerProjectCommands(
     // cannot be left waiting on a cold bridge for an open-ended time. Only the
     // first-use branch consumes it; a read served from the durable cache is
     // unaffected.
-    let firstUseDeadline: number | null = null;
+    let firstUseDeadline: number | null =
+      ensureAgent === "codex" && !cache.codex?.models.length
+        ? Date.now() + FIRST_USE_CATALOG_BUDGET_MS
+        : null;
+    const codexDiscovery = waitForCatalog(
+      fetchCodexBridgeModels(environment, context),
+      Date.now() + CODEX_LIVE_MODEL_FETCH_TIMEOUT_MS,
+    );
     const config = await storage.loadConfig();
     const openCodeModelProviders = normalizeOpenCodeModelProviders(
       config.global.openCodeModelProviders,
@@ -801,12 +821,10 @@ export function registerProjectCommands(
             .connectedModelProviders(openCodeCatalogInput)
             .catch(() => undefined)
         : undefined;
-    // Claude, Codex and OpenCode are not seeded through a per-environment
-    // bridge here: Claude and Codex catalogues are host-wide, and OpenCode's is
-    // cached per project from the same host-level probe. A fresh installation
-    // downloads them through the short-lived host probe the Settings refresh
-    // uses. A host that is not signed in yet simply stays empty and is retried
-    // once it is.
+    // A running Codex bridge can satisfy the picker before a cold host probe.
+    const codexOnFirstUse = firstUseDeadline !== null ? await codexDiscovery : undefined;
+    // The short-lived host probe supplies the first catalogue when no cached
+    // or running source has models for these platforms.
     let seedFailed = false;
     const hostSeeded =
       ensureAgent === "claude" || ensureAgent === "codex" || ensureAgent === "opencode";
@@ -814,13 +832,13 @@ export function registerProjectCommands(
       ensureAgent === "claude"
         ? Boolean(environment.claudeModelCatalog?.models.length || cache.claude?.models.length)
         : ensureAgent === "codex"
-          ? Boolean(cache.codex?.models.length)
+          ? Boolean(cache.codex?.models.length || codexOnFirstUse?.status === "ok")
           : ensureAgent === "opencode"
             ? Boolean(openCodeSnapshot?.models.length || liveOpenCodeModels.length)
             : false;
     if (hostSeeded && !hostModelsAlreadyAvailable) {
-      firstUseDeadline = Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
-      const seeded = await waitForFirstUseSeed(
+      firstUseDeadline ??= Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
+      const seeded = await waitForCatalog(
         seedHostModelCatalogIfMissing(context, ensureAgent, refreshHostModelCatalog, {
           projectId: environment.projectId,
         }),
@@ -875,7 +893,7 @@ export function registerProjectCommands(
         ? firstUseCatalogFetchTimeoutMs(firstUseDeadline)
         : undefined;
     const claudeModels = environment.claudeModelCatalog?.models ?? cache.claude?.models ?? [];
-    const codexModels = cache.codex?.models ?? [];
+    let codexModels = cache.codex?.models ?? [];
     // The live catalogue is already filtered by the provider, but a cache
     // written before the allowlist changed is not. Filter here too so the
     // renderer never receives a provider the user excluded.
@@ -921,7 +939,7 @@ export function registerProjectCommands(
         isSelectableOpenCodeModelId(model.id, openCodeModelProviders) &&
         isConnectedOpenCodeModel(model.id),
     );
-    const [cursorFetch, grokFetch, piFetch] = await Promise.all([
+    const [cursorFetch, grokFetch, piFetch, codexFetch] = await Promise.all([
       fetchAcpNormalizedModelsResult(
         environment,
         context,
@@ -930,7 +948,21 @@ export function registerProjectCommands(
       ),
       fetchAcpNormalizedModelsResult(environment, context, "grok", firstUseFetchTimeoutMs("grok")),
       fetchAcpNormalizedModelsResult(environment, context, "pi", firstUseFetchTimeoutMs("pi")),
+      codexDiscovery,
     ]);
+    if (codexFetch?.status === "ok") {
+      codexModels = codexFetch.models;
+      if (codexFetch.accountLoginKey) {
+        try {
+          cache =
+            (await persistCodexHostCatalog(context, codexModels, codexFetch.accountLoginKey)) ??
+            cache;
+        } catch (error) {
+          log.warn("cache.write-failed", { agent: "codex", error: formatLogError(error) });
+        }
+      }
+    }
+    refreshStaleHostModelCatalogsInBackground(context, refreshHostModelCatalog, cache);
     const cursorModels = cursorFetch.models;
     const grokModels = grokFetch.models;
     const piModels = piFetch.models;

@@ -288,7 +288,7 @@ function ConversationRow({
             {attentionCount} need{attentionCount === 1 ? "s" : ""} you
           </span>
         ) : (
-          <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+          <span className="shrink-0 text-[11px] font-medium tabular-nums text-muted-foreground">
             {conversation.messageCount}
           </span>
         )}
@@ -398,7 +398,7 @@ function RecipientPicker({
                   {mailbox.environmentName} · {mailbox.projectName}
                 </span>
               </span>
-              <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px]">
+              <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] tracking-wide">
                 {mailbox.presence.replaceAll("_", " ")}
               </span>
             </button>

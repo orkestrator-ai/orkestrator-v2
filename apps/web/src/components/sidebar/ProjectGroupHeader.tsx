@@ -192,7 +192,7 @@ export function ProjectGroupHeader({
             )}
             {unreadMail > 0 && (
               <span
-                className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-cyan-400/90 px-1 font-mono text-[9px] text-zinc-950"
+                className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-cyan-400/90 px-1 font-mono text-[10px] text-zinc-950"
                 aria-label={`${unreadMail} unread agent messages`}
               >
                 {unreadMail > 99 ? "99+" : unreadMail}

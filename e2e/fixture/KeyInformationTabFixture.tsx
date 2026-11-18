@@ -19,6 +19,7 @@ import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const ENVIRONMENT_ID = "key-info-environment";
 const PIPELINE_ID = "key-info-pipeline";
+const LONG_SUMMARY_TOKEN = "UnbrokenSummaryToken".repeat(12);
 
 /** A brief shaped like a real pipeline's, long enough to need the tab's space. */
 const keyInformation: BuildPipelineKeyInformation = {
@@ -194,7 +195,8 @@ function TabHost({ onOpen }: { onOpen: (options?: CreateTabOptions) => void }) {
 
 /**
  * The build tab with its Key information panel, and the tab the panel pops
- * out into. `?view=tab` opens straight on the tab; `?empty=1` has no brief.
+ * out into. `?view=tab` opens straight on the tab, `?empty=1` has no brief,
+ * and `?summary=long-token` exercises wrapping without word boundaries.
  */
 export function KeyInformationTabFixture() {
   const params = new URLSearchParams(window.location.search);
@@ -202,8 +204,17 @@ export function KeyInformationTabFixture() {
   const [openedWith, setOpenedWith] = useState<string>("");
   const empty = params.get("empty") === "1";
   const hydration = params.get("hydration");
+  const longSummary = params.get("summary") === "long-token";
 
   useLayoutEffect(() => {
+    const fixturePipeline = {
+      ...pipeline,
+      keyInformation: empty
+        ? undefined
+        : longSummary
+          ? { ...keyInformation, summary: LONG_SUMMARY_TOKEN }
+          : keyInformation,
+    };
     let reads = 0;
     if (hydration) {
       window.orkestrator = {
@@ -219,16 +230,14 @@ export function KeyInformationTabFixture() {
             version: BUILD_PIPELINE_VERSION,
             revision: pipeline.backendRevision,
             updatedAt: pipeline.createdAt,
-            snapshot: pipeline,
+            snapshot: fixturePipeline,
           };
         },
         listen: () => () => undefined,
       } as unknown as Window["orkestrator"];
     }
     appCommandStore(useBuildPipelineStore.def).setState({
-      pipelines: hydration
-        ? new Map()
-        : new Map([[PIPELINE_ID, empty ? { ...pipeline, keyInformation: undefined } : pipeline]]),
+      pipelines: hydration ? new Map() : new Map([[PIPELINE_ID, fixturePipeline]]),
       buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
     });
     appCommandStore(usePaneLayoutStore.def).setState({
@@ -258,7 +267,7 @@ export function KeyInformationTabFixture() {
         ],
       ]),
     });
-  }, [empty, hydration]);
+  }, [empty, hydration, longSummary]);
 
   const onOpen = useCallback(
     (options?: CreateTabOptions) => {

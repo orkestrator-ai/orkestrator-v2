@@ -23,7 +23,7 @@ import {
   PUBLIC_PR_SIDES,
 } from "@orkestrator/protocol/public-api-inputs-pr";
 import type { MergeEnvironmentPrResult } from "../commands-review.js";
-import { sanitizeGitHubError } from "../github.js";
+import { sanitizeGitHubError } from "../git/index.js";
 import type { Environment } from "../models.js";
 import {
   isProjectHomeEnvironment,

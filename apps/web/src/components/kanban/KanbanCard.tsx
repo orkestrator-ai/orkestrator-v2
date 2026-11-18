@@ -134,7 +134,7 @@ function getBuildPhaseDisplay(phase: BuildPhase): { label: string; className: st
     case "complete":
       return { label: "Complete", className: "bg-success/15 text-success border-success/30" };
     case "failed":
-      return { label: "Failed", className: "bg-red-500/15 text-red-400 border-red-500/30" };
+      return { label: "Failed", className: "bg-failure/15 text-failure border-failure/30" };
   }
 }
 
@@ -276,10 +276,10 @@ export function KanbanCard({
       style={style}
       data-testid="kanban-card"
       className={cn(
-        "group relative overflow-hidden rounded-lg border bg-card p-3 pl-4 shadow-sm",
+        "group relative overflow-hidden rounded-lg border bg-card p-3 pl-4",
         "cursor-grab active:cursor-grabbing",
-        "transition-[border-color,box-shadow,background-color]",
-        "border-border hover:border-primary/50 hover:bg-accent/20 hover:shadow-md",
+        "transition-[border-color,background-color]",
+        "border-border hover:border-primary/50 hover:bg-accent/20",
         isDragOverlay && "rotate-1 border-primary/60 shadow-2xl shadow-black/50",
       )}
       {...attributes}
@@ -361,7 +361,7 @@ export function KanbanCard({
                 data-testid="kanban-card-criteria"
                 className={cn(
                   "flex shrink-0 items-center gap-1",
-                  tally.failed > 0 && "text-destructive",
+                  tally.failed > 0 && "text-failure",
                 )}
                 title={`${tally.passed} passed, ${tally.failed} failed, ${tally["not-checked"]} not checked, ${tally.unchecked} not verified yet`}
               >

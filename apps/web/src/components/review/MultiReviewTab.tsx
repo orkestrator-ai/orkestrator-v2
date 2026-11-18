@@ -254,7 +254,7 @@ function AutoPrLaunchNotice({
 const NOTE_TONE_CLASS = {
   muted: "text-muted-foreground",
   warning: "text-amber-500",
-  destructive: "text-destructive",
+  destructive: "text-failure",
 } as const;
 
 /**
@@ -1009,7 +1009,7 @@ function MultiReviewOverviewTab({
       <div className="grid h-full place-items-center p-6 text-center">
         <div>
           {error ? (
-            <AlertCircle className="mx-auto mb-3 size-6 text-destructive" />
+            <AlertCircle className="mx-auto mb-3 size-6 text-failure" />
           ) : (
             <Loader2 className="mx-auto mb-3 size-6 animate-spin text-primary" />
           )}
@@ -1770,7 +1770,7 @@ function MultiReviewOverviewTab({
             <Button
               variant="outline"
               size="sm"
-              className={`${INSPECTOR_BUTTON_CLASS} hover:text-destructive`}
+              className={`${INSPECTOR_BUTTON_CLASS} hover:text-failure`}
               aria-label={`Stop ${name}`}
               title="Stop this reviewer; the review continues without it"
               disabled={reviewerActionsBlocked}
@@ -1979,7 +1979,7 @@ function MultiReviewOverviewTab({
     notices.push(
       <div
         key="error"
-        className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+        className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-failure"
       >
         {error ?? workflow.error}
       </div>,

@@ -259,7 +259,7 @@ function PlatformBadgePill({ badge }: { badge: AgentPlatformBadge }) {
       className={cn(
         "mr-1.5 inline-block rounded-full border px-1.5 py-px align-baseline text-[11px] leading-4 font-medium",
         badge.tone === "positive"
-          ? "border-emerald-400/35 text-emerald-200"
+          ? "border-success/35 text-success"
           : "border-amber-400/40 text-amber-200",
       )}
     >
@@ -1058,7 +1058,7 @@ export function AgentModelPicker({
               "mx-2 mb-2 rounded-md border px-2 py-1.5 text-[11px] leading-snug",
               platformCaveat || platformBadge?.tone !== "positive"
                 ? "border-amber-500/25 bg-amber-500/10 text-amber-200"
-                : "border-emerald-500/20 bg-emerald-500/5 text-emerald-100",
+                : "border-success/20 bg-success/5 text-success",
             )}
           >
             {platformBadge ? <PlatformBadgePill badge={platformBadge} /> : null}

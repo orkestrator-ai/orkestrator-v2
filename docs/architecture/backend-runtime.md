@@ -4,16 +4,16 @@ Status: Living — `apps/backend/src/core/backend-runtime.ts`,
 `terminal-runtime.ts`, `terminal-history.ts`, `local-server-runtime.ts`,
 `opencode2/host-server-state.ts`, `pi-catalog-probes.ts`,
 `environment-operations.ts`, `environment-replacement-fence.ts`,
-`pr-monitor-runtime.ts`, `docker-container-state-cache.ts`,
+`git/pr-monitor-runtime.ts`, `docker-container-state-cache.ts`,
 `diff-stats-tracking.ts`, `tmux-runtime.ts`, `agent-accounts-runtime.ts`,
 `agent-accounts-last-usage.ts`, `plan-usage/cache.ts`, `cursor-sdk-login.ts`,
-`github-cli-login.ts`, `opencode2/provider-login-slot.ts`,
+`git/github-cli-login.ts`, `opencode2/provider-login-slot.ts`,
 `container-usage-sampler.ts`, `container-oom-events.ts`,
 `container-log-service.ts`,
 `docker-cleanup-grants.ts`, `integration-locks.ts`, `features/build-tasks.ts`,
 `public-api/reconciliations.ts`, `keyed-single-flight.ts`,
 `coordinator-request-flights.ts`,
-`github-cli-binary.ts`, `host-catalog-seeds.ts`.
+`git/github-cli-binary.ts`, `host-catalog-seeds.ts`.
 
 One backend instance owns its process state through one `BackendRuntime`.
 The backend builds it in `core/index.ts` (`options.runtime ?? new
@@ -83,7 +83,7 @@ whether lifecycle work may be admitted and drains it on shutdown, while
   construction option too: `index.ts` and the command fixtures pass
   `prMonitor: { scheduleMergeCleanup: scheduleMergeCleanupRecovery }` and
   `tmux: { localClaudeConfigDirectory: tmuxLocalClaudeConfigDirectory }`, so
-  neither `pr-monitor-runtime.ts` nor the tmux modules import
+  neither `git/pr-monitor-runtime.ts` nor the tmux modules import
   `commands-servers.ts`. `index.ts` also passes the Claude state doorbell
   (`tmux.claudeStatePolls.signal`, from `backendClaudeStateSignal()`), the
   tmux hook doorbell (`tmux.hookSignal`, from `backendTmuxHookSignal()`) and its
@@ -269,7 +269,7 @@ declaration:
 | --- | --- | --- |
 | `container-resources.ts` | `capacityCache`, `diskCache` | `docker info` and `docker system df` describe the daemon. (The usage sample is owner-filtered and moved to `containerUsage`.) |
 | `docker-image.ts` | `manifestCache`, `topologyCache` | Keyed by image, and the daemon's topology. |
-| `git-docker-scan-pool.ts` | `gitDockerScanPool` | Bounds Git and Docker work on the host; a pool per backend would multiply the bound. |
+| `git/docker-scan-pool.ts` | `gitDockerScanPool` | Bounds Git and Docker work on the host; a pool per backend would multiply the bound. |
 | `change-tracking/environment-projector.ts` | `gitVersionPromise` | The host's Git version. |
 | `change-tracking/legacy-payload.ts` | `compatibilityCache` | A bounded memo of a pure function of its content key. |
 | `design/export-writer.ts` | `destinationLocks`, `destinationOperations` | Serialise writes to one file on the host; the cap bounds the process. Keyed by destination path, not by backend: a copy per backend would let two backends write the same file at once. |
@@ -286,7 +286,7 @@ declaration:
 | `environment-cleanup-reconciler.ts` | `exhaustedWarnings`, `loggedSweepFailures` | Only de-duplicate log lines. |
 | `environment-cleanup-reconciler.ts` | `reportedStrayWithContent`, `scheduled` | Keyed by the resolved data directory. |
 | `bug-report-service.ts` | `filingFlights` | Keyed by data directory and report id. |
-| `git-fsmonitor.ts` | `fsmonitorMigrations` | Keyed by worktree path: the migration edits that worktree's config file on the host. |
+| `git/fsmonitor.ts` | `fsmonitorMigrations` | Keyed by worktree path: the migration edits that worktree's config file on the host. |
 | `packages/protocol/src/node/command-capture.ts` | `commandInvocations`, `commandObservers`, `commandCaptureMetrics` | Count this process's own subprocesses for benchmarks and recurring-work metrics; `runCommand` has no backend in reach. |
 | `transcript-artifacts/preview-supervisor.ts` | `backendStartIdentity` | The start identity of this process, which names the preview scratch it owns. |
 | `transcript-artifacts/dependency-manifest.ts` | `cache` | Verified bytes of a pinned bundle file, keyed by bundle and directory. |

@@ -13,7 +13,7 @@ import type { AgentAccountPlatform } from "@orkestrator/protocol/agent-accounts"
  *   code, then exits once the user approves it. Device code avoids the browser
  *   flow's fixed `127.0.0.1:1455` callback.
  * - GitHub: `gh auth login --web` behaves like Codex's device flow (see
- *   `github-cli-setup.ts`).
+ *   `git/github-cli-setup.ts`).
  *
  * The CLI owns the OAuth exchange and writes the credential where it always
  * does for that directory; this module never sees a token.

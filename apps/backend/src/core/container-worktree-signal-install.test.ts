@@ -50,18 +50,20 @@ describe("worktree signal install", () => {
     const installer = createContainerWorktreeSignalInstaller({
       ensureHost: async (...args) => {
         calls.push(args);
+        return true;
       },
       ensurePorts: async () => undefined,
       exec: async () => ({ stdout: "", stderr: "" }),
     });
+    const route = { status: "reachable", hostAddress: "10.0.2.2" };
     await installer.install(
       "container-1",
       { ...credential, revoke: () => undefined },
-      { containerHostReachability: { containerHostAddress: () => "10.0.2.2" } } as never,
+      { containerHostReachability: { snapshot: () => route } } as never,
       () => true,
       signal,
     );
-    expect(calls).toEqual([["container-1", signal, "10.0.2.2"]]);
+    expect(calls).toEqual([["container-1", signal, route]]);
   });
 
   for (const stage of ["host", "ports", "exec"] as const) {
@@ -86,7 +88,10 @@ describe("worktree signal install", () => {
           });
         };
         const installer = createContainerWorktreeSignalInstaller({
-          ensureHost: (_id, signal) => step("host", signal),
+          ensureHost: async (_id, signal) => {
+            await step("host", signal);
+            return true;
+          },
           ensurePorts: (_id, _port, signal) => step("ports", signal),
           exec: async (_command, _args, options) => {
             await step("exec", options?.signal);

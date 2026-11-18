@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1005,
-    "defined": 1005,
+    "commands": 1006,
+    "defined": 1006,
     "untyped": 0,
     "events": 45
   },
@@ -9062,8 +9062,17 @@
       "access": "workspace",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:ab8c5e6b6bead2f67d35e064b68b045037bbc68e3ee544167da9a99228a3ea62",
+      "argsDigest": "sha256:b1f5867951a2dfcbbc59757c1e522735f95195c92f88cc5f3f5f47065383ea85",
       "resultDigest": "sha256:5dee01d06a9537a370d94de81c96fd1e1db7b559bd6dda7715df2c924fa668fb"
+    },
+    "web_annotation_result_diff": {
+      "domain": "web-annotations",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7a8c6fd74ed6fa51d1e86eb504b5e373ff6e16277490222144722db53a3d1a43",
+      "resultDigest": "sha256:ed326d5cac2b9a2f743efeefb9cc60c5e04310661737883f135eb32d21631d65"
     },
     "web_annotation_update": {
       "domain": "web-annotations",

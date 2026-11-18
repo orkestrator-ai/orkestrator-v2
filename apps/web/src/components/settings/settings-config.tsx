@@ -87,7 +87,7 @@ function RemoteMachineConfig({
 
   if (error) {
     return (
-      <SettingsPageLayout role="alert" className="space-y-2 text-sm text-red-400">
+      <SettingsPageLayout role="alert" className="space-y-2 text-sm text-failure">
         <p>This machine's settings could not be read: {error}</p>
         <Button
           type="button"

@@ -3,7 +3,7 @@
  *
  * The polling loop used to live here: a 1-second tick that only ever watched
  * the active environment, with mode requests in a renderer store that a reload
- * erased. The backend owns all of that now (`apps/backend/src/core/pr-monitor.ts`)
+ * erased. The backend owns all of that now (`apps/backend/src/core/git/pr-monitor.ts`)
  * — it monitors every environment with a PR or a pending mode request, performs
  * the kanban side effects, and persists PR state. This hook only mirrors the
  * monitor into the store and raises user-facing notifications for transitions.

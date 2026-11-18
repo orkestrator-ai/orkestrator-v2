@@ -152,7 +152,7 @@ export function DebugBuildDialog({
           }}
         >
           {scope ? null : (
-            <p role="alert" className="text-sm text-destructive">
+            <p role="alert" className="text-sm text-failure">
               The machine this environment is on is no longer shown in this window.
             </p>
           )}

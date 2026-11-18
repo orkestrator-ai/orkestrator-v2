@@ -1,5 +1,5 @@
 /**
- * Targets inside same-origin frames (todo 0047 task 5): the backend
+ * Targets inside same-origin frames (same-origin iframes, #2363): the backend
  * advertises `operations.frameTargets`, stores the root path as captured,
  * refuses an unbounded or malformed one, and gives the agent each frame's
  * document path plus a selector scoped to the innermost document.

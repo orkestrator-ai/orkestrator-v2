@@ -110,7 +110,7 @@ specifications, package tests, and intentionally malformed fixtures. Use
 `mise run test` for the default suite or prefix a focused path with `./`.
 
 For a focused web or backend owner, select its package directory, for example
-`bun test --cwd apps/backend ./src/core/pr-monitor-agent-completion.integration.test.ts --parallel=1`.
+`bun test --cwd apps/backend ./src/core/git/pr-monitor-agent-completion.integration.test.ts --parallel=1`.
 The root `bunfig.toml` excludes these package trees, so a root-relative app
 filter can match no tests. Put `--cwd` after `test`: `bun --cwd apps/backend test`
 dispatches the package's `test` script instead, broadening discovery to the

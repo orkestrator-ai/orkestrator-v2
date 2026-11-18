@@ -23,7 +23,7 @@ import { lstat } from "node:fs/promises";
 import path from "node:path";
 import { CaptureError, captureErrorReason } from "./capture-error.js";
 import { confinedRead, validCapturePath } from "./confined-read.js";
-import { HARDENED_GIT_CONFIG } from "../git-fsmonitor.js";
+import { HARDENED_GIT_CONFIG } from "../git/index.js";
 import { CommandFailedError, runCommandBuffer } from "../shell.js";
 import { objectId, type ObjectStore } from "./object-store.js";
 import { STAT_SETTLE_WINDOW_MS, statSettled, statStamp } from "../stat-stamp.js";

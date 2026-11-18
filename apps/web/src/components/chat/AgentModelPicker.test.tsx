@@ -918,12 +918,19 @@ describe("AgentModelPicker", () => {
     // An enforced platform with no caveat still shows its tier, with its meaning.
     const codexNote = document.querySelector("[data-native-platform-note='codex']");
     expect(codexNote?.textContent).toBe("Read-only · EnforcedBlocked whatever the agent attempts.");
-    expect(codexNote?.querySelector("[data-native-platform-badge='positive']")).toBeTruthy();
+    expect(codexNote?.className.split(" ")).toEqual(
+      expect.arrayContaining(["border-success/20", "bg-success/5", "text-success"]),
+    );
+    const codexPill = codexNote?.querySelector("[data-native-platform-badge='positive']");
+    expect(codexPill?.className.split(" ")).toEqual(
+      expect.arrayContaining(["border-success/35", "text-success"]),
+    );
     expect(document.querySelector("[data-native-platform-caveat]") === null).toBe(true);
-    expect(
-      screen.getByRole("button", { name: "codex models, Read-only · Enforced" }).dataset
-        .platformBadge,
-    ).toBe("positive");
+    const codexButton = screen.getByRole("button", { name: "codex models, Read-only · Enforced" });
+    expect(codexButton.dataset.platformBadge).toBe("positive");
+    expect(codexButton.querySelector("[data-native-platform-badge]")?.className.split(" ")).toEqual(
+      expect.arrayContaining(["border-success/35", "text-success"]),
+    );
 
     const cursorButton = screen.getByRole("button", {
       name: "cursor models, Read-only · Provider-configured. Cursor exposes no approval callback to verify them.",

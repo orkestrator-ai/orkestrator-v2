@@ -356,7 +356,7 @@ export function NativeAgentQuestionCard({
                       "mt-0.5 flex size-4 shrink-0 items-center justify-center border",
                       question.multiple ? "rounded-[4px]" : "rounded-full",
                       selected
-                        ? "border-primary bg-primary text-primary-foreground"
+                        ? "border-primary bg-primary-fill text-primary-foreground"
                         : "border-muted-foreground/40",
                     )}
                     aria-hidden
@@ -461,7 +461,7 @@ export function NativeAgentQuestionCard({
           className={cn(
             "flex items-center gap-1.5 border-t px-3 py-2 text-xs",
             error || hold.error
-              ? "border-destructive/30 bg-destructive/10 text-destructive"
+              ? "border-destructive/30 bg-destructive/10 text-failure"
               : "border-border/60 bg-muted/30 text-muted-foreground",
           )}
         >

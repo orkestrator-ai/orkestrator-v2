@@ -24,7 +24,7 @@
  */
 
 import { parseGitHubPullRequestUrl } from "./commands-review.js";
-import { classifyPrDetectionFailure } from "./pr-monitor-policy.js";
+import { classifyPrDetectionFailure } from "./git/index.js";
 
 /** PRs per query: one page of aliases keeps a batch well inside one rate-limit point. */
 export const PR_BATCH_MAX_PULL_REQUESTS = 25;
@@ -40,7 +40,7 @@ export const PR_BATCH_EXCLUDED_MS = 10 * 60_000;
 export const PR_BATCH_TIMEOUT_MS = 30_000;
 const MAX_GROUPS = 16;
 const MAX_MEMBERS_PER_GROUP = 64;
-/** One page of rollup contexts, as `pr-required-checks.ts` reads; more leaves the rollup to `gh pr view`. */
+/** One page of rollup contexts, as `git/pr-required-checks.ts` reads; more leaves the rollup to `gh pr view`. */
 const CONTEXT_PAGE = 100;
 
 /**

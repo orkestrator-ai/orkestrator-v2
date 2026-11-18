@@ -24,7 +24,7 @@ import { egressGatewayOf } from "../src/core/container-network-owner";
 import {
   deliverRuntimeSeedBeforeBoot,
   prepareEgressGatewayWithSeed,
-} from "../src/core/github-ranges-seed-delivery";
+} from "../src/core/git/github-ranges-seed-delivery";
 import { startDockerContainer } from "../src/core/container-start";
 import {
   attributeCalls,

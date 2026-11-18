@@ -19,6 +19,8 @@ import {
 } from "@orkestrator/protocol/structured-review-transcript";
 import { useVirtuosoScrollState } from "@/hooks";
 import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
+import { COMPOSE_COLUMN_CLASS_NAME } from "@/components/chat/NativeComposeBar";
+import { COMPOSE_DOCK_GROUND_CLASS_NAME } from "@/components/chat/NativeComposeDock";
 import { cn } from "@/lib/utils";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
@@ -466,9 +468,14 @@ export function PipelineSessionTranscript({
           </RichTranscriptScopeContext.Provider>
         </div>
         {visible && (composer || !isAtBottom) && (
-          <div className="shrink-0 px-3 pt-2 pb-4">
+          <div
+            className={cn(
+              "relative isolate shrink-0 px-2 pt-2 pb-4 sm:px-4",
+              COMPOSE_DOCK_GROUND_CLASS_NAME,
+            )}
+          >
             {!isAtBottom && (
-              <div className="mx-auto mb-1 flex w-full max-w-[56rem] justify-end">
+              <div className={cn(COMPOSE_COLUMN_CLASS_NAME, "mb-1 flex justify-end")}>
                 <button
                   type="button"
                   onClick={scrollToBottom}

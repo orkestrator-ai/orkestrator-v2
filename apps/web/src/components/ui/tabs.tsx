@@ -15,7 +15,7 @@ type TabsVariant = keyof typeof listStyles;
 const triggerStyles: Record<TabsVariant, string> = {
   underline:
     "border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:text-foreground",
-  pill: "rounded-full data-[state=active]:bg-primary-fill data-[state=active]:text-primary-foreground data-[state=active]:[--focus-hairline-color:currentColor]",
+  pill: "rounded-lg data-[state=active]:bg-primary-fill data-[state=active]:text-primary-foreground data-[state=active]:[--focus-hairline-color:currentColor]",
   segmented:
     "rounded-md font-normal data-[state=active]:bg-primary-fill data-[state=active]:font-bold data-[state=active]:text-primary-foreground data-[state=active]:[--focus-hairline-color:currentColor]",
 };

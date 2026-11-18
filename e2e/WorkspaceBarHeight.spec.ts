@@ -125,6 +125,7 @@ for (const presentation of ["bar", "grid"]) {
         await page.keyboard.press("ArrowLeft");
       }
       await expect(tab).toBeFocused();
+      await expect(tab).toHaveCSS("border-radius", "8px");
       await expect(tab).toHaveCSS("outline-style", "solid");
       await expect(tab).toHaveCSS("outline-width", "1px");
       await expect(tab).toHaveCSS("outline-offset", "-2px");

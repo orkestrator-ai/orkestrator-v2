@@ -1,4 +1,5 @@
 import { DesignWorkspaceDialog } from "@/components/design/DesignWorkspaceDialog";
+import { EnvironmentSettingsDialog } from "@/components/environments/EnvironmentSettingsDialog";
 import { FilesPanelHeader } from "@/components/files-panel/FilesPanelHeader";
 import { FeaturesView } from "@/components/kanban/FeaturesView";
 import { SkillsSettings } from "@/components/settings/SkillsSettings";
@@ -60,6 +61,11 @@ export function installTabStylesFixture() {
             agent: "claude",
             plugins: [{ name: "review", status: "configured", source: "user" }],
           };
+        case "get_environment_extensions":
+          return [
+            { agent: "claude", mcpServers: [], plugins: [] },
+            { agent: "codex", mcpServers: [], plugins: [] },
+          ];
         default:
           return null;
       }
@@ -132,8 +138,30 @@ export function TabStylesFixture() {
         )}
         {view === "skills" && (
           <SkillsSettings
-            showProviderTabs={false}
             listSkills={async (provider) => ({ provider, roots: [], skills: [], errors: [] })}
+          />
+        )}
+        {view === "extensions" && (
+          <EnvironmentSettingsDialog
+            open
+            initialSection="extensions"
+            onOpenChange={() => undefined}
+            onUpdate={() => undefined}
+            environment={{
+              id: environmentId,
+              projectId,
+              name: "Tab styles environment",
+              branch: "main",
+              containerId: null,
+              status: "running",
+              prUrl: null,
+              prState: null,
+              hasMergeConflicts: null,
+              createdAt: now,
+              networkAccessMode: "restricted",
+              order: 0,
+              environmentType: "local",
+            }}
           />
         )}
       </div>

@@ -380,7 +380,7 @@ The app is flat. Depth comes from tonal layers (sidebar darkest, then background
 
 ## Shapes
 
-Gently rounded and consistent: 8px (`lg`) for buttons, rows, segmented controls and the tool card; 6px (`md`) for inputs and inner segments; 12px (`xl`) for cards and the site's windows; 16px (`2xl`) for modals; full pills for chips, prompt suggestions, goal pills and status dots. Environment markers carry meaning in their shape: a circle is a local worktree, a square is a container, and the working ring follows that shape.
+Buttons, rows, section switchers, segmented control tracks and tool cards have 8px corners (`lg`). Inputs and inner segments use 6px (`md`), cards and the site's windows use 12px (`xl`), and modals use 16px (`2xl`). Chips, prompt suggestions, goal pills, count badges and status dots can use full pills. A circular environment marker means a local worktree, and a square marker means a container. The working ring follows the marker's shape.
 
 ## Components
 
@@ -412,9 +412,9 @@ Quiet until touched. Most app buttons are ghost or tonal; the filled blue is rar
 
 ### Navigation
 - **Sidebar rows:** 8px-radius rows inset 4px from the panel edge. Hover is `environment-hover`; the selected row is the `selected` → `selected-edge` gradient with a 2px Signal Blue bar on the left that gives way to the drag grip on hover. Offline machines dim to 60%.
-- **Workspace tabs:** 12–14px labels with an icon; the active tab gets a 2px Signal Blue underline. The top section tabs (Home, Coordinator, Kanban…) mark the active one with a filled blue pill.
+- **Workspace tabs.** Tabs use 12–14px labels with an icon. The active tab gets a 2px Signal Blue underline. Top section tabs such as Home, Coordinator and Kanban mark the active section with a blue fill and 8px corners.
 - **Segmented selector:** an `input-surface` track with a `divider` border and 2px inset; the selected segment is a filled blue with bold text.
-- **Shared Tabs variants:** use `underline` for icon-and-label views within a pane, `pill` to switch sections, and `segmented` to choose between modes or representations. The segmented variant uses the same track as the segmented selector.
+- **Shared Tabs variants.** Use `underline` for icon-and-label views within a pane, `pill` for section switches with an 8px corner radius on the selected fill and its focus hairline, and `segmented` to choose between modes or representations. The segmented variant uses the same track as the segmented selector.
 - **Mobile:** hamburger to a slide-over sidebar; touch targets at least 40–44px.
 
 ### Live Signals (signature)

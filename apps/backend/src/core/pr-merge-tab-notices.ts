@@ -13,7 +13,9 @@
  * `prMergeNoticePendingUrl` in the write that records the merge, and this
  * clears it once every tab has been sent its notice. Each tab's request id is
  * derived from the environment, tab and PR, so a retry after a crash between
- * the two replays the same message instead of sending another. Merges
+ * the two replays the same message instead of sending another. A bounded
+ * receipt on each mailbox is committed with the notice and outlives message
+ * retention, so a delayed partial retry cannot resend a successful notice. Merges
  * recorded before the marker existed are never announced.
  */
 import { createHash } from "node:crypto";
@@ -43,9 +45,6 @@ const SKIP_TAB: ReadonlySet<AgentMailRefusalCode> = new Set([
   // retention has since pruned.
   "idempotency-conflict",
   "message-not-found",
-  // Awareness never displaces mail that needs an answer, and a retry will
-  // not find room either.
-  "mailbox-backlog-full",
 ]);
 
 export type PrMergeTabNoticeStorage = Pick<
@@ -161,13 +160,14 @@ export async function deliverPrMergeTabNotices(
           subject,
           body,
         },
-        { notice },
+        { notice, mergeNoticeUrl: prUrl },
       );
     } catch (error) {
       if (error instanceof AgentMailError && error.code === "messaging-disabled") {
         // The user turned agent messaging off; announcing later would be news
         // about something long past.
-        break;
+        await clear();
+        return;
       }
       if (error instanceof AgentMailError && SKIP_TAB.has(error.code)) continue;
       retry = true;
@@ -178,5 +178,6 @@ export async function deliverPrMergeTabNotices(
       });
     }
   }
-  if (!retry) await clear();
+  if (retry) throw new Error("Merge notice delivery remains pending");
+  await clear();
 }

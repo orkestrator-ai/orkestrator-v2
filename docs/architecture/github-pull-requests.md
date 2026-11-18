@@ -157,7 +157,11 @@ It is sent exactly once per merge. `updateEnvironment` sets the backend-private
 (and drops it if the PR is replaced or reopened); the PR monitor's terminal
 follow-up (`resumeTerminalEffects`) sends the notices and clears it. Each tab's
 mail request id comes from the environment, tab and PR, so a retry after a
-crash replays rather than resends. A merge recorded before the marker existed
+crash replays rather than resends. A completion receipt saved with each mailbox
+outlives mail retention; retries never re-admit a pruned successful notice.
+Retryable failures (including mailbox capacity) leave terminal repair unsettled
+for the monitor’s bounded backoff. Admission checks the current merge identity
+and deletion intent after asynchronous preparation, before publishing mail. A merge recorded before the marker existed
 is never announced, an environment being deleted after its merge (Merge &
 Cleanup, or a delete) is skipped, and build pipeline workers are left to their
 pipeline. Turning agent messaging off drops a pending notice.

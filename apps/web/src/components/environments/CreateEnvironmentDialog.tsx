@@ -117,6 +117,12 @@ import {
   openCodeModelProviderId,
 } from "@orkestrator/protocol/native-agent";
 import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { hydrateAgentModelCatalogCache } from "@/lib/agent-model-catalog-cache";
+import {
+  MODEL_CATALOG_REFRESHED_EVENT,
+  modelCatalogRefreshTargetsScope,
+} from "@/components/settings/agent/refresh-model-catalog";
+import { useAgentAccountsChanged } from "@/hooks/useAgentAccountsChanged";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
@@ -334,6 +340,27 @@ export function CreateEnvironmentDialog({
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const piModels = useAgentModelCatalogStore((state) => state.piModels);
   const piCatalogSeedAttemptedRef = useRef(false);
+  const [catalogRefreshRevision, setCatalogRefreshRevision] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    const refresh = (event: Event) => {
+      if (modelCatalogRefreshTargetsScope(event, catalogScope)) {
+        setCatalogRefreshRevision((revision) => revision + 1);
+      }
+    };
+    window.addEventListener(MODEL_CATALOG_REFRESHED_EVENT, refresh);
+    return () => window.removeEventListener(MODEL_CATALOG_REFRESHED_EVENT, refresh);
+  }, [catalogScope, open]);
+  // Load the target node's saved catalogue on open and after Settings refreshes it.
+  const hydrateCatalog = useCallback(() => {
+    void hydrateAgentModelCatalogCache({ scope: catalogScope }).catch((error: unknown) => {
+      log.debug("models.hydrate-failed", { error: formatLogError(error) });
+    });
+  }, [catalogScope]);
+  useEffect(() => {
+    if (open) hydrateCatalog();
+  }, [catalogRefreshRevision, hydrateCatalog, open]);
+  useAgentAccountsChanged(open ? "codex" : null, hydrateCatalog, catalogScope);
   const [cachedOpenCodeModels, setCachedOpenCodeModels] = useState<CachedOpenCodeModel[]>([]);
   useEffect(() => {
     if (!open) {
@@ -720,7 +747,7 @@ export function CreateEnvironmentDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, projectId, nodeBackend]);
+  }, [catalogRefreshRevision, open, projectId, nodeBackend]);
 
   // Restore drafts only for a new dialog/project, never for navigation changes.
   useEffect(() => {

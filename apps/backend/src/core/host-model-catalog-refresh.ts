@@ -6,6 +6,12 @@ import { mintBridgeToken } from "@orkestrator/protocol/node/bridge-credential";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
+import {
+  applyActiveAgentAccountEnvironment,
+  resolveActiveAgentAccount,
+  type ResolvedAgentAccount,
+} from "./agent-accounts-active.js";
+import { agentAccountLoginKey } from "./agent-accounts-store.js";
 import type { CommandContext } from "./commands-context.js";
 import {
   resolveBunBinary,
@@ -51,7 +57,7 @@ type RefreshableAgent = Extract<
 
 export type HostCatalog =
   | { agent: "claude"; models: Awaited<ReturnType<typeof fetchClaudeBridgeModelCatalog>>["models"] }
-  | { agent: "codex"; models: unknown[] }
+  | { agent: "codex"; models: unknown[]; accountLoginKey: string }
   | { agent: "opencode"; models: AgentModel[] }
   | { agent: "cursor" | "grok" | "pi"; models: AgentModel[] };
 
@@ -169,11 +175,27 @@ async function refreshClaude(
   return { agent: "claude", models: catalog.models };
 }
 
-async function refreshCodex(context: CommandContext): Promise<HostCatalog> {
+async function refreshCodex(
+  context: CommandContext,
+  account: ResolvedAgentAccount,
+): Promise<HostCatalog> {
   const { cwd, entrypoint } = await bridgeEntrypoint(context, "codex-bridge");
   const workingDirectory = await probeWorkingDirectory(context);
   const token = mintBridgeToken();
   const config = await context.storage.loadConfig();
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    CWD: workingDirectory,
+    CODEX_BRIDGE_TOKEN: token,
+    CODEX_PATH: resolveCodexBinary(context),
+    [CODEX_MAX_CONCURRENT_THREADS_ENV]: String(
+      resolveCodexMaxConcurrentThreads(config.global.codexMaxConcurrentThreads),
+    ),
+    ORKESTRATOR_VERSION: APP_VERSION,
+    ORKESTRATOR_PARENT_PID: String(process.pid),
+    ORKESTRATOR_BRIDGE_DEBUG: bridgeDebugEnvValue(config.global),
+  };
+  await applyActiveAgentAccountEnvironment(context, "codex", env, account);
   const models = await withShortLivedBridge(
     context.runtime.localServers,
     {
@@ -183,18 +205,7 @@ async function refreshCodex(context: CommandContext): Promise<HostCatalog> {
       cwd,
       token,
       headers: bearerBridgeHeaders(token),
-      env: {
-        ...process.env,
-        CWD: workingDirectory,
-        CODEX_BRIDGE_TOKEN: token,
-        CODEX_PATH: resolveCodexBinary(context),
-        [CODEX_MAX_CONCURRENT_THREADS_ENV]: String(
-          resolveCodexMaxConcurrentThreads(config.global.codexMaxConcurrentThreads),
-        ),
-        ORKESTRATOR_VERSION: APP_VERSION,
-        ORKESTRATOR_PARENT_PID: String(process.pid),
-        ORKESTRATOR_BRIDGE_DEBUG: bridgeDebugEnvValue((await context.storage.loadConfig()).global),
-      },
+      env,
     },
     async (port, authToken) => {
       const response = await fetch(`http://127.0.0.1:${port}/global/models`, {
@@ -213,7 +224,11 @@ async function refreshCodex(context: CommandContext): Promise<HostCatalog> {
       return body.models;
     },
   );
-  return { agent: "codex", models };
+  return {
+    agent: "codex",
+    models,
+    accountLoginKey: agentAccountLoginKey(account.accountId, account.loginGeneration),
+  };
 }
 
 async function refreshAcp(
@@ -322,13 +337,23 @@ function createHostModelCatalogRefresher(
   overrides: Partial<HostRefreshDependencies> = {},
 ): HostModelCatalogRefresher {
   const dependencies = { ...defaultDependencies, ...overrides };
-  const flights = new Map<RefreshableAgent, Promise<HostCatalog>>();
-  return (context, agent) => {
-    const existing = flights.get(agent);
+  const flightsByRuntime = new WeakMap<LocalServerRuntime, Map<string, Promise<HostCatalog>>>();
+  return async (context, agent) => {
+    const localServers = context.runtime.localServers;
+    const account = agent === "codex" ? await resolveActiveAgentAccount(context, agent) : undefined;
+    const key = account
+      ? `codex:${agentAccountLoginKey(account.accountId, account.loginGeneration)}`
+      : agent;
+    let flights = flightsByRuntime.get(localServers);
+    if (!flights) {
+      flights = new Map();
+      flightsByRuntime.set(localServers, flights);
+    }
+    const existing = flights.get(key);
     if (existing) return existing;
     const refresh = (async () => {
       if (agent === "claude") return refreshClaude(context, dependencies);
-      if (agent === "codex") return refreshCodex(context);
+      if (account) return refreshCodex(context, account);
       if (agent === "cursor" || agent === "grok") {
         return refreshAcp(context, agent, dependencies);
       }
@@ -339,9 +364,9 @@ function createHostModelCatalogRefresher(
       }
       return refreshOpenCode(context, dependencies);
     })().finally(() => {
-      if (flights.get(agent) === refresh) flights.delete(agent);
+      flights.delete(key);
     });
-    flights.set(agent, refresh);
+    flights.set(key, refresh);
     return refresh;
   };
 }

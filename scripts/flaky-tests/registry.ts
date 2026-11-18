@@ -9,7 +9,7 @@ import path from "node:path";
 
 export const REGISTRY_RELATIVE = "docs/tests/flaky-tests";
 export const INDEX = "0000-index.md";
-const CASE_FILE = /^\d{4}-.+\.md$/;
+const CASE_FILE = /^\d{4,}-.+\.md$/;
 
 export const DEFAULT_REPO = path.resolve(import.meta.dir, "../..");
 
@@ -48,7 +48,7 @@ export function parseIndexRows(group: string, index: string): IndexRow[] {
   const rows: IndexRow[] = [];
   for (const line of index.split("\n")) {
     const cells = tableCells(line);
-    if (!cells || cells.length < 6 || !/^\d{4}$/.test(cells[0]!)) continue;
+    if (!cells || cells.length < 6 || !/^\d{4,}$/.test(cells[0]!)) continue;
     const link = cells.at(-1)!.match(/^\[([^\]]+\.md)\]\(\1\)$/);
     if (!link) continue;
     rows.push({
@@ -91,11 +91,11 @@ export function caseStatus(text: string): string | undefined {
  */
 export function caseMatcher(query: string): (fileName: string) => boolean {
   const trimmed = query.trim().replace(/\.md$/, "");
-  if (/^\d{1,4}$/.test(trimmed)) {
+  if (/^\d+$/.test(trimmed)) {
     const id = trimmed.padStart(4, "0");
     return (fileName) => fileName.startsWith(`${id}-`);
   }
-  if (/^\d{4}-/.test(trimmed)) return (fileName) => fileName === `${trimmed}.md`;
+  if (/^\d{4,}-/.test(trimmed)) return (fileName) => fileName === `${trimmed}.md`;
   throw new Error(`Not a case id or case file name: ${query}`);
 }
 
@@ -148,7 +148,7 @@ export async function findCases(source: CaseSource, query: string): Promise<Case
       const text = await source.read(group, caseFile);
       return {
         group,
-        id: caseFile.slice(0, 4),
+        id: caseFile.split("-")[0]!,
         caseFile,
         relativePath: `${REGISTRY_RELATIVE}/${group}/${caseFile}`,
         status: caseStatus(text),

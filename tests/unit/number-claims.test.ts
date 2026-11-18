@@ -23,9 +23,9 @@ const root = path.resolve(import.meta.dir, "../..");
 const claimsRoot = path.join(root, "docs/number-claims");
 const INDEX = "0000-index.md";
 const README = "README.md";
-const NUMBERED_FILE = /^(\d{4})-.+\.md$/;
-const CLAIM_NAME = /^\d{4}$/;
-const CLAIM_BODY = /^[a-z0-9-]+\/(\d{4})-[^/\s]+\.md$/;
+const NUMBERED_FILE = /^(\d{4,})-.+\.md$/;
+const CLAIM_NAME = /^\d{4,}$/;
+const CLAIM_BODY = /^[a-z0-9-]+\/(\d{4,})-[^/\s]+\.md$/;
 
 // Claims are required from these numbers up. They sat just below the highest
 // number in use when the claims were added; new numbers come from the top.
@@ -52,7 +52,7 @@ function readClaims(claims: string): { claims: Map<string, string>; problems: st
   for (const name of readdirSync(claims).sort()) {
     if (name === README) continue;
     if (!CLAIM_NAME.test(name)) {
-      problems.push(`${name}: a claim is named by its four-digit number only`);
+      problems.push(`${name}: a claim is named by its number (at least four digits) only`);
       continue;
     }
     const body = readFileSync(path.join(claims, name), "utf8").trim();
@@ -71,7 +71,7 @@ function claimProblems(register: string, claimsDir: string, claimsFrom: number):
   const { claims, problems } = readClaims(claimsDir);
   const claimsName = path.basename(claimsDir);
   for (const file of numberedFiles(register)) {
-    const id = path.basename(file).slice(0, 4);
+    const id = path.basename(file).split("-")[0]!;
     const claimed = claims.get(id);
     if (claimed === file) continue;
     if (claimed !== undefined) {
@@ -204,7 +204,9 @@ describe("number claim guard fixtures", () => {
   test("rejects a claim file that is not named by a number", () => {
     const directory = fixture();
     write(directory, "claims/7520-new", "area/7520-new.md\n");
-    expect(check(directory)).toEqual(["7520-new: a claim is named by its four-digit number only"]);
+    expect(check(directory)).toEqual([
+      "7520-new: a claim is named by its number (at least four digits) only",
+    ]);
   });
 
   test("rejects a numbered file below the threshold that contradicts an existing claim", () => {

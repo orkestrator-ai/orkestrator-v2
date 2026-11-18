@@ -8,6 +8,7 @@ import { createStore } from "zustand/vanilla";
 import * as realBackend from "@/lib/backend";
 import { mockToastError as toastError } from "../../../../tests/mocks/sonner";
 import { installControlledTimeout } from "../../../../tests/helpers/controlled-timeout";
+import { flushMicrotasks } from "@orkestrator/protocol/testing/manual-clock";
 
 const realBackendSnapshot = { ...realBackend };
 const saveComposeDraft = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
@@ -212,7 +213,8 @@ describe("compose draft persistence", () => {
       settled = true;
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    // Only the blocked save can settle the waiter; no timer is involved.
+    await flushMicrotasks();
     expect(settled).toBe(false);
 
     releaseSave?.();
@@ -1145,6 +1147,8 @@ describe("useDurableComposeDraft", () => {
   });
 
   test("does not delete an unread draft after a failed load but persists a later edit", async () => {
+    const logs = captureLogs();
+    const debounce = controlSaveDebounce(5);
     getComposeDraft.mockRejectedValueOnce(new Error("backend unavailable"));
     const { result } = renderHook(() =>
       useDurableComposeDraft({
@@ -1159,19 +1163,27 @@ describe("useDurableComposeDraft", () => {
       }),
     );
 
-    await waitFor(() => expect(getComposeDraft).toHaveBeenCalled());
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    try {
+      await logs.waitForRecord((record) => record.event === "compose-draft.restore-failed");
+    } finally {
+      logs.restore();
+    }
+    // Let the failed read's `finally` run. A read that never succeeded leaves
+    // the key unhydrated, so no save of the empty value (or delete) is armed.
+    await act(async () => {
+      await flushMicrotasks();
+    });
+    expect(debounce.pendingCount()).toBe(0);
     expect(deleteComposeDraft).not.toHaveBeenCalled();
 
     act(() => result.current[1]("authoritative local edit"));
-    await waitFor(() =>
-      expect(saveComposeDraft).toHaveBeenCalledWith(
-        "test:project-hook-failed-read:value",
-        "project",
-        "project-hook-failed-read",
-        "authoritative local edit",
-        0,
-      ),
+    await fireSaveDebounce("test:project-hook-failed-read:value");
+    expect(saveComposeDraft).toHaveBeenCalledWith(
+      "test:project-hook-failed-read:value",
+      "project",
+      "project-hook-failed-read",
+      "authoritative local edit",
+      0,
     );
   });
 });

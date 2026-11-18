@@ -5,6 +5,7 @@
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, waitFor } from "@testing-library/react";
+import { installControlledTimeout } from "../../../../tests/helpers/controlled-timeout";
 import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentSessionStateUpdate,
@@ -91,7 +92,8 @@ mock.module("@/lib/backend", () => ({
 
 const { useNativeAgentSession, resetNativeAgentSyncCapabilityForTests } =
   await import("./useNativeAgentSession");
-const { dispatchResourceChange, resetResourceSync } = await import("@/lib/resource-sync");
+const { dispatchResourceChange, resetResourceSync, RESOURCE_COALESCE_MS } =
+  await import("@/lib/resource-sync");
 const { resetReadCoordinatorForTests } = await import("@/lib/read-coordinator");
 const { installFakeReadCoordinator } = await import("@/lib/testing/read-coordinator");
 
@@ -101,7 +103,6 @@ afterAll(() => {
 });
 
 const stateReads = () => getNativeAgentSessionStateUpdateMock.mock.calls.length;
-const realTick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function renderSession(isActive = true) {
   return renderHookInAppCommandScope(() =>
@@ -190,24 +191,30 @@ describe("useNativeAgentSession coordinated background reads", () => {
     await settledSession();
     const beforeHide = stateReads();
 
-    document.setVisibility("hidden");
-    for (let revision = 1; revision <= 3; revision += 1) {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision,
-        agent: "codex",
-        logicalSessionKey: "env-env-1:tab-1",
-      });
-      // resource-sync coalesces on a real 50 ms timer.
-      await act(() => realTick(70));
+    const coalesce = installControlledTimeout(RESOURCE_COALESCE_MS, { label: "resource sync" });
+    try {
+      document.setVisibility("hidden");
+      for (let revision = 1; revision <= 3; revision += 1) {
+        dispatchResourceChange({
+          resource: "native-agent-session",
+          id: "env-1",
+          revision,
+          agent: "codex",
+          logicalSessionKey: "env-env-1:tab-1",
+        });
+        await act(() => {
+          expect(coalesce.advance()).toBe(1);
+        });
+      }
+    } finally {
+      coalesce.restore();
     }
     expect(stateReads()).toBe(beforeHide);
 
     document.setVisibility("visible");
     await act(() => clock.advance(50));
     await waitFor(() => expect(stateReads()).toBe(beforeHide + 1));
-    await act(() => realTick(20));
+    await act(() => clock.advance(1_499));
     expect(stateReads()).toBe(beforeHide + 1);
   });
 

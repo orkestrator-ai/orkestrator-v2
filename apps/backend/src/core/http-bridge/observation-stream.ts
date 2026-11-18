@@ -4,6 +4,7 @@ import {
   type SseFrame,
 } from "@orkestrator/protocol/gateway-event-stream";
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
+import { unrefTimers, type IntervalTimers } from "@orkestrator/protocol/timers";
 import { abortableSleep } from "../abortable-timing.js";
 import type { BridgeConnection } from "../agent-provider-contract.js";
 import { bridgeEventStreamFetch } from "./transport.js";
@@ -71,6 +72,11 @@ export interface HttpBridgeObservationStreamOptions {
   retryInitialMs?: number;
   retryMaxMs?: number;
   silenceMs?: number;
+  /**
+   * The silence watchdog's interval. Defaults to the global timers, unref'd;
+   * tests pass a manual clock (with `now` read from it) and advance it.
+   */
+  timers?: IntervalTimers;
 }
 
 export class HttpBridgeObservationStream {
@@ -83,7 +89,8 @@ export class HttpBridgeObservationStream {
   /** Aborted by `close()`, so a pending reconnect delay ends at once. */
   private readonly stopping = new AbortController();
   private running: Promise<void> = Promise.resolve();
-  private watchdog: ReturnType<typeof setInterval> | null = null;
+  private watchdog: unknown = null;
+  private readonly timers: IntervalTimers;
   private readonly backoff: ReconnectBackoff;
   private readonly now: () => number;
   private readonly silenceMs: number;
@@ -92,6 +99,7 @@ export class HttpBridgeObservationStream {
 
   constructor(private readonly options: HttpBridgeObservationStreamOptions) {
     this.now = options.now ?? Date.now;
+    this.timers = options.timers ?? unrefTimers;
     this.silenceMs = Math.max(1, options.silenceMs ?? BRIDGE_OBSERVATION_STREAM_SILENCE_MS);
     this.backoff = new ReconnectBackoff(
       {
@@ -205,18 +213,17 @@ export class HttpBridgeObservationStream {
    */
   private startWatchdog(connection: AbortController): void {
     this.stopWatchdog();
-    this.watchdog = setInterval(
+    this.watchdog = this.timers.setInterval(
       () => {
         if (this.connection !== connection) return;
         if (this.now() - this.lastFrameAt > this.silenceMs) connection.abort();
       },
       Math.max(1, Math.floor(this.silenceMs / 3)),
     );
-    (this.watchdog as { unref?: () => void }).unref?.();
   }
 
   private stopWatchdog(): void {
-    if (this.watchdog) clearInterval(this.watchdog);
+    if (this.watchdog !== null) this.timers.clearInterval(this.watchdog);
     this.watchdog = null;
   }
 

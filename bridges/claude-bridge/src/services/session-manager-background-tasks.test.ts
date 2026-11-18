@@ -27,6 +27,7 @@ import {
   waitFor,
 } from "./session-manager-test-harness.js";
 import { readSessionActivityObservation } from "../routes/session-activity.js";
+import { flushMicrotasks } from "@orkestrator/protocol/testing/manual-clock";
 import { setClaudeRuntimeIdleTimingForTesting } from "./session-manager-runtime-idle.js";
 
 // These cases pin the moment a turn stops owing anything to its CLI. With no
@@ -881,7 +882,8 @@ describe("background task reducer", () => {
 
     releaseContextUsage();
     await waitFor(() => created.status === "idle");
-    await Bun.sleep(10);
+    await call.consumed();
+    await flushMicrotasks();
     expect(inputClosed).toBe(false);
     expect(call.isClosed()).toBe(false);
     for (const id of ["agent-research-1", "agent-research-2", "agent-research-3"]) {
@@ -955,7 +957,8 @@ describe("background task reducer", () => {
         agent_transcript_path: "/tmp/agent-survey.jsonl",
       });
       releaseContextUsage();
-      await Bun.sleep(10);
+      await call.consumed();
+      await flushMicrotasks();
       expect(created.backgroundTasks?.["agent-survey"]?.status).toBe("completed");
       expect(inputClosed).toBe(false);
       expect(call.isClosed()).toBe(false);
@@ -1155,7 +1158,8 @@ describe("background task reducer", () => {
     });
     expect(taskControl(created, "parked-wake")).toBeDefined();
     pushSuccessfulContinuationResult(call);
-    await Bun.sleep(10);
+    await call.consumed();
+    await flushMicrotasks();
     expect(inputClosed).toBe(false);
     expect(call.isClosed()).toBe(false);
     await hooks.SubagentStop![0]!.hooks[0]!({
@@ -1200,7 +1204,7 @@ describe("background task reducer", () => {
     // Hooks run on the control channel while pushed frames are consumed
     // asynchronously; let the stream catch up so each step sees the order the
     // CLI produced.
-    const drain = () => Bun.sleep(5);
+    const drain = () => call.consumed();
 
     level(["agent-dl"]);
     call.push({
@@ -1425,7 +1429,7 @@ describe("background task reducer", () => {
       parent_tool_use_id: "agent-tool-use",
       event: { type: "message_start", message: { id: "subagent-partial" } },
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await call.consumed();
     expect(created.status).toBe("idle");
 
     // The resumed root turn thinks for minutes: only partials and thinking
@@ -1763,7 +1767,8 @@ describe("background task reducer", () => {
       user_message_uuid: "notification-older",
       result_index: 0,
     });
-    await Bun.sleep(20);
+    await call.consumed();
+    await flushMicrotasks();
     expect(created.status).toBe("running");
     expect(created.abortController).toBe(followUpController);
 
@@ -1881,7 +1886,8 @@ describe("background task reducer", () => {
       },
       total_cost_usd: 1.5,
     });
-    await Bun.sleep(20);
+    await call.consumed();
+    await flushMicrotasks();
     expect(contextUsage).toHaveBeenCalledTimes(1);
     expect(created.status).toBe("running");
     expect(created.claudeUsageBaseline).toMatchObject({ input: 10, cost: 0.5 });

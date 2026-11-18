@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import { ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import { emitToContents } from "../electron/desktop-window-contexts";
 import { KeyboardShortcutsController } from "../electron/keyboard-shortcuts-menu";
 import { KeyboardShortcutsRouting } from "../electron/keyboard-shortcuts-routing";
@@ -30,15 +31,19 @@ function harness(platform: NodeJS.Platform = "linux") {
           : null,
     },
   }));
-  const controller = new KeyboardShortcutsController();
+  const clock = new ManualClock();
+  const controller = new KeyboardShortcutsController(clock);
   const routing = new KeyboardShortcutsRouting(() => owners, controller, platform);
   const register = (id: number) => {
     const source = Object.assign(new EventEmitter(), { id });
     routing.register(source);
     return source;
   };
-  return { shell, second, otherWindow, owners, controller, routing, register };
+  return { shell, second, otherWindow, owners, controller, routing, register, clock };
 }
+
+/** Longer than every focus-restore retry the controller makes (20 attempts, 25 ms apart). */
+const PAST_EVERY_RESTORE_MS = 1_000;
 
 // ⌘⇧/ as macOS reports it. Ctrl+Shift+/ may report the shifted "?".
 const chord = {
@@ -275,36 +280,39 @@ describe("native shortcut routing", () => {
     controller.forget(id === 2 ? second.id : shell.id);
   });
 
-  test("closed IPC accepts only live app renderers", async () => {
-    const { controller, routing, owners, shell, second } = harness();
+  test("closed IPC accepts only live app renderers", () => {
+    const { controller, routing, owners, shell, second, clock } = harness();
     const restoreShell = mock(() => true);
     const restoreSecond = mock(() => true);
     controller.request({ renderer: shell, restoreFocus: restoreShell }, "open");
     controller.request({ renderer: second, restoreFocus: restoreSecond }, "open");
     for (const id of [42, 43, 999]) routing.closed(id);
-    await Bun.sleep(10);
+    expect(clock.pendingCount()).toBe(0);
+    clock.advance(PAST_EVERY_RESTORE_MS);
     expect(restoreShell).not.toHaveBeenCalled();
     expect(restoreSecond).not.toHaveBeenCalled();
     routing.closed(shell.id);
     routing.closed(second.id);
-    await Bun.sleep(10);
+    clock.advance(PAST_EVERY_RESTORE_MS);
     expect(restoreShell).toHaveBeenCalledTimes(1);
     expect(restoreSecond).toHaveBeenCalledTimes(1);
     controller.request({ renderer: second, restoreFocus: restoreSecond }, "open");
     owners[1]!.contents.isDestroyed = () => true;
     routing.closed(second.id);
-    await Bun.sleep(10);
+    clock.advance(PAST_EVERY_RESTORE_MS);
     expect(restoreSecond).toHaveBeenCalledTimes(1);
     controller.forget(second.id);
   });
 
-  test.each(["destroyed", "did-navigate"])("%s invalidates pending restoration", async (event) => {
-    const { register, controller, shell } = harness();
+  test.each(["destroyed", "did-navigate"])("%s invalidates pending restoration", (event) => {
+    const { register, controller, shell, clock } = harness();
     const restore = mock(() => true);
     controller.request({ renderer: shell, restoreFocus: restore }, "open");
     controller.closed(shell.id);
+    expect(clock.pendingCount()).toBe(1);
     register(shell.id).emit(event);
-    await Bun.sleep(10);
+    expect(clock.pendingCount()).toBe(0);
+    clock.advance(PAST_EVERY_RESTORE_MS);
     expect(restore).not.toHaveBeenCalled();
   });
 });

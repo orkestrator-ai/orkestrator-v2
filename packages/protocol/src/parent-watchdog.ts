@@ -16,6 +16,8 @@
  * contract — the backend writes it and both bridges read it. Keeping one
  * implementation means hardening it hardens every watcher at once.
  */
+import { unrefTimers, type IntervalTimers } from "./timers.js";
+
 export const PARENT_PID_ENV = "ORKESTRATOR_PARENT_PID";
 
 /**
@@ -53,26 +55,17 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * The interval primitives a watchdog or lifecycle owner arms.
+ * The interval primitives a watchdog or lifecycle owner arms (defined in
+ * `timers.ts` with the other timer seams).
  *
  * Injected so tests can drive time deterministically and count what is still
  * armed after a shutdown, rather than sleeping and hoping. Production passes
  * nothing and gets the runtime's own timers.
  */
-export interface IntervalTimers {
-  setInterval(callback: () => void, ms: number): unknown;
-  clearInterval(handle: unknown): void;
-}
+export type { IntervalTimers };
 
-export const runtimeIntervalTimers: IntervalTimers = {
-  setInterval: (callback, ms) => {
-    const handle = setInterval(callback, ms);
-    // A watchdog or sweep must never be what keeps a process alive.
-    (handle as { unref?: () => void }).unref?.();
-    return handle;
-  },
-  clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
-};
+/** The runtime's interval timers, unref'd: a watchdog or sweep must never keep a process alive. */
+export const runtimeIntervalTimers: IntervalTimers = unrefTimers;
 
 export interface ParentWatchdogOptions {
   parentPid: number;

@@ -11,6 +11,7 @@ import {
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AGENT_INTERACTION_HOLD_CEILING_MS } from "@orkestrator/protocol/agent-interactions";
+import { ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 
 import {
   NO_RESPONSE,
@@ -20,6 +21,18 @@ import {
   waitUntil,
   writeRolloutWithTurns,
 } from "./app-server-runtime-test-harness.js";
+
+/**
+ * The environment drain is parked on another thread's activity: its deadline
+ * has not passed, and only a phase change or that deadline can release it.
+ */
+function drainIsWaiting(h: { runtime: unknown }): boolean {
+  const runtime = h.runtime as { context: { idleWaiters: ReadonlySet<unknown> } };
+  return runtime.context.idleWaiters.size > 0;
+}
+
+/** A hang watchdog for waits that end on a real signal, not an assertion deadline. */
+const SIGNAL_WATCHDOG_MS = 30_000;
 
 describe("session authentication readiness", () => {
   test("reports confirmed sign-out and omits readiness after account recovery", async () => {
@@ -619,7 +632,12 @@ describe("environment refresh", () => {
       .finally(() => {
         settled = true;
       });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // A regression settles instead of parking; stop waiting either way.
+    await waitUntil(
+      () => settled || drainIsWaiting(h),
+      "the drain never waited",
+      SIGNAL_WATCHDOG_MS,
+    );
     expect(settled).toBe(false);
     expect(h.children).toHaveLength(1);
 
@@ -656,7 +674,7 @@ describe("environment refresh", () => {
       requestId: "req-b",
       attachments: [],
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitUntil(() => drainIsWaiting(h), "the drain never waited", SIGNAL_WATCHDOG_MS);
     h.child().exit(1);
 
     const outcome = await Promise.race([
@@ -797,11 +815,16 @@ describe("environment refresh", () => {
       release = resolve;
     });
     let gated = false;
+    let parked!: () => void;
+    const parkedAtStartTurn = new Promise<void>((resolve) => {
+      parked = resolve;
+    });
     const startTurn = h.engine.startTurn.bind(h.engine);
     h.engine.startTurn = async (options) => {
       // Only thread B's dispatch is parked; it has already claimed the thread.
       if (!gated) {
         gated = true;
+        parked();
         await gate;
       }
       return startTurn(options);
@@ -812,7 +835,7 @@ describe("environment refresh", () => {
       requestId: "req-b",
       attachments: [],
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await parkedAtStartTurn;
     expect(h.runtime.getRegistry().getThread("thread-b")!.dispatchInFlight).toBe(true);
 
     fingerprint = "sha256:two";
@@ -864,7 +887,13 @@ describe("environment refresh", () => {
     void runtime.waitForAllThreadsIdle(generation).then(() => {
       settled = true;
     });
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    // Parked on the thread's activity, five seconds from its deadline.
+    // A regression settles instead of parking; stop waiting either way.
+    await waitUntil(
+      () => settled || drainIsWaiting(h),
+      "the drain never waited",
+      SIGNAL_WATCHDOG_MS,
+    );
     expect(settled).toBe(false);
   });
 });
@@ -1891,16 +1920,17 @@ describe("forking", () => {
     writeRolloutWithTurns("thread-detached", [
       { turnId: "turn-a", user: "question", assistant: "answer" },
     ]);
+    let clock = 1_000_000;
     const h = await harness(
       { ...FORK_HANDLERS, "thread/resume": () => ({ thread: threadPayload("thread-detached") }) },
-      { threadIdleMs: 1 },
+      { threadIdleMs: 1, now: () => clock },
     );
 
     const resumed = await h.runtime.resumeSession({
       threadId: "thread-detached",
       mode: "build",
     });
-    await Bun.sleep(5);
+    clock += 5;
     expect((await h.runtime.sweepIdle()).detached).toBe(1);
 
     // Re-attaching rehydrates from the rollout, which is where the turn ids now
@@ -2160,7 +2190,8 @@ describe("compaction", () => {
   });
 
   test("a missing compacted notification is released by the deadline", async () => {
-    const h = await harness(COMPACT_HANDLERS, { compactionTimeoutMs: 15 });
+    const clock = new ManualClock();
+    const h = await harness(COMPACT_HANDLERS, { compactionTimeoutMs: 15, compactionTimers: clock });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, {
       prompt: "go",
@@ -2174,7 +2205,10 @@ describe("compaction", () => {
     await h.drain();
 
     expect(await h.runtime.compactSession(sessionId)).toBe("accepted");
-    await Bun.sleep(35);
+    expect(clock.pendingDelays()).toEqual([15]);
+    clock.advance(14);
+    expect(h.runtime.getRegistry().getThread("thread-1")?.compacting).toBe(true);
+    clock.advance(1);
 
     expect(h.runtime.getRegistry().getThread("thread-1")?.compacting).toBe(false);
     expect(h.runtime.getStatus(sessionId)).toMatchObject({
@@ -2242,15 +2276,20 @@ describe("compaction", () => {
     const inFlight = new Promise<void>((resolve) => {
       release = resolve;
     });
+    let requested!: () => void;
+    const rpcStarted = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
     const { h, sessionId } = await compactableSession({
       "thread/compact/start": async () => {
+        requested();
         await inFlight;
         return {};
       },
     });
 
     const compaction = h.runtime.compactSession(sessionId);
-    await Bun.sleep(1);
+    await rpcStarted;
     await h.runtime.abort(sessionId);
     release();
 
@@ -2422,15 +2461,20 @@ describe("native review", () => {
     const reviewGate = new Promise<void>((resolve) => {
       releaseReview = resolve;
     });
+    let requested!: () => void;
+    const rpcStarted = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
     const { h, sessionId } = await reviewableSession({
       "review/start": async () => {
+        requested();
         await reviewGate;
         return { reviewThreadId: "review-1", turn: { id: "turn-review" } };
       },
     });
 
     const review = h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" });
-    await Bun.sleep(5);
+    await rpcStarted;
 
     // The window the guard has to close.
     const racing = await h.runtime.prompt(sessionId, {
@@ -2568,7 +2612,11 @@ describe("native review", () => {
     const review = h.runtime.startNativeReview(sessionId, {
       type: "uncommittedChanges",
     });
-    await Bun.sleep(5);
+    await waitUntil(
+      () => h.child().requests.some((request) => request.method === "review/start"),
+      "review/start never reached the child",
+      SIGNAL_WATCHDOG_MS,
+    );
     h.child().exit(1);
 
     expect(await review).toEqual({ outcome: "unavailable" });

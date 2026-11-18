@@ -14,6 +14,7 @@ import {
 } from "@orkestrator/protocol/preview-access";
 import { previewFailure } from "@orkestrator/protocol/preview-services";
 import { WebSocket as WsClient } from "ws";
+import { flushMicrotasks, ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 
 import { createCommandRegistry } from "../../backend/src/core/commands";
 import type { CommandContext } from "../../backend/src/core/commands-context";
@@ -27,6 +28,7 @@ import { connectionPreviewBackend } from "../electron/preview-connection-backend
 import { liveServicePartitionSuffixes } from "../electron/preview-partition-retention";
 import {
   PreviewTransportManager,
+  previewServiceKey,
   previewServicePartitionSuffix,
   type PreviewServiceSession,
 } from "../electron/preview-transport-manager";
@@ -34,6 +36,24 @@ import {
   startPreviewFixture,
   type PreviewFixture,
 } from "../../../test-fixtures/preview-app/server";
+
+/**
+ * Re-checks `condition` once per event-loop turn, running `step` (such as
+ * advancing a manual clock) before each re-check, until it holds. It ends on
+ * the condition, never on wall time; the turn cap only turns a hang into a
+ * readable failure.
+ */
+async function until(
+  condition: () => boolean | Promise<boolean>,
+  step?: () => void,
+): Promise<void> {
+  for (let turn = 0; turn < 100_000; turn += 1) {
+    if (await condition()) return;
+    step?.();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error("until: the condition never held");
+}
 
 type HeaderHook = Parameters<PreviewServiceSession["webRequest"]["onBeforeSendHeaders"]>[0];
 type RequestHook = Parameters<PreviewServiceSession["webRequest"]["onBeforeRequest"]>[0];
@@ -82,6 +102,8 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
   let remote: boolean;
   let failAttach: Error | null;
   let beforeAttach: (() => Promise<void>) | undefined;
+  /** The retirement lease and renewal timers of `manager`. */
+  let leaseClock: ManualClock;
   const sessions = new Map<string, FakeSession>();
   const invoked: string[] = [];
 
@@ -120,6 +142,7 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     beforeAttach = undefined;
     invoked.length = 0;
     sessions.clear();
+    leaseClock = new ManualClock({ firstHandle: 0 });
     manager = new PreviewTransportManager({
       invoke: async <T>(command: string, args: Record<string, unknown>) => {
         invoked.push(command);
@@ -141,6 +164,7 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
       },
       clientKey: "window-test",
       retirementMs: 50,
+      leaseTimers: leaseClock,
       // Hermetic: public names resolve to a public address.
       lookupHost: async () => ["93.184.216.34"],
     });
@@ -606,24 +630,49 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     expect(manager.stats().services).toBe(0);
   });
 
+  test("reacquiring clears a zero-valued retirement timer", async () => {
+    const attach = Promise.withResolvers<void>();
+    beforeAttach = () => attach.promise;
+    const service = target();
+    const key = previewServiceKey(service);
+    // Release while the attachment is pending so retirement owns handle 0.
+    const first = manager.acquire(service, "tab-1");
+    manager.release(key, "tab-1");
+    manager.release(key, "tab-1");
+    const delays = leaseClock.pendingDelays();
+    const reacquired = manager.acquire(service, "tab-2");
+    attach.resolve();
+    const [, descriptor] = await Promise.all([first, reacquired]);
+
+    expect(delays).toEqual([50]);
+    expect(leaseClock.advance(50)).toBe(0);
+    expect(manager.stats().services).toBe(1);
+    expect(harness.runtime.access.stats().attachments).toBe(1);
+    const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
+    expect((await get(`${descriptor.origin}/health`, headers)).status).toBe(200);
+  });
+
   test("hiding does not close the listener; the last release retires it and frees the attachment", async () => {
     const descriptor = await manager.acquire(target(), "tab-1");
     await manager.acquire(target("/other"), "tab-2");
     manager.release(descriptor.serviceKey, "tab-1");
-    await Bun.sleep(80);
+    // Another tab still holds the service: no lease starts, so passing the
+    // whole retirement lease cannot close the listener.
+    expect(leaseClock.advance(50)).toBe(0);
     const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
     expect((await get(`${descriptor.origin}/health`, headers)).status).toBe(200);
     manager.release(descriptor.serviceKey, "tab-2");
+    expect(manager.stats().services).toBe(1);
+    expect(leaseClock.advance(49)).toBe(0);
+    expect(manager.stats().services).toBe(1);
+    expect(leaseClock.advance(1)).toBe(1);
     // Retirement drops the service at once, then closes the listener and only
-    // then releases the attachment, so wait for the last step rather than for
-    // a fixed slice of a possibly loaded host's time.
-    const deadline = Date.now() + 3_000;
-    while (
-      (!invoked.includes("release_preview_attachment") ||
-        harness.runtime.access.stats().attachments !== 0) &&
-      Date.now() < deadline
-    )
-      await Bun.sleep(5);
+    // then releases the attachment, so wait for the last step.
+    await until(
+      () =>
+        invoked.includes("release_preview_attachment") &&
+        harness.runtime.access.stats().attachments === 0,
+    );
     expect(manager.stats().services).toBe(0);
     expect(invoked).toContain("release_preview_attachment");
     expect(harness.runtime.access.stats().attachments).toBe(0);
@@ -710,6 +759,7 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
     const sessions = new Map<string, FakeSession>();
     const ports: number[] = [];
     let remote = true;
+    const clock = new ManualClock({ firstHandle: 0 });
     const manager = new PreviewTransportManager({
       invoke: async <T>(command: string, args: Record<string, unknown>) => {
         invoked.push({ command, args });
@@ -734,6 +784,7 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
       },
       clientKey: "window-test",
       renewIntervalMs: 5,
+      leaseTimers: clock,
       portHints: {
         get: () => {
           options.onListen?.();
@@ -748,6 +799,7 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
       invoked,
       sessions,
       ports,
+      clock,
       setRemote: (value: boolean) => (remote = value),
     };
   }
@@ -764,14 +816,17 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
 
   test("disposal while attaching releases the late attachment and binds nothing", async () => {
     const pending = deferred<PreviewAttachmentDescriptor>();
-    const { manager, invoked, sessions, ports } = setup({ attach: () => pending.promise });
+    const { manager, invoked, sessions, ports, clock } = setup({ attach: () => pending.promise });
     const acquired = manager.acquire(target, "tab-1").catch((error: unknown) => error);
     await Bun.sleep(0);
     await manager.disposeAll();
     pending.resolve(attachment());
     expect(String(await acquired)).toContain("backend-unavailable");
-    await Bun.sleep(30);
+    // Releasing the late attachment is the start-up's last step, taken in
+    // place of binding a listener.
+    await until(() => invoked.length >= 2);
     expect(ports).toEqual([]);
+    expect(clock.pendingCount()).toBe(0);
     expect(invoked.map((entry) => entry.command)).toEqual([
       "create_preview_attachment",
       "release_preview_attachment",
@@ -783,7 +838,7 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
 
   test("a renewal refused for a moved generation counts one reconnect", async () => {
     let refuse = true;
-    const { manager, invoked } = setup({
+    const { manager, invoked, clock } = setup({
       renew: async () => {
         if (!refuse) return undefined;
         refuse = false;
@@ -791,13 +846,13 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
       },
     });
     const descriptor = await manager.acquire(target, "tab-1");
-    const deadline = Date.now() + 2_000;
-    while (
-      invoked.filter((entry) => entry.command === "create_preview_attachment").length < 2 &&
-      Date.now() < deadline
-    )
-      await Bun.sleep(5);
-    await Bun.sleep(20);
+    // The first renewal is refused, which reattaches.
+    expect(clock.advance(5)).toBe(1);
+    await until(
+      () =>
+        invoked.filter((entry) => entry.command === "create_preview_attachment").length === 2 &&
+        manager.transportState(descriptor.serviceKey)?.state === "ready",
+    );
     expect(manager.transportState(descriptor.serviceKey)).toEqual({
       mode: "desktop-tunnel",
       state: "ready",
@@ -823,7 +878,7 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
       });
       let attaches = 0;
       let renewals = 0;
-      const { manager, invoked } = setup({
+      const { manager, invoked, clock } = setup({
         attach: async () => {
           const id = ++attaches;
           if (pending && id === 3) await gate;
@@ -840,24 +895,24 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
       });
       const called = (command: string) => invoked.filter((entry) => entry.command === command);
       const descriptor = await manager.acquire(target, "tab-1");
-      const deadline = Date.now() + 2_000;
-      while (called("release_preview_attachment").length < 1 && Date.now() < deadline)
-        await Bun.sleep(5);
+      // Renewal 1 of att_1 stays pending; renewal 2 is refused and replaces att_1.
+      expect(clock.advance(10)).toBe(2);
+      await until(() => called("release_preview_attachment").length === 1);
       if (pending) {
-        while (called("create_preview_attachment").length < 3 && Date.now() < deadline)
-          await Bun.sleep(5);
-        expect(called("create_preview_attachment")).toHaveLength(3);
+        // att_2's own renewal is refused too, and its reattach is held open.
+        expect(clock.advance(5)).toBe(1);
+        await until(() => called("create_preview_attachment").length === 3);
       }
+      const renewalsBefore = renewals;
       // The backend refuses the pending renewal because att_1 has been released.
       refuseSlowRenewal(previewFailure("not-found"));
-      await Bun.sleep(20);
+      await flushMicrotasks();
+      await new Promise((resolve) => setImmediate(resolve));
+      // No timer ran meanwhile, so any further attach could only come from that refusal.
+      expect(renewals).toBe(renewalsBefore);
       expect(called("create_preview_attachment")).toHaveLength(pending ? 3 : 2);
       releaseAttach();
-      while (
-        called("release_preview_attachment").length < (pending ? 2 : 1) &&
-        Date.now() < deadline
-      )
-        await Bun.sleep(5);
+      await until(() => called("release_preview_attachment").length >= (pending ? 2 : 1));
       expect(called("release_preview_attachment").map((entry) => entry.args)).toEqual([
         { attachmentId: "att_1" },
         ...(pending ? [{ attachmentId: "att_2" }] : []),
@@ -879,7 +934,7 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
   test("a failed renewal reattach counts its trigger and failure once", async () => {
     let attaches = 0;
     let renewals = 0;
-    const { manager, invoked } = setup({
+    const { manager, invoked, clock } = setup({
       attach: async () => {
         if (++attaches > 1) throw previewFailure("capacity-exceeded");
         return attachment();
@@ -891,12 +946,8 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
     });
     try {
       const descriptor = await manager.acquire(target, "tab-1");
-      const deadline = Date.now() + 2_000;
-      while (
-        manager.transportState(descriptor.serviceKey)?.state !== "unavailable" &&
-        Date.now() < deadline
-      )
-        await Bun.sleep(5);
+      expect(clock.advance(5)).toBe(1);
+      await until(() => manager.transportState(descriptor.serviceKey)?.state === "unavailable");
       expect(manager.transportState(descriptor.serviceKey)).toMatchObject({
         state: "unavailable",
         failure: "capacity-exceeded",
@@ -915,15 +966,35 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
     });
   });
 
+  test("disposal clears a zero-valued renewal timer", async () => {
+    const { manager, invoked, clock } = setup();
+    try {
+      await manager.acquire(target, "tab-1");
+      expect(clock.intervalPeriods()).toEqual([5]);
+    } finally {
+      await manager.disposeAll();
+    }
+    expect(clock.advance(5)).toBe(0);
+    expect(invoked.map(({ command }) => command)).toEqual([
+      "create_preview_attachment",
+      "release_preview_attachment",
+    ]);
+  });
+
   test("disposal while binding closes the listener and never starts renewal", async () => {
     let manager!: PreviewTransportManager;
     const context = setup({ onListen: () => void manager.disposeAll() });
     manager = context.manager;
     const error = await manager.acquire(target, "tab-1").catch((failure: unknown) => failure);
     expect(String(error)).toContain("backend-unavailable");
-    await Bun.sleep(30);
     expect(context.ports).toHaveLength(1);
-    expect(await refused(context.ports[0]!)).toBe(true);
+    // Disposal closes the listener and then releases the attachment.
+    await until(() =>
+      context.invoked.some((entry) => entry.command === "release_preview_attachment"),
+    );
+    await until(() => refused(context.ports[0]!));
+    // No renewal was armed, so none can ever run.
+    expect(context.clock.pendingCount()).toBe(0);
     const commands = context.invoked.map((entry) => entry.command);
     expect(commands.filter((command) => command === "release_preview_attachment")).toHaveLength(1);
     expect(commands).not.toContain("renew_preview_attachment");

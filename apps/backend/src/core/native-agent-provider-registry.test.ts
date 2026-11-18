@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import {
   ABSENT_BRIDGE_RECHECK_MS,
   type BridgeConnection,
@@ -43,8 +44,10 @@ function harness(
   const environment = { id: "env-1", environmentType: "local" } as Environment;
   const bridgeConnection = mock(async () => (overrides.bridge ?? (() => connection(4000)))());
   const observeBridgeConnection = mock(async () => (overrides.peek ?? (() => undefined))());
+  const timers = new ManualClock();
   const deps: ProviderRegistryDependencies = {
     now: () => clock,
+    timers,
     isStopped: () => stopped,
     assertAcceptingWork: () => {
       if (stopped) throw new Error("Native agent service is shut down");
@@ -82,15 +85,13 @@ function harness(
     advance: (ms: number) => {
       clock += ms;
     },
+    timers,
+    /** Runs the retirement timers now due and lets their disposal settle. */
+    settleTimers: () => timers.advanceAsync(0),
     stop: () => {
       stopped = true;
     },
   };
-}
-
-/** Let zero-delay retirement timers and their disposal settle. */
-async function settleTimers(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 5));
 }
 
 describe("ProviderRegistry", () => {
@@ -184,7 +185,7 @@ describe("ProviderRegistry", () => {
 
   test("replaces and retires a provider when its bridge is replaced", async () => {
     let port = 4000;
-    const { registry, created, dispositions, replaced } = harness({
+    const { registry, created, dispositions, replaced, settleTimers } = harness({
       bridge: () => connection(port),
     });
 
@@ -260,7 +261,9 @@ describe("ProviderRegistry", () => {
 
   test("a retired provider is not disposed while a dispatch it sent is in flight", async () => {
     let port = 4000;
-    const { registry, dispositions } = harness({ bridge: () => connection(port) });
+    const { registry, dispositions, timers, settleTimers } = harness({
+      bridge: () => connection(port),
+    });
     const first = await registry.resolve(INPUT);
     registry.beginDispatch(first);
     registry.beginDispatch(first);
@@ -268,15 +271,19 @@ describe("ProviderRegistry", () => {
 
     port = 4001;
     await registry.resolve(INPUT);
+    // No grace timer is armed while a dispatch is in flight.
+    expect(timers.pendingCount()).toBe(0);
     await settleTimers();
     expect(dispositions[0]).not.toHaveBeenCalled();
 
     registry.endDispatch(first);
+    expect(timers.pendingCount()).toBe(0);
     await settleTimers();
     expect(dispositions[0]).not.toHaveBeenCalled();
 
     registry.endDispatch(first);
     expect(registry.hasDispatchInFlight(first)).toBe(false);
+    expect(timers.pendingDelays()).toEqual([0]);
     await settleTimers();
     expect(dispositions[0]).toHaveBeenCalledTimes(1);
   });
@@ -298,7 +305,7 @@ describe("ProviderRegistry", () => {
   });
 
   test("eviction honours identity and retires without disposing immediately", async () => {
-    const { registry, dispositions } = harness({
+    const { registry, dispositions, timers } = harness({
       options: { providerRetirementGraceMs: 60_000 },
     });
     const cached = await registry.resolve(INPUT);
@@ -311,6 +318,9 @@ describe("ProviderRegistry", () => {
     expect(registry.cached(KEY)).toBeUndefined();
     expect(registry.connectionIdentity(KEY)).toBeUndefined();
     expect(registry.stateForTesting().retiring.has(cached)).toBe(true);
+    // Disposal waits out the whole grace.
+    expect(timers.pendingDelays()).toEqual([60_000]);
+    await timers.advanceAsync(59_999);
     expect(dispositions[0]).not.toHaveBeenCalled();
     await registry.shutdown();
     expect(dispositions[0]).toHaveBeenCalledTimes(1);

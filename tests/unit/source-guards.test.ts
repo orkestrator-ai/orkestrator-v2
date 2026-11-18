@@ -42,6 +42,7 @@ import {
   type Findings,
 } from "../source-guards/scan";
 import { sleepBeforeNegativeAssertion } from "../source-guards/sleep-before-negative-assertion";
+import { sleepBeforePositiveAssertion } from "../source-guards/sleep-before-positive-assertion";
 import { smallFakePid } from "../source-guards/small-fake-pid";
 import {
   LibBackendShimResolver,
@@ -276,6 +277,108 @@ describe("sleep-before-negative-assertion", () => {
       "test('controlled time', () => {",
       "  timer.advance();",
       "  expect(spy).not.toHaveBeenCalled();",
+      "});",
+    ].join("\n");
+    expect(lines(guard, source)).toEqual([]);
+  });
+});
+
+describe("sleep-before-positive-assertion", () => {
+  const guard = sleepBeforePositiveAssertion;
+
+  test("flags a fixed sleep followed only by checks that something happened", () => {
+    const source = [
+      "const settle = () => new Promise((resolve) => setTimeout(resolve, 20));",
+      "test('a', async () => {",
+      "  await Bun.sleep(50);",
+      "  expect(spy).toHaveBeenCalled();",
+      "  expect(count).toBe(1);",
+      "  await settle();",
+      "  expect(rows).toHaveLength(2);",
+      "  await act(() => new Promise((resolve) => setTimeout(resolve, 40)));",
+      "  expect(screen.getByText('saved')).toBeTruthy();",
+      "  await sleep(5);",
+      "  const seen = log.slice();",
+      "  expect(seen).toEqual(['a']);",
+      "});",
+    ].join("\n");
+    expect(lines(guard, source)).toEqual([3, 6, 8, 10]);
+  });
+
+  test("assigns a mixed window with a commented matcher to the negative guard once", () => {
+    const file = {
+      path: "fixture.test.ts",
+      isBunTest: true,
+      source: [
+        "test('a', async () => {",
+        "  await Bun.sleep(50);",
+        "  expect(spy).toHaveBeenCalled();",
+        "  expect(count).toBe( /* no more items */ 0);",
+        "});",
+      ].join("\n"),
+    };
+    expect(scanSource(file, [guard, sleepBeforeNegativeAssertion])).toEqual([
+      { file: file.path, guard: sleepBeforeNegativeAssertion.id, line: 2 },
+    ]);
+  });
+
+  test("flags a synchronous member-form assertion without a plain expect call", () => {
+    const source = [
+      "test('a', async () => {",
+      "  await Bun.sleep(50);",
+      "  expect.soft(result).toBeTruthy();",
+      "});",
+    ].join("\n");
+    expect(lines(guard, source)).toEqual([2]);
+  });
+
+  for (const [importLine, sleepCall] of [
+    ["import { setTimeout } from 'node:timers/promises';", "setTimeout(50)"],
+    ["import { sleepMs } from './helpers';", "sleepMs(50)"],
+  ] as const) {
+    test(`flags an awaited ${sleepCall} with no other fixed sleep in the file`, () => {
+      const source = [
+        importLine,
+        "test('a', async () => {",
+        `  await ${sleepCall};`,
+        "  expect(result).toBeTruthy();",
+        "});",
+      ].join("\n");
+      expect(lines(guard, source)).toEqual([3]);
+    });
+  }
+
+  test("does not flag awaited or promise assertions, awaited reads, zero or named delays", () => {
+    const source = [
+      "test('web-first assertions retry on their own', async () => {",
+      "  await page.waitForTimeout(500);",
+      "  await expect(page.getByText('x')).toBeVisible();",
+      "});",
+      "test('a promise assertion waits for the promise', async () => {",
+      "  await Bun.sleep(5);",
+      "  expect(task).resolves.toBe(1);",
+      "});",
+      "test('an awaited read waits on something real', async () => {",
+      "  await Bun.sleep(5);",
+      "  expect(await store.read()).toBe(1);",
+      "  expect(spy).toHaveBeenCalled();",
+      "});",
+      "test('an awaited event in between', async () => {",
+      "  await Bun.sleep(50);",
+      "  await waitFor(() => expect(row).toBeTruthy());",
+      "  expect(spy).toHaveBeenCalled();",
+      "});",
+      "test('a zero delay yields, it does not wait', async () => {",
+      "  await new Promise((resolve) => setTimeout(resolve, 0));",
+      "  expect(items).toHaveLength(1);",
+      "});",
+      "test('a named delay', async () => {",
+      "  await Bun.sleep(SETTLE_MS);",
+      "  expect(items).toHaveLength(1);",
+      "});",
+      "test('controlled time', async () => {",
+      "  await clock.advanceAsync(20);",
+      "  expect(spy).toHaveBeenCalled();",
       "});",
     ].join("\n");
     expect(lines(guard, source)).toEqual([]);

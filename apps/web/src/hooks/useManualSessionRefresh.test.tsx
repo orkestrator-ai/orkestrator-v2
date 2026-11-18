@@ -45,7 +45,7 @@ describe("useManualSessionRefresh", () => {
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
 
     rerender(<Harness refreshRequestId={1} refresh={refresh} />);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The hook has no timer: its effect ran inside the act that wraps every render.
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
@@ -66,14 +66,14 @@ describe("useManualSessionRefresh", () => {
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
 
     rerender(<Harness refreshRequestId={3} refresh={refresh} />);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The hook has no timer: its effect ran inside the act that wraps every render.
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   test("waits until the tab is ready, then honours the pending request", async () => {
     const refresh = mock(async () => {});
     const { rerender } = render(<Harness refreshRequestId={1} isReady={false} refresh={refresh} />);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The hook has no timer: its effect ran inside the act that wraps every render.
     expect(refresh).not.toHaveBeenCalled();
 
     rerender(<Harness refreshRequestId={1} isReady refresh={refresh} />);

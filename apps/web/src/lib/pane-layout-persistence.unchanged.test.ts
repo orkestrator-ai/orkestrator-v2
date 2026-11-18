@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import { environmentStore } from "@/stores/environmentStore";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PersistedPaneLayout } from "@/types/paneLayout";
@@ -10,7 +11,13 @@ import { appCommandStore } from "@/test/app-command-store";
 
 type LayoutInput = ReturnType<typeof createPersistedPaneLayoutInput>;
 
-const waitForTimers = () => new Promise((resolve) => setTimeout(resolve, 20));
+/** Each test's debounce clock: advancing it is what lets a debounced write start. */
+let clock = new ManualClock();
+beforeEach(() => {
+  clock = new ManualClock();
+});
+/** Passes every debounce the tests use and lets the writes they start settle. */
+const waitForTimers = () => clock.advanceAsync(20);
 
 function saved(environmentId: string, input: LayoutInput): PersistedPaneLayout {
   return { ...input, environmentId, updatedAt: "2026-01-01T00:00:00.000Z", revision: 1 };
@@ -55,7 +62,7 @@ describe("pane layout persistence with unchanged environments", () => {
     );
     hydrate("env-quiet", "quiet-tab-marker");
     hydrate("env-busy", "busy-tab");
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     try {
       const quietSerialisations = countSerialisations("quiet-tab-marker");
       const store = appCommandStore(paneLayoutStore).getState();
@@ -80,7 +87,7 @@ describe("pane layout persistence with unchanged environments", () => {
       saved(environmentId, input),
     );
     hydrate("env-1", "first-tab-marker");
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     try {
       const serialisations = countSerialisations("first-tab-marker");
       // A top-level field unrelated to any environment's layout.
@@ -104,7 +111,7 @@ describe("pane layout persistence with unchanged environments", () => {
     });
     hydrate("env-retry", "original");
     hydrate("env-other", "other");
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     try {
       appCommandStore(paneLayoutStore)
         .getState()
@@ -137,7 +144,7 @@ describe("pane layout persistence with unchanged environments", () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       saved(environmentId, input),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     try {
       const store = appCommandStore(paneLayoutStore).getState();
       store.initialize("container-env-1", "env-1");

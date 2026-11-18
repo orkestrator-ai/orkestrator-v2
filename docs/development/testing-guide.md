@@ -511,7 +511,23 @@ script already runs `--parallel`, which isolates). A file that needs a
 different budget sets it with `setDefaultTimeout`; `--timeout` on the command
 line is overridden by the preload.
 
-To skip an application delay, capture it with `installControlledTimeout` (`tests/helpers/controlled-timeout.ts`,
+Prefer injecting time. A module that arms a debounce, deadline, retry or poll
+takes an optional timer seam (`TimeoutTimers`, `IntervalTimers` or `Timers`
+from `@orkestrator/protocol/timers`, or its own interface of the same shape)
+and uses the runtime's timers when none is given. Tests pass a `ManualClock`
+(`@orkestrator/protocol/testing/manual-clock`), which implements all of them:
+`advance(ms)` runs every timer due in that span in due order, `advanceAsync(ms)`
+yields a bounded 50 microtask turns before the first timer and after each
+callback. Pass a custom settle function that awaits an explicit completion
+signal when the next timer must wait for asynchronous work.
+`pendingCount()` and `pendingDelays()` show what is armed, which is the
+evidence a negative assertion needs. Adding the seam never changes a production
+default; `startPaneLayoutPersistence({ timers })` and the parent watchdogs are
+examples. `FakeIntervals` (`@orkestrator/protocol/testing/fake-intervals`)
+predates it and still serves interval-only owners.
+
+When a seam is awkward (a timer armed deep inside a rendered tree), capture the
+delay with `installControlledTimeout` (`tests/helpers/controlled-timeout.ts`,
 tested by `tests/unit/controlled-timeout.test.ts`). It intercepts only timers
 scheduled at one exact delay, leaving Testing Library, promises and unrelated
 timers real, and it throws when more timers are pending at that delay than
@@ -545,7 +561,9 @@ says whether one is armed, and `restore()` reports any it drops. The
 
 The `sleep-before-negative-assertion` source guard
 (`tests/unit/source-guards.test.ts`) refuses a new fixed sleep followed by a
-negative or exact-count assertion, and its siblings refuse released ports
+negative or exact-count assertion; `sleep-before-positive-assertion` refuses
+one followed only by checks that something happened, which fail on a loaded
+host while the work is still running. Their siblings refuse released ports
 and small fake pids. (A `subprocess-without-budget` guard used to require a
 per-file budget on tests that start processes; the shared 60 s default
 replaced it.) Existing offenders

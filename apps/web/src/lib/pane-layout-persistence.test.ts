@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import * as backend from "@/lib/backend";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
@@ -21,7 +22,13 @@ import { reconcilePersistedLayout } from "./pane-layout-restore";
 import { mockToastError } from "../../../../tests/mocks/sonner";
 import { appCommandStore } from "@/test/app-command-store";
 
-const waitForTimers = () => new Promise((resolve) => setTimeout(resolve, 20));
+/** Each test's debounce clock: advancing it is what lets a debounced write start. */
+let clock = new ManualClock();
+beforeEach(() => {
+  clock = new ManualClock();
+});
+/** Passes every debounce the tests use and lets the writes they start settle. */
+const waitForTimers = () => clock.advanceAsync(20);
 type LayoutInput = ReturnType<typeof createPersistedPaneLayoutInput>;
 
 /**
@@ -81,7 +88,12 @@ describe("pane layout persistence", () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5, selectionDebounceMs: 5 });
+    const stop = startPaneLayoutPersistence({
+      timers: clock,
+      save,
+      debounceMs: 5,
+      selectionDebounceMs: 5,
+    });
     try {
       // Both the structural debounce and the reset notification must be
       // suppressed once hydration is cleared, even while the pane record stays.
@@ -147,7 +159,7 @@ describe("pane layout persistence", () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.addTab("default", { id: "tab-1", type: "plain" }, "env-1");
@@ -241,7 +253,7 @@ describe("pane layout persistence", () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     appCommandStore(paneLayoutStore).getState().beginHydration("env-1");
@@ -342,7 +354,7 @@ describe("pane layout persistence", () => {
       if (attempts === 1) throw new Error("offline");
       return createSaved(environmentId, input);
     });
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -364,7 +376,7 @@ describe("pane layout persistence", () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.addTab("default", { id: "tab-1", type: "plain" }, "env-1");
@@ -428,6 +440,7 @@ describe("pane layout persistence", () => {
       revision: 5,
     }));
     const stop = startPaneLayoutPersistence({
+      timers: clock,
       save,
       debounceMs: 60_000,
       selectionDebounceMs: 5,
@@ -462,7 +475,7 @@ describe("pane layout persistence", () => {
       "env-1",
       appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
 
     appCommandStore(paneLayoutStore).getState().setActiveTab("default", "b", "env-1");
     await waitForTimers();
@@ -504,7 +517,7 @@ describe("pane layout persistence", () => {
       "env-1",
       appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
 
     store.setActiveTab("default", "b", "env-1");
     await waitForTimers();
@@ -551,7 +564,7 @@ describe("pane layout persistence", () => {
       "env-1",
       appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
 
     appCommandStore(paneLayoutStore).getState().setActiveTab("default", "b", "env-1");
     await waitForTimers();
@@ -586,6 +599,7 @@ describe("pane layout persistence", () => {
       appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
     );
     const stop = startPaneLayoutPersistence({
+      timers: clock,
       save,
       debounceMs: 60_000,
       selectionDebounceMs: 25,
@@ -595,7 +609,7 @@ describe("pane layout persistence", () => {
       store.setActiveTab("default", index % 2 === 0 ? "b" : "a", "env-1");
     }
     expect(save).not.toHaveBeenCalled();
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await clock.advanceAsync(40);
 
     expect(save).toHaveBeenCalledTimes(1);
     expect((save.mock.calls[0]![1].root as PaneLeaf).activeTabId).toBe("a");
@@ -615,6 +629,7 @@ describe("pane layout persistence", () => {
       appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
     );
     const stop = startPaneLayoutPersistence({
+      timers: clock,
       save,
       debounceMs: 60_000,
       selectionDebounceMs: 5,
@@ -638,7 +653,7 @@ describe("pane layout persistence", () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 60_000 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 60_000 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -670,7 +685,7 @@ describe("pane layout persistence", () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 60_000 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 60_000 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -692,7 +707,7 @@ describe("pane layout persistence", () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     for (const environmentId of ["env-1", "env-2"]) {
       store.initialize(`container-${environmentId}`, environmentId);
@@ -715,7 +730,7 @@ describe("pane layout persistence", () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 10 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 10 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -733,7 +748,7 @@ describe("pane layout persistence", () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.addTab("default", { id: "tab-1", type: "plain", initialPrompt: "one shot" }, "env-1");
@@ -756,7 +771,7 @@ describe("pane layout persistence", () => {
       if (save.mock.calls.length === 1) await firstBlocked;
       return createSaved(environmentId, input);
     });
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -803,7 +818,7 @@ describe("pane layout persistence", () => {
       "env-1",
       appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
 
     appCommandStore(paneLayoutStore)
       .getState()
@@ -831,7 +846,7 @@ describe("pane layout persistence", () => {
       if (save.mock.calls.length === 1) await firstBlocked;
       return createSaved(environmentId, input);
     });
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -875,7 +890,7 @@ describe("pane layout persistence", () => {
       saved.push(environmentId);
       return createSaved(environmentId, input);
     });
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 60_000 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 60_000 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -1034,7 +1049,7 @@ describe("pane layout persistence", () => {
         revision: 6,
       }),
     );
-    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, load, debounceMs: 5 });
 
     appCommandStore(paneLayoutStore)
       .getState()
@@ -1057,7 +1072,7 @@ describe("pane layout persistence", () => {
     const directSave = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input),
     );
-    const stop = startPaneLayoutPersistence({ save: chainSave, debounceMs: 60_000 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save: chainSave, debounceMs: 60_000 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -1342,7 +1357,7 @@ describe("pane layout persistence", () => {
       updatedAt: "2026-01-01T00:00:00.000Z",
       revision: 2,
     }));
-    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, load, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -1422,7 +1437,7 @@ describe("pane layout persistence", () => {
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
     store.finishHydration("env-1", localState);
-    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, load, debounceMs: 5 });
 
     appCommandStore(paneLayoutStore)
       .getState()
@@ -1482,7 +1497,7 @@ describe("pane layout persistence", () => {
       updatedAt: "2026-01-01T00:00:00.000Z",
       revision: 2,
     }));
-    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, load, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -1539,7 +1554,7 @@ describe("pane layout persistence", () => {
       updatedAt: "2026-01-01T00:00:00.000Z",
       revision: 2,
     }));
-    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, load, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-old", "env-1");
     store.beginHydration("env-1");
@@ -1589,6 +1604,7 @@ describe("pane layout persistence", () => {
       };
     });
     const stop = startPaneLayoutPersistence({
+      timers: clock,
       save,
       load,
       debounceMs: 5,
@@ -1612,7 +1628,7 @@ describe("pane layout persistence", () => {
       ...createSaved(environmentId, input),
       revision: 3,
     }));
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -1646,7 +1662,7 @@ describe("pane layout persistence", () => {
       await blocked;
       return createSaved(environmentId, input);
     });
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -1676,7 +1692,7 @@ describe("pane layout persistence", () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input),
     );
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 60_000 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 60_000 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -1718,6 +1734,7 @@ describe("pane layout persistence", () => {
       appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
     );
     const stop = startPaneLayoutPersistence({
+      timers: clock,
       save,
       debounceMs: 60_000,
       selectionDebounceMs: 60_000,
@@ -1756,6 +1773,7 @@ describe("pane layout persistence", () => {
     ).rejects.toThrow("direct offline");
 
     const stop = startPaneLayoutPersistence({
+      timers: clock,
       save: async () => {
         throw new Error("chain offline");
       },
@@ -1829,7 +1847,7 @@ describe("pane layout persistence", () => {
       },
     });
     const load = mock(async () => savedResult("env-1", divergent));
-    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 60_000 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, load, debounceMs: 60_000 });
 
     // Nothing hydrated this environment, so the mirror holds no common base and
     // the stored record disagrees. Blessing it with a freshly read revision
@@ -1874,7 +1892,7 @@ describe("pane layout persistence", () => {
         revision: expectedRevision + 1,
       }),
     );
-    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 60_000 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, load, debounceMs: 60_000 });
 
     await flushPaneLayoutNow("env-unhydrated", input);
 
@@ -1895,7 +1913,7 @@ describe("pane layout persistence", () => {
     // Another client deleted the environment's layout between our save and the
     // re-read, so there is nothing to merge with and nothing to overwrite.
     const load = mock(async () => null);
-    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, load, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -1931,7 +1949,7 @@ describe("pane layout persistence", () => {
       updatedAt: "2026-01-01T00:00:00.000Z",
       revision: 6,
     }));
-    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, load, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -1970,7 +1988,7 @@ describe("pane layout persistence", () => {
       updatedAt: "2026-01-01T00:00:00.000Z",
       revision: 4,
     }));
-    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, load, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -2045,7 +2063,7 @@ describe("pane layout persistence", () => {
       ...savedResult("env-1", remoteInput),
       revision: 3,
     }));
-    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, load, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -2069,6 +2087,7 @@ describe("pane layout persistence", () => {
 
   test("declines an adoption that is behind or disagrees with the known revision", () => {
     const stop = startPaneLayoutPersistence({
+      timers: clock,
       save: async (environmentId, input) => createSaved(environmentId, input),
       debounceMs: 60_000,
     });
@@ -2121,7 +2140,7 @@ describe("pane layout persistence", () => {
       }
       return createSaved(environmentId, layout);
     });
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -2165,6 +2184,7 @@ describe("pane layout persistence", () => {
       revision: 8,
     }));
     const stop = startPaneLayoutPersistence({
+      timers: clock,
       save,
       hydrateDependencies,
       debounceMs: 5,
@@ -2175,6 +2195,8 @@ describe("pane layout persistence", () => {
     store.finishHydration("env-1");
     store.addTab("default", { id: "local", type: "plain" }, "env-1");
 
+    // The debounced write is what loads the dependencies.
+    clock.advance(5);
     await started;
     appCommandStore(paneLayoutStore).setState((state) => ({
       hydration: new Map(state.hydration).set("env-1", "pending"),
@@ -2231,7 +2253,7 @@ describe("pane layout persistence", () => {
         ...savedResult("env-1", remoteInput),
         revision: 2,
       }));
-      const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+      const stop = startPaneLayoutPersistence({ timers: clock, save, load, debounceMs: 5 });
       const store = appCommandStore(paneLayoutStore).getState();
       store.initialize("container-1", "env-1");
       store.beginHydration("env-1");
@@ -2282,7 +2304,7 @@ describe("pane layout persistence", () => {
       if (save.mock.calls.length === 2) throw new Error("offline");
       return createSaved(environmentId, layout);
     });
-    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
     const store = appCommandStore(paneLayoutStore).getState();
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
@@ -2323,7 +2345,7 @@ describe("pane layout persistence", () => {
       const save = mock(async (environmentId: string, input: LayoutInput) =>
         createSaved(environmentId, input),
       );
-      const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+      const stop = startPaneLayoutPersistence({ timers: clock, save, debounceMs: 5 });
       const store = appCommandStore(paneLayoutStore).getState();
       store.initialize("container-1", "env-1");
       store.beginHydration("env-1");
@@ -2375,6 +2397,7 @@ describe("pane layout persistence", () => {
     );
 
     const stop = startPaneLayoutPersistence({
+      timers: clock,
       hydrateDependencies: async () => undefined,
     });
     try {
@@ -2421,6 +2444,7 @@ describe("pane layout persistence", () => {
       },
     );
     const stop = startPaneLayoutPersistence({
+      timers: clock,
       hydrateDependencies: async () => undefined,
     });
     try {
@@ -2511,6 +2535,7 @@ describe("pane layout persistence", () => {
         };
       });
       const stop = startPaneLayoutPersistence({
+        timers: clock,
         save,
         debounceMs: 5,
         hydrateDependencies: async () => undefined,

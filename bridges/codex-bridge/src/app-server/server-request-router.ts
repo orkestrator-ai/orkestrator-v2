@@ -53,6 +53,7 @@ import {
   type InteractionResolution,
 } from "./interactions.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { unrefTimers, type TimeoutTimers } from "@orkestrator/protocol/timers";
 import type { DynamicToolCallResponse } from "./generated/typescript/v2/index.js";
 
 const log = createLogger("bridge.codex");
@@ -174,6 +175,11 @@ export interface ServerRequestRouterOptions {
   /** Backstop so a branch that somehow fails to answer still answers. */
   responseTimeoutMs?: number;
   /**
+   * The backstop's timers. Defaults to the global timers, unref'd; tests pass a
+   * manual clock so the backstop fires when they advance past it.
+   */
+  responseTimers?: TimeoutTimers;
+  /**
    * How long a human has to answer before the request auto-declines, and the
    * fresh window a resumed (un-paused) request restarts.
    */
@@ -244,6 +250,7 @@ export class ServerRequestRouter {
   private readonly clock: InteractionDeadlineClock;
   private readonly isGenerationLive: (generation: EngineGeneration) => boolean;
   private readonly responseTimeoutMs: number;
+  private readonly responseTimers: TimeoutTimers;
   private readonly pending = new Map<string, ServerRequestRecord>();
   /** Requests whose response write has begun; the double-answer guard. */
   private readonly sendStarted = new Set<string>();
@@ -283,6 +290,7 @@ export class ServerRequestRouter {
     };
     this.isGenerationLive = options.isGenerationLive ?? (() => true);
     this.responseTimeoutMs = options.responseTimeoutMs ?? DEFAULT_RESPONSE_TIMEOUT_MS;
+    this.responseTimers = options.responseTimers ?? unrefTimers;
     this.approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
   }
 
@@ -450,7 +458,7 @@ export class ServerRequestRouter {
     this.pending.set(key, record);
     this.counts.total += 1;
 
-    const timer = setTimeout(() => {
+    const timer = this.responseTimers.setTimeout(() => {
       if (!this.pending.has(key)) return;
       // Parked on a human. The approval's own (much longer) timer owns the answer;
       // firing here would answer a request the user is still looking at.
@@ -481,9 +489,10 @@ export class ServerRequestRouter {
         ),
       );
     }, this.responseTimeoutMs);
-    timer.unref?.();
 
-    void this.route(key, record, request, generation).finally(() => clearTimeout(timer));
+    void this.route(key, record, request, generation).finally(() =>
+      this.responseTimers.clearTimeout(timer),
+    );
   }
 
   private async route(

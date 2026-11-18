@@ -5,6 +5,7 @@ import {
   type AppShortcutId,
   type KeyboardShortcutsRequest,
 } from "@orkestrator/protocol/keyboard-shortcuts";
+import { runtimeTimeoutTimers, type TimeoutTimers } from "@orkestrator/protocol/timers";
 import { emitToContents, type RendererContents } from "./desktop-window-contexts.js";
 
 /** The renderer that owns the dialog, and can take keyboard focus from a native view. */
@@ -119,11 +120,22 @@ export function resolveKeyboardShortcutsTarget(
 /** Owns focus across the native-view → dialog → native-view round trip. */
 export class KeyboardShortcutsController {
   private readonly origins = new Map<number, () => boolean>();
-  private readonly restores = new Map<number, ReturnType<typeof setTimeout>>();
+  private readonly restores = new Map<number, unknown>();
+  private readonly timers: TimeoutTimers;
+
+  /** `timers` is injected in tests, which advance them instead of sleeping. */
+  constructor(timers: TimeoutTimers = runtimeTimeoutTimers) {
+    this.timers = timers;
+  }
 
   forget(rendererId: number): void {
     this.origins.delete(rendererId);
-    clearTimeout(this.restores.get(rendererId));
+    this.cancelRestore(rendererId);
+  }
+
+  private cancelRestore(rendererId: number): void {
+    const pending = this.restores.get(rendererId);
+    if (pending !== undefined) this.timers.clearTimeout(pending);
     this.restores.delete(rendererId);
   }
 
@@ -132,8 +144,7 @@ export class KeyboardShortcutsController {
     const id = target.renderer.id;
     // Keep the origin while cancelling: a renderer may reopen before the
     // overlay becomes visible, and its final dismissal still owes this focus.
-    clearTimeout(this.restores.get(id));
-    this.restores.delete(id);
+    this.cancelRestore(id);
     if (target.restoreFocus && !this.origins.has(id)) this.origins.set(id, target.restoreFocus);
     requestKeyboardShortcuts(target.renderer, request);
   }
@@ -141,7 +152,7 @@ export class KeyboardShortcutsController {
   closed(rendererId: number): void {
     const restore = this.origins.get(rendererId);
     if (!restore) return;
-    clearTimeout(this.restores.get(rendererId));
+    this.cancelRestore(rendererId);
     // Overlay visibility updates travel over a different IPC channel. Wait for
     // the live view to be shown again; a hidden/disposed view never takes focus.
     let remaining = 20;
@@ -151,8 +162,8 @@ export class KeyboardShortcutsController {
         this.origins.delete(rendererId);
         return;
       }
-      this.restores.set(rendererId, setTimeout(attempt, 25));
+      this.restores.set(rendererId, this.timers.setTimeout(attempt, 25));
     };
-    this.restores.set(rendererId, setTimeout(attempt, 0));
+    this.restores.set(rendererId, this.timers.setTimeout(attempt, 0));
   }
 }

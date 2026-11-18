@@ -11,11 +11,18 @@
  * errors. Because each publish is a full normalized snapshot rather than a patch,
  * a dropped intermediate frame is unobservable; the next one is complete.
  */
+import { unrefTimers, type Timers } from "@orkestrator/protocol/timers";
+
+/** The time a publish is stamped with and the cadence timer it arms. */
+export type CoalescerClock = Pick<Timers, "now" | "setTimeout" | "clearTimeout">;
+
 export interface CoalescerOptions {
   /** Minimum gap between scheduled publishes. */
   intervalMs?: number | (() => number);
   publish: () => Promise<void> | void;
   onError?: (error: unknown) => void;
+  /** Injected in tests, which advance it instead of sleeping through the cadence. */
+  clock?: CoalescerClock;
 }
 
 /** ~60fps is pointless for text; this is roughly perceptual for streaming prose. */
@@ -25,14 +32,15 @@ export class UpdateCoalescer {
   private readonly intervalMs: number | (() => number);
   private readonly publish: () => Promise<void> | void;
   private readonly onError?: (error: unknown) => void;
+  private readonly clock: CoalescerClock;
 
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private timer: unknown = null;
   private publishing = false;
   private runPromise: Promise<void> | null = null;
   /** A change arrived while a publish was in flight. */
   private dirty = false;
   private stopped = false;
-  private lastPublishedAt = 0;
+  private lastPublishedAt: number | undefined;
   private coalescedCount = 0;
   private publishedCount = 0;
 
@@ -40,6 +48,7 @@ export class UpdateCoalescer {
     this.intervalMs = options.intervalMs ?? DEFAULT_COALESCE_INTERVAL_MS;
     this.publish = options.publish;
     this.onError = options.onError;
+    this.clock = options.clock ?? unrefTimers;
   }
 
   getMetrics(): { coalesced: number; published: number } {
@@ -47,7 +56,7 @@ export class UpdateCoalescer {
   }
 
   /** Records a change; publishes on the next cadence tick. */
-  schedule(now: number = Date.now()): void {
+  schedule(now: number = this.clock.now()): void {
     if (this.stopped) return;
     this.coalescedCount += 1;
 
@@ -55,16 +64,17 @@ export class UpdateCoalescer {
       this.dirty = true;
       return;
     }
-    if (this.timer) return;
+    if (this.timer !== null) return;
 
     const intervalMs = typeof this.intervalMs === "function" ? this.intervalMs() : this.intervalMs;
-    const elapsed = now - this.lastPublishedAt;
-    const delay = elapsed >= intervalMs ? 0 : intervalMs - elapsed;
-    this.timer = setTimeout(() => {
+    const delay =
+      this.lastPublishedAt === undefined
+        ? 0
+        : Math.max(0, intervalMs - (now - this.lastPublishedAt));
+    this.timer = this.clock.setTimeout(() => {
       this.timer = null;
       void this.run();
     }, delay);
-    this.timer.unref?.();
   }
 
   /**
@@ -75,8 +85,8 @@ export class UpdateCoalescer {
    */
   async flushNow(): Promise<void> {
     if (this.stopped) return;
-    if (this.timer) {
-      clearTimeout(this.timer);
+    if (this.timer !== null) {
+      this.clock.clearTimeout(this.timer);
       this.timer = null;
     }
     await this.run();
@@ -126,7 +136,7 @@ export class UpdateCoalescer {
       try {
         await this.publish();
         this.publishedCount += 1;
-        this.lastPublishedAt = Date.now();
+        this.lastPublishedAt = this.clock.now();
       } catch (error) {
         this.onError?.(error);
       } finally {
@@ -151,8 +161,8 @@ export class UpdateCoalescer {
 
   stop(): void {
     this.stopped = true;
-    if (this.timer) {
-      clearTimeout(this.timer);
+    if (this.timer !== null) {
+      this.clock.clearTimeout(this.timer);
       this.timer = null;
     }
   }

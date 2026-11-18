@@ -1,21 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { flushMicrotasks, ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import { UpdateCoalescer } from "./coalescer.js";
-
-const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 5));
-
-async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate() && Date.now() < deadline) {
-    await tick();
-  }
-  expect(predicate()).toBe(true);
-}
 
 describe("UpdateCoalescer", () => {
   test("coalesces a burst into one scheduled full snapshot", async () => {
     let published = 0;
+    const clock = new ManualClock({ start: 1_000 });
     const coalescer = new UpdateCoalescer({
       intervalMs: 0,
+      clock,
       publish: () => {
         published += 1;
       },
@@ -23,35 +16,38 @@ describe("UpdateCoalescer", () => {
     coalescer.schedule();
     coalescer.schedule();
     coalescer.schedule();
-    await tick();
+    expect(clock.pendingDelays()).toEqual([0]);
+    await clock.advanceAsync(0);
 
     expect(published).toBe(1);
     expect(coalescer.getMetrics()).toEqual({ coalesced: 3, published: 1 });
     coalescer.stop();
   });
 
-  test("publishes eventually at the interval selected for a schedule", async () => {
+  test("publishes immediately at time zero, then respects the selected interval", async () => {
     const selectedIntervalMs = 40;
     const publishedAt: number[] = [];
+    const clock = new ManualClock();
     const coalescer = new UpdateCoalescer({
       intervalMs: () => selectedIntervalMs,
+      clock,
       publish: () => {
-        // Bun schedules the coalescer's timer on a monotonic clock. Measuring
-        // the elapsed interval with Date.now() lets a wall-clock adjustment
-        // make a correct publication look early and fail the lower bound.
-        publishedAt.push(performance.now());
+        publishedAt.push(clock.now());
       },
     });
 
-    await coalescer.flushNow();
-    const firstPublishedAt = publishedAt[0]!;
     coalescer.schedule();
+    expect(clock.pendingDelays()).toEqual([0]);
+    await clock.advanceAsync(0);
 
-    await tick();
-    expect(publishedAt).toHaveLength(1);
-    await waitFor(() => publishedAt.length === 2);
+    coalescer.schedule();
+    expect(clock.pendingDelays()).toEqual([selectedIntervalMs]);
 
-    expect(publishedAt[1]! - firstPublishedAt).toBeGreaterThanOrEqual(selectedIntervalMs - 2);
+    await clock.advanceAsync(selectedIntervalMs - 1);
+    expect(publishedAt).toEqual([0]);
+    await clock.advanceAsync(1);
+
+    expect(publishedAt).toEqual([0, selectedIntervalMs]);
     coalescer.stop();
   });
 
@@ -59,14 +55,15 @@ describe("UpdateCoalescer", () => {
     let intervalMs = 35;
     const intervalReads: number[] = [];
     const publishedAt: number[] = [];
+    const clock = new ManualClock({ start: 1_000 });
     const coalescer = new UpdateCoalescer({
       intervalMs: () => {
         intervalReads.push(intervalMs);
         return intervalMs;
       },
+      clock,
       publish: () => {
-        // Monotonic for the same reason as the cadence assertion above.
-        publishedAt.push(performance.now());
+        publishedAt.push(clock.now());
       },
     });
 
@@ -76,18 +73,23 @@ describe("UpdateCoalescer", () => {
     // interval, rather than retaining the previous schedule's value.
     intervalMs = 35;
     coalescer.schedule();
-    await waitFor(() => publishedAt.length === 2);
+    expect(clock.pendingDelays()).toEqual([35]);
+    await clock.advanceAsync(35);
+    expect(publishedAt).toHaveLength(2);
     intervalMs = 0;
     coalescer.schedule();
-    await waitFor(() => publishedAt.length === 3);
+    expect(clock.pendingDelays()).toEqual([0]);
+    await clock.advanceAsync(0);
+    expect(publishedAt).toHaveLength(3);
 
     // Short to long: after the immediate schedule, the callback must be
     // consulted again and defer the next publication.
     intervalMs = 35;
     coalescer.schedule();
-    await waitFor(() => publishedAt.length === 4);
+    expect(clock.pendingDelays()).toEqual([35]);
+    await clock.advanceAsync(35);
 
-    expect(publishedAt[3]! - publishedAt[2]!).toBeGreaterThanOrEqual(33);
+    expect(publishedAt).toEqual([1_000, 1_035, 1_035, 1_070]);
 
     expect(intervalReads).toEqual([35, 0, 35]);
     coalescer.stop();
@@ -95,8 +97,10 @@ describe("UpdateCoalescer", () => {
 
   test("flushNow bypasses a pending long dynamic interval", async () => {
     let published = 0;
+    const clock = new ManualClock({ start: 1_000 });
     const coalescer = new UpdateCoalescer({
       intervalMs: () => 60_000,
+      clock,
       publish: () => {
         published += 1;
       },
@@ -104,14 +108,15 @@ describe("UpdateCoalescer", () => {
 
     await coalescer.flushNow();
     coalescer.schedule();
-    await tick();
+    expect(clock.pendingDelays()).toEqual([60_000]);
     expect(published).toBe(1);
 
     await coalescer.flushNow();
     expect(published).toBe(2);
 
     // The cancelled cadence timer must not publish again.
-    await tick();
+    expect(clock.pendingCount()).toBe(0);
+    await clock.advanceAsync(60_000);
     expect(published).toBe(2);
     coalescer.stop();
   });
@@ -122,8 +127,10 @@ describe("UpdateCoalescer", () => {
       release = resolve;
     });
     let published = 0;
+    const clock = new ManualClock({ start: 1_000 });
     const coalescer = new UpdateCoalescer({
       intervalMs: 0,
+      clock,
       publish: async () => {
         published += 1;
         if (published === 1) await gate;
@@ -136,7 +143,9 @@ describe("UpdateCoalescer", () => {
     const terminalFlush = coalescer.flushNow().finally(() => {
       terminalFlushSettled = true;
     });
-    await tick();
+    // Only the gate can release the first publish; no timer is armed.
+    expect(clock.pendingCount()).toBe(0);
+    await flushMicrotasks();
     expect(terminalFlushSettled).toBe(false);
 
     release();
@@ -225,17 +234,21 @@ describe("UpdateCoalescer", () => {
 
   test("stop cancels pending work and makes schedule/flush no-ops", async () => {
     let published = 0;
+    const clock = new ManualClock({ start: 1_000 });
     const coalescer = new UpdateCoalescer({
       intervalMs: 50,
+      clock,
       publish: () => {
         published += 1;
       },
     });
     coalescer.schedule(1);
+    expect(clock.pendingCount()).toBe(1);
     coalescer.stop();
+    expect(clock.pendingCount()).toBe(0);
     coalescer.schedule();
     await coalescer.flushNow();
-    await tick();
+    await clock.advanceAsync(50);
     expect(coalescer.isStopped()).toBe(true);
     expect(published).toBe(0);
   });

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { installVirtualTimeout, type VirtualTimeout } from "@/test/virtual-timeout";
 import type { NativeEvent, UnlistenFn } from "@/lib/native/events";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import {
@@ -59,6 +60,7 @@ const readPrefetchedCommandResponse = (command: string, args: Record<string, unk
 const { createReadCoordinator, getReadCoordinator, resetReadCoordinatorForTests } =
   await import("./read-coordinator");
 const {
+  RESOURCE_COALESCE_MS,
   dispatchResourceChange,
   onResourceChanged,
   onResourceResync,
@@ -69,8 +71,34 @@ const {
   startResourceSync,
 } = await import("./resource-sync");
 
-const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-/** Comfortably past the module's 50ms coalescing window. */
+const realSetTimeout = globalThis.setTimeout;
+const realSleep = (ms: number) => new Promise<void>((resolve) => realSetTimeout(resolve, ms));
+
+/**
+ * Lets the work already started finish: the mocked transport and manifest
+ * loads resolve in microtasks, and the attach-time resync runs in a real
+ * zero-delay task, which a zero-delay turn scheduled after it always follows.
+ */
+async function settle(): Promise<void> {
+  for (let turn = 0; turn < 5; turn++) {
+    for (let microtask = 0; microtask < 20; microtask++) await Promise.resolve();
+    await realSleep(0);
+  }
+}
+
+/**
+ * The module holds each change for its coalescing window before delivering
+ * it. That window runs on a virtual clock (installed per test), so `tick(ms)`
+ * lets the started work settle, then lets `ms` of virtual time pass, which
+ * delivers exactly what falls due in it without waiting for it.
+ */
+let coalesceClock: VirtualTimeout | null = null;
+async function tick(ms: number): Promise<void> {
+  if (!coalesceClock) throw new Error("tick() needs the coalescing clock installed by beforeEach");
+  await settle();
+  await coalesceClock.elapse(ms, settle);
+}
+/** Past the module's 50 ms coalescing window. */
 const COALESCED = 80;
 const originalSetInterval = globalThis.setInterval;
 const originalClearInterval = globalThis.clearInterval;
@@ -89,12 +117,10 @@ async function startAfterAttachResync(): Promise<() => void> {
     attachResyncRan = true;
   });
   const stop = startResourceSync();
-  const deadline = Date.now() + 10_000;
   try {
-    while (!attachResyncRan) {
-      if (Date.now() > deadline) throw new Error("the attach-time resync never ran");
-      await tick(1);
-    }
+    // A zero-delay task: it has run once the started work has settled.
+    await settle();
+    if (!attachResyncRan) throw new Error("the attach-time resync never ran");
   } finally {
     stopObserving();
   }
@@ -133,6 +159,9 @@ function fullScopedManifest(revision = "b".repeat(32)): ScopedResourceRevisionMa
 }
 
 beforeEach(() => {
+  coalesceClock = installVirtualTimeout(RESOURCE_COALESCE_MS, {
+    label: "resource-sync coalescing",
+  });
   globalThis.setInterval = originalSetInterval;
   globalThis.clearInterval = originalClearInterval;
   resetResourceSync();
@@ -146,6 +175,8 @@ beforeEach(() => {
 
 afterEach(() => {
   resetResourceSync();
+  coalesceClock?.restore();
+  coalesceClock = null;
   globalThis.setInterval = originalSetInterval;
   globalThis.clearInterval = originalClearInterval;
 });
@@ -1060,7 +1091,8 @@ describe("scoped resource reconciliation", () => {
       finish = resolve;
     });
     onResourceChanged("project-notes", async (received) => {
-      await tick(10);
+      // A handler that finishes in a later task, not within the delivery's turn.
+      await realSleep(0);
       completed.push(received.id);
       finish();
     });

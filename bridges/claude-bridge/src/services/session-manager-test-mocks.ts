@@ -115,6 +115,14 @@ export interface QueryCall {
   finish: () => void;
   fail: (err: Error) => void;
   isClosed: () => boolean;
+  /**
+   * Resolves once the bridge has taken every pushed frame and is waiting for
+   * the next one (or the stream has ended). The bridge handles a frame before
+   * it asks for the next, so this is the signal that what was pushed so far
+   * has been processed: await it instead of sleeping, including before
+   * asserting that a frame changed nothing.
+   */
+  consumed: () => Promise<void>;
 }
 
 export function pushSuccessfulContinuationResult(call: QueryCall): void {
@@ -157,17 +165,21 @@ export function nextQueryCall(timeoutMs = 1000): Promise<QueryCall> {
 
 export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["options"] }) => {
   const queue: unknown[] = [];
+  /** Set only while the consumer is parked waiting for a frame. */
   let pendingResolve: (() => void) | null = null;
   let finished = false;
   let closed = false;
   let error: Error | null = null;
+  let terminated = false;
+  const consumptionWaiters: Array<() => void> = [];
+  const settleConsumption = () => {
+    for (const resolve of consumptionWaiters.splice(0)) resolve();
+  };
 
   const wake = () => {
-    if (pendingResolve) {
-      const r = pendingResolve;
-      pendingResolve = null;
-      r();
-    }
+    const resume = pendingResolve;
+    pendingResolve = null;
+    resume?.();
   };
 
   const call: QueryCall = {
@@ -176,7 +188,7 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
     push: (msg) => {
       // Match the SDK contract: close() terminates the process, so no later
       // assistant/result frame can be observed by the consumer.
-      if (closed) return;
+      if (closed || terminated) return;
       queue.push(msg);
       wake();
     },
@@ -185,6 +197,10 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
       wake();
     },
     isClosed: () => closed,
+    consumed: () =>
+      terminated || pendingResolve !== null
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => consumptionWaiters.push(resolve)),
     fail: (err) => {
       error = err;
       finished = true;
@@ -207,23 +223,26 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
 
   const beforeExit = queryControlOverrides.beforeExit as (() => Promise<void>) | undefined;
   async function* iter() {
-    while (true) {
-      if (error) {
-        const err = error;
-        error = null;
-        throw err;
+    try {
+      while (true) {
+        if (error) throw error;
+        if (queue.length > 0) {
+          yield queue.shift();
+          continue;
+        }
+        if (finished) {
+          await beforeExit?.();
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          pendingResolve = resolve;
+          settleConsumption();
+        });
       }
-      if (queue.length > 0) {
-        yield queue.shift();
-        continue;
-      }
-      if (finished) {
-        await beforeExit?.();
-        return;
-      }
-      await new Promise<void>((r) => {
-        pendingResolve = r;
-      });
+    } finally {
+      terminated = true;
+      queue.length = 0;
+      settleConsumption();
     }
   }
 

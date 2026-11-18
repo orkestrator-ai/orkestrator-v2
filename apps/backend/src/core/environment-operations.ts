@@ -261,6 +261,14 @@ export class EnvironmentOperations {
     this.merging.delete(environmentId);
   }
 
+  /**
+   * The merge-cleanup recovery running for an environment, if any. It settles
+   * once the recovery has finished or stood aside; it never rejects.
+   */
+  mergeCleanupRecovery(environmentId: string): Promise<void> | undefined {
+    return this.mergeCleanupRecoveries.get(environmentId);
+  }
+
   /** Runs one merge-cleanup recovery per environment at a time. */
   scheduleMergeCleanupRecovery(environmentId: string, recover: () => Promise<void>): void {
     if (this.mergeCleanupRecoveries.has(environmentId)) return;

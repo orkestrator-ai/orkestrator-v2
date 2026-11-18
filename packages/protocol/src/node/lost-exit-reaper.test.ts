@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   createLostExitReaper,
   createDarwinLostExitReaper,
@@ -7,6 +7,7 @@ import {
 } from "./lost-exit-reaper.js";
 
 import { configureLogger, resetLogger } from "../logger.js";
+import { ManualClock } from "../testing/manual-clock.js";
 
 const SELF = 4242;
 
@@ -30,10 +31,18 @@ function fakeSystem(table: Map<number, FakeProcess>, inspectFails = false) {
   return { system, waited };
 }
 
-const settle = (ms = 40) => Bun.sleep(ms);
+/**
+ * Longer than every check `fastReaper` makes: a 5 ms grace, then at most 50
+ * checks 5 ms apart.
+ */
+const PAST_EVERY_CHECK_MS = 1_000;
 
 describe("createLostExitReaper", () => {
   let reaper: LostExitReaper | undefined;
+  let clock = new ManualClock();
+  beforeEach(() => {
+    clock = new ManualClock();
+  });
   afterEach(() => {
     reaper?.stop();
     resetLogger();
@@ -45,29 +54,32 @@ describe("createLostExitReaper", () => {
       graceMs: 5,
       maxCheckMs: 5,
       maxChecks: 4,
+      timers: clock,
       ...options,
     }));
 
-  test("reaps this process's zombie after the grace period", async () => {
+  test("reaps this process's zombie after the grace period", () => {
     const table = new Map([[100, { ppid: SELF, state: "Z" }]]);
     const { system, waited } = fakeSystem(table);
     const reaper = fastReaper(system);
     reaper.reap(100, () => false);
     expect(waited).toEqual([]);
-    await settle();
+    clock.advance(4);
+    expect(waited).toEqual([]);
+    clock.advance(1);
     expect(waited).toEqual([100]);
     expect(table.has(100)).toBe(false);
     expect(reaper.stats()).toEqual({ pending: 0, reaped: 1, abandoned: 0 });
   });
 
-  test("does nothing once the runtime has reported the exit", async () => {
+  test("does nothing once the runtime has reported the exit", () => {
     const table = new Map([[100, { ppid: SELF, state: "Z" }]]);
     const { system, waited } = fakeSystem(table);
     const reaper = fastReaper(system);
     let reported = false;
     reaper.reap(100, () => reported);
     reported = true;
-    await settle();
+    clock.advance(PAST_EVERY_CHECK_MS);
     expect(waited).toEqual([]);
     expect(table.has(100)).toBe(true);
     // Already reported when handed over: not even watched.
@@ -75,61 +87,63 @@ describe("createLostExitReaper", () => {
     expect(reaper.stats().pending).toBe(0);
   });
 
-  test("never waits on a zombie whose parent is another process", async () => {
+  test("never waits on a zombie whose parent is another process", () => {
     const table = new Map([[100, { ppid: 7, state: "Z" }]]);
     const { system, waited } = fakeSystem(table);
     const reaper = fastReaper(system);
     reaper.reap(100, () => false);
-    await settle();
+    clock.advance(PAST_EVERY_CHECK_MS);
     expect(waited).toEqual([]);
     expect(table.get(100)).toEqual({ ppid: 7, state: "Z" });
     expect(reaper.stats()).toEqual({ pending: 0, reaped: 0, abandoned: 0 });
   });
 
-  test("never waits on a child that is still running, and gives up after its checks", async () => {
+  test("never waits on a child that is still running, and gives up after its checks", () => {
     const table = new Map([[100, { ppid: SELF, state: "S" }]]);
     const { system, waited } = fakeSystem(table);
     const reaper = fastReaper(system);
     reaper.reap(100, () => false);
-    await settle(80);
+    clock.advance(PAST_EVERY_CHECK_MS);
     expect(waited).toEqual([]);
     expect(table.get(100)).toEqual({ ppid: SELF, state: "S" });
     expect(reaper.stats()).toEqual({ pending: 0, reaped: 0, abandoned: 1 });
   });
 
-  test("reaps a child that becomes a zombie between checks", async () => {
+  test("reaps a child that becomes a zombie between checks", () => {
     const table = new Map([[100, { ppid: SELF, state: "R" }]]);
     const { system, waited } = fakeSystem(table);
     const reaper = fastReaper(system, { maxChecks: 50 });
     reaper.reap(100, () => false);
-    await settle(20);
+    // The grace and three more checks see a running child.
+    clock.advance(20);
     expect(waited).toEqual([]);
+    expect(reaper.stats().pending).toBe(1);
     table.set(100, { ppid: SELF, state: "Z" });
-    await settle();
+    clock.advance(5);
     expect(waited).toEqual([100]);
     expect(reaper.stats().reaped).toBe(1);
   });
 
-  test("leaves a PID that names no process", async () => {
+  test("leaves a PID that names no process", () => {
     const { system, waited } = fakeSystem(new Map());
     const reaper = fastReaper(system);
     reaper.reap(100, () => false);
-    await settle();
+    clock.advance(PAST_EVERY_CHECK_MS);
     expect(waited).toEqual([]);
     expect(reaper.stats()).toEqual({ pending: 0, reaped: 0, abandoned: 0 });
   });
 
-  test("never waits while ps cannot say what the PID is", async () => {
+  test("never waits while ps cannot say what the PID is", () => {
     const table = new Map([[100, { ppid: SELF, state: "Z" }]]);
     const { system, waited } = fakeSystem(table, true);
     const reaper = fastReaper(system);
     reaper.reap(100, () => false);
-    await settle(80);
+    clock.advance(PAST_EVERY_CHECK_MS);
     expect(waited).toEqual([]);
     expect(reaper.stats().abandoned).toBe(1);
   });
 
-  test("refuses this process, init and invalid PIDs", async () => {
+  test("refuses this process, init and invalid PIDs", () => {
     const { system, waited } = fakeSystem(
       new Map([
         [1, { ppid: 0, state: "Z" }],
@@ -138,12 +152,12 @@ describe("createLostExitReaper", () => {
     );
     const reaper = fastReaper(system);
     for (const pid of [0, -5, 1, SELF, 1.5, Number.NaN]) reaper.reap(pid, () => false);
-    await settle();
+    clock.advance(PAST_EVERY_CHECK_MS);
     expect(waited).toEqual([]);
     expect(reaper.stats().pending).toBe(0);
   });
 
-  test("bounds how many children it waits on", async () => {
+  test("bounds how many children it waits on", () => {
     const table = new Map([
       [100, { ppid: SELF, state: "Z" }],
       [101, { ppid: SELF, state: "Z" }],
@@ -153,22 +167,22 @@ describe("createLostExitReaper", () => {
     const reaper = fastReaper(system, { maxPending: 2 });
     for (const pid of [100, 101, 102]) reaper.reap(pid, () => false);
     expect(reaper.stats()).toEqual({ pending: 2, reaped: 0, abandoned: 1 });
-    await settle();
+    clock.advance(PAST_EVERY_CHECK_MS);
     expect(waited.sort()).toEqual([100, 101]);
     expect(table.has(102)).toBe(true);
   });
 
-  test("watches a PID once however often it is handed over", async () => {
+  test("watches a PID once however often it is handed over", () => {
     const table = new Map([[100, { ppid: SELF, state: "Z" }]]);
     const { system, waited } = fakeSystem(table);
     const reaper = fastReaper(system);
     reaper.reap(100, () => false);
     reaper.reap(100, () => false);
     expect(reaper.stats().pending).toBe(1);
-    await settle();
+    clock.advance(PAST_EVERY_CHECK_MS);
     expect(waited).toEqual([100]);
   });
-  test("abandons a failed waitpid without waiting again on a released PID", async () => {
+  test("abandons a failed waitpid without waiting again on a released PID", () => {
     const { system, waited } = fakeSystem(new Map([[100, { ppid: SELF, state: "Z" }]]));
     system.waitNoHang = (pid) => {
       waited.push(pid);
@@ -182,14 +196,14 @@ describe("createLostExitReaper", () => {
     });
     const reaper = fastReaper(system);
     reaper.reap(100, () => false);
-    await settle();
+    clock.advance(PAST_EVERY_CHECK_MS);
     expect(waited).toEqual([100]);
     expect(reaper.stats()).toEqual({ pending: 0, reaped: 0, abandoned: 1 });
     expect(events.some((line) => line.includes("reason=waitpid-failed"))).toBe(true);
   });
 
   for (const operation of ["inspect", "waitNoHang"] as const) {
-    test(`retries after ${operation} throws, then reaps once`, async () => {
+    test(`retries after ${operation} throws, then reaps once`, () => {
       const { system, waited } = fakeSystem(new Map([[100, { ppid: SELF, state: "Z" }]]));
       let calls = 0;
       const failOnce = () => {
@@ -210,13 +224,13 @@ describe("createLostExitReaper", () => {
       }
       const reaper = fastReaper(system);
       reaper.reap(100, () => false);
-      await settle();
+      clock.advance(PAST_EVERY_CHECK_MS);
       expect(calls).toBe(2);
       expect(waited).toEqual([100]);
       expect(reaper.stats()).toEqual({ pending: 0, reaped: 1, abandoned: 0 });
     });
 
-    test(`bounds retries when ${operation} keeps throwing`, async () => {
+    test(`bounds retries when ${operation} keeps throwing`, () => {
       const { system } = fakeSystem(new Map([[100, { ppid: SELF, state: "Z" }]]));
       let calls = 0;
       system[operation] = () => {
@@ -225,7 +239,7 @@ describe("createLostExitReaper", () => {
       };
       const reaper = fastReaper(system);
       reaper.reap(100, () => false);
-      await settle(80);
+      clock.advance(PAST_EVERY_CHECK_MS);
       expect(calls).toBe(4);
       expect(reaper.stats()).toEqual({ pending: 0, reaped: 0, abandoned: 1 });
     });

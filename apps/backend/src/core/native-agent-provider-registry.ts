@@ -24,11 +24,17 @@ import {
 } from "./native-agent-service-shared.js";
 import type { NativeAgentObservationBroker } from "./native-agent-observation.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { unrefTimers, type TimeoutTimers } from "@orkestrator/protocol/timers";
 
 const log = createLogger("native-agent");
 
 export interface ProviderRegistryDependencies {
   now(): number;
+  /**
+   * The retirement grace timers. Defaults to the global timers, unref'd; tests
+   * pass a manual clock and advance it past the grace.
+   */
+  timers?: TimeoutTimers;
   isStopped(): boolean;
   assertAcceptingWork(): void;
   assertEnvironmentLive(environmentId: string): Promise<Environment>;
@@ -95,13 +101,15 @@ export class ProviderRegistry {
    * process; disposing it while a prompt it sent is in flight would abort that
    * prompt. Retirement waits for its dispatches to settle and a grace period.
    */
-  private readonly retiring = new Map<
-    NativeAgentRuntimeProvider,
-    ReturnType<typeof setTimeout> | null
-  >();
+  /** Each retiring provider's grace timer handle, or `null` while it waits on a dispatch. */
+  private readonly retiring = new Map<NativeAgentRuntimeProvider, unknown>();
   private readonly disposed = new WeakSet<NativeAgentRuntimeProvider>();
 
-  constructor(private readonly deps: ProviderRegistryDependencies) {}
+  private readonly timers: TimeoutTimers;
+
+  constructor(private readonly deps: ProviderRegistryDependencies) {
+    this.timers = deps.timers ?? unrefTimers;
+  }
 
   /** Resolve a provider, starting its bridge if needed. */
   async resolve(input: EnsureNativeAgentSessionInput): Promise<NativeAgentRuntimeProvider> {
@@ -334,7 +342,7 @@ export class ProviderRegistry {
     const retiring = Array.from(this.retiring.keys()).filter(
       (provider) => !this.isCached(provider) && !this.disposed.has(provider),
     );
-    for (const timer of this.retiring.values()) if (timer) clearTimeout(timer);
+    for (const timer of this.retiring.values()) if (timer != null) this.timers.clearTimeout(timer);
     this.retiring.clear();
     await Promise.allSettled(
       retiring.map((provider) => {
@@ -352,7 +360,7 @@ export class ProviderRegistry {
     providers: Map<string, NativeAgentRuntimeProvider>;
     connections: Map<string, string>;
     absentBridgeUntil: Map<string, number>;
-    retiring: Map<NativeAgentRuntimeProvider, ReturnType<typeof setTimeout> | null>;
+    retiring: Map<NativeAgentRuntimeProvider, unknown>;
   } {
     return {
       providers: this.providers,
@@ -396,19 +404,18 @@ export class ProviderRegistry {
 
   /** Arm the grace timer once no dispatch is in flight on the provider. */
   private scheduleRetirement(provider: NativeAgentRuntimeProvider): void {
-    if (!this.retiring.has(provider) || this.retiring.get(provider)) return;
+    if (!this.retiring.has(provider) || this.retiring.get(provider) != null) return;
     if (this.dispatchCounts.has(provider)) return; // re-armed when it settles
-    const timer = setTimeout(
+    const timer = this.timers.setTimeout(
       () => void this.finishRetirement(provider),
       Math.max(0, this.deps.options.providerRetirementGraceMs ?? PROVIDER_RETIREMENT_GRACE_MS),
     );
-    timer.unref?.();
     this.retiring.set(provider, timer);
   }
 
   private cancelRetirement(provider: NativeAgentRuntimeProvider): void {
     const timer = this.retiring.get(provider);
-    if (timer) clearTimeout(timer);
+    if (timer != null) this.timers.clearTimeout(timer);
     this.retiring.delete(provider);
   }
 

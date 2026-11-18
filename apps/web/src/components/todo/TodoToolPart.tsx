@@ -136,7 +136,7 @@ export function TodoToolPart({
                       key={todo.id ?? `todo-${index}-${todo.content.slice(0, 30)}`}
                       className={cn(
                         "flex items-start gap-2 rounded-sm text-xs",
-                        todo.status === "completed" && "text-muted-foreground/60",
+                        todo.status === "completed" && "text-muted-foreground",
                         isChanged && "bg-muted/50 -mx-1 px-1 py-0.5",
                       )}
                     >
@@ -150,12 +150,12 @@ export function TodoToolPart({
                               ? "text-yellow-500"
                               : todo.status === "cancelled"
                                 ? "text-red-500"
-                                : "text-muted-foreground/50",
+                                : "text-muted-foreground",
                           )}
                         />
                       )}
                       {todo.id !== undefined && (
-                        <span className="mt-px shrink-0 font-mono text-[10px] text-muted-foreground/60">
+                        <span className="mt-px shrink-0 font-mono text-[11px] text-muted-foreground">
                           #{todo.id}
                         </span>
                       )}
@@ -180,13 +180,13 @@ export function TodoToolPart({
                 })}
 
                 {isPartialList && (
-                  <div className="pt-1 text-[10px] text-muted-foreground/60">
+                  <div className="pt-1 text-[11px] text-muted-foreground">
                     Tasks created before this session was being watched are not shown.
                   </div>
                 )}
 
                 {truncatedCount > 0 && (
-                  <div className="pt-1 text-[10px] text-muted-foreground/60">
+                  <div className="pt-1 text-[11px] text-muted-foreground">
                     {truncatedCount} more task{truncatedCount === 1 ? "" : "s"} not shown.
                   </div>
                 )}

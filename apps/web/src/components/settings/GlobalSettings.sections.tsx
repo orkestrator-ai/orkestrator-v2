@@ -1017,7 +1017,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </div>
           </button>
         </div>
-        <span className="block text-xs text-muted-foreground/60">
+        <span className="block text-xs text-muted-foreground">
           *Requires the Dev Containers extension
         </span>
       </div>
@@ -1424,10 +1424,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               )}
             </SelectContent>
           </Select>
-          <p
-            id="claude-background-command-limit-restart"
-            className="text-xs text-muted-foreground/60"
-          >
+          <p id="claude-background-command-limit-restart" className="text-xs text-muted-foreground">
             Applies when an environment&apos;s Claude bridge next starts, for example after the
             environment restarts. Interactive Claude terminals have no limit.
           </p>
@@ -1708,7 +1705,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             aria-describedby="codex-max-concurrent-threads-description codex-max-concurrent-threads-restart"
             className="max-w-32"
           />
-          <p id="codex-max-concurrent-threads-restart" className="text-xs text-muted-foreground/60">
+          <p id="codex-max-concurrent-threads-restart" className="text-xs text-muted-foreground">
             Applies when a native Codex bridge next starts.
           </p>
         </div>
@@ -2467,7 +2464,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         </div>
         <DatabaseStorageCard />
         <DiagnosticsExportCard />
-        <p className="text-xs text-muted-foreground/60">
+        <p className="text-xs text-muted-foreground">
           Changes apply straight away, with no restart and without interrupting running agents.
         </p>
       </div>

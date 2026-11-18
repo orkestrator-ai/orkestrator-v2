@@ -208,4 +208,58 @@ describe("workspace file moves", () => {
       'mv -- "$source" "$destination"',
     );
   });
+
+  test("renames a folder in place only in the container helper's rename mode", async () => {
+    await fs.mkdir(path.join(worktreePath, "source", "nested"));
+    await fs.writeFile(path.join(worktreePath, "source", "nested", "a.txt"), "inside");
+    await fs.mkdir(path.join(worktreePath, "source", "taken"));
+    const run = (source: string, destination: string, mode?: string) =>
+      Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          CONTAINER_PINNED_FILE_MOVE,
+          "--",
+          worktreePath,
+          source,
+          path.posix.dirname(destination),
+          destination,
+          ...(mode ? [mode] : []),
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+
+    const plainMove = run("source/nested", "source/renamed");
+    expect(await plainMove.exited).toBe(1);
+    expect(await new Response(plainMove.stderr).text()).toContain(
+      "Source is not a regular file: source/nested",
+    );
+
+    const elsewhere = run("source/nested", "destination/nested", "rename-in-place");
+    expect(await elsewhere.exited).toBe(1);
+    expect(await new Response(elsewhere.stderr).text()).toContain(
+      "A folder can only be renamed in place",
+    );
+
+    const collision = run("source/nested", "source/taken", "rename-in-place");
+    expect(await collision.exited).toBe(1);
+    expect(await new Response(collision.stderr).text()).toContain(
+      "A file or folder already exists at source/taken",
+    );
+
+    const renamed = run("source/nested", "source/renamed", "rename-in-place");
+    expect(await renamed.exited).toBe(0);
+    await expect(
+      fs.readFile(path.join(worktreePath, "source", "renamed", "a.txt"), "utf8"),
+    ).resolves.toBe("inside");
+
+    expect(
+      containerMoveFileCommand("source/nested", "source", "source/renamed", {
+        renameInPlace: true,
+      }),
+    ).toContain('"$destination" rename-in-place');
+    expect(containerMoveFileCommand("source/a.txt", ".", "a.txt")).not.toContain(
+      '"$destination" rename-in-place',
+    );
+  });
 });

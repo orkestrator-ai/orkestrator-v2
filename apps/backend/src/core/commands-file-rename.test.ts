@@ -69,9 +69,9 @@ describe("workspace file renames", () => {
     const move = pathSafety.moveConfinedFile;
     const publicationError = new Error("Publication refused");
     const spy = spyOn(pathSafety, "moveConfinedFile").mockImplementation(
-      async (root, source, destination) => {
+      async (root, source, destination, hooks, options) => {
         if (destination === "src/README.md") throw publicationError;
-        await move(root, source, destination);
+        await move(root, source, destination, hooks, options);
       },
     );
     try {
@@ -92,8 +92,8 @@ describe("workspace file renames", () => {
     const move = pathSafety.moveConfinedFile;
     let recoveryPath = "";
     const spy = spyOn(pathSafety, "moveConfinedFile").mockImplementation(
-      async (root, source, destination) => {
-        await move(root, source, destination);
+      async (root, source, destination, hooks, options) => {
+        await move(root, source, destination, hooks, options);
         if (source === "src/readme.md") {
           recoveryPath = destination;
           await fs.writeFile(path.join(root, "src", "readme.md"), "concurrent", { flag: "wx" });
@@ -115,9 +115,7 @@ describe("workspace file renames", () => {
         failure = error;
       }
       expect(failure).toBeInstanceOf(Error);
-      expect((failure as Error).message).toContain(
-        `Recover the original file from ${recoveryPath}`,
-      );
+      expect((failure as Error).message).toContain(`Recover the original from ${recoveryPath}`);
       expect(recoveryPath).toMatch(/^src\/\.[a-f0-9-]+\.rename$/);
       expect(await fs.readFile(path.join(worktreePath, recoveryPath), "utf8")).toBe("original");
       expect(await fs.readFile(path.join(worktreePath, "src", "readme.md"), "utf8")).toBe(
@@ -136,18 +134,81 @@ describe("workspace file renames", () => {
     await fs.writeFile(path.join(worktreePath, "src", "b.txt"), "b");
 
     await expect(renameLocalFile(worktreePath, "src/a.txt", "b.txt")).rejects.toThrow(
-      "A file already exists at src/b.txt",
+      "A file or folder already exists at src/b.txt",
     );
     await expect(fs.readFile(path.join(worktreePath, "src", "a.txt"), "utf8")).resolves.toBe("a");
     await expect(fs.readFile(path.join(worktreePath, "src", "b.txt"), "utf8")).resolves.toBe("b");
   });
 
-  test("rejects directories and missing files", async () => {
-    await fs.mkdir(path.join(worktreePath, "src", "nested"));
+  test("renames a folder in place with its contents", async () => {
+    await fs.mkdir(path.join(worktreePath, "src", "nested", "deeper"), { recursive: true });
+    await fs.writeFile(path.join(worktreePath, "src", "nested", "deeper", "a.txt"), "inside");
 
-    await expect(renameLocalFile(worktreePath, "src/nested", "other")).rejects.toThrow(
-      "Source is not a regular file",
+    await expect(renameLocalFile(worktreePath, "src/nested", "renamed")).resolves.toBe(
+      "src/renamed",
     );
+    expect(await fs.readdir(path.join(worktreePath, "src"))).toEqual(["renamed"]);
+    await expect(
+      fs.readFile(path.join(worktreePath, "src", "renamed", "deeper", "a.txt"), "utf8"),
+    ).resolves.toBe("inside");
+  });
+
+  test("changes only the letter case of a folder name", async () => {
+    await fs.mkdir(path.join(worktreePath, "src", "docs"));
+    await fs.writeFile(path.join(worktreePath, "src", "docs", "a.txt"), "case");
+
+    await expect(renameLocalFile(worktreePath, "src/docs", "Docs")).resolves.toBe("src/Docs");
+    expect(await fs.readdir(path.join(worktreePath, "src"))).toEqual(["Docs"]);
+    await expect(
+      fs.readFile(path.join(worktreePath, "src", "Docs", "a.txt"), "utf8"),
+    ).resolves.toBe("case");
+  });
+
+  test("does not replace an existing folder", async () => {
+    await fs.mkdir(path.join(worktreePath, "src", "a"));
+    await fs.mkdir(path.join(worktreePath, "src", "b"));
+    await fs.writeFile(path.join(worktreePath, "src", "a", "keep.txt"), "a");
+
+    await expect(renameLocalFile(worktreePath, "src/a", "b")).rejects.toThrow(
+      "A file or folder already exists at src/b",
+    );
+    await expect(
+      fs.readFile(path.join(worktreePath, "src", "a", "keep.txt"), "utf8"),
+    ).resolves.toBe("a");
+  });
+
+  test("does not follow a symlinked folder", async () => {
+    await fs.mkdir(path.join(worktreePath, "src", "real"));
+    await fs.symlink("real", path.join(worktreePath, "src", "link"));
+
+    await expect(renameLocalFile(worktreePath, "src/link", "other")).rejects.toThrow(
+      "Source is not a regular file or folder",
+    );
+    expect((await fs.readdir(path.join(worktreePath, "src"))).sort()).toEqual(["link", "real"]);
+  });
+
+  test("moves a folder only when renaming it in place", async () => {
+    await fs.mkdir(path.join(worktreePath, "src", "nested"));
+    await fs.mkdir(path.join(worktreePath, "other"));
+
+    await expect(
+      pathSafety.moveConfinedFile(
+        worktreePath,
+        "src/nested",
+        "other/nested",
+        {},
+        {
+          allowDirectory: true,
+        },
+      ),
+    ).rejects.toThrow("A folder can only be renamed in place");
+    await expect(
+      pathSafety.moveConfinedFile(worktreePath, "src/nested", "src/renamed"),
+    ).rejects.toThrow("Source is not a regular file: src/nested");
+    expect(await fs.readdir(path.join(worktreePath, "src"))).toEqual(["nested"]);
+  });
+
+  test("rejects missing files", async () => {
     await expect(renameLocalFile(worktreePath, "src/missing.txt", "other.txt")).rejects.toThrow(
       "Source no longer exists",
     );

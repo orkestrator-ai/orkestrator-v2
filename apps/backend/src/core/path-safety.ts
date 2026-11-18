@@ -68,8 +68,18 @@ function isLoopOrNoFollowError(code: number): boolean {
   return code === ERRNO_ELOOP_LINUX || code === ERRNO_ELOOP_DARWIN;
 }
 
+export interface ConfinedMoveOptions {
+  /**
+   * Also accept a directory as the source. Only a rename in place is allowed
+   * then (source and destination share a parent), so a folder can never be
+   * moved into itself or one of its descendants.
+   */
+  allowDirectory?: boolean;
+}
+
 /**
- * Atomically moves a regular file without re-resolving mutable ancestors.
+ * Atomically moves a regular file (or, when renaming in place, a folder)
+ * without re-resolving mutable ancestors.
  *
  * Every parent directory is opened relative to an already-pinned descriptor
  * with O_NOFOLLOW, then the platform no-replace rename primitive operates on
@@ -81,6 +91,7 @@ export async function moveConfinedFile(
   sourcePath: string,
   destinationPath: string,
   testHooks: ConfinedMoveTestHooks = {},
+  options: ConfinedMoveOptions = {},
 ): Promise<void> {
   if (process.platform !== "darwin" && process.platform !== "linux") {
     throw new Error("Safe workspace file moves are not supported on this platform");
@@ -92,6 +103,13 @@ export async function moveConfinedFile(
   const destinationParent = path.posix.dirname(destination);
   const sourceName = path.posix.basename(source);
   const destinationName = path.posix.basename(destination);
+  const allowDirectory = options.allowDirectory === true;
+  if (allowDirectory && sourceParent !== destinationParent) {
+    throw new Error("A folder can only be renamed in place");
+  }
+  const notMovable = allowDirectory
+    ? `Source is not a regular file or folder: ${source}`
+    : `Source is not a regular file: ${source}`;
   const canonicalRoot = await fs.realpath(rootPath);
   const rootStats = await fs.lstat(canonicalRoot);
   if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
@@ -174,10 +192,12 @@ export async function moveConfinedFile(
     const sourceFd = openAt(sourceParentFd, sourceName, fileFlags);
     if (sourceFd < 0) {
       if (errno() === ERRNO_ENOENT) throw new Error(`Source no longer exists: ${source}`);
-      throw new Error(`Source is not a regular file: ${source}`);
+      throw new Error(notMovable);
     }
     const sourceStats = fsSync.fstatSync(sourceFd);
-    if (!sourceStats.isFile()) throw new Error(`Source is not a regular file: ${source}`);
+    if (!sourceStats.isFile() && !(allowDirectory && sourceStats.isDirectory())) {
+      throw new Error(notMovable);
+    }
 
     await testHooks.afterDirectoriesOpened?.();
     assertPinnedDirectoryStillNamed(canonicalRoot, sourceParent, sourceParentFd);
@@ -224,7 +244,11 @@ export async function moveConfinedFile(
     if (result !== 0) {
       const code = errno();
       if (code === ERRNO_EEXIST) {
-        throw new Error(`A file already exists at ${destination}`);
+        throw new Error(
+          allowDirectory
+            ? `A file or folder already exists at ${destination}`
+            : `A file already exists at ${destination}`,
+        );
       }
       if (code === ERRNO_ENOENT) throw new Error(`Source no longer exists: ${source}`);
       if (code === ERRNO_EXDEV) {

@@ -1033,18 +1033,36 @@ export function useFilesPanel() {
   );
 
   const renameFile = useCallback(
-    async (filePath: string, newName: string) => {
+    async (filePath: string, newName: string, options: { target?: "file" | "folder" } = {}) => {
       if (!isAvailable || !targetId) {
         throw new Error("The selected environment is not available");
       }
+
+      // The backend renames a folder through the same command; only the
+      // open-tab guard, the expanded tree state and the wording differ.
+      const isFolder = options.target === "folder";
+      const noun = isFolder ? "folder" : "file";
+      const inRenamedBranch = (candidate: string) =>
+        candidate === filePath || (isFolder && candidate.startsWith(`${filePath}/`));
 
       setFileActionPending(filePath);
       try {
         const openTabs = snapshotEnvironmentId
           ? scope.store(paneLayoutStore).getState().getAllTabs(snapshotEnvironmentId)
           : [];
-        if (openTabs.some((tab) => tab.type === "file" && tab.fileData?.filePath === filePath)) {
-          throw new Error("Close the file's editor tab before renaming it");
+        if (
+          openTabs.some(
+            (tab) =>
+              tab.type === "file" &&
+              tab.fileData?.filePath !== undefined &&
+              inRenamedBranch(tab.fileData.filePath),
+          )
+        ) {
+          throw new Error(
+            isFolder
+              ? "Close the editor tabs of files in this folder before renaming it"
+              : "Close the file's editor tab before renaming it",
+          );
         }
         const environmentId = await resolveMutationEnvironmentId();
         let renamed: string;
@@ -1060,12 +1078,26 @@ export function useFilesPanel() {
           await refreshAllFilesData().catch(() => undefined);
           throw error;
         }
+        if (
+          isFolder &&
+          activeSnapshotKeyRef.current === environmentSnapshotKey &&
+          filesPanel.getState().fileSubtreeKey === environmentSnapshotKey
+        ) {
+          // Keep the renamed branch open the way it was, and forget the old
+          // branch's subtrees so a stale read cannot be merged back.
+          const { expandedFolders, setFolderExpanded } = filesPanel.getState();
+          const expandedInBranch = expandedFolders.filter(inRenamedBranch);
+          for (const path of expandedInBranch) setFolderExpanded(path, false);
+          for (const path of expandedInBranch) {
+            setFolderExpanded(`${renamed}${path.slice(filePath.length)}`, true);
+          }
+        }
         await refreshAllFilesData();
-        toast.success("File renamed", { description: renamed });
+        toast.success(isFolder ? "Folder renamed" : "File renamed", { description: renamed });
         return renamed;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        toast.error("Failed to rename file", { description: message });
+        toast.error(`Failed to rename ${noun}`, { description: message });
         throw error;
       } finally {
         setFileActionPending(null);
@@ -1080,6 +1112,8 @@ export function useFilesPanel() {
       isLocalEnvironment,
       worktreePath,
       refreshAllFilesData,
+      environmentSnapshotKey,
+      filesPanel,
     ],
   );
 

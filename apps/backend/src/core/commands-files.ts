@@ -1644,7 +1644,12 @@ export function resolveWorkspaceFileRename(
   return { source, directory, destination };
 }
 
-/** Rename one regular file in place without replacing an existing path. */
+const RENAME_IN_PLACE = { allowDirectory: true } as const;
+
+/**
+ * Rename one regular file or folder in place without replacing an existing
+ * path. A folder keeps its contents; only its own name changes.
+ */
 export async function renameLocalFile(
   worktreePath: string,
   relativePath: string,
@@ -1653,7 +1658,7 @@ export async function renameLocalFile(
   const rename = resolveWorkspaceFileRename(relativePath, newName);
 
   if (rename.source.toLowerCase() !== rename.destination.toLowerCase()) {
-    await moveConfinedFile(worktreePath, rename.source, rename.destination);
+    await moveConfinedFile(worktreePath, rename.source, rename.destination, {}, RENAME_IN_PLACE);
     return rename.destination;
   }
 
@@ -1664,15 +1669,15 @@ export async function renameLocalFile(
   const stagedName = `.${randomUUID()}.rename`;
   const staged =
     rename.directory === "." ? stagedName : path.posix.join(rename.directory, stagedName);
-  await moveConfinedFile(worktreePath, rename.source, staged);
+  await moveConfinedFile(worktreePath, rename.source, staged, {}, RENAME_IN_PLACE);
   try {
-    await moveConfinedFile(worktreePath, staged, rename.destination);
+    await moveConfinedFile(worktreePath, staged, rename.destination, {}, RENAME_IN_PLACE);
   } catch (error) {
     try {
-      await moveConfinedFile(worktreePath, staged, rename.source);
+      await moveConfinedFile(worktreePath, staged, rename.source, {}, RENAME_IN_PLACE);
     } catch (rollbackError) {
       throw new Error(
-        `Rename failed and the original path could not be restored. Recover the original file from ${staged}. ${error instanceof Error ? error.message : String(error)}`,
+        `Rename failed and the original path could not be restored. Recover the original from ${staged}. ${error instanceof Error ? error.message : String(error)}`,
         { cause: rollbackError },
       );
     }
@@ -2121,8 +2126,9 @@ export function containerDeleteFileCommand(target: string): string {
 export const CONTAINER_PINNED_FILE_MOVE = String.raw`
 const fs = require("node:fs"), path = require("node:path");
 const { dlopen, FFIType, ptr, read } = require("bun:ffi");
-const [rootPath, source, directory, destination] = process.argv.slice(1);
+const [rootPath, source, directory, destination, mode] = process.argv.slice(1);
 const sourceParent = path.posix.dirname(source), destinationParent = path.posix.dirname(destination);
+const allowDirectory = mode === "rename-in-place";
 const sourceName = path.posix.basename(source), destinationName = path.posix.basename(destination);
 const encoded = value => Buffer.from(value + "\0");
 const isMac = process.platform === "darwin";
@@ -2168,12 +2174,15 @@ const assertStillNamed = (relativeDirectory, fd) => {
 };
 let rootFd;
 try {
+  if (allowDirectory && sourceParent !== destinationParent) fail("A folder can only be renamed in place");
+  const notMovable = (allowDirectory ? "Source is not a regular file or folder: " : "Source is not a regular file: ") + source;
   rootFd = fs.openSync(rootPath, directoryFlags);
   const sourceParentFd = openDirectory(rootFd, sourceParent, "Source directory");
   const destinationParentFd = openDirectory(rootFd, destinationParent, "Destination directory");
   const sourceFd = openAt(sourceParentFd, sourceName, fileFlags);
-  if (sourceFd < 0) fail(errno() === 2 ? "Source no longer exists: " + source : "Source is not a regular file: " + source);
-  if (!fs.fstatSync(sourceFd).isFile()) fail("Source is not a regular file: " + source);
+  if (sourceFd < 0) fail(errno() === 2 ? "Source no longer exists: " + source : notMovable);
+  const sourceStats = fs.fstatSync(sourceFd);
+  if (!sourceStats.isFile() && !(allowDirectory && sourceStats.isDirectory())) fail(notMovable);
   assertStillNamed(sourceParent, sourceParentFd);
   assertStillNamed(destinationParent, destinationParentFd);
   const sourceBytes = encoded(sourceName), destinationBytes = encoded(destinationName);
@@ -2182,7 +2191,7 @@ try {
     : library.symbols.renameat2(sourceParentFd, ptr(sourceBytes), destinationParentFd, ptr(destinationBytes), 1);
   if (result !== 0) {
     const code = errno();
-    if (code === 17) fail("A file already exists at " + destination);
+    if (code === 17) fail((allowDirectory ? "A file or folder already exists at " : "A file already exists at ") + destination);
     if (code === 2) fail("Source no longer exists: " + source);
     if (code === 18) fail("Source and destination must be on the same filesystem");
     fail("Unable to move file safely: " + source);
@@ -2198,11 +2207,18 @@ try {
 }
 `.trim();
 
+/**
+ * Moves one regular file inside the container workspace. With
+ * `renameInPlace`, the source may also be a folder, and source and
+ * destination must share a parent.
+ */
 export function containerMoveFileCommand(
   source: string,
   directory: string,
   destination: string,
+  options: { renameInPlace?: boolean } = {},
 ): string {
+  const mode = options.renameInPlace ? " rename-in-place" : "";
   return `
     set -euo pipefail
     cd /workspace
@@ -2216,7 +2232,7 @@ export function containerMoveFileCommand(
       echo "File is already in $directory" >&2
       exit 1
     fi
-    bun -e ${quoteShell(CONTAINER_PINNED_FILE_MOVE)} -- /workspace "$source" "$directory" "$destination"
+    bun -e ${quoteShell(CONTAINER_PINNED_FILE_MOVE)} -- /workspace "$source" "$directory" "$destination"${mode}
   `;
 }
 

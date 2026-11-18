@@ -1500,6 +1500,88 @@ describe("useFilesPanel", () => {
     expect(result.current.fileActionPending).toBeNull();
   });
 
+  test("blocks renaming a folder that holds a file open in any pane", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores(environment);
+    appCommandStore(paneLayoutStore).setState({
+      activeEnvironmentId: "env-local",
+      environments: new Map([
+        [
+          "env-local",
+          {
+            containerId: null,
+            activePaneId: "pane",
+            root: {
+              kind: "leaf",
+              id: "pane",
+              activeTabId: "file-tab",
+              tabs: [
+                {
+                  id: "file-tab",
+                  type: "file",
+                  fileData: {
+                    filePath: "src/App.tsx",
+                    isLocalEnvironment: true,
+                    worktreePath: "/tmp/worktree",
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      ]),
+    });
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
+
+    await act(async () => {
+      await expect(result.current.renameFile("src", "lib", { target: "folder" })).rejects.toThrow(
+        "Close the editor tabs of files in this folder before renaming it",
+      );
+    });
+    expect(mockRenameLocalFile).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith("Failed to rename folder", {
+      description: "Close the editor tabs of files in this folder before renaming it",
+    });
+    expect(result.current.fileActionPending).toBeNull();
+  });
+
+  test("renames a folder with folder wording and keeps its expanded branch open", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    appCommandStore(filesPanelStore).setState({
+      expandedFolders: ["src", "src/hooks", "srcs", "docs"],
+    });
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
+
+    await act(async () => {
+      await expect(result.current.renameFile("src", "lib", { target: "folder" })).resolves.toBe(
+        "lib",
+      );
+    });
+    expect(mockRenameContainerFile).toHaveBeenCalledWith("env-container", "src", "lib");
+    expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
+    expect(mockToastSuccess).toHaveBeenCalledWith("Folder renamed", { description: "lib" });
+    expect([...appCommandStore(filesPanelStore).getState().expandedFolders].sort()).toEqual([
+      "docs",
+      "lib",
+      "lib/hooks",
+      "srcs",
+    ]);
+    expect(result.current.fileActionPending).toBeNull();
+  });
+
   test("keeps pending state while a mutation runs and clears it after failure", async () => {
     const environment = createMockEnvironment({
       id: "env-container",

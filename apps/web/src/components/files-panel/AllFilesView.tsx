@@ -53,7 +53,11 @@ interface AllFilesViewProps {
   onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
   onCopyFiles?: (files: File[], destinationDirectory: string) => void;
   onCreateFolder?: (parentDirectory: string, folderName: string) => Promise<string>;
-  onRename?: (path: string, newName: string) => Promise<string>;
+  onRename?: (
+    path: string,
+    newName: string,
+    options?: { target?: "file" | "folder" },
+  ) => Promise<string>;
   movePending?: boolean;
   /** Opens a file when no environment panes are mounted (the project root). */
   onOpenFile?: (path: string, options?: CreateFileTabOptions) => void;
@@ -110,7 +114,9 @@ export function AllFilesView({
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [moveSourcePaths, setMoveSourcePaths] = useState<string[] | null>(null);
   const [createParentDirectory, setCreateParentDirectory] = useState<string | null>(null);
-  const [renamePath, setRenamePath] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ path: string; isFolder: boolean } | null>(
+    null,
+  );
   const [isRootDragOver, setIsRootDragOver] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [anchorPath, setAnchorPath] = useState<string | null>(null);
@@ -192,16 +198,27 @@ export function AllFilesView({
 
   const handleRename = async (path: string, newName: string) => {
     if (!onRename) return;
-    // The refreshed tree can prune the old path before onRename resolves.
-    const wasSelected = selectedPaths.includes(path);
-    const wasAnchor = anchorPath === path;
-    const renamed = await onRename(path, newName);
+    const isFolder = renameTarget?.path === path && renameTarget.isFolder;
+    // A renamed folder carries its selected files with it.
+    const isAffected = (candidate: string) =>
+      candidate === path || (isFolder && candidate.startsWith(`${path}/`));
+    // The refreshed tree can prune the old paths before onRename resolves.
+    const previouslySelected = selectedPaths.filter(isAffected);
+    const previousAnchor = anchorPath;
+    const renamed = await onRename(path, newName, { target: isFolder ? "folder" : "file" });
+    const remap = (candidate: string) =>
+      isAffected(candidate) ? `${renamed}${candidate.slice(path.length)}` : candidate;
+    const restored = previouslySelected.map(remap);
     setSelectedPaths((current) => {
-      const next = current.map((selected) => (selected === path ? renamed : selected));
-      return wasSelected && !next.includes(renamed) ? [...next, renamed] : next;
+      const next = current.map(remap);
+      return [...next, ...restored.filter((selected) => !next.includes(selected))];
     });
-    setAnchorPath((current) => (wasAnchor || current === path ? renamed : current));
-    setRenamePath(null);
+    setAnchorPath((current) => {
+      const anchor =
+        previousAnchor !== null && isAffected(previousAnchor) ? previousAnchor : current;
+      return anchor === null ? null : remap(anchor);
+    });
+    setRenameTarget(null);
   };
 
   const moveTo = (destinationDirectory: string) => {
@@ -348,7 +365,9 @@ export function AllFilesView({
             onMove={onMove}
             onCopyFiles={onCopyFiles}
             onRequestMove={onMove ? setMoveSourcePaths : undefined}
-            onRequestRename={onRename ? setRenamePath : undefined}
+            onRequestRename={
+              onRename ? (path, isFolder) => setRenameTarget({ path, isFolder }) : undefined
+            }
             onCreateFolder={requestCreateFolder}
             movePending={movePending}
           />
@@ -366,9 +385,10 @@ export function AllFilesView({
         onCreate={handleCreateFolder}
       />
       <RenameFileDialog
-        filePath={renamePath}
+        filePath={renameTarget?.path ?? null}
+        isFolder={renameTarget?.isFolder ?? false}
         isPending={movePending}
-        onCancel={() => setRenamePath(null)}
+        onCancel={() => setRenameTarget(null)}
         onRename={handleRename}
       />
       <Dialog

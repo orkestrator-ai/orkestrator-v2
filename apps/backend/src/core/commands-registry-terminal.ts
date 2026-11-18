@@ -1593,7 +1593,9 @@ export function registerTerminalCommands(
       const rename = resolveWorkspaceFileRename(filePath, newName);
       await dockerExec(
         id,
-        containerMoveFileCommand(rename.source, rename.directory, rename.destination),
+        containerMoveFileCommand(rename.source, rename.directory, rename.destination, {
+          renameInPlace: true,
+        }),
       );
       context.runtime.diffStats.service.invalidateChanges({ containerId: id });
       context.runtime.diffStats.service.refresh(environmentIdString);

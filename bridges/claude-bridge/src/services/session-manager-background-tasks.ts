@@ -10,13 +10,18 @@ import { MAX_SHELL_TASK_DETAILS, updateSessionPreferences } from "./session-pref
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import { sessions } from "./session-manager-core.js";
-import type { BackgroundTaskSystemMessage } from "./session-manager-messages.js";
+import type { BackgroundTaskSystemMessage } from "./session-manager-task-records.js";
 import type { ClaudeRuntime } from "./session-manager-runtime.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   backgroundTasksForSnapshot,
   LIVE_BACKGROUND_TASK_STATUSES,
 } from "./background-task-snapshot.js";
+import {
+  isWorkflowTaskEdge,
+  mergeWorkflowProgress,
+  settleWorkflowAgents,
+} from "./background-task-workflow.js";
 
 const log = createLogger("bridge.claude");
 
@@ -271,6 +276,12 @@ type BackgroundTaskMetadata = Pick<
   | "progressSummary"
   | "pausedMs"
   | "endReason"
+  | "workflowAgents"
+  | "workflowAgentsOmitted"
+  | "workflowAgentCounts"
+  | "workflowAgentIds"
+  | "workflowAgentLabels"
+  | "workflowRunId"
 >;
 
 const BACKGROUND_TASK_METADATA_KEYS = [
@@ -285,6 +296,12 @@ const BACKGROUND_TASK_METADATA_KEYS = [
   "progressSummary",
   "pausedMs",
   "endReason",
+  "workflowAgents",
+  "workflowAgentsOmitted",
+  "workflowAgentCounts",
+  "workflowAgentIds",
+  "workflowAgentLabels",
+  "workflowRunId",
 ] as const satisfies ReadonlyArray<keyof BackgroundTaskMetadata>;
 
 /**
@@ -311,20 +328,52 @@ export const RUN_SCOPED_TASK_METADATA_RESET = {
   progressSummary: undefined,
   pausedMs: undefined,
   endReason: undefined,
+  workflowAgents: undefined,
+  workflowAgentsOmitted: undefined,
+  workflowAgentCounts: undefined,
+  workflowAgentIds: undefined,
+  workflowAgentLabels: undefined,
+  workflowRunId: undefined,
 } as const satisfies BackgroundTaskMetadata;
 
-/** The metadata one parsed task message reports, carrying only fields it has. */
-export function taskMessageMetadata(message: BackgroundTaskSystemMessage): BackgroundTaskMetadata {
+/**
+ * The metadata one parsed task message reports, carrying only fields it has.
+ *
+ * `previous` is the task's record before this message, which is what says a
+ * frame with no list of its own still belongs to a workflow: a workflow's
+ * progress frames name its latest agent where other tasks put their own name
+ * and tool, so those become its status line instead.
+ */
+export function taskMessageMetadata(
+  message: BackgroundTaskSystemMessage,
+  previous?: BackgroundTaskSnapshot,
+): BackgroundTaskMetadata {
+  const workflow = isWorkflowTaskEdge(message, previous);
+  // On every other subtype `summary` is the terminal report, not a status.
+  // Agent-specific workflow progress carries a label in last_tool_name and
+  // the phase and label in description. Heartbeats and closing frames carry
+  // rows too, but repeat the launch title without naming an agent.
+  const progressSummary =
+    message.subtype !== "task_progress"
+      ? undefined
+      : workflow
+        ? message.last_tool_name && message.description
+        : message.summary;
   return {
-    ...(message.task_type ? { taskType: message.task_type } : {}),
+    ...(message.task_type
+      ? { taskType: message.task_type }
+      : workflow
+        ? { taskType: "local_workflow" }
+        : {}),
     ...(message.parent_task_id ? { parentTaskId: message.parent_task_id } : {}),
     ...(message.prompt ? { prompt: message.prompt } : {}),
     ...(message.workflow_name ? { workflowName: message.workflow_name } : {}),
     ...(message.ambient ? { ambient: true } : {}),
-    ...(message.last_tool_name ? { lastToolName: message.last_tool_name } : {}),
-    // On every other subtype `summary` is the terminal report, not a status.
-    ...(message.subtype === "task_progress" && message.summary
-      ? { progressSummary: message.summary }
+    ...(message.last_tool_name && !workflow ? { lastToolName: message.last_tool_name } : {}),
+    ...(progressSummary ? { progressSummary } : {}),
+    ...(workflow && message.run_id ? { workflowRunId: message.run_id } : {}),
+    ...(message.workflow_progress
+      ? mergeWorkflowProgress(message.workflow_progress, previous)
       : {}),
     ...(message.patch?.total_paused_ms !== undefined
       ? { pausedMs: message.patch.total_paused_ms }
@@ -628,6 +677,33 @@ export const NO_CONTROL_CHANNEL: StopBackgroundTaskResult = {
   message: "No live Claude control channel can reach this task",
 };
 
+/** Keep the terminal agent list across eviction and bridge restarts. */
+export function persistSettledWorkflowDetails(
+  session: SessionState,
+  task: BackgroundTaskSnapshot,
+): void {
+  if (
+    !session.sdkSessionId ||
+    !task.toolUseId ||
+    !task.workflowAgents ||
+    LIVE_BACKGROUND_TASK_STATUSES.has(task.status)
+  )
+    return;
+  void updateSessionPreferences(session.sdkSessionId, {
+    workflowTaskDetails: [
+      {
+        taskId: task.id,
+        toolUseId: task.toolUseId,
+        workflowAgents: task.workflowAgents,
+        workflowAgentsOmitted: task.workflowAgentsOmitted,
+        usage: task.usage,
+      },
+    ],
+  }).catch((error) =>
+    log.warn("task.details-persist-failed", { error: formatLogError(error, { message: false }) }),
+  );
+}
+
 /**
  * Move one task to a terminal state and forget which handle owned it.
  *
@@ -644,15 +720,20 @@ export function settleBackgroundTask(
 ): boolean {
   const previous = session.backgroundTasks?.[taskId];
   if (!previous || !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)) return false;
-  session.backgroundTasks = boundBackgroundTaskHistory({
-    ...session.backgroundTasks,
-    [taskId]: {
+  const task = settleWorkflowAgents(
+    {
       ...previous,
       status,
       endedAt: previous.endedAt ?? Date.now(),
       ...(error !== undefined ? { error: previous.error ?? error } : {}),
     },
+    error,
+  );
+  session.backgroundTasks = boundBackgroundTaskHistory({
+    ...session.backgroundTasks,
+    [taskId]: task,
   });
+  persistSettledWorkflowDetails(session, task);
   releaseBackgroundTask(session, taskId);
   // The process that owned it stays up; its idle window decides when it goes.
   session.finishTurnInputIfSettled?.();
@@ -713,6 +794,17 @@ export async function stopBackgroundTask(
   if (typeof stopTask !== "function") {
     return NO_CONTROL_CHANNEL;
   }
+  const workflowRunReplaced = () => {
+    if (task.taskType !== "local_workflow") return false;
+    const latest =
+      session.backgroundTasks?.[taskId] ?? session.claudeRuntime?.tasks.settling.get(taskId);
+    return (
+      latest !== undefined &&
+      (latest.startedAt !== task.startedAt ||
+        (task.workflowRunId !== undefined && latest.workflowRunId !== task.workflowRunId) ||
+        (task.toolUseId !== undefined && latest.toolUseId !== task.toolUseId))
+    );
+  };
   // Before the request: the CLI's `stopped` edge can come back ahead of its
   // answer to it.
   const { stopRequested } = owner!.tasks;
@@ -722,6 +814,7 @@ export async function stopBackgroundTask(
   try {
     await stopTask.call(control, taskId);
   } catch (error) {
+    if (workflowRunReplaced()) return NO_CONTROL_CHANNEL;
     // No stop reached the CLI, so a later edge for this task is its own.
     stopRequested.delete(taskId);
     // A terminal provider notification can win the race with the rejected stop
@@ -752,7 +845,7 @@ export async function stopBackgroundTask(
   // only the turn's `for await` loop reads that — a stop issued after the turn
   // has no reader, so the snapshot is patched here rather than waited for. The
   // notification, if one does arrive, lands on the same terminal state.
-  if (settleBackgroundTask(session, taskId, "killed")) {
+  if (!workflowRunReplaced() && settleBackgroundTask(session, taskId, "killed")) {
     emitBackgroundTaskSnapshot(session);
   }
   return { ok: true };

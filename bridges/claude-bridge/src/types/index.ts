@@ -10,6 +10,7 @@ import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interacti
 import type {
   NativeAgentContextCategory,
   NativeAgentCostSource,
+  NativeAgentWorkflowAgentCounts,
 } from "@orkestrator/protocol/native-agent";
 
 export type {
@@ -1068,6 +1069,55 @@ export interface BackgroundTaskSnapshot {
    * process that this session has no record of; see `resumeOrphanScanOutcome`.
    */
   endReason?: "worker_restart" | "resume_cleanup";
+  /**
+   * The agents a `local_workflow` task runs, from its `workflow_progress`.
+   * They are not tasks of their own: no `task_*` frame names them, so this is
+   * the only record of what each one is doing. See `background-task-workflow.ts`.
+   */
+  workflowAgents?: BackgroundWorkflowAgent[];
+  /** Agents the CLI or this bridge left out of `workflowAgents` to bound it. */
+  workflowAgentsOmitted?: number;
+  workflowAgentCounts?: NativeAgentWorkflowAgentCounts;
+  /** Internal only: identity and labels retained through display and CLI compaction. */
+  workflowAgentIds?: ReadonlySet<string>;
+  workflowAgentLabels?: ReadonlyMap<
+    number,
+    Pick<BackgroundWorkflowAgent, "phaseTitle" | "agentType">
+  >;
+  /** Internal only: identifies delayed frames from an earlier workflow run. */
+  workflowRunId?: string;
+}
+
+/** One `workflow_agent` row of a workflow's `workflow_progress`, validated and bounded. */
+export interface BackgroundWorkflowAgent {
+  /** The agent's position in the run; the CLI's identity for the row. */
+  index: number;
+  /** The script's label for the agent. */
+  label: string;
+  /**
+   * The CLI's row state. `start` covers both queued (no `startedAt`) and
+   * starting; `error` covers a failure and an agent stopped with the run.
+   */
+  state: "start" | "progress" | "done" | "error";
+  phaseTitle?: string;
+  /** The id the agent's `SubagentStart`/`SubagentStop` hooks carry. */
+  agentId?: string;
+  agentType?: string;
+  model?: string;
+  lastToolName?: string;
+  /** The CLI's one-line description of the agent's latest tool call. */
+  lastToolSummary?: string;
+  error?: string;
+  tokens?: number;
+  toolCalls?: number;
+  /** Epoch milliseconds. */
+  startedAt?: number;
+  durationMs?: number;
+  cached?: boolean;
+  skipped?: boolean;
+  blocked?: boolean;
+  /** Set when the agent was stopped because the whole run ended. */
+  endedWithRun?: "completed" | "failed" | "stopped";
 }
 
 export interface BackgroundTaskUsage {

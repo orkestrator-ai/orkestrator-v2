@@ -32,6 +32,13 @@ import {
   recordedOwnerState,
 } from "./process-identity.js";
 
+import {
+  boundWorkflowTaskDetails,
+  MAX_WORKFLOW_TASK_DETAILS,
+  parseWorkflowTaskDetails,
+  type WorkflowTaskDetails,
+} from "./background-task-workflow.js";
+
 /** Preferences that must survive a bridge restart. Extend here, not ad hoc. */
 export interface SessionPreferences {
   /**
@@ -81,6 +88,8 @@ export interface SessionPreferences {
   localTranscript?: ClaudeLocalTranscriptEntry[];
   /** Shell-hook enrichment by launching call (one run); updates upsert the newest 256 calls. */
   shellTaskDetails?: ClaudeShellTaskDetails[];
+  /** Agent outcomes the CLI only reported to the SDK, keyed by their Workflow call. */
+  workflowTaskDetails?: WorkflowTaskDetails[];
   /**
    * When the CLI reported that this session's transcript lost lines
    * (`session_writes_lost`). The rollout cannot record its own loss, so this is
@@ -616,6 +625,14 @@ function parsePreferences(raw: string): SessionPreferences | undefined {
       .map(parseShellTaskDetails)
       .filter((entry): entry is ClaudeShellTaskDetails => entry !== undefined);
   }
+  if (Array.isArray(record.workflowTaskDetails)) {
+    preferences.workflowTaskDetails = boundWorkflowTaskDetails(
+      record.workflowTaskDetails.slice(-MAX_WORKFLOW_TASK_DETAILS).flatMap((raw) => {
+        const entry = parseWorkflowTaskDetails(raw);
+        return entry ? [entry] : [];
+      }),
+    );
+  }
   const turnInFlight = parseTurnInFlightMark(record.turnInFlight);
   if (turnInFlight) preferences.turnInFlight = turnInFlight;
   if (
@@ -795,6 +812,16 @@ export async function updateSessionPreferences(
             details.set(entry.toolUseId, { ...previous, ...entry });
           }
           next.shellTaskDetails = Array.from(details.values()).slice(-MAX_SHELL_TASK_DETAILS);
+        }
+        if (update.workflowTaskDetails) {
+          const details = new Map(
+            existing.workflowTaskDetails?.map((entry) => [entry.toolUseId, entry]),
+          );
+          for (const entry of update.workflowTaskDetails) {
+            details.delete(entry.toolUseId);
+            details.set(entry.toolUseId, entry);
+          }
+          next.workflowTaskDetails = boundWorkflowTaskDetails(Array.from(details.values()));
         }
         await writePreferencesFile(path, next);
       });

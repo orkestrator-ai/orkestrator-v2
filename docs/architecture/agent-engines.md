@@ -522,9 +522,21 @@ compatibility surface is spread across the files that normalize the SDK's
 message union into Orkestrator's own `NormalizedMessage`/`NormalizedPart`
 model: `services/session-manager-prompt-handlers/*` (one handler per SDK frame
 type, dispatched in `dispatch.ts`), `services/session-manager-messages.ts`,
-the SDK-facing types and dispositions in `types/index.ts`, and
+the task-frame readers in `services/session-manager-task-records.ts` and
+`services/background-task-workflow.ts` (agent-specific `task_progress` uses
+`description` and `last_tool_name` for the latest agent, while heartbeat
+frames can update the agent list without naming one), the SDK-facing types
+and dispositions in `types/index.ts`, and
 `sdk-compatibility.test.ts`, which drives the installed SDK. Review those on
 every SDK bump.
+
+Workflow cards use the launch description and the task's run ID while the
+workflow is active. The bridge counts reported agents and matches their hook IDs
+before selecting the rows to display. Running and failed agents take priority
+at the 64-row limit. Claude Code 2.1.326 writes the Workflow result and the task
+notification to its rollout. Agent rows arrive through the SDK, so the bridge
+keeps bounded terminal details keyed by the launch call and restores them when
+it reads that rollout.
 
 Turns run through the SDK's `query()` with `includePartialMessages: true` so
 partial assistant output streams as it arrives. Continuation uses the SDK's own

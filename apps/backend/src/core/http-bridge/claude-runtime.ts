@@ -5,6 +5,8 @@ import {
   type NativeAgentBackgroundTaskSummary,
   type NativeAgentBackgroundTaskUsage,
   type NativeAgentTurnActivity,
+  type NativeAgentWorkflowAgent,
+  type NativeAgentWorkflowAgentStatus,
 } from "@orkestrator/protocol/native-agent";
 import { asRecord } from "../agent-provider-runtime.js";
 
@@ -79,10 +81,9 @@ function agentRoleField(value: unknown): { agentRole?: string } {
 }
 
 /** A name passes whole or not at all, for the reason {@link agentRoleField} gives. */
-function nameField<K extends "agentRole" | "parentTaskId" | "workflowName" | "lastToolName">(
-  key: K,
-  value: unknown,
-): Partial<Record<K, string>> {
+function nameField<
+  K extends "agentRole" | "parentTaskId" | "workflowName" | "lastToolName" | "model",
+>(key: K, value: unknown): Partial<Record<K, string>> {
   if (typeof value !== "string") return {};
   const name = value.trim();
   return name.length > 0 &&
@@ -135,6 +136,125 @@ function usageField(value: unknown): { usage?: NativeAgentBackgroundTaskUsage } 
   return { usage: { totalTokens, toolUses, durationMs } };
 }
 
+const WORKFLOW_AGENTS_MAX = 64;
+const CLAUDE_WORKFLOW_SUBAGENT_TYPE = "workflow-subagent";
+const WORKFLOW_AGENT_LABEL_MAX_LENGTH = 200;
+const WORKFLOW_AGENT_LINE_MAX_LENGTH = 200;
+const WORKFLOW_AGENT_ERROR_MAX_LENGTH = 500;
+
+function shortText(value: unknown, max: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim().slice(0, max);
+  return text || undefined;
+}
+
+function nonNegativeCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * The bridge's CLI row state, in the protocol's terms. The CLI reports a
+ * queued agent as `start` with no start time, and an agent stopped because
+ * its workflow ended as an `error` marked `endedWithRun`.
+ */
+function workflowAgentStatus(
+  row: Record<string, unknown>,
+): NativeAgentWorkflowAgentStatus | undefined {
+  switch (row.state) {
+    case "start":
+      return row.startedAt === undefined ? "queued" : "running";
+    case "progress":
+      return "running";
+    case "done":
+      return row.skipped === true ? "skipped" : "completed";
+    case "error":
+      if (row.skipped === true) return "skipped";
+      return row.endedWithRun !== undefined ? "stopped" : "failed";
+    default:
+      return undefined;
+  }
+}
+
+function workflowAgentCountsField(
+  value: unknown,
+): Pick<NativeAgentBackgroundTaskSummary, "workflowAgentCounts"> {
+  const counts = asRecord(value);
+  if (!counts) return {};
+  const { total, running, queued, finished, failed, partial } = counts;
+  const isCount = (count: unknown): count is number =>
+    typeof count === "number" && Number.isSafeInteger(count) && count >= 0;
+  if (
+    !isCount(total) ||
+    !isCount(running) ||
+    !isCount(queued) ||
+    !isCount(finished) ||
+    !isCount(failed) ||
+    running + queued + finished !== total ||
+    failed > finished
+  ) {
+    return {};
+  }
+  return {
+    workflowAgentCounts: {
+      total,
+      running,
+      queued,
+      finished,
+      failed,
+      ...(partial === true ? { partial } : {}),
+    },
+  };
+}
+
+function workflowAgentsField(
+  value: unknown,
+  omitted: unknown,
+): Pick<NativeAgentBackgroundTaskSummary, "workflowAgents" | "workflowAgentsOmitted"> {
+  const rows = Array.isArray(value) ? value : [];
+  const agents = rows.slice(0, WORKFLOW_AGENTS_MAX).flatMap((raw): NativeAgentWorkflowAgent[] => {
+    const row = asRecord(raw);
+    if (!row) return [];
+    const index = row.index;
+    const status = workflowAgentStatus(row);
+    const label = shortText(row.label, WORKFLOW_AGENT_LABEL_MAX_LENGTH);
+    if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0) return [];
+    if (!status || !label) return [];
+    const phase = shortText(row.phaseTitle, WORKFLOW_AGENT_LABEL_MAX_LENGTH);
+    const activity = shortText(row.lastToolSummary, WORKFLOW_AGENT_LINE_MAX_LENGTH);
+    const error = shortText(row.error, WORKFLOW_AGENT_ERROR_MAX_LENGTH);
+    const totalTokens = nonNegativeCount(row.tokens);
+    const toolUses = nonNegativeCount(row.toolCalls);
+    const durationMs = nonNegativeCount(row.durationMs);
+    const startedAt = isoFromEpoch(row.startedAt);
+    return [
+      {
+        index,
+        label,
+        status,
+        ...(phase ? { phase } : {}),
+        // Claude Code's default type for every workflow agent names no role.
+        ...(row.agentType === CLAUDE_WORKFLOW_SUBAGENT_TYPE
+          ? {}
+          : nameField("agentRole", row.agentType)),
+        ...nameField("model", row.model),
+        ...nameField("lastToolName", row.lastToolName),
+        ...(activity ? { activity } : {}),
+        ...(error ? { error } : {}),
+        ...(totalTokens !== undefined ? { totalTokens } : {}),
+        ...(toolUses !== undefined ? { toolUses } : {}),
+        ...(startedAt ? { startedAt } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(row.cached === true ? { cached: true } : {}),
+      },
+    ];
+  });
+  const dropped = (nonNegativeCount(omitted) ?? 0) + Math.max(0, rows.length - WORKFLOW_AGENTS_MAX);
+  return {
+    ...(agents.length > 0 ? { workflowAgents: agents } : {}),
+    ...(dropped > 0 ? { workflowAgentsOmitted: dropped } : {}),
+  };
+}
+
 export function normalizeClaudeBackgroundTasks(
   value: unknown,
 ): NativeAgentBackgroundTaskSummary[] | undefined {
@@ -174,6 +294,8 @@ export function normalizeClaudeBackgroundTasks(
           ...textField("progressSummary", task.progressSummary),
           ...pausedMsField(task.pausedMs),
           ...endReasonField(task.endReason),
+          ...workflowAgentsField(task.workflowAgents, task.workflowAgentsOmitted),
+          ...workflowAgentCountsField(task.workflowAgentCounts),
         },
       ];
     });

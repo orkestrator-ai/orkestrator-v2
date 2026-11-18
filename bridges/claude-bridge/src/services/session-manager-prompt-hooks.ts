@@ -9,11 +9,13 @@ import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { SessionState } from "../types/index.js";
 import { recordClaudeToolDenied } from "./change-evidence.js";
 import { commandChangeHooks } from "./command-changes.js";
+import { isWorkflowAgentHook } from "./background-task-workflow.js";
 import { eventEmitter } from "./event-emitter.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
   backgroundTaskOwner,
   emitBackgroundTaskSnapshot,
+  parkSettlingBackgroundTask,
   recordBackgroundTaskLaunch,
   recordShellCommand,
   recordShellResult,
@@ -115,6 +117,16 @@ export async function recordBackgroundTaskHook(
       : hookInput.agent_id;
   const owner = backgroundTaskOwner(session, hookTaskId);
   if (owner && owner !== turn.runtime) return {};
+  // A workflow's agents are rows of the workflow, not tasks: no frame would
+  // ever describe or settle such a record, and the CLI starts no turn when
+  // one stops. The workflow task itself holds this process's liveness.
+  if (
+    (hookInput.hook_event_name === "SubagentStart" ||
+      hookInput.hook_event_name === "SubagentStop") &&
+    isWorkflowAgentHook(session.backgroundTasks, hookInput.agent_id, hookInput.agent_type)
+  ) {
+    return {};
+  }
   if (
     hookInput.hook_event_name === "TaskCreated" ||
     hookInput.hook_event_name === "SubagentStart"
@@ -159,8 +171,25 @@ export async function recordBackgroundTaskHook(
       LIVE_BACKGROUND_TASK_STATUSES.has(session.backgroundTasks?.[taskId]?.status ?? "completed") &&
       !stopRequestedEdge(turn.runtime, taskId, undefined);
     if (settlesReleasedTurn) {
-      turn.receivedResult = false;
-      waitForContinuationAfterNotification(turn);
+      const task = session.backgroundTasks?.[taskId];
+      const workflowMayClaimStop =
+        hookInput.hook_event_name === "SubagentStop" &&
+        task?.taskType === undefined &&
+        Array.from(turn.runtime.tasks.live).some((id) => {
+          const candidate = session.backgroundTasks?.[id];
+          return (
+            candidate?.taskType === "local_workflow" &&
+            LIVE_BACKGROUND_TASK_STATUSES.has(candidate.status)
+          );
+        });
+      if (workflowMayClaimStop && task) {
+        // A pending workflow row may claim this hook. Keep the owner available
+        // for a real task_notification without making its root reply owed yet.
+        parkSettlingBackgroundTask(turn.runtime, task);
+      } else {
+        turn.receivedResult = false;
+        waitForContinuationAfterNotification(turn);
+      }
     }
     if (settleBackgroundTask(session, taskId, "completed")) {
       emitBackgroundTaskSnapshot(session);

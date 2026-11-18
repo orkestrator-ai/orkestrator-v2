@@ -53,6 +53,7 @@ import { TmuxComposeFocusFixture, installTmuxComposeFocusFixture } from "./TmuxC
 import { AgentUsageFixture } from "./AgentUsageFixture";
 import { AddProjectDialogFixture } from "./AddProjectDialogFixture";
 import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
+import { WorkflowAgentsFixture } from "./WorkflowAgentsFixture";
 import { CodexSubagentCardsFixture } from "./CodexSubagentCardsFixture";
 import { MachinesSettingsFixture } from "./MachinesSettingsFixture";
 import { DesignCanvasFixture, installDesignCanvasFixture } from "./DesignCanvasFixture";
@@ -2357,6 +2358,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/ended-agent") return <EndedAgentFixture />;
   if (window.location.pathname === "/background-task-outcome")
     return <BackgroundTaskOutcomeFixture />;
+  if (window.location.pathname === "/workflow-agents") return <WorkflowAgentsFixture />;
   if (window.location.pathname === "/codex-subagent-cards") return <CodexSubagentCardsFixture />;
   if (window.location.pathname === "/opencode-pipeline-transcript")
     return <OpenCodePipelineTranscriptFixture />;

@@ -326,7 +326,7 @@ export function withProviderContextWindow(
   contextWindow: number | undefined,
   fallback?: NativeAgentContextUsage,
 ): NativeAgentContextUsage | undefined {
-  if (!usage) return usage;
+  if (!usage || usage.occupancyUnknown) return usage;
   const maximumTokens =
     usage.maximumTokens ??
     (contextWindow !== undefined && contextWindow > 0 ? contextWindow : undefined) ??

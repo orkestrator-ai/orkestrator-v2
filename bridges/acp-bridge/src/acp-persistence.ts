@@ -19,7 +19,8 @@ import {
   parsePersistedComposerState,
   type AcpNormalizedSessionConfig,
 } from "./session-config.js";
-import { parseAcpTurnUsage } from "./usage.js";
+import { parsePersistedAcpTurnUsage } from "./usage.js";
+import { restoreSessionCost } from "./acp-usage-cost.js";
 import {
   AcpProcess,
   MAX_MESSAGE_TEXT_BYTES,
@@ -156,16 +157,18 @@ export function restoreSessionConfig(candidate: JsonObject): AcpNormalizedSessio
  */
 export function restorePersistedUsage(value: unknown): PersistedUsage | null {
   if (!isObject(value)) return null;
-  const turn = parseAcpTurnUsage(value.turn);
+  const turn = parsePersistedAcpTurnUsage(value.turn);
+  const cost = restoreSessionCost(value.cost);
   if (
-    !turn ||
+    (!turn && !cost) ||
     typeof value.updatedAt !== "string" ||
     !Number.isFinite(Date.parse(value.updatedAt))
   ) {
     return null;
   }
   return {
-    turn,
+    turn: turn ?? {},
+    ...(cost ? { cost } : {}),
     ...(Array.isArray(value.turns)
       ? {
           turns: value.turns.slice(-20).flatMap((candidate) => {
@@ -175,6 +178,12 @@ export function restorePersistedUsage(value: unknown): PersistedUsage | null {
             const entry: NonNullable<PersistedUsage["turns"]>[number] = { turnId };
             // Restored so a turn kept across a restart is still dated by when
             // it ran, not by when the reattached session republishes it.
+            if (
+              typeof candidate.revision === "number" &&
+              Number.isSafeInteger(candidate.revision) &&
+              candidate.revision > 0
+            )
+              entry.revision = candidate.revision;
             if (typeof candidate.at === "string" && candidate.at) entry.at = candidate.at;
             for (const key of [
               "costUsd",
@@ -187,6 +196,15 @@ export function restorePersistedUsage(value: unknown): PersistedUsage | null {
               "durationMs",
               "apiDurationMs",
             ] as const) {
+              if (
+                key === "costUsd" &&
+                !cost &&
+                ("lastTurnCostUsdTicks" in value ||
+                  "sessionCostUsdTicks" in value ||
+                  turn?.costUsdTicks !== undefined ||
+                  turn?.costUsdTicksUnknown)
+              )
+                continue;
               const number = candidate[key];
               if (typeof number === "number" && Number.isFinite(number) && number >= 0) {
                 entry[key] = number;
@@ -210,12 +228,6 @@ export function restorePersistedUsage(value: unknown): PersistedUsage | null {
       : {}),
     ...(Number.isSafeInteger(value.sessionTokens) && Number(value.sessionTokens) >= 0
       ? { sessionTokens: Number(value.sessionTokens) }
-      : {}),
-    ...(Number.isSafeInteger(value.lastTurnCostUsdTicks) && Number(value.lastTurnCostUsdTicks) >= 0
-      ? { lastTurnCostUsdTicks: Number(value.lastTurnCostUsdTicks) }
-      : {}),
-    ...(Number.isSafeInteger(value.sessionCostUsdTicks) && Number(value.sessionCostUsdTicks) >= 0
-      ? { sessionCostUsdTicks: Number(value.sessionCostUsdTicks) }
       : {}),
     ...(typeof value.modelId === "string" ? { modelId: value.modelId.slice(0, 1_024) } : {}),
     ...(Number.isSafeInteger(value.durationMs) && Number(value.durationMs) >= 0

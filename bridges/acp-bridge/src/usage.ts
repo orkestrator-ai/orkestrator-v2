@@ -135,23 +135,8 @@ function parseUsdCost(value: Record<string, unknown>): number | undefined {
   return money(cost.amount);
 }
 
-/**
- * Carriers whose `costUsdTicks` would be one turn's cost.
- *
- * Evidence (Grok 1.0.77, the pinned binary, read 2026-11-18): `costUsdTicks`
- * is a field of the `PromptUsage` struct, beside `modelCalls`,
- * `costIsPartial` and `usageIsIncomplete`, which is what `turn_completed`'s
- * `usage` and the prompt result's `_meta.usage` carry. Its token counts are
- * the prompt's own (the recorded fixture: one model call, 15,675 tokens,
- * 226,620,000 ticks = $0.022662), so the ticks beside them are that prompt's
- * spend, not a running session total. `response_completed` carries
- * `ResponseUsage`, which has no tick field, and ACP `usage_update` is a
- * session snapshot; ticks on either would have an unknown scope, so they are
- * refused rather than guessed at.
- */
-function carriesTurnCostTicks(kind: string): boolean {
-  return kind !== "usage_update" && kind !== "response_completed";
-}
+/** Keep off until the two-turn billing reconciliation in task 11 passes. */
+export const GROK_TICK_COSTS_QUALIFIED = false;
 
 function tickCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
@@ -193,6 +178,7 @@ function payloadKind(value: Record<string, unknown>): string {
 function parseAcpTurnUsageObject(
   value: Record<string, unknown>,
   kind: string,
+  carriesTicks: boolean,
 ): AcpTurnUsage | null {
   const nested = isObject(value.usage) ? value.usage : undefined;
   const usage: AcpTurnUsage = {};
@@ -207,7 +193,7 @@ function parseAcpTurnUsageObject(
   }
   const costUsd = parseUsdCost(nested ?? {}) ?? parseUsdCost(value);
   if (costUsd !== undefined) usage.costUsd = costUsd;
-  if (carriesTurnCostTicks(kind)) parseCostUsdTicks(usage, [nested, value]);
+  if (carriesTicks) parseCostUsdTicks(usage, [nested, value]);
 
   // ACP `usage_update` uses `used`/`size`, which are too generic to accept on
   // every payload. The discriminator is required; persist restore already
@@ -235,13 +221,28 @@ function parseAcpTurnUsageObject(
  * governs its `_meta` too, so a `usage_update`'s `_meta` cannot smuggle in
  * ticks.
  */
-export function parseAcpTurnUsage(value: unknown): AcpTurnUsage | null {
+export function parseAcpTurnUsage(
+  value: unknown,
+  source?: { provider: string; carrier: "notification" | "prompt-result" },
+): AcpTurnUsage | null {
   if (!isObject(value)) return null;
   const kind = payloadKind(value);
-  const fromMeta = isObject(value._meta) ? parseAcpTurnUsageObject(value._meta, kind) : null;
-  const fromValue = parseAcpTurnUsageObject(value, kind);
+  // Grok 1.0.77 puts PromptUsage on turn_completed and the prompt response.
+  const carriesTicks =
+    source?.provider === "grok" &&
+    (source.carrier === "prompt-result"
+      ? kind === "" && typeof value.stopReason === "string"
+      : kind === "turn_completed");
+  const fromMeta = isObject(value._meta)
+    ? parseAcpTurnUsageObject(value._meta, kind, carriesTicks)
+    : null;
+  const fromValue = parseAcpTurnUsageObject(value, kind, carriesTicks);
   const merged = { ...fromMeta, ...fromValue };
   return Object.keys(merged).length > 0 ? merged : null;
+}
+
+export function parsePersistedAcpTurnUsage(value: unknown): AcpTurnUsage | null {
+  return isObject(value) ? parseAcpTurnUsageObject(value, "", true) : null;
 }
 
 /** A turn's tick cost when it is trustworthy; `undefined` means unknown. */
@@ -254,28 +255,6 @@ export function ticksToUsd(ticks: number): number {
 }
 
 /**
- * The session's tick total after one more turn is counted, or `undefined`
- * once any counted turn's cost is unknown.
- *
- * A turn reaches here only when it reported tokens, so a turn without
- * qualified ticks is a turn whose cost is missing, not a free one; the total
- * stays unknown from then on rather than silently under-counting. A session
- * with no tokens counted yet starts from zero.
- */
-export function addSessionCostUsdTicks(
-  previousSessionTicks: number | undefined,
-  previousSessionTokens: number | undefined,
-  turn: AcpTurnUsage,
-): number | undefined {
-  const turnTicks = qualifiedCostUsdTicks(turn);
-  if (turnTicks === undefined) return undefined;
-  const base = previousSessionTicks ?? ((previousSessionTokens ?? 0) === 0 ? 0 : undefined);
-  if (base === undefined) return undefined;
-  const total = base + turnTicks;
-  return Number.isSafeInteger(total) ? total : undefined;
-}
-
-/**
  * Project one turn's usage onto the provider-neutral snapshot the agent info
  * panel renders.
  *
@@ -283,13 +262,7 @@ export function addSessionCostUsdTicks(
  * token total is the closest thing Grok offers: an agent's input already
  * contains the whole conversation.
  *
- * `costUsd` is the session's cost. An explicit USD `usage_update.cost` is
- * ACP's cumulative session figure and takes precedence. Without one, the
- * session's summed Grok ticks (`sessionCostUsdTicks`, kept by the session as
- * each turn is counted) are shown, converted at `GROK_TICKS_PER_USD`. A
- * session whose tick total became unknown shows no cost at all. The last
- * turn's own ticks are never shown here: that would be a per-turn amount
- * under a session label (the per-turn amount goes on the turn's row).
+ * The caller supplies the session-scoped cost alongside the latest token usage.
  */
 export function acpContextUsage(
   usage: AcpTurnUsage,
@@ -298,14 +271,13 @@ export function acpContextUsage(
     durationMs?: number;
     lastTurnTokens?: number;
     sessionTokens?: number;
-    /** Summed qualified Grok ticks of every counted turn; absent when unknown. */
-    sessionCostUsdTicks?: number;
+    sessionCostUsd?: number;
     turns?: NativeAgentContextUsage["turns"];
     source?: NativeAgentContextUsage["source"];
     updatedAt: string;
   },
 ): NativeAgentContextUsage | null {
-  const usedTokens =
+  const observedTokens =
     usage.contextUsedTokens ??
     usage.totalTokens ??
     (usage.inputTokens === undefined &&
@@ -317,19 +289,28 @@ export function acpContextUsage(
         (usage.outputTokens ?? 0) +
         (usage.cacheReadTokens ?? 0) +
         (usage.cacheWriteTokens ?? 0));
-  if (usedTokens === undefined) return null;
+  const costUsd = details.sessionCostUsd ?? usage.costUsd;
+  if (
+    observedTokens === undefined &&
+    costUsd === undefined &&
+    !details.turns?.some((turn) => turn.costUsd !== undefined || turn.revision !== undefined)
+  )
+    return null;
+  // The wire snapshot requires a number. With cost-only usage, omit the
+  // context window and token metrics so no occupancy is presented.
+  const usedTokens = observedTokens ?? 0;
   const durationMs = count(details.durationMs);
-  const sessionTicks = tickCount(details.sessionCostUsdTicks);
-  const costUsd =
-    usage.costUsd ?? (sessionTicks === undefined ? undefined : ticksToUsd(sessionTicks));
   const contextWindow =
-    usage.contextWindow !== undefined && usage.contextWindow > 0 ? usage.contextWindow : undefined;
+    observedTokens !== undefined && usage.contextWindow !== undefined && usage.contextWindow > 0
+      ? usage.contextWindow
+      : undefined;
   const percentage =
     contextWindow === undefined
       ? undefined
       : Math.max(0, Math.min(100, (usedTokens / contextWindow) * 100));
   return {
     usedTokens,
+    ...(observedTokens === undefined ? { occupancyUnknown: true } : {}),
     ...(contextWindow === undefined ? {} : { maximumTokens: contextWindow }),
     ...(percentage === undefined ? {} : { percentage }),
     ...(usage.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
@@ -363,34 +344,12 @@ const TICK_USAGE_FIELDS: ReadonlySet<keyof AcpTurnUsage> = new Set([
   "costUsdTicksUnknown",
 ]);
 
-/**
- * One turn's ticks across its attempts: their sum when every attempt that
- * reported tokens also reported qualified ticks, unknown when only some did
- * (a sum would under-count the turn), and absent when none did.
- */
-function combineAttemptTicks(
-  parts: readonly AcpTurnUsage[],
-): { costUsdTicks: number } | { costUsdTicksUnknown: true } | Record<string, never> {
-  let total: number | undefined;
-  let missing = false;
-  for (const part of parts) {
-    if (part.costUsdTicksUnknown === true) return { costUsdTicksUnknown: true };
-    if (part.costUsdTicks === undefined) {
-      if (acpUsageTokenCount(part) !== undefined) missing = true;
-      continue;
-    }
-    total = (total ?? 0) + part.costUsdTicks;
-  }
-  if (total === undefined) return {};
-  if (missing || !Number.isSafeInteger(total)) return { costUsdTicksUnknown: true };
-  return { costUsdTicks: total };
-}
-
 /** Sum consumption across attempts, retaining the latest session snapshots. */
 export function accumulateAttemptUsage(
-  previous: AcpTurnUsage = {},
+  previous: AcpTurnUsage | undefined,
   attempt: AcpTurnUsage,
 ): AcpTurnUsage {
+  if (!previous) return attempt;
   const combined = { ...previous, ...attempt };
   for (const key of Object.keys(attempt) as Array<keyof AcpTurnUsage>) {
     if (!SNAPSHOT_USAGE_FIELDS.has(key) && !TICK_USAGE_FIELDS.has(key)) {
@@ -399,8 +358,12 @@ export function accumulateAttemptUsage(
     }
   }
   delete combined.costUsdTicks;
-  delete combined.costUsdTicksUnknown;
-  Object.assign(combined, combineAttemptTicks([previous, attempt]));
+  const left = qualifiedCostUsdTicks(previous);
+  const right = qualifiedCostUsdTicks(attempt);
+  const ticks = left === undefined || right === undefined ? undefined : left + right;
+  if (ticks !== undefined && Number.isSafeInteger(ticks)) combined.costUsdTicks = ticks;
+  else if (left !== undefined || right !== undefined) combined.costUsdTicksUnknown = true;
+
   const previousTokens = acpUsageTokenCount(previous);
   const attemptTokens = acpUsageTokenCount(attempt);
   if (previousTokens !== undefined || attemptTokens !== undefined) {

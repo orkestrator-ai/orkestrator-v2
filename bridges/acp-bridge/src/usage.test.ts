@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   accumulateAttemptUsage,
   acpContextUsage,
-  addSessionCostUsdTicks,
+  parsePersistedAcpTurnUsage,
   GROK_TICKS_PER_USD,
   parseAcpTurnUsage,
   qualifiedCostUsdTicks,
@@ -14,20 +14,23 @@ const UPDATED_AT = "2026-08-14T18:00:00.000Z";
 describe("parseAcpTurnUsage", () => {
   test("reads the camelCase breakdown Grok sends with turn_completed", () => {
     expect(
-      parseAcpTurnUsage({
-        sessionUpdate: "turn_completed",
-        usage: {
-          inputTokens: 15_639,
-          outputTokens: 36,
-          totalTokens: 15_675,
-          cachedReadTokens: 5_888,
-          cacheCreationTokens: 0,
-          reasoningTokens: 31,
-          modelCalls: 1,
-          apiDurationMs: 1_448,
-          costUsdTicks: 226_620_000,
+      parseAcpTurnUsage(
+        {
+          sessionUpdate: "turn_completed",
+          usage: {
+            inputTokens: 15_639,
+            outputTokens: 36,
+            totalTokens: 15_675,
+            cachedReadTokens: 5_888,
+            cacheCreationTokens: 0,
+            reasoningTokens: 31,
+            modelCalls: 1,
+            apiDurationMs: 1_448,
+            costUsdTicks: 226_620_000,
+          },
         },
-      }),
+        { provider: "grok", carrier: "notification" },
+      ),
     ).toEqual({
       totalTokens: 15_675,
       inputTokens: 15_639,
@@ -327,42 +330,13 @@ describe("acpContextUsage", () => {
     expect(acpContextUsage({ apiDurationMs: 1_448 }, { updatedAt: UPDATED_AT })).toBeNull();
   });
 
-  test("shows the session's summed Grok ticks as the provider's cost", () => {
-    expect(
-      acpContextUsage(
-        { totalTokens: 15_675, costUsdTicks: 226_620_000 },
-        { sessionCostUsdTicks: 326_620_000, updatedAt: UPDATED_AT },
-      ),
-    ).toMatchObject({ costUsd: 0.032662, costSource: "provider" });
-  });
-
   test("never shows one turn's ticks as the session's cost", () => {
-    // `costUsd` is session-scoped. The last turn's ticks alone, with the
-    // session total unknown, would be a per-turn amount under that label.
     const usage = acpContextUsage(
       { totalTokens: 15_675, costUsdTicks: 226_620_000 },
       { updatedAt: UPDATED_AT },
     );
     expect(usage).not.toBeNull();
     expect(usage).not.toHaveProperty("costUsd");
-    expect(usage).not.toHaveProperty("costSource");
-  });
-
-  test("an explicit USD cost takes precedence over summed ticks", () => {
-    expect(
-      acpContextUsage(
-        { totalTokens: 15_675, costUsd: 0.5, costUsdTicks: 226_620_000 },
-        { sessionCostUsdTicks: 226_620_000, updatedAt: UPDATED_AT },
-      ),
-    ).toMatchObject({ costUsd: 0.5, costSource: "provider" });
-  });
-
-  test("ignores a session tick total that is not a safe integer", () => {
-    for (const sessionCostUsdTicks of [-1, 1.5, Number.NaN, 2 ** 60]) {
-      expect(
-        acpContextUsage({ totalTokens: 1 }, { sessionCostUsdTicks, updatedAt: UPDATED_AT }),
-      ).not.toHaveProperty("costUsd");
-    }
   });
 
   test("an explicit USD cost is the provider's own amount; credits are no cost at all", () => {
@@ -424,6 +398,8 @@ describe("acpContextUsage", () => {
 });
 
 describe("Grok costUsdTicks", () => {
+  const notification = { provider: "grok", carrier: "notification" } as const;
+  const promptResult = { provider: "grok", carrier: "prompt-result" } as const;
   test("converts at 10^10 ticks per USD", () => {
     expect(GROK_TICKS_PER_USD).toBe(10_000_000_000);
     expect(ticksToUsd(226_620_000)).toBeCloseTo(0.022662, 12);
@@ -433,10 +409,13 @@ describe("Grok costUsdTicks", () => {
 
   test("reads ticks from the prompt result's _meta.usage", () => {
     expect(
-      parseAcpTurnUsage({
-        stopReason: "end_turn",
-        _meta: { usage: { totalTokens: 100, costUsdTicks: 5_000_000, modelCalls: 1 } },
-      }),
+      parseAcpTurnUsage(
+        {
+          stopReason: "end_turn",
+          _meta: { usage: { totalTokens: 100, costUsdTicks: 5_000_000, modelCalls: 1 } },
+        },
+        promptResult,
+      ),
     ).toEqual({ totalTokens: 100, costUsdTicks: 5_000_000 });
   });
 
@@ -452,7 +431,10 @@ describe("Grok costUsdTicks", () => {
           _meta: { usage: { totalTokens: 9, costUsdTicks: 7 }, [flag]: true },
         },
       ]) {
-        const usage = parseAcpTurnUsage(payload);
+        const usage = parseAcpTurnUsage(
+          payload,
+          "stopReason" in payload ? promptResult : notification,
+        );
         expect(usage).toMatchObject({ totalTokens: 9, costUsdTicksUnknown: true });
         expect(qualifiedCostUsdTicks(usage!)).toBeUndefined();
       }
@@ -461,10 +443,13 @@ describe("Grok costUsdTicks", () => {
 
   test("a malformed tick value is unknown", () => {
     for (const costUsdTicks of [-1, 1.5, "226620000", Number.NaN, 2 ** 60]) {
-      const usage = parseAcpTurnUsage({
-        sessionUpdate: "turn_completed",
-        usage: { totalTokens: 9, costUsdTicks },
-      });
+      const usage = parseAcpTurnUsage(
+        {
+          sessionUpdate: "turn_completed",
+          usage: { totalTokens: 9, costUsdTicks },
+        },
+        notification,
+      );
       expect(usage).toEqual({ totalTokens: 9, costUsdTicksUnknown: true });
     }
   });
@@ -474,29 +459,35 @@ describe("Grok costUsdTicks", () => {
     // snapshot. Neither carries ticks in Grok 1.0.77; one that did would have
     // an unknown scope.
     expect(
-      parseAcpTurnUsage({
-        sessionUpdate: "response_completed",
-        usage: { input_tokens: 9, costUsdTicks: 7 },
-      }),
+      parseAcpTurnUsage(
+        {
+          sessionUpdate: "response_completed",
+          usage: { input_tokens: 9, costUsdTicks: 7 },
+        },
+        notification,
+      ),
     ).toEqual({ inputTokens: 9 });
     expect(
-      parseAcpTurnUsage({
-        sessionUpdate: "usage_update",
-        used: 10,
-        size: 100,
-        costUsdTicks: 7,
-        _meta: { costUsdTicks: 7 },
-      }),
+      parseAcpTurnUsage(
+        {
+          sessionUpdate: "usage_update",
+          used: 10,
+          size: 100,
+          costUsdTicks: 7,
+          _meta: { costUsdTicks: 7 },
+        },
+        notification,
+      ),
     ).toEqual({ contextUsedTokens: 10, contextWindow: 100 });
   });
 
   test("round-trips the persisted tick fields under their stored names", () => {
-    expect(parseAcpTurnUsage({ totalTokens: 5, costUsdTicks: 3 })).toEqual({
+    expect(parsePersistedAcpTurnUsage({ totalTokens: 5, costUsdTicks: 3 })).toEqual({
       totalTokens: 5,
       costUsdTicks: 3,
     });
     expect(
-      parseAcpTurnUsage({ totalTokens: 5, costUsdTicks: 3, costUsdTicksUnknown: true }),
+      parsePersistedAcpTurnUsage({ totalTokens: 5, costUsdTicks: 3, costUsdTicksUnknown: true }),
     ).toEqual({ totalTokens: 5, costUsdTicksUnknown: true });
   });
 
@@ -533,20 +524,16 @@ describe("Grok costUsdTicks", () => {
     });
   });
 
-  test("the session total starts at zero and becomes unknown at the first gap", () => {
-    expect(addSessionCostUsdTicks(undefined, undefined, { costUsdTicks: 5 })).toBe(5);
-    expect(addSessionCostUsdTicks(undefined, 0, { costUsdTicks: 5 })).toBe(5);
-    expect(addSessionCostUsdTicks(10, 40, { costUsdTicks: 5 })).toBe(15);
-    // A turn without ticks is a missing cost, not a free one.
-    expect(addSessionCostUsdTicks(10, 40, { totalTokens: 4 })).toBeUndefined();
-    expect(addSessionCostUsdTicks(10, 40, { costUsdTicks: 5, costUsdTicksUnknown: true })).toBe(
-      undefined,
-    );
-    // Earlier turns were counted without a known cost (or before ticks were
-    // read at all): the total stays unknown.
-    expect(addSessionCostUsdTicks(undefined, 40, { costUsdTicks: 5 })).toBeUndefined();
-    expect(addSessionCostUsdTicks(Number.MAX_SAFE_INTEGER, 40, { costUsdTicks: 5 })).toBe(
-      undefined,
-    );
+  test("ignores tick-shaped fields outside Grok prompt usage", () => {
+    const usage = { totalTokens: 5, costUsdTicks: 3, costIsPartial: true };
+    expect(parseAcpTurnUsage({ sessionUpdate: "state_update", usage }, notification)).toEqual({
+      totalTokens: 5,
+    });
+    expect(
+      parseAcpTurnUsage({ stopReason: "end_turn", usage }, { ...promptResult, provider: "cursor" }),
+    ).toEqual({ totalTokens: 5 });
+    expect(parseAcpTurnUsage({ stopReason: "end_turn", usage }, notification)).toEqual({
+      totalTokens: 5,
+    });
   });
 });

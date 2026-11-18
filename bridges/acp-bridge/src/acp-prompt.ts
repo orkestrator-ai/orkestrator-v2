@@ -19,6 +19,7 @@ import {
   type JsonObject,
   type SessionState,
 } from "./acp-context.js";
+import { accumulateAttemptUsage } from "./usage.js";
 import { recordTurnUsage } from "./acp-session.js";
 import { STRUCTURED_PROMPT_INSTRUCTION_PREFIX } from "./structured-prompt-marker.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
@@ -295,7 +296,7 @@ export async function requestPromptWithRetriableProviderRetries(
       else if (state.promptDeadlineAt === promptDeadlineAt) state.promptDeadlineAt = undefined;
     }
 
-    recordTurnUsage(state, result);
+    recordTurnUsage(state, result, "prompt-result");
     const flattened = requestError ? null : flattenedRetriableProviderTail(state);
     if (!requestError && !flattened) {
       const last = state.messages.at(-1);
@@ -378,8 +379,14 @@ export async function requestPromptWithRetriableProviderRetries(
 }
 
 function resetEndedAttempt(state: SessionState): void {
-  state.completedAttemptUsage = state.currentTurnUsage;
+  state.completedAttemptUsage = state.currentTurnUsage ?? state.completedAttemptUsage ?? {};
   state.currentAttemptUsage = {};
+  if (provider === "grok") {
+    state.currentTurnUsage = {
+      ...accumulateAttemptUsage(state.completedAttemptUsage, state.currentAttemptUsage),
+      costUsd: undefined,
+    };
+  }
   if (state.currentTurnOutput !== null) state.currentTurnOutput = "";
   reconcileStaleToolParts(state);
   cancelEndedAttemptInteractions(state);

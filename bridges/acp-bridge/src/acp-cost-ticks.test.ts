@@ -1,16 +1,16 @@
 import "./testing/unit-test-env.js";
 import { describe, expect, test } from "bun:test";
-import type { SessionState } from "./acp-context.js";
-import { restorePersistedUsage } from "./acp-persistence.js";
-import { publicContextUsage } from "./acp-public.js";
-import { finalizeTurnUsage, recordTurnUsage } from "./acp-session.js";
+import type { AcpProcess, SessionState } from "./acp-context.js";
 
-/**
- * Grok's `costUsdTicks` through the session: each turn's row carries that
- * turn's own cost, the panel's `costUsd` carries the session total, and an
- * explicit USD figure wins over both. See `usage.ts` for the evidence that
- * the ticks are per prompt.
- */
+const fixtureConfig = process.env.ACP_PROVIDER_CONFIG!;
+process.env.ACP_PROVIDER_CONFIG = JSON.stringify({ ...JSON.parse(fixtureConfig), id: "grok" });
+const { sessions } = await import("./acp-context.js");
+const { restorePersistedUsage } = await import("./acp-persistence.js");
+const { requestPromptWithRetriableProviderRetries } = await import("./acp-prompt.js");
+const { publicContextUsage } = await import("./acp-public.js");
+const { applySessionUpdate, finalizeHistoryReplayTurnUsage, finalizeTurnUsage, recordTurnUsage } =
+  await import("./acp-session.js");
+process.env.ACP_PROVIDER_CONFIG = fixtureConfig;
 
 function newState(): SessionState {
   return {
@@ -22,129 +22,261 @@ function newState(): SessionState {
     approvals: new Map(),
     interactions: new Map(),
     activeSubagentDescriptors: new Map(),
+    uncheckedTranscriptBytes: 0,
+    historyMessageIds: new Map(),
     revision: 0,
     sessionConfig: { composer: {} },
     currentTurnOutput: null,
   } as unknown as SessionState;
 }
 
-/** One turn as the HTTP handler drives it: start, carriers, finalize, clear. */
-function runTurn(state: SessionState, carriers: unknown[]): void {
+function startTurn(state: SessionState): void {
   state.promptSequence += 1;
+  state.status = "running";
   state.turnStartedAt = Date.now();
   state.currentTurnUsage = {};
   state.currentAttemptUsage = {};
   state.completedAttemptUsage = undefined;
   state.currentTurnRequestId = `request-${state.promptSequence}`;
-  for (const carrier of carriers) recordTurnUsage(state, carrier);
-  finalizeTurnUsage(state);
+}
+
+function settleTurn(state: SessionState, qualified?: boolean): void {
+  finalizeTurnUsage(state, qualified);
+  state.status = "idle";
   state.turnStartedAt = undefined;
   state.currentTurnUsage = undefined;
-  state.currentAttemptUsage = undefined;
-  state.completedAttemptUsage = undefined;
   state.currentTurnRequestId = undefined;
 }
 
-/** What Grok sends for one prompt: `turn_completed`, then the prompt result. */
-function grokTurn(totalTokens: number, costUsdTicks: number, extra: Record<string, unknown> = {}) {
-  const usage = { totalTokens, inputTokens: totalTokens - 10, outputTokens: 10, modelCalls: 1 };
-  return [
-    { sessionUpdate: "turn_completed", usage: { ...usage, costUsdTicks, ...extra } },
-    { stopReason: "end_turn", _meta: { usage: { ...usage, costUsdTicks, ...extra } } },
-  ];
+function result(usage: Record<string, unknown>) {
+  return { stopReason: "end_turn", _meta: { usage } };
+}
+
+function complete(state: SessionState, usage: Record<string, unknown>, qualified = true): void {
+  startTurn(state);
+  recordTurnUsage(state, result(usage), "prompt-result");
+  settleTurn(state, qualified);
+}
+
+function late(state: SessionState, usage: Record<string, unknown>): void {
+  recordTurnUsage(state, { sessionUpdate: "turn_completed", usage }, "notification", true);
+}
+
+function costs(state: SessionState) {
+  return state.usage?.turns?.map((turn) => turn.costUsd);
+}
+
+function dashboardUsd(amount: number) {
+  return { sessionUpdate: "usage_update", cost: { amount, currency: "USD" } };
 }
 
 describe("Grok ticks across a session", () => {
-  test("each row has its own turn's cost and the panel shows their sum", () => {
+  test("production withholds tick-derived prices before billing qualification", () => {
     const state = newState();
-    runTurn(state, grokTurn(15_675, 226_620_000));
-    runTurn(state, grokTurn(80_000, 1_250_000_000));
+    startTurn(state);
+    recordTurnUsage(
+      state,
+      result({ totalTokens: 100, costUsdTicks: 200_000_000 }),
+      "prompt-result",
+    );
+    settleTurn(state);
+    expect(state.usage?.cost?.total).toEqual({ usd: 0, ticks: 200_000_000 });
+    expect(costs(state)).toEqual([undefined]);
+    expect(publicContextUsage(state)?.costUsd).toBeUndefined();
+    state.usage = restorePersistedUsage(JSON.parse(JSON.stringify(state.usage))) ?? undefined;
+    expect(publicContextUsage(state)?.costUsd).toBeUndefined();
+    expect(costs(state)).toEqual([undefined]);
+  });
 
-    expect(state.usage?.turns?.map((turn) => [turn.costUsd, turn.costSource])).toEqual([
-      [0.022662, "provider"],
-      [0.125, "provider"],
-    ]);
-    expect(state.usage).toMatchObject({
+  test("two differently priced qualified turns contribute once each", () => {
+    const state = newState();
+    complete(state, { totalTokens: 15_675, costUsdTicks: 226_620_000 });
+    complete(state, { totalTokens: 80_000, costUsdTicks: 1_250_000_000 });
+    expect(costs(state)).toEqual([0.022662, 0.125]);
+    expect(publicContextUsage(state, true)).toMatchObject({
       sessionTokens: 95_675,
-      lastTurnCostUsdTicks: 1_250_000_000,
-      sessionCostUsdTicks: 1_476_620_000,
-    });
-    const usage = publicContextUsage(state);
-    expect(usage?.costUsd).toBeCloseTo(0.147662, 12);
-    expect(usage?.costSource).toBe("provider");
-  });
-
-  test("a partial turn shows no cost and leaves the session total unknown", () => {
-    const state = newState();
-    runTurn(state, grokTurn(100, 1_000));
-    runTurn(state, grokTurn(200, 2_000, { costIsPartial: true }));
-    runTurn(state, grokTurn(300, 3_000));
-
-    expect(state.usage?.turns?.map((turn) => turn.costUsd)).toEqual([
-      1_000 / 1e10,
-      undefined,
-      3_000 / 1e10,
-    ]);
-    expect(state.usage?.sessionCostUsdTicks).toBeUndefined();
-    expect(publicContextUsage(state)).not.toHaveProperty("costUsd");
-  });
-
-  test("a turn with tokens but no ticks leaves the session total unknown", () => {
-    const state = newState();
-    runTurn(state, [{ stopReason: "end_turn", usage: { totalTokens: 40 } }]);
-    runTurn(state, grokTurn(100, 1_000));
-
-    expect(state.usage?.turns?.at(-1)?.costUsd).toBe(1_000 / 1e10);
-    expect(state.usage?.sessionCostUsdTicks).toBeUndefined();
-    expect(publicContextUsage(state)).not.toHaveProperty("costUsd");
-  });
-
-  test("an explicit USD session cost takes precedence over ticks", () => {
-    const state = newState();
-    runTurn(state, [
-      ...grokTurn(100, 1_000),
-      {
-        sessionUpdate: "usage_update",
-        used: 100,
-        size: 1_000,
-        cost: { amount: 0.5, currency: "USD" },
-      },
-    ]);
-
-    expect(state.usage?.turns?.[0]).toMatchObject({ costUsd: 0.5, costSource: "provider" });
-    expect(publicContextUsage(state)).toMatchObject({ costUsd: 0.5, costSource: "provider" });
-  });
-
-  test("a late repeat of the last turn's carrier does not count its ticks twice", () => {
-    const state = newState();
-    runTurn(state, grokTurn(100, 1_000));
-    runTurn(state, grokTurn(200, 2_000));
-    recordTurnUsage(state, grokTurn(200, 2_000)[0]);
-
-    expect(state.usage).toMatchObject({
-      sessionTokens: 300,
-      lastTurnCostUsdTicks: 2_000,
-      sessionCostUsdTicks: 3_000,
+      costUsd: 0.147662,
+      costSource: "provider",
     });
   });
 
-  test("the tick totals survive a restart", () => {
+  test("cumulative USD subtracts the priced prefix before entering usage history", () => {
     const state = newState();
-    runTurn(state, grokTurn(100, 1_000));
-    const restored = restorePersistedUsage(JSON.parse(JSON.stringify(state.usage)));
+    complete(state, { totalTokens: 10, costUsdTicks: 200_000_000 });
+    startTurn(state);
+    recordTurnUsage(state, result({ totalTokens: 20 }), "prompt-result");
+    recordTurnUsage(state, dashboardUsd(0.05));
+    settleTurn(state, true);
+    expect(costs(state)?.[0]).toBe(0.02);
+    expect(costs(state)?.[1]).toBeCloseTo(0.03, 12);
+    expect(costs(state)?.reduce<number>((sum, cost) => sum + (cost ?? 0), 0)).toBeCloseTo(0.05, 12);
+    expect(publicContextUsage(state, true)?.costUsd).toBe(0.05);
+  });
 
-    expect(restored).toMatchObject({
-      turn: { costUsdTicks: 1_000 },
-      lastTurnCostUsdTicks: 1_000,
-      sessionCostUsdTicks: 1_000,
+  test("uses explicit USD on the panel and omits a delta across an unknown prefix", () => {
+    const state = newState();
+    complete(state, { totalTokens: 10, costUsdTicks: 200_000_000 }, false);
+    startTurn(state);
+    recordTurnUsage(state, result({ totalTokens: 20 }), "prompt-result");
+    recordTurnUsage(state, dashboardUsd(0.05));
+    settleTurn(state);
+    expect(costs(state)).toEqual([undefined, undefined]);
+    expect(publicContextUsage(state)?.costUsd).toBe(0.05);
+  });
+
+  test("uses an idle cumulative USD snapshot as the next turn's baseline", () => {
+    const state = newState();
+    recordTurnUsage(state, dashboardUsd(0.02));
+    startTurn(state);
+    recordTurnUsage(state, result({ inputTokens: 20 }), "prompt-result");
+    recordTurnUsage(state, dashboardUsd(0.05));
+    settleTurn(state);
+    expect(costs(state)?.[0]).toBeCloseTo(0.03, 12);
+    expect(publicContextUsage(state)?.costUsd).toBe(0.05);
+  });
+
+  test("late ticks restore the subtotal and revise the same history row", () => {
+    const state = newState();
+    complete(state, { totalTokens: 10, costUsdTicks: 200_000_000 });
+    complete(state, { totalTokens: 20 });
+    const firstVersion = state.usage?.turns?.at(-1);
+    expect(publicContextUsage(state, true)?.costUsd).toBeUndefined();
+    late(state, { totalTokens: 20, costUsdTicks: 300_000_000 });
+    expect(publicContextUsage(state, true)?.costUsd).toBe(0.05);
+    expect(state.usage?.turns?.at(-1)).toMatchObject({
+      turnId: firstVersion?.turnId,
+      at: firstVersion?.at,
+      revision: 1,
+      costUsd: 0.03,
     });
-    expect(restored?.turns?.[0]).toMatchObject({ costUsd: 1_000 / 1e10, costSource: "provider" });
+    late(state, { totalTokens: 20, costUsdTicks: 300_000_000 });
+    expect(state.usage?.turns?.at(-1)?.revision).toBe(1);
+    late(state, { costIsPartial: true });
+    expect(state.usage?.turns?.at(-1)).toMatchObject({ revision: 2, costUsd: undefined });
+    expect(publicContextUsage(state, true)?.costUsd).toBeUndefined();
+  });
+
+  test("retracts a cost-only report even before the first token snapshot", () => {
+    const state = newState();
+    complete(state, { costUsdTicks: 200_000_000 });
+    expect(publicContextUsage(state, true)).toMatchObject({
+      costUsd: 0.02,
+      occupancyUnknown: true,
+    });
+    expect(state.usage?.turns?.[0]?.totalTokens).toBeUndefined();
+    late(state, { usageIsIncomplete: true });
+    expect(publicContextUsage(state, true)?.turns?.[0]).toMatchObject({ revision: 1 });
+    expect(publicContextUsage(state, true)?.costUsd).toBeUndefined();
+  });
+
+  test("a successful prompt with no usage invalidates a prior total", () => {
+    const state = newState();
+    complete(state, { totalTokens: 10, costUsdTicks: 200_000_000 });
+    startTurn(state);
+    recordTurnUsage(state, { stopReason: "end_turn" }, "prompt-result");
+    settleTurn(state, true);
+    expect(publicContextUsage(state, true)).toMatchObject({ usedTokens: 10 });
+    expect(publicContextUsage(state, true)?.costUsd).toBeUndefined();
+    expect(costs(state)).toEqual([0.02, undefined]);
+  });
+
+  test("keeps a zero-token unknown turn in the cost ledger across restart", () => {
+    const state = newState();
+    complete(state, { totalTokens: 0, costUsdTicks: 5, costIsPartial: true });
+    state.usage = restorePersistedUsage(JSON.parse(JSON.stringify(state.usage))) ?? undefined;
+    expect(state.usage?.cost).toBeDefined();
+    complete(state, { totalTokens: 10, costUsdTicks: 200_000_000 });
+    expect(costs(state)).toEqual([undefined, 0.02]);
+    expect(publicContextUsage(state, true)?.costUsd).toBeUndefined();
+  });
+
+  test("restores the known prefix and rejects malformed persisted totals", () => {
+    const state = newState();
+    complete(state, { totalTokens: 10, costUsdTicks: 200_000_000 });
+    const snapshot = JSON.parse(JSON.stringify(state.usage));
+    const restored = restorePersistedUsage(snapshot);
+    expect(restored?.cost).toEqual({
+      beforeLastTurn: { usd: 0 },
+      total: { usd: 0, ticks: 200_000_000 },
+    });
     expect(
       restorePersistedUsage({
-        ...JSON.parse(JSON.stringify(state.usage)),
-        sessionCostUsdTicks: -5,
-        lastTurnCostUsdTicks: 1.5,
-      }),
-    ).not.toHaveProperty("sessionCostUsdTicks");
+        ...snapshot,
+        cost: { total: { usd: 0, ticks: Number.MAX_SAFE_INTEGER + 1 } },
+      })?.cost?.total,
+    ).toBeUndefined();
+    expect(
+      restorePersistedUsage({
+        ...snapshot,
+        cost: undefined,
+        lastTurnCostUsdTicks: 200_000_000,
+      })?.turns?.[0]?.costUsd,
+    ).toBeUndefined();
   });
+
+  test("hydrates replay ticks without counting duplicate carriers or inventing history rows", () => {
+    const state = newState();
+    state.historyReplay = "hydrate";
+    function replayPrompt(id: string) {
+      applySessionUpdate(state, {
+        sessionId: state.acpSessionId,
+        update: {
+          sessionUpdate: "user_message",
+          messageId: id,
+          content: { type: "text", text: id },
+        },
+      });
+    }
+    replayPrompt("first");
+    late(state, { totalTokens: 10, costUsdTicks: 200_000_000 });
+    late(state, { totalTokens: 10, costUsdTicks: 200_000_000 });
+    replayPrompt("second");
+    late(state, { totalTokens: 20, costUsdTicks: 300_000_000 });
+    finalizeHistoryReplayTurnUsage(state);
+    expect(publicContextUsage(state, true)).toMatchObject({ sessionTokens: 30, costUsd: 0.05 });
+    expect(state.usage?.turns).toBeUndefined();
+    replayPrompt("unpriced");
+    finalizeHistoryReplayTurnUsage(state);
+    expect(publicContextUsage(state, true)?.costUsd).toBeUndefined();
+  });
+
+  test.each([true, false])(
+    "accounts for continued attempts (first attempt priced: %s)",
+    async (firstPriced) => {
+      const state = newState();
+      const replies = [
+        {
+          ...result(firstPriced ? { inputTokens: 10, costUsdTicks: 200_000_000 } : {}),
+          stopReason: "cancelled",
+        },
+        result({ inputTokens: 20, costUsdTicks: 300_000_000 }),
+      ];
+      const child = {
+        request() {
+          if (replies.length === 2) state.policyDeniedRequests = 1;
+          return Promise.resolve(replies.shift());
+        },
+      } as unknown as AcpProcess;
+      startTurn(state);
+      state.child = child;
+      sessions.set(state.id, state);
+      try {
+        await requestPromptWithRetriableProviderRetries(
+          state,
+          child,
+          {},
+          state.promptSequence,
+          undefined,
+        );
+        settleTurn(state, true);
+        expect(replies).toHaveLength(0);
+        expect(publicContextUsage(state, true)?.costUsd).toBe(firstPriced ? 0.05 : undefined);
+        late(state, { inputTokens: 20, costUsdTicks: 400_000_000 });
+        expect(publicContextUsage(state, true)?.costUsd).toBe(firstPriced ? 0.06 : undefined);
+        expect(costs(state)).toEqual([firstPriced ? 0.06 : undefined]);
+      } finally {
+        sessions.delete(state.id);
+      }
+    },
+  );
 });

@@ -1,4 +1,7 @@
-import { sessions, type JsonObject } from "./acp-context.js";
+import { randomUUID } from "node:crypto";
+import { provider, sessions, type JsonObject } from "./acp-context.js";
+
+const activityGeneration = randomUUID();
 
 /**
  * The one activity read both `GET /session/:id/activity` and
@@ -17,13 +20,20 @@ import { sessions, type JsonObject } from "./acp-context.js";
 export function sessionActivityObservation(sessionId: string): JsonObject {
   const state = sessions.get(sessionId);
   if (!state) return { activity: "missing" };
+  const revision =
+    provider === "grok" ? { contentRevision: `${activityGeneration}:${state.revision}` } : {};
   if (state.status !== "running" && state.activeSubagentToolIds.size === 0) {
     // How the latest turn ended, for the backend's turn-end bell. A turn the
     // bridge cut short leaves the session idle; the backend reads that one
     // from the dispatch journal.
-    return { activity: "idle", ...(state.status === "error" ? { turnFailed: true } : {}) };
+    return {
+      ...revision,
+      activity: "idle",
+      ...(state.status === "error" ? { turnFailed: true } : {}),
+    };
   }
   return {
+    ...revision,
     activity: state.approvals.size > 0 || state.interactions.size > 0 ? "waiting" : "working",
   };
 }

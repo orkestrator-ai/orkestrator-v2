@@ -1,4 +1,5 @@
 import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-window";
+import { sessionCostUsd } from "./acp-usage-cost.js";
 import { acpContextUsage } from "./usage.js";
 import {
   MAX_STRUCTURED_RESULTS,
@@ -91,26 +92,27 @@ export function boundTranscriptForRead(state: SessionState): void {
  * The neutral usage snapshot, or nothing at all. Cursor's current ACP adapter
  * still omits every usage carrier, and an empty meter reading "0 tokens"
  * would claim a measurement the agent never made; the panel's own "no
- * snapshot yet" copy is the truth until a carrier arrives.
+ * snapshot yet" copy is the truth until the provider reports usage.
  */
-export function publicContextUsage(state: SessionState) {
+export function publicContextUsage(state: SessionState, ticksQualified?: boolean) {
   return state.usage
-    ? acpContextUsage(state.usage.turn, {
-        ...(state.usage.modelId ? { modelId: state.usage.modelId } : {}),
-        ...(state.usage.durationMs === undefined ? {} : { durationMs: state.usage.durationMs }),
-        ...(state.usage.lastTurnTokens === undefined
-          ? {}
-          : { lastTurnTokens: state.usage.lastTurnTokens }),
-        ...(state.usage.sessionTokens === undefined
-          ? {}
-          : { sessionTokens: state.usage.sessionTokens }),
-        ...(state.usage.sessionCostUsdTicks === undefined
-          ? {}
-          : { sessionCostUsdTicks: state.usage.sessionCostUsdTicks }),
-        ...(state.usage.turns?.length ? { turns: state.usage.turns } : {}),
-        source: provider,
-        updatedAt: state.usage.updatedAt,
-      })
+    ? acpContextUsage(
+        state.usage.cost ? { ...state.usage.turn, costUsd: undefined } : state.usage.turn,
+        {
+          ...(state.usage.modelId ? { modelId: state.usage.modelId } : {}),
+          ...(state.usage.durationMs === undefined ? {} : { durationMs: state.usage.durationMs }),
+          ...(state.usage.lastTurnTokens === undefined
+            ? {}
+            : { lastTurnTokens: state.usage.lastTurnTokens }),
+          ...(state.usage.sessionTokens === undefined
+            ? {}
+            : { sessionTokens: state.usage.sessionTokens }),
+          sessionCostUsd: sessionCostUsd(state.usage.cost?.total, ticksQualified),
+          ...(state.usage.turns?.length ? { turns: state.usage.turns } : {}),
+          source: provider,
+          updatedAt: state.usage.updatedAt,
+        },
+      )
     : null;
 }
 

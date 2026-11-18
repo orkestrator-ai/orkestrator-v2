@@ -228,6 +228,8 @@ describe("usage projection history", () => {
     expect(withProviderContextWindow({ usedTokens: 50_000 }, undefined)).toEqual({
       usedTokens: 50_000,
     });
+    const costOnly = { usedTokens: 0, occupancyUnknown: true, costUsd: 0.03 } as const;
+    expect(withProviderContextWindow(costOnly, 200_000)).toEqual(costOnly);
     expect(withProviderContextWindow(undefined, 200_000)).toBeUndefined();
   });
 

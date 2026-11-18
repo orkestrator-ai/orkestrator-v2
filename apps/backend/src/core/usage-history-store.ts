@@ -23,6 +23,7 @@ import {
   applyTurnToRecord,
   emptyUsageSessionRecord,
   parseUsageSessionRecord,
+  recordedUsageDays,
   pruneRecordDays,
   type UsageEnvironmentLabel,
   type UsageSessionRecord,
@@ -117,7 +118,7 @@ export class UsageHistoryStore {
   }
 
   /**
-   * Records every turn not already in the row. Returns how many were applied,
+   * Records new and revised turns. Returns how many were applied,
    * so a caller can tell a repeated read from new usage.
    */
   recordTurns(input: RecordUsageTurnsInput): number {
@@ -217,7 +218,8 @@ export class UsageHistoryStore {
       // before either filter: a pane has to be able to say that history starts
       // later than the range it shows, and to offer a platform whose usage is
       // outside the environment currently selected.
-      for (const day of Object.keys(record.days)) {
+      const days = recordedUsageDays(record);
+      for (const day of Object.keys(days)) {
         if (!recordingSince || day < recordingSince) recordingSince = day;
       }
       recordedPlatforms.add(record.platform);
@@ -238,7 +240,7 @@ export class UsageHistoryStore {
       if (query.platform && record.platform !== query.platform) continue;
       if (query.environmentId && record.environmentId !== query.environmentId) continue;
       let sessionCounted = false;
-      for (const [day, bucket] of Object.entries(record.days)) {
+      for (const [day, bucket] of Object.entries(days)) {
         if (day < fromDay || day > toDay) continue;
         for (const [modelId, modelUsage] of Object.entries(bucket.models)) {
           if (!sessionCounted) {
@@ -457,7 +459,7 @@ function pruneExpiredDays(database: StorageDatabase, key: string, oldestDay: str
       const record = parseUsageSessionRecord(current);
       if (!record) return { result: { kind: "skipped" } };
       const changed = pruneRecordDays(record, oldestDay);
-      if (Object.keys(record.days).length === 0) {
+      if (Object.keys(record.days).length === 0 && !record.recentTurns?.length) {
         return { result: { kind: "removed" }, delete: true };
       }
       const result: PruneOutcome = {

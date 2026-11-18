@@ -281,7 +281,7 @@ export async function route(
     return json(response, answer.status, answer.body);
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(close|messages|transcript(?:\/(?:detail|page))?|status|activity|human-prompts|prompt|compact|fork|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+(?:\/hold)?)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+(?:\/hold)?)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(close|messages|usage|transcript(?:\/(?:detail|page))?|status|activity|human-prompts|prompt|compact|fork|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+(?:\/hold)?)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+(?:\/hold)?)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
@@ -375,6 +375,10 @@ export async function route(
         ? bridgeTranscriptSubReadBody(source, transcriptSubRead, query)
         : bridgeTranscriptRouteBody(source, query),
     );
+  }
+  // Usage reconciliation may run while the session is idle and unmounted.
+  if (action === "usage" && request.method === "GET") {
+    return json(response, 200, { contextUsage: publicContextUsage(state) });
   }
   if (action === "status" && request.method === "GET") {
     const contextUsage = publicContextUsage(state);

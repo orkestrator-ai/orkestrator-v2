@@ -10,6 +10,7 @@ import {
   MAX_RECORDED_MODELS_PER_DAY,
   applyTurnToRecord,
   emptyUsageSessionRecord,
+  recordedUsageDays,
   usageTurnDay,
   usageTurnKey,
 } from "./usage-history-record.js";
@@ -83,7 +84,7 @@ test("a turn number reused by the next conversation in the same tab is still cou
   expect(applyTurnToRecord(record, turn("turn-1"), DAY, AT, "conv-a")).toBe(true);
   expect(applyTurnToRecord(record, turn("turn-1"), DAY, AT, "conv-a")).toBe(false);
   expect(applyTurnToRecord(record, turn("turn-1"), DAY, AT, "conv-b")).toBe(true);
-  expect(record.days[DAY]!.models["model-a"]!.turns).toBe(2);
+  expect(recordedUsageDays(record)[DAY]!.models["model-a"]!.turns).toBe(2);
   expect(record.turnIds).toEqual([
     usageTurnKey("turn-1", "conv-a"),
     usageTurnKey("turn-1", "conv-b"),

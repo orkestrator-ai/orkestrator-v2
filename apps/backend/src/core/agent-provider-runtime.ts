@@ -129,6 +129,7 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
   if (usedTokens === undefined) return undefined;
   const usage: NativeAgentContextUsage = {
     usedTokens,
+    ...(raw.occupancyUnknown === true ? { occupancyUnknown: true } : {}),
     ...(maximumTokens === undefined ? {} : { maximumTokens }),
     ...(percentage === undefined ? {} : { percentage }),
   };
@@ -231,6 +232,13 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
         const value = turn[key];
         if (typeof value === "number" && Number.isFinite(value) && value >= 0)
           normalized[key] = value;
+      }
+      if (
+        typeof turn.revision === "number" &&
+        Number.isSafeInteger(turn.revision) &&
+        turn.revision > 0
+      ) {
+        normalized.revision = turn.revision;
       }
       if (normalized.costUsd !== undefined && isNativeAgentCostSource(turn.costSource)) {
         normalized.costSource = turn.costSource;

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { toast } from "sonner";
+import { formatCoordinatorAccountSwitchName } from "@/lib/coordinator-account-switch-label";
 import { subscribeCommandNodeEvents, subscribeNodeEvents } from "@/lib/federation/node-events";
 import { portalStore } from "@/lib/portal/portal-store";
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -13,6 +14,7 @@ export function describeCoordinatorAccountSwitch(record: CoordinatorAccountSwitc
   const provider = record.platform === "codex" ? "Codex" : "Claude";
   const from = record.fromAccountLabel ?? record.fromAccountId;
   const action = record.state === "executed" ? "switched" : "tried to switch";
+  const coordinator = formatCoordinatorAccountSwitchName(record.coordinatorName);
   const check =
     record.state === "outcome-unknown"
       ? " The outcome is unknown. Check the active account on the target machine."
@@ -21,7 +23,7 @@ export function describeCoordinatorAccountSwitch(record: CoordinatorAccountSwitc
     record.authorizedBy === "self-timer"
       ? ` A timer you set allowed it${record.userInstruction ? `: you asked “${record.userInstruction}”.` : "."}`
       : "";
-  return `The ${record.coordinatorName} ${action} the active ${provider} account on ${record.nodeName}${from ? ` from “${from}”` : ""} to “${record.toAccountLabel}”${record.reason ? `: “${record.reason}”` : "."}${timer}${check}`;
+  return `The ${coordinator} ${action} the active ${provider} account on ${record.nodeName}${from ? ` from “${from}”` : ""} to “${record.toAccountLabel}”${record.reason ? `: “${record.reason}”` : "."}${timer}${check}`;
 }
 
 function isRecord(value: unknown): value is CoordinatorAccountSwitchRecord {

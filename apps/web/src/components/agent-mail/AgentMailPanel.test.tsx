@@ -248,7 +248,7 @@ describe("AgentMailButton", () => {
   test("renders nothing when messaging is disabled", () => {
     setMessagingEnabled(false);
     renderInAppCommandScope(<AgentMailButton />);
-    expect(screen.queryByRole("button", { name: /Agent messages/ }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /Agent mail/ }) === null).toBe(true);
   });
 
   test("shows mail that needs the person in a primary badge and opens the panel", () => {
@@ -260,7 +260,7 @@ describe("AgentMailButton", () => {
       ]),
     });
     renderInAppCommandScope(<AgentMailButton />);
-    const button = screen.getByRole("button", { name: "Agent messages, 3 need you" });
+    const button = screen.getByRole("button", { name: "Agent mail, 3 messages need you" });
     const badge = within(button).getByText("3");
     expect(badge.classList.contains("bg-primary-fill")).toBe(true);
     expect(badge.classList.contains("text-primary-foreground")).toBe(true);
@@ -273,7 +273,15 @@ describe("AgentMailButton", () => {
       summary: new Map([[AGENT_1, summaryEntry({ attentionCount: 0 })]]),
     });
     renderInAppCommandScope(<AgentMailButton />);
-    expect(screen.getByRole("button", { name: "Agent messages" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Agent mail" })).toBeTruthy();
+  });
+
+  test("uses the singular accessible name for one message needing attention", () => {
+    appCommandStore(agentMailStore).setState({
+      summary: new Map([[AGENT_1, summaryEntry({ attentionCount: 1 })]]),
+    });
+    renderInAppCommandScope(<AgentMailButton />);
+    expect(screen.getByRole("button", { name: "Agent mail, 1 message needs you" })).toBeTruthy();
   });
 });
 

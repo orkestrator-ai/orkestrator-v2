@@ -308,7 +308,7 @@ function ProjectCopyDialogBody({
           </DialogTitle>
           <DialogDescription>
             {approving
-              ? `The project coordinator asked for this${request.reason ? `: “${request.reason}”` : "."} Nothing is copied unless you approve it.`
+              ? `The project Coordinator asked for this${request.reason ? `: “${request.reason}”` : "."} Nothing is copied unless you approve it.`
               : "The repository is cloned there from its Git remote. Pick the files Git does not carry that the copy needs, such as .env files. Dependencies are installed there, not copied."}
           </DialogDescription>
         </DialogHeader>

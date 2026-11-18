@@ -45,8 +45,8 @@ export function AgentMailButton() {
       className="relative h-7 w-7"
       aria-label={
         attention
-          ? `Agent messages, ${attention} need${attention === 1 ? "s" : ""} you`
-          : "Agent messages"
+          ? `Agent mail, ${attention} message${attention === 1 ? " needs" : "s need"} you`
+          : "Agent mail"
       }
       onClick={() => openPanel({})}
     >

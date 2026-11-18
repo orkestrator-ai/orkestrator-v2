@@ -208,7 +208,7 @@ test("another machine's project header sums its mail and shows its home's activi
   expect(within(header).getAllByLabelText("3 unread agent messages")).toHaveLength(1);
   expect(within(header).getByLabelText("Agent message delivery failed")).toBeTruthy();
 
-  const homeActivity = within(header).getByRole("button", { name: "app Home needs attention" });
+  const homeActivity = within(header).getByRole("button", { name: "app home needs attention" });
   const bell = homeActivity.querySelector("svg");
   expect(bell?.classList.contains("fill-amber-400/20")).toBe(true);
   expect(bell?.classList.contains("text-amber-400")).toBe(true);
@@ -245,7 +245,7 @@ test("a failed tombstoned remote home cannot be selected", async () => {
     />,
   );
   await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
-  expect(screen.queryByRole("button", { name: /Home (working|needs attention)/ }) === null).toBe(
+  expect(screen.queryByRole("button", { name: /home (working|needs attention)/i }) === null).toBe(
     true,
   );
 });
@@ -265,7 +265,7 @@ test("a quiet home shows nothing in its project header", async () => {
     />,
   );
   await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
-  expect(screen.queryByRole("button", { name: /Home (working|needs attention)/ }) === null).toBe(
+  expect(screen.queryByRole("button", { name: /home (working|needs attention)/i }) === null).toBe(
     true,
   );
 });
@@ -283,7 +283,7 @@ test("the cross-machine activity list has the controls bar and home rows this wi
   expect(within(list).getByLabelText("2 environments")).toBeTruthy();
   expect(within(list).getByLabelText("1 waiting environment")).toBeTruthy();
   // A working build pipeline on the home reads as working, as on its own machine.
-  expect(within(list).getByRole("button", { name: "app Home working" })).toBeTruthy();
+  expect(within(list).getByRole("button", { name: "app home working" })).toBeTruthy();
   expect(within(list).getAllByTestId("federated-environment-row")).toHaveLength(2);
 });
 

@@ -270,7 +270,7 @@ export const GRAPH_SYSTEM_ACTION_SPECS: Readonly<Record<GraphSystemAction, Graph
       action: "update-ticket",
       label: "Update ticket",
       description:
-        "Moves the run's Kanban ticket, comments on it, or records acceptance criteria results (`record_kanban_criteria_checks`), as the Build Pipeline does.",
+        "Moves the run's Kanban ticket, comments on it, or records acceptance criteria results (`record_kanban_criteria_checks`), as the build pipeline does.",
       sideEffect: true,
       idempotency:
         "Once per run, node and iteration; a comment is never added twice, a column move or criteria result is set, not appended.",
@@ -278,7 +278,7 @@ export const GRAPH_SYSTEM_ACTION_SPECS: Readonly<Record<GraphSystemAction, Graph
         lifecycle: {
           type: "enum",
           options: GRAPH_TICKET_LIFECYCLE_EVENTS,
-          description: "One of the Build Pipeline's ticket updates, exactly as it makes them.",
+          description: "One of the build pipeline's ticket updates, exactly as it makes them.",
         },
         status: {
           type: "enum",

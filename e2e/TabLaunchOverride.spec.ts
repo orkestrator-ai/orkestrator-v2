@@ -12,7 +12,7 @@ test("only the tab whose launch overrode the default is marked", async ({ page }
   await expect(marker).toHaveText("requested");
   await expect(marker).toHaveAttribute(
     "title",
-    "This launch uses claude-opus-5-5 · max. The coordinator overrode the saved default.",
+    "This launch uses claude-opus-5-5 · max. The Coordinator overrode the saved default.",
   );
   // In the tab it belongs to: the word sits between that tab's title and close button.
   await expect(
@@ -69,7 +69,7 @@ test("a worker the command node launched on a leaf is marked on the leaf's tab",
     leaf.getByRole("tab", { name: /Lint the port/ }).getByTestId("tab-launch-override"),
   ).toHaveAttribute(
     "title",
-    "This launch uses gpt-5.5. The coordinator overrode the saved default.",
+    "This launch uses gpt-5.5. The Coordinator overrode the saved default.",
   );
   await expect(leaf.getByTestId("tab-launch-override")).toHaveCount(1);
   // The command node's own tabs with the same ids keep their own answers.

@@ -351,7 +351,7 @@ describe("CoordinatorPanel tab strip", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Change agent" }));
     let dialog = await screen.findByRole("alertdialog");
-    expect(dialog.textContent).toContain("Change the coordinator's agent?");
+    expect(dialog.textContent).toContain("Change the Coordinator's agent?");
     expect(dialog.textContent).toContain("where you choose its agent");
     expect(dialog.textContent).toContain("Open delegations move to the new main");
     fireEvent.click(within(dialog).getByRole("button", { name: "Keep open" }));
@@ -608,7 +608,7 @@ describe("CoordinatorPanel tab strip", () => {
     expect(within(menu).getByRole("menuitem", { name: "Change agent…" })).toBeTruthy();
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Change agent…" }));
     expect((await screen.findByRole("alertdialog")).textContent).toContain(
-      "Change the coordinator's agent?",
+      "Change the Coordinator's agent?",
     );
   });
 
@@ -715,7 +715,7 @@ describe("CoordinatorPanel tab strip", () => {
   test("the loading state is announced, and New side agent keeps its name when only its icon shows", async () => {
     hangLoads = true;
     const loading = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
-    expect((await screen.findByRole("status")).textContent).toBe("Loading coordinator");
+    expect((await screen.findByRole("status")).textContent).toBe("Loading Coordinator");
     loading.unmount();
 
     hangLoads = false;
@@ -723,7 +723,7 @@ describe("CoordinatorPanel tab strip", () => {
     const create = await screen.findByRole("button", { name: "New side agent" });
     // Its tooltip says what a side agent is for, not only its name.
     expect(create.getAttribute("title")).toBe(
-      "Side agents can read the project and talk to the main coordinator, but can't launch workers. Good for a second opinion or a parallel investigation.",
+      "Side agents can read the project and talk to the main Coordinator, but can't launch workers. Good for a second opinion or a parallel investigation.",
     );
     expect(create.querySelector("span")?.className).toContain("max-sm:sr-only");
   });

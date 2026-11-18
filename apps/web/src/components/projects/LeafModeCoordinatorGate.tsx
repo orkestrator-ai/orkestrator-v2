@@ -200,7 +200,7 @@ export function LeafModeCoordinatorGate({
                 : summaryUnavailable
                   ? "The command node's repository information is unavailable."
                   : "The command node's repository list is incomplete."}{" "}
-              We could not confirm whether this repository has a coordinator on the command node.
+              We could not confirm whether this repository has a Coordinator on the command node.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button
@@ -222,7 +222,7 @@ export function LeafModeCoordinatorGate({
                 {retrying ? "Retrying…" : "Try again"}
               </Button>
               <Button type="button" variant="outline" size="sm" onClick={openAnyway}>
-                Open this node&apos;s coordinator anyway
+                Open this node&apos;s Coordinator anyway
               </Button>
             </div>
           </div>
@@ -250,10 +250,10 @@ export function LeafModeCoordinatorGate({
         </p>
         <p className="text-muted-foreground">
           It is controlled by {controllers}. Coordination for this project happens there, not here.
-          This node&apos;s own coordinator conversations are kept, but its coordinator does not act
+          This node&apos;s own Coordinator conversations are kept, but its Coordinator does not act
           across nodes while this node is controlled.
           {onLeaf
-            ? " The sidebar is grouped by repository; group it by machine or project to open this node's coordinator directly."
+            ? " The sidebar is grouped by repository; group it by machine or project to open this node's Coordinator directly."
             : null}
         </p>
         <div className="flex flex-wrap gap-2">
@@ -270,11 +270,11 @@ export function LeafModeCoordinatorGate({
                 })
               }
             >
-              Open the coordinator on {controllers}
+              Open the Coordinator on {controllers}
             </Button>
           ) : null}
           <Button type="button" variant="outline" size="sm" onClick={openAnyway}>
-            Open this node&apos;s coordinator anyway
+            Open this node&apos;s Coordinator anyway
           </Button>
         </div>
       </div>

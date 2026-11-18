@@ -80,7 +80,7 @@ const BUILD_INTENT_GUIDANCE: Record<BuildIntent, { kind: string; detail: string 
   },
   prompt: {
     kind: "prompt environment",
-    detail: "the agent runs one prompt; start review and the PR by hand or from a coordinator.",
+    detail: "the agent runs one prompt; start review and the PR by hand or from a Coordinator.",
   },
 };
 

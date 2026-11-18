@@ -310,9 +310,13 @@ describe("client-only optimistic messages", () => {
     expect(agentMailSenderLabel({ ...node, role: "agent", title: "fix-login-bug" })).toBe(
       "fix-login-bug · startup-agent on omarchy-hp",
     );
-    // Coordinators keep their own names.
-    expect(agentMailSenderLabel({ ...node, role: "coordinator", title: null })).toBe(
-      "Project coordinator on omarchy-hp",
+    for (const title of [null, "Project coordinator"]) {
+      expect(agentMailSenderLabel({ ...node, role: "coordinator", title })).toBe(
+        "Project Coordinator on omarchy-hp",
+      );
+    }
+    expect(agentMailSenderLabel({ ...node, role: "coordinator", title: "Release lead" })).toBe(
+      "Release lead on omarchy-hp",
     );
     expect(
       agentMailSenderLabel({
@@ -326,7 +330,7 @@ describe("client-only optimistic messages", () => {
         agent: "claude",
         title: null,
       }),
-    ).toBe("Project coordinator");
+    ).toBe("Project Coordinator");
   });
 
   test("reads the mail kind from the authenticated sender, not from the payload", () => {

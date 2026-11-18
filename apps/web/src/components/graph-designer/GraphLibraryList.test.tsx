@@ -103,8 +103,12 @@ describe("GraphLibraryList", () => {
       ["active", "Build pipeline engine"],
       ["retired", "Retired engine"],
     ]);
+    expect(screen.getByText("Build pipeline", { exact: true })).toBeDefined();
     expect(screen.getByText("Build pipeline engine").getAttribute("title")).toBe(
       "Runs on the build pipeline engine; duplicate it to run a copy as a graph",
+    );
+    expect(screen.getByText("Retired engine").getAttribute("title")).toBe(
+      "Looped Review's engine was retired: duplicate this template to run it as a graph",
     );
     // Without a project there is no project section.
     expect(screen.queryByRole("region", { name: "Project templates" }) === null).toBe(true);

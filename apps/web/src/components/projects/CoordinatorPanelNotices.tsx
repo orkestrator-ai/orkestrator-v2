@@ -60,7 +60,7 @@ export const COORDINATOR_SIDE_COMPOSER_PLACEHOLDER = `Ask a question about this 
 
 /** What a side agent is for: the New side agent tooltip and a side composer's hint. */
 export const COORDINATOR_SIDE_AGENT_EXPLANATION =
-  "Side agents can read the project and talk to the main coordinator, but can't launch workers. Good for a second opinion or a parallel investigation.";
+  "Side agents can read the project and talk to the main Coordinator, but can't launch workers. Good for a second opinion or a parallel investigation.";
 
 /** The tiers a qualified platform can hold (`coordinator.md`, Provider qualification). */
 export type CoordinatorReadOnlyTier = Exclude<CoordinatorProviderTier, "unavailable">;
@@ -148,7 +148,7 @@ export function CoordinatorIsolationBadge({
         data-coordinator-isolation-details
       >
         <p>
-          The coordinator reads this checkout but never changes it. Builds, fixes and other changes
+          The Coordinator reads this checkout but never changes it. Builds, fixes and other changes
           run in build pipelines or prompt environments.
         </p>
         {tier && platform ? (
@@ -241,8 +241,8 @@ export function CoordinatorWorkflowStoreBanner({
         </span>{" "}
         <span className="text-muted-foreground">
           {full
-            ? "New launches are refused, and messages to workers will not wake the coordinator, until room frees up."
-            : "The records every project's coordinator shares will soon refuse new launches."}{" "}
+            ? "New launches are refused, and messages to workers will not wake the Coordinator, until room frees up."
+            : "The records every project's Coordinator shares will soon refuse new launches."}{" "}
           Delete finished worker environments, or let running work finish; finished work older than
           a day is then cleared automatically.
         </span>

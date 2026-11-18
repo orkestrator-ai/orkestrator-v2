@@ -11,14 +11,19 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00021</p>
       <h1>00021 · Use one casing for the named product terms</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-low">Low</span>
         <span class="pill">Copy</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 6 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 6 / 6 images</span
         >
       </div>
-      <p class="note">Depends on <a href="00020-label-casing.html">00020</a>.</p>
+      <p class="note">
+        The broader heading and button casing rollout depends on
+        <a href="00020-label-casing.html">00020</a> settling and recording the rule. This task's
+        acceptance criteria explicitly require Done for the named-term copy sweep. That scope uses
+        sentence case and the established product names from PRODUCT.md.
+      </p>
 
       <h2>Problem</h2>
       <p>
@@ -49,14 +54,14 @@
         <tbody>
           <tr>
             <td><code>apps/web/src (JSX text, labels, titles, toasts)</code></td>
-            <td>run the grep; sentence-initial and heading uses follow task 00020</td>
+            <td>Run the grep for named terms. Task 00020 governs the broader label rollout.</td>
           </tr>
         </tbody>
       </table>
 
       <h2>Approach</h2>
       <ol>
-        <li>Do this after task 00020 so heading and button casing is already decided.</li>
+        <li>Apply sentence case to headings and buttons containing the named terms in scope.</li>
         <li>
           Use the lower-case forms from PRODUCT.md mid-sentence; capitalize only at the start of a
           sentence or label, per the casing rule.
@@ -187,53 +192,53 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Before images captured on <b>unmodified</b> code for every slot above, and committed
             under <code>design/images/00021/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “6 / 6”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
+          <input type="checkbox" aria-label="Done" checked /><span
+            >Type-check and the owning tests pass (commands above);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -241,14 +246,57 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
+      <p>
+        The review fix reran the exact <code>NODE_ENV=test</code> term-copy command above and exited
+        0. The web type check and changed-file formatting and lint checks also passed.
       </p>
+      <p>
+        The baselines were captured from clean application code at <code>b2c91abb9</code>. All six
+        screenshots use the same paused local fixture and unread project home in headless
+        <code>design-00021</code>, with a dark theme at 1440×900 and 100% zoom. The profile ran
+        without host seeding, agent credentials or the host reachability check. Each capture run
+        reloaded the renderer before opening the views.
+      </p>
+      <h3>Hit classification and decisions</h3>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          Use the proposed sentence-case option from 00020 for these terms. The built-in graph is
+          named “Build pipeline,” its badge reads “Build pipeline engine,” and the inspector uses
+          “the build pipeline engine.” The workspace wait notice uses lowercase “build pipeline” in
+          running text. “Subork” is a standalone dialog label, so its initial capital is correct.
+        </li>
+        <li>
+          Keep “Coordinator” and “Multi Review” capitalized as named features. Coordinator prose,
+          alerts, actions and settings previously mixed forms, so their authored UI copy now
+          consistently capitalizes the name. The Multi Review label already follows the rule.
+        </li>
+        <li>
+          Use “Agent mail” for the panel and its launcher, matching the existing settings label and
+          notice. Counts and the empty state still refer to individual messages.
+        </li>
+        <li>
+          Use lowercase “home” after the project name in the shared sidebar activity row and
+          “project home” in its tooltip. The project's tab label is still “Home.” The remaining
+          common terms follow sentence case where they already appear. Identifiers, stored titles,
+          palette values and layout are outside this copy change.
+        </li>
+      </ul>
+      <h3>Image pairs</h3>
+      <ul>
+        <li>
+          <strong>Build pipeline header and tabs.</strong> The existing Build tab, paused status and
+          stage graph use the intended casing in both images. The engine label correction is in the
+          graph template library. The elapsed time and host metrics reflect each capture.
+        </li>
+        <li>
+          <strong>Project home row.</strong> The current sidebar shows the home as a row when it
+          needs attention and environments are sorted by activity. “origin Home” becomes “origin
+          home” in the visible row and its accessible name.
+        </li>
+        <li>
+          <strong>Agent mail panel.</strong> The panel heading changes from “Agent messages” to
+          “Agent mail.” Both images show the same empty inbox with “No messages yet.”
+        </li>
       </ul>
 
       <footer>

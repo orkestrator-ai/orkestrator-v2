@@ -771,7 +771,7 @@ export function RepositorySettings({
                   {COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL}
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  Off: this project&apos;s coordinator sends work only to environments it launched,
+                  Off: this project&apos;s Coordinator sends work only to environments it launched,
                   so a compromised worker cannot use it to reach an environment you made by hand.
                   On: it can also message, prompt, start and stop your other environments here,
                   which then run that work under their own permissions.

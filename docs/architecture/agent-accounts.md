@@ -941,7 +941,7 @@ Grok, Pi, OpenCode and Cursor have no accounts to switch; the tools say so.
 An approval only helps while someone is there to give it. On 2026-11-04 two
 requests waited about four and a half hours overnight while seven build
 pipelines failed on the 5-hour limit they were meant to avoid. So each
-provider's accounts in Settings have a second tick, **Let coordinators switch
+provider's accounts in Settings have a second tick, **Let Coordinators switch
 accounts without asking**, off by default
 (`@orkestrator/protocol/coordinator-account-switch-grant`).
 

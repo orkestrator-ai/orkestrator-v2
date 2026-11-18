@@ -286,7 +286,7 @@ describe("toPipelineTranscript with agent mail", () => {
 
     expect(row!.peerMail).toMatchObject({
       kind: "coordinator",
-      sender: "Project coordinator on mini",
+      sender: "Project Coordinator on mini",
     });
     expectNoEnvelope([row!]);
   });

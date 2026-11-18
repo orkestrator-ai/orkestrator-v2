@@ -182,7 +182,7 @@ describe("mounted mail tool tiles", () => {
         expansionKey="fallback"
       />,
     );
-    expect(screen.getByText("To Project coordinator")).toBeTruthy();
+    expect(screen.getByText("To Project Coordinator")).toBeTruthy();
   });
   test("names the recipient's environment from the environment store until its mailbox loads", async () => {
     invokeMock.mockImplementation(async () => new Promise(() => {}));

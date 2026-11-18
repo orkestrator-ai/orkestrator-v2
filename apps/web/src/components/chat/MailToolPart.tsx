@@ -80,7 +80,7 @@ export function MailToolPart({
   const recipientName = address
     ? agentMailAddressText(address)
     : toCoordinator
-      ? (descriptor?.displayName ?? "Project coordinator")
+      ? (descriptor?.displayName ?? "Project Coordinator")
       : "another agent";
   const state = live;
   const senderAddress = !sent && call.from ? agentMailSenderAddress(call.from) : undefined;

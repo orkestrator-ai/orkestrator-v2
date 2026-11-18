@@ -314,6 +314,11 @@ export interface NodeMailActor {
   turnOrigin?: "mail";
 }
 
+/** Canonical display title for both new and retained Coordinator mail. */
+export function formatCoordinatorMailTitle(title: string | null): string {
+  return !title || title === "Project coordinator" ? "Project Coordinator" : title;
+}
+
 /** Who node mail is budgeted as: one remote sender, like a mailbox. */
 export function nodeMailSenderKey(
   actor: Pick<NodeMailActor, "nodeId" | "environmentId" | "tabId">,

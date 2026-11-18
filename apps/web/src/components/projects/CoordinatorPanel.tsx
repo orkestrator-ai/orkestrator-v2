@@ -146,7 +146,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     setError,
   });
   const hasMain = conversations.some((item) => item.role === "main");
-  const newConversationLabel = hasMain ? "New side agent" : "Start coordinator";
+  const newConversationLabel = hasMain ? "New side agent" : "Start Coordinator";
   const availablePlatforms = useMemo(
     () =>
       AGENT_PLATFORMS.filter(
@@ -266,7 +266,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       >
         <div role="status">
           <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
-          <span className="sr-only">Loading coordinator</span>
+          <span className="sr-only">Loading Coordinator</span>
         </div>
       </div>
     );
@@ -397,7 +397,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       },
       {
         failureMessage: replacingMain
-          ? "Could not change the coordinator's agent"
+          ? "Could not change the Coordinator's agent"
           : "Could not create conversation",
       },
     );
@@ -491,7 +491,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             >
               <span className="font-medium">Coordinator startup failed.</span>{" "}
               <span className="text-muted-foreground">
-                {snapshot.workspace.lastStartupError ?? "The coordinator could not be started."}
+                {snapshot.workspace.lastStartupError ?? "The Coordinator could not be started."}
               </span>
             </CoordinatorBanner>
           ) : null}
@@ -637,13 +637,13 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             <AlertDialogHeader>
               <AlertDialogTitle>
                 {pendingMainClose?.changeAgent
-                  ? "Change the coordinator's agent?"
+                  ? "Change the Coordinator's agent?"
                   : "Close the main conversation?"}
               </AlertDialogTitle>
               <AlertDialogDescription>
                 {pendingMainClose?.changeAgent
                   ? `${pendingMainClose.title} will close and a new main conversation opens, where you choose its agent. Open delegations move to the new main. A report that arrives before you choose starts it with the default agent.`
-                  : `${pendingMainClose?.title ?? "The main conversation"} will close. The next message to the coordinator starts a new main conversation with the default agent, and open delegations move to it.${
+                  : `${pendingMainClose?.title ?? "The main conversation"} will close. The next message to the Coordinator starts a new main conversation with the default agent, and open delegations move to it.${
                       pendingMainClose && conversationById.get(pendingMainClose.id)?.agent
                         ? " To choose the agent yourself, use Change agent instead."
                         : ""

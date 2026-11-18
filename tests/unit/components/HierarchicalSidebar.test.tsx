@@ -2943,14 +2943,14 @@ describe("HierarchicalSidebar", () => {
     expect(projectButton.getAttribute("aria-current")).toBe("page");
     fireEvent.click(projectButton);
     expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
-    fireEvent.click(screen.getByRole("button", { name: "Project One Home needs attention" }));
+    fireEvent.click(screen.getByRole("button", { name: "Project One home needs attention" }));
     expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("home");
     expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
     act(() => useUIChromeStore.getState().setEnvironmentSortMode("activity"));
     expect(screen.getByLabelText("1 environment")).toBeTruthy();
     expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
-    const activityHome = screen.getByRole("button", { name: "Project One Home needs attention" });
-    expect(within(activityHome).getByText("Project One Home — needs attention")).toBeTruthy();
+    const activityHome = screen.getByRole("button", { name: "Project One home needs attention" });
+    expect(within(activityHome).getByText("Project One home — needs attention")).toBeTruthy();
     const homeBell = activityHome.querySelector("svg");
     expect(homeBell?.classList.contains("fill-amber-400/20")).toBe(true);
     expect(homeBell?.classList.contains("text-amber-400")).toBe(true);
@@ -2961,13 +2961,13 @@ describe("HierarchicalSidebar", () => {
       createdEnvironment,
     ];
     view.rerender(<HierarchicalSidebar />);
-    expect(screen.getByRole("button", { name: "Project One Home working" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Project One home working" })).toBeTruthy();
     environmentsValue = [
       { ...home, hasUnreadWork: false, agentActivityState: "idle" },
       createdEnvironment,
     ];
     view.rerender(<HierarchicalSidebar />);
-    expect(screen.queryByRole("button", { name: /Project One Home/ }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /Project One home/i }) === null).toBe(true);
     const zeroCounter = screen.getByLabelText("0 waiting environments");
     expect(within(zeroCounter).getByText("0")).toBeTruthy();
     expect(zeroCounter.classList.contains("text-muted-foreground")).toBe(true);

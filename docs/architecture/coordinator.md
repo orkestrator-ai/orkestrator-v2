@@ -746,7 +746,7 @@ A notice about a new event starts one too. A sweep of older state does not: it
 waits for the next main, so finished work from long-closed conversations cannot
 wake a fresh coordinator after a restart. See
 [Who hears a notice](#who-hears-a-notice). With no main open, the toolbar action
-reads **Start coordinator**.
+reads **Start Coordinator**.
 
 Reading a coordinator (`CoordinatorService.get`, so `get_project_coordinator`,
 the panel's view and every coordinator `read_messages`) repairs nothing and
@@ -3072,7 +3072,7 @@ the main coordinator has four tools (capability `accounts`, plus
   permission it creates a `switch-agent-account` request the user approves
   in the same dialog as `request_environment_deletion`. With the `scheduleId`
   of a self-timer that carries the user's permission it switches at once, and
-  so it does when the user ticked "Let coordinators switch accounts without
+  so it does when the user ticked "Let Coordinators switch accounts without
   asking" for that provider in Settings on the coordinator's machine (within
   an hourly limit, never to a signed-out or used-up account; see
   [agent-accounts.md](agent-accounts.md#switching-without-asking)). The result's

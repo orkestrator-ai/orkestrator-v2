@@ -126,7 +126,7 @@ export function RootChangesApprovalDialog({
             Apply uncommitted changes to “{worker}”{remoteNode ? ` on ${remoteNode}` : ""}?
           </DialogTitle>
           <DialogDescription>
-            The project coordinator asked to copy some of this checkout&apos;s uncommitted changes
+            The project Coordinator asked to copy some of this checkout&apos;s uncommitted changes
             into that worker. Pick the files; nothing happens unless you approve.
             {remoteNode
               ? ` The worker is on ${remoteNode}: the changes are sent there over the node connection, up to ${MAX_NODE_PATCH_MIB} MiB.`

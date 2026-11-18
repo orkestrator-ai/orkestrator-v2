@@ -173,7 +173,7 @@ export function NodeActionRequestsDialog() {
             {TITLES[request.kind]} {label}?
           </AlertDialogTitle>
           <AlertDialogDescription>
-            The project coordinator asked for this. Nothing happens unless you approve it.
+            The project Coordinator asked for this. Nothing happens unless you approve it.
             {request.reason ? ` Its reason: “${request.reason}”` : ""}
             {request.askedBecause ? ` You are asked because: ${request.askedBecause}` : ""}
             {request.kind === "delete-environment"

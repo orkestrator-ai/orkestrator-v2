@@ -8,7 +8,7 @@ test("short panes keep onboarding, starter and sending reachable", async ({ page
     height: 360,
   });
   await page.goto("/coordinator-explanations");
-  const dismiss = page.getByRole("button", { name: "Dismiss how the coordinator works" });
+  const dismiss = page.getByRole("button", { name: "Dismiss how the Coordinator works" });
   await dismiss.scrollIntoViewIfNeeded();
   await expect(dismiss).toBeInViewport();
   await page.getByRole("button", { name: "Explain this project", exact: true }).click();
@@ -21,7 +21,7 @@ test("short panes keep onboarding, starter and sending reachable", async ({ page
   await send.click();
   await expect(page.getByText("Message sent", { exact: true })).toBeVisible();
   await dismiss.click();
-  await expect(page.getByRole("region", { name: "How the coordinator works" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "How the Coordinator works" })).toHaveCount(0);
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.locator("[data-coordinator-intro-card]")).toHaveCount(0);
 });
@@ -30,7 +30,7 @@ test("toolbar fits and every picker tier is visible before selection", async ({
   page,
 }, testInfo) => {
   await page.goto("/coordinator-explanations");
-  const help = page.getByRole("button", { name: "How the coordinator works", exact: true });
+  const help = page.getByRole("button", { name: "How the Coordinator works", exact: true });
   await expect(help).toBeInViewport({ timeout: 15_000 });
   await expect(page.locator("[data-coordinator-tier-pill='enforced']")).toBeInViewport();
   await expect(page.getByRole("button", { name: "Refresh repository status" })).toBeInViewport();

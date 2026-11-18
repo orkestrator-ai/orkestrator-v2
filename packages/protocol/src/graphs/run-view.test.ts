@@ -151,7 +151,7 @@ describe("admission blocks (D3 across engines)", () => {
         holder: "build-pipeline",
         holderAccess: "write",
       }),
-    ).toBe("Waiting: Build Pipeline is writing this environment");
+    ).toBe("Waiting: build pipeline is writing this environment");
     expect(
       graphActivationBlockText({
         reason: "external-workflow",

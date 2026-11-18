@@ -21,7 +21,7 @@ function message(overrides: Partial<AgentMailMessage>): AgentMailMessage {
       projectId: "project",
       environmentId: "coordinator:c:v",
       tabId: "coordinator-tab",
-      title: null,
+      title: "Project coordinator",
     },
     toEnvironmentId: "env",
     toTabId: "pipeline-worker:pipeline:build:0:key",

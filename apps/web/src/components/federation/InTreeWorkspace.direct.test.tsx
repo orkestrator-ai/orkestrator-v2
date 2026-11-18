@@ -356,7 +356,7 @@ test("selection: navigating inside the in-tree workspace is the window's one sel
 test("open: a cross-node open from inside the in-tree workspace is the window's direct open", async () => {
   await openLeaf({ projectId: project.id });
   await settle();
-  // "Open the coordinator on <command node>" inside the node's workspace
+  // "Open the Coordinator on <command node>" inside the node's workspace
   // (`LeafModeCoordinatorGate`) runs in the window's document.
   act(() =>
     openMachineWorkspace({

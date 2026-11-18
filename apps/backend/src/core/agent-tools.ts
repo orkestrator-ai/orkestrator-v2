@@ -7,7 +7,17 @@ import { createDesignMcp, resolveDesignDestination, type DesignService } from ".
 import { createHash } from "node:crypto";
 import { mintAgentToolsToken } from "@orkestrator/protocol/node/bridge-credential";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { type AgentToolsPeerGate, dockerPeerFilter } from "./agent-tools-peer-filter.js";
+import {
+  type AgentToolsPeerGate,
+  dockerPeerFilter,
+  isLoopbackPeer,
+} from "./agent-tools-peer-filter.js";
+import {
+  AGENT_TOOLS_LOOPBACK_PROBE_PATH,
+  AGENT_TOOLS_LOOPBACK_PROOF_HEADER,
+  agentToolsLoopbackProof,
+  createAgentToolsLoopbackSigner,
+} from "./agent-tools-loopback-proof.js";
 import { closeListeners, listenAgentTools } from "./agent-tools-listen.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
@@ -982,11 +992,14 @@ async function createAgentToolServer(
     );
   }
   if (annotationTools) {
+    const annotationScope = { environmentId: scope.environmentId, tabId: scope.tabId ?? null };
+    const diffAdvertised = await annotationTools.host.resultDiffAvailable?.(annotationScope);
     registerWebAnnotationTools(
       server,
       annotationTools.host,
-      { environmentId: scope.environmentId, tabId: scope.tabId ?? null },
+      annotationScope,
       annotationTools.limiter,
+      diffAdvertised,
     );
   }
 
@@ -1054,6 +1067,7 @@ export class AgentToolsServer {
   /** Every listener, including the loopback one `listenAgentTools` may add. */
   private listeners: Server[] = [];
   private port: number | null = null;
+  readonly signLoopbackProbe = createAgentToolsLoopbackSigner();
 
   /** Bound port, so preview resolution can refuse it as a target. */
   listeningPort(): number | null {
@@ -1602,6 +1616,23 @@ export class AgentToolsServer {
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://agent-tools.invalid");
+    if (url.pathname === AGENT_TOOLS_LOOPBACK_PROBE_PATH) {
+      const proof =
+        request.method === "GET" && isLoopbackPeer(request.socket.remoteAddress)
+          ? agentToolsLoopbackProof(url, this.signLoopbackProbe)
+          : null;
+      if (proof) {
+        response.writeHead(200, {
+          [AGENT_TOOLS_LOOPBACK_PROOF_HEADER]: proof,
+          "cache-control": "no-store",
+        });
+        response.end();
+      } else {
+        jsonResponse(response, 404, { error: "Not found" });
+      }
+      return;
+    }
+
     if (
       url.pathname === CLAUDE_STATE_SIGNAL_PATH ||
       url.pathname === WORKTREE_SIGNAL_PATH ||

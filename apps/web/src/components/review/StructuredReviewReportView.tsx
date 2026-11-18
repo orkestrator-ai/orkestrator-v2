@@ -671,7 +671,7 @@ function ReportArticle({
                 ? "border-success/35 bg-success/8 text-success"
                 : report.verdict.ready === "with-fixes"
                   ? "border-amber-500/35 bg-amber-500/8 text-amber-300"
-                  : "border-red-500/35 bg-red-500/8 text-red-300",
+                  : "border-failure/35 bg-failure/8 text-failure",
             )}
           >
             {report.verdict.ready}

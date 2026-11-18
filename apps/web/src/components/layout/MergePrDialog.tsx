@@ -106,7 +106,7 @@ export function MergePrDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         {mergeError && (
-          <div className="min-w-0 max-h-[min(16rem,40vh)] overflow-y-auto overflow-x-hidden rounded-md bg-destructive/10 p-3 text-sm text-destructive whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+          <div className="min-w-0 max-h-[min(16rem,40vh)] overflow-y-auto overflow-x-hidden rounded-md bg-destructive/10 p-3 text-sm text-failure whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
             Failed to merge PR: {mergeError}
           </div>
         )}
@@ -180,7 +180,7 @@ export function MergePrDialog({
                 variant="outline"
                 className={cn(
                   "w-full shrink-0 justify-start gap-2 sm:w-52",
-                  mergeability === "conflicts" && "border-destructive text-destructive",
+                  mergeability === "conflicts" && "border-destructive text-failure",
                 )}
                 disabled={resolve.disabledReason !== null || resolve.busy}
                 onClick={resolve.onResolve}

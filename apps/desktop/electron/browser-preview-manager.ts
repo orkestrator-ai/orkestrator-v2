@@ -155,6 +155,8 @@ export interface BrowserPreviewManagerOptions {
   pins?: Pick<BrowserPreviewPinSessionsOptions, "livePollIntervalMs" | "pageLimits" | "sleep">;
   /** Result-capture and responsive stability windows (tests shorten them). */
   stability?: { deadlineMs: number; quietMs: number };
+  /** Wait before a result capture's unstable-region sample (tests shorten it). */
+  unstableSampleDelayMs?: number;
   now?: () => number;
 }
 
@@ -240,6 +242,9 @@ export class BrowserPreviewManager {
         : {}),
       ...(options.now ? { now: options.now } : {}),
       ...(options.stability ? { stability: options.stability } : {}),
+      ...(options.unstableSampleDelayMs !== undefined
+        ? { unstableSampleDelayMs: options.unstableSampleDelayMs }
+        : {}),
       focusHost: () => this.focusHost(),
     });
     this.pins = new BrowserPreviewPinSessions({

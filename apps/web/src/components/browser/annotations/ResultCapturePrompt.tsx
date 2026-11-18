@@ -15,7 +15,7 @@ import {
 
 /**
  * Capture current result, offered as a prompt once the turn has finished and
- * this note has no after-capture yet (to-do 0047 task 3), otherwise as the
+ * this note has no after-capture yet (#2311), otherwise as the
  * plain manual button. Either way the user starts the capture: it never
  * navigates or reloads the preview, so whatever sign-in or form state the
  * user set up is what gets captured.
@@ -35,7 +35,7 @@ export function ResultCapture({
   originalCaptureId: string | null;
   requestId: string;
 }) {
-  const { environmentId, capture, currentPage } = useAnnotationPanel();
+  const { environmentId, capture, currentPage, features } = useAnnotationPanel();
   const [dismissed, setDismissed] = useState(() =>
     isResultCapturePromptDismissed(environmentId, requestId, annotationId),
   );
@@ -47,6 +47,8 @@ export function ResultCapture({
     promptEligible,
   });
   const masks = capture.desktopCapabilities?.features.resultCapture.masks ?? false;
+  const sampleUnstable =
+    capture.desktopCapabilities?.features.resultCapture.unstableRegions === true;
 
   const start = () =>
     // No annotationId option: this must never replace the note's own
@@ -58,6 +60,9 @@ export function ResultCapture({
       result: {
         requestId,
         ...(originalCaptureId ? { originalCaptureId } : {}),
+        // A second sample for the unstable-region mask, only when the backend
+        // offers advisory diffs and this desktop can take it.
+        ...(features.resultDiffs && sampleUnstable ? { sampleUnstable: true } : {}),
       },
     });
 

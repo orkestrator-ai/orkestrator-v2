@@ -34,6 +34,7 @@ import {
   type WebAnnotationTextQuote,
 } from "./web-annotations.js";
 import { isAgentPlatform } from "./agent-platforms.js";
+import { WEB_ANNOTATION_DIFF_LIMITS } from "./web-annotations-diff.js";
 
 export type WebAnnotationValidation<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -519,6 +520,37 @@ export function validateWebAnnotationResultCaptureMetadata(
   if (value.targetResolution !== undefined) {
     if (!isAnchorResolution(value.targetResolution)) return fail("targetResolution is invalid");
     out.targetResolution = value.targetResolution;
+  }
+  if (value.originalMasks !== undefined) {
+    const original = value.originalMasks;
+    if (
+      !isRecord(original) ||
+      (original.captureId !== null && !isWebAnnotationId(original.captureId)) ||
+      !Array.isArray(original.rects) ||
+      original.rects.length > 2 * WEB_ANNOTATION_LIMITS.redactionRegions ||
+      !original.rects.every(isWebAnnotationRect)
+    ) {
+      return fail("originalMasks are invalid");
+    }
+    out.originalMasks = {
+      captureId: original.captureId,
+      rects: original.rects.map(({ x, y, width, height }) => ({ x, y, width, height })),
+    };
+  }
+  if (value.unstableRegions !== undefined) {
+    if (
+      !Array.isArray(value.unstableRegions) ||
+      value.unstableRegions.length > WEB_ANNOTATION_DIFF_LIMITS.unstableRegions ||
+      !value.unstableRegions.every(isWebAnnotationRect)
+    ) {
+      return fail("unstableRegions are invalid");
+    }
+    out.unstableRegions = (value.unstableRegions as WebAnnotationRect[]).map((rect) => ({
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+    }));
   }
   return { ok: true, value: out };
 }

@@ -598,7 +598,7 @@ export function MultiReviewLaunchDialog({
                   data-testid="multi-review-defaults-status"
                   className={
                     defaultsError
-                      ? "mb-4 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300"
+                      ? "mb-4 rounded-md border border-failure/30 bg-failure/10 px-3 py-2 text-xs text-failure"
                       : "mb-4 text-xs text-zinc-500"
                   }
                 >

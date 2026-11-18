@@ -253,7 +253,7 @@ export function AgentsMdApprovalDialog({
                       ) : null}
                       {result && RESULT_NOTE[result] ? (
                         <span
-                          className={cn(result === "conflict" ? "text-destructive" : "")}
+                          className={cn(result === "conflict" ? "text-failure" : "")}
                           data-testid="agents-md-entry-note"
                         >
                           ({RESULT_NOTE[result]})
@@ -328,7 +328,7 @@ export function AgentsMdApprovalDialog({
               );
             })}
             {"error" in proposal ? (
-              <p className="text-xs text-destructive" role="alert">
+              <p className="text-xs text-failure" role="alert">
                 {proposal.error}
               </p>
             ) : null}
@@ -337,7 +337,7 @@ export function AgentsMdApprovalDialog({
           <section className="min-w-0 space-y-1" aria-label="Change to the section">
             {loadError ? (
               <div>
-                <p className="flex items-center gap-2 text-sm text-destructive">
+                <p className="flex items-center gap-2 text-sm text-failure">
                   <AlertCircle className="h-4 w-4" /> Could not read the current section:{" "}
                   {loadError}
                 </p>
@@ -381,7 +381,7 @@ export function AgentsMdApprovalDialog({
                         className={cn(
                           "whitespace-pre-wrap",
                           line.type === "add" && "bg-success/10 text-success",
-                          line.type === "remove" && "bg-red-500/10 text-red-300 line-through",
+                          line.type === "remove" && "bg-failure/10 text-failure line-through",
                           line.type === "same" && "text-muted-foreground",
                         )}
                       >
@@ -391,10 +391,10 @@ export function AgentsMdApprovalDialog({
                     ))}
                   </pre>
                 ) : merged && !merged.ok ? (
-                  <p className="text-xs text-destructive">{merged.error}</p>
+                  <p className="text-xs text-failure">{merged.error}</p>
                 ) : null}
                 {conflicts.length > 0 ? (
-                  <p className="text-xs text-destructive" role="alert">
+                  <p className="text-xs text-failure" role="alert">
                     {conflicts.map((outcome) => outcome.detail).join(" ")} Drop that entry or
                     decline and ask the coordinator to propose again.
                   </p>

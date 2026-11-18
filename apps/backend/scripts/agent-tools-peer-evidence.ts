@@ -49,7 +49,8 @@ import {
  *
  * On a rootless daemon (Docker info lists the `rootless` security option) the
  * three sources run again for each of RootlessKit's host loopback addresses
- * (slirp4netns's and gvisor-tap-vsock's), with `host.docker.internal` naming
+ * (slirp4netns's and pasta's, gvisor-tap-vsock's and VPNKit's), with
+ * `host.docker.internal` naming
  * it instead of `host-gateway`, as the
  * backend does once its check finds that address answering
  * (`rootlessHostLoopbackSources`). Point `DOCKER_HOST` at a disposable
@@ -211,8 +212,9 @@ try {
   };
   const gatewayPass = await probeSources("host-gateway");
   result.containerSources = gatewayPass.sources;
-  // Every RootlessKit driver's host loopback address (slirp4netns's 10.0.2.2,
-  // gvisor-tap-vsock's 10.0.2.1), keyed by address.
+  // Every RootlessKit driver's host loopback address (slirp4netns's and
+  // pasta's 10.0.2.2, gvisor-tap-vsock's 10.0.2.1, VPNKit's 192.168.65.2),
+  // keyed by address.
   const loopbackPasses: Array<[string, Awaited<ReturnType<typeof probeSources>>]> = [];
   if (rootless) {
     for (const address of ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES) {
@@ -227,6 +229,7 @@ try {
   // bridge start and the workflow preflight run it.
   const reachability = new ContainerHostReachabilityService({
     servicePort: () => server.servicePort(),
+    signLoopbackProbe: server.signLoopbackProbe,
     ownerNamespace: owner,
     fallbackImage: () => CONTAINER_HOST_PROBE_IMAGE,
     platform: process.argv.includes("--platform-linux") ? "linux" : process.platform,

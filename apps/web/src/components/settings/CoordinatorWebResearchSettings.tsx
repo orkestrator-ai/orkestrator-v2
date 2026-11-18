@@ -174,7 +174,7 @@ export function CoordinatorWebResearchSettings({
             </Button>
           </form>
           {draftProblem ? (
-            <p role="alert" className="text-xs text-destructive">
+            <p role="alert" className="text-xs text-failure">
               {draftProblem}
             </p>
           ) : null}

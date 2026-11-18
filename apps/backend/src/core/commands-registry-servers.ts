@@ -668,10 +668,9 @@ function serverLogCommand(
 
 /**
  * Cursor, Grok and Pi receive the agent tools connection per session rather
- * than at bridge start, so nothing on their start path repairs the container's
- * host alias or network policy or proves the tools server reachable. Do both
- * in the background: a blocked path is logged and raised in the app (the probe
- * re-runs the host check) without delaying or failing the bridge start.
+ * than at bridge start. Probe in the background so a blocked path is logged
+ * and raised in the app. Session credential resolution separately waits for
+ * the host alias and network policy to be prepared.
  */
 function probeContainerAgentTools(context: CommandContext, containerId: string): void {
   void context.containerHostReachability

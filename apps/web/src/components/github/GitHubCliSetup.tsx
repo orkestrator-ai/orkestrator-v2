@@ -287,7 +287,7 @@ export function GitHubCliSetup({
         </p>
       ) : null}
       {displayedError ? (
-        <p role="alert" className="flex items-start gap-2 text-xs text-destructive">
+        <p role="alert" className="flex items-start gap-2 text-xs text-failure">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span className="whitespace-pre-wrap">{displayedError}</span>
         </p>

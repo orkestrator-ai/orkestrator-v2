@@ -158,7 +158,7 @@ const STATUS_TEXT: Record<ChangeFileStatus, string> = {
 
 function statusIcon(status: ChangeFileStatus | null): ReactNode {
   if (status === "added") return <FilePlus className="h-3 w-3 text-success" />;
-  if (status === "deleted") return <FileX className="h-3 w-3 text-red-500" />;
+  if (status === "deleted") return <FileX className="h-3 w-3 text-failure" />;
   return <FileCode className="h-3 w-3" />;
 }
 
@@ -501,12 +501,12 @@ export function DiffViewerTab({
             <AlertCircle
               className={cn(
                 "h-8 w-8",
-                body.kind === "failed" ? "text-red-400" : "text-muted-foreground",
+                body.kind === "failed" ? "text-failure" : "text-muted-foreground",
               )}
             />
             <p
               role="status"
-              className={cn("text-sm", body.kind === "failed" ? "text-red-400" : "text-foreground")}
+              className={cn("text-sm", body.kind === "failed" ? "text-failure" : "text-foreground")}
             >
               {copy.title}
             </p>
@@ -584,7 +584,7 @@ export function DiffViewerTab({
               Load more files
             </Button>
             {shownBody.moreError && (
-              <p role="alert" className="text-xs text-red-400">
+              <p role="alert" className="text-xs text-failure">
                 {shownBody.moreError}
               </p>
             )}
@@ -714,7 +714,7 @@ function DiffHeader({
                 isMobile ? "sr-only" : "shrink-0 rounded px-1.5 py-0.5 text-xs",
                 !isMobile && status === "added" && "bg-success/20 text-success",
                 !isMobile && status === "modified" && "bg-yellow-500/20 text-yellow-400",
-                !isMobile && status === "deleted" && "bg-red-500/20 text-red-400",
+                !isMobile && status === "deleted" && "bg-failure/20 text-failure",
                 !isMobile && status === "renamed" && "bg-blue-500/20 text-blue-300",
               )}
             >
@@ -750,7 +750,7 @@ function DiffHeader({
               )}
               {additions && <span className="text-success">{additions}</span>}
               {additions && deletions && " "}
-              {deletions && <span className="text-red-400">{deletions}</span>}
+              {deletions && <span className="text-failure">{deletions}</span>}
             </span>
           )}
           {refreshing && (

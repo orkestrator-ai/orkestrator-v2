@@ -10,8 +10,11 @@ import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { cn } from "@/lib/utils";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { AutoPipelineTabData } from "@/types/paneLayout";
+import { handOffAutoPipelineToBuildTab } from "./auto-pipeline-handoff";
 import { AutoPipelineBuildNotes } from "./AutoPipelineBuildNotes";
 import { AutoPipelineCriteriaField } from "./AutoPipelineCriteriaField";
 import { AutoPipelineDescriptionField } from "./AutoPipelineDescriptionField";
@@ -80,18 +83,24 @@ export function autoPipelineProblems(
  * drafting, editing the ticket and confirming all happen here, one step at a
  * time. Drafting and promotion run in the backend, and edits are saved there,
  * so switching tabs or environments neither cancels nor loses anything; the
- * tab re-reads where things stand whenever it is shown.
+ * tab re-reads where things stand whenever it is shown. Once the pipeline has
+ * started, its tab is selected and this tab closes.
  */
 export function AutoPipelineTab({
+  tabId,
   environmentId,
   data,
   isActive,
 }: {
+  /** This tab's own id in the environment's pane layout. */
+  tabId: string;
   environmentId: string;
   data: AutoPipelineTabData;
   isActive: boolean;
 }) {
   const backend = useScopeBackend();
+  // The environment's node keeps its pane layout.
+  const paneLayouts = useNodeScope().store(paneLayoutStore);
   const fieldId = useId();
   const sourceTabId = data.sourceTabId;
   const [state, setState] = useState<AutoPipelineState | null>(null);
@@ -133,6 +142,19 @@ export function AutoPipelineTab({
     const timer = setInterval(() => void refresh(), POLL_MS);
     return () => clearInterval(timer);
   }, [isActive, refresh]);
+
+  // A started pipeline replaces this tab: select the pipeline's tab and close
+  // this one. Not cancelled on unmount, since closing the tab unmounts it.
+  const promotedPipelineId = state?.phase === "promoted" ? state.pipelineId : null;
+  useEffect(() => {
+    if (!promotedPipelineId) return;
+    handOffAutoPipelineToBuildTab({
+      layouts: paneLayouts,
+      environmentId,
+      autoPipelineTabId: tabId,
+      pipelineId: promotedPipelineId,
+    });
+  }, [environmentId, paneLayouts, promotedPipelineId, tabId]);
 
   /**
    * Saves the newest pending edits. A failure keeps them pending (and in

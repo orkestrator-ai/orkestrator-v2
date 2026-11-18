@@ -1125,6 +1125,14 @@ process-local; after a restart the tab shows the persisted draft.
   step fails, the state's `reviewed` field carries that ticket; the tab shows it
   read-only and offers confirming it again or drafting again, because the
   backend refuses edits to it.
+- **A started pipeline replaces the tab.** When the tab reads `promoted`, it
+  selects the pipeline's `claude-build` tab (which the backend adds to the
+  layout while starting the pipeline) and closes itself
+  (`auto-pipeline-handoff.ts`). The handoff waits, bounded, for the build tab
+  to reach the window's layout, outlives the tab's unmount, and moves focus
+  only while the Auto-pipeline tab is still selected in its pane; a tab the
+  user chose meanwhile keeps focus. If the build tab never arrives the tab
+  stays open with its "Auto-pipeline started" notice.
 - **Unsaved edits are never dropped.** A failed save keeps the newest edits
   pending, warns that they are unsaved, retries (a bounded number of times, or
   on demand) and saves them again when the tab unmounts. Edits whose save still

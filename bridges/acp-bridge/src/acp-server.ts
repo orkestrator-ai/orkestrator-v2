@@ -1,3 +1,4 @@
+import { announceLocalBridgeReady } from "@orkestrator/protocol/node/local-bridge-readiness";
 import { createServer, type ServerResponse } from "node:http";
 import {
   PARENT_PID_ENV,
@@ -62,8 +63,6 @@ export const server = createServer((request, response) => {
     .finally(stopWatchingClient);
 });
 
-server.listen(port, hostname, () => log.info("server.listening", { provider, hostname, port }));
-
 let shutdownPromise: Promise<void> | null = null;
 export function shutdown(): Promise<void> {
   if (shutdownPromise) return shutdownPromise;
@@ -102,3 +101,8 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
     setTimeout(() => process.exit(1), 5_000).unref();
   });
 }
+
+server.listen(port, hostname, () => {
+  announceLocalBridgeReady(port);
+  log.info("server.listening", { provider, hostname, port });
+});

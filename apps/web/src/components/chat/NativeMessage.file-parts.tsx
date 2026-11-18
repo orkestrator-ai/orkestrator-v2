@@ -75,24 +75,17 @@ const IMAGE_NAME_MARKERS = [
 ];
 
 function namesAnImage(reference?: string): boolean {
-  if (!reference) return false;
-  const lower = reference.toLowerCase();
-  return IMAGE_NAME_MARKERS.some((marker) => lower.includes(marker));
-}
-
-/**
- * Whether a file part opens in the image viewer. A declared type decides when
- * there is one, so a recording (`.mp4`) is never sent to the image viewer.
- * When the type is unknown (a query string or fragment after the extension, a
- * trailing `.bak`, a path with no extension but an image `fileUrl`), an image
- * name in either reference still makes it an image, as it did before MIME
- * classification; the viewer then refuses whatever the reader cannot reach.
- */
-function isImageFilePart(path: string, fileUrl?: string): boolean {
-  const mime = declaredMime(path, fileUrl);
-  if (mime.startsWith("image/")) return true;
-  if (mime !== "application/octet-stream") return false;
-  return namesAnImage(fileUrl) || namesAnImage(path);
+  if (!reference || reference.startsWith("data:")) return false;
+  let pathname = reference.split(/[?#]/, 1)[0] ?? "";
+  if (isRemoteMediaUrl(reference) || reference.startsWith("file://")) {
+    try {
+      pathname = new URL(reference).pathname;
+    } catch {
+      return false;
+    }
+  }
+  const filename = pathname.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  return IMAGE_NAME_MARKERS.some((marker) => filename.includes(marker));
 }
 
 /** The decoded image would exceed the viewer's pixel ceiling. */
@@ -123,6 +116,14 @@ function assertDecodableImage(url: string): void {
   ) {
     throw new ImageTooLargeError(dimensions.width, dimensions.height);
   }
+}
+
+/** A filename hint needs a successful browser decode before opening the gallery. */
+async function decodeImageHint(source: string): Promise<void> {
+  const image = new Image();
+  image.referrerPolicy = "no-referrer";
+  image.src = source;
+  await image.decode();
 }
 
 /**
@@ -220,8 +221,14 @@ export function FilePart({
   const mediaScope = useScopesWithCommandFallback().scope;
   const mediaNodeId = mediaScope.nodeId;
   const [gallery, setGallery] = useState<{ items: GalleryItem[]; index: number } | null>(null);
+  const mime = declaredMime(path, fileUrl);
+  const heuristicImage =
+    !alwaysImage &&
+    mime === "application/octet-stream" &&
+    (namesAnImage(fileUrl) || namesAnImage(path));
+  const [failedImageHint, setFailedImageHint] = useState<string | null>(null);
   const [imageSrc, setImageSrc] = useState<string | null>(() =>
-    readImagePreviewCache(cacheKey, mediaNodeId),
+    heuristicImage ? null : readImagePreviewCache(cacheKey, mediaNodeId),
   );
   const [snapshot, setSnapshot] = useState(() =>
     readImagePreviewSnapshot(cacheKey, imageSrc, mediaNodeId),
@@ -251,7 +258,8 @@ export function FilePart({
   const ownerDropsUnreadable = Boolean(onLoadUnavailable);
 
   const displayName = filename || path.split(/[\\/]/).pop() || path || "file";
-  const isImage = alwaysImage || isImageFilePart(path, fileUrl);
+  const isImage =
+    alwaysImage || mime.startsWith("image/") || (heuristicImage && failedImageHint !== cacheKey);
   // Only the thumbnail-bearing surface gets the tile chrome. A part that is
   // never eagerly loaded would otherwise sit as an empty card until clicked.
   const showThumbnailTile = isImage && eagerPreview;
@@ -261,7 +269,7 @@ export function FilePart({
     if (imageLoadRef.current) return imageLoadRef.current;
 
     const cached = readImagePreviewCache(cacheKey, mediaNodeId);
-    if (cached) {
+    if (cached && !heuristicImage) {
       setSnapshot(readImagePreviewSnapshot(cacheKey, cached, mediaNodeId));
       return Promise.resolve(cached);
     }
@@ -283,6 +291,7 @@ export function FilePart({
           },
         );
         assertDecodableImage(resolved.url);
+        if (heuristicImage) await decodeImageHint(resolved.url);
         setSnapshot(resolved.snapshot ?? null);
         return resolved.url;
       } catch (err) {
@@ -292,6 +301,7 @@ export function FilePart({
           error: formatLogError(err),
         });
         setLoadError(err instanceof ImageTooLargeError ? "too-large" : "unavailable");
+        if (heuristicImage && !(err instanceof ImageTooLargeError)) setFailedImageHint(cacheKey);
         if (onLoadUnavailableRef.current) {
           // Remembered only for an owner that drops the row. A first-class file
           // row keeps its badge and stays retryable, which is the behaviour a
@@ -312,6 +322,7 @@ export function FilePart({
     return request;
   }, [
     cacheKey,
+    heuristicImage,
     isImage,
     path,
     fileUrl,
@@ -321,6 +332,10 @@ export function FilePart({
     pin,
     mediaScope,
     mediaNodeId,
+    setSnapshot,
+    setLoading,
+    setLoadError,
+    setFailedImageHint,
   ]);
 
   useEffect(() => {
@@ -378,7 +393,7 @@ export function FilePart({
       load: loadImage,
     };
     setGallery(index >= 0 ? { items, index } : { items: [self], index: 0 });
-  }, [displayName, galleryGroup, imageSrc, isImage, loadImage]);
+  }, [displayName, galleryGroup, imageSrc, isImage, loadImage, setImageSrc]);
 
   const closeGallery = useCallback((open: boolean) => {
     if (!open) setGallery(null);
@@ -424,6 +439,7 @@ export function FilePart({
             onError={() => {
               setDecodedImage(null);
               setLoadError("unavailable");
+              if (heuristicImage) setFailedImageHint(cacheKey);
             }}
             // Reserve the placeholder height until decode. Cached dimensions
             // reserve the final aspect ratio immediately on transcript remounts.

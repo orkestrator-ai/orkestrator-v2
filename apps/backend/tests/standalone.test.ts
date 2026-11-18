@@ -1,4 +1,5 @@
 // Standalone backend: packaged Sharp runtime, web app and command serving, and the agent-test credential handoff.
+import { FAKE_BRIDGE_STARTUP } from "./fake-bridge-startup.js";
 import { describe, expect, jest, test } from "bun:test";
 import { semver } from "bun";
 import { cp, mkdir, readFile, realpath, writeFile, symlink } from "node:fs/promises";
@@ -158,7 +159,11 @@ describe("standalone backend service", () => {
           await writeFile(
             path.join(dist, "index.js"),
             `
-          Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() {
+          ${FAKE_BRIDGE_STARTUP}
+          Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch(request) {
+            if (new URL(request.url).pathname === "/global/auth-check") {
+              return new Response(null, { status: bridgeAuthStatus(request.headers.get("authorization")) });
+            }
             return Response.json({
               snapshotSelected: process.env.CURSOR_API_KEY === "startup-fixture-key",
               authFile: process.env.PI_BRIDGE_AUTH_FILE ?? null,
@@ -168,6 +173,7 @@ describe("standalone backend service", () => {
               home: process.env.HOME,
             });
           }});
+          announceBridgeReady();
         `,
           );
         }

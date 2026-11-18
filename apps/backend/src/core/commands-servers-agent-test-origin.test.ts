@@ -1,3 +1,4 @@
+import { FAKE_BRIDGE_STARTUP } from "../../tests/fake-bridge-startup.js";
 import {
   ENVIRONMENT_ISOLATION_ENV_NAMES,
   environmentIsolationVariables,
@@ -37,9 +38,16 @@ await Bun.write(import.meta.dir + "/captured.json", JSON.stringify({
   nonessential: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC ?? null,
   isolation: Object.fromEntries(${JSON.stringify(ENVIRONMENT_ISOLATION_ENV_NAMES)}.map(k => [k, process.env[k] ?? null])),
 }));
-const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+${FAKE_BRIDGE_STARTUP}
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch(request) {
+  const status = new URL(request.url).pathname === "/global/auth-check"
+    ? bridgeAuthStatus(request.headers.get("authorization")) : 200;
+  return Response.json({ ok: status === 200 }, { status });
+} });
 const stop = () => { server.stop(true); process.exit(0); };
-process.on("SIGTERM", stop); process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+announceBridgeReady();
 `;
 
 const SAVED_ENV = [

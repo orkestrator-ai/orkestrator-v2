@@ -92,6 +92,7 @@ export async function checkHttpHealth(
   pathName = "/global/health",
   headers?: Record<string, string>,
   timeoutMs = 2_000,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   const http = await import("node:http");
   return new Promise((resolve) => {
@@ -108,6 +109,7 @@ export async function checkHttpHealth(
         path: pathName,
         timeout: timeoutMs,
         headers,
+        signal,
       },
       (response) => {
         response.resume();
@@ -187,6 +189,7 @@ export async function waitForHealth(
   dependencies: {
     checkHealth?: typeof checkHttpHealth;
     delay?: (milliseconds: number) => Promise<void>;
+    signal?: AbortSignal;
   } = {},
 ): Promise<void> {
   const checkHealth = dependencies.checkHealth ?? checkHttpHealth;
@@ -199,7 +202,10 @@ export async function waitForHealth(
     : localServerPollMs(LOCAL_SERVER_HEALTH_INTERVAL_MS);
   const polls = pollsForBudget(attempts, LOCAL_SERVER_HEALTH_INTERVAL_MS, intervalMs);
   for (let attempt = 0; attempt < polls; attempt += 1) {
-    if (await checkHealth(port, pathName, headers)) return;
+    dependencies.signal?.throwIfAborted();
+    const healthy = await checkHealth(port, pathName, headers);
+    dependencies.signal?.throwIfAborted();
+    if (healthy) return;
     await delay(intervalMs);
   }
   throw new Error(`Server on port ${port} did not become healthy`);

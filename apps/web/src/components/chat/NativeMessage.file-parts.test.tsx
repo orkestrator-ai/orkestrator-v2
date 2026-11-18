@@ -1,6 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { invoke } from "@/lib/native/backend";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
-import { canLoadImagePreview } from "./NativeMessage.file-parts";
+import { canLoadImagePreview, FilePart } from "./NativeMessage.file-parts";
 
 const CONTAINER = "container-1";
 
@@ -54,5 +57,69 @@ describe("canLoadImagePreview with inline or remote bytes", () => {
     const remote = "https://example.test/shot.png";
     expect(canLoadImagePreview(remote, remote, undefined)).toBe(true);
     expect(canLoadImagePreview(remote, remote, CONTAINER)).toBe(true);
+  });
+});
+
+describe("FilePart attachment routing", () => {
+  const invokeMock = invoke as unknown as ReturnType<typeof mock>;
+
+  afterEach(() => {
+    cleanup();
+    invokeMock.mockReset();
+  });
+
+  test("keeps the generic preview and original download for a ZIP under an image-named folder", async () => {
+    invokeMock.mockImplementation((command: string) =>
+      Promise.resolve(command === "read_file_base64" ? "UEsDBAA=" : null),
+    );
+    renderInAppCommandScope(<FilePart path="/workspace/archive.png/export.zip" />);
+    fireEvent.click(screen.getByRole("button", { name: /^Preview file: export\.zip/ }));
+    expect(await screen.findByRole("button", { name: "Download original" })).toBeTruthy();
+  });
+
+  test("ignores image markers in a URL query and keeps known videos in the file viewer", () => {
+    renderInAppCommandScope(
+      <>
+        <FilePart
+          path="/workspace/export.zip"
+          fileUrl="https://example.test/export.zip?thumbnail=photo.png"
+        />
+        <FilePart path="/workspace/archive.png/recording.mp4" />
+      </>,
+    );
+    expect(screen.getByRole("button", { name: /^Preview file: export\.zip/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Preview file: recording\.mp4/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Open full image/ })).toBeNull();
+  });
+
+  test.each(["?version=2", "#preview"])(
+    "opens a genuine image with %s in the gallery",
+    async (suffix) => {
+      const fileUrl = `https://example.test/photo.webp${suffix}`;
+      renderInAppCommandScope(<FilePart path={fileUrl} fileUrl={fileUrl} filename="photo.webp" />);
+      fireEvent.click(screen.getByRole("button", { name: "Open full image: photo.webp" }));
+      expect(await screen.findByRole("dialog")).toBeTruthy();
+      expect(screen.getByRole("img").getAttribute("src")).toBe(fileUrl);
+    },
+  );
+
+  test("falls back to file actions when a filename-based image hint fails to decode", async () => {
+    const decode = spyOn(HTMLImageElement.prototype, "decode").mockRejectedValue(
+      new DOMException("Cannot decode attachment", "EncodingError"),
+    );
+    invokeMock.mockImplementation((command: string) =>
+      Promise.resolve(command === "read_file_base64" ? "UEsDBAA=" : null),
+    );
+    try {
+      renderInAppCommandScope(<FilePart path="/workspace/photo.png.bak" />);
+      fireEvent.click(screen.getByRole("button", { name: "Open full image: photo.png.bak" }));
+      fireEvent.click(
+        await screen.findByRole("button", { name: /^Preview file: photo\.png\.bak/ }),
+      );
+      expect(await screen.findByRole("button", { name: "Download original" })).toBeTruthy();
+      expect(decode).toHaveBeenCalledTimes(1);
+    } finally {
+      decode.mockRestore();
+    }
   });
 });

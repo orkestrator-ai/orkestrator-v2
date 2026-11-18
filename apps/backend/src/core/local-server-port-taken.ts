@@ -1,4 +1,5 @@
 import type { Readable } from "node:stream";
+import { isHealthyHttpResponse } from "./commands-server-health.js";
 
 /**
  * A local server lost its port between allocation and bind.
@@ -35,38 +36,59 @@ const TAIL_CHARS = 64;
 const OUTPUT_DRAIN_MS = 250;
 
 /**
- * Watch a child's stdout and stderr for a bind failure. The text is matched
- * and discarded; nothing is retained beyond a short tail per stream.
+ * Match binding diagnostics and the exact listening line on the child's own
+ * output. Keep only short partial lines and tails between chunks.
  */
-export function watchForPortInUse(
+export function watchLocalServerOutput(
   streams: ReadonlyArray<Readable | null | undefined>,
   onSeen: () => void,
+  readyLine?: string,
 ): {
   readonly seen: () => boolean;
+  readonly ready: () => boolean;
   /** Resolves once every stream has ended, or after a short bound. */
   readonly drained: () => Promise<void>;
   readonly stop: () => void;
 } {
   let seen = false;
+  let ready = false;
   const detachers: Array<() => void> = [];
   for (const stream of streams) {
     if (!stream) continue;
     let tail = "";
+    let line = "";
+    let truncatedLine = false;
     const onData = (chunk: Buffer | string) => {
       if (seen) return;
-      const text = tail + (typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+      const output = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      const text = tail + output;
       if (PORT_IN_USE_PATTERN.test(text)) {
         seen = true;
         onSeen();
         return;
       }
       tail = text.slice(-TAIL_CHARS);
+      if (!readyLine || ready) return;
+      const lines = (line + output).split("\n");
+      line = lines.pop() ?? "";
+      for (const [index, completed] of lines.entries()) {
+        if ((index > 0 || !truncatedLine) && completed.trimEnd() === readyLine) {
+          ready = true;
+          return;
+        }
+      }
+      if (lines.length) truncatedLine = false;
+      if (line.length > TAIL_CHARS * 2) {
+        line = "";
+        truncatedLine = true;
+      }
     };
     stream.on("data", onData);
     detachers.push(() => stream.off("data", onData));
   }
   return {
     seen: () => seen,
+    ready: () => ready,
     drained: () => drainStreams(streams),
     stop: () => {
       for (const detach of detachers.splice(0)) detach();
@@ -76,7 +98,7 @@ export function watchForPortInUse(
 
 function drainStreams(streams: ReadonlyArray<Readable | null | undefined>): Promise<void> {
   const open = streams.filter(
-    (stream): stream is Readable => Boolean(stream) && !stream!.readableEnded && !stream!.destroyed,
+    (stream): stream is Readable => stream != null && !stream.readableEnded && !stream.destroyed,
   );
   if (open.length === 0) return Promise.resolve();
   return new Promise((resolve) => {
@@ -91,50 +113,46 @@ function drainStreams(streams: ReadonlyArray<Readable | null | undefined>): Prom
     // an exited child from waiting on it.
     const timer = setTimeout(finish, OUTPUT_DRAIN_MS);
     for (const stream of open) {
+      const remove = () => {
+        stream.off("end", onEnd);
+        stream.off("close", onEnd);
+      };
       const onEnd = () => {
+        remove();
         remaining -= 1;
         if (remaining === 0) finish();
       };
       stream.once("end", onEnd);
       stream.once("close", onEnd);
-      listeners.push(() => {
-        stream.off("end", onEnd);
-        stream.off("close", onEnd);
-      });
+      listeners.push(remove);
     }
   });
 }
 
-/**
- * Whether the server on `port` refuses this start's own token: `true` only on
- * an explicit 401 from `/global/auth-check`, which every bridge serves behind
- * its token. Any other answer, including a 404 from a bridge without the
- * route and a probe that fails outright, is not evidence of another server.
- */
-export async function refusesOwnToken(
+/** A missing legacy route is distinct from both successful auth and a failed probe. */
+export async function probeLocalBridgeAuth(
   port: number,
   headers: Record<string, string>,
-  timeoutMs = 2_000,
-): Promise<boolean> {
+  signal?: AbortSignal,
+): Promise<"accepted" | "refused" | "unsupported" | "unavailable"> {
   const http = await import("node:http");
   return new Promise((resolve) => {
-    let settled = false;
-    const complete = (refused: boolean) => {
-      if (settled) return;
-      settled = true;
-      resolve(refused);
-    };
     const request = http.get(
-      { host: "127.0.0.1", port, path: "/global/auth-check", timeout: timeoutMs, headers },
+      { host: "127.0.0.1", port, path: "/global/auth-check", timeout: 2_000, headers, signal },
       (response) => {
         response.resume();
-        complete(response.statusCode === 401);
+        const status = response.statusCode;
+        if (status === 401) resolve("refused");
+        else if (status === 404 || status === 405) resolve("unsupported");
+        else if (isHealthyHttpResponse(status, response.headers["content-type"]))
+          resolve("accepted");
+        else resolve("unavailable");
       },
     );
-    request.on("timeout", () => {
+    request.once("timeout", () => {
       request.destroy();
-      complete(false);
+      resolve("unavailable");
     });
-    request.on("error", () => complete(false));
+    request.once("error", () => resolve("unavailable"));
   });
 }

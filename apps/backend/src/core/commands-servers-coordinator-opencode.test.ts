@@ -63,6 +63,7 @@ Bun.serve({
   },
 });
 process.on("SIGTERM", () => process.exit(0));
+process.stdout.write("server listening on http://127.0.0.1:" + port + "\\n");
 `,
       { mode: 0o755 },
     );

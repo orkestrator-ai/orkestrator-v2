@@ -4,6 +4,7 @@
 // First, before any module reads the environment: what the bridge launcher
 // recorded for the agents this bridge spawns (bridge-launch-environment.ts).
 import "@orkestrator/protocol/node/bridge-launch-environment";
+import { announceLocalBridgeReady } from "@orkestrator/protocol/node/local-bridge-readiness";
 import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
 import {
   applyBridgeLogPolicy,
@@ -236,11 +237,14 @@ if (parentPid !== null) {
   });
 }
 
-type BridgeServerOptions = Parameters<typeof serve>[0];
+type StartBridgeListener = (
+  options: Parameters<typeof serve>[0],
+  onListening: () => void,
+) => unknown;
 
 function startBridgeServer(
   env: NodeJS.ProcessEnv = process.env,
-  start: (options: BridgeServerOptions) => unknown = serve,
+  start: StartBridgeListener = serve,
 ): unknown {
   if (env.CLAUDE_BRIDGE_NO_SERVER === "1") {
     return undefined;
@@ -249,13 +253,10 @@ function startBridgeServer(
   const port = parseInt(env.PORT || "4097", 10);
   const hostname = env.HOSTNAME || "0.0.0.0";
   log.debug("server.starting", { hostname, port });
-  const server = start({
-    fetch: app.fetch,
-    port,
-    hostname,
+  return start({ fetch: app.fetch, port, hostname }, () => {
+    announceLocalBridgeReady(port);
+    log.info("server.listening", { hostname, port });
   });
-  log.info("server.listening", { hostname, port });
-  return server;
 }
 
 export const __testing = {

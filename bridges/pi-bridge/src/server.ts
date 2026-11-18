@@ -1,6 +1,7 @@
 /**
  * Process lifecycle: the HTTP server, idle detaching, and a clean shutdown.
  */
+import { announceLocalBridgeReady } from "@orkestrator/protocol/node/local-bridge-readiness";
 import { createServer, type Server } from "node:http";
 import {
   BridgeLifecycle,
@@ -114,6 +115,7 @@ export async function start(
   if (lifecycle) throw new Error("The Pi bridge server was already started");
   lifecycle = lifecycleFor(listenPort, options);
   await lifecycle.start();
+  if (lifecycle.phase === "started") announceLocalBridgeReady(listenPort);
 }
 
 /**

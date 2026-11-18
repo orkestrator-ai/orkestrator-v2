@@ -158,7 +158,9 @@
 
       <section class="capture" id="cap-plugin-tags-desktop">
         <h3>Plugins browser with tags <span class="pill">desktop 1440×900</span></h3>
-        <p class="how">Open Settings → Plugins.</p>
+        <p class="how">
+          Open Settings → Skills and plugins → Plugins and select <code>review-tools</code>.
+        </p>
         <div class="pair">
           <figure class="shot">
             <figcaption>
@@ -167,7 +169,7 @@
             <div class="frame">
               <img
                 src="images/00010/before-plugin-tags-desktop.png"
-                alt="Before: Empty Plugins browser in the isolated profile (desktop)"
+                alt="Before: 9px Disabled tags in the plugin list and selected plugin details"
                 loading="lazy"
               />
             </div>
@@ -179,7 +181,7 @@
             <div class="frame">
               <img
                 src="images/00010/after-plugin-tags-desktop.png"
-                alt="After: Empty Plugins browser in the isolated profile (desktop)"
+                alt="After: 11px Disabled tags in the plugin list and selected plugin details"
                 loading="lazy"
               />
             </div>
@@ -362,11 +364,18 @@ mise run lint</code></pre>
           The Build dialog step numbers are larger at 10px and stay centered in their 16px badges.
         </li>
         <li>
-          The Plugins browser shows its real empty state in both captures. The isolated backend
-          always returns an empty plugin catalog, so plugin tags are absent in this pair. Both tag
-          styles are set to 11px in the renderer.
+          The Plugins browser shows the same selected disabled plugin in both captures. For this
+          pair, a browser fixture populated the isolated profile's catalog. The baseline restored
+          the original 9px classes in both tag locations. The after capture confirms that both
+          Disabled tags render at 11px.
         </li>
       </ul>
+      <h3>Skills detail layout</h3>
+      <p>
+        A 390px browser check with a long plugin name showed the source tag could obscure the skill
+        heading and overlap its controls. The tag can now wrap to its own line and truncate within
+        the available width. The full plugin name remains in the tag text and its hover title.
+      </p>
 
       <footer>
         Source of truth: <a href="../DESIGN.md">DESIGN.md</a> and

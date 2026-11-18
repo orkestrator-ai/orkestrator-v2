@@ -746,7 +746,7 @@ A notice about a new event starts one too. A sweep of older state does not: it
 waits for the next main, so finished work from long-closed conversations cannot
 wake a fresh coordinator after a restart. See
 [Who hears a notice](#who-hears-a-notice). With no main open, the toolbar action
-reads **Start coordinator**.
+reads **Start Coordinator**.
 
 Reading a coordinator (`CoordinatorService.get`, so `get_project_coordinator`,
 the panel's view and every coordinator `read_messages`) repairs nothing and

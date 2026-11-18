@@ -27,6 +27,7 @@ import {
 import { InfoHint } from "@/components/ui/info-hint";
 import { getCoordinatorAccountSwitchGrant, setCoordinatorAccountSwitchGrant } from "@/lib/backend";
 import type { AccountMachine } from "@/lib/backend/agent-accounts";
+import { formatCoordinatorAccountSwitchName } from "@/lib/coordinator-account-switch-label";
 import { formatRelativeTime } from "@/lib/format-relative-time";
 import type { AgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
 import type {
@@ -75,7 +76,7 @@ export function CoordinatorSwitchRecordRow({ record }: { record: CoordinatorAcco
         {outcome ? <span className="ml-1.5 text-destructive">{outcome}</span> : null}
       </p>
       <p className="text-muted-foreground">
-        Asked by {record.coordinatorName}
+        Asked by {formatCoordinatorAccountSwitchName(record.coordinatorName)}
         {record.reason ? `: “${record.reason}”` : ""}
       </p>
       {record.authorizedBy === "self-timer" ? (
@@ -123,7 +124,7 @@ export function CoordinatorSwitchLog({
         <DialogHeader>
           <DialogTitle>{platformLabel} account switches</DialogTitle>
           <DialogDescription>
-            Switches coordinators made without asking, newest first.
+            Switches Coordinators made without asking, newest first.
           </DialogDescription>
         </DialogHeader>
         <ul

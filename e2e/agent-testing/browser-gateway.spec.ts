@@ -253,7 +253,9 @@ test.describe("host path browsing", () => {
             const closeDrawer = page
               .getByRole("button", { name: "Close projects and environments" })
               .first();
-            await expect(openDrawer.or(closeDrawer).first()).toBeVisible();
+            // Settle startup overlays before reading the drawer state. The locator
+            // handler dismisses any Docker warning during this actionability check.
+            await openDrawer.or(closeDrawer).first().click({ trial: true });
             if (await openDrawer.isVisible()) await openDrawer.click();
             await expect(drawer).toBeVisible();
           }
@@ -1224,19 +1226,19 @@ test("build pipeline live steering persists while inactive and rehydrates after 
     const openEnvironment = async (name: string) => {
       const expand = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
       const entry = page.getByText(name, { exact: true }).first();
-      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
-      await expect(page.getByText("Checking Docker availability...", { exact: true })).toBeHidden({
-        timeout: 30_000,
-      });
-      for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
-        const continueButton = page.getByRole("button", { name: label, exact: true });
-        if (await continueButton.isVisible()) await continueButton.click();
-      }
       await expect(
-        page.getByText("Checking CLI tools installation...", { exact: true }),
+        page.getByText(/^(Checking Docker availability|Checking CLI tools installation)\.\.\.$/),
       ).toBeHidden({
         timeout: 30_000,
       });
+      const withoutGitHub = page.getByRole("button", {
+        name: "Continue Without GitHub CLI",
+        exact: true,
+      });
+      if (await withoutGitHub.isVisible()) await withoutGitHub.click();
+      // The startup handler owns the Docker prompt. Wait for the sidebar to
+      // become actionable before choosing which control to click.
+      await expand.or(entry).first().click({ trial: true, timeout: 30_000 });
       if (await expand.isVisible()) await expand.click();
       await page.keyboard.press("Escape");
       await entry.click();

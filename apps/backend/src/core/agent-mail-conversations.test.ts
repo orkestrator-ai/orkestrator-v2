@@ -54,6 +54,40 @@ function message(id: string, createdAt: string, body: string): AgentMailMessage 
 }
 
 describe("agent mail conversations", () => {
+  test("uses the default name for a retained local Coordinator without a mailbox", () => {
+    const from = {
+      kind: "coordinator",
+      projectId: "p",
+      coordinatorId: "coordinator",
+      conversationId: "conversation",
+      environmentId: "coordinator-env",
+      tabId: "coordinator-tab",
+      incarnationId: "i",
+      agent: "codex",
+      title: null,
+    } satisfies AgentMailMessage["from"];
+    const key = agentMailParticipantKey(from);
+    const mailboxes = [
+      {
+        descriptor,
+        messages: [{ ...message("local-mail", "2026-10-18T10:00:00.000Z", "Report"), from }],
+      },
+    ];
+    const [summary] = listAgentMailConversations(mailboxes, { cutoff: 0 });
+    const conversation = agentMailConversationBetween(mailboxes, key, LIVE, {
+      cutoff: 0,
+      revision: 1,
+    });
+    for (const participants of [summary!.participants, conversation.participants]) {
+      expect(participants.find((participant) => participant.key === key)).toMatchObject({
+        kind: "coordinator",
+        displayName: "Project Coordinator",
+        closed: true,
+        canReceive: false,
+      });
+    }
+  });
+
   test.each([
     ["Project coordinator", "Project Coordinator on mini"],
     ["Release lead", "Release lead on mini"],

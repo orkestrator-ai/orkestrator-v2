@@ -2962,7 +2962,7 @@ describe("HierarchicalSidebar", () => {
       createdEnvironment,
     ];
     view.rerender(<HierarchicalSidebar />);
-    expect(screen.queryByRole("button", { name: /Project One Home/ }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /Project One home/i }) === null).toBe(true);
     expect(screen.getByLabelText("0 waiting environments")).toBeTruthy();
     environmentsValue = [{ ...home, hasUnreadWork: false }, createdEnvironment];
     view.rerender(<HierarchicalSidebar />);

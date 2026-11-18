@@ -40,7 +40,9 @@ test.each(["deletionError", "cleanupAfterMergeError"] as const)(
     } as Environment;
     appCommandStore(environmentStore).getState().setEnvironments([home]);
     const view = renderInAppCommandScope(<ProjectHomeActivity home={home} projectName="Project" />);
-    fireEvent.click(screen.getByRole("button", { name: "Project home needs attention" }));
+    const activity = screen.getByRole("button", { name: "Project home needs attention" });
+    expect(activity.getAttribute("title")).toBe("Open project home — needs attention");
+    fireEvent.click(activity);
     expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("home");
     const failed = { ...home, deletionRequestedAt: "2026-11-05T12:00:00Z", [field]: "failed" };
     act(() => {

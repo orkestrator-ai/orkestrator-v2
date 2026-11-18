@@ -122,7 +122,7 @@ export const GRAPH_CAPABILITY_PROFILE_DEFINITIONS: Readonly<
       "Runs checks and builds with a full shell, but edits no files and commits nothing; a guard checks the workspace afterwards.",
     deny: Object.freeze(["file.write", "file.patch", "git.commit", ...REMOTE_DENIALS] as const),
     allow: Object.freeze([]),
-    equivalent: "the Build Pipeline's Verify, with its git baseline",
+    equivalent: "the build pipeline's Verify, with its git baseline",
   }),
   researcher: Object.freeze({
     id: "researcher",

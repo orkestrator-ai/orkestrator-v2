@@ -60,7 +60,7 @@ export function addGraphGuardDiagnostics(
       if (error.code === "out_of_range") {
         diagnostics.add(
           "loop-bound-exceeded",
-          "A loop runs at most 10 iterations (the Build Pipeline's protocol maximum)",
+          "A loop runs at most 10 iterations (the build pipeline's protocol maximum)",
           at,
         );
         continue;

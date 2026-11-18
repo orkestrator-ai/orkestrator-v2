@@ -241,7 +241,7 @@ test("a failed tombstoned remote home cannot be selected", async () => {
     />,
   );
   await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
-  expect(screen.queryByRole("button", { name: /Home (working|needs attention)/ }) === null).toBe(
+  expect(screen.queryByRole("button", { name: /home (working|needs attention)/i }) === null).toBe(
     true,
   );
 });
@@ -261,7 +261,7 @@ test("a quiet home shows nothing in its project header", async () => {
     />,
   );
   await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
-  expect(screen.queryByRole("button", { name: /Home (working|needs attention)/ }) === null).toBe(
+  expect(screen.queryByRole("button", { name: /home (working|needs attention)/i }) === null).toBe(
     true,
   );
 });

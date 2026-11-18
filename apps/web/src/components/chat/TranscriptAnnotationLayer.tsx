@@ -355,7 +355,7 @@ export function TranscriptAnnotationLayer({
             type="button"
             data-transcript-selection-ignore
             data-testid="transcript-annotation-marker"
-            className="fixed z-[70] flex h-9 min-w-9 items-center justify-center rounded-full border-2 border-white bg-primary-fill px-2 text-sm font-semibold text-primary-foreground shadow-lg transition-colors after:absolute after:-bottom-1 after:left-1 after:h-2 after:w-2 after:-rotate-12 after:rounded-bl-sm after:bg-inherit hover:bg-primary-fill/85 focus-hairline focus-hairline-outset"
+            className="fixed z-[70] flex h-9 min-w-9 items-center justify-center rounded-full border-2 border-white bg-primary-fill px-2 text-sm font-semibold text-primary-foreground shadow-lg transition-colors after:absolute after:-bottom-1 after:left-1 after:h-2 after:w-2 after:-rotate-12 after:rounded-bl-sm after:bg-inherit hover:[background-color:color-mix(in_srgb,var(--color-primary-fill)_85%,var(--color-background))] focus-hairline focus-hairline-outset"
             style={anchoredStyle(anchor.rect, 36)}
             aria-label={`Edit comment for transcript reference ${annotationNumber}`}
             onClick={() => editAnnotation(annotation.id)}

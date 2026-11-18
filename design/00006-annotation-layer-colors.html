@@ -63,7 +63,8 @@
       <ol>
         <li>
           Move the pill and the pins to <code>bg-primary-fill</code> with
-          <code>text-primary-foreground</code>; hover to <code>bg-primary-fill/85</code>.
+          <code>text-primary-foreground</code>. On hover, use <code>bg-primary-fill/85</code> on the
+          pill and mix 85% primary fill with the background token on the pin.
         </li>
         <li>
           Keep the shadow (these float over the work). Decide whether the white border stays as a
@@ -255,8 +256,8 @@ mise run lint</code></pre>
         </li>
         <li>
           <strong>Numbered pins pair.</strong> Both pins use the same deeper blue as the action
-          pill. Each tail inherits its pin's fill through hover, and the white rings still separate
-          the pins from the transcript.
+          pill. Each tail inherits its pin's fill. The hovered pin uses an opaque mix so the white
+          ring stays visible around the pin and does not show through the tail.
         </li>
       </ul>
       <p class="note">

@@ -144,6 +144,6 @@ test("renders a linkless merged notice for a non-GitHub host", () => {
     />,
   );
   expect(container.querySelector("[data-pr-update-notice]")?.textContent).toContain("merged");
-  expect(container.querySelector("a")).toBeNull();
+  expect(container.querySelector("a") === null).toBe(true);
   unmount();
 });

@@ -155,7 +155,7 @@ export function multiReviewDefaultRows(
       ...reviewLensField(lenses[index] ?? undefined),
     })),
     reviewModel: concreteRow(configuredRow("reviewPreparation") ?? review, catalog),
-    addressFindingsModel: concreteRow(configuredRow("fixReviewIssues") ?? review, catalog),
+    addressFindingsModel: concreteRow(configuredRow("addressFindings") ?? review, catalog),
   };
 }
 

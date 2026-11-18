@@ -8,7 +8,7 @@ import {
   type PrMonitorDetectionOptions,
   type PrMonitorServiceOptions,
   type PrMonitorTarget,
-} from "../src/core/pr-monitor.js";
+} from "../src/core/git/pr-monitor.js";
 import { ManualTime, flushMicrotasks } from "../src/core/recurring-test-support.js";
 import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
 import { WorkAdmissionPool } from "../src/core/work-admission.js";

@@ -14,7 +14,7 @@
  * | `package` | `reviewPackage` (the sealed `review-package@2` descriptor) |
  * | `review` (panel branch N) | `reviewers[N-1]`: status, session, report, provisional findings |
  * | `consolidate` | `reviewSession`, `stepRuntimes.consolidate`, `consolidatedReport`, `consolidationOverlap` |
- * | `fix` | `addressFindingsSession`, `stepRuntimes["address-findings"]`, `addressFindingsResult` |
+ * | `address-findings` | `addressFindingsSession`, `stepRuntimes["address-findings"]`, `addressFindingsResult` |
  * | `describe-pr`, `pr` | `autoPrLaunch` |
  *
  * The consolidated report cites graph item ids (`review/panel.2/issue-3`,
@@ -24,7 +24,7 @@
  * exactly as they do for a bespoke review.
  *
  * Artifacts are read only for what the record does not hold yet (a reviewer's
- * report, the consolidated report, the package, the fix result), so a pass
+ * report, the consolidated report, the package, the Address Findings result), so a pass
  * over an unchanged run reads nothing but the run. Pure apart from that read.
  */
 import { createHash } from "node:crypto";
@@ -80,7 +80,7 @@ export const MULTI_REVIEW_GRAPH_NODES = Object.freeze({
   review: "review",
   consolidate: "consolidate",
   hasFindings: "has-findings",
-  fix: "fix",
+  addressFindings: "address-findings",
   describePr: "describe-pr",
   pr: "pr",
 } as const);
@@ -116,7 +116,7 @@ export async function projectMultiReviewGraphRun(
   // Steps and their sessions.
   const plan = latest.get(slot(N.plan));
   const consolidate = latest.get(slot(N.consolidate));
-  const fix = latest.get(slot(N.fix));
+  const addressFindings = latest.get(slot(N.addressFindings));
   const packageStep = latest.get(slot(N.package));
   const preparer = workflow.reviewModel ?? workflow.addressFindingsModel;
   const consolidator = workflow.consolidationModel ?? preparer;
@@ -126,13 +126,13 @@ export async function projectMultiReviewGraphRun(
     next,
     run.id,
     "addressFindingsSession",
-    fix,
+    addressFindings,
     workflow.addressFindingsModel,
     "address-findings",
   );
   setRuntime(next, "prepare", plan);
   setRuntime(next, "consolidate", consolidate);
-  setRuntime(next, "address-findings", fix);
+  setRuntime(next, "address-findings", addressFindings);
 
   // The sealed package every reviewer shared.
   if (!next.reviewPackage && packageStep?.state === "complete" && packageStep.outputs.package) {
@@ -150,8 +150,12 @@ export async function projectMultiReviewGraphRun(
   }
 
   // Address Findings's result.
-  if (!next.addressFindingsResult && fix?.state === "complete" && fix.outputs.result) {
-    const result = await readAddressFindingsResult(read, fix.outputs.result);
+  if (
+    !next.addressFindingsResult &&
+    addressFindings?.state === "complete" &&
+    addressFindings.outputs.result
+  ) {
+    const result = await readAddressFindingsResult(read, addressFindings.outputs.result);
     if (result) next.addressFindingsResult = result;
   }
 
@@ -180,7 +184,7 @@ function projectActiveRequest(
   delete workflow.activeRequest;
   if (terminal) return;
   const steps: [MultiReviewStepKind, string][] = [
-    ["address-findings", N.fix],
+    ["address-findings", N.addressFindings],
     ["consolidate", N.consolidate],
     ["prepare", N.plan],
   ];
@@ -679,11 +683,12 @@ function phaseOf(
 ): MultiReviewPhase {
   if (run.status === "cancelled") return "cancelled";
   if (run.status === "cancelling") return "cancelling";
-  const fix = latest.get(slot(N.fix));
+  const addressFindings = latest.get(slot(N.addressFindings));
   if (workflow.addressFindingsResult)
     return workflow.addressFindingsResult.complete ? "completed" : "failed";
   if (run.status === "failed") return "failed";
-  if (isActive(fix)) return workflow.consolidatedReport ? "addressing-findings" : "consolidating";
+  if (isActive(addressFindings))
+    return workflow.consolidatedReport ? "addressing-findings" : "consolidating";
   // Auto-address findings hands a report with findings to Address Findings through a gate that
   // runs in a later save; the bespoke engine moves on in the same save, so
   // the review is never shown ready (with an Address Findings run button and a wake) in between.
@@ -692,7 +697,7 @@ function phaseOf(
     workflow.autoAddressFindings === true &&
     hasFindings(workflow.consolidatedReport) &&
     !isGraphRunTerminal(run.status) &&
-    (!fix || fix.state === "waiting")
+    (!addressFindings || addressFindings.state === "waiting")
   ) {
     return "addressing-findings";
   }
@@ -714,7 +719,7 @@ function failureOf(
   if (workflow.addressFindingsResult && !workflow.addressFindingsResult.complete) {
     return `The Address Findings model could not address every finding: ${workflow.addressFindingsResult.summary}`;
   }
-  const failed = [N.plan, N.package, N.consolidate, N.fix]
+  const failed = [N.plan, N.package, N.consolidate, N.addressFindings]
     .map((nodeId) => latest.get(slot(nodeId)))
     .find((activation) => activation?.state === "failed");
   return (

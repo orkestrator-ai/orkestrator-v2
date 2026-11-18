@@ -193,7 +193,7 @@ function SetupTranscriptStatus({
       <div className="chat-status-row min-w-0">
         <div className="flex min-w-0 items-center gap-2">
           {failed ? (
-            <span role="status" className="flex items-center gap-1.5 text-xs text-destructive">
+            <span role="status" className="flex items-center gap-1.5 text-xs text-failure">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
               Environment setup failed.
             </span>
@@ -267,7 +267,7 @@ function SetupTranscriptStatus({
         </div>
       ) : null}
       {error && (
-        <p role="alert" className="pb-2 text-xs text-destructive">
+        <p role="alert" className="pb-2 text-xs text-failure">
           {error}
         </p>
       )}
@@ -288,7 +288,7 @@ function SetupStatus({
   return (
     <>
       {failed ? (
-        <AlertTriangle className="h-8 w-8 text-destructive" />
+        <AlertTriangle className="h-8 w-8 text-failure" />
       ) : (
         <Loader2 className="h-8 w-8 animate-spin text-yellow-400" />
       )}
@@ -355,7 +355,7 @@ function SetupStatus({
         </Button>
       )}
       {error && (
-        <p role="alert" className="max-w-sm text-center text-xs text-destructive">
+        <p role="alert" className="max-w-sm text-center text-xs text-failure">
           {error}
         </p>
       )}

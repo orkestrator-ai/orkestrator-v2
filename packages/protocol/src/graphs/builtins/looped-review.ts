@@ -159,8 +159,8 @@ export function loopedReviewRoundNodes(round: number) {
     discover: `discover-r${round}`,
     reconcile: `reconcile-r${round}`,
     hasFindings: `has-findings-r${round}`,
-    fix: `fix-r${round}`,
-    fixed: `fixed-r${round}`,
+    addressFindings: `address-findings-r${round}`,
+    addressFindingsComplete: `address-findings-complete-r${round}`,
     loop: `passes-r${round}`,
   };
 }
@@ -177,8 +177,8 @@ export function loopedReviewTemplateStages(
     stages[ids.discover] = "discovery";
     stages[ids.reconcile] = "reconciliation";
     stages[ids.hasFindings] = "after-reconciliation";
-    stages[ids.fix] = "fix";
-    stages[ids.fixed] = "after-fix";
+    stages[ids.addressFindings] = "fix";
+    stages[ids.addressFindingsComplete] = "after-fix";
   });
   return Object.freeze(stages);
 }
@@ -258,30 +258,30 @@ function roundNodes(round: number, allowance: number): GraphNodeSpec[] {
       otherwise: "clean",
     },
     {
-      id: ids.fix,
+      id: ids.addressFindings,
       kind: "agent",
       label: `Round ${round} · Address Findings`,
       description: "Fixes the whole pool in a fresh session and commits.",
       role: "model",
       capabilities: { profile: "builder" },
       workspaceAccess: "write",
-      prompt: { builtIn: "fix-review-issues" },
+      prompt: { builtIn: "address-findings" },
       inputs: [
         { name: "pool", type: "finding-pool@1", render: "json-frame" },
         { name: "code", type: "workspace@1" },
       ],
       outputs: [
-        { name: "result", type: "fix-result@1" },
+        { name: "result", type: "address-findings-result@1" },
         { name: "code", type: "workspace@1" },
       ],
     },
     {
-      id: ids.fixed,
+      id: ids.addressFindingsComplete,
       kind: "gate",
       label: `Round ${round} · Address Findings complete?`,
       description: "An incomplete Address Findings failed the review; nothing runs after it.",
       inputs: [
-        { name: "result", type: "fix-result@1" },
+        { name: "result", type: "address-findings-result@1" },
         { name: "code", type: "workspace@1" },
       ],
       branches: [
@@ -302,8 +302,8 @@ function roundEdges(round: number): GraphEdgeSpec[] {
     round === 1
       ? edge(`target-${ids.prepare}`, { input: "target" }, target(ids.prepare, "code"))
       : edge(
-          `${previous.fixed}-${ids.prepare}`,
-          port(previous.fixed, "code", "complete"),
+          `${previous.addressFindingsComplete}-${ids.prepare}`,
+          port(previous.addressFindingsComplete, "code", "complete"),
           target(ids.prepare, "code"),
         ),
     edge(`${ids.prepare}-plan`, port(ids.prepare, "plan"), target(ids.package, "plan")),
@@ -318,17 +318,25 @@ function roundEdges(round: number): GraphEdgeSpec[] {
     edge(`${ids.reconcile}-pool`, port(ids.reconcile, "pool"), target(ids.hasFindings, "pool")),
     edge(`${ids.prepare}-gate-code`, port(ids.prepare, "code"), target(ids.hasFindings, "code")),
     edge(
-      `${ids.hasFindings}-fix-pool`,
+      `${ids.hasFindings}-address-findings-pool`,
       port(ids.hasFindings, "pool", "findings"),
-      target(ids.fix, "pool"),
+      target(ids.addressFindings, "pool"),
     ),
     edge(
-      `${ids.hasFindings}-fix-code`,
+      `${ids.hasFindings}-address-findings-code`,
       port(ids.hasFindings, "code", "findings"),
-      target(ids.fix, "code"),
+      target(ids.addressFindings, "code"),
     ),
-    edge(`${ids.fix}-result`, port(ids.fix, "result"), target(ids.fixed, "result")),
-    edge(`${ids.fix}-code`, port(ids.fix, "code"), target(ids.fixed, "code")),
+    edge(
+      `${ids.addressFindings}-result`,
+      port(ids.addressFindings, "result"),
+      target(ids.addressFindingsComplete, "result"),
+    ),
+    edge(
+      `${ids.addressFindings}-code`,
+      port(ids.addressFindings, "code"),
+      target(ids.addressFindingsComplete, "code"),
+    ),
   ];
 }
 
@@ -343,7 +351,10 @@ export function loopedReviewTemplate(startingAllowance: number): GraphTemplateV1
       const gate = loopedReviewRoundNodes(index + 1).hasFindings;
       return { id: gate, source: port(gate, "code", "clean") };
     }),
-    { id: last.fixed, source: port(last.fixed, "code", "complete") },
+    {
+      id: last.addressFindingsComplete,
+      source: port(last.addressFindingsComplete, "code", "complete"),
+    },
   ];
   const passes = allowances.reduce((total, allowance) => total + allowance, 0);
   return {

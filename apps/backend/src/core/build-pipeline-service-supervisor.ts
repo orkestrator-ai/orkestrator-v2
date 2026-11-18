@@ -20,7 +20,6 @@ import {
   isActiveBuildPhase,
   reviewValidationStage,
   BRANCH_PUSH_SESSION_LABEL,
-  REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
   executionModeForSessionPhase,
   pipelineReviewIssueCounts,
@@ -47,6 +46,7 @@ import {
   sessionForCurrentPhase,
   resumablePhase,
   discardPreparationResult,
+  preparesReviewPackage,
   sessionAgent,
   sessionPhaseFor,
   discardSessionReviewReports,
@@ -523,12 +523,11 @@ export class BuildPipelineSupervisor {
       const request = pipeline.restartRequest;
       delete pipeline.restartRequest;
       if (request.kind === "review-package") {
-        pipeline.phase = request.implementationPhase === "rework" ? "reworking" : "building";
         await this.startReviewPackagePreparation(pipeline);
         return;
       }
       if (request.kind === "validation") {
-        pipeline.phase = request.implementationPhase === "rework" ? "reworking" : "building";
+        pipeline.phase = "preparing-package";
         if (!pipeline.validationRun) throw new Error("Validation restart plan is missing");
         await this.advanceValidation(pipeline);
         return;
@@ -584,12 +583,7 @@ export class BuildPipelineSupervisor {
       const sessionPhase = sessionPhaseFor(phase);
       if (!sessionPhase) throw new Error(`Cannot retry pipeline phase ${phase}`);
       delete pipeline.stageRetryRequested;
-      const current = pipeline.sessions[pipeline.currentSessionIndex];
-      if (current?.label === REVIEW_PACKAGE_SESSION_LABEL) {
-        await this.startReviewPackagePreparation(pipeline);
-      } else {
-        await this.startStage(pipeline, sessionPhase, phase);
-      }
+      await this.startStage(pipeline, sessionPhase, phase);
       return;
     }
 
@@ -1003,13 +997,13 @@ export class BuildPipelineSupervisor {
         )
           return;
         if (await this.pauseUnchangedRework(pipeline, session)) return;
-        if (
-          usesPackagePreparationSession(pipeline) &&
-          session.label !== REVIEW_PACKAGE_SESSION_LABEL
-        ) {
+        if (usesPackagePreparationSession(pipeline)) {
           await this.startReviewPackagePreparation(pipeline);
           return;
         }
+        await this.finishReviewPackagePreparation(pipeline, provider, session);
+        return;
+      case "preparing-package":
         await this.finishReviewPackagePreparation(pipeline, provider, session);
         return;
       case "reviewing":
@@ -1174,7 +1168,7 @@ export class BuildPipelineSupervisor {
         id: randomUUID(),
         sessionId: session.sdkSessionId,
         requestId,
-        phase: pipeline.phase as "building" | "reworking",
+        phase: pipeline.phase as "building" | "reworking" | "preparing-package",
         prompt,
         useTaskImages: false,
         structuredReview: true,
@@ -1205,6 +1199,8 @@ export class BuildPipelineSupervisor {
       // Forward passes clear their run before the next plan; one left over is
       // still the record's only copy, so keep its summary.
       archiveValidationRun(pipeline);
+      // The run belongs to package preparation, whichever turn planned it.
+      pipeline.phase = "preparing-package";
       pipeline.validationRun = newReviewValidationRun(
         `review-validation-${randomUUID()}`,
         parseReviewValidationPlan(result.value),
@@ -1438,7 +1434,7 @@ export class BuildPipelineSupervisor {
       session.validationPlan ??= pipeline.activePromptContext?.validationPlan;
       delete pipeline.activePromptContext;
     }
-    if (phase === "building" || phase === "reworking") discardPreparationResult(session);
+    if (preparesReviewPackage(phase)) discardPreparationResult(session);
     if (rest.length) {
       pipeline.pendingUserMessages = rest;
     } else {
@@ -1508,33 +1504,22 @@ export class BuildPipelineSupervisor {
   }
 
   async restartMissingStage(pipeline: BuildPipeline): Promise<void> {
-    const stage =
-      pipeline.phase === "building"
-        ? "build"
-        : pipeline.phase === "reviewing"
-          ? "review"
-          : pipeline.phase === "addressing-findings"
-            ? "address-findings"
-            : pipeline.phase === "verifying"
-              ? "verify"
-              : pipeline.phase === "reworking"
-                ? "rework"
-                : pipeline.phase === "creating-pr"
-                  ? "pr"
-                  : pipeline.phase === "resolving-conflicts"
-                    ? "resolve-conflicts"
-                    : null;
-    if (!stage) throw new Error(`Cannot recover pipeline phase ${pipeline.phase}`);
+    const phase = resumablePhase(pipeline.phase);
+    const stage = phase ? sessionPhaseFor(phase) : null;
+    if (!phase || !stage) throw new Error(`Cannot recover pipeline phase ${pipeline.phase}`);
     if (stage === "review") {
       await this.startVerifiedReviewOrPrepare(pipeline);
       return;
     }
-    await this.startStage(pipeline, stage, pipeline.phase as ResumableBuildPhase);
+    await this.startStage(pipeline, stage, phase);
   }
 
   /**
-   * Opens a writable preparation-only turn before a review retry or legacy
-   * package-less review. Reusing the normal fixing completion path keeps
+   * Opens the package preparation session (`package-preparation`, pipeline
+   * phase `preparing-package`): after Build or Rework when the package is
+   * prepared by a session of its own, and before a review retry or a
+   * package-less review on every pipeline. Its completion shares the
+   * Build/Rework path (`finishReviewPackagePreparation`), which keeps
    * structured-result recovery and package generation in one state machine.
    */
   async startReviewPackagePreparation(pipeline: BuildPipeline): Promise<void> {
@@ -1551,7 +1536,7 @@ export class BuildPipelineSupervisor {
       );
     }
     delete pipeline.reviewPackage;
-    await this.startStage(pipeline, "rework", "reworking", {
+    await this.startStage(pipeline, "package-preparation", "preparing-package", {
       // The dedicated preparation runs under the preparation step, not Build.
       prompt: withBuildStepInstructions(
         reviewValidationDiscoveryPrompt(targetBranch),
@@ -1567,7 +1552,7 @@ export class BuildPipelineSupervisor {
             effort: pipeline.reviewPreparation.reasoningEffort,
             fastMode: pipeline.reviewPreparation.fastMode,
           }
-        : await this.agents.stepSettings(pipeline, "address-findings"),
+        : await this.agents.stepSettings(pipeline, "package-preparation"),
     });
   }
 
@@ -1614,6 +1599,12 @@ export class BuildPipelineSupervisor {
     phase: ResumableBuildPhase,
     override?: StageOverride,
   ): Promise<void> {
+    // Package preparation needs its own prompt, schema and settings, so a
+    // retry, interaction retry or recovery of the stage starts it afresh.
+    if (sessionPhase === "package-preparation" && !override) {
+      await this.startReviewPackagePreparation(pipeline);
+      return;
+    }
     const writers = this.ctx.options.workspaceWriters;
     const use = buildPipelineSessionStage(sessionPhase).turn === "read-only" ? "read" : "write";
     const claim =
@@ -1673,13 +1664,10 @@ export class BuildPipelineSupervisor {
         (!override && buildPipelineSessionStage(sessionPhase).turn === "guarded") || readOnlyReview
           ? await this.validationBaseline(pipeline, readOnlyReview ? "review" : "verify")
           : undefined;
-      // Only a real fix turn: the dedicated package-preparation session also
-      // runs as "rework" but always arrives with an override and never edits code.
       const originalRework = pipeline.sessions.find(
         (session) =>
           session.phase === "rework" &&
           session.iteration === pipeline.iteration &&
-          session.label !== REVIEW_PACKAGE_SESSION_LABEL &&
           // A fix superseded by a rewind from a later round ran before those
           // rounds changed the code; its baseline is not this fix's.
           carriesReworkBaseline(pipeline, session),
@@ -1786,7 +1774,7 @@ export class BuildPipelineSupervisor {
           ? { producedReviewPackagePlan: true as const }
           : {}),
         // The marker Verify reads to choose the typed report over the text.
-        ...(sessionPhase === "address-findings" && dispatchResultKind === "fix-result"
+        ...(sessionPhase === "address-findings" && dispatchResultKind === "address-findings-result"
           ? { addressFindingsReportKind: PIPELINE_ADDRESS_FINDINGS_REPORT_KIND }
           : {}),
         ...sessionWorkspaceBaselineFields(validationWorktree),

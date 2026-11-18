@@ -67,7 +67,11 @@ import type { CommandContext } from "./commands-context.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
-import { gitDockerScanPool } from "./git-docker-scan-pool.js";
+import {
+  containerGitBlobReadCommand,
+  decodeGitBatchOutput,
+  gitDockerScanPool,
+} from "./git/index.js";
 import { createHash, randomUUID } from "node:crypto";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
 import {
@@ -196,7 +200,6 @@ import { conditionalSnapshot } from "./commands-terminal.js";
 import type { GitFileChange } from "./commands-helpers.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { readableHostFileRoots } from "./readable-host-roots.js";
-import { containerGitBlobReadCommand, decodeGitBatchOutput } from "./git-blob-read.js";
 import {
   parseReviewWorktreeFingerprint,
   REVIEW_WORKTREE_FINGERPRINT_TIMEOUT_MS,

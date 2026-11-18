@@ -116,7 +116,7 @@ export function ProjectNotesView({ projectId }: ProjectNotesViewProps) {
       {notesError && (
         <div
           role="alert"
-          className="flex items-center gap-3 border-b border-destructive/20 bg-destructive/10 px-6 py-2 text-xs text-destructive"
+          className="flex items-center gap-3 border-b border-destructive/20 bg-destructive/10 px-6 py-2 text-xs text-failure"
         >
           <span className="min-w-0 break-words [overflow-wrap:anywhere]">
             Couldn’t load these notes: {notesError}

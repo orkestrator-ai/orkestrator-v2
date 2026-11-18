@@ -100,7 +100,7 @@ const LENS_SCHEMA: GraphJsonSchema = {
  * `lens`, `item`, `branch` or `ticket`).
  */
 export interface GraphPromptSourceBound {
-  /** `input.report`, `params.autoFix`, `run`, `lens`, `item`, `branch`, `ticket`. */
+  /** `input.report`, `params.autoAddressFindings`, `run`, `lens`, `item`, `branch`, `ticket`. */
   key: string;
   /**
    * Bytes the whole value, and any set of non-overlapping parts of it, can

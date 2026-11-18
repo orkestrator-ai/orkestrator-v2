@@ -300,8 +300,8 @@ export function MachinesSettings() {
         ) : null}
 
         {connectionsError ? (
-          <div className="rounded-lg border border-red-500/25 bg-red-500/[0.07] p-4" role="alert">
-            <p className="text-sm text-red-300">{connectionsError}</p>
+          <div className="rounded-lg border border-failure/25 bg-failure/[0.07] p-4" role="alert">
+            <p className="text-sm text-failure">{connectionsError}</p>
             <Button
               type="button"
               variant="outline"
@@ -622,7 +622,7 @@ const STATUS_TONE_CLASS = {
   muted: "text-zinc-500",
   active: "text-sky-300",
   good: "text-success",
-  bad: "text-red-300",
+  bad: "text-failure",
 } as const;
 
 /** A machine the command node controls, moved by its grip. */
@@ -824,8 +824,7 @@ function MachineRow({
             size="sm"
             className={cn(
               "gap-1.5",
-              outdated &&
-                "border-red-500/50 bg-red-500/10 text-red-300 hover:bg-red-500/20 hover:text-red-200",
+              outdated && "border-failure/50 bg-failure/10 text-failure hover:bg-failure/20",
             )}
             onClick={onUpdates}
             disabled={!entry.maintenance}
@@ -840,7 +839,7 @@ function MachineRow({
             <Download className="h-3.5 w-3.5" />
             <span className="sr-only sm:not-sr-only">Updates</span>
             {outdated ? (
-              <span className="rounded-full bg-red-500/80 px-1.5 text-[10px] leading-4 font-semibold text-white">
+              <span className="rounded-full bg-failure/20 px-1.5 text-[10px] leading-4 font-semibold text-failure">
                 {issues.length}
               </span>
             ) : null}

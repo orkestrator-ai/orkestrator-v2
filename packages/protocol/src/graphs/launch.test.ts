@@ -39,9 +39,9 @@ describe("parseGraphLaunchRequest", () => {
           { platform: "claude", model: " opus ", lens: { label: "Security", instruction: "x\ny" } },
           { platform: "codex" },
         ],
-        fixer: { platform: "codex", reasoningEffort: "high", fastMode: false },
+        addresser: { platform: "codex", reasoningEffort: "high", fastMode: false },
       },
-      params: { autoFix: true, rounds: 3, mode: "fast", none: null },
+      params: { autoAddressFindings: true, rounds: 3, mode: "fast", none: null },
       inputs: { brief: { text: "hi" } },
       ticket: { taskId: "t1" },
       saveDefaults: true,
@@ -76,7 +76,7 @@ describe("parseGraphLaunchRequest", () => {
 
 describe("graphRoleDefaultBindings (item 108's reading)", () => {
   const roles: GraphRole[] = [
-    { key: "fixer", multiplicity: "one", defaultsFrom: ["fixReviewIssues", "review"] },
+    { key: "addresser", multiplicity: "one", defaultsFrom: ["addressFindings", "review"] },
     { key: "plain", multiplicity: "one" },
     {
       key: "reviewer",
@@ -90,7 +90,7 @@ describe("graphRoleDefaultBindings (item 108's reading)", () => {
   test("first usable key, else the default agent; panel positions per key then additional reviewers", () => {
     const result = graphRoleDefaultBindings(roles, {
       actionDefaults: {
-        fixReviewIssues: { platform: "grok" },
+        addressFindings: { platform: "grok" },
         review: { platform: "claude", model: "opus" },
       },
       additionalReviewers: [{ platform: "pi" }, null, { platform: "opencode" }],
@@ -99,7 +99,7 @@ describe("graphRoleDefaultBindings (item 108's reading)", () => {
       // grok is disabled: its default is not usable.
       enabledAgents: ["claude", "codex", "pi"],
     });
-    expect(result.fixer).toEqual({ platform: "claude", model: "opus" });
+    expect(result.addresser).toEqual({ platform: "claude", model: "opus" });
     expect(result.plain).toEqual({ platform: "codex" });
     expect(result.reviewer).toEqual([
       { platform: "claude", model: "opus" },
@@ -114,15 +114,17 @@ describe("graphRoleDefaultBindings (item 108's reading)", () => {
 
 describe("graphLaunchParams", () => {
   const parameters = [
-    { key: "autoFix", type: "boolean" as const, default: false },
+    { key: "autoAddressFindings", type: "boolean" as const, default: false },
     { key: "rounds", type: "integer" as const, min: 1, max: 5 },
     { key: "mode", type: "enum" as const, options: ["fast", "deep"], default: "fast" },
     { key: "note", type: "string" as const, maxBytes: 4, default: "" },
   ];
 
   test("given, then saved, then declared defaults; required values and bounds are issues", () => {
-    expect(graphLaunchParams(parameters, { rounds: 2 }, { mode: "deep", autoFix: "bad" })).toEqual({
-      params: { autoFix: false, rounds: 2, mode: "deep", note: "" },
+    expect(
+      graphLaunchParams(parameters, { rounds: 2 }, { mode: "deep", autoAddressFindings: "bad" }),
+    ).toEqual({
+      params: { autoAddressFindings: false, rounds: 2, mode: "deep", note: "" },
       issues: [],
     });
     expect(graphLaunchParams(parameters).issues).toEqual(["The parameter rounds needs a value"]);

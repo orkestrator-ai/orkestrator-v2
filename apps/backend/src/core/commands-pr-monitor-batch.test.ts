@@ -14,8 +14,7 @@ import {
   type PrBatchGroup,
 } from "./commands-pr-monitor-batch.js";
 import { detectEnvironmentPullRequest } from "./commands-pr-monitor.js";
-import { gitHubCli } from "./github-cli-binary.js";
-import type { PrMonitorTarget } from "./pr-monitor.js";
+import { gitHubCli, type PrMonitorTarget } from "./git/index.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 
 /**

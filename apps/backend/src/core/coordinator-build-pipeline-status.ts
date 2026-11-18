@@ -206,7 +206,15 @@ export function buildPipelineStatus(
       mode: "settled",
     };
   }
-  const finishedStage = phase ? BUILD_STAGE_LABELS[phase] : undefined;
+  // Package preparation follows the round's implementation step.
+  const finishedStage =
+    phase === "preparing-package"
+      ? iteration > 0
+        ? "rework"
+        : "build"
+      : phase
+        ? BUILD_STAGE_LABELS[phase]
+        : undefined;
   if (finishedStage) {
     return {
       key: `stage:${phase}:${iteration}`,

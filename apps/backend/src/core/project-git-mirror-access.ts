@@ -14,13 +14,13 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { GitHubCliSelection } from "./github-cli-binary.js";
 import {
   containerGitHubCredentialSource,
   getGitHubTokenLogin,
+  type GitHubCliSelection,
+  gitHubTokenCredentialOptions,
   resolveContainerGitHubToken,
-} from "./github-credentials.js";
-import { gitHubTokenCredentialOptions } from "./github-git-credentials.js";
+} from "./git/index.js";
 import type { AppConfig } from "./models.js";
 import { runCommand } from "./shell.js";
 

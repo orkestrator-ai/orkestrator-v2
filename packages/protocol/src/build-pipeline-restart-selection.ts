@@ -1,6 +1,5 @@
 import {
   BUILD_PIPELINE_AGENTS,
-  REVIEW_PACKAGE_SESSION_LABEL,
   pipelineIndependentReviewSlot,
   stepKeyForSessionPhase,
   type BuildPipeline,
@@ -76,7 +75,7 @@ export function pipelineRestartSlot(
   pipeline: Pick<BuildPipeline, "reviewers">,
   session: Pick<PipelineSession, "phase" | "label">,
 ): BuildPipelineRestartSlot | null {
-  if (session.label === REVIEW_PACKAGE_SESSION_LABEL) return { kind: "review-preparation" };
+  if (session.phase === "package-preparation") return { kind: "review-preparation" };
   if (session.phase === "review") {
     if (session.label === PIPELINE_CONSOLIDATION_SESSION_LABEL) {
       return { kind: "review-preparation" };

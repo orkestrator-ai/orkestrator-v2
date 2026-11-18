@@ -42,7 +42,7 @@ export function TicketComments({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-5 w-5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/comment:opacity-100 focus-visible:opacity-100 hover:text-destructive"
+                  className="h-5 w-5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/comment:opacity-100 focus-visible:opacity-100 hover:text-failure"
                   onClick={() => onDelete(comment.id)}
                   aria-label="Delete comment"
                 >

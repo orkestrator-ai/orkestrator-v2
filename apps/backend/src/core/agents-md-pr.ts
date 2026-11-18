@@ -15,9 +15,13 @@ import {
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { validateGitRefName } from "./commands-agent-support.js";
 import type { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
-import { gitHubCliEnv, type GitHubCliConfigSource } from "./github-credentials.js";
-import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
-import { runRemoteGit } from "./git-noninteractive-env.js";
+import {
+  gitHubCli,
+  type GitHubCliConfigSource,
+  gitHubCliEnv,
+  type GitHubCliSelection,
+  runRemoteGit,
+} from "./git/index.js";
 import { CommandFailedError, runCommandBuffer } from "./shell.js";
 
 /**

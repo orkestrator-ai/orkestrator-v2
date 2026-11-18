@@ -2,6 +2,7 @@ import {
   StatusReadabilityFixture,
   installStatusReadabilityFixture,
 } from "./StatusReadabilityFixture";
+import { TabStylesFixture, installTabStylesFixture } from "./TabStylesFixture";
 import { DesignAgentDockFixture } from "./DesignAgentDockFixture";
 import { LinearBoardDragFixture } from "./LinearBoardDragFixture";
 import { LinearBoardAssigneesFixture } from "./LinearBoardAssigneesFixture";
@@ -25,6 +26,7 @@ import { PinnedScrollFixture } from "./PinnedScrollFixture";
 import { SidebarMotionFixture } from "../../apps/web/src/test/SidebarMotionFixture";
 import { HtmlPreviewFixture } from "./HtmlPreviewFixture";
 import { SuborkGroupFixture } from "./SuborkGroupFixture";
+import { HoverWashesFixture, installHoverWashesFixture } from "./HoverWashesFixture";
 import { ProjectHomeMessageApprovalFixture } from "./ProjectHomeMessageApprovalFixture";
 import { WorkerQuestionApprovalFixture } from "./WorkerQuestionApprovalFixture";
 import { DiffBaseFixture, installDiffBaseFixture } from "./DiffBaseFixture";
@@ -58,6 +60,7 @@ import { DesignAgentLinksFixture, installDesignAgentLinksFixture } from "./Desig
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
+import { FeaturesComposeFixture, TerminalComposeFixture } from "./ComposeFramesFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { CoordinatorPaneTreeFixture } from "./CoordinatorPaneTreeFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
@@ -89,6 +92,14 @@ import {
   type ClaudeOptions,
 } from "../../apps/web/src/components/environments/CreateEnvironmentDialog";
 import { BrowserTab } from "../../apps/web/src/components/browser/BrowserTab";
+import { formatPreviewServiceUri } from "@orkestrator/protocol/preview-services";
+import {
+  FIXTURE_BACKEND_INSTANCE_ID,
+  FIXTURE_ENVIRONMENT_ID,
+  FIXTURE_SERVICE_ID,
+  fixturePreviewCapabilities,
+  fixturePreviewSnapshot,
+} from "@orkestrator/protocol/testing/preview-contract-fixtures";
 import { NativeComposeBar } from "../../apps/web/src/components/chat/NativeComposeBar";
 import { QueuedPromptsDialog } from "../../apps/web/src/components/chat/QueuedPromptsDialog";
 import { AgentThinkingIndicator } from "../../apps/web/src/components/chat/AgentThinkingIndicator";
@@ -403,8 +414,28 @@ function DesignLaunchFixture() {
   );
 }
 
-function BrowserFixture() {
+function installBrowserServiceFixture() {
+  window.orkestrator = {
+    invoke: async <T,>(command: string) => {
+      if (command === "get_preview_capabilities") return fixturePreviewCapabilities() as T;
+      if (command === "get_preview_services") return fixturePreviewSnapshot() as T;
+      throw new Error(`Unknown backend command: ${command}`);
+    },
+  } as Window["orkestrator"];
+}
+
+function BrowserFixture({ service }: { service: boolean }) {
   const empty = new URLSearchParams(window.location.search).has("empty");
+  const url = service
+    ? formatPreviewServiceUri({
+        backendInstanceId: FIXTURE_BACKEND_INSTANCE_ID,
+        environmentId: FIXTURE_ENVIRONMENT_ID,
+        serviceId: FIXTURE_SERVICE_ID,
+        path: "/",
+      })
+    : empty
+      ? ""
+      : "http://localhost:3000/";
 
   return (
     <main className="min-h-screen bg-muted p-4 text-foreground">
@@ -415,8 +446,8 @@ function BrowserFixture() {
       >
         <BrowserTab
           tabId="browser-fixture"
-          environmentId="fixture-environment"
-          data={{ url: empty ? "" : "http://localhost:3000/" }}
+          environmentId={service ? FIXTURE_ENVIRONMENT_ID : "fixture-environment"}
+          data={{ url }}
           isActive
         />
       </section>
@@ -1981,6 +2012,7 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/tab-styles") return <TabStylesFixture />;
   if (window.location.pathname === "/html-preview") return <HtmlPreviewFixture />;
   if (window.location.pathname === "/annotation-destination-layout")
     return <AnnotationDestinationLayoutFixture />;
@@ -2116,7 +2148,11 @@ function fixtureForPath() {
     installDesignLaunchFixture();
     return <DesignLaunchFixture />;
   }
-  if (window.location.pathname === "/browser") return <BrowserFixture />;
+  if (window.location.pathname === "/browser") {
+    const service = new URLSearchParams(window.location.search).has("service");
+    if (service) installBrowserServiceFixture();
+    return <BrowserFixture service={service} />;
+  }
   if (window.location.pathname === "/sortable-project-folder") {
     return <SortableProjectFolderFixture />;
   }
@@ -2138,6 +2174,8 @@ function fixtureForPath() {
       </Suspense>
     );
   if (window.location.pathname === "/composer-icon-pickers") return <ComposerIconPickersFixture />;
+  if (window.location.pathname === "/features-compose") return <FeaturesComposeFixture />;
+  if (window.location.pathname === "/terminal-compose") return <TerminalComposeFixture />;
   if (window.location.pathname === "/agent-model-picker") return <AgentModelPickerFixture />;
   if (window.location.pathname === "/mobile-shell") {
     installMobileAppShellFixture();
@@ -2300,6 +2338,10 @@ function fixtureForPath() {
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;
   if (window.location.pathname === "/agent-usage") return <AgentUsageFixture />;
   if (window.location.pathname === "/subork-group") return <SuborkGroupFixture />;
+  if (window.location.pathname === "/hover-washes") {
+    installHoverWashesFixture();
+    return <HoverWashesFixture />;
+  }
   if (window.location.pathname === "/ended-agent") return <EndedAgentFixture />;
   if (window.location.pathname === "/background-task-outcome")
     return <BackgroundTaskOutcomeFixture />;
@@ -2334,6 +2376,7 @@ function fixtureForPath() {
 if (window.location.pathname === "/diff-base") installDiffBaseFixture();
 if (window.location.pathname === "/change-tracking") installChangeTrackingFixture();
 if (window.location.pathname === "/status-readability") installStatusReadabilityFixture();
+if (window.location.pathname === "/tab-styles") installTabStylesFixture();
 // The app's window scope and command scope, as `App.tsx` mounts them: a
 // per-node store hook outside a provider throws in a development renderer.
 createRoot(document.getElementById("root")!).render(

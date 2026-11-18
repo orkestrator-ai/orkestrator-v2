@@ -215,7 +215,7 @@ describe("build pipeline multi-model review", () => {
       expect(reviewing.reviewers).toBeUndefined();
       expect(providers.get("codex")!.created).toContainEqual(
         expect.objectContaining({
-          phase: "rework",
+          phase: "package-preparation",
           label: REVIEW_PACKAGE_SESSION_LABEL,
           options: expect.objectContaining({
             model: "review-coordinator",
@@ -432,7 +432,7 @@ describe("build pipeline multi-model review", () => {
       expect(coordinator.created).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            phase: "rework",
+            phase: "package-preparation",
             label: REVIEW_PACKAGE_SESSION_LABEL,
             options: expect.objectContaining({
               model: "review-coordinator",

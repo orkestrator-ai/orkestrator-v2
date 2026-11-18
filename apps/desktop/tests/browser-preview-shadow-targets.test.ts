@@ -1,5 +1,5 @@
 /**
- * Element targets inside open shadow roots (todo 0047 task 5): hit-testing
+ * Element targets inside open shadow roots (#1598): hit-testing
  * descends into open roots, the anchor carries the root path, and the
  * resolver re-finds the element by resolving each host and then running the
  * ordinary rules inside the innermost root. Closed roots and frames keep the

@@ -57,7 +57,7 @@ describe("multiReviewDefaultRows", () => {
         review2: { platform: "claude" },
         // A disabled platform falls back to Review, as the button does.
         reviewPreparation: { platform: "pi", model: "pi-model" },
-        fixReviewIssues: { platform: "claude", model: "opus", reasoningEffort: "xhigh" },
+        addressFindings: { platform: "claude", model: "opus", reasoningEffort: "xhigh" },
       },
       platforms: { claude: { model: "claude-sonnet-5" } },
       multiReview: { reviewerCount: 3, additionalReviewers: [null] },
@@ -143,7 +143,7 @@ describe("multiReviewDefaultRows", () => {
       const resolved = piRows({
         actionDefaults: {
           review: { platform: "pi" },
-          fixReviewIssues: { platform: "pi", model: "openai/gpt-5.5" },
+          addressFindings: { platform: "pi", model: "openai/gpt-5.5" },
         },
         platforms: { pi: { model: "openai/gpt-4" } },
         multiReview: {
@@ -181,7 +181,7 @@ describe("multiReviewDefaultRows", () => {
         {
           actionDefaults: {
             review: { platform: "pi", reasoningEffort: "high" },
-            fixReviewIssues: { platform: "pi", model: "gone/x" },
+            addressFindings: { platform: "pi", model: "gone/x" },
           },
         },
         unmarked,

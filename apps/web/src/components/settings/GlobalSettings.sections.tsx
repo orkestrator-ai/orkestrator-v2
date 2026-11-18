@@ -593,7 +593,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         )}
 
         {reviewInstructionValidationError && (
-          <p className="flex items-start gap-1.5 text-xs text-destructive">
+          <p className="flex items-start gap-1.5 text-xs text-failure">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             {reviewInstructionValidationError}
           </p>
@@ -940,7 +940,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </Button>
         </div>
         {sshAgentSocketPathValidationError && (
-          <p role="alert" className="flex items-start gap-1.5 text-xs text-destructive">
+          <p role="alert" className="flex items-start gap-1.5 text-xs text-failure">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             {sshAgentSocketPathValidationError}
           </p>
@@ -1065,7 +1065,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </Button>
         </div>
         {defaultProjectsDirectoryValidationError && (
-          <p role="alert" className="flex items-start gap-1.5 text-xs text-destructive">
+          <p role="alert" className="flex items-start gap-1.5 text-xs text-failure">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             {defaultProjectsDirectoryValidationError}
           </p>
@@ -1527,7 +1527,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                         current.filter((candidate) => candidate !== provider),
                       )
                     }
-                    className="h-7 px-2 text-muted-foreground hover:text-destructive"
+                    className="h-7 px-2 text-muted-foreground hover:text-failure"
                   >
                     <X className="h-4 w-4" />
                   </Button>
@@ -1579,7 +1579,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               </Button>
             </div>
             {openCodeProviderDraftError && (
-              <p id="opencode-provider-error" className="text-xs text-destructive">
+              <p id="opencode-provider-error" className="text-xs text-failure">
                 {openCodeProviderDraftError}
               </p>
             )}
@@ -1859,7 +1859,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               value={terminalBackgroundColor}
               onChange={(e) => handleBackgroundColorChange(e.target.value)}
               placeholder={DEFAULT_TERMINAL_APPEARANCE.backgroundColor}
-              className={cn("font-mono w-32", colorError && "border-red-500")}
+              className={cn("font-mono w-32", colorError && "border-failure/60")}
             />
             <Button
               type="button"
@@ -1873,7 +1873,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </Button>
           </div>
           {colorError && (
-            <div className="text-sm text-red-500 flex items-center gap-1">
+            <div className="text-sm text-failure flex items-center gap-1">
               <XCircle className="h-3 w-3" />
               {colorError}
             </div>
@@ -1919,11 +1919,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           onChange={handleDomainsChange}
           placeholder={"github.com\nregistry.npmjs.org\napi.anthropic.com"}
           rows={8}
-          className={cn("font-mono text-sm", domainErrors.length > 0 && "border-red-500")}
+          className={cn("font-mono text-sm", domainErrors.length > 0 && "border-failure/60")}
         />
 
         {domainErrors.length > 0 && (
-          <div className="text-sm text-red-500 space-y-1">
+          <div className="text-sm text-failure space-y-1">
             {domainErrors.map((error, i) => (
               <div key={i} className="flex items-center gap-1">
                 <XCircle className="h-3 w-3" />
@@ -1961,10 +1961,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 ) : result.valid ? (
                   <AlertCircle className="h-3 w-3 text-yellow-500" />
                 ) : (
-                  <XCircle className="h-3 w-3 text-red-500" />
+                  <XCircle className="h-3 w-3 text-failure" />
                 )}
                 <span className="font-mono">{result.domain}</span>
-                {result.error && <span className="text-red-500 ml-1">{result.error}</span>}
+                {result.error && <span className="text-failure ml-1">{result.error}</span>}
               </div>
             ))}
           </div>
@@ -2129,7 +2129,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </div>
 
             {gatewayTokenValidationError && (
-              <p className="text-xs text-destructive">{gatewayTokenValidationError}</p>
+              <p className="text-xs text-failure">{gatewayTokenValidationError}</p>
             )}
             {gatewayTokenLoadError && (
               <p className="flex items-start gap-1.5 text-xs text-amber-400/90">
@@ -2371,7 +2371,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             <span className="text-sm text-muted-foreground">days</span>
           </div>
           {!isValidDebugLogRetentionDays(debugLogRetentionDays) && (
-            <p className="text-xs text-destructive">
+            <p className="text-xs text-failure">
               Enter a whole number from {MIN_DEBUG_LOG_RETENTION_DAYS} to{" "}
               {MAX_DEBUG_LOG_RETENTION_DAYS}.
             </p>

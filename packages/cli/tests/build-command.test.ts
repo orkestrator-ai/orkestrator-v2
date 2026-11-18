@@ -291,14 +291,14 @@ describe("build launch", () => {
         "--type",
         "local",
         "--instructions-file",
-        "address=-",
+        "address-findings=-",
         "--json",
       ],
       io,
     );
     expect(run.code).toBe(0);
     expect(requestsFor(gateway, "build.launch")[0]!.body.args.input).toMatchObject({
-      steps: { address: { instructions: "Address every nit." } },
+      steps: { "address-findings": { instructions: "Address every nit." } },
     });
   });
 
@@ -313,6 +313,7 @@ describe("build launch", () => {
       [...base, "--type", "local", "--environment", "env-1"],
       [...base, "--type", "vm"],
       [...base, "--type", "local", "--step", "ship=claude"],
+      [...base, "--type", "local", "--step", "address=claude"],
       [...base, "--type", "local", "--step", "build=gpt-5.5"],
       [...base, "--type", "local", "--step", "build=claude/"],
       [...base, "--type", "local", "--step", "build=claude", "--step", "build=codex"],

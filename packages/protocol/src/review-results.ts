@@ -1,7 +1,7 @@
 /**
- * Fix and pull-request results: the provider-facing schemas and their domain
+ * Address Findings and pull-request results: the provider-facing schemas and their domain
  * parsers. The backend validates workflow results of these kinds with them,
- * and graph types `fix-result@1` and `pr-result@1` reuse them, so both live
+ * and graph types `address-findings-result@1` and `pr-result@1` reuse them, so both live
  * here where the browser can run them too.
  */
 import type { JsonSchema } from "./structured-output.js";

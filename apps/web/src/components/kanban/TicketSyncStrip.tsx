@@ -46,7 +46,7 @@ const STATE_DOTS: Record<TicketSyncNodeState["state"], string> = {
   behind: "bg-amber-500",
   offline: "bg-zinc-500",
   "update-required": "bg-amber-500",
-  error: "bg-red-500",
+  error: "bg-failure",
 };
 
 export type BoardTicketSyncStatus = TicketSyncStatusResult & { error?: string };

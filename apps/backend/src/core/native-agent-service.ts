@@ -2982,7 +2982,7 @@ export class NativeAgentService {
       tabId &&
       environment &&
       this.options.resolveAgentToolConnection
-        ? this.options.resolveAgentToolConnection(
+        ? await this.options.resolveAgentToolConnection(
             input.environmentId,
             input.owner.projectId,
             tabId,

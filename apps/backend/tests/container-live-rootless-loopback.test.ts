@@ -24,7 +24,7 @@ import { runCommand } from "../src/core/shell";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import { lifecycleEnvironment } from "./container-lifecycle-fixtures";
-import { hostServiceContext } from "./container-live-host-service-context";
+import { agentToolsStandIn, hostServiceContext } from "./container-live-host-service-context";
 import { startRuntime } from "./container-live-start";
 import { removeLabelledResources } from "./container-live-cleanup";
 
@@ -65,7 +65,11 @@ afterAll(async () => {
 }, 180_000);
 
 function hostListener(): number {
-  const server = Bun.serve({ hostname: "0.0.0.0", port: 0, fetch: () => new Response("host-ok") });
+  const server = Bun.serve({
+    hostname: "0.0.0.0",
+    port: 0,
+    fetch: (request) => agentToolsStandIn(request, "host-ok"),
+  });
   servers.push(server);
   return server.port!;
 }

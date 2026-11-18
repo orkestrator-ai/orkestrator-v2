@@ -108,7 +108,7 @@ the file stays blocked on task 1 alone.
 - DNS topology line: `{"daemonRootless":true,"resolvers":["nameserver 127.0.0.11","# ExtServers: [host(127.0.0.53)]"],...}`, with the same five name-check `nat` redirections to `172.30.1.3:31443` and `:31453` as on 2026-11-10. Docker named its upstream through `host(...)`, so pasta's own DNS forwarder (`10.0.2.3`) was not on the path.
 - The same suite on a VPNKit daemon (`--net vpnkit`): **5 pass, 1 skip** (the older image, not loaded there), 109 assertions, with the same topology.
 - The conditions suite on pasta with `ORKESTRATOR_LIVE_IPV6_NETWORK=1`: 3/3, 69 assertions (IPv6, DNS rotation, two rootless daemon restarts).
-- No pasta-only defect in the name checks. The run found that VPNKit's host loopback address is `192.168.65.2`, which the reachability check does not probe: [8305](8305-vpnkit-host-loopback-address.md).
+- No pasta-only defect in the name checks. The run found that VPNKit's host loopback address is `192.168.65.2`, which the reachability check did not probe: 8305 (retired 2026-11-18), fixed and [run live](../../development/container-qualification.md#vpnkit-host-loopback-in-the-reachability-check-8305-2026-11-18).
 
 **Decisions.**
 
@@ -252,6 +252,6 @@ probe fixes (task 1, by the recommended decision that CI's run counts).
 - 4730 (retired 2026-11-10; the launcher is in [container qualification](../../development/container-qualification.md#disposable-docker-daemon)): the disposable daemon task 1 had to build by hand, and task 2 used
 - [7549](7549-rootless-docker-cp-refusals.md): rootless `docker cp` refusals, why task 2 kept `TMPDIR` off `/tmp`
 - 7390 (retired 2026-11-17): rootless daemon restarts on the other drivers (VPNKit, pasta, gvisor-tap-vsock) and with `live-restore`; its runs are in [container qualification](../../development/container-qualification.md#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17)
-- [8305](8305-vpnkit-host-loopback-address.md): VPNKit's host loopback address, found by task 4's run
+- 8305 (retired 2026-11-18): VPNKit's host loopback address, found by task 4's run; probed by the reachability check since, [evidence](../../development/container-qualification.md#vpnkit-host-loopback-in-the-reachability-check-8305-2026-11-18)
 - To-do 0241 (retired 2026-11-10): the leaked networks that fill the host's pools; see [disk usage](../../development/disk-usage.md#what-you-clean-yourself)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): held the user part of task 4 (installing `passt` on beelink, decided 2026-11-14), answered and removed on 2026-11-17.

@@ -116,7 +116,7 @@ function nestingChain(levels: number): GraphTemplateV1[] {
           id: "inner",
           kind: "subgraph",
           template: { scope: "user", id: `level-${level + 1}` },
-          roles: { checker: "checker", fixer: "fixer" },
+          roles: { checker: "checker", addresser: "addresser" },
           inputs: [{ name: "code", type: "workspace@1" }],
         },
       ];
@@ -280,7 +280,7 @@ const CASES: Record<GraphCompileDiagnosticCode | GraphCapabilityIssueCode, Case>
     from: () =>
       parentTemplate(
         auditNode({
-          outputs: [{ name: "report", type: "fix-result@1" }],
+          outputs: [{ name: "report", type: "address-findings-result@1" }],
         }),
       ),
     mutate: () => {},
@@ -294,7 +294,7 @@ const CASES: Record<GraphCompileDiagnosticCode | GraphCapabilityIssueCode, Case>
     expect: { nodeId: "audit", path: "nodes[1].params.depth" },
   },
   "subgraph-role-binding": {
-    from: () => parentTemplate(auditNode({ roles: { checker: "panel", fixer: "worker" } })),
+    from: () => parentTemplate(auditNode({ roles: { checker: "panel", addresser: "worker" } })),
     mutate: () => {},
     options: { resolveTemplate: resolverOf(childTemplate()) },
     expect: { nodeId: "audit", path: "nodes[1].roles.checker" },
@@ -381,7 +381,7 @@ const CASES: Record<GraphCompileDiagnosticCode | GraphCapabilityIssueCode, Case>
   },
   "system-port-unsupported": {
     mutate: (t) => {
-      withPush(t).outputs = [{ name: "report", type: "fix-result@1" }];
+      withPush(t).outputs = [{ name: "report", type: "address-findings-result@1" }];
     },
     expect: { nodeId: "push", port: "report", detail: "output-type" },
   },
@@ -448,7 +448,7 @@ const CASES: Record<GraphCompileDiagnosticCode | GraphCapabilityIssueCode, Case>
     mutate: (t) => {
       t.loops![0]!.carry.push({
         from: { node: "build", port: "code" },
-        to: { node: "fix", port: "code" },
+        to: { node: "rework", port: "code" },
       });
     },
     expect: { loopId: "rounds", path: "loops[0].carry[2]" },
@@ -549,7 +549,7 @@ const CASES: Record<GraphCompileDiagnosticCode | GraphCapabilityIssueCode, Case>
   },
   "output-type-mismatch": {
     mutate: (t) => {
-      t.outputs![0]!.type = "fix-result@1";
+      t.outputs![0]!.type = "address-findings-result@1";
     },
     expect: { path: "outputs[0]" },
   },
@@ -888,12 +888,12 @@ describe("rule details", () => {
     expect(codes((t) => (prepare(t).firstIterationFrom = { input: "target" }))).toEqual([
       "no_edge",
     ]);
-    expect(codes((t) => (prepare(t).firstIterationFrom = { node: "fix", port: "code" }))).toEqual([
-      "inside_loop",
-    ]);
+    expect(
+      codes((t) => (prepare(t).firstIterationFrom = { node: "rework", port: "code" })),
+    ).toEqual(["inside_loop"]);
     expect(
       codes((t) => {
-        t.edges = t.edges.filter((edge) => edge.id !== "fix-prepare");
+        t.edges = t.edges.filter((edge) => edge.id !== "rework-prepare");
       }),
     ).toEqual(["no_later_source"]);
   });

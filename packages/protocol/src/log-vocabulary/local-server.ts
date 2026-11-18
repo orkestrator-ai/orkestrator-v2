@@ -11,6 +11,8 @@ export const LOCAL_SERVER_LOG_AREAS = defineLogAreas({
       "opencode.database-lost-retrying":
         "OpenCode lost its shared database at startup, so it is retried.",
       "server.stopping": "A local server is being stopped, for the fixed `reason` given.",
+      "bridge.port-taken":
+        "Another process took a bridge's port between allocation and bind, so the start is retried on a fresh port; `attempt` is the attempt that lost the port.",
       "bridge.started": {
         description: "A local bridge process was spawned; `key` names its kind and environment.",
         essential: true,

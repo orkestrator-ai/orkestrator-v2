@@ -1,3 +1,4 @@
+import { FAKE_BRIDGE_STARTUP } from "./fake-bridge-startup.js";
 import { eventSink } from "../src/core/backend-emit.js";
 import { LOCAL_SERVER_POLL_OVERRIDE_ENV } from "../src/core/commands-server-health.js";
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
@@ -806,6 +807,7 @@ export async function createCommandFixtures() {
     await fs.writeFile(
       path.join(bridgeDist, "index.js"),
       `
+      ${FAKE_BRIDGE_STARTUP}
       const http = require("node:http");
       const port = Number(process.env.PORT);
       ${
@@ -824,6 +826,10 @@ export async function createCommandFixtures() {
           : ""
       }
       http.createServer((req, res) => {
+        if (req.url === "/global/auth-check") {
+          res.writeHead(bridgeAuthStatus(req.headers.authorization)).end();
+          return;
+        }
         if (req.url === "/global/health") {
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify({ ok: true }));
@@ -843,7 +849,7 @@ export async function createCommandFixtures() {
         }
         res.writeHead(404);
         res.end();
-      }).listen(port, "127.0.0.1");
+      }).listen(port, "127.0.0.1", announceBridgeReady);
     `,
     );
   }

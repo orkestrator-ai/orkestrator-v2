@@ -123,7 +123,9 @@ describe("standalone backend service", () => {
           }
           response.writeHead(404, { "content-type": "application/json" });
           response.end(JSON.stringify({ _tag: "NotFoundError", message: "Not found" }));
-        }).listen(Number(process.argv[2]), "127.0.0.1");
+        }).listen(Number(process.argv[2]), "127.0.0.1", () => {
+          process.stdout.write("server listening on http://127.0.0.1:" + process.argv[2] + "\\n");
+        });
       `;
       await writeFile(fakeServerPath, fakeServerSource);
       await writeFile(

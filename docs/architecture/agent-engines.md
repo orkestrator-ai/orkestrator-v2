@@ -1044,6 +1044,9 @@ OpenCode bump, re-check:
 - The credential plugin's hook names (`opencode2/server.ts`), exercised by
   `apps/backend/tests/bridge-credential-docker.test.ts` and the live tests
   under `apps/backend/src/core/opencode2/`.
+- The host CLI still prints `server listening on http://127.0.0.1:<port>` after
+  binding. The local supervisor waits for that line and authenticated
+  `/api/info` before publishing the port.
 - The routes the client and the feature modules call (`GET /openapi.json` on a
   running server lists them).
 - That nothing relies on a request handler waiting for plugins: since 2.2.7

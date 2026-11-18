@@ -302,3 +302,10 @@ installs on first start (`apps/backend/src/core/bridge-runtime-install.ts`).
 Anything that starts a bridge resolves it through `prepareBridgePath`, not
 `getBridgePath`, so that install happens. `packages/cli/tests/cli.test.ts`
 enumerates `bridges/` against that list.
+
+## Host bridge startup
+
+After installing lifecycle handlers and binding its HTTP listener, each managed
+bridge writes the marker from `local-bridge-readiness.ts` to its child stdout.
+The backend waits for that marker, a successful authenticated
+`GET /global/auth-check`, and healthy HTTP before publishing the host port.

@@ -1,3 +1,4 @@
+import { FAKE_BRIDGE_STARTUP } from "../../tests/fake-bridge-startup.js";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -94,8 +95,14 @@ async function stage(bridge: "pi-bridge" | "cursor-bridge") {
       process.on("SIGTERM", () => { clearInterval(timer); process.exit(0); });
       await new Promise(() => {});
     }
+    ${FAKE_BRIDGE_STARTUP}
     const server = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.PORT || 0),
-      fetch() { return Response.json({ ok: true }); } });
+      fetch(request) {
+        const status = new URL(request.url).pathname === "/global/auth-check"
+          ? bridgeAuthStatus(request.headers.get("authorization")) : 200;
+        return Response.json({ ok: status === 200 }, { status });
+      } });
+    announceBridgeReady();
     process.on("SIGTERM", () => { server.stop(true); process.exit(0); });
   `,
   );

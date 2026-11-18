@@ -1,3 +1,4 @@
+import { LOCAL_BRIDGE_READY_PREFIX } from "@orkestrator/protocol/node/local-bridge-readiness";
 import { applyAgentTestAnthropicOrigin } from "./agent-test-fixtures.js";
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import { BRIDGE_LOG_RELAY_ENV } from "@orkestrator/protocol/node/logger-environment";
@@ -38,6 +39,8 @@ import {
 } from "./commands-local-server-lifecycle.js";
 import {
   checkHttpHealth,
+  LOCAL_SERVER_HEALTH_INTERVAL_MS,
+  localServerHealthAttempts,
   confirmRunningServerHealth,
   localServerHealthPath,
   waitForLocalServerHealth,
@@ -138,6 +141,12 @@ import {
 } from "./agent-accounts-active.js";
 
 import { agentAccountLoginKey } from "./agent-accounts-store.js";
+import {
+  LOCAL_SERVER_PORT_ATTEMPTS,
+  LocalServerPortTakenError,
+  probeLocalBridgeAuth,
+  watchLocalServerOutput,
+} from "./local-server-port-taken.js";
 
 /**
  * How long an unresponsive bridge with a turn or background work in progress is
@@ -288,13 +297,39 @@ export async function waitForLocalServerStartup(
   port: number,
   kind: LocalServerKind,
   headers?: Record<string, string>,
-  options: { health?: Parameters<typeof waitForLocalServerHealth>[3] } = {},
+  options: {
+    health?: Parameters<typeof waitForLocalServerHealth>[3];
+    /**
+     * This start's own token. A healthy answer is confirmed against it, so a
+     * different server that took the port is not mistaken for this one.
+     */
+    identityHeaders?: Record<string, string>;
+    /** Managed builds require the auth route, even after reporting a successful bind. */
+    requireAuthenticatedReadiness?: boolean;
+  } = {},
 ): Promise<void> {
   let settled = false;
   let exited = false;
 
   await new Promise<void>((resolve, reject) => {
+    const controller = new AbortController();
+    const readyLine =
+      kind === "opencode"
+        ? `server listening on http://127.0.0.1:${port}`
+        : `${LOCAL_BRIDGE_READY_PREFIX}${port}`;
+    const output = watchLocalServerOutput(
+      [child.stdout, child.stderr],
+      () => complete(new LocalServerPortTakenError(port, "bind-failed")),
+      readyLine,
+    );
+    const timeout = setTimeout(
+      () => complete(new Error(`Server on port ${port} did not become healthy`)),
+      localServerHealthAttempts(kind) * LOCAL_SERVER_HEALTH_INTERVAL_MS,
+    );
     const cleanup = () => {
+      clearTimeout(timeout);
+      controller.abort();
+      output.stop();
       child.off("error", onError);
       child.off("exit", onExit);
     };
@@ -308,18 +343,45 @@ export async function waitForLocalServerStartup(
     const onError = (error: Error) => complete(error);
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       exited = true;
-      complete(
-        new Error(
-          `${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`,
-        ),
-      );
+      clearTimeout(timeout);
+      controller.abort();
+      // The bind failure is printed just before the exit; let it arrive.
+      void output
+        .drained()
+        .then(() =>
+          complete(
+            output.seen()
+              ? new LocalServerPortTakenError(port, "bind-failed")
+              : new Error(
+                  `${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`,
+                ),
+          ),
+        );
     };
 
     child.once("error", onError);
     child.once("exit", onExit);
-    waitForLocalServerHealth(port, kind, headers, options.health).then(
+    const checkHealth = options.health?.checkHealth ?? checkHttpHealth;
+    void waitForLocalServerHealth(port, kind, headers, {
+      ...options.health,
+      signal: controller.signal,
+      checkHealth: async (probePort, probePath, probeHeaders) => {
+        if (!output.ready()) return false;
+        if (options.identityHeaders) {
+          const auth = await probeLocalBridgeAuth(port, options.identityHeaders, controller.signal);
+          if (auth === "refused") throw new LocalServerPortTakenError(port, "foreign-server");
+          if (
+            auth !== "accepted" &&
+            (auth !== "unsupported" || options.requireAuthenticatedReadiness)
+          ) {
+            return false;
+          }
+        }
+        if (controller.signal.aborted) return false;
+        return checkHealth(probePort, probePath, probeHeaders, undefined, controller.signal);
+      },
+    }).then(
       () => {
-        // A server that has already exited is not healthy, whatever answers.
         if (!exited) complete();
       },
       (error: unknown) => {
@@ -658,12 +720,37 @@ export async function fetchAcpNormalizedModelsAtResult(
 // Child-scoped launch authority; weak keys release exited process records.
 const coordinatorResearchLaunches = new WeakMap<ChildProcessWithoutNullStreams, string>();
 
+function canRetryLocalServerStart(
+  error: unknown,
+  attempt: number,
+  context: CommandContext,
+): error is LocalServerPortTakenError {
+  return (
+    error instanceof LocalServerPortTakenError &&
+    attempt < LOCAL_SERVER_PORT_ATTEMPTS &&
+    !context.runtime.localServers.isShuttingDown()
+  );
+}
+
 export async function startLocalServerUnlocked(
   environmentId: string,
   context: CommandContext,
   kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
-  const started = await startLocalServerAttempt(environmentId, context, kind);
+  let started: Awaited<ReturnType<typeof startLocalServerAttempt>>;
+  const rejectedPorts = new Set<number>();
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      started = await startLocalServerAttempt(environmentId, context, kind, rejectedPorts);
+      break;
+    } catch (error) {
+      // The failed attempt has already stopped its child and cleared its
+      // records, so a fresh attempt allocates a fresh port.
+      if (!canRetryLocalServerStart(error, attempt, context)) throw error;
+      rejectedPorts.add(error.port);
+      log.warn("bridge.port-taken", { key: `${kind}:${environmentId}`, attempt });
+    }
+  }
   // OpenCode's server is not one of our bridges and takes no log policy.
   if (kind !== "opencode" && started.authToken) {
     context.runtime.logPolicy?.bridgeStarted({
@@ -679,6 +766,7 @@ async function startLocalServerAttempt(
   environmentId: string,
   context: CommandContext,
   kind: LocalServerKind,
+  rejectedPorts: ReadonlySet<number>,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
   context.runtime.environments.fence.assertNotMoving(environmentId);
   const key = `${kind}:${environmentId}`;
@@ -861,7 +949,7 @@ async function startLocalServerAttempt(
   }
 
   const bridgeConfig = await context.storage.loadConfig();
-  const port = await allocateLocalPort();
+  const port = await allocateLocalPort(rejectedPorts);
   let command = "";
   let cwd = environment.worktreePath;
   let launchedAccountId: string | undefined;
@@ -1277,19 +1365,21 @@ async function startLocalServerAttempt(
 
   const { port: field, pid: pidField } = localServerFields(kind);
   try {
-    const authToken = localServers.bridgeToken(kind, environmentId);
+    const authToken = bridgeToken;
     try {
       await waitForLocalServerStartup(
         child,
         port,
         kind,
-        authToken
-          ? kind === "opencode"
-            ? openCodeHealthHeaders(authToken)
-            : kind === "cursor" || kind === "grok" || kind === "pi"
-              ? bearerBridgeHeaders(authToken)
-              : undefined
-          : undefined,
+        kind === "opencode"
+          ? openCodeHealthHeaders(authToken)
+          : kind === "cursor" || kind === "grok" || kind === "pi"
+            ? bearerBridgeHeaders(authToken)
+            : undefined,
+        // OpenCode's own health check already requires its password.
+        kind !== "opencode"
+          ? { identityHeaders: bearerBridgeHeaders(authToken), requireAuthenticatedReadiness: true }
+          : {},
       );
     } finally {
       releaseOpenCodeHostStart();
@@ -1353,12 +1443,12 @@ async function startLocalServerAttempt(
       if (selectedConversation) {
         context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
       }
-      // A start that shutdown cut short says nothing about the conversation, and
-      // the record would refuse it after the next launch. Only this conversation
-      // is marked: the workspace, and every other conversation, stay as they are.
-      const startupError = localServers.isShuttingDown()
-        ? undefined
-        : sanitizeCoordinatorError(error);
+      // Startup errors block coordinator admission. Record a terminal failure
+      // only after cleanup has determined whether another attempt is safe.
+      const retrying =
+        !terminationError && canRetryLocalServerStart(error, rejectedPorts.size + 1, context);
+      const startupError =
+        retrying || localServers.isShuttingDown() ? undefined : sanitizeCoordinatorError(error);
       await context.storage.coordinators
         .mutateCoordinatorWorkspace(environment.projectId, (workspace) =>
           workspace && workspace.id === coordinatorId
@@ -1548,21 +1638,28 @@ export function getLocalServerStatus(
   );
 }
 
-export async function allocateLocalPort(): Promise<number> {
+export async function allocateLocalPort(excludedPorts?: ReadonlySet<number>): Promise<number> {
   const net = await import("node:net");
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.listen(0, "127.0.0.1", () => {
+  const reservations: ReturnType<typeof net.createServer>[] = [];
+  try {
+    for (;;) {
+      const server = net.createServer();
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      reservations.push(server);
       const address = server.address();
-      if (address && typeof address === "object") {
-        const port = address.port;
-        server.close(() => resolve(port));
-      } else {
-        server.close(() => reject(new Error("Failed to allocate port")));
-      }
-    });
-    server.once("error", reject);
-  });
+      if (!address || typeof address === "string") throw new Error("Failed to allocate port");
+      if (!excludedPorts?.has(address.port)) return address.port;
+      // Keep that socket until allocation finishes so the OS cannot offer a
+      // rejected port again even if the listener that took it has gone away.
+    }
+  } finally {
+    await Promise.all(
+      reservations.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+    );
+  }
 }
 
 /**

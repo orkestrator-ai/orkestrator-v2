@@ -1,3 +1,4 @@
+import { FAKE_BRIDGE_STARTUP } from "./fake-bridge-startup.js";
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import http from "node:http";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
@@ -52,12 +53,17 @@ function markLocalServerLastFailureAt(
  * A 503 fails a probe immediately, so these tests never wait out a timeout.
  */
 const CONTROLLABLE_BRIDGE = `
+  ${FAKE_BRIDGE_STARTUP}
   const http = require("node:http");
   let failRemaining = 0;
   let stalled = false;
   let healthProbes = 0;
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
+    if (url.pathname === "/global/auth-check") {
+      res.writeHead(bridgeAuthStatus(req.headers.authorization)).end();
+      return;
+    }
     if (url.pathname === "/fail") failRemaining = Number(url.searchParams.get("n"));
     else if (url.pathname === "/stall") stalled = true;
     else if (url.pathname === "/recover") stalled = false;
@@ -86,7 +92,7 @@ const CONTROLLABLE_BRIDGE = `
     res.writeHead(200);
     res.end();
   });
-  server.listen(Number(process.env.PORT), "127.0.0.1");
+  server.listen(Number(process.env.PORT), "127.0.0.1", announceBridgeReady);
   setInterval(() => {}, 60_000);
 `;
 

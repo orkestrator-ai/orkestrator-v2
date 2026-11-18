@@ -1,6 +1,7 @@
 // First, before any module reads the environment: what the bridge launcher
 // recorded for the agents this bridge spawns (bridge-launch-environment.ts).
 import "@orkestrator/protocol/node/bridge-launch-environment";
+import { announceLocalBridgeReady } from "@orkestrator/protocol/node/local-bridge-readiness";
 import { PolicyWideningRefusedError } from "@orkestrator/protocol/execution-policy-narrowing";
 import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
 import {
@@ -1819,26 +1820,28 @@ app.get("/event/subscribe", (c) => {
   });
 });
 
-type BridgeServerOptions = Parameters<typeof serve>[0];
+type StartBridgeListener = (
+  options: Parameters<typeof serve>[0],
+  onListening: () => void,
+) => unknown;
 
 function startBridgeServer(
   env: NodeJS.ProcessEnv = process.env,
-  start: (options: BridgeServerOptions) => unknown = serve,
+  start: StartBridgeListener = serve,
 ): unknown {
   if (env.CODEX_BRIDGE_NO_SERVER === "1") {
     return undefined;
   }
 
-  return start({
-    fetch: app.fetch,
-    port: parseInt(env.PORT || "4098", 10),
-    hostname: env.HOSTNAME || "0.0.0.0",
-  });
+  const port = parseInt(env.PORT || "4098", 10);
+  return start({ fetch: app.fetch, port, hostname: env.HOSTNAME || "0.0.0.0" }, () =>
+    announceLocalBridgeReady(port),
+  );
 }
 
 function startBridge(
   env: NodeJS.ProcessEnv = process.env,
-  listen: (options: BridgeServerOptions) => unknown = serve,
+  listen: StartBridgeListener = serve,
   runtime: Pick<AppServerRuntime, "start" | "getHealth"> = appServerRuntime,
 ): unknown {
   // Mark restoration synchronously before a listener can receive requests.

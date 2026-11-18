@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   ONE_PIXEL_PNG,
+  GROK_CONTENT_REVISION,
   here,
   nativeFetch,
   sharedBridge,
@@ -894,7 +895,7 @@ describe("ACP bridge", () => {
         await nativeFetch(`${base}/session/${created.id}/activity`, {
           headers,
         }).then((response) => response.json()),
-      ).toEqual({ activity: "working" });
+      ).toEqual({ activity: "working", contentRevision: GROK_CONTENT_REVISION });
 
       expect(
         (
@@ -931,7 +932,7 @@ describe("ACP bridge", () => {
         await nativeFetch(`${base}/session/${created.id}/activity`, {
           headers,
         }).then((response) => response.json()),
-      ).toEqual({ activity: "idle" });
+      ).toEqual({ activity: "idle", contentRevision: GROK_CONTENT_REVISION });
     });
   }
 

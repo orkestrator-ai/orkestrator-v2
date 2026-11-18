@@ -1,3 +1,4 @@
+import { FAKE_BRIDGE_STARTUP } from "./fake-bridge-startup.js";
 import {
   seedStore,
   seedUnreadableStore,
@@ -100,7 +101,7 @@ http.createServer((req, res) => {
   res.end(req.url && req.url.startsWith("/api/credential")
     ? JSON.stringify({ data: [] })
     : JSON.stringify({ version: "2.2.6", pid: process.pid }));
-}).listen(port, "127.0.0.1");
+}).listen(port, "127.0.0.1", () => process.stdout.write("server listening on http://127.0.0.1:" + port + "\\n"));
 `;
   const scriptPath = `${binary}.cjs`;
   await fs.writeFile(scriptPath, script);
@@ -2963,6 +2964,7 @@ exit 1
       await fs.writeFile(
         path.join(bridgeDist, "index.js"),
         `
+          ${FAKE_BRIDGE_STARTUP}
           const http = require("node:http");
           require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
             cwd: process.cwd(),
@@ -2982,6 +2984,10 @@ exit 1
               .digest("hex"),
           }));
           http.createServer((req, res) => {
+            if (req.url === "/global/auth-check") {
+              res.writeHead(bridgeAuthStatus(req.headers.authorization)).end();
+              return;
+            }
             if (req.url === "/global/health") {
               res.writeHead(200, {
                 "content-type": "application/json",
@@ -3006,7 +3012,7 @@ exit 1
             }
             res.writeHead(404, { "content-type": "application/json" });
             res.end(JSON.stringify({ error: "not found" }));
-          }).listen(Number(process.env.PORT), "127.0.0.1");
+          }).listen(Number(process.env.PORT), "127.0.0.1", announceBridgeReady);
         `,
       );
 
@@ -3129,6 +3135,7 @@ exit 1
       await fs.writeFile(
         path.join(bridgeDist, "index.js"),
         `
+        ${FAKE_BRIDGE_STARTUP}
         const http = require("node:http");
         require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
           cwd: process.cwd(),
@@ -3141,13 +3148,17 @@ exit 1
           hostname: process.env.HOSTNAME ?? "",
         }));
         http.createServer((req, res) => {
+          if (req.url === "/global/auth-check") {
+            res.writeHead(bridgeAuthStatus(req.headers.authorization)).end();
+            return;
+          }
           if (req.url === "/global/health") {
             res.writeHead(200, { "content-type": "application/json" });
             res.end(JSON.stringify({ ok: true }));
             return;
           }
           res.writeHead(404).end();
-        }).listen(Number(process.env.PORT), "127.0.0.1");
+        }).listen(Number(process.env.PORT), "127.0.0.1", announceBridgeReady);
       `,
       );
 
@@ -3239,6 +3250,7 @@ printf '%s' ${JSON.stringify(
         "claude-bridge",
         `
         const fs = require("node:fs");
+        ${FAKE_BRIDGE_STARTUP}
         const http = require("node:http");
         const path = require("node:path");
         fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
@@ -3256,9 +3268,13 @@ printf '%s' ${JSON.stringify(
           )),
         }));
         http.createServer((req, res) => {
+          if (req.url === "/global/auth-check") {
+            res.writeHead(bridgeAuthStatus(req.headers.authorization)).end();
+            return;
+          }
           res.writeHead(req.url === "/global/health" ? 200 : 404);
           res.end();
-        }).listen(Number(process.env.PORT), "127.0.0.1");
+        }).listen(Number(process.env.PORT), "127.0.0.1", announceBridgeReady);
       `,
       );
 
@@ -3377,6 +3393,7 @@ printf '%s' ${JSON.stringify(
         "claude-bridge",
         `
         const fs = require("node:fs");
+        ${FAKE_BRIDGE_STARTUP}
         const http = require("node:http");
         const path = require("node:path");
         fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
@@ -3388,9 +3405,13 @@ printf '%s' ${JSON.stringify(
           home: process.env.HOME ?? "",
         }));
         http.createServer((req, res) => {
+          if (req.url === "/global/auth-check") {
+            res.writeHead(bridgeAuthStatus(req.headers.authorization)).end();
+            return;
+          }
           res.writeHead(req.url === "/global/health" ? 200 : 404);
           res.end();
-        }).listen(Number(process.env.PORT), "127.0.0.1");
+        }).listen(Number(process.env.PORT), "127.0.0.1", announceBridgeReady);
       `,
       );
 
@@ -3489,6 +3510,7 @@ printf '%s' ${JSON.stringify(
         "codex-bridge",
         `
         const fs = require("node:fs");
+        ${FAKE_BRIDGE_STARTUP}
         const http = require("node:http");
         const { spawn } = require("node:child_process");
         const descendant = spawn(
@@ -3501,6 +3523,10 @@ printf '%s' ${JSON.stringify(
           JSON.stringify({ bridgePid: process.pid, descendantPid: descendant.pid }),
         );
         const server = http.createServer((req, res) => {
+          if (req.url === "/global/auth-check") {
+            res.writeHead(bridgeAuthStatus(req.headers.authorization)).end();
+            return;
+          }
           if (req.url === "/global/health") {
             res.writeHead(200, { "content-type": "application/json" });
             res.end(JSON.stringify({ ok: true }));
@@ -3509,7 +3535,7 @@ printf '%s' ${JSON.stringify(
           res.writeHead(404);
           res.end();
         });
-        server.listen(Number(process.env.PORT), "127.0.0.1");
+        server.listen(Number(process.env.PORT), "127.0.0.1", announceBridgeReady);
         process.on("SIGTERM", () => {
           fs.writeFileSync(
             ${JSON.stringify(shutdownMarkerPath)},
@@ -3565,13 +3591,18 @@ printf '%s' ${JSON.stringify(
         "codex-bridge",
         `
         const fs = require("node:fs");
+        ${FAKE_BRIDGE_STARTUP}
         const http = require("node:http");
         fs.writeFileSync(${JSON.stringify(startedMarkerPath)}, "started");
         setTimeout(() => {
           http.createServer((req, res) => {
+            if (req.url === "/global/auth-check") {
+              res.writeHead(bridgeAuthStatus(req.headers.authorization)).end();
+              return;
+            }
             res.writeHead(req.url === "/global/health" ? 200 : 404);
             res.end();
-          }).listen(Number(process.env.PORT), "127.0.0.1");
+          }).listen(Number(process.env.PORT), "127.0.0.1", announceBridgeReady);
         }, 100);
       `,
       );
@@ -3914,13 +3945,18 @@ printf '%s' ${JSON.stringify(
         "codex-bridge",
         `
         const fs = require("node:fs");
+        ${FAKE_BRIDGE_STARTUP}
         const http = require("node:http");
         fs.writeFileSync(${JSON.stringify(startedMarkerPath)}, "started");
         setTimeout(() => {
           http.createServer((req, res) => {
+            if (req.url === "/global/auth-check") {
+              res.writeHead(bridgeAuthStatus(req.headers.authorization)).end();
+              return;
+            }
             res.writeHead(req.url === "/global/health" ? 200 : 404);
             res.end();
-          }).listen(Number(process.env.PORT), "127.0.0.1");
+          }).listen(Number(process.env.PORT), "127.0.0.1", announceBridgeReady);
         }, 100);
       `,
       );

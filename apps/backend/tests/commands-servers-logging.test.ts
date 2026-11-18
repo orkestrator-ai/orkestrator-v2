@@ -1,3 +1,4 @@
+import { FAKE_BRIDGE_STARTUP } from "./fake-bridge-startup.js";
 import { describe, expect, mock, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
@@ -61,15 +62,20 @@ describe("local server logging environment", () => {
 describe("local bridge exit logging", () => {
   /** A real process that answers health checks, and exits with a code when asked to. */
   const FAKE_BRIDGE = `
+    ${FAKE_BRIDGE_STARTUP}
     Bun.serve({
       hostname: "127.0.0.1",
       port: Number(process.env.PORT),
       fetch(request) {
+        if (new URL(request.url).pathname === "/global/auth-check") {
+          return new Response(null, { status: bridgeAuthStatus(request.headers.get("authorization")) });
+        }
         const code = new URL(request.url).searchParams.get("exit");
         if (code !== null) setTimeout(() => process.exit(Number(code)), 5);
         return Response.json({ healthy: true });
       },
     });
+    announceBridgeReady();
   `;
 
   /** A Codex environment whose bridge process is whatever `launch` starts. */

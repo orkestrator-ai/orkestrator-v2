@@ -1,5 +1,15 @@
+import { FAKE_BRIDGE_STARTUP } from "../../tests/fake-bridge-startup.js";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { once } from "node:events";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter, once } from "node:events";
+import { PassThrough } from "node:stream";
+import { LOCAL_BRIDGE_READY_PREFIX } from "@orkestrator/protocol/node/local-bridge-readiness";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
+import { hasBridgeAuthorityKey } from "./bridge-authority-keys.js";
+import {
+  LOCAL_SERVER_PORT_ATTEMPTS,
+  LocalServerPortTakenError,
+} from "./local-server-port-taken.js";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -134,9 +144,16 @@ describe("Coordinator Codex server", () => {
     await fs.writeFile(
       path.join(bridge, "index.js"),
       `
-const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+${FAKE_BRIDGE_STARTUP}
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch(request) {
+  const status = new URL(request.url).pathname === "/global/auth-check"
+    ? bridgeAuthStatus(request.headers.get("authorization")) : 200;
+  return Response.json({ ok: status === 200 }, { status });
+} });
 const stop = () => { server.stop(true); process.exit(0); };
-process.on("SIGTERM", stop); process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+announceBridgeReady();
 `,
     );
     await fs.rm(path.join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"));
@@ -244,9 +261,16 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       await fs.writeFile(
         path.join(bridge, "index.js"),
         `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP, oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN, commandSandbox: process.env.ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX, userSkills: process.env.ORKESTRATOR_COORDINATOR_CLAUDE_USER_SKILLS_DIR }));
-const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+${FAKE_BRIDGE_STARTUP}
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch(request) {
+  const status = new URL(request.url).pathname === "/global/auth-check"
+    ? bridgeAuthStatus(request.headers.get("authorization")) : 200;
+  return Response.json({ ok: status === 200 }, { status });
+} });
 const stop = () => { server.stop(true); process.exit(0); };
-process.on("SIGTERM", stop); process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+announceBridgeReady();
 `,
       );
       const project = await storage.addProject(createProject("remote", checkout));
@@ -418,9 +442,16 @@ const captured = {
 };
 await mkdir(process.env.CURSOR_BRIDGE_STATE_DIR, { recursive: true });
 await Bun.write(process.env.CURSOR_BRIDGE_STATE_DIR + "/captured.json", JSON.stringify(captured));
-const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+${FAKE_BRIDGE_STARTUP}
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch(request) {
+  const status = new URL(request.url).pathname === "/global/auth-check"
+    ? bridgeAuthStatus(request.headers.get("authorization")) : 200;
+  return Response.json({ ok: status === 200 }, { status });
+} });
 const stop = () => { server.stop(true); process.exit(0); };
-process.on("SIGTERM", stop); process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+announceBridgeReady();
 `,
     );
     const project = await storage.addProject(createProject("remote", checkout));
@@ -520,9 +551,16 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       path.join(bridge, "index.js"),
       `if (JSON.stringify(process.env).includes("refresh-sentinel")) throw new Error("Refresh token leaked to environment");
 await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ stateDir: process.env.CODEX_BRIDGE_STATE_DIR ?? null, codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, userSkills: process.env.ORKESTRATOR_COORDINATOR_CODEX_USER_SKILLS_DIR }));
-const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+${FAKE_BRIDGE_STARTUP}
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch(request) {
+  const status = new URL(request.url).pathname === "/global/auth-check"
+    ? bridgeAuthStatus(request.headers.get("authorization")) : 200;
+  return Response.json({ ok: status === 200 }, { status });
+} });
 const stop = () => { server.stop(true); process.exit(0); };
-process.on("SIGTERM", stop); process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+announceBridgeReady();
 `,
     );
     const project = await storage.addProject(createProject("remote", checkout));
@@ -740,6 +778,152 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     expect(context.runtime.localServers.process(`codex:${runtimeId}`)).toBeUndefined();
   });
 
+  test.each([
+    { outcome: "recovers", attempts: 2 },
+    { outcome: "exhausts retries", attempts: LOCAL_SERVER_PORT_ATTEMPTS },
+    { outcome: "ordinary exit", attempts: 1 },
+    { outcome: "shutdown", attempts: 1 },
+    { outcome: "cleanup failure", attempts: 1 },
+  ])("coordinator startup $outcome", async ({ outcome, attempts }) => {
+    const bridge = path.join(root, "bridges", "codex-bridge", "dist");
+    await fs.mkdir(bridge, { recursive: true });
+    await fs.writeFile(path.join(bridge, "index.js"), "");
+    const project = await storage.addProject(createProject("remote", checkout));
+    const coordinators = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const { workspace } = await coordinators.ensure(project.id);
+    const conversationId = workspace.conversations[0]!.id;
+    await coordinators.assignConversationAgent(project.id, conversationId, "codex");
+    const runtimeId = coordinatorRuntimeId(workspace.id, conversationId);
+    const key = `codex:${runtimeId}`;
+    const launches: Array<{ port: number; token: string; child: ChildProcessWithoutNullStreams }> =
+      [];
+    const listeners: Array<ReturnType<typeof Bun.serve>> = [];
+    const terminateProcessTree = mock(async () => outcome !== "cleanup failure");
+    const runtime = trackedRuntime({
+      localServers: {
+        terminateProcessTree,
+        spawn: (_command, _args, options) => {
+          const port = Number(options?.env?.PORT);
+          const token = runtime.localServers.bridgeToken("codex", runtimeId)!;
+          const stdout = new PassThrough();
+          const stderr = new PassThrough();
+          const child = Object.assign(new EventEmitter(), {
+            pid: fakePid(launches.length + 1),
+            stdin: new PassThrough(),
+            stdout,
+            stderr,
+            killed: false,
+            exitCode: null,
+            signalCode: null,
+          }) as unknown as ChildProcessWithoutNullStreams;
+          launches.push({ child, port, token });
+          const binds = outcome === "recovers" && launches.length === attempts;
+          listeners.push(
+            Bun.serve({
+              hostname: "127.0.0.1",
+              port,
+              fetch: (request) => {
+                const authCheck = new URL(request.url).pathname === "/global/auth-check";
+                const status = !authCheck
+                  ? 200
+                  : !binds
+                    ? 404
+                    : request.headers.get("authorization") === `Bearer ${token}`
+                      ? 200
+                      : 401;
+                return Response.json({ status }, { status });
+              },
+            }),
+          );
+          queueMicrotask(() => {
+            if (binds) {
+              stdout.write(`${LOCAL_BRIDGE_READY_PREFIX}${port}\n`);
+              return;
+            }
+            if (outcome === "shutdown") runtime.localServers.closeAdmission();
+            if (outcome === "ordinary exit") {
+              stdout.end();
+              stderr.end("startup crashed");
+              child.emit("exit", 23, null);
+            } else {
+              stderr.end("EADDRINUSE\n");
+            }
+          });
+          return child;
+        },
+      },
+    });
+    const context = {
+      storage,
+      coordinators,
+      appRoot: root,
+      resourceRoot: root,
+      emit: () => undefined,
+      environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime,
+    } as CommandContext;
+    const start = startLocalServerUnlocked(runtimeId, context, "codex");
+    try {
+      if (outcome === "recovers") {
+        const started = await start;
+        expect(started).toMatchObject({
+          port: launches[1]!.port,
+          pid: launches[1]!.child.pid,
+          wasRunning: false,
+        });
+        expect(runtime.localServers.process(key)).toBe(launches[1]!.child);
+        expect(runtime.localServers.bridgeToken("codex", runtimeId)).toBe(launches[1]!.token);
+      } else if (outcome === "ordinary exit") {
+        await expect(start).rejects.toThrow("code 23");
+      } else if (outcome === "cleanup failure") {
+        await expect(start).rejects.toThrow("Failed to start and clean up local server");
+        expect(runtime.localServers.process(key)).toBe(launches[0]!.child);
+      } else {
+        await expect(start).rejects.toBeInstanceOf(LocalServerPortTakenError);
+      }
+
+      expect(launches).toHaveLength(attempts);
+      expect(new Set(launches.map(({ port }) => port)).size).toBe(attempts);
+      const failedAttempts = outcome === "recovers" ? launches.slice(0, -1) : launches;
+      expect(terminateProcessTree).toHaveBeenCalledTimes(failedAttempts.length);
+      for (const { child, token } of failedAttempts) {
+        expect(terminateProcessTree).toHaveBeenCalledWith(child, expect.anything());
+        expect(hasBridgeAuthorityKey(token)).toBe(outcome === "cleanup failure");
+      }
+      const saved = (await storage.coordinators.getCoordinatorWorkspace(
+        project.id,
+      ))!.conversations.find(({ id }) => id === conversationId)!;
+      if (outcome === "recovers" || outcome === "shutdown") {
+        expect(saved.startupError).toBeUndefined();
+      } else {
+        expect(saved.startupError).toContain(
+          outcome === "ordinary exit"
+            ? "before becoming healthy"
+            : "taken before the server could bind",
+        );
+      }
+      if (outcome === "recovers") {
+        expect(saved.bridgePort).toBe(launches[1]!.port);
+        expect(saved.bridgePid).toBe(launches[1]!.child.pid);
+      } else {
+        expect(saved.bridgePort).toBeUndefined();
+        expect(saved.bridgePid).toBeUndefined();
+        if (outcome !== "cleanup failure") {
+          expect(runtime.localServers.bridgeToken("codex", runtimeId)).toBeUndefined();
+          expect(runtime.localServers.process(key)).toBeUndefined();
+        }
+      }
+    } finally {
+      for (const listener of listeners) listener.stop(true);
+      terminateProcessTree.mockResolvedValue(true);
+      await runtime.localServers.shutdown();
+    }
+  });
+
   test("revokes a coordinator credential when process spawn fails synchronously", async () => {
     const bridge = path.join(root, "bridges", "codex-bridge", "dist");
     await fs.mkdir(bridge, { recursive: true });
@@ -849,9 +1033,16 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.writeFile(
       path.join(bridge, "index.js"),
       `await Bun.write(process.env.CODEX_HOME + "/no-mcp.json", JSON.stringify({ url: process.env.ORKESTRATOR_AGENT_MCP_URL ?? null, token: process.env.ORKESTRATOR_AGENT_MCP_TOKEN ?? null }));
-const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+${FAKE_BRIDGE_STARTUP}
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch(request) {
+  const status = new URL(request.url).pathname === "/global/auth-check"
+    ? bridgeAuthStatus(request.headers.get("authorization")) : 200;
+  return Response.json({ ok: status === 200 }, { status });
+} });
 const stop = () => { server.stop(true); process.exit(0); };
-process.on("SIGTERM", stop); process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+announceBridgeReady();
 `,
     );
     cleanupContext = context;
@@ -892,9 +1083,16 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.writeFile(
       path.join(bridge, "index.js"),
       `await Bun.write(process.env.CWD + "/bridge-cwd.txt", process.env.CWD);
-const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+${FAKE_BRIDGE_STARTUP}
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch(request) {
+  const status = new URL(request.url).pathname === "/global/auth-check"
+    ? bridgeAuthStatus(request.headers.get("authorization")) : 200;
+  return Response.json({ ok: status === 200 }, { status });
+} });
 const stop = () => { server.stop(true); process.exit(0); };
-process.on("SIGTERM", stop); process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+announceBridgeReady();
 `,
     );
     const secondCheckout = path.join(root, "second-checkout");
@@ -938,9 +1136,16 @@ await Bun.write(process.env.CWD + "/account-launch.json", JSON.stringify({
   home: process.env.CODEX_HOME, openaiKey: process.env.OPENAI_API_KEY ?? null,
   codexKey: process.env.CODEX_API_KEY ?? null,
 }));
-const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+${FAKE_BRIDGE_STARTUP}
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch(request) {
+  const status = new URL(request.url).pathname === "/global/auth-check"
+    ? bridgeAuthStatus(request.headers.get("authorization")) : 200;
+  return Response.json({ ok: status === 200 }, { status });
+} });
 const stop = () => { server.stop(true); process.exit(0); };
-process.on("SIGTERM", stop); process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+announceBridgeReady();
 `,
     );
     const project = await storage.addProject(createProject("remote", checkout));
@@ -1019,9 +1224,16 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.writeFile(
       path.join(bridge, "index.js"),
       `await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT ?? null, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH ?? null, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP ?? null, commandSandbox: process.env.ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX ?? null, userSkills: process.env.ORKESTRATOR_COORDINATOR_CLAUDE_USER_SKILLS_DIR ?? null, codexUserSkills: process.env.ORKESTRATOR_COORDINATOR_CODEX_USER_SKILLS_DIR ?? null }));
-const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+${FAKE_BRIDGE_STARTUP}
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch(request) {
+  const status = new URL(request.url).pathname === "/global/auth-check"
+    ? bridgeAuthStatus(request.headers.get("authorization")) : 200;
+  return Response.json({ ok: status === 200 }, { status });
+} });
 const stop = () => { server.stop(true); process.exit(0); };
-process.on("SIGTERM", stop); process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+announceBridgeReady();
 `,
     );
     const project = await storage.addProject(createProject("remote", checkout));
@@ -1089,9 +1301,16 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.writeFile(
       path.join(bridge, "index.js"),
       `await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ codexPath: process.env.CODEX_PATH ?? null, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY ?? null, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE ?? null, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT ?? null }));
-const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+${FAKE_BRIDGE_STARTUP}
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch(request) {
+  const status = new URL(request.url).pathname === "/global/auth-check"
+    ? bridgeAuthStatus(request.headers.get("authorization")) : 200;
+  return Response.json({ ok: status === 200 }, { status });
+} });
 const stop = () => { server.stop(true); process.exit(0); };
-process.on("SIGTERM", stop); process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+announceBridgeReady();
 `,
     );
     const project = await storage.addProject(createProject("remote", checkout));
@@ -1133,9 +1352,16 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       path.join(bridge, "index.js"),
       `
 await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ url: process.env.ORKESTRATOR_AGENT_MCP_URL ?? null, token: process.env.ORKESTRATOR_AGENT_MCP_TOKEN ?? null }));
-const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+${FAKE_BRIDGE_STARTUP}
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch(request) {
+  const status = new URL(request.url).pathname === "/global/auth-check"
+    ? bridgeAuthStatus(request.headers.get("authorization")) : 200;
+  return Response.json({ ok: status === 200 }, { status });
+} });
 const stop = () => { server.stop(true); process.exit(0); };
-process.on("SIGTERM", stop); process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+announceBridgeReady();
 `,
     );
     await storage.bugReports.createBugReport({

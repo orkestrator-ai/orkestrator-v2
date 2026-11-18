@@ -91,6 +91,7 @@ import { currentPageForService } from "./annotations/format";
 import { useBrowserAnnotations } from "./annotations/useBrowserAnnotations";
 import {
   BROWSER_ADDRESS_FORM_CLASS,
+  BROWSER_ADDRESS_FRAME_CLASS,
   BROWSER_ADDRESS_INPUT_CLASS,
   BROWSER_TOOLBAR_ACTIONS_CLASS,
   BROWSER_TOOLBAR_CLASS,
@@ -790,8 +791,10 @@ function ServicePreview({
         >
           <div
             className={cn(
-              "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-input-surface shadow-sm transition-colors focus-within:border-ring",
-              attachError ? "border-destructive/70" : "border-border",
+              BROWSER_ADDRESS_FRAME_CLASS,
+              attachError
+                ? "border-destructive/70 [--focus-hairline-color:var(--color-destructive)]"
+                : "border-border",
             )}
           >
             <PreviewServicePicker

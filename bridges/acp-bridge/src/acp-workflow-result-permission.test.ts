@@ -80,7 +80,7 @@ describe("the current turn's workflow-result attempt", () => {
     // A tool this attempt does not offer.
     expect(
       workflowResultPermissionOption(
-        { toolCall: named("orkestrator__submit_fix_result"), options },
+        { toolCall: named("orkestrator__submit_address_findings_result"), options },
         reviewerTurn,
       ),
     ).toBeUndefined();

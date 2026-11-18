@@ -149,7 +149,9 @@ describe("turn rules", () => {
     });
     expect(effect(rules, "orkestrator_workflow_result_submit_review_report")).toBe("allow");
     expect(effect(rules, "orkestrator_workflow_result_validate_workflow_result")).toBe("allow");
-    expect(effect(rules, "orkestrator_workflow_result_submit_fix_result")).toBe("deny");
+    expect(effect(rules, "orkestrator_workflow_result_submit_address_findings_result")).toBe(
+      "deny",
+    );
     expect(effect(rules, `${openCode2TabMcpServer("ses_a")}_ask_agents`)).toBe("deny");
     expect(effect(rules, "edit")).toBe("deny");
   });

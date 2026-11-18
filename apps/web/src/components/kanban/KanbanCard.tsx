@@ -114,6 +114,11 @@ function getBuildPhaseDisplay(phase: BuildPhase): { label: string; className: st
         label: "Reworking",
         className: "bg-orange-500/15 text-orange-400 border-orange-500/30",
       };
+    case "preparing-package":
+      return {
+        label: "Preparing Package",
+        className: "bg-teal-500/15 text-teal-400 border-teal-500/30",
+      };
     case "creating-pr":
       return {
         label: "Creating PR",

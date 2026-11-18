@@ -993,7 +993,7 @@ function InspectorNotes({
             : session.phase === "verify"
               ? "verification-result"
               : session.phase === "address-findings"
-                ? "fix-result"
+                ? "address-findings-result"
                 : "review-preparation"
         }
       />,

@@ -48,7 +48,7 @@ function failureDiagnosisRun(overrides: Partial<GraphRun> = {}): GraphRun {
       digest: plan.templateDigest,
     },
     bindings: {
-      roles: { diagnoser: { platform: "claude" }, fixer: { platform: "codex" } },
+      roles: { diagnoser: { platform: "claude" }, addresser: { platform: "codex" } },
       params: {},
       inputs: {},
     },
@@ -235,8 +235,8 @@ describe("branches", () => {
         ?.id,
     ).toBe("validate/failure-2");
     // An unreplicated node keeps its single position.
-    const fix = run.plan.nodes.find((entry) => entry.id === "fix")!;
-    expect(graphRunNodeBranches(run, fix, 1)).toBeNull();
+    const addressFindings = run.plan.nodes.find((entry) => entry.id === "address-findings")!;
+    expect(graphRunNodeBranches(run, addressFindings, 1)).toBeNull();
   });
 });
 

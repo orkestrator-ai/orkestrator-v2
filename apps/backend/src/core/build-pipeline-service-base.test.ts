@@ -890,6 +890,8 @@ describe("BuildPipelineService", () => {
             limitations: ["No validation command is configured for this test"],
           });
           await mutateStored(storage, started.id, (snapshot) => {
+            // Validation runs in package preparation's own phase.
+            snapshot.phase = "preparing-package";
             snapshot.validationRun = { ...original, status };
             snapshot.iteration = 2;
             snapshot.sessions[snapshot.currentSessionIndex]!.iteration = 2;
@@ -923,6 +925,7 @@ describe("BuildPipelineService", () => {
         await withService(async (service, storage, _provider, invocations) => {
           const { started } = await startBuilding(service, storage);
           await mutateStored(storage, started.id, (snapshot) => {
+            snapshot.phase = "preparing-package";
             snapshot.validationRun = {
               ...newReviewValidationRun("validation-original", {
                 headRef: "1".repeat(40),
@@ -936,9 +939,9 @@ describe("BuildPipelineService", () => {
 
           const restarted = await service.restartCurrentStep(started.id);
 
-          expect(restarted.phase).toBe("reworking");
+          expect(restarted.phase).toBe("preparing-package");
           expect(restarted.sessions.at(-1)).toMatchObject({
-            phase: "rework",
+            phase: "package-preparation",
             label: REVIEW_PACKAGE_SESSION_LABEL,
             status: "running",
           });
@@ -955,7 +958,7 @@ describe("BuildPipelineService", () => {
         const { started } = await startBuilding(service, storage, {
           reviewPreparation: { agent: "claude" },
         });
-        provider.runningPhases.add("rework");
+        provider.runningPhases.add("package-preparation");
         await service.advanceNow(started.id);
         const preparation = (await pipeline(storage, started.id)).sessions.at(-1)!;
         expect(preparation.label).toBe(REVIEW_PACKAGE_SESSION_LABEL);
@@ -963,8 +966,9 @@ describe("BuildPipelineService", () => {
         const restarted = await service.restartCurrentStep(started.id);
 
         expect(provider.aborted).toContain(preparation.sdkSessionId);
+        expect(restarted.phase).toBe("preparing-package");
         expect(restarted.sessions.at(-1)).toMatchObject({
-          phase: "rework",
+          phase: "package-preparation",
           label: REVIEW_PACKAGE_SESSION_LABEL,
           status: "running",
         });
@@ -1136,8 +1140,9 @@ describe("BuildPipelineService", () => {
 
       expect(restarted.reviewPackage).toBeUndefined();
       expect(restarted.validationRun).toBeUndefined();
+      expect(restarted.phase).toBe("preparing-package");
       expect(restarted.sessions.at(-1)).toMatchObject({
-        phase: "rework",
+        phase: "package-preparation",
         label: REVIEW_PACKAGE_SESSION_LABEL,
         status: "running",
       });
@@ -1600,8 +1605,9 @@ describe("BuildPipelineService", () => {
         requestId,
         value: (provider.phases.get(sessionId) === "review"
           ? cleanReview
-          : provider.phases.get(sessionId) === "build" ||
-              provider.phases.get(sessionId) === "rework"
+          : ["build", "rework", "package-preparation"].includes(
+                provider.phases.get(sessionId) ?? "",
+              )
             ? TEST_REVIEW_PREPARATION
             : { complete: false, rationale: "Still failing acceptance checks." }) as T,
       });

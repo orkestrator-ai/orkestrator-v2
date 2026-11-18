@@ -105,7 +105,7 @@ describe("registry instances", () => {
     const removeA = first.addAcceptanceCheck("review-report", check("a"));
     first.addAcceptanceCheck("review-report", check("b"));
     expect(first.entry("review-report").acceptanceChecks).toHaveLength(2);
-    expect(first.entry("fix-result").acceptanceChecks).toHaveLength(0);
+    expect(first.entry("address-findings-result").acceptanceChecks).toHaveLength(0);
     expect(second.entry("review-report").acceptanceChecks).toHaveLength(0);
     expect(second.hasAcceptanceChecks()).toBe(false);
     for (const registered of first.checksFor("review-report")) await registered(attempt);

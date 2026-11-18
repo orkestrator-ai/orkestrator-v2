@@ -101,11 +101,11 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["restart_build_pipeline_step", "build-pipelines"],
   ["launch_multi_review", "multi-review"],
   ["open_multi_review", "multi-review"],
-  ["open_multi_review_fix", "multi-review"],
+  ["open_multi_review_address_findings", "multi-review"],
   ["get_multi_review", "multi-review"],
   ["cancel_multi_review", "multi-review"],
   ["address_multi_review", "multi-review"],
-  ["custom_fix_multi_review", "multi-review"],
+  ["custom_address_multi_review", "multi-review"],
   // Saved graph templates (item 214, D6): run, never author.
   ["list_graph_templates", "graphs"],
   ["launch_graph", "graphs"],
@@ -294,7 +294,7 @@ export async function createControlMcp(
         "Use launch_environment for a new workspace and launch_job for an independent " +
         "agent tab in an existing ready environment. " +
         (coordinatorScope
-          ? "Every launch_environment call requires baseBranch and baseCommit; copy coordinatorBase from get_launch_options, the latest commit of the repository's base branch, unless the user asks to build on the current checkout (checkoutBase). Use launch_multi_review for a Multi Review, and open_multi_review or open_multi_review_fix to focus saved work. "
+          ? "Every launch_environment call requires baseBranch and baseCommit; copy coordinatorBase from get_launch_options, the latest commit of the repository's base branch, unless the user asks to build on the current checkout (checkoutBase). Use launch_multi_review for a Multi Review, and open_multi_review or open_multi_review_address_findings to focus saved work. "
           : "") +
         // Operator instructions below carry the operator's own request-id rule.
         (coordinatorScope

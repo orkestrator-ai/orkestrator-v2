@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDown } from "lucide-react";
-import {
-  REVIEW_PACKAGE_SESSION_LABEL,
-  isSupersededPipelineSession,
-} from "@orkestrator/protocol/build-pipeline";
+import { isSupersededPipelineSession } from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { type BuildPipeline, type PipelineSession } from "@/stores/buildPipelineStore";
@@ -281,7 +278,7 @@ export function PipelineSessionTranscript({
       session?.startedAt ?? transcriptFallbackCreatedAt,
       session?.interactionTranscript,
     );
-    if (session?.label === REVIEW_PACKAGE_SESSION_LABEL) {
+    if (session?.phase === "package-preparation") {
       return hideMachineOutputText(transcript, {
         stripTrailingPayload: true,
         trailingPayloadRootKeys: REVIEW_PACKAGE_PLAN_ROOT_KEYS,
@@ -316,7 +313,6 @@ export function PipelineSessionTranscript({
     session?.phase,
     session?.startedAt,
     session?.interactionTranscript,
-    session?.label,
     structuredResultAccepted,
     transcriptFallbackCreatedAt,
   ]);

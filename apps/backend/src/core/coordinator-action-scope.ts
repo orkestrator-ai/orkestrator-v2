@@ -167,19 +167,14 @@ async function admitAndRun(
   return result;
 }
 
-/** Durable launch identity uses the public vocabulary, including receipts from before migration 11. */
+/** Durable launch identity: the button request as the caller sent it. */
 export function coordinatorMultiReviewLaunchHash(
   input: LaunchMultiReviewActionInput,
   nodeId?: string,
 ): string {
-  const { addressFindingsModel, autoAddressFindings, ...rest } = input;
   return actionHash({
     action: "launch-multi-review",
     ...(nodeId === undefined ? {} : { nodeId }),
-    input: {
-      ...rest,
-      ...(addressFindingsModel === undefined ? {} : { fixModel: addressFindingsModel }),
-      ...(autoAddressFindings === undefined ? {} : { autoFix: autoAddressFindings }),
-    },
+    input,
   });
 }

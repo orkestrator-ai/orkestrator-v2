@@ -59,10 +59,10 @@ const BUILDER_PHRASES: Record<GraphBuiltInPromptId, string> = {
   "review-package-preparation": REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
   "discovery-review": "You are an independent native code-review pass.",
   consolidation: "This is a merge, not another review.",
-  "fix-review-issues": STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
-  "address-review": "Fix every recorded failure that relates to the ticket",
+  "address-findings": STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
+  "pipeline-address-findings": "Fix every recorded failure that relates to the ticket",
   build: "You are building a feature. Here is the ticket:",
-  "pipeline-fix": "Rework this ticket: fix its unmet acceptance criteria:",
+  "pipeline-rework": "Rework this ticket: fix its unmet acceptance criteria:",
   verify: "Verify the committed branch changes against this ticket:",
   "pull-request-description": "Write the pull request title and description",
   "resolve-conflicts": "Fetch origin, merge origin/main, and resolve every merge conflict",
@@ -392,10 +392,10 @@ describe("equivalence with the bound builders", () => {
     expect(text).toBe(buildPrompt(pipeline(), NOTES, "main"));
   });
 
-  test("pipeline-fix is reworkPrompt with the verdict's feedback", () => {
+  test("pipeline-rework is reworkPrompt with the verdict's feedback", () => {
     const verdict = example<{ rationale: string }>("verification-verdict");
     const text = graphBuiltInPromptText({
-      ...exampleContext("pipeline-fix"),
+      ...exampleContext("pipeline-rework"),
       inputs: { ticket: ticketArtifact(), feedback: artifact("feedback", "verification-verdict") },
       notes: NOTES,
     });
@@ -405,29 +405,29 @@ describe("equivalence with the bound builders", () => {
 
   test("verify is verificationPrompt without its final-JSON output contract", () => {
     const reviewPackage = example<ReviewPackageReference>("review-package");
-    const fixResult = example<ReviewAddressFindingsResult>("fix-result");
+    const fixResult = example<ReviewAddressFindingsResult>("address-findings-result");
     const text = graphBuiltInPromptText({
       ...exampleContext("verify"),
       inputs: {
         ticket: ticketArtifact(),
-        address: artifact("address", "fix-result", fixResult),
+        addressFindings: artifact("addressFindings", "address-findings-result", fixResult),
         package: artifact("package", "review-package", reviewPackage),
       },
       notes: NOTES,
     });
     expect(`${text}\n\n${VERIFICATION_OUTPUT_CONTRACT}`).toBe(
       verificationPrompt(pipeline({ reviewPackage }), NOTES, "main", undefined, {
-        kind: "fix-result",
+        kind: "address-findings-result",
         result: boundPipelineAddressFindingsResult(fixResult),
       }),
     );
   });
 
-  test("address-review is addressFindingsReportPrompt with the validation instruction minus its output contract", () => {
+  test("pipeline-address-findings is addressFindingsReportPrompt with the validation instruction minus its output contract", () => {
     const report = example<StructuredReviewReport>("review-report");
     const reviewPackage = example<ReviewPackageReference>("review-package");
     const text = graphBuiltInPromptText({
-      ...exampleContext("address-review"),
+      ...exampleContext("pipeline-address-findings"),
       inputs: {
         report: artifact("report", "review-report", report),
         package: artifact("package", "review-package", reviewPackage),
@@ -566,10 +566,10 @@ describe("equivalence with the bound builders", () => {
     expect(text).toContain(reports[0]!.itemIds![0]!);
   });
 
-  test("fix-review-issues is the Multi Review fix prompt", () => {
+  test("address-findings is the Multi Review Address Findings prompt", () => {
     const report = example<StructuredReviewReport>("review-report");
     const context = {
-      ...exampleContext("fix-review-issues"),
+      ...exampleContext("address-findings"),
       inputs: { report: artifact("report", "review-report", report) },
     };
     expect(graphBuiltInPromptText(context)).toBe(addressFindingsReportPrompt(report));
@@ -599,10 +599,10 @@ describe("equivalence with the bound builders", () => {
     );
   });
 
-  test("fix-review-issues frames a custom report's value", () => {
+  test("address-findings frames a custom report's value", () => {
     const diagnosis = { diagnoses: [{ cause: "flaky clock", file: "src/time.ts" }] };
     const text = graphBuiltInPromptText({
-      ...exampleContext("fix-review-issues"),
+      ...exampleContext("address-findings"),
       inputs: {
         report: { port: "report", type: "diagnosis@1", artifactId: "a-1", value: diagnosis },
       },

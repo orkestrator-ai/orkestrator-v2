@@ -209,7 +209,7 @@ describe("ready set over small plans", () => {
 
   test("an untaken gate outlet and a false `when` skip their subtrees (§9.1)", () => {
     const compiled = compiledPlan(graphTemplateExample("multi-review"));
-    let run = runOf(compiled, { panel: 2, params: { autoFix: true, autoPr: true } });
+    let run = runOf(compiled, { panel: 2, params: { autoAddressFindings: true, autoPr: true } });
     run = plan(run).run;
     run = completeNode(run, "plan");
     run = completeNode(plan(run).run, "package");
@@ -222,13 +222,16 @@ describe("ready set over small plans", () => {
     // The clean outlet leaves fix, describe-pr and pr without input: all skip.
     const clean = completeNode(run, "has-findings", { outlet: "clean" });
     const afterClean = plan(clean);
-    expect(find(afterClean.run, "fix").state).toBe("skipped");
+    expect(find(afterClean.run, "address-findings").state).toBe("skipped");
     expect(find(afterClean.run, "describe-pr").state).toBe("skipped");
     expect(find(afterClean.run, "pr").state).toBe("skipped");
     expect(afterClean.waiting).toBe(0);
     expect(missingGraphRunOutputs(afterClean.run)).toEqual([]);
-    // The findings outlet with `autoFix: false` skips fix through its `when`.
-    const noFix = runOf(compiled, { panel: 2, params: { autoFix: false, autoPr: true } });
+    // The findings outlet with `autoAddressFindings: false` skips fix through its `when`.
+    const noFix = runOf(compiled, {
+      panel: 2,
+      params: { autoAddressFindings: false, autoPr: true },
+    });
     let other = plan(noFix).run;
     other = completeNode(other, "plan");
     other = completeNode(plan(other).run, "package");
@@ -236,8 +239,8 @@ describe("ready set over small plans", () => {
     other = completeNode(plan(other).run, "consolidate");
     other = completeNode(plan(other).run, "has-findings", { outlet: "findings" });
     const result = plan(other).run;
-    expect(find(result, "fix").state).toBe("skipped");
-    expect(find(result, "fix").inputs).toEqual({});
+    expect(find(result, "address-findings").state).toBe("skipped");
+    expect(find(result, "address-findings").inputs).toEqual({});
     expect(find(result, "pr").state).toBe("skipped");
   });
 
@@ -332,18 +335,18 @@ describe("loops and iterations (§9.2)", () => {
     let next = plan(run).run;
     if (at === 1) next = plan(completeNode(next, "build")).run;
     next = plan(next).run;
-    for (const nodeId of ["fix", "prepare", "package", "review"]) {
+    for (const nodeId of ["rework", "prepare", "package", "review"]) {
       next = plan(completeNode(next, nodeId, { iteration: at })).run;
     }
     next = plan(completeNode(next, "has-issues", { iteration: at, outlet })).run;
-    next = plan(completeNode(next, "address", { iteration: at })).run;
+    next = plan(completeNode(next, "address-findings", { iteration: at })).run;
     return completeNode(next, "verify", { iteration: at });
   }
 
   test("iteration 1 reads `first` edges and skips the later-only entry", () => {
     let run = plan(runOf(compiled)).run;
     run = plan(completeNode(run, "build")).run;
-    const fix = find(run, "fix");
+    const fix = find(run, "rework");
     expect(fix.state).toBe("skipped");
     const prepare = find(run, "prepare");
     expect(prepare.state).toBe("ready");
@@ -362,16 +365,16 @@ describe("loops and iterations (§9.2)", () => {
     expect(result.loopsAdvanced).toBe(1);
     run = result.run;
     expect(run.loopIterations.rounds).toBe(2);
-    const fix = find(run, "fix", 2);
+    const fix = find(run, "rework", 2);
     expect(fix.state).toBe("ready");
     expect(fix.inputs).toEqual({
       ticket: id("ticket"),
       feedback: verdictId,
       code: verifyCode,
     });
-    run = plan(completeNode(run, "fix", { iteration: 2 }), values).run;
-    // `prepare` now reads the `later` edge from fix, not build.
-    expect(find(run, "prepare", 2).inputs.code).toBe(id("fix#iter=2#attempt=1/code"));
+    run = plan(completeNode(run, "rework", { iteration: 2 }), values).run;
+    // `prepare` now reads the `later` edge from rework, not build.
+    expect(find(run, "prepare", 2).inputs.code).toBe(id("rework#iter=2#attempt=1/code"));
   });
 
   test("a clean outlet takes the other producer of a single-value port", () => {
@@ -381,7 +384,7 @@ describe("loops and iterations (§9.2)", () => {
       run = plan(completeNode(run, nodeId)).run;
     }
     run = plan(completeNode(run, "has-issues", { outlet: "clean" })).run;
-    expect(find(run, "address").state).toBe("skipped");
+    expect(find(run, "address-findings").state).toBe("skipped");
     const verify = find(run, "verify");
     expect(verify.state).toBe("ready");
     expect(verify.inputs.code).toBe(id("prepare#iter=1#attempt=1/code"));
@@ -407,7 +410,7 @@ describe("loops and iterations (§9.2)", () => {
     expect(atBound.run.loopIterations.rounds).toBe(3);
     expect(atBound.doneLoops).toEqual(["rounds"]);
     expect(
-      atBound.run.activations.filter((activation) => activation.nodeId === "fix"),
+      atBound.run.activations.filter((activation) => activation.nodeId === "rework"),
     ).toHaveLength(3);
   });
 });

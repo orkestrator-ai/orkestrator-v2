@@ -8,7 +8,7 @@
  * Build Pipeline and Multi Review drive), after checking that the plan names
  * that commit and that it is the environment's HEAD. `run-validation` also
  * accepts a plan made for an ancestor of that commit and runs it on the
- * commit itself: a repair loop (report §9.4) carries the fixer's new commit
+ * commit itself: a repair loop (report §9.4) carries the Address Findings node's new commit
  * into the next iteration with the plan the run started with. Sealing stays
  * exact, because the package names the commit its plan was made for. The worker is
  * idempotent per validation run id, and the id is derived from the run,

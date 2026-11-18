@@ -6,7 +6,7 @@
  */
 
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
-import { MAX_BUILD_PIPELINE_ITERATIONS, type BuildStepKey } from "./build-pipeline.js";
+import { BUILD_STEP_KEYS, MAX_BUILD_PIPELINE_ITERATIONS } from "./build-pipeline.js";
 import { MAX_BUILD_STEP_INSTRUCTIONS_BYTES } from "./build-pipeline-stage-instructions.js";
 import { PUBLIC_API_LIMITS } from "./public-api.js";
 import type {
@@ -39,30 +39,10 @@ export const REVIEW_LENS_INPUT: PublicJsonSchema = {
   additionalProperties: false,
 };
 
-/**
- * The Build Pipeline's steps, in launcher order, by their public names. The
- * public names keep `address` for Address Findings until to-do 4740 task 3;
- * the build itself stores and sends `address-findings`.
- */
-export const PUBLIC_BUILD_STEPS = Object.freeze([
-  "build",
-  "review",
-  "address",
-  "verify",
-  "pr",
-  "resolve-conflicts",
-] as const);
-export type PublicBuildStepKey = (typeof PUBLIC_BUILD_STEPS)[number];
-
-/** The build's own step a public step name sets. */
-export function buildStepKeyForPublicStep(step: PublicBuildStepKey): BuildStepKey {
-  return step === "address" ? "address-findings" : step;
-}
-
 const instructions: PublicJsonSchema = {
   type: "string",
   maxLength: MAX_BUILD_STEP_INSTRUCTIONS_BYTES,
-  description: `The user's own instructions for this step, at most ${MAX_BUILD_STEP_INSTRUCTIONS_BYTES} bytes of UTF-8 (16 KiB). The step's prompt carries them after its own contract; Fix uses the build step's. Receipts and summaries report their size, never the text.`,
+  description: `The user's own instructions for this step, at most ${MAX_BUILD_STEP_INSTRUCTIONS_BYTES} bytes of UTF-8 (16 KiB). The step's prompt carries them after its own contract; Rework uses the build step's. Receipts and summaries report their size, never the text.`,
 };
 
 const stepFields: Record<string, PublicJsonSchema> = {
@@ -176,7 +156,7 @@ export const BUILD_ACTION_INPUTS: Readonly<
           description:
             "Per-step overrides. A step you name replaces only that step's saved selection; one that names only instructions keeps its saved agent and model. Omitted steps keep their saved defaults.",
           properties: Object.fromEntries(
-            PUBLIC_BUILD_STEPS.map((step) => [
+            BUILD_STEP_KEYS.map((step) => [
               step,
               stepOverride(
                 step === "review"

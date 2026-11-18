@@ -163,7 +163,7 @@ class ProbingProvider implements BuildPipelineProvider {
       ok: true,
       provider: "claude",
       requestId,
-      value: (phase === "build" || phase === "rework"
+      value: (phase === "build" || phase === "rework" || phase === "package-preparation"
         ? TEST_REVIEW_PREPARATION
         : phase === "address-findings"
           ? TEST_ADDRESS_FINDINGS_RESULT

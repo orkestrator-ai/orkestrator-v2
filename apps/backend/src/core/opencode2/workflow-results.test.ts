@@ -248,7 +248,7 @@ describe("workflow results", () => {
     const rules = rulesOf(server, id);
     const last = (action: string) => rules.findLast((rule) => rule.action === action)?.effect;
     expect(last("orkestrator_workflow_result_submit_review_report")).toBe("allow");
-    expect(last("orkestrator_workflow_result_submit_fix_result")).toBe("deny");
+    expect(last("orkestrator_workflow_result_submit_address_findings_result")).toBe("deny");
 
     server.finishRun(id);
     expect(await provider.settleTurn(id, "wr-1")).toBe(true);

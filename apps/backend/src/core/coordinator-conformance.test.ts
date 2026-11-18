@@ -316,7 +316,7 @@ describe("coordinator read-only conformance", () => {
     );
     // A prompt environment's review, fix, PR and conflicts are the coordinator's.
     expect(COORDINATOR_ENVIRONMENT_CHOICE_RULE).toContain(
-      "when you judge the work ready, launch Multi Review, then see it through its fix, the pull request and conflict resolution",
+      "when you judge the work ready, launch Multi Review, then see it through Address Findings, the pull request and conflict resolution",
     );
     expect(COORDINATOR_ENVIRONMENT_CHOICE_RULE).toContain(
       "Investigation with no code change ends with the worker's report",
@@ -335,7 +335,7 @@ describe("coordinator read-only conformance", () => {
     expect(COORDINATOR_PR_RULE).toContain("auto-PR raises the PR itself");
     expect(COORDINATOR_PR_RULE).toContain("has its own PR step");
     expect(COORDINATOR_PR_RULE).toContain(
-      "For a prompt environment, a Multi Review with auto-fix and auto-PR raises the PR itself",
+      "For a prompt environment, a Multi Review with auto-address findings and auto-PR raises the PR itself",
     );
     expect(COORDINATOR_PR_RULE).toContain(
       "A pipeline environment (one a build pipeline runs, from start_build_pipeline or a Build button) has its own PR step",

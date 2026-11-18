@@ -190,6 +190,14 @@ export function stageAfterReview(
  * `producedReviewPackagePlan`: the transcript still contains that plan, and the
  * renderer keys redaction on the sticky fact.
  */
+/**
+ * Whether a phase's turn submits a review package result (review preparation
+ * or a validation plan), which a message sent into the turn invalidates.
+ */
+export function preparesReviewPackage(phase: ResumableBuildPhase | null | undefined): boolean {
+  return phase === "building" || phase === "reworking" || phase === "preparing-package";
+}
+
 export function discardPreparationResult(session: PipelineSession): void {
   // Further implementation invalidates the earlier decision to skip review too.
   delete session.buildOutcome;
@@ -498,6 +506,8 @@ export function resumePromptFor(
       return "Resume verification from where you left off. Re-check the current codebase against the original ticket and incorporate any messages sent while the pipeline was paused. Use ordinary prose for interim progress, never emit a provisional verdict, and make the final assistant message the only JSON object required by the verification instructions.";
     case "reworking":
       return `Resume fixing the verification failures from where you left off. Incorporate any messages sent while the pipeline was paused, finish the requested fixes, and validate the result as appropriate. ${REVIEW_PREPARATION_OUTPUT_CONTRACT} Do not ask questions; make sensible assumptions.`;
+    case "preparing-package":
+      return "Resume preparing the review package from where you left off. Incorporate any messages sent while the pipeline was paused, finish discovering the validation plan for the committed change, and finish with the required validation plan. Do not ask questions; make sensible assumptions.";
     case "creating-pr":
       if (options.deliveryPolicy === "push-no-pr") {
         return "Resume pushing the current branch to origin from where you left off. Incorporate messages sent while paused, commit the work as needed, and push the branch. Do not create, edit, or reopen a pull request. Do not merge. Do not ask questions; make sensible assumptions.";

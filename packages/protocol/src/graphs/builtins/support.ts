@@ -26,7 +26,7 @@ export function target(node: string, name: string): GraphPortTarget {
 
 /**
  * A report with issues or test coverage gaps: today's `stageAfterReview` and
- * Multi Review's auto-fix condition, over a `review-report@1` input.
+ * Multi Review's automatic Address Findings condition, over a `review-report@1` input.
  */
 export function reviewReportHasFindings(input: string): GraphPredicate {
   return {

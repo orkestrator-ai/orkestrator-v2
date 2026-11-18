@@ -225,7 +225,8 @@ describe("validation history", () => {
         await service.advanceNow(started.id);
         snapshot = await pipeline(storage, started.id);
       }
-      expect(snapshot.phase).toBe("building");
+      // The new plan's run belongs to package preparation.
+      expect(snapshot.phase).toBe("preparing-package");
       expect(snapshot.validationHistory).toEqual([
         summarizeValidationRun(leftover, 0, true, failures)!,
       ]);
@@ -250,7 +251,7 @@ describe("validation history", () => {
             requestId,
             value: (phase === "review"
               ? cleanReview
-              : phase === "build" || phase === "rework"
+              : phase === "build" || phase === "rework" || phase === "package-preparation"
                 ? {
                     headRef: controls.currentHead,
                     commands: [],

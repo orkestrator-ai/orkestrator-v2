@@ -78,7 +78,7 @@ function scriptReview(w: GraphReviewWorld, options: { findings: boolean; complet
         )
       : undefined,
   );
-  w.fakes.scripts.set("fix", ({ port }) =>
+  w.fakes.scripts.set("address-findings", ({ port }) =>
     port === "result"
       ? {
           complete: options.complete ?? true,
@@ -245,14 +245,14 @@ describe("a graph-engine Multi Review", () => {
     expect(run.plan.template.engine).toBeUndefined();
     expect(run.environmentId).toBe(w.environmentId);
     expect(run.bindings.params).toMatchObject({
-      autoFix: true,
+      autoAddressFindings: true,
       autoPr: false,
       targetBranch: "main",
     });
     expect(run.bindings.inputs[MULTI_REVIEW_GRAPH_INSTRUCTION_INPUT]).toBeDefined();
     expect(run.bindings.roles.preparer).toEqual({ platform: "claude", model: "haiku" });
     expect(run.bindings.roles.consolidator).toEqual({ platform: "claude", model: "haiku" });
-    expect(run.bindings.roles.fixer).toEqual({ platform: "claude", model: "opus" });
+    expect(run.bindings.roles.addresser).toEqual({ platform: "claude", model: "opus" });
     expect(run.bindings.roles.reviewer).toEqual([
       {
         platform: "claude",

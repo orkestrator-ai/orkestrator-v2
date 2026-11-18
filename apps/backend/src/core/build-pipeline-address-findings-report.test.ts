@@ -40,11 +40,11 @@ describe("typed Address report", () => {
           structuredResultStatus: "pending",
         });
         const dispatch = provider.sent.find((entry) => entry.sessionId === address.sdkSessionId)!;
-        expect(dispatch.prompt).toContain("submit_fix_result");
+        expect(dispatch.prompt).toContain("submit_address_findings_result");
         expect(dispatch.prompt).toContain(
           "Report your work in the Address Findings result you submit",
         );
-        expect(dispatch.workflowResultTool).toBe("submit_fix_result");
+        expect(dispatch.workflowResultTool).toBe("submit_address_findings_result");
         expect(dispatch.workflowResultKey).toBe(address.structuredRequestId);
 
         const submitted = {
@@ -79,7 +79,7 @@ describe("typed Address report", () => {
         // The transcript is never the report once the session is typed.
         expect(prompt).not.toContain("latest assistant text");
       },
-      { toolMode: true, toolKinds: ["fix-result"] },
+      { toolMode: true, toolKinds: ["address-findings-result"] },
     );
   });
 
@@ -108,8 +108,8 @@ describe("typed Address report", () => {
           const remindedRequestId = remindedSession.structuredRequestId;
           if (!remindedRequestId) throw new Error("The reminder opened no result slot");
           expect(reminder.requestId).toBe(remindedRequestId);
-          expect(reminder.prompt).toContain("has not received your fix result");
-          expect(reminder.prompt).toContain("submit_fix_result");
+          expect(reminder.prompt).toContain("has not received your address findings result");
+          expect(reminder.prompt).toContain("submit_address_findings_result");
           expect(await workflowResults!.status(scope, firstRequestId)).toMatchObject({
             lifecycle: "superseded",
           });
@@ -134,7 +134,7 @@ describe("typed Address report", () => {
           expect(provider.sent).toHaveLength(sentBefore);
           expect(failed.sessions.some((session) => session.phase === "verify")).toBe(false);
         },
-        { toolMode: true, toolKinds: ["fix-result"], structuredResultDeadlineMs: 0 },
+        { toolMode: true, toolKinds: ["address-findings-result"], structuredResultDeadlineMs: 0 },
       );
     },
   );
@@ -229,20 +229,22 @@ describe("Address sessions from before the typed report", () => {
     expect(legacy).toContain("Resume addressing the review findings");
   });
 
-  test("dispatch recovery re-prepares an Address slot with the fix-result schema", async () => {
+  test("dispatch recovery re-prepares an Address slot with the address-findings-result schema", async () => {
     await withPipeline(
       async ({ service, read, workflowResults }) => {
         const prepare = spyOn(workflowResults!, "prepare");
         try {
           const started = await service.start(startInput());
           await advanceUntil(service, read, started.id, "addressing-findings");
-          const call = prepare.mock.calls.find(([input]) => input.kind === "fix-result");
+          const call = prepare.mock.calls.find(
+            ([input]) => input.kind === "address-findings-result",
+          );
           expect(call?.[0].schema).toEqual(REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA);
         } finally {
           prepare.mockRestore();
         }
       },
-      { toolMode: true, toolKinds: ["fix-result"] },
+      { toolMode: true, toolKinds: ["address-findings-result"] },
     );
   });
 });

@@ -2076,7 +2076,7 @@ function MultiReviewOverviewTab({
                       ? "validation-plan"
                       : workflow.activeRequest.kind === "consolidate"
                         ? "consolidated-review"
-                        : "fix-result"
+                        : "address-findings-result"
                   }
                   className="mt-0.5"
                 />

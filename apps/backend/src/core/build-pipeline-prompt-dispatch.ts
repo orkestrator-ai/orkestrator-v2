@@ -56,7 +56,9 @@ export class BuildPipelinePromptDispatch {
       return;
     }
     const schema = attempt.structuredReview
-      ? attempt.phase === "building" || attempt.phase === "reworking"
+      ? attempt.phase === "building" ||
+        attempt.phase === "reworking" ||
+        attempt.phase === "preparing-package"
         ? attempt.validationPlan === true
           ? REVIEW_VALIDATION_PLAN_SCHEMA
           : REVIEW_PREPARATION_RESULT_JSON_SCHEMA

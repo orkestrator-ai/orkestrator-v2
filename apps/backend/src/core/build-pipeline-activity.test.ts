@@ -148,17 +148,31 @@ describe("build pipeline activity", () => {
     const getEnvironment = spyOn(storage, "getEnvironment");
     const loadEnvironments = spyOn(storage, "loadEnvironments");
     const listPipelines = spyOn(storage, "listAllBuildPipelines");
+    const listSiblings = spyOn(storage, "listBuildPipelinesForEnvironment");
     try {
       await save(storage, pipeline("p42", "e42", "building"));
       await timers.advance(500, observer);
       expect(getPipeline.mock.calls).toEqual([["p42"]]);
       expect(listPipelines).not.toHaveBeenCalled();
+      expect(listSiblings).not.toHaveBeenCalled();
       expect(getEnvironment.mock.calls).toEqual([["e42"]]);
       expect(loadEnvironments).not.toHaveBeenCalled();
       expect((await activity(storage, "e42")).aggregate).toBe("working");
 
+      getPipeline.mockClear();
       getEnvironment.mockClear();
-      await timers.advance(29_500, observer);
+      await save(storage, pipeline("p42", "e42", "complete"));
+      await timers.advance(500, observer);
+      expect(getPipeline.mock.calls).toEqual([["p42"]]);
+      expect(listPipelines).not.toHaveBeenCalled();
+      expect(listSiblings.mock.calls).toEqual([["proj-1", "e42"]]);
+      expect(await listSiblings.mock.results[0]!.value).toHaveLength(1);
+      expect(getEnvironment.mock.calls).toEqual([["e42"]]);
+      expect(loadEnvironments).not.toHaveBeenCalled();
+      expect((await activity(storage, "e42")).aggregate).toBe("idle");
+
+      getEnvironment.mockClear();
+      await timers.advance(29_000, observer);
       expect(listPipelines).toHaveBeenCalledTimes(1);
       expect(await listPipelines.mock.results[0]!.value).toHaveLength(100);
       expect(getEnvironment).toHaveBeenCalledTimes(100);
@@ -168,6 +182,7 @@ describe("build pipeline activity", () => {
       getEnvironment.mockRestore();
       loadEnvironments.mockRestore();
       listPipelines.mockRestore();
+      listSiblings.mockRestore();
     }
   });
 
@@ -254,6 +269,7 @@ describe("build pipeline activity", () => {
     for (const failure of [
       "getBuildPipeline",
       "getEnvironment",
+      "listBuildPipelinesForEnvironment",
       "setEnvironmentAgentActivity",
     ] as const) {
       test(`${transition} retries a failed ${failure} automatically`, async () => {
@@ -338,7 +354,88 @@ describe("build pipeline activity", () => {
     }
   });
 
-  test("shared-directory observers converge on external changes during the sweep", async () => {
+  test("a completion cannot go idle ahead of a queued sibling activation", async () => {
+    const storage = await store();
+    await save(storage, pipeline("p1", "e1", "building"));
+    const { observer, timers } = watched(storage);
+    await observer.start();
+    const attention = captureAttention(storage);
+
+    await save(storage, pipeline("p1", "e1", "reviewing"));
+    await save(storage, pipeline("p2", "e1", "building"));
+    await save(storage, pipeline("p1", "e1", "complete"));
+    await timers.advance(500, observer);
+    expect((await activity(storage, "e1")).source).toBe("working");
+    expect(await bell(storage, "e1")).toBeNull();
+    expect(attention).not.toHaveBeenCalled();
+
+    await save(storage, pipeline("p2", "e1", "complete"));
+    await timers.advance(500, observer);
+    expect((await activity(storage, "e1")).source).toBe("idle");
+    expect(await bell(storage, "e1")).toBe("agent_finished");
+    expect(attention).toHaveBeenCalledTimes(1);
+  });
+
+  test("an event before startup retry accounts for siblings already in storage", async () => {
+    const storage = await store();
+    await save(storage, pipeline("p1", "e1", "building"));
+    await save(storage, pipeline("p2", "e1", "building"));
+    await storage.setEnvironmentAgentActivity(
+      "e1",
+      "working",
+      new Date().toISOString(),
+      "build-pipeline",
+    );
+    const { observer, timers } = watched(storage);
+    const attention = captureAttention(storage);
+    const failing = spyOn(storage, "listAllBuildPipelines").mockRejectedValueOnce(
+      new Error("offline"),
+    );
+    try {
+      await expect(observer.start()).rejects.toThrow("offline");
+      await save(storage, pipeline("p1", "e1", "complete"));
+      await timers.advance(500, observer);
+      expect(failing).toHaveBeenCalledTimes(2);
+      expect((await activity(storage, "e1")).source).toBe("working");
+      expect(await bell(storage, "e1")).toBeNull();
+      expect(attention).not.toHaveBeenCalled();
+
+      await save(storage, pipeline("p2", "e1", "complete"));
+      await timers.advance(500, observer);
+      expect((await activity(storage, "e1")).source).toBe("idle");
+      expect(await bell(storage, "e1")).toBe("agent_finished");
+      expect(attention).toHaveBeenCalledTimes(1);
+    } finally {
+      failing.mockRestore();
+    }
+  });
+
+  test("a completion accounts for a sibling restarted by another storage instance", async () => {
+    const storage = await store();
+    const writer = new StorageService(storage.getDataDir());
+    await writer.init();
+    cleanups.unshift(async () => writer.close());
+    await save(storage, pipeline("p1", "e1", "building"));
+    await save(storage, pipeline("p2", "e1", "failed"));
+    const { observer, timers } = watched(storage);
+    await observer.start();
+    const attention = captureAttention(storage);
+
+    await save(writer, pipeline("p2", "e1", "building"));
+    await save(storage, pipeline("p1", "e1", "complete"));
+    await timers.advance(500, observer);
+    expect((await activity(storage, "e1")).source).toBe("working");
+    expect(await bell(storage, "e1")).toBeNull();
+    expect(attention).not.toHaveBeenCalled();
+
+    await save(storage, pipeline("p2", "e1", "complete"));
+    await timers.advance(500, observer);
+    expect((await activity(storage, "e1")).source).toBe("idle");
+    expect(await bell(storage, "e1")).toBe("agent_finished");
+    expect(attention).toHaveBeenCalledTimes(1);
+  });
+
+  test("shared-directory observers see sibling completions on an event and repair stale activity on the sweep", async () => {
     const first = await store();
     const second = new StorageService(first.getDataDir());
     await second.init();
@@ -354,8 +451,6 @@ describe("build pipeline activity", () => {
     expect((await activity(second, "e1")).source).toBe("working");
     await save(second, pipeline("p2", "e1", "complete"));
     await two.timers.advance(500, two.observer);
-    expect((await activity(first, "e1")).source).toBe("working");
-    await two.timers.advance(29_500, two.observer);
     expect((await activity(first, "e1")).source).toBe("idle");
 
     // A stale activity write (for example an in-flight write from a third

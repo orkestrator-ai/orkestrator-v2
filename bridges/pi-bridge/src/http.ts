@@ -121,6 +121,13 @@ import { TimeoutError, withTimeout } from "./timeout.js";
 import { closeSessionRetaining } from "./session-close.js";
 import { readSessionBranches } from "./session-branches.js";
 import { HistoryTargetError } from "./history-target.js";
+import { acceptsGzip } from "./http-encoding.js";
+import {
+  BranchSummaryError,
+  BranchSwitchCancelledError,
+  parseBranchSwitchBody,
+  requestBranchSummaryCancellation,
+} from "./branch-switch.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
   applyComposerPatch,
@@ -333,6 +340,9 @@ export async function route(
     if (error instanceof SessionBusyError) return json(response, 409, { error: error.message });
     if (error instanceof HistoryTargetError) {
       return json(response, 409, { error: error.message });
+    }
+    if (error instanceof BranchSwitchCancelledError || error instanceof BranchSummaryError) {
+      return json(response, error.status, error.body());
     }
     // `kind` separates a missing provider login from a bad bridge token, which
     // is also a 401; the backend shows the former's message as written.
@@ -807,9 +817,15 @@ async function routeSession(
     return json(response, 200, await readSessionBranches(state));
   }
   if (action === "branches" && subject && request.method === "POST") {
-    await navigateSessionHistory(state, decodeURIComponent(subject), "at");
+    // `{ summarize: true }` keeps Pi's summary of the branch left (a model
+    // call); no body is an ordinary switch (`branch-switch.ts`).
+    const body = parseBranchSwitchBody(await readJsonValue(request));
+    if (!body.ok) throw new HttpError(400, body.error);
+    const switched = await navigateSessionHistory(state, decodeURIComponent(subject), "at", {
+      summarize: body.summarize,
+    });
     await persistBarrier();
-    return json(response, 200, { switched: true });
+    return json(response, 200, { switched: true, summarized: switched.summarized });
   }
   if (action === "title" && request.method === "POST") {
     const body = await readJson(request);
@@ -945,6 +961,15 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
     ).catch(() => "pending" as const);
     if (outcome === "pending") return json(response, 202, { cancelled: false, pending: true });
     return json(response, 200, { cancelled: outcome === "stopped" });
+  }
+  // A summarized branch switch, answered exactly like a compaction.
+  const summary = requestBranchSummaryCancellation(state);
+  if (summary) {
+    const stopped = await withTimeout(summary, cancelAckTimeoutMs, "Pi branch summary").catch(
+      () => undefined,
+    );
+    if (stopped === undefined) return json(response, 202, { cancelled: false, pending: true });
+    return json(response, 200, { cancelled: stopped });
   }
   return json(response, 200, { cancelled: false });
 }
@@ -1929,32 +1954,6 @@ async function readJsonValue(request: IncomingMessage): Promise<unknown> {
   } catch {
     throw new HttpError(400, "Request body must be JSON");
   }
-}
-
-function acceptsGzip(request: IncomingMessage): boolean {
-  const header = request.headers["accept-encoding"];
-  const value = Array.isArray(header) ? header.join(",") : header;
-  if (typeof value !== "string") return false;
-
-  let wildcard: number | undefined;
-  for (const item of value.split(",")) {
-    const [rawCoding, ...rawParameters] = item.split(";");
-    const coding = rawCoding?.trim().toLowerCase();
-    if (coding !== "gzip" && coding !== "*") continue;
-
-    let quality = 1;
-    for (const rawParameter of rawParameters) {
-      const [rawName, rawValue] = rawParameter.split("=", 2);
-      if (rawName?.trim().toLowerCase() !== "q") continue;
-      const parsed = Number(rawValue?.trim());
-      quality = Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : 0;
-    }
-    // A named coding takes precedence over a wildcard, including an explicit
-    // refusal (`gzip;q=0, *;q=1`).
-    if (coding === "gzip") return quality > 0;
-    wildcard = quality;
-  }
-  return (wildcard ?? 0) > 0;
 }
 
 export function json(response: ServerResponse, status: number, body: unknown): void {

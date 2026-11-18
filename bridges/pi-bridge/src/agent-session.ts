@@ -105,6 +105,14 @@ import {
 import { renderToolCall } from "./tool-rendering.js";
 import { newSessionState } from "./session-factory.js";
 import {
+  assertBranchSummaryActive,
+  assertSummaryCanFollow,
+  beginBranchSummary,
+  BranchSwitchCancelledError,
+  endBranchSummary,
+  navigateBranch,
+} from "./branch-switch.js";
+import {
   HistoryTargetError,
   lastUserTarget,
   readContentText,
@@ -1701,35 +1709,73 @@ export async function forkSession(
   }
 }
 
-/** Move the active leaf to a prior entry and rehydrate the authoritative branch. */
+/**
+ * Move the active leaf to a prior entry and rehydrate the authoritative branch.
+ *
+ * `summarize` asks Pi to summarize the branch being left first (a model call,
+ * so only on request; see `branch-switch.ts`). The session is claimed for the
+ * whole switch, so no prompt can start on the branch being left while Pi
+ * moves off it.
+ */
 export async function navigateSessionHistory(
   state: SessionState,
   messageOrEntryId: string,
   position: "before" | "at" = "before",
-): Promise<void> {
-  if (state.status === "running" || state.dispatching) throw new SessionBusyError();
-  const session = await ensureSession(state);
-  // A branch switch names an entry of another branch, which no row shows.
-  const target =
-    resolveHistoryTarget(state, session, messageOrEntryId)?.entryId ??
-    (session.sessionManager.getEntry(messageOrEntryId.trim())
-      ? messageOrEntryId.trim()
-      : undefined);
-  if (!target) throw new HistoryTargetError();
-  const result = await session.navigateTree(target, { summarize: false });
-  if (result.cancelled || result.aborted) throw new Error("Pi did not change the active branch");
-  // Tree navigation edits user/custom messages by stopping at their parent.
-  // Branch selection must retain the selected leaf, including reply-less prompts.
-  if (position === "at" && session.sessionManager.getLeafId() !== target) {
-    session.sessionManager.branch(target);
-    session.refreshContext();
+  options: { summarize?: boolean } = {},
+): Promise<{ summarized: boolean }> {
+  if (
+    state.status === "running" ||
+    state.dispatching ||
+    state.compacting ||
+    state.commandReload !== undefined ||
+    state.promptClaim !== undefined
+  ) {
+    throw new SessionBusyError();
   }
-  // In memory only until a prompt appends under it; the render below and every
-  // later reopen of the file read it from here.
-  rememberHistoryLeaf(state, session.sessionManager);
-  resetRenderedHistory(state);
-  hydrateHistory(state);
-  await overlayCommandChanges(state);
+  // Claimed before the first await, as the compact route does: a cold attach
+  // yields, and a prompt must not slip into it.
+  state.dispatching = true;
+  const run = options.summarize ? beginBranchSummary(state) : undefined;
+  let stopped = false;
+  try {
+    const session = await ensureSession(state).catch((error: unknown) => {
+      assertBranchSummaryActive(run);
+      throw error;
+    });
+    assertBranchSummaryActive(run);
+    // A branch switch names an entry of another branch, which no row shows.
+    const target =
+      resolveHistoryTarget(state, session, messageOrEntryId)?.entryId ??
+      (session.sessionManager.getEntry(messageOrEntryId.trim())
+        ? messageOrEntryId.trim()
+        : undefined);
+    if (!target) throw new HistoryTargetError();
+    if (run && position === "at") assertSummaryCanFollow(session.sessionManager.getEntry(target));
+    const { summaryEntryId } = await navigateBranch(session, target, run);
+    // Tree navigation edits user/custom messages by stopping at their parent.
+    // Branch selection must retain the selected leaf, including reply-less
+    // prompts. A summary is Pi's new leaf, a child of the selected entry, and
+    // moving past it would drop it from the branch.
+    if (position === "at" && !summaryEntryId && session.sessionManager.getLeafId() !== target) {
+      session.sessionManager.branch(target);
+      session.refreshContext();
+    }
+    // In memory only until a prompt appends under it; the render below and every
+    // later reopen of the file read it from here.
+    rememberHistoryLeaf(state, session.sessionManager);
+    resetRenderedHistory(state);
+    hydrateHistory(state);
+    await overlayCommandChanges(state);
+    return { summarized: summaryEntryId !== undefined };
+  } catch (error) {
+    stopped = error instanceof BranchSwitchCancelledError;
+    throw error;
+  } finally {
+    state.dispatching = false;
+    state.lastAccessed = Date.now();
+    if (run) endBranchSummary(state, run, stopped);
+    await runDeferredCommandReload(state);
+  }
 }
 
 export async function setSessionTitle(state: SessionState, title: string): Promise<void> {

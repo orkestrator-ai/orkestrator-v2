@@ -18,6 +18,7 @@ import type { CommandContext, CommandOutcome, CommandSpec, ParsedCommand } from 
 import { observe, ObservationStopped, observationClock } from "../wait.js";
 import {
   DEFAULT_WAIT_MS,
+  isTerminalReceipt,
   oneOf,
   optionalBoolean,
   PROMPT_OPTIONS,
@@ -922,26 +923,65 @@ export const sessionCommands: CommandSpec[] = [
     path: ["session", "branch"],
     action: "session.branch",
     summary: "Switch the conversation to another branch from `session branches` (Pi).",
-    description: "The branch being left is kept and listed by `session branches`.",
+    description:
+      "The branch being left is kept and listed by `session branches`. --summarize also keeps Pi's summary of it in the conversation, which costs one model call.",
     positionals: [
       { name: "session", required: true },
       { name: "entry-id", required: true },
     ],
-    options: [REQUEST_ID_OPTION],
+    options: [
+      {
+        name: "summarize",
+        kind: "boolean",
+        description:
+          "Ask Pi to summarize the branch being left (one model call) and keep the summary.",
+      },
+      REQUEST_ID_OPTION,
+    ],
     async run(context, parsed) {
-      const { session, result, receipt, warnings } = await submit<Record<string, unknown>>(
-        context,
-        "session.branch",
-        { sessionId: parsed.positionals.session, entryId: parsed.positionals["entry-id"] },
-        parsed.options,
-      );
+      const summarize = parsed.options.summarize === true;
+      const entryId = parsed.positionals["entry-id"];
+      const input = {
+        sessionId: parsed.positionals.session,
+        entryId,
+        ...(summarize ? { summarize: true } : {}),
+      };
+      const submitted = summarize
+        ? await submitForWait<Record<string, unknown>>(
+            context,
+            "session.branch",
+            input,
+            parsed.options,
+            DEFAULT_WAIT_MS,
+          )
+        : await submit<Record<string, unknown>>(context, "session.branch", input, parsed.options);
+      const { session, warnings } = submitted;
+      let { result, receipt } = submitted;
+      if (summarize && receipt) {
+        if (!isTerminalReceipt(receipt)) {
+          const remaining =
+            "deadline" in submitted && submitted.deadline !== undefined
+              ? Math.max(0, submitted.deadline - Date.now())
+              : DEFAULT_WAIT_MS;
+          receipt = await waitForOperation(context, session, receipt, remaining);
+        }
+        const failure = receiptFailure(receipt);
+        if (failure) throw failure;
+        result = receipt.result ?? result;
+      }
       return {
         action: "session.branch",
         result,
         receipt,
         warnings,
         connection: session.identity,
-        human: [`switched to branch ${parsed.positionals["entry-id"]}`],
+        human: [
+          !summarize
+            ? `switched to branch ${entryId}`
+            : result?.summarized === true
+              ? `switched to branch ${entryId}, keeping a summary of the branch left`
+              : `switched to branch ${entryId}; Pi kept no summary of the branch left`,
+        ],
       };
     },
   },

@@ -672,53 +672,66 @@ const sessionBranches: ReadActionHandler<TargetInput> = {
   },
 };
 
-const sessionBranch: MutationActionHandler<TargetInput & { entryId: string }> = {
-  kind: "mutation",
-  action: "session.branch",
-  parse(input) {
-    onlyActionKeys(input, "session.branch");
-    const target = sessionTarget(input);
-    const entryId = requiredString(input, "entryId", 500);
-    return {
-      value: { ...target, entryId },
-      scope: `session:${target.sessionId}`,
-      intent: { entryId },
-    };
-  },
-  async prepare(input, context) {
-    const session = await resolveSession(context, input);
-    refuseOnCoordinator(session, "switched to another branch");
-    requireProviderSession(session);
-    assertReadyForAgents(session.environment);
-    if (!providerCapabilities(session.agent).branches) {
-      throw new PublicActionError(
-        "capability-unavailable",
-        `${session.agent} conversations have no branches`,
-      );
-    }
-    assertSessionIdle(context, session, "switching branches");
-    return {
-      resources: {
-        environmentId: session.environment.id,
-        sessionId: session.sessionId,
-        tabId: session.tab.tabId,
-      },
-      async execute(operation) {
-        await operation.update({ stage: "switching" });
-        // The branch being left stays in the session file and is listed by
-        // `session.branches`, so a switch is always reversible.
-        await context.invoke("perform_native_agent_session_action", {
-          ...triple(session),
-          action: { kind: "switch-branch", entryId: input.entryId },
-        });
-        return {
-          state: "succeeded",
-          result: { sessionId: session.sessionId, entryId: input.entryId },
-        };
-      },
-    };
-  },
-};
+const sessionBranch: MutationActionHandler<TargetInput & { entryId: string; summarize: boolean }> =
+  {
+    kind: "mutation",
+    action: "session.branch",
+    parse(input) {
+      onlyActionKeys(input, "session.branch");
+      const target = sessionTarget(input);
+      const entryId = requiredString(input, "entryId", 500);
+      const summarize = optionalBoolean(input, "summarize") === true;
+      return {
+        value: { ...target, entryId, summarize },
+        scope: `session:${target.sessionId}`,
+        // Only a summarized switch names it, so an ordinary switch keeps the
+        // intent (and the request-key replay) it always had.
+        intent: summarize ? { entryId, summarize } : { entryId },
+      };
+    },
+    async prepare(input, context) {
+      const session = await resolveSession(context, input);
+      refuseOnCoordinator(session, "switched to another branch");
+      requireProviderSession(session);
+      assertReadyForAgents(session.environment);
+      if (!providerCapabilities(session.agent).branches) {
+        throw new PublicActionError(
+          "capability-unavailable",
+          `${session.agent} conversations have no branches`,
+        );
+      }
+      assertSessionIdle(context, session, "switching branches");
+      return {
+        background: input.summarize,
+        resources: {
+          environmentId: session.environment.id,
+          sessionId: session.sessionId,
+          tabId: session.tab.tabId,
+        },
+        async execute(operation) {
+          await operation.update({ stage: "switching" });
+          // The branch being left stays in the session file and is listed by
+          // `session.branches`, so a switch is always reversible.
+          const outcome = (await context.invoke("perform_native_agent_session_action", {
+            ...triple(session),
+            action: {
+              kind: "switch-branch",
+              entryId: input.entryId,
+              ...(input.summarize ? { summarize: true } : {}),
+            },
+          })) as { summarized?: unknown } | null | undefined;
+          return {
+            state: "succeeded",
+            result: {
+              sessionId: session.sessionId,
+              entryId: input.entryId,
+              ...(input.summarize ? { summarized: outcome?.summarized === true } : {}),
+            },
+          };
+        },
+      };
+    },
+  };
 
 function allowedActions(request: AgentInteractionRequest): PublicInteraction["actions"] {
   const actions: PublicInteraction["actions"] = ["answer"];

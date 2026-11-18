@@ -296,6 +296,7 @@
     "@cursor/sdk@1.4.1": "patches/@cursor%2Fsdk@1.4.1.patch",
     "react-virtuoso@4.18.19": "patches/react-virtuoso@4.18.19.patch",
     "@testing-library/dom@10.4.2": "patches/@testing-library%2Fdom@10.4.2.patch",
+    "@earendil-works/pi-coding-agent@1.5.2": "patches/@earendil-works%2Fpi-coding-agent@1.5.2.patch",
   },
   "overrides": {
     "dompurify": "3.4.17",

@@ -62,11 +62,25 @@ export const BRIDGE_SESSION_LIST_TIMEOUT_MS = 35_000;
 const BRIDGE_ATTACH_TIMEOUT_MS = 90_000;
 
 /**
+ * A Pi branch switch that summarizes the branch it leaves: a model call that
+ * can take as long as a turn. Longer than the bridge's own four-minute bound
+ * on the summary (`branch-switch.ts`), so the bridge answers first, with a
+ * definite "stopped", rather than this side giving up while the switch lands.
+ */
+const BRIDGE_BRANCH_SUMMARY_TIMEOUT_MS = 5 * 60_000;
+
+/**
  * Which ceiling a request gets. `prompt` and `attach` are separate names for
  * the same budget so call sites read as what they do.
  */
 export type BridgeRequestTimeoutKind =
-  "default" | "session-start" | "attach" | "prompt" | "catalog-refresh" | "session-list";
+  | "default"
+  | "session-start"
+  | "attach"
+  | "prompt"
+  | "catalog-refresh"
+  | "session-list"
+  | "branch-summary";
 
 /**
  * Transport failures that are proven to precede the first written byte.
@@ -378,7 +392,8 @@ export async function boundedJson(
       if (done) break;
       budget.remaining -= value.byteLength;
       if (budget.remaining < 0) {
-        await reader.cancel().catch(() => undefined);
+        // Cancellation may wait on the source or another branch of a tee.
+        void reader.cancel().catch(() => undefined);
         throw new ProviderUnavailableError(`${operation} is oversized`);
       }
       text += decoder.decode(value, { stream: true });
@@ -433,6 +448,7 @@ function bridgeRequestTimeoutMs(
   if (kind === "attach" || kind === "prompt") return BRIDGE_ATTACH_TIMEOUT_MS;
   if (kind === "catalog-refresh") return BRIDGE_CATALOG_REFRESH_TIMEOUT_MS;
   if (kind === "session-list") return BRIDGE_SESSION_LIST_TIMEOUT_MS;
+  if (kind === "branch-summary") return BRIDGE_BRANCH_SUMMARY_TIMEOUT_MS;
   return DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS;
 }
 
@@ -577,18 +593,27 @@ export async function assertOkWithErrorDetail(
 ): Promise<void> {
   if (response.ok) return;
   const payload = asRecord(await boundedJson(response, operation).catch(() => null));
+  throwBridgeResponseError(response.status, operation, payload, options.detailAlone);
+}
+
+export function throwBridgeResponseError(
+  status: number,
+  operation: string,
+  payload: Record<string, unknown> | null | undefined,
+  detailAlone = false,
+): never {
   const rawDetail = nonEmptyString(payload?.error)?.trim();
   const detail = rawDetail ? rawDetail.replace(/[\r\n\t]+/g, " ").slice(0, 500) : "";
   const message =
-    options.detailAlone && detail
+    detailAlone && detail
       ? detail
       : `${operation} ${
-          isTransientHttpStatus(response.status) ? "is temporarily unavailable" : "failed"
-        } (HTTP ${response.status})${detail ? `: ${detail}` : ""}`;
-  if (isTransientHttpStatus(response.status)) {
+          isTransientHttpStatus(status) ? "is temporarily unavailable" : "failed"
+        } (HTTP ${status})${detail ? `: ${detail}` : ""}`;
+  if (isTransientHttpStatus(status)) {
     throw new ProviderUnavailableError(message);
   }
-  if (response.status === 403 && payload?.code === POLICY_WIDENING_REFUSED_CODE) {
+  if (status === 403 && payload?.code === POLICY_WIDENING_REFUSED_CODE) {
     throw new BridgePolicyWideningRefusedError(message);
   }
   throw new Error(message);

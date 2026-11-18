@@ -616,6 +616,8 @@ export const SessionActionOutcomeSchema = openRecord({
   requestId: optionalString,
   /** A steer that missed its turn: `new-turn` or `queued` (0005 task 10). */
   deliveredAs: optionalString,
+  /** A `switch-branch` that asked for a summary: whether Pi kept one. */
+  summarized: optionalBoolean,
 });
 
 /** `AgentInteractionApplyOutcome` (agent-interactions.ts). */

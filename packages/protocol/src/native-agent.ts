@@ -1387,7 +1387,16 @@ export type NativeAgentSessionAction =
     }
   | { kind: "review" }
   | { kind: "rewind-messages"; messageId: string }
-  | { kind: "switch-branch"; entryId: string };
+  | {
+      kind: "switch-branch";
+      entryId: string;
+      /**
+       * Ask Pi to summarize the branch being left and keep the summary at the
+       * new position. A model call the user pays for, so only on request;
+       * absent or false is an ordinary switch with no model call.
+       */
+      summarize?: boolean;
+    };
 
 /**
  * `rejected` is only ever a verified, definitive steer refusal for the same
@@ -1412,6 +1421,12 @@ export type NativeAgentSessionActionOutcome =
       shareUrl?: string;
       preview?: unknown;
       requestId?: string;
+      /**
+       * A `switch-branch` that asked for a summary: whether one was kept.
+       * False when the branch left had nothing to summarize, or the bridge
+       * predates summaries.
+       */
+      summarized?: boolean;
     }
   | NativeAgentSteerRejectedOutcome;
 

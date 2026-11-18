@@ -16,6 +16,7 @@
  * module is evaluated once per file exactly as the duplicated preambles were.
  */
 import { afterEach, beforeEach } from "bun:test";
+import type { TimeoutTimers } from "@orkestrator/protocol/timers";
 
 import { EventEmitter } from "node:events";
 
@@ -285,6 +286,7 @@ export async function harness(
     environmentDrainTimeoutMs?: number;
     ambiguousRecoveryTimeoutMs?: number;
     compactionTimeoutMs?: number;
+    compactionTimers?: TimeoutTimers;
     orderedEventMaxCount?: number;
     orderedEventMaxBytes?: number;
     initialPromptRetryDelayMs?: number;
@@ -384,6 +386,7 @@ export async function harness(
     ...(options.compactionTimeoutMs !== undefined
       ? { compactionTimeoutMs: options.compactionTimeoutMs }
       : {}),
+    ...(options.compactionTimers ? { compactionTimers: options.compactionTimers } : {}),
     ...(options.orderedEventMaxCount !== undefined
       ? { orderedEventMaxCount: options.orderedEventMaxCount }
       : {}),

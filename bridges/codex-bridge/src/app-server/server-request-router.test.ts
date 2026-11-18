@@ -15,6 +15,7 @@ import type { InboundServerRequest } from "./envelope-validation.js";
 import { configureLogger, resetLogger, type LogOutput } from "@orkestrator/protocol/logger";
 import type { InteractionRequest, InteractionResolution } from "./interactions.js";
 import type { InteractionDeadlineClock } from "@orkestrator/protocol/agent-interaction-deadline";
+import { ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
   AGENT_INTERACTION_HOLD_CEILING_MS,
@@ -87,14 +88,21 @@ describe("exhaustiveness", () => {
   });
 
   test("the final backstop answers when no routing branch attempts a response", async () => {
-    const h = harness({ responseTimeoutMs: 5 });
+    const clock = new ManualClock();
+    const h = harness({ responseTimeoutMs: 5, responseTimers: clock });
     const internals = h.router as unknown as {
       route: () => Promise<void>;
     };
     internals.route = () => new Promise<void>(() => undefined);
 
     h.router.handle(request("future/request"), 7);
-    await Bun.sleep(25);
+    expect(clock.pendingDelays()).toEqual([5]);
+    clock.advance(4);
+    await settle();
+    expect(h.answers).toHaveLength(0);
+
+    clock.advance(1);
+    await settle();
 
     expect(h.answers).toEqual([
       {
@@ -392,8 +400,10 @@ describe("bookkeeping", () => {
 
   test("a response whose write never flushes is recorded, not answered twice", async () => {
     let released: (() => void) | null = null;
+    const clock = new ManualClock();
     const h = harness({
       responseTimeoutMs: 5,
+      responseTimers: clock,
       // Never resolves: models a back-pressured stdin on a dying child.
       respond: () =>
         new Promise<void>((resolve) => {
@@ -402,7 +412,8 @@ describe("bookkeeping", () => {
     });
 
     h.router.handle(request("item/fileChange/requestApproval"), 1);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await settle();
+    clock.advance(5);
 
     // Writing again down the same stuck pipe cannot help, and a second response
     // would risk answering one request twice — so record it and stop.
@@ -554,10 +565,16 @@ describe("interactive approvals", () => {
   });
 
   test("an unanswered approval expires as a denial", async () => {
-    const h = approvalHarness();
+    const clock = new ManualClock();
+    const h = approvalHarness({ clock, responseTimers: clock });
     h.router.handle(request("item/commandExecution/requestApproval"), 1);
     await settle();
-    await Bun.sleep(80);
+    clock.advance(49);
+    await settle();
+    expect(h.answers).toHaveLength(0);
+
+    clock.advance(1);
+    await settle();
 
     // Deny, never approve: an ignored prompt must not authorise anything.
     expect(h.answers[0]!.result).toEqual({ decision: "decline" });
@@ -570,13 +587,22 @@ describe("interactive approvals", () => {
     // The 10s backstop exists for a branch that fails to answer. A parked approval
     // has legitimately not answered yet, and answering here would resolve a prompt
     // the user is still reading.
-    const h = approvalHarness({ responseTimeoutMs: 10, approvalTimeoutMs: 5_000 });
+    const clock = new ManualClock();
+    const h = approvalHarness({
+      responseTimeoutMs: 10,
+      approvalTimeoutMs: 5_000,
+      clock,
+      responseTimers: clock,
+    });
     h.router.handle(request("item/commandExecution/requestApproval"), 1);
     await settle();
-    await Bun.sleep(40);
+    // Well past the backstop, short of the approval's own deadline.
+    clock.advance(4_999);
+    await settle();
 
     expect(h.answers).toHaveLength(0);
     expect(h.router.getParkedApprovals()).toHaveLength(1);
+    expect(clock.pendingDelays()).toEqual([1]);
     expect(h.router.getMetrics().timedOut).toBe(0);
   });
 
@@ -923,10 +949,16 @@ describe("interactive questions and MCP elicitation", () => {
   });
 
   test("an unanswered interaction auto-cancels and is counted as expired", async () => {
-    const h = interactionHarness();
+    const clock = new ManualClock();
+    const h = interactionHarness({ clock, responseTimers: clock });
     h.router.handle(questionRequest(), 1);
     await settle();
-    await Bun.sleep(90);
+    clock.advance(49);
+    await settle();
+    expect(h.answers).toHaveLength(0);
+
+    clock.advance(1);
+    await settle();
 
     // Cancel, never accept: an ignored prompt must not answer on the user's behalf.
     expect(h.answers[0]!.result).toEqual({ answers: {} });
@@ -941,12 +973,20 @@ describe("interactive questions and MCP elicitation", () => {
   });
 
   test("an explicitly blocking question remains parked without a timer", async () => {
-    const h = interactionHarness({ approvalTimeoutMs: 20 });
+    const clock = new ManualClock();
+    const h = interactionHarness({
+      approvalTimeoutMs: 20,
+      responseTimeoutMs: 10,
+      clock,
+      responseTimers: clock,
+    });
     const blocking = questionRequest();
     blocking.params = { ...(blocking.params as object), isBlocking: true };
     h.router.handle(blocking, 1);
     await settle();
-    await Bun.sleep(50);
+    // Past both the window and the backstop.
+    clock.advance(1_000);
+    await settle();
 
     expect(h.answers).toHaveLength(0);
     expect(h.router.getParkedInteractions()).toHaveLength(1);
@@ -954,7 +994,8 @@ describe("interactive questions and MCP elicitation", () => {
   });
 
   test("a shorter autoResolutionMs shortens the park, it does not extend it", async () => {
-    const h = interactionHarness({ approvalTimeoutMs: 5_000 });
+    const clock = new ManualClock();
+    const h = interactionHarness({ approvalTimeoutMs: 5_000, clock, responseTimers: clock });
     h.router.handle(
       {
         ...questionRequest(),
@@ -963,7 +1004,12 @@ describe("interactive questions and MCP elicitation", () => {
       1,
     );
     await settle();
-    await Bun.sleep(80);
+    clock.advance(29);
+    await settle();
+    expect(h.router.getParkedInteractions()).toHaveLength(1);
+
+    clock.advance(1);
+    await settle();
 
     expect(h.router.getParkedInteractions()).toHaveLength(0);
     expect(h.router.getMetrics().interactionsExpired).toBe(1);
@@ -973,13 +1019,22 @@ describe("interactive questions and MCP elicitation", () => {
     // AGENTS.md invariant: the 10s backstop exists for a branch that failed to
     // answer. A parked interaction has legitimately not answered yet, and
     // answering here would resolve a prompt the user is still reading.
-    const h = interactionHarness({ responseTimeoutMs: 10, approvalTimeoutMs: 5_000 });
+    const clock = new ManualClock();
+    const h = interactionHarness({
+      responseTimeoutMs: 10,
+      approvalTimeoutMs: 5_000,
+      clock,
+      responseTimers: clock,
+    });
     h.router.handle(questionRequest(), 1);
     await settle();
-    await Bun.sleep(40);
+    // Well past the backstop, short of the interaction's own deadline.
+    clock.advance(4_999);
+    await settle();
 
     expect(h.answers).toHaveLength(0);
     expect(h.router.getParkedInteractions()).toHaveLength(1);
+    expect(clock.pendingDelays()).toEqual([1]);
     expect(h.router.getMetrics().timedOut).toBe(0);
   });
 

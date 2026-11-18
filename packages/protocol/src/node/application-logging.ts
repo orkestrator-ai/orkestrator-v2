@@ -4,6 +4,7 @@ import path from "node:path";
 import { formatWithOptions } from "node:util";
 
 import { normalizeDebugLogRetentionDays } from "../debug-logging.js";
+import { unrefTimers, type IntervalTimers } from "../timers.js";
 import { ESSENTIAL_LOG_DIRECTORY_NAME } from "./essential-log.js";
 import { defaultLogDetail, resolveLogDetail, type LogDetail } from "../log-policy.js";
 import {
@@ -412,6 +413,14 @@ export function installProductionApplicationLogging(options: {
   cleanupIntervalMs?: number;
   bounds?: Partial<ApplicationLogBounds>;
   files?: ApplicationLogFileOperations;
+  /** The cleanup interval's timer. Injected in tests, which advance it instead of sleeping. */
+  timers?: IntervalTimers;
+  /**
+   * Handed every retention sweep as it starts (a sweep never rejects).
+   * Injected in tests, which await a sweep instead of sleeping until it is
+   * probably over, and count sweeps to prove one did not start.
+   */
+  observeSweep?: (sweep: Promise<void>) => void;
 }): InstalledApplicationLogging {
   let settings = readApplicationLogSettings(options.dataDir);
 
@@ -627,7 +636,7 @@ export function installProductionApplicationLogging(options: {
   // always have, and the Debug settings' clean-up button stays the way to remove them.
   const prune = async () => {
     if (!settings.enabled) return;
-    await pruneExpiredApplicationLogs(
+    const sweep = pruneExpiredApplicationLogs(
       logDirectory,
       settings.retentionDays,
       Date.now(),
@@ -638,6 +647,8 @@ export function installProductionApplicationLogging(options: {
         renderLogLine("error", "logging", "prune.failed", { error: formatLogError(error) }),
       );
     });
+    options.observeSweep?.(sweep);
+    await sweep;
   };
   const logs = createLogger("logging");
   const announceStart = () => {
@@ -655,8 +666,11 @@ export function installProductionApplicationLogging(options: {
     write(marker, getLogFormat());
   };
   void prune();
-  const cleanupTimer = setInterval(prune, options.cleanupIntervalMs ?? LOG_CLEANUP_INTERVAL_MS);
-  cleanupTimer.unref();
+  const timers = options.timers ?? unrefTimers;
+  // Unref'd by the runtime default: the sweep must never keep the process alive.
+  const cleanupTimer = timers.setInterval(() => {
+    void prune();
+  }, options.cleanupIntervalMs ?? LOG_CLEANUP_INTERVAL_MS);
   if (settings.enabled) announceStart();
 
   return {
@@ -687,7 +701,7 @@ export function installProductionApplicationLogging(options: {
     async stop() {
       if (!stopped) {
         stopped = true;
-        clearInterval(cleanupTimer);
+        timers.clearInterval(cleanupTimer);
         for (const level of Object.keys(originalMethods) as Array<keyof typeof originalMethods>) {
           console[level] = originalMethods[level];
         }

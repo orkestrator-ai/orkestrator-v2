@@ -145,30 +145,48 @@ function buildContext(definitions: readonly Definition[], declared: ReadonlySet<
   return context;
 }
 
-/** Whether a statement is `expect(...)...<matcher>(...)` with a negative or exact-count matcher. */
-export function isNegativeAssertion(statement: AnyNode): boolean {
-  if (statement.type !== "ExpressionStatement") return false;
+/** An `expect(...)...<matcher>(...)` statement, taken apart. */
+interface Assertion {
+  call: AnyNode;
+  matcher: string;
+  /** The statement is `await expect(...)`: a retrying (web-first) or promise assertion. */
+  awaited: boolean;
+  /** Every modifier between `expect(...)` and the matcher, such as `not` or `resolves`. */
+  modifiers: Set<string>;
+}
+
+function assertionOf(statement: AnyNode): Assertion | undefined {
+  if (statement.type !== "ExpressionStatement") return undefined;
   let call = unwrap(statement.expression);
-  if (call.type === "AwaitExpression") call = unwrap(call.argument);
-  if (call.type !== "CallExpression") return false;
+  const awaited = call.type === "AwaitExpression";
+  if (awaited) call = unwrap(call.argument);
+  if (call.type !== "CallExpression") return undefined;
   const callee = unwrap(call.callee);
   const matcher = memberName(callee);
-  if (!matcher || callee.type !== "MemberExpression") return false;
-  let negated = false;
+  if (!matcher || callee.type !== "MemberExpression") return undefined;
+  const modifiers = new Set<string>();
   let receiver = unwrap(callee.object);
   while (receiver.type === "MemberExpression") {
-    if (memberName(receiver) === "not") negated = true;
+    const name = memberName(receiver);
+    if (name) modifiers.add(name);
     receiver = unwrap(receiver.object);
   }
-  if (receiver.type !== "CallExpression") return false;
+  if (receiver.type !== "CallExpression") return undefined;
   const expectCallee = unwrap(receiver.callee);
   const isExpect =
     (expectCallee.type === "Identifier" && expectCallee.name === "expect") ||
     (expectCallee.type === "MemberExpression" &&
       unwrap(expectCallee.object).type === "Identifier" &&
       unwrap(expectCallee.object).name === "expect");
-  if (!isExpect) return false;
-  if (negated || ALWAYS_NEGATIVE_MATCHERS.has(matcher)) return true;
+  return isExpect ? { call, matcher, awaited, modifiers } : undefined;
+}
+
+/** Whether a statement is `expect(...)...<matcher>(...)` with a negative or exact-count matcher. */
+export function isNegativeAssertion(statement: AnyNode): boolean {
+  const assertion = assertionOf(statement);
+  if (!assertion) return false;
+  const { call, matcher } = assertion;
+  if (assertion.modifiers.has("not") || ALWAYS_NEGATIVE_MATCHERS.has(matcher)) return true;
   const expected = call.arguments[0] ? unwrap(call.arguments[0]) : undefined;
   if (!expected) return false;
   if (matcher === "toBe")
@@ -179,34 +197,64 @@ export function isNegativeAssertion(statement: AnyNode): boolean {
   return false;
 }
 
-/** Offsets of each sleep in `statements` that a negative assertion follows before any other await. */
-function sleepsBeforeNegativeAssertions(
-  statements: readonly AnyNode[],
-  context: Context,
-): number[] {
-  const findings: number[] = [];
-  let armed: AnyNode | undefined;
-  let reported = false;
+/**
+ * Whether a statement is a synchronous `expect(...)` assertion that something
+ * did happen: not negative (see {@link isNegativeAssertion}), not awaited and
+ * not on a promise. An awaited assertion waits for its own condition (a
+ * Playwright web-first assertion retries; `.resolves` waits for the promise),
+ * so the sleep before it is not what makes it pass.
+ */
+export function isPositiveAssertion(statement: AnyNode): boolean {
+  const assertion = assertionOf(statement);
+  if (!assertion || assertion.awaited) return false;
+  if (assertion.modifiers.has("resolves") || assertion.modifiers.has("rejects")) return false;
+  return !isNegativeAssertion(statement);
+}
+
+/**
+ * A fixed sleep and the assertions that follow it before any other await:
+ * what the sleep is standing in for a signal to.
+ */
+export interface SleepWindow {
+  /** Source offset of the sleep statement. */
+  offset: number;
+  negative: boolean;
+  positive: boolean;
+}
+
+/** Each fixed sleep in `statements` that at least one assertion follows before any other await. */
+function sleepWindows(statements: readonly AnyNode[], context: Context): SleepWindow[] {
+  const windows: SleepWindow[] = [];
+  let open: SleepWindow | undefined;
+  const close = () => {
+    if (open && (open.negative || open.positive)) windows.push(open);
+    open = undefined;
+  };
   for (const statement of statements) {
     if (
       statement.type === "ExpressionStatement" &&
       unwrap(statement.expression).type === "AwaitExpression" &&
       isFixedSleep(statement.expression, context)
     ) {
-      armed = statement;
-      reported = false;
+      close();
+      open = { offset: statement.start, negative: false, positive: false };
       continue;
     }
-    if (!armed) continue;
+    if (!open) continue;
     if (isNegativeAssertion(statement)) {
-      if (!reported) findings.push(armed.start);
-      reported = true;
+      open.negative = true;
       continue;
     }
-    if (containsOutsideFunctions(statement, (candidate) => candidate.type === "AwaitExpression"))
-      armed = undefined;
+    // An await anywhere else (including `expect(await read())`) waits on
+    // something real, so the sleep no longer stands alone before what follows.
+    if (containsOutsideFunctions(statement, (candidate) => candidate.type === "AwaitExpression")) {
+      close();
+      continue;
+    }
+    if (isPositiveAssertion(statement)) open.positive = true;
   }
-  return findings;
+  close();
+  return windows;
 }
 
 /** The function definitions a top-level statement makes, exported or not. */
@@ -280,7 +328,15 @@ function importedHelpers(node: AnyNode, file: ScannedFile): Map<string, LocalSle
   return found;
 }
 
-function visitSleeps(file: ScannedFile): GuardVisitor {
+/**
+ * Walks a file for fixed sleeps and reports the windows `report` selects.
+ * Shared by the negative- and positive-assertion guards, which select
+ * disjoint windows so no sleep is counted twice.
+ */
+export function visitSleepWindows(
+  file: ScannedFile,
+  report: (window: SleepWindow) => boolean,
+): GuardVisitor {
   const definitions: Definition[] = [];
   const declared = new Set<string>();
   const imported = new Map<string, LocalSleep>();
@@ -316,21 +372,34 @@ function visitSleeps(file: ScannedFile): GuardVisitor {
         if (declared.has(name) || context.helpers.has(name)) continue;
         context.helpers.set(name, helper);
       }
-      return lists.flatMap((statements) => sleepsBeforeNegativeAssertions(statements, context));
+      return lists.flatMap((statements) =>
+        sleepWindows(statements, context)
+          .filter(report)
+          .map((window) => window.offset),
+      );
     },
   };
 }
 
 /** A known sleep or a Promise-wrapped `setTimeout` with a positive literal delay. */
-const FIXED_SLEEP_TEXT =
+export const FIXED_SLEEP_TEXT =
   /\b(?:[sS]leep|delay|delayMs|wait|waitMs|pause|waitForTimeout)\(\s*[1-9]|setTimeout\(\s*\w+\s*,\s*[1-9]/;
 /** A local helper that sleeps for a variable delay, e.g. `(ms) => new Promise((r) => setTimeout(r, ms))`. */
-const SLEEP_HELPER_TEXT = /setTimeout\(\s*\w+\s*,\s*[a-zA-Z_]|\b[sS]leep\(\s*[a-zA-Z_]/;
+export const SLEEP_HELPER_TEXT = /setTimeout\(\s*\w+\s*,\s*[a-zA-Z_]|\b[sS]leep\(\s*[a-zA-Z_]/;
 /** An awaited call with a positive literal argument, such as `await realTick(50)`. */
-const AWAITED_LITERAL_CALL_TEXT = /await\s+[\w.$]+\(\s*(?:[\w.]+\s*,\s*)?[1-9]/;
+export const AWAITED_LITERAL_CALL_TEXT = /await\s+[\w.$]+\(\s*(?:[\w.]+\s*,\s*)?[1-9]/;
 /** A relative import of a test-support module, which may define the file's sleep helpers. */
-const SUPPORT_IMPORT_TEXT =
+export const SUPPORT_IMPORT_TEXT =
   /from\s+["']\.{1,2}\/[^"']*(?:test-harness|test-support|fixture)[^"']*["']/i;
+/** Cheap text test: the file may contain a fixed sleep the AST walk would recognise. */
+export function mayHaveFixedSleep(source: string): boolean {
+  return (
+    FIXED_SLEEP_TEXT.test(source) ||
+    ((SLEEP_HELPER_TEXT.test(source) || SUPPORT_IMPORT_TEXT.test(source)) &&
+      AWAITED_LITERAL_CALL_TEXT.test(source))
+  );
+}
+
 const NEGATIVE_MATCHER_TEXT =
   /\.not\.|\.to(?:Be\((?:0|false)\)|HaveLength\(0\)|(?:Strict)?Equal\(\[\]\)|(?:HaveBeen|Be)CalledTimes|BeUndefined|BeNull|BeFalsy)/;
 
@@ -339,14 +408,11 @@ export const sleepBeforeNegativeAssertion: SourceGuard = {
   advice:
     "A fixed sleep followed by a check that something did not happen (or happened an exact " +
     "number of times) only proves the sleep was shorter than the work, which a loaded host " +
-    "does not guarantee. Capture the delay with installControlledTimeout " +
-    "(tests/helpers/controlled-timeout.ts) and advance it, or await the event itself, then " +
-    "assert. See docs/development/testing-guide.md, 'Controlled time'.",
+    "does not guarantee. Drive the delay with ManualClock " +
+    "(@orkestrator/protocol/testing/manual-clock) or installControlledTimeout " +
+    "(tests/helpers/controlled-timeout.ts) and advance it past the deadline, or await the " +
+    "event itself, then assert. See docs/development/testing-guide.md, 'Controlled time'.",
   appliesTo: () => true,
-  mayOffend: (source) =>
-    (FIXED_SLEEP_TEXT.test(source) ||
-      ((SLEEP_HELPER_TEXT.test(source) || SUPPORT_IMPORT_TEXT.test(source)) &&
-        AWAITED_LITERAL_CALL_TEXT.test(source))) &&
-    NEGATIVE_MATCHER_TEXT.test(source),
-  visit: (_program, file) => visitSleeps(file),
+  mayOffend: (source) => mayHaveFixedSleep(source) && NEGATIVE_MATCHER_TEXT.test(source),
+  visit: (_program, file) => visitSleepWindows(file, (window) => window.negative),
 };

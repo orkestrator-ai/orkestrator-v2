@@ -65,13 +65,11 @@ async function fixture(overrides: Partial<Environment> = {}) {
   return { storage, contextOn, logged };
 }
 
-async function deleted(storage: StorageService): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    if (!(await storage.getEnvironment("e1"))) return;
-    await Bun.sleep(5);
-  }
-  throw new Error("recovery did not delete the environment");
+/** Waits for the recovery `scheduleMergeCleanupRecovery` started; fails when it started none. */
+async function recovered(runtime: BackendRuntime): Promise<void> {
+  const recovery = runtime.environments.mergeCleanupRecovery("e1");
+  expect(recovery).toBeDefined();
+  await recovery;
 }
 
 test("recovery stands aside while Merge and Cleanup holds the environment", async () => {
@@ -81,7 +79,8 @@ test("recovery stands aside while Merge and Cleanup holds the environment", asyn
   expect(runtime.environments.beginMerge("e1")).toBe(true);
   for (let poll = 0; poll < 3; poll += 1) {
     scheduleMergeCleanupRecovery("e1", context);
-    await Bun.sleep(5);
+    // Standing aside starts no recovery at all, so nothing can follow later.
+    expect(runtime.environments.mergeCleanupRecovery("e1")).toBeUndefined();
   }
   expect(logged.filter((line) => line.includes("merge-cleanup.resume-failed"))).toEqual([]);
   expect(await storage.getEnvironment("e1")).toMatchObject({
@@ -96,7 +95,7 @@ test("recovery stands aside while that environment's delete is running", async (
   const context = contextOn(runtime);
   expect(runtime.environments.beginDelete("e1")).toBe(true);
   scheduleMergeCleanupRecovery("e1", context);
-  await Bun.sleep(5);
+  expect(runtime.environments.mergeCleanupRecovery("e1")).toBeUndefined();
   expect(logged.filter((line) => line.includes("merge-cleanup.resume-failed"))).toEqual([]);
   expect((await storage.getEnvironment("e1"))?.deletionRequestedAt).toBeUndefined();
   runtime.environments.endDelete("e1");
@@ -113,7 +112,7 @@ test("a guard taken while recovery reads storage still stops it", async () => {
     return environment;
   }) as typeof storage.getEnvironment;
   scheduleMergeCleanupRecovery("e1", context);
-  await Bun.sleep(20);
+  await recovered(runtime);
   storage.getEnvironment = read;
   expect(logged.filter((line) => line.includes("merge-cleanup.resume-failed"))).toEqual([]);
   expect((await storage.getEnvironment("e1"))?.deletionRequestedAt).toBeUndefined();
@@ -124,19 +123,22 @@ test("after a real restart the guards are gone and recovery finishes the delete"
   const beforeRestart = new BackendRuntime({ emit: () => undefined });
   expect(beforeRestart.environments.beginMerge("e1")).toBe(true);
   scheduleMergeCleanupRecovery("e1", contextOn(beforeRestart));
-  await Bun.sleep(5);
+  expect(beforeRestart.environments.mergeCleanupRecovery("e1")).toBeUndefined();
   expect(await storage.getEnvironment("e1")).not.toBeNull();
 
   // Only the persisted intent crosses a restart; the running-work guards do not.
   const afterRestart = new BackendRuntime({ emit: () => undefined });
   scheduleMergeCleanupRecovery("e1", contextOn(afterRestart));
-  await deleted(storage);
+  await recovered(afterRestart);
+  expect(await storage.getEnvironment("e1")).toBeNull();
 });
 
 test("a recorded failure still waits for a manual retry", async () => {
   const { storage, contextOn } = await fixture({ cleanupAfterMergeError: "failed earlier" });
   const runtime = new BackendRuntime({ emit: () => undefined });
   scheduleMergeCleanupRecovery("e1", contextOn(runtime));
-  await Bun.sleep(20);
-  expect((await storage.getEnvironment("e1"))?.deletionRequestedAt).toBeUndefined();
+  await recovered(runtime);
+  const environment = await storage.getEnvironment("e1");
+  expect(environment).toMatchObject({ cleanupAfterMergeError: "failed earlier" });
+  expect(environment?.deletionRequestedAt).toBeUndefined();
 });

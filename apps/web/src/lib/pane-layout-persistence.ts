@@ -34,6 +34,7 @@ import {
 } from "@/types/paneLayout";
 import { boundBrowserHistory, sanitizeBrowserHistoryForPersistence } from "@/lib/browser-history";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { runtimeTimeoutTimers, type TimeoutTimers } from "@orkestrator/protocol/timers";
 
 const log = createLogger("web.pane-layout");
 
@@ -71,6 +72,8 @@ export interface PaneLayoutPersistenceOptions {
   debounceMs?: number;
   selectionDebounceMs?: number;
   maxConflictRetries?: number;
+  /** The debounce timers. Injected in tests, which advance them instead of sleeping. */
+  timers?: TimeoutTimers;
 }
 
 type PaneLayoutWriteSettledHandler = (environmentId: string) => void;
@@ -397,8 +400,9 @@ export function startPaneLayoutPersistence(
     options.selectionDebounceMs ??
     (options.debounceMs === undefined ? 0 : Math.min(debounceMs, 200));
   const maxConflictRetries = options.maxConflictRetries ?? 3;
-  const timers = new Map<string, ReturnType<typeof setTimeout>>();
-  const selectionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const clock = options.timers ?? runtimeTimeoutTimers;
+  const timers = new Map<string, unknown>();
+  const selectionTimers = new Map<string, unknown>();
   const lastEnqueued = new Map<string, string>();
   const writeChains = new Map<string, Promise<void>>();
   const pendingWrites = new Map<string, PendingPaneLayoutWrite>();
@@ -411,13 +415,13 @@ export function startPaneLayoutPersistence(
 
   const cancelTimer = (environmentId: string) => {
     const timer = timers.get(environmentId);
-    if (timer) clearTimeout(timer);
+    if (timer !== undefined) clock.clearTimeout(timer);
     timers.delete(environmentId);
   };
 
   const cancelSelectionTimer = (environmentId: string) => {
     const timer = selectionTimers.get(environmentId);
-    if (timer) clearTimeout(timer);
+    if (timer !== undefined) clock.clearTimeout(timer);
     selectionTimers.delete(environmentId);
   };
 
@@ -701,7 +705,7 @@ export function startPaneLayoutPersistence(
     }
     selectionTimers.set(
       environmentId,
-      setTimeout(() => {
+      clock.setTimeout(() => {
         void flushSelectionEnvironment(environmentId)?.catch((error) =>
           reportWriteFailure(environmentId, error),
         );
@@ -950,7 +954,7 @@ export function startPaneLayoutPersistence(
       }
       timers.set(
         environmentId,
-        setTimeout(() => {
+        clock.setTimeout(() => {
           void flushEnvironment(environmentId)?.catch((error) =>
             reportWriteFailure(environmentId, error),
           );

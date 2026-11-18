@@ -5,6 +5,7 @@
  * merging, structured-output parsing and the recovered-context prompt.
  */
 
+import type { TimeoutTimers } from "@orkestrator/protocol/timers";
 import type { AppServerEngine } from "./engine/app-server-engine.js";
 import type { CommandChangeProbe } from "./sessions/command-changes.js";
 import type { CodexChangeEvidence } from "./change-evidence.js";
@@ -81,6 +82,11 @@ export interface AppServerRuntimeOptions {
   ambiguousRecoveryTimeoutMs?: number;
   /** Test/embedding override for the background compaction completion deadline. */
   compactionTimeoutMs?: number;
+  /**
+   * The compaction deadline's timers. Defaults to the global timers, unref'd;
+   * tests pass a manual clock and advance it past the deadline.
+   */
+  compactionTimers?: TimeoutTimers;
   /** Test/embedding override for the per-thread ordered-event count bound. */
   orderedEventMaxCount?: number;
   /** Test/embedding override for the per-thread ordered-event byte estimate. */

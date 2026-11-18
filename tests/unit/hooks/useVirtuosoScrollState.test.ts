@@ -7,7 +7,19 @@ import {
 } from "@/hooks/useVirtuosoScrollState";
 import { uiStore } from "@/stores/uiStore";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
-import { elapseFakeTime } from "../../../apps/web/src/test/fake-clock-frames";
+import { animationFrame, elapseFakeTime } from "../../../apps/web/src/test/fake-clock-frames";
+
+/**
+ * More animation frames than any scroll journey (a 30-frame budget) or
+ * activation readiness retry (30 attempts) can use. Every scroll this hook
+ * issues after its synchronous first step runs on a frame, so once these have
+ * been delivered, whatever was going to happen has happened.
+ */
+const PAST_EVERY_FRAME_BUDGET = 40;
+
+async function deliverFrames(count = PAST_EVERY_FRAME_BUDGET): Promise<void> {
+  for (let frame = 0; frame < count; frame += 1) await animationFrame();
+}
 
 /**
  * happy-dom reports 0 for every layout metric, so a scroller that can actually
@@ -435,9 +447,7 @@ describe("useVirtuosoScrollState", () => {
       act(() => {
         result.current.scrollProps.atBottomStateChange(true);
       });
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      });
+      await deliverFrames();
 
       // "auto", not "smooth" — this is content catching up, not a user journey.
       expect(scrollToCalls).toEqual([
@@ -558,10 +568,8 @@ describe("useVirtuosoScrollState", () => {
         result.current.scrollProps.atBottomStateChange(true);
       });
 
-      // Flush the setTimeout that schedules the footer scroll
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      });
+      // The footer scroll runs on a later frame.
+      await deliverFrames();
 
       expect(scrollToCalls).toHaveLength(1);
       expect(scrollToCalls[0]).toEqual({
@@ -599,7 +607,7 @@ describe("useVirtuosoScrollState", () => {
         );
         const settled = scrollToCalls.length;
         height = 1800;
-        await act(() => new Promise((resolve) => setTimeout(resolve, 80)));
+        await deliverFrames();
         // The journey ended at its budget; nothing re-issues afterwards.
         expect(scrollToCalls.length).toBe(settled);
         expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
@@ -625,7 +633,7 @@ describe("useVirtuosoScrollState", () => {
         result.current.scrollToBottom();
         result.current.scrollToBottom();
       });
-      await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+      await deliverFrames();
       // Each request starts its own index jump, but only the current journey
       // reaches its frame: one footer scroll, two superseded operations.
       expect(scrollToIndexCalls).toHaveLength(3);
@@ -650,18 +658,14 @@ describe("useVirtuosoScrollState", () => {
       act(() => {
         result.current.scrollProps.atBottomStateChange(true);
       });
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 30));
-      });
+      await deliverFrames();
       expect(scrollToCalls).toHaveLength(1);
 
       // Second invocation — should NOT be blocked by the in-flight guard
       act(() => {
         result.current.scrollToBottom();
       });
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 30));
-      });
+      await deliverFrames();
       expect(scrollToCalls).toHaveLength(2);
     });
 
@@ -1747,9 +1751,7 @@ describe("useVirtuosoScrollState", () => {
       const before = scrollToIndexCalls.length;
       rerender({ isActive: true });
 
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 30));
-      });
+      await deliverFrames();
 
       // Re-activation issues an instant scrollToIndex + scrollTo (auto, not
       // smooth). The smooth retry loop is intentionally NOT used here.
@@ -1806,9 +1808,7 @@ describe("useVirtuosoScrollState", () => {
         // wantsStick=false the activation effect's rAF body is a no-op
         // beyond the flag reset, so the call count must not change.
         rerender({ isActive: true });
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 30));
-        });
+        await deliverFrames();
         expect(scrollToIndexCalls.length).toBe(callsBeforeReactivation);
 
         // Subsequent scrollToBottom must succeed (one new scrollToIndex)
@@ -1859,9 +1859,7 @@ describe("useVirtuosoScrollState", () => {
 
       // Flush any rAF the activation effect might schedule. It must not
       // fire a scroll on first activation.
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 30));
-      });
+      await deliverFrames();
       expect(scrollToIndexCalls.length).toBe(0);
       expect(scrollToCalls.length).toBe(0);
 
@@ -1897,9 +1895,7 @@ describe("useVirtuosoScrollState", () => {
         rerender({ isActive: false });
         rerender({ isActive: true });
 
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 30));
-        });
+        await deliverFrames();
 
         expect(scrollToIndexCalls.length).toBe(0);
         expect(scrollToCalls.length).toBe(0);
@@ -1964,9 +1960,7 @@ describe("useVirtuosoScrollState", () => {
 
       rerender({ isActive: true });
 
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 30));
-      });
+      await deliverFrames();
 
       const scrollToIndexCalls: any[] = [];
       const scrollToCalls: any[] = [];
@@ -1984,9 +1978,7 @@ describe("useVirtuosoScrollState", () => {
           result.current.scrollProps.scrollerRef(scroller);
         });
 
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 30));
-        });
+        await deliverFrames();
 
         expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
         expect(scrollToCalls).toEqual([{ top: 10_000_000, behavior: "auto" }]);
@@ -2038,11 +2030,9 @@ describe("useVirtuosoScrollState", () => {
         rerender({ isActive: true });
 
         await waitFor(() => expect(scrollToIndexCalls).toHaveLength(1));
-        await act(async () => {
-          // Let any incorrectly retained readiness retry fire before checking
-          // the one-shot activation invariant.
-          await new Promise((resolve) => setTimeout(resolve, 30));
-        });
+        // Let any incorrectly retained readiness retry fire before checking
+        // the one-shot activation invariant.
+        await deliverFrames();
 
         // The handle became ready on a later retry, so exactly one activation
         // scroll fired once it was available.
@@ -2086,9 +2076,7 @@ describe("useVirtuosoScrollState", () => {
           result.current.scrollProps.scrollerRef(scroller);
         });
 
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        });
+        await deliverFrames();
 
         // The handle is now ready and the scroller remounts. Because the
         // pending flag was cleared on exhaustion, this must NOT fire a scroll.
@@ -2104,9 +2092,7 @@ describe("useVirtuosoScrollState", () => {
           result.current.scrollProps.scrollerRef(remount);
         });
 
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 30));
-        });
+        await deliverFrames();
 
         expect(scrollToIndexCalls).toEqual([]);
         expect(scrollToCalls).toEqual([]);
@@ -2147,9 +2133,7 @@ describe("useVirtuosoScrollState", () => {
 
         rerender({ isActive: true });
 
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 30));
-        });
+        await deliverFrames();
 
         expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
         expect(scrollToCalls).toEqual([{ top: 10_000_000, behavior: "auto" }]);
@@ -2182,9 +2166,7 @@ describe("useVirtuosoScrollState", () => {
       rerender({ isActive: true });
       rerender({ isActive: false });
 
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 30));
-      });
+      await deliverFrames();
 
       expect(scrollToIndexCalls.length).toBe(0);
       expect(scrollToCalls.length).toBe(0);
@@ -2240,7 +2222,7 @@ describe("useVirtuosoScrollState", () => {
         rerender({ isActive: false });
         act(() => appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" }));
         rerender({ isActive: true });
-        await act(() => new Promise((resolve) => setTimeout(resolve, 60)));
+        await deliverFrames();
         expect(scrollToIndexCalls).toEqual([]);
         expect(scrollToCalls).toEqual([]);
         expect(el.scrollTop).toBe(500);
@@ -2293,7 +2275,7 @@ describe("useVirtuosoScrollState", () => {
         act(() => wheelUp(el, 500));
         rerender({ isActive: false });
         rerender({ isActive: true });
-        await act(() => new Promise((resolve) => setTimeout(resolve, 30)));
+        await deliverFrames();
         expect(scrollToIndexCalls.length).toBe(0);
         expect(scrollToCalls.length).toBe(0);
       } finally {
@@ -2317,13 +2299,13 @@ describe("useVirtuosoScrollState", () => {
         rerender({ isActive: false, explicitTargetPending: false });
         // The follower would catch up, but a message link is waiting.
         rerender({ isActive: true, explicitTargetPending: true });
-        await act(() => new Promise((resolve) => setTimeout(resolve, 40)));
+        await deliverFrames();
         expect(scrollToCalls).toEqual([]);
         act(() => {
           result.current.scrollToIndex(2, undefined, "message-link");
         });
         rerender({ isActive: true, explicitTargetPending: false });
-        await act(() => new Promise((resolve) => setTimeout(resolve, 40)));
+        await deliverFrames();
         // The target's navigation superseded the deferred activation.
         // (This harness renders no rows, so the target's bounded re-issues run.)
         expect(scrollToIndexCalls.length).toBeGreaterThan(0);
@@ -2350,7 +2332,7 @@ describe("useVirtuosoScrollState", () => {
         act(() => result.current.scrollProps.scrollerRef(el));
         rerender({ isActive: false, explicitTargetPending: false });
         rerender({ isActive: true, explicitTargetPending: true });
-        await act(() => new Promise((resolve) => setTimeout(resolve, 40)));
+        await deliverFrames();
         expect(scrollToCalls).toEqual([]);
         rerender({ isActive: true, explicitTargetPending: false });
         await waitFor(() => expect(scrollToCalls).toHaveLength(1));

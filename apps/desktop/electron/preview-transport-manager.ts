@@ -42,6 +42,7 @@ import {
 import { PreviewTunnelConnector } from "./preview-tunnel-session.js";
 import { answering } from "./webrequest-listener.js";
 import { createLogger, type Logger, type LogEventOf } from "@orkestrator/protocol/logger";
+import { unrefTimers, type IntervalTimers, type TimeoutTimers } from "@orkestrator/protocol/timers";
 
 const log = createLogger("preview");
 
@@ -101,6 +102,12 @@ export interface PreviewTransportManagerOptions {
   /** An external-browser forward closes after this long with no connection. */
   externalForwardIdleMs?: number;
   externalForwardTimers?: ExternalForwardTimers;
+  /**
+   * The retirement lease and attachment-renewal timers. Injected in tests,
+   * which advance them instead of sleeping; the runtime's own, unref'd,
+   * otherwise.
+   */
+  leaseTimers?: TimeoutTimers & IntervalTimers;
   poolMax?: number;
   /** A tunnel session with no connections closes after this long; defaults to 30 s. */
   tunnelSessionIdleMs?: number;
@@ -138,8 +145,8 @@ interface ServiceGroup {
   pool: Array<{ socket: Duplex; idle: ReturnType<typeof setTimeout> }>;
   /** Multiplexed tunnel sessions, one per attachment. */
   tunnel: PreviewTunnelConnector;
-  retireTimer: ReturnType<typeof setTimeout> | null;
-  renewTimer: ReturnType<typeof setInterval> | null;
+  retireTimer: unknown;
+  renewTimer: unknown;
   state: BrowserPreviewTransportState;
   ready: Promise<void>;
   disposed: boolean;
@@ -249,6 +256,10 @@ export class PreviewTransportManager {
 
   constructor(private readonly options: PreviewTransportManagerOptions) {}
 
+  private get leaseTimers(): TimeoutTimers & IntervalTimers {
+    return this.options.leaseTimers ?? unrefTimers;
+  }
+
   // -------------------------------------------------------------------------
   // Attachment by holders
 
@@ -274,7 +285,7 @@ export class PreviewTransportManager {
     }
     group.holders.add(holderId);
     if (group.retireTimer) {
-      clearTimeout(group.retireTimer);
+      this.leaseTimers.clearTimeout(group.retireTimer);
       group.retireTimer = null;
     }
     try {
@@ -322,11 +333,10 @@ export class PreviewTransportManager {
     if (!group) return;
     group.holders.delete(holderId);
     if (group.holders.size > 0 || group.retireTimer) return;
-    group.retireTimer = setTimeout(
+    group.retireTimer = this.leaseTimers.setTimeout(
       () => void this.retire(group),
       this.options.retirementMs ?? 30_000,
     );
-    group.retireTimer.unref?.();
   }
 
   /** Navigation scope for an ingress URL, so the view manager can confine navigation. */
@@ -553,11 +563,10 @@ export class PreviewTransportManager {
       await this.listen(group);
       if (group.disposed) throw previewFailure("backend-unavailable");
       this.installSessionHooks(group);
-      group.renewTimer = setInterval(
+      group.renewTimer = this.leaseTimers.setInterval(
         () => void this.renew(group),
         this.options.renewIntervalMs ?? 5 * 60_000,
       );
-      group.renewTimer.unref?.();
       this.setState(group, { mode: "desktop-tunnel", state: "ready" });
     } catch (error) {
       const failure = previewErrorFromUnknown(error);
@@ -1125,8 +1134,8 @@ export class PreviewTransportManager {
 
   private async closeGroup(group: ServiceGroup): Promise<void> {
     group.disposed = true;
-    if (group.retireTimer) clearTimeout(group.retireTimer);
-    if (group.renewTimer) clearInterval(group.renewTimer);
+    if (group.retireTimer) this.leaseTimers.clearTimeout(group.retireTimer);
+    if (group.renewTimer) this.leaseTimers.clearInterval(group.renewTimer);
     this.drainPool(group);
     group.tunnel.close();
     const forward = group.forward;

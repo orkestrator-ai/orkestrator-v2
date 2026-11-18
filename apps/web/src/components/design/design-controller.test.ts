@@ -294,6 +294,7 @@ describe("design canvas controller", () => {
   });
 
   test("a prepared draft restored after restart is never executed automatically", async () => {
+    const clock = installDesignClock();
     const key = `${window.location.origin}|env-1|${canvasId}`;
     const prepared = (await backend.handle("design_prepare", {
       descriptor: {
@@ -327,7 +328,8 @@ describe("design canvas controller", () => {
     const controller = designController("env-1", canvasId);
     const release = controller.acquire();
     await controller.refresh();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Every retry, backoff and save delay the controller could arm falls due.
+    await clock.advanceBy(PAST_EVERY_CONTROLLER_DELAY_MS);
     expect(backend.executions).toHaveLength(0);
     const intent = controller.projection.intents[0]!;
     expect(intent.restored).toBe(true);
@@ -461,6 +463,11 @@ describe("design canvas controller after a failure", () => {
 const DRAFTS_KEY = "orkestrator.design.intents.v1";
 const draftKey = `${window.location.origin}|env-1|${canvasId}`;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Virtual time past every delay the controller arms: its longest backoff and
+ * its execute wait are both 30 s.
+ */
+const PAST_EVERY_CONTROLLER_DELAY_MS = 60_000;
 
 function seedRestored(intents: Array<Partial<DesignIntent> & { id: string; token?: string }>) {
   window.localStorage.setItem(
@@ -677,6 +684,7 @@ describe("design canvas controller regressions", () => {
   });
 
   test("another window's failed edit is listed for review; Resume takes it over and runs it", async () => {
+    const clock = installDesignClock();
     backend.intents.push({
       id: "i-other",
       clientId: "c-other-window",
@@ -700,7 +708,8 @@ describe("design canvas controller regressions", () => {
     await controller.refresh();
     const listed = controller.projection.intents.find((intent) => intent.id === "i-other")!;
     expect(listed).toMatchObject({ restored: true, outcome: "rejected" });
-    await sleep(30);
+    // Its "after-delay" retry hint must not make this window retry it.
+    await clock.advanceBy(PAST_EVERY_CONTROLLER_DELAY_MS);
     expect(backend.executions).toHaveLength(0);
     await controller.resume("i-other");
     await until(() => backend.frames.get(frameA)!.frame.x === 21);
@@ -904,6 +913,7 @@ describe("design canvas controller regressions", () => {
   });
 
   test("discarding one failure unblocks only edits with no other failure ahead", async () => {
+    const clock = installDesignClock();
     const controller = designController("env-1", canvasId);
     const release = controller.acquire();
     await controller.refresh();
@@ -924,7 +934,7 @@ describe("design canvas controller regressions", () => {
     await controller.resume(byGesture(controller, "f2")!.id);
     await until(() => byGesture(controller, "f2")?.outcome === "rejected");
     await controller.discard(byGesture(controller, "f2")!.id);
-    await sleep(50);
+    await clock.advanceBy(PAST_EVERY_CONTROLLER_DELAY_MS);
     // f1 is still unreviewed ahead of it.
     expect(byGesture(controller, "dep")!.blocked).toBe(true);
     expect(backend.frames.get(frameA)!.frame.y).toBe(0);

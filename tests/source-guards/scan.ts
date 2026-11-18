@@ -14,6 +14,7 @@ import { libBackendCommandDefault } from "./lib-backend-command-default";
 import { rawWebRequestListener } from "./raw-webrequest-listener";
 import { releasedPortRebind } from "./released-port-rebind";
 import { sleepBeforeNegativeAssertion } from "./sleep-before-negative-assertion";
+import { sleepBeforePositiveAssertion } from "./sleep-before-positive-assertion";
 import { smallFakePid } from "./small-fake-pid";
 import { windowOrkestratorDirect } from "./window-orkestrator-direct";
 import { windowOrkestratorPortal } from "./window-orkestrator-portal";
@@ -21,6 +22,7 @@ import { workspaceCommandBoundCall } from "./workspace-command-bound-call";
 
 export const SOURCE_GUARDS: readonly SourceGuard[] = [
   sleepBeforeNegativeAssertion,
+  sleepBeforePositiveAssertion,
   releasedPortRebind,
   smallFakePid,
   windowOrkestratorDirect,

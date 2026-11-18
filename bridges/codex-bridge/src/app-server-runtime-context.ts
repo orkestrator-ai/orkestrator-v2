@@ -172,7 +172,8 @@ export class CodexRuntimeContext {
    * Compaction has no response to wait on, so a lost notification would leave
    * the thread `running` for the life of the bridge.
    */
-  readonly compactionBackstops = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Handles from the compaction deadline's timers (`compactionTimers`), opaque. */
+  readonly compactionBackstops = new Map<string, unknown>();
   /**
    * Approvals the UI has been told about and can still answer.
    *

@@ -21,6 +21,7 @@ import {
   PolicyWideningRefusedError,
 } from "@orkestrator/protocol/execution-policy-narrowing";
 import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
+import { unrefTimers, type TimeoutTimers } from "@orkestrator/protocol/timers";
 import type { CodexRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
 import { openAssistantRow } from "./app-server-runtime-rows.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -492,7 +493,7 @@ export class CodexRuntimeSessions {
 
   armCompactionBackstop(threadId: string): void {
     this.clearCompactionBackstop(threadId);
-    const timer = setTimeout(() => {
+    const timer = this.compactionTimers().setTimeout(() => {
       this.ctx.compactionBackstops.delete(threadId);
       const context = this.ctx.registry.getThread(threadId);
       if (!context?.compacting) return;
@@ -501,14 +502,17 @@ export class CodexRuntimeSessions {
         "Codex never reported that compaction finished. The session was released.",
       );
     }, this.ctx.options.compactionTimeoutMs ?? DEFAULT_COMPACTION_TIMEOUT_MS);
-    timer.unref?.();
     this.ctx.compactionBackstops.set(threadId, timer);
+  }
+
+  private compactionTimers(): TimeoutTimers {
+    return this.ctx.options.compactionTimers ?? unrefTimers;
   }
 
   clearCompactionBackstop(threadId: string): void {
     const timer = this.ctx.compactionBackstops.get(threadId);
-    if (!timer) return;
-    clearTimeout(timer);
+    if (timer === undefined) return;
+    this.compactionTimers().clearTimeout(timer);
     this.ctx.compactionBackstops.delete(threadId);
   }
 

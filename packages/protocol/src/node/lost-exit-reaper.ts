@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { createLogger } from "../logger.js";
+import { unrefTimers, type TimeoutTimers } from "../timers.js";
 import { bunRuntime, PROCESS_INSPECTION_OPTIONS } from "./shell-process-state.js";
 
 const log = createLogger("process");
@@ -49,6 +50,8 @@ export type LostExitReaperOptions = {
   maxChecks?: number;
   /** Children waited on at once. Past it a child is left unreaped, never queued. */
   maxPending?: number;
+  /** The check timers. Injected in tests, which advance them instead of sleeping. */
+  timers?: TimeoutTimers;
 };
 
 export type LostExitReaperStats = { pending: number; reaped: number; abandoned: number };
@@ -72,7 +75,8 @@ export function createLostExitReaper(options: LostExitReaperOptions): LostExitRe
   const maxCheckMs = options.maxCheckMs ?? REAP_MAX_CHECK_MS;
   const maxChecks = options.maxChecks ?? REAP_MAX_CHECKS;
   const maxPending = options.maxPending ?? REAP_MAX_PENDING;
-  const pending = new Map<number, ReturnType<typeof setTimeout>>();
+  const timers = options.timers ?? unrefTimers;
+  const pending = new Map<number, unknown>();
   let reaped = 0;
   let abandoned = 0;
 
@@ -107,7 +111,7 @@ export function createLostExitReaper(options: LostExitReaperOptions): LostExitRe
     delayMs: number,
     checks: number,
   ) => {
-    const timer = setTimeout(() => {
+    const timer = timers.setTimeout(() => {
       pending.delete(pid);
       let again: boolean;
       try {
@@ -122,8 +126,6 @@ export function createLostExitReaper(options: LostExitReaperOptions): LostExitRe
       }
       schedule(pid, reported, startedAt, Math.min(delayMs * 2, maxCheckMs), checks + 1);
     }, delayMs);
-    // A zombie must not keep the process alive; exiting reaps it anyway.
-    timer.unref?.();
     pending.set(pid, timer);
   };
 
@@ -139,7 +141,7 @@ export function createLostExitReaper(options: LostExitReaperOptions): LostExitRe
     },
     stats: () => ({ pending: pending.size, reaped, abandoned }),
     stop() {
-      for (const timer of pending.values()) clearTimeout(timer);
+      for (const timer of pending.values()) timers.clearTimeout(timer);
       pending.clear();
     },
   };

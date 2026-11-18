@@ -115,6 +115,14 @@ export interface QueryCall {
   finish: () => void;
   fail: (err: Error) => void;
   isClosed: () => boolean;
+  /**
+   * Resolves once the bridge has taken every pushed frame and is waiting for
+   * the next one (or the stream has ended). The bridge handles a frame before
+   * it asks for the next, so this is the signal that what was pushed so far
+   * has been processed: await it instead of sleeping, including before
+   * asserting that a frame changed nothing.
+   */
+  consumed: () => Promise<void>;
 }
 
 export function pushSuccessfulContinuationResult(call: QueryCall): void {
@@ -161,6 +169,13 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
   let finished = false;
   let closed = false;
   let error: Error | null = null;
+  /** The consumer is parked waiting for a frame, or the stream has ended. */
+  let idle = false;
+  const idleWaiters: Array<() => void> = [];
+  const becomeIdle = () => {
+    idle = true;
+    for (const resolve of idleWaiters.splice(0)) resolve();
+  };
 
   const wake = () => {
     if (pendingResolve) {
@@ -185,6 +200,10 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
       wake();
     },
     isClosed: () => closed,
+    consumed: () =>
+      idle && queue.length === 0
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => idleWaiters.push(resolve)),
     fail: (err) => {
       error = err;
       finished = true;
@@ -211,6 +230,7 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
       if (error) {
         const err = error;
         error = null;
+        becomeIdle();
         throw err;
       }
       if (queue.length > 0) {
@@ -219,11 +239,14 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
       }
       if (finished) {
         await beforeExit?.();
+        becomeIdle();
         return;
       }
       await new Promise<void>((r) => {
         pendingResolve = r;
+        becomeIdle();
       });
+      idle = false;
     }
   }
 

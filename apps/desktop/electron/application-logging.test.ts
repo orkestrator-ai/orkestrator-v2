@@ -1,4 +1,5 @@
 import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
+import { flushMicrotasks, ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import { configureLogger, createLogger, resetLogger } from "@orkestrator/protocol/logger";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
@@ -1050,30 +1051,63 @@ describe("production application log pruning", () => {
     await writeFile(stale, "stale");
     await backdate(stale, "2000-01-01T00:00:00Z");
 
-    const logger = installProductionApplicationLogging({ dataDir, cleanupIntervalMs: 5 });
+    const clock = new ManualClock();
+    const sweeps: Promise<void>[] = [];
+    const logger = installProductionApplicationLogging({
+      dataDir,
+      cleanupIntervalMs: 5,
+      timers: clock,
+      observeSweep: (sweep) => sweeps.push(sweep),
+    });
     try {
-      await Bun.sleep(60);
+      // The start-up sweep, then one per interval.
+      expect(sweeps).toHaveLength(1);
+      expect(clock.intervalPeriods()).toEqual([5]);
+      await Promise.all(sweeps);
       expect(await readdir(logDirectory)).not.toContain("stale.log");
+
+      const later = path.join(logDirectory, "later.log");
+      await writeFile(later, "later");
+      await backdate(later, "2000-01-01T00:00:00Z");
+      expect(clock.advance(5)).toBe(1);
+      expect(sweeps).toHaveLength(2);
+      await sweeps[1];
+      expect(await readdir(logDirectory)).not.toContain("later.log");
+
       // Removing the directory out from under the timer must not produce an
-      // unhandled rejection or stop later sweeps.
+      // unhandled rejection or stop later sweeps. A sweep never rejects, so
+      // awaiting each one proves the failure was handled.
       await rm(logDirectory, { recursive: true, force: true });
-      await Bun.sleep(30);
+      expect(clock.advance(10)).toBe(2);
+      expect(sweeps).toHaveLength(4);
+      await Promise.all(sweeps);
     } finally {
       await logger?.stop();
     }
+    expect(clock.pendingCount()).toBe(0);
   });
 });
 
 describe("application logging shutdown", () => {
   /**
-   * The re-issued quit is its own `setTimeout(0)`, scheduled only once the hold
-   * settles. When a loaded host stalls the event loop past a test's fixed sleep,
-   * that sleep's timer is already due and runs before the quit timer that the
-   * same wake-up schedules, so wait for the quit itself, with a bound.
+   * Captures the hold's own timers by their delays: each deadline, and the
+   * re-issued quit, which is its own `setTimeout(0)` scheduled only once the
+   * hold settles. A test then advances them instead of sleeping, so it shows
+   * the quit waited for the hold whatever the load on the host.
    */
-  async function waitForQuits(app: { quitCount: number }, count: number): Promise<void> {
-    const deadline = Date.now() + 3_000;
-    while (app.quitCount < count && Date.now() < deadline) await Bun.sleep(1);
+  function controlShutdownTimers(...deadlineMs: number[]) {
+    const deadlines = deadlineMs.map((ms) =>
+      installControlledTimeout(ms, { label: `${ms} ms shutdown deadline` }),
+    );
+    const quit = installControlledTimeout(0, { label: "deferred quit" });
+    return {
+      deadlines,
+      quit,
+      restore() {
+        quit.restore();
+        for (const deadline of deadlines.toReversed()) deadline.restore();
+      },
+    };
   }
 
   function fakeApp(): {
@@ -1121,21 +1155,32 @@ describe("application logging shutdown", () => {
       },
     } satisfies InstalledApplicationLogging;
 
-    registerApplicationLoggingShutdown(app.host, logging, 5_000);
-    app.emit();
-    expect(app.preventedCount).toBe(1);
-    await Bun.sleep(5);
-    expect(app.quitCount).toBe(0);
+    const timers = controlShutdownTimers(5_000);
+    try {
+      registerApplicationLoggingShutdown(app.host, logging, 5_000);
+      app.emit();
+      expect(app.preventedCount).toBe(1);
+      await flushMicrotasks();
+      // Held: no quit is scheduled while the flush is outstanding.
+      expect(timers.quit.pendingCount()).toBe(0);
+      expect(timers.deadlines[0]!.pendingCount()).toBe(1);
+      expect(app.quitCount).toBe(0);
 
-    stopped.resolve();
-    await waitForQuits(app, 1);
-    expect(app.quitCount).toBe(1);
+      stopped.resolve();
+      await flushMicrotasks();
+      expect(timers.deadlines[0]!.pendingCount()).toBe(0);
+      expect(app.quitCount).toBe(0);
+      expect(timers.quit.advance()).toBe(1);
+      expect(app.quitCount).toBe(1);
 
-    // The re-entrant will-quit that our own `app.quit()` triggers must fall
-    // straight through rather than parking the app again.
-    app.emit();
-    expect(app.preventedCount).toBe(1);
-    expect(stopCalls).toBe(1);
+      // The re-entrant will-quit that our own `app.quit()` triggers must fall
+      // straight through rather than parking the app again.
+      app.emit();
+      expect(app.preventedCount).toBe(1);
+      expect(stopCalls).toBe(1);
+    } finally {
+      timers.restore();
+    }
   });
 
   test("quits anyway when the flush outlives its deadline", async () => {
@@ -1149,10 +1194,20 @@ describe("application logging shutdown", () => {
       stop: () => new Promise<void>(() => {}),
     } satisfies InstalledApplicationLogging;
 
-    registerApplicationLoggingShutdown(app.host, logging, 10);
-    app.emit();
-    await waitForQuits(app, 1);
-    expect(app.quitCount).toBe(1);
+    const timers = controlShutdownTimers(10);
+    try {
+      registerApplicationLoggingShutdown(app.host, logging, 10);
+      app.emit();
+      await flushMicrotasks();
+      expect(timers.quit.pendingCount()).toBe(0);
+
+      expect(timers.deadlines[0]!.advance()).toBe(1);
+      await flushMicrotasks();
+      expect(timers.quit.advance()).toBe(1);
+      expect(app.quitCount).toBe(1);
+    } finally {
+      timers.restore();
+    }
   });
 
   test("quits anyway when the flush rejects", async () => {
@@ -1166,10 +1221,18 @@ describe("application logging shutdown", () => {
       stop: () => Promise.reject(new Error("disk gone")),
     } satisfies InstalledApplicationLogging;
 
-    registerApplicationLoggingShutdown(app.host, logging, 5_000);
-    app.emit();
-    await waitForQuits(app, 1);
-    expect(app.quitCount).toBe(1);
+    const timers = controlShutdownTimers(5_000);
+    try {
+      registerApplicationLoggingShutdown(app.host, logging, 5_000);
+      app.emit();
+      await flushMicrotasks();
+      // Released by the rejection, not by its deadline.
+      expect(timers.deadlines[0]!.pendingCount()).toBe(0);
+      expect(timers.quit.advance()).toBe(1);
+      expect(app.quitCount).toBe(1);
+    } finally {
+      timers.restore();
+    }
   });
 
   test("re-quits after will-quit dispatch returns when the queue is already idle", async () => {
@@ -1197,16 +1260,22 @@ describe("application logging shutdown", () => {
       stop: async () => {},
     } satisfies InstalledApplicationLogging;
 
-    registerApplicationLoggingShutdown(host, logging, 5_000);
-    quitting = true;
-    let prevented = false;
-    listener?.({ preventDefault: () => (prevented = true) });
-    for (let tick = 0; tick < 50; tick += 1) await Promise.resolve();
-    if (prevented) quitting = false;
-    expect(effectiveQuits).toBe(0);
+    const timers = controlShutdownTimers(5_000);
+    try {
+      registerApplicationLoggingShutdown(host, logging, 5_000);
+      quitting = true;
+      let prevented = false;
+      listener?.({ preventDefault: () => (prevented = true) });
+      for (let tick = 0; tick < 50; tick += 1) await Promise.resolve();
+      if (prevented) quitting = false;
+      expect(effectiveQuits).toBe(0);
 
-    await Bun.sleep(5);
-    expect(effectiveQuits).toBe(1);
+      // The quit was deferred to a later macrotask, which runs once dispatch has returned.
+      expect(timers.quit.advance()).toBe(1);
+      expect(effectiveQuits).toBe(1);
+    } finally {
+      timers.restore();
+    }
   });
 
   test("closes the log only after pending output settles", async () => {
@@ -1226,18 +1295,26 @@ describe("application logging shutdown", () => {
       },
     } satisfies InstalledApplicationLogging;
 
-    registerApplicationLoggingShutdown(app.host, logging, 5_000, {
-      settled: () => backend.promise.then(() => void order.push("backend-stopped")),
-      timeoutMs: 5_000,
-    });
-    app.emit();
-    await Bun.sleep(5);
-    expect(order).toEqual([]);
+    // The pending output's own bound, then the hold's (both bounds together).
+    const timers = controlShutdownTimers(5_000, 10_000);
+    try {
+      registerApplicationLoggingShutdown(app.host, logging, 5_000, {
+        settled: () => backend.promise.then(() => void order.push("backend-stopped")),
+        timeoutMs: 5_000,
+      });
+      app.emit();
+      await flushMicrotasks();
+      expect(timers.deadlines.map((deadline) => deadline.pendingCount())).toEqual([1, 1]);
+      expect(order).toEqual([]);
 
-    backend.resolve();
-    await waitForQuits(app, 1);
-    expect(order).toEqual(["backend-stopped", "log-closed"]);
-    expect(app.quitCount).toBe(1);
+      backend.resolve();
+      await flushMicrotasks();
+      expect(order).toEqual(["backend-stopped", "log-closed"]);
+      expect(timers.quit.advance()).toBe(1);
+      expect(app.quitCount).toBe(1);
+    } finally {
+      timers.restore();
+    }
   });
 
   test("closes the log anyway when pending output outlives its own bound", async () => {
@@ -1350,7 +1427,12 @@ describe("live settings", () => {
     await writeFile(old, "old\n");
     const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
     await utimes(old, threeDaysAgo, threeDaysAgo);
-    const logging = installProductionApplicationLogging({ dataDir });
+    const sweeps: Promise<void>[] = [];
+    const logging = installProductionApplicationLogging({
+      dataDir,
+      timers: new ManualClock(),
+      observeSweep: (sweep) => sweeps.push(sweep),
+    });
     const exists = () =>
       stat(old).then(
         () => true,
@@ -1358,14 +1440,18 @@ describe("live settings", () => {
       );
     try {
       await logging.flush();
+      await Promise.all(sweeps);
+      const sweepsBefore = sweeps.length;
       expect(await exists()).toBe(true);
 
+      // Saving is off: a shorter retention starts no sweep at all.
       logging.updateSettings({ enabled: false, retentionDays: 1 });
-      await Bun.sleep(30);
+      expect(sweeps).toHaveLength(sweepsBefore);
       expect(await exists()).toBe(true);
 
       logging.updateSettings({ enabled: true, retentionDays: 1 });
-      for (let waited = 0; waited < 2_000 && (await exists()); waited += 10) await Bun.sleep(10);
+      expect(sweeps).toHaveLength(sweepsBefore + 1);
+      await sweeps.at(-1);
       expect(await exists()).toBe(false);
       expect(logging.settings().retentionDays).toBe(1);
     } finally {

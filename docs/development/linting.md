@@ -72,7 +72,7 @@ that `git ls-files -co --exclude-standard` lists, once (test and spec files plus
 modules: files under `tests/` or `testing/` directories and names containing
 `test-harness`, `test-support` or `fixture`), with the DOM scan's exclusions. A
 cheap text prefilter decides which files oxc-parser parses, and each parsed file
-is walked once for all four guards. The guards live in `tests/source-guards/`:
+is walked once for every guard that applies. The test-source guards are:
 
 - **`sleep-before-negative-assertion`**: an awaited fixed sleep with a literal
   delay (`Bun.sleep(50)`, `sleep`, `delay`, `wait`, `pause`, a Promise-wrapped
@@ -83,6 +83,16 @@ is walked once for all four guards. The guards live in `tests/source-guards/`:
   `toHaveLength(0)`, `toEqual([])`, `toHaveBeenCalledTimes`, `toBeNull`,
   `toBeUndefined`, `toBeFalsy`). Use `installControlledTimeout` or await the
   event (testing guide, "Controlled time").
+- **`sleep-before-positive-assertion`**: the same sleep followed, before any
+  other await, only by synchronous assertions that something happened (any
+  other `expect(...)` matcher). Such a test fails on a loaded host while the
+  work is still running. A sleep that a negative assertion also follows is the
+  negative guard's finding, so no sleep is counted twice; awaited assertions
+  (Playwright's retrying `await expect(...)`, `.resolves`, `.rejects`) and
+  assertions on an awaited read (`expect(await read())`) are not flagged,
+  because they wait on something real. Drive the delay with `ManualClock`
+  (`@orkestrator/protocol/testing/manual-clock`) or `installControlledTimeout`,
+  or await the event.
 - **`released-port-rebind`**: a helper that binds port 0, reads the port and
   closes the server before the port is used or returned, and any call to a
   free-port helper by name (`getFreePort`, `reserveFreePort`,

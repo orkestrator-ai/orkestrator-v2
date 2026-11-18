@@ -433,7 +433,7 @@ export const DesignFrameView = memo(function DesignFrameView({
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              className="text-destructive"
+              className="text-failure"
               onSelect={() => actions.frameAction(frame.id, "delete")}
             >
               Delete frame
@@ -519,7 +519,7 @@ export const DesignFrameView = memo(function DesignFrameView({
         />
       )}
       {failure && (
-        <p className="absolute -bottom-6 left-0 flex max-w-full items-center gap-1 truncate text-[11px] text-destructive">
+        <p className="absolute -bottom-6 left-0 flex max-w-full items-center gap-1 truncate text-[11px] text-failure">
           <AlertTriangle className="size-3 shrink-0" /> Edit not applied — review below
         </p>
       )}
@@ -529,7 +529,7 @@ export const DesignFrameView = memo(function DesignFrameView({
           aria-label={`${frame.name} needs repair`}
           className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-background/95 p-4 text-center text-xs"
         >
-          <ShieldAlert className="size-6 text-destructive" />
+          <ShieldAlert className="size-6 text-failure" />
           <p className="font-medium">This frame can’t be edited</p>
           <p className="max-w-xs text-muted-foreground">
             {meta?.validation.message ?? "It could not be rendered by the design runtime."}

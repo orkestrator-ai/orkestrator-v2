@@ -1289,7 +1289,7 @@ Containers in `restricted` mode (the default) reach only an allowlist; anything
 else is rejected outright. `full` mode skips the firewall entirely.
 
 - GitHub's own published ranges are always allowed: from the backend's hourly
-  seed (`github-ranges-cache.ts`) when it is under a day old, else a live
+  seed (`git/github-ranges-cache.ts`) when it is under a day old, else a live
   fetch of `api.github.com/meta`, else a cached copy under a week old; with
   none the firewall fails closed.
 - Everything else comes from the environment's `ALLOWED_DOMAINS`, which the

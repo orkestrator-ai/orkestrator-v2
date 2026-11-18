@@ -48,12 +48,10 @@ export function CompactionPart({
   const header = (
     <div className="flex min-w-0 items-center gap-2">
       <Icon
-        className={cn("h-3 w-3 shrink-0", failed ? "text-destructive" : "text-muted-foreground")}
+        className={cn("h-3 w-3 shrink-0", failed ? "text-failure" : "text-muted-foreground")}
         aria-hidden="true"
       />
-      <span
-        className={cn("shrink-0 text-xs", failed ? "text-destructive" : "text-muted-foreground")}
-      >
+      <span className={cn("shrink-0 text-xs", failed ? "text-failure" : "text-muted-foreground")}>
         {label}
       </span>
       {detail ? <span className="truncate text-[11px] text-muted-foreground">{detail}</span> : null}
@@ -120,7 +118,7 @@ export function RetryPart({ part }: { part: Extract<NativeMessagePart, { type: "
     <div
       className={cn(
         "my-1 flex min-w-0 items-center gap-2 text-[11px]",
-        failed ? "text-destructive" : "text-muted-foreground",
+        failed ? "text-failure" : "text-muted-foreground",
       )}
     >
       <RefreshCw
@@ -142,7 +140,7 @@ const STATUS_ICONS = {
 const STATUS_CLASSES = {
   info: "text-muted-foreground",
   warning: "text-amber-400/90",
-  error: "text-destructive",
+  error: "text-failure",
 } as const;
 
 /**

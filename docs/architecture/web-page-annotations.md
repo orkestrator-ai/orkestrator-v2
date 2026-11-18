@@ -341,7 +341,7 @@ own root: selecting one records that root's scope, not `unsupported`.
 Desktop clients send a `shadow` scope, on an element or a text range's
 container, to every backend; the backend still advertises
 `operations.shadowTargets` with authoring, but the renderer no longer reads it
-(every backend accepts the scope since 0047 task 5).
+(every backend accepts the scope since same-origin iframes landed, #2363).
 
 Same-origin frames (`browser-preview-frame-kit.ts`) are entered only through
 `contentDocument`, which the browser withholds for a cross-origin or sandboxed
@@ -698,12 +698,96 @@ the prompt in the panel's live region; the prompt itself is derived from the
 request and result records, so a missed transition costs only the
 announcement. Nothing captures without the user's click: a silent
 turn-end capture could record a mid-edit or signed-out page, or a tab that
-has moved on (to-do 0047 task 3). The prompt needs no capability of its
+has moved on (#2311). The prompt needs no capability of its
 own: it calls `web_annotation_result_capture` under the existing
 `operations.comparison`. Acceptance checks the
 expected content revision, capture id and result revision; a newer note or
 capture makes the old result historical. Only a human resolves. A new reply on
 a resolved note reopens it.
+
+### Advisory result diffs
+
+A backend that advertises `operations.resultDiffs` (on unless the host sets
+`resultDiffs: false`; it follows readability, not authoring) computes a region
+diff between a note's original capture and one of its after-captures on
+request: `web_annotation_result_diff` (`{ environmentId, captureId }`, a
+`read` command that stays available in read-only mode) and the agent tool's
+`diff` option below. Each comparison of a result card shows **Show what
+changed (advisory)** on every client that reads (`ResultDiff.tsx`). The diff
+is computed from the stored images each time and never stored: the captures
+are immutable, so the answer does not change. It is always `advisory: true`
+and worded as evidence, "not a pass or fail"; it never resolves, reports an
+outcome or counts as a check.
+
+- **Comparable captures only** (`resultDiffPreconditions` in
+  `web-annotations/result-diff.ts`). Known and matching route and service, viewport, scroll
+  (within 1 CSS px), zoom, device scale and stored image size; both captures
+  complete (not stale) with a full-viewport image (a region crop's source,
+  never the crop); the after-capture settled (`stability: "stable"`) and
+  carrying an unstable-region mask. Anything else is answered
+  `status: "incomparable"` with every reason found, each with a fixed message
+  (`WEB_ANNOTATION_DIFF_REFUSALS`). Images are never resized to fit, because a
+  resized comparison reports scaling as layout change.
+- **The unstable-region mask.** When the backend advertises diffs and the
+  desktop reports `resultCapture.unstableRegions`, the renderer starts a
+  result capture with `sampleUnstable`; main then takes a second screenshot
+  300 ms after the first (`sampleUnstableRegions` in
+  `browser-preview-capture.ts`) and compares the two privacy-verified samples at the
+  stored resolution after painting the union of their sensitive fields and
+  reapplied redactions on both samples, in 16 CSS px cells where any changed pixel counts
+  (`unstableRegionsBetween`). The changed cells become `unstableRegions` in
+  document CSS pixels (at most 32; more collapse into their bounding box). A
+  failed privacy scan, navigation, a size or scroll change between samples, unreadable pixels or a
+  comparison over 1 s gives no mask, which makes a later diff refuse rather
+  than trust a wrong mask. The renderer forwards the mask only to a backend
+  that advertises diffs, and without the flag a result capture is exactly
+  what it was before (one screenshot, no extra delay). Recapture repeats sampling
+  with the same result options. Dropping the image clears its motion mask.
+- **What is compared.** Both images are decoded with `sharp` to 8-bit RGBA.
+  Pixels under either capture's recorded redactions and under the motion
+  mask are left out. The after-capture carries the final spool masks, including
+  edits made in the result editor. Original masks are bound to their capture
+  and projected with that image's scroll and scale. A redacted original whose
+  mask cache was lost, or a result with incomplete redaction geometry, must be
+  captured again before it can be compared. A pixel changed when a channel differs by more than 24;
+  changed pixels are counted in 8 px cells, a cell needs two to count, and
+  touching cells (diagonals included) form one region. The answer carries the
+  changed, compared and excluded pixel counts, the changed share, up to 32
+  regions (largest first in count; `truncatedRegions` when there were more)
+  in stored-image and CSS pixels, and how many masks and moving regions were
+  left out. `compareWebAnnotationRasters`
+  (`packages/protocol/src/web-annotations-diff.ts`) is the one comparison,
+  used by both the backend diff and the desktop mask.
+- **Bounds** (`WEB_ANNOTATION_DIFF_LIMITS`). Both sizes come from the asset
+  records and are checked against 4,000,000 pixels before decoding, and the
+  decoder gets the same limit; at most two diffs run at once, and a third is
+  answered `busy`, never queued; a slot is held until its decode actually
+  stops on both reads, even after one decode fails or the request times out; the whole diff, decode included, stops at 5 s
+  (`timeout`). A decode failure is `decode-failed`. None of these produce a
+  partial diff.
+- **Rendering.** The card outlines each region over the after-image in an
+  SVG whose view box is the stored image size, so the outlines scale exactly
+  with the picture, and lists what was left out. An incomparable answer lists
+  its reasons instead of any image. Busy and timed-out comparisons can be retried in place.
+
+Decisions (from to-do 0047, retired 2026-11-18; its earlier decision record
+is `git show b2c91abb9:docs/todo/previews-and-annotations/0047-web-annotation-extensions.md`):
+
+- **The diff runs in the backend, on stored assets**, not in each client at
+  view time: one implementation serves desktop, web and iOS review and the
+  agent tool, at the cost of decode work in the backend process, which the
+  pixel ceiling, the two-slot limit and the deadline bound. `sharp` was
+  already a backend dependency.
+- **The unstable mask is sampled by the desktop, not drawn by the user**: a
+  second screenshot within the existing result-capture path costs no user
+  effort. It misses animations slower than the sample interval, which is why
+  the result stays advisory.
+- **Regions, not a pixel overlay image**: outlining cells needs no encoded
+  image, so nothing new is stored or collected and the answer is a few
+  kilobytes for the agent as well as the card.
+- **On demand and unstored**: captures are immutable, so a stored diff would
+  only duplicate an answer that can be recomputed, and would need migration
+  and collection rules of its own.
 
 ## Agent tools
 
@@ -713,6 +797,15 @@ When the agent tools server has a host, credentials bound to a tab get
 tab, never from a model-supplied id alone. Reports are stored as
 `agent-reported`, provisional while the request is active, and can never
 resolve, retarget or dispatch. Agent checks cannot claim `app-observed`.
+
+While the backend advertises `operations.resultDiffs`, `get_annotation_evidence`
+also accepts `diff: true` (and optionally `resultCaptureId`, one of the
+request's `resultCaptures`) and adds the [advisory diff](#advisory-result-diffs)
+of the annotation's latest after-capture in the assigned request, or
+`diff: null` with a note asking the user to capture the result. A capture id
+outside that request's result captures for the annotation is answered
+`not-result-capture` without being read. Without the capability the tool's
+schema and description do not mention diffs.
 
 ## Legacy migration
 
@@ -747,9 +840,9 @@ and copies them as JSON; counts reset when the backend or app restarts.
 
 | Client | Behavior |
 | --- | --- |
-| Desktop + current backend | Capture, author, discuss, request, review, compare; development source hints when the page emits them. |
+| Desktop + current backend | Capture, author, discuss, request, review, compare, advisory result diffs; development source hints when the page emits them. |
 | Desktop + older backend | Capabilities unavailable; no annotation writes. |
-| Web / iOS + current backend | List, reply, discuss, request and review; capture shown as unavailable. |
+| Web / iOS + current backend | List, reply, discuss, request and review, advisory result diffs of desktop captures; capture shown as unavailable. |
 | Backend disconnected | Cached content with connection status; unsaved text retained. |
 | Storage degraded | Read-only for affected items with the reason. |
 
@@ -763,7 +856,8 @@ What has actually been exercised on a real stack (sign-off and history under
 | Open shadow roots | An element note and a quote inside an open root captured in the desktop's preview view (isolated world, main-side parse), stored, then pinned and shown on page again after a reload (Linux headless, 2026-11-11) | Closed roots (unsupported); a Linux Wayland or X11 window; macOS |
 | Same-origin iframes | Element notes inside a same-origin frame, a nested `srcdoc` frame and an open root inside a frame picked with real pointer input in headless Chromium, with the page scripts in a CDP isolated world (`browser-preview-frame-targets.integration.test.ts`, Linux, 2026-11-17): rectangles through border, padding and scale, resolution after a frame navigation and a reload, masking inside the frame; cross-origin and sandboxed frames captured as the frame only | The desktop's own preview view (Electron); macOS; a stored note's brief on a real agent turn |
 | Development source hints | Fixture HTML and a real Vite 8 dev server with the documented emitter, captured from the desktop in a local worktree and in a container (Linux, 2026-11-06); fixture HTML in a container (macOS desktop); the container path check through the gateway (Linux) | webpack, Next.js and other Babel setups (unqualified) |
-| Result captures | Stable, unstable (animation, loading font), route, viewport and target differences, expired sign-in (macOS) | Pixel differences (not implemented); the turn-end capture prompt after a real agent turn (unit-tested only) |
+| Result captures | Stable, unstable (animation, loading font), route, viewport and target differences, expired sign-in (macOS) | The turn-end capture prompt after a real agent turn (unit-tested only) |
+| Advisory result diffs | Linux headless, 2026-11-18: native Electron capture and recapture of a fixture with controlled motion, manual redaction in the renderer editor, and a diff computed from the resulting stored image; decoder limits and agent tool rollout in the backend suite; retry and image overlay in the renderer harness | macOS; the capture prompt following a live model turn |
 | Live implement | Claude, Codex, Cursor, Grok, OpenCode, Pi (local worktree); Claude in a Docker container | Other providers in a container |
 | Live Discuss | All six; read-only on Claude and on Codex/Cursor/Grok sessions in Plan | — |
 | Needs input | Claude: approval and clarifying question answered from the request card | Codex (its Ask policy does not gate workspace edits); Cursor, Grok, OpenCode, Pi not run |
@@ -792,7 +886,13 @@ What has actually been exercised on a real stack (sign-off and history under
   shadow root later on its own resolves on the next DOM change or re-send. A
   page too large to
   search in time is labelled as such rather than as a missing target.
-- Pixel differences are not implemented and are never advertised. A thread
+- Advisory result diffs need an after-capture taken with the unstable-region
+  mask, so after-captures from before `operations.resultDiffs`, from an older
+  desktop, or from a page that moved or scrolled between the two samples are
+  refused (`no-unstable-mask`). The mask samples only the after page: an
+  animation shown only in the original capture is compared. A diff measures
+  pixels, not intent; two runs of the same page can differ in rendering noise
+  above the tolerance. A thread
   summary for a different session is a deterministic excerpt of recent
   entries, not a generated summary. The review tray counts images exactly from
   summaries on current backends; against an older backend it counts only
@@ -880,7 +980,7 @@ lost data or a write outside the workspace.
 Milestones A to C were written up by a worker agent on 2026-10-25 and
 accepted by the maintainer on 2026-11-14. The records below are as accepted,
 with the reviewer line filled in; what changed since (Linux runs, open
-shadow roots from 0047) is in the matrix above. The gate-scope answers:
+shadow roots from 0047 (retired)) is in the matrix above. The gate-scope answers:
 
 - **Native-window gate:** Linux is enough; macOS is deferred.
 - **Remote backend:** deferred, not in scope now.
@@ -921,7 +1021,7 @@ Reviewer / date: the maintainer, 2026-11-14, accepted
 Milestone / PR / commit: B, targets and batches; same commit
 Implemented scope and remaining deferrals: anchors, live pins, Show on page,
   hash/query identity, batch reservation. Deferred: shadow/iframe targets
-  (0047)
+  (0047 (retired))
 Platforms, providers, and client versions exercised: macOS Electron (pins,
   Show on page); gateway Chromium (batches)
 Logged commands and results: pins after reorder, hot reload, duplication,
@@ -937,7 +1037,7 @@ Reviewer / date: the maintainer, 2026-11-14, accepted
 Milestone / PR / commit: C, results, modes and clients; same commit
 Implemented scope and remaining deferrals: result captures and comparison
   labels, Discuss modes, web review, container file checks. Deferred: the
-  iOS wrapper run; pixel differences (0047)
+  iOS wrapper run; pixel differences (0047 (retired))
 Platforms, providers, and client versions exercised: macOS Electron (result
   captures); gateway Chromium and WebKit 27.2 (web review); Docker container
   (file checks, live Claude report)

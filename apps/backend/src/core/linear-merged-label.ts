@@ -11,7 +11,7 @@
  * with backoff, capped at an hour, until it lands; pending records survive a
  * restart and the environment's deletion.
  *
- * Writers: the PR monitor's terminal follow-up (`pr-monitor-runtime.ts`), the
+ * Writers: the PR monitor's terminal follow-up (`git/pr-monitor-runtime.ts`), the
  * build finding its pull request already merged (`persistPullRequest`),
  * environment deletion when the environment recorded a merge
  * (`environment-delete.ts`), and the startup sweep, retried after incomplete

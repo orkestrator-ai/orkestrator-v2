@@ -38,7 +38,7 @@ import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, writeGithubRangesSeedFixture } from "./container-lifecycle-fixtures";
-import { hostServiceContext } from "./container-live-host-service-context";
+import { agentToolsStandIn, hostServiceContext } from "./container-live-host-service-context";
 import { startRuntime } from "./container-live-start";
 import { removeLabelledResources } from "./container-live-cleanup";
 import { startGateway } from "./gateway-test-harness";
@@ -98,7 +98,7 @@ function listener(hostname: string, answer: string): { port: number; peers: Set<
     fetch: (request, self) => {
       const peer = self.requestIP(request)?.address;
       if (peer) peers.add(peer);
-      return new Response(answer);
+      return agentToolsStandIn(request, answer);
     },
   });
   servers.push(server);

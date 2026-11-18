@@ -2,6 +2,9 @@ import type { ReactNode, Ref } from "react";
 import { cn } from "@/lib/utils";
 import { CHAT_COLUMN_SHIFT_CLASS } from "./chat-column-shift";
 
+export const COMPOSE_DOCK_GROUND_CLASS_NAME =
+  "before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:bottom-0 before:-z-10 before:bg-[linear-gradient(to_bottom,transparent,var(--color-background)_2rem)]";
+
 interface NativeComposeDockProps {
   centered: boolean;
   children: ReactNode;
@@ -63,7 +66,7 @@ export function NativeComposeDock({
              * keeps that text out from behind the composer, the goal pill and
              * the scroll-down control, without a hard edge across the column.
              */
-            "top-full -translate-y-full before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:bottom-0 before:-z-10 before:bg-[linear-gradient(to_bottom,transparent,var(--color-background)_2rem)]",
+            cn("top-full -translate-y-full", COMPOSE_DOCK_GROUND_CLASS_NAME),
       )}
     >
       <div

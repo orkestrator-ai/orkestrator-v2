@@ -10,8 +10,11 @@ import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { cn } from "@/lib/utils";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { AutoPipelineTabData } from "@/types/paneLayout";
+import { handOffAutoPipelineToBuildTab } from "./auto-pipeline-handoff";
 import { AutoPipelineBuildNotes } from "./AutoPipelineBuildNotes";
 import { AutoPipelineCriteriaField } from "./AutoPipelineCriteriaField";
 import { AutoPipelineDescriptionField } from "./AutoPipelineDescriptionField";
@@ -80,18 +83,24 @@ export function autoPipelineProblems(
  * drafting, editing the ticket and confirming all happen here, one step at a
  * time. Drafting and promotion run in the backend, and edits are saved there,
  * so switching tabs or environments neither cancels nor loses anything; the
- * tab re-reads where things stand whenever it is shown.
+ * tab re-reads where things stand whenever it is shown. Once the pipeline has
+ * started, its tab is selected and this tab closes.
  */
 export function AutoPipelineTab({
+  tabId,
   environmentId,
   data,
   isActive,
 }: {
+  /** This tab's own id in the environment's pane layout. */
+  tabId: string;
   environmentId: string;
   data: AutoPipelineTabData;
   isActive: boolean;
 }) {
   const backend = useScopeBackend();
+  // The environment's node keeps its pane layout.
+  const paneLayouts = useNodeScope().store(paneLayoutStore);
   const fieldId = useId();
   const sourceTabId = data.sourceTabId;
   const [state, setState] = useState<AutoPipelineState | null>(null);
@@ -115,6 +124,16 @@ export function AutoPipelineTab({
     () =>
       backend.getAutoPipelineState(environmentId, sourceTabId).then(
         (value) => {
+          // The read can finish after confirmation's component has unmounted.
+          // Start the layout handoff here rather than relying on a mounted effect.
+          if (value.phase === "promoted") {
+            handOffAutoPipelineToBuildTab({
+              layouts: paneLayouts,
+              environmentId,
+              autoPipelineTabId: tabId,
+              pipelineId: value.pipelineId,
+            });
+          }
           setState(value);
           setReadError(null);
           return value;
@@ -124,7 +143,7 @@ export function AutoPipelineTab({
           return null;
         },
       ),
-    [backend, environmentId, sourceTabId],
+    [backend, environmentId, paneLayouts, sourceTabId, tabId],
   );
   // Re-read on every return to the tab and keep polling while it is shown.
   useEffect(() => {
@@ -341,7 +360,7 @@ export function AutoPipelineTab({
                       className={cn(
                         "grid size-4 place-items-center rounded-full text-[10px] tabular-nums",
                         done && !problem
-                          ? "bg-primary text-primary-foreground"
+                          ? "bg-primary-fill text-primary-foreground"
                           : problem && draft
                             ? "bg-destructive/80 text-white"
                             : "bg-muted text-muted-foreground",
@@ -372,14 +391,14 @@ export function AutoPipelineTab({
             </p>
           )}
           {!state && readError && (
-            <p role="alert" className="text-sm text-destructive">
+            <p role="alert" className="text-sm text-failure">
               {readError}
             </p>
           )}
           {draftError && state?.phase !== "failed" && state?.phase !== "drafting" && (
             <p
               role="alert"
-              className="mb-4 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              className="mb-4 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-failure"
             >
               <AlertCircle className="mt-0.5 size-4 shrink-0" />
               <span className="min-w-0 break-words">Drafting did not start: {draftError}</span>
@@ -417,7 +436,7 @@ export function AutoPipelineTab({
             <div className="space-y-3">
               <p
                 role="alert"
-                className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-failure"
               >
                 <AlertCircle className="mt-0.5 size-4 shrink-0" />
                 <span className="min-w-0 break-words">{state.error}</span>
@@ -500,7 +519,7 @@ export function AutoPipelineTab({
                   {Object.keys(problems).length > 0 && (
                     <ul
                       aria-label="Before confirming"
-                      className="space-y-1 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                      className="space-y-1 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-failure"
                     >
                       {problems.details && <li>Details: {problems.details}</li>}
                       {problems.criteria && <li>Acceptance criteria: {problems.criteria}</li>}
@@ -581,7 +600,7 @@ export function AutoPipelineTab({
                 ) : (
                   <p
                     role="alert"
-                    className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                    className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-failure"
                   >
                     <AlertCircle className="mt-0.5 size-4 shrink-0" />
                     <span className="min-w-0 break-words">{confirmError}</span>

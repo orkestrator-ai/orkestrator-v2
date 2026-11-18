@@ -683,7 +683,7 @@ export function EnvironmentRow({
                 )}
                 {model.deleteFailureText && (
                   <span
-                    className="truncate text-[11px] font-normal leading-4 text-destructive"
+                    className="truncate text-[11px] font-normal leading-4 text-failure"
                     title={model.deleteFailureText}
                   >
                     {model.deleteFailureText}
@@ -707,7 +707,7 @@ export function EnvironmentRow({
               <button
                 type="button"
                 onClick={() => setDeleteOpen(true)}
-                className="shrink-0 rounded px-1.5 text-[11px] leading-5 text-destructive transition-colors hover:bg-zinc-700/60 focus-hairline"
+                className="shrink-0 rounded px-1.5 text-[11px] leading-5 text-failure transition-colors hover:bg-zinc-700/60 focus-hairline"
                 aria-describedby={nameId}
               >
                 Retry

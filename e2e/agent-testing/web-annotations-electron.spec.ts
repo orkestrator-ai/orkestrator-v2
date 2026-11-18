@@ -66,6 +66,7 @@ import {
   resolveRuntimeProfile,
   type RuntimeProfile,
 } from "../../apps/desktop/electron/runtime-profile";
+import type { OrkestratorElectronApi } from "../../apps/desktop/electron/preload-api";
 import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { longText } from "../../test-fixtures/agent-project/annotation-app/page";
@@ -3048,6 +3049,201 @@ async function captureResult(
     targetMatch: stored.comparison?.targetMatch ?? null,
   };
 }
+
+test("native result recapture compares real screenshots and excludes editor redactions", async () => {
+  test.setTimeout(90_000);
+  await navigate(ROUTE_VARIANTS.motion);
+  const banner = `[data-testid="${TEST_IDS.animatedBanner}"]`;
+  // Keep the fixture animation within a fixed box, so it does not move the
+  // selected content or undermine the layout settle check.
+  await inPreview(`(() => {
+    const css = document.createElement("style");
+    css.textContent = ${JSON.stringify(`${banner} { animation: none !important; background: #fff; }`)};
+    css.id = "diff-fixture-style";
+    document.head.append(css);
+    return true;
+  })()`);
+  await preview("startCapture", {
+    tabId: TAB_ID,
+    mode: "page",
+    environmentId: s().environmentId,
+  });
+  const originalPending = await awaitCaptureEnd(TAB_ID);
+  if (originalPending.status !== "captured") throw new Error("Original capture failed");
+  const original = await saveCapture(originalPending.pending.captureId, "Compare the fixture.");
+
+  const held = await heldRequest(original.annotationId);
+  try {
+    const started = await preview<BrowserPreviewSelectionStatus>("startCapture", {
+      tabId: TAB_ID,
+      mode: "page",
+      environmentId: s().environmentId,
+      purpose: "result",
+      result: {
+        requestId: held.request.id,
+        originalCaptureId: original.captureId,
+        sampleUnstable: true,
+      },
+    });
+    const first = started.status === "captured" ? started : await awaitCaptureEnd(TAB_ID);
+    if (first.status !== "captured") throw new Error(`Capture failed: ${first.status}`);
+    // Change the fixture only after Electron has acquired the first real
+    // frame. A free-running animation can land on the same phase twice on
+    // a busy host, which would make an empty motion mask legitimate.
+    await s().app.evaluate(
+      ({ webContents }, { origin, banner }) => {
+        const contents = webContents
+          .getAllWebContents()
+          .find((candidate) => !candidate.isDestroyed() && candidate.getURL().startsWith(origin))!;
+        const capturePage = contents.capturePage;
+        contents.capturePage = async (...args: Parameters<typeof capturePage>) => {
+          contents.capturePage = capturePage;
+          const image = await capturePage.apply(contents, args);
+          await contents.mainFrame.executeJavaScript(`new Promise((resolve) => {
+            document.querySelector(${JSON.stringify(banner)}).style.backgroundColor = "#000";
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)));
+          })`);
+          return image;
+        };
+      },
+      { origin: previewOrigin(), banner },
+    );
+    const replacement = await preview<BrowserPreviewSelectionStatus>("startCapture", {
+      tabId: TAB_ID,
+      mode: "page",
+      environmentId: s().environmentId,
+      recaptureCaptureId: first.pending.captureId,
+    });
+    const ready = replacement.status === "captured" ? replacement : await awaitCaptureEnd(TAB_ID);
+    if (ready.status !== "captured") throw new Error(`Recapture failed: ${ready.status}`);
+    const captureId = ready.pending.captureId;
+    const pending = await readPending(captureId);
+    expect(pending.result?.unstableRegions?.length).toBeGreaterThan(0);
+    expect(pending.result?.originalMasks?.captureId).toBe(original.captureId);
+
+    await preview("setVisible", TAB_ID, false);
+    // Mount the production redaction editor in the fixture renderer. The
+    // controlled draft holds the request while the real preload and backend
+    // accept the canvas output and the renderer's normal commit.
+    await s().window.evaluate(
+      async ({ captureId, requestId, annotationId, environmentId }) => {
+        const resources = performance.getEntriesByType("resource").map((entry) => entry.name);
+        const reactPath = resources.find((url) => url.includes("/deps/react.js?"))!;
+        const rootPath = resources.find((url) => url.includes("/deps/react-dom_client.js?"))!;
+        const editorPath = "/src/components/browser/annotations/RedactionEditor.tsx";
+        const redactPath = "/src/lib/web-annotations/redaction.ts";
+        const commitPath = "/src/lib/web-annotations/capture-commit.ts";
+        const intentPath = "/src/lib/web-annotations/capture-intents.ts";
+        const syncPath = "/src/lib/web-annotations/sync.ts";
+        const storePath = "/src/stores/webAnnotationStore.ts";
+        const desktop = (window as unknown as { orkestrator: OrkestratorElectronApi }).orkestrator;
+        const api = desktop.browserPreview.capture;
+        const pending = (await api.readPendingCapture(captureId))!;
+        const { default: React } = await import(reactPath);
+        const { default: ReactDOM } = await import(rootPath);
+        const { RedactionEditor } = await import(editorPath);
+        const { redactPngDataUrl } = await import(redactPath);
+        const { commitPendingCapture } = await import(commitPath);
+        const { rememberCaptureIntent } = await import(intentPath);
+        const { acquireWebAnnotationSync } = await import(syncPath);
+        const { getWebAnnotationCache } = await import(storePath);
+        const sync = acquireWebAnnotationSync(environmentId, { visible: false });
+        const mount = document.createElement("div");
+        mount.dataset.resultRedactionFixture = "";
+        Object.assign(mount.style, {
+          position: "fixed",
+          top: "20px",
+          left: "20px",
+          zIndex: "10000",
+          width: "400px",
+          padding: "16px",
+          backgroundColor: "#18181b",
+        });
+        document.body.append(mount);
+        const root = ReactDOM.createRoot(mount);
+        const deadline = Date.now() + 10_000;
+        try {
+          while (!getWebAnnotationCache(environmentId).capabilities?.operations.resultDiffs) {
+            if (Date.now() > deadline) throw new Error("Result diffs were not advertised");
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          rememberCaptureIntent(captureId, {
+            kind: "result",
+            requestId,
+            annotationId,
+            createdAt: Date.now(),
+          });
+          root.render(
+            React.createElement(RedactionEditor, {
+              imageDataUrl: pending.imageDataUrl!,
+              imageSize: pending.descriptor.image!,
+              onCancel: () => undefined,
+              onApply: async (regions: WebAnnotationRect[]) => {
+                try {
+                  const imageDataUrl = await redactPngDataUrl(pending.imageDataUrl!, regions);
+                  await api.replacePendingCaptureImage(captureId, {
+                    regions,
+                    imageDataUrl,
+                    manualRegions: regions.length,
+                  });
+                  const after = (await api.readPendingCapture(captureId))!;
+                  const committed = await commitPendingCapture({
+                    api,
+                    environmentId,
+                    captureId,
+                    record: after,
+                    input: { body: "" },
+                  });
+                  mount.dataset.committedCapture = committed.backendCaptureId;
+                } catch (error) {
+                  mount.dataset.commitError = String(error);
+                } finally {
+                  sync.release();
+                  root.unmount();
+                }
+              },
+            }),
+          );
+        } catch (error) {
+          sync.release();
+          root.unmount();
+          mount.remove();
+          throw error;
+        }
+      },
+      {
+        captureId,
+        requestId: held.request.id,
+        annotationId: original.annotationId,
+        environmentId: s().environmentId,
+      },
+    );
+    const editor = s().window.locator("[data-result-redaction-fixture]");
+    await editor.getByRole("button", { name: "Add box" }).click();
+    await editor.getByRole("button", { name: "Apply redaction" }).click();
+    await expect(editor).toHaveAttribute("data-committed-capture", /^capture-/);
+    const stored = await editor.getAttribute("data-committed-capture");
+    const diff = await invoke(C.resultDiff, {
+      environmentId: s().environmentId,
+      captureId: stored,
+    });
+    expect(diff).toMatchObject({
+      diff: {
+        status: "compared",
+        advisory: true,
+        changedPixels: 0,
+        excluded: { masks: 1, unstableRegions: expect.any(Number) },
+      },
+    });
+  } finally {
+    await s()
+      .window.locator("[data-result-redaction-fixture]")
+      .evaluate((element) => element.remove())
+      .catch(() => undefined);
+    await preview("setVisible", TAB_ID, true);
+    await held.cleanup();
+  }
+});
 
 test("result captures label stability and comparison differences, and Show on page reports an expired sign-in redirect", async () => {
   const testInfo = test.info();

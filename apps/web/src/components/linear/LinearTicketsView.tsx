@@ -946,7 +946,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
 
             {detailState === "error" && (
               <div className="rounded-md border border-destructive/30 bg-destructive/10 p-4">
-                <div className="flex items-start gap-2 text-sm text-destructive">
+                <div className="flex items-start gap-2 text-sm text-failure">
                   <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>{detailError}</span>
                 </div>
@@ -1060,7 +1060,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
                       disabled={commentState === "loading"}
                     />
                     {commentError && (
-                      <div className="flex items-start gap-2 text-sm text-destructive">
+                      <div className="flex items-start gap-2 text-sm text-failure">
                         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                         <span className="break-words">{commentError}</span>
                       </div>
@@ -1091,7 +1091,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
                     <div className="flex flex-wrap items-center gap-2">
                       {selectedPipeline?.completionCommentStatus === "failed" && (
                         <>
-                          <span className="text-xs text-destructive">
+                          <span className="text-xs text-failure">
                             Linear comment failed: {selectedPipeline.completionCommentError}
                           </span>
                           <Button
@@ -1486,7 +1486,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
 
                 {issuesState === "error" && (
                   <div className="rounded-md border border-destructive/30 bg-destructive/10 p-4">
-                    <div className="flex items-start gap-2 text-sm text-destructive">
+                    <div className="flex items-start gap-2 text-sm text-failure">
                       <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                       <span>{issuesError}</span>
                     </div>

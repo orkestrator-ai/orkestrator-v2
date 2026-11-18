@@ -83,7 +83,9 @@ test("details, acceptance criteria and confirm are steps of the same tab", async
   });
   await page.getByRole("button", { name: "Confirm auto-pipeline" }).click();
   await expect(page.getByText(/Promoting environment/)).toBeVisible();
-  await expect(page.getByText(/Auto-pipeline started/)).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Auto-pipeline 2" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: /^Build:/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("Pipeline running from Review.")).toBeVisible();
   const ticket = parseAutoPipelineTicket(
     await page.evaluate(() => (window as ProbeWindow).confirmedTicket),
   );
@@ -273,4 +275,25 @@ test("a drafting request the backend never recorded says why", async ({ page }, 
   await expect(page.getByRole("alert")).toContainText("Drafting did not start");
   await expect(page.getByRole("button", { name: "Draft ticket" })).toBeVisible();
   await shot(page, "tab-draft-refused", testInfo.project.name);
+});
+
+test("confirmation finishes after leaving the tab without taking its selection", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/auto-pipeline");
+  await page.getByRole("button", { name: "To pipeline", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).waitFor();
+  await steps(page)
+    .getByRole("button", { name: /Confirm/ })
+    .click();
+  await page.getByRole("button", { name: "Confirm Auto-pipeline" }).click();
+  await expect(page.getByText(/Promoting environment/)).toBeVisible();
+  await shot(page, "handoff-before", testInfo.project.name);
+  await page.getByRole("tab", { name: "Codex 1" }).click();
+  await expect(page.getByRole("tab", { name: "Auto-pipeline 2" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: /^Build:/ })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Codex 1" })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: /^Build:/ }).click();
+  await expect(page.getByText("Pipeline running from Review.")).toBeVisible();
+  await shot(page, "handoff-after", testInfo.project.name);
 });

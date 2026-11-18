@@ -42,8 +42,7 @@ import { defaultToolchainBinDir, toolchainRootDir } from "@orkestrator/toolchain
 import type { CommandContext } from "./commands-context.js";
 import { stopLocalServer } from "./commands-servers.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
-import { gitHubCli } from "./github-cli-binary.js";
-import { gitHubCliEnv, resolveGitHubToken } from "./github-credentials.js";
+import { gitHubCli, gitHubCliEnv, resolveGitHubToken } from "./git/index.js";
 import { runCommand } from "./shell.js";
 import { writeConfinedFile } from "./path-safety.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";

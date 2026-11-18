@@ -2,7 +2,7 @@
  * The Address → Verify handoff: what Verify reads about this round's Address
  * stage (`docs/architecture/review-preparation.md`).
  *
- * An Address session opened with a `fix-result` slot carries the marker
+ * An Address session opened with an `address-findings-result` slot carries the marker
  * `addressFindingsReportKind` and, once the backend accepts its result, a bounded copy
  * in `addressFindingsResult`; Verify reads that copy as an evidence frame. An Address
  * session without the marker (one started before the typed handoff) has no
@@ -46,5 +46,5 @@ export function verificationAddressFindingsReport(
   const address = roundAddressFindingsSession(pipeline);
   if (address?.addressFindingsReportKind === undefined || !address.addressFindingsResult)
     return undefined;
-  return { kind: "fix-result", result: address.addressFindingsResult };
+  return { kind: "address-findings-result", result: address.addressFindingsResult };
 }

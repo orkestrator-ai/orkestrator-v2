@@ -7,7 +7,7 @@ import { createEnvironment } from "./storage.js";
 import { runCommand } from "./shell.js";
 import { countUntrackedFileLines, localGitScanCacheStats } from "./local-git-scan-caches.js";
 import * as baselineGit from "./diff-baseline.js";
-import * as remoteGit from "./git-noninteractive-env.js";
+import * as remoteGit from "./git/noninteractive-env.js";
 import * as containerExec from "./commands-container-exec.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./public-api/test-support.js";
 

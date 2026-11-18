@@ -4,7 +4,7 @@ import {
   getGitHubPullRequestFiles,
   mapPullRequestFiles,
   parsePullRequestFilePatch,
-} from "../src/core/github-pull-request-files";
+} from "../src/core/git/github-pull-request-files";
 import {
   HEAD_SHA,
   REF,

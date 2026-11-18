@@ -173,7 +173,7 @@ function ExtensionStatusIcon({ status }: { status: backend.AgentExtensionItem["s
     return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />;
   }
   if (status === "failed") {
-    return <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />;
+    return <XCircle className="h-3.5 w-3.5 shrink-0 text-failure" />;
   }
   if (status === "pending") {
     return <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-500" />;
@@ -213,7 +213,7 @@ function ExtensionCollection({
         </span>
       </div>
       {error ? (
-        <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+        <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-failure">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>{error}</span>
         </div>
@@ -864,7 +864,7 @@ export function EnvironmentSettingsDialog({
                 onChange={handleNameChange}
                 placeholder="Environment name"
               />
-              {nameError && <p className="text-sm text-destructive">{nameError}</p>}
+              {nameError && <p className="text-sm text-failure">{nameError}</p>}
             </div>
             {isLocalEnvironment && (
               <div className="space-y-4">
@@ -1114,11 +1114,11 @@ export function EnvironmentSettingsDialog({
                     disabled={useGlobalDefaults}
                     placeholder={"github.com\nregistry.npmjs.org\napi.anthropic.com"}
                     rows={8}
-                    className={`font-mono text-sm ${domainErrors.length > 0 ? "border-red-500" : ""} ${useGlobalDefaults ? "opacity-50" : ""}`}
+                    className={`font-mono text-sm ${domainErrors.length > 0 ? "border-failure/60" : ""} ${useGlobalDefaults ? "opacity-50" : ""}`}
                   />
                 </div>
                 {domainErrors.length > 0 && (
-                  <div className="text-sm text-red-500 space-y-1">
+                  <div className="text-sm text-failure space-y-1">
                     {domainErrors.map((error, i) => (
                       <div key={i} className="flex items-center gap-1">
                         <XCircle className="h-3 w-3" />
@@ -1153,12 +1153,12 @@ export function EnvironmentSettingsDialog({
                         ) : result.valid ? (
                           <AlertCircle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" />
                         ) : (
-                          <XCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+                          <XCircle className="h-4 w-4 text-failure mt-0.5 shrink-0" />
                         )}
                         <div className="min-w-0">
                           <span className="font-mono text-xs break-all">{result.domain}</span>
                           {result.error && (
-                            <span className="text-red-500 text-xs block">{result.error}</span>
+                            <span className="text-failure text-xs block">{result.error}</span>
                           )}
                         </div>
                       </div>
@@ -1306,7 +1306,7 @@ export function EnvironmentSettingsDialog({
               </div>
             )}
             {portError && (
-              <div className="flex items-center gap-2 p-2 rounded-md bg-destructive/10 text-destructive text-sm">
+              <div className="flex items-center gap-2 p-2 rounded-md bg-destructive/10 text-failure text-sm">
                 <XCircle className="h-4 w-4 shrink-0" />
                 <span>{portError}</span>
               </div>
@@ -1481,7 +1481,7 @@ export function EnvironmentSettingsDialog({
               </Button>
             </div>
             {extensionsError && (
-              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-failure">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{extensionsError}</span>
               </div>
@@ -1491,14 +1491,15 @@ export function EnvironmentSettingsDialog({
               onValueChange={(value) => setActiveExtensionAgent(value as backend.AgentExtensionId)}
             >
               <TabsList
+                variant="pill"
                 aria-label="Agent extensions"
-                className="h-auto min-h-10 w-full flex-wrap justify-start rounded-xl border border-border/70 bg-muted/30 p-1 sm:w-fit"
+                className="w-full flex-wrap sm:w-fit"
               >
                 {AGENT_ORDER.map((agent) => (
                   <TabsTrigger
                     key={agent}
                     value={agent}
-                    className="h-8 min-w-0 flex-1 gap-2 px-4 text-xs data-[state=active]:bg-background data-[state=active]:text-foreground sm:min-w-32"
+                    className="min-w-0 gap-2 px-4 text-xs sm:min-w-32"
                   >
                     <AgentExtensionIcon agent={agent} className="h-4 w-4" />
                     {AGENT_EXTENSION_COPY[agent].label}

@@ -8,7 +8,7 @@ import { isHostIdle } from "@orkestrator/protocol/host-maintenance";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import type { PtyProcess } from "./pty.js";
-import { GitHubCliSelection } from "./github-cli-binary.js";
+import { GitHubCliSelection } from "./git/index.js";
 import {
   describeImageStatus,
   imageOlderThanBackend,

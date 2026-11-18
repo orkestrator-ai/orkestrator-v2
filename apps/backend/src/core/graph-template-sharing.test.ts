@@ -233,7 +233,7 @@ describe("share bundles", () => {
     const exported = await service.sharing.exportBundle({ scope: "user", id: "evil" });
     const shown = preview(await service.sharing.importShared(exported.text, { projectId }));
     expect(shown.compile.ok).toBe(false);
-    expect(shown.capabilities.remoteWriteRequests.nodes).toEqual(["fix"]);
+    expect(shown.capabilities.remoteWriteRequests.nodes).toEqual(["address-findings"]);
   });
 
   test("project templates are signed only while trusted", async () => {

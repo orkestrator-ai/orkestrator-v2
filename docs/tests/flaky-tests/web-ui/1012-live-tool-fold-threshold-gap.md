@@ -351,6 +351,84 @@ suite's own worker count does not decide it: it failed alone with one worker
 at load 28 and passed with four at load 22, which points at what else the
 host is doing. No assertion, timeout or skip changed.
 
+## Fold gap during fill-rule validation (2026-11-18)
+
+Mobile Chromium failed `a live group crossing the fold threshold folds into its line with no-preference motion` (`e2e/ToolGroupFold.spec.ts:127`). The last fold-gap assertion at line 195 measured 57 px against a 2 px limit. It passed on the runner retry.
+
+The aggregate command was `ORKESTRATOR_REVIEW_VALIDATION=1 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=9 ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=7200000 mise run test:logged -- --name browser -- mise run test:browser`. The nine-worker component suite completed with 1,783 passed, 155 skipped, and two retry passes among 1,940 cases. All 20 public-site cases passed. The branch base was `259e88d90c9cb3e6e24de95d8333dbc5a12cbef2` and the tested fix was `eac72b3b7`.
+
+The isolated owning spec command `ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name address-fill-rule-tool-fold-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx --no-install playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1 --retries=0 --output output/address-findings-00005/tool-fold-owner` passed in 184.4 s. `mise run flaky:recurrence` confirmed case 1012 is open on the observing base. The tested fix affects the design evidence page and the Claude tmux approval card. The failure occurred in the streaming transcript fixture. The cause remains open.
+
+## Fold gap during failure-colour validation (2026-11-18)
+
+On `replace-failure-token-cb2bfc48b3c1-r1` at `5f24ec961`, based on
+`259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`, mobile Chromium failed
+`a live group crossing the fold threshold folds into its line with no-preference motion`
+in `e2e/ToolGroupFold.spec.ts:195`. The maximum fold gap was 57 px on the first
+attempt and 97 px on the retry, above the 2 px limit.
+
+The aggregate was
+`ORKESTRATOR_REVIEW_VALIDATION=1 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=8 ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=5400000 mise run test:logged -- --name browser -- mise run test:browser`.
+The component suite reported 1,785 passed, 155 skipped, one failed and one
+flaky in 49.0 minutes, with eight workers. The log is
+`orkestrator-test-run.P4Cu8y/browser.log.gz` under the host temporary directory.
+
+The mobile owning spec reproduced the gap of 57 px with one worker and
+zero retries. It reported 19 passed, one failed in 93.7 s.
+
+```sh
+ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name review-browser-tool-fold -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts --workers 1 --retries 0 --project mobile-chromium --output output/address-findings-00002/tool-fold-browser ToolGroupFold.spec.ts
+```
+
+`mise run flaky:recurrence -- 1012 --base 259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`
+reported the case open. This run reproduced the gap in both configurations.
+
+## Recurrence (2026-11-18): Design 00016 review validation
+
+On Linux at `deb92c491`, based on `259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`,
+the five-worker component browser run (`ORKESTRATOR_E2E_HOST_NETWORK=1
+mise run test:logged -- --name browser -- mise run test:browser`) failed
+`a live group crossing the fold threshold folds into its line with no-preference motion`
+on mobile. The frame probe at `e2e/ToolGroupFold.spec.ts:170` measured a 6 px gap
+against the 2 px limit. The browser watchdog ended the component suite at
+30 minutes with 1,543 passed, 10 failed, 152 skipped, five interrupted and
+224 cases that had yet to run.
+
+The one-worker owner run in the loopback namespace (`mise run test:logged
+-- --name tool-group-fold-browser-isolation -- bun scripts/loopback-network.ts
+--free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config
+e2e/playwright.config.ts ToolGroupFold.spec.ts --workers=1
+--output output/playwright/tool-group-fold-review`) passed the mobile case
+and reproduced the same assertion failure at 7 px on desktop. The owner
+finished with 38 passed, one skipped and one failed in 147.5 s.
+`mise run flaky:recurrence -- 1012 --base 259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`
+reported the case open. Design 00016 changes the quote renderer and has
+no edits to the tool group's animation or its test.
+
+## Recurrence (2026-11-18, workflow vocabulary review)
+
+The component check started at `a1289718a` on base
+`b2c91abb94de8144c119aeccf4a31cf26b655d3b`. It ran with `mise run test:logged -- --name browser -- mise run test:browser`,
+five Chromium workers and no retries. The check reported 1,773 passed, 155
+skipped and four failed in 1,772.8 s. The case
+`a live group crossing the fold threshold folds into its line with no-preference motion`
+in `e2e/ToolGroupFold.spec.ts:127` measured gaps of 4 px on mobile and 9 px on
+desktop against a 2 px limit at line 170.
+
+The complete owner ran through `mise run test:logged -- --name
+4740-tool-fold-owner -- bun scripts/loopback-network.ts --free-port
+ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts
+e2e/ToolGroupFold.spec.ts --workers=1 --output
+output/playwright/workflow-phase-tool-fold-owner`. It finished with 37 passed,
+one skipped and two failed in 158.9 s, measuring 9 px on mobile at line 170 and
+41 px on desktop at line 149. A one-worker run that also included the
+StreamingTranscript owner exited successfully in 238.4 s. The gap remains
+reproducible even with one worker. These repairs do not touch the fold or
+transcript implementation.
+
+Failure logs are `/tmp/orkestrator-test-run.dLX8UW/browser.log.gz` and
+`/tmp/orkestrator-test-run.h5NAvH/4740-tool-fold-owner.log.gz`.
+
 ## Recurrence — 2026-11-18 (label casing review fixes)
 
 On macOS arm64, the mobile no-preference motion case at

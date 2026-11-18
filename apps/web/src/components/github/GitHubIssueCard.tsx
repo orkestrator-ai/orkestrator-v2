@@ -81,8 +81,8 @@ export function GitHubIssueCard({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "group rounded-lg border border-border/70 bg-card p-3 shadow-sm transition-[border-color,box-shadow,opacity]",
-        "hover:border-border hover:shadow-md",
+        "group rounded-lg border border-border/70 bg-card p-3 transition-[border-color,opacity]",
+        "hover:border-border",
         isDragging && "opacity-25",
         isOverlay && "w-[304px] rotate-1 border-primary/50 shadow-xl",
       )}

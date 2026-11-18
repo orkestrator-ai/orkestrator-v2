@@ -717,7 +717,7 @@ agents, models, defaults and base branch tip), `list_environments`,
 `get_tab_transcript`, `launch_environment`, `launch_job`,
 `send_prompt_to_tab`, `send_message`, `start_environment`,
 `stop_environment`, `get_repository_context`, the build pipeline tools,
-the Multi Review tools (custom fix and reviewer tabs included) and the worker
+the Multi Review tools (custom Address Findings and reviewer tabs included) and the worker
 surfaces `launch_terminal`, `open_worker_browser`, `edit_worker_tab`,
 `create_pr`, `resolve_conflicts`, `get_worker_changes`, `fork_worker`,
 `stop_worker_turn`, `list_worker_commands` and `run_worker_command` (see [coordinator.md](coordinator.md#worker-surfaces)), and the ticket tools

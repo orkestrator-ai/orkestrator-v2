@@ -2949,7 +2949,12 @@ describe("HierarchicalSidebar", () => {
     act(() => useUIChromeStore.getState().setEnvironmentSortMode("activity"));
     expect(screen.getByLabelText("1 environment")).toBeTruthy();
     expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Project One Home needs attention" }));
+    const activityHome = screen.getByRole("button", { name: "Project One Home needs attention" });
+    expect(within(activityHome).getByText("Project One Home — needs attention")).toBeTruthy();
+    const homeBell = activityHome.querySelector("svg");
+    expect(homeBell?.classList.contains("fill-amber-400/20")).toBe(true);
+    expect(homeBell?.classList.contains("text-amber-400")).toBe(true);
+    fireEvent.click(activityHome);
     expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
     environmentsValue = [
       { ...home, hasUnreadWork: false, agentActivityState: "working" },
@@ -2963,10 +2968,17 @@ describe("HierarchicalSidebar", () => {
     ];
     view.rerender(<HierarchicalSidebar />);
     expect(screen.queryByRole("button", { name: /Project One Home/ }) === null).toBe(true);
-    expect(screen.getByLabelText("0 waiting environments")).toBeTruthy();
+    const zeroCounter = screen.getByLabelText("0 waiting environments");
+    expect(within(zeroCounter).getByText("0")).toBeTruthy();
+    expect(zeroCounter.classList.contains("text-muted-foreground")).toBe(true);
+    const zeroBell = zeroCounter.querySelector("svg");
+    expect(zeroBell?.classList.contains("fill-amber-400/20")).toBe(true);
+    expect(zeroBell?.classList.contains("text-amber-400")).toBe(true);
     environmentsValue = [{ ...home, hasUnreadWork: false }, createdEnvironment];
     view.rerender(<HierarchicalSidebar />);
-    expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
+    const waitingBell = screen.getByLabelText("1 waiting environment").querySelector("svg");
+    expect(waitingBell?.classList.contains("fill-amber-400/20")).toBe(true);
+    expect(waitingBell?.classList.contains("text-amber-400")).toBe(true);
   });
 
   test("search excludes hidden homes and project deletion still includes them", async () => {

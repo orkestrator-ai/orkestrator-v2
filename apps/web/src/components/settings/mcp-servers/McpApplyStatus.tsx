@@ -32,7 +32,7 @@ const STATE_TEXT: Record<McpApplyState, string> = {
 };
 
 const TONE: Partial<Record<McpApplyState, string>> = {
-  failed: "text-red-300",
+  failed: "text-failure",
   "restart-required": "text-amber-300",
   "blocked-policy": "text-amber-300",
   queued: "text-blue-300",

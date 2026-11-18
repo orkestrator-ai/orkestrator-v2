@@ -319,7 +319,7 @@ describe("buildPipelineConfiguredDefaults", () => {
             reasoningEffort: "high",
           },
           reviewPreparation: { platform: "codex", model: "gpt-5.6" },
-          fixReviewIssues: { platform: "claude", model: "claude-sonnet-5" },
+          addressFindings: { platform: "claude", model: "claude-sonnet-5" },
           verify: {
             platform: "codex",
             model: "gpt-5.6",
@@ -473,7 +473,7 @@ describe("buildPipelineConfiguredDefaults", () => {
             codex: { model: "gpt-5.4", reasoningEffort: "medium" },
           },
           actionDefaults: {
-            fixReviewIssues: { platform: "codex", model: "gpt-5.6" },
+            addressFindings: { platform: "codex", model: "gpt-5.6" },
           },
         },
       }),

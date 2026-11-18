@@ -1,4 +1,5 @@
-import { buildStepKeyForPublicStep, PUBLIC_BUILD_STEPS } from "./public-api-inputs-build.js";
+import { BUILD_STEP_KEYS } from "./build-pipeline.js";
+import { BUILD_ACTION_INPUTS } from "./public-api-inputs-build.js";
 import { describe, expect, test } from "bun:test";
 import { PUBLIC_ACTION_NAMES, PUBLIC_ACTIONS, type PublicActionName } from "./public-api.js";
 import {
@@ -267,8 +268,8 @@ describe("public action input contract", () => {
   });
 });
 
-test("public build steps map Address Findings to the internal vocabulary", () => {
-  for (const step of PUBLIC_BUILD_STEPS) {
-    expect(buildStepKeyForPublicStep(step)).toBe(step === "address" ? "address-findings" : step);
-  }
+test("build.launch names its steps as the build does", () => {
+  const steps = BUILD_ACTION_INPUTS["build.launch"].input.properties.steps;
+  expect(Object.keys(steps?.properties ?? {})).toEqual([...BUILD_STEP_KEYS]);
+  expect(steps?.properties).not.toHaveProperty("address");
 });

@@ -208,7 +208,11 @@ test("another machine's project header sums its mail and shows its home's activi
   expect(within(header).getAllByLabelText("3 unread agent messages")).toHaveLength(1);
   expect(within(header).getByLabelText("Agent message delivery failed")).toBeTruthy();
 
-  fireEvent.click(within(header).getByRole("button", { name: "app Home needs attention" }));
+  const homeActivity = within(header).getByRole("button", { name: "app Home needs attention" });
+  const bell = homeActivity.querySelector("svg");
+  expect(bell?.classList.contains("fill-amber-400/20")).toBe(true);
+  expect(bell?.classList.contains("text-amber-400")).toBe(true);
+  fireEvent.click(homeActivity);
   await waitFor(() =>
     expect(useRemoteWorkspaceStore.getState().requests.a?.request).toMatchObject({
       projectId: "project-1",

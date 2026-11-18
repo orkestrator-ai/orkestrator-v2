@@ -10,7 +10,7 @@ import { recurringWorkMetrics } from "./recurring-work-metrics.js";
  * repeat the work: the line count of each settled untracked file, and that the
  * exclude file was ensured (docs/architecture/git-scan-caches.md).
  *
- * Process-wide on purpose, like `git-fsmonitor.ts`'s migrations: both scan paths
+ * Process-wide on purpose, like `git/fsmonitor.ts`'s migrations: both scan paths
  * (diff stats and Git scopes) read the same files, and every entry is checked
  * against the file's own stat before it is used. Bounded by worktree count and,
  * per worktree, by entries and estimated bytes. The diff stats owner drops a

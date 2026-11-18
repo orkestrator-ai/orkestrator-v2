@@ -161,13 +161,13 @@ describe("graphConnectionVerdict", () => {
     const result = verdict(
       { ...template, loops: [{ ...loop, carry: [] }] },
       { node: "verify", handle: "out:code" },
-      { node: "fix", handle: "in:code" },
+      { node: "rework", handle: "in:code" },
     );
     expect(result).toMatchObject({ ok: true, plan: { kind: "carry", loopId: loop.id } });
     const outside = verdict(
       { ...template, loops: [] },
       { node: "verify", handle: "out:code" },
-      { node: "fix", handle: "in:code" },
+      { node: "rework", handle: "in:code" },
     );
     expect(outside.ok).toBe(false);
     expect(!outside.ok && outside.reason).toContain("cycle");
@@ -253,10 +253,10 @@ describe("building report §9 shapes with canvas operations", () => {
   test("§9.2: the Build Pipeline's loop, from its nodes and plain edges, compiles", () => {
     const example = graphTemplateExample("build-pipeline-loop");
     // Start from the nodes and the edges that are not the loop's: no region,
-    // no carries, no firstIterationFrom, no fix → prepare edge.
+    // no carries, no firstIterationFrom, no rework → prepare edge.
     let template: GraphTemplateV1 = structuredClone(example);
     delete template.loops;
-    template.edges = template.edges.filter((edge) => edge.id !== "fix-prepare");
+    template.edges = template.edges.filter((edge) => edge.id !== "rework-prepare");
     for (const node of template.nodes) {
       for (const port of node.inputs ?? []) delete port.firstIterationFrom;
     }
@@ -274,7 +274,7 @@ describe("building report §9 shapes with canvas operations", () => {
     // A second producer into prepare.code from inside the loop: iteration 1 reads Build.
     template = connect(
       template,
-      { node: "fix", handle: "out:code" },
+      { node: "rework", handle: "out:code" },
       { node: "prepare", handle: "in:code" },
     ).template;
     const prepare = template.nodes.find((node) => node.id === "prepare")!;
@@ -286,12 +286,12 @@ describe("building report §9 shapes with canvas operations", () => {
     template = connect(
       template,
       { node: "verify", handle: "out:verdict" },
-      { node: "fix", handle: "in:feedback" },
+      { node: "rework", handle: "in:feedback" },
     ).template;
     template = connect(
       template,
       { node: "verify", handle: "out:code" },
-      { node: "fix", handle: "in:code" },
+      { node: "rework", handle: "in:code" },
     ).template;
     expect(template.loops![0]!.carry).toHaveLength(2);
     const result = compile(template);

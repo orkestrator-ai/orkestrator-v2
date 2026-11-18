@@ -1,4 +1,4 @@
-import { createGitHubConditionalCache } from "../src/core/github-pull-requests";
+import { createGitHubConditionalCache } from "../src/core/git/github-pull-requests";
 
 export const TOKEN = "github_pat_pull_request_secret";
 export const HEAD_SHA = "a".repeat(40);

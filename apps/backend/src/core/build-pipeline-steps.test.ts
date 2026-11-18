@@ -181,7 +181,7 @@ class RecordingProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : phase === "build" || phase === "rework"
+        : phase === "build" || phase === "rework" || phase === "package-preparation"
           ? TEST_REVIEW_PREPARATION
           : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
@@ -1732,7 +1732,9 @@ describe("per-step execution modes", () => {
         ok: true,
         provider: "codex",
         requestId,
-        value: (codex.phases.get(sessionId) === "build" || codex.phases.get(sessionId) === "rework"
+        value: (["build", "rework", "package-preparation"].includes(
+          codex.phases.get(sessionId) ?? "",
+        )
           ? TEST_REVIEW_PREPARATION
           : codex.phases.get(sessionId) === "review"
             ? {
@@ -1806,7 +1808,7 @@ describe("per-step execution modes", () => {
       const verifyDispatch = sent.find((entry) =>
         entry.prompt.startsWith("Verify the committed branch changes"),
       );
-      expect(verifyDispatch?.prompt).toContain("<address-fix-result-json>");
+      expect(verifyDispatch?.prompt).toContain("<address-findings-result-json>");
       expect(verifyDispatch?.prompt).toContain(TEST_ADDRESS_FINDINGS_RESULT.summary);
       expect(verifyDispatch?.prompt).not.toContain(
         "Fixed the off-by-one; reran src/app.test.ts: pass.",

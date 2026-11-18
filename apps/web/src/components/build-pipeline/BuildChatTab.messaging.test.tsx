@@ -963,23 +963,21 @@ describe("BuildChatTab agent messaging", () => {
     expect(screen.getByRole("button", { name: label })).toBeTruthy();
   });
 
-  test.each(["building", "reworking"] as const)("names validation during the %s phase", (phase) => {
+  test("names validation during package preparation", () => {
     pipelineStore()
       .getState()
       .replacePipeline({
         ...running,
-        phase,
+        phase: "preparing-package",
         validationRun: validationRun({ status: "running" }),
       });
     renderTab();
 
     const header = within(screen.getByTestId("build-pipeline-header"));
     expect(header.getByRole("button", { name: "Restart validation" })).toBeTruthy();
-    expect(
-      header.queryByRole("button", {
-        name: `Restart ${phase === "building" ? "build" : "rework"} stage`,
-      }) === null,
-    ).toBe(true);
+    expect(header.queryByRole("button", { name: "Restart review preparation" }) === null).toBe(
+      true,
+    );
   });
 
   test.each(["cancelled", "retry"] as const)(
@@ -989,7 +987,7 @@ describe("BuildChatTab agent messaging", () => {
         .getState()
         .replacePipeline({
           ...running,
-          phase: "reworking",
+          phase: "preparing-package",
           validationRun: validationRun({
             status: reason === "cancelled" ? "cancelled" : "running",
           }),
@@ -1001,17 +999,17 @@ describe("BuildChatTab agent messaging", () => {
     },
   );
 
-  test("names the dedicated preparation session during a fix", () => {
+  test("names the dedicated preparation session", () => {
     pipelineStore()
       .getState()
       .replacePipeline({
         ...running,
-        phase: "reworking",
+        phase: "preparing-package",
         sessions: [
           ...running.sessions,
           {
             ...running.sessions[0]!,
-            phase: "rework",
+            phase: "package-preparation",
             sessionKey: "preparation-key",
             sdkSessionId: "preparation-session",
             status: "running",

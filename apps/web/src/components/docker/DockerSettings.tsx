@@ -118,14 +118,14 @@ function MachineDockerSettings() {
   const available = windowMachine ? windowAvailable : remoteAvailable;
   if (available === null && probeError)
     return (
-      <p role="status" className="text-sm text-destructive">
+      <p role="status" className="text-sm text-failure">
         {probeError}
       </p>
     );
   if (available === null) return <p className="text-sm text-muted-foreground">Checking Docker…</p>;
   if (!available) {
     return (
-      <div className="flex max-w-3xl items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+      <div className="flex max-w-3xl items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-failure">
         <AlertCircle className="h-4 w-4 shrink-0" />
         <span>Docker is not running. Start Docker to see its resources and containers.</span>
       </div>
@@ -134,7 +134,7 @@ function MachineDockerSettings() {
   return (
     <>
       {probeError && (
-        <p role="status" className="text-sm text-destructive">
+        <p role="status" className="text-sm text-failure">
           {probeError}
         </p>
       )}
@@ -302,7 +302,7 @@ function DockerSettingsPanel() {
   const renderDockerSection = () => {
     if (error) {
       return (
-        <div className="flex items-center gap-2 p-3 rounded-md bg-destructive/10 text-destructive text-sm">
+        <div className="flex items-center gap-2 p-3 rounded-md bg-destructive/10 text-failure text-sm">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{error}</span>
         </div>
@@ -429,12 +429,12 @@ function DockerSettingsPanel() {
                 return (
                   <div
                     key={container.id}
-                    className={`flex items-center justify-between p-3 rounded-md ${isOrphaned ? "bg-red-500/10 border border-red-500/30" : "bg-zinc-800/50 border border-zinc-700"}`}
+                    className={`flex items-center justify-between p-3 rounded-md ${isOrphaned ? "bg-failure/10 border border-failure/30" : "bg-zinc-800/50 border border-zinc-700"}`}
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span
-                          className={`font-medium text-sm truncate ${isOrphaned ? "text-red-700 dark:text-red-400" : ""}`}
+                          className={`font-medium text-sm truncate ${isOrphaned ? "text-failure" : ""}`}
                         >
                           {container.name}
                           {project && (
@@ -444,7 +444,7 @@ function DockerSettingsPanel() {
                           )}
                         </span>
                         {isOrphaned && (
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-red-500/20 text-red-700 dark:text-red-400">
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-failure/20 text-failure">
                             {container.cleanupExclusion === "legacy-unadopted"
                               ? "Legacy"
                               : "Orphaned"}
@@ -476,9 +476,9 @@ function DockerSettingsPanel() {
                         </span>
                       )}
                       {!isRunning && container.oomKilled ? (
-                        <span className="text-xs text-destructive">Out of memory</span>
+                        <span className="text-xs text-failure">Out of memory</span>
                       ) : container.oomEvents ? (
-                        <span className="text-xs text-destructive">
+                        <span className="text-xs text-failure">
                           {container.oomEvents} out-of-memory{" "}
                           {container.oomEvents === 1 ? "kill" : "kills"}
                         </span>
@@ -522,7 +522,7 @@ function DockerSettingsPanel() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-7 w-7 text-red-600 hover:text-red-700 dark:hover:bg-red-900/30"
+                            className="h-7 w-7 text-failure hover:bg-destructive/15 hover:text-failure"
                             onClick={() => handleDeleteContainer(container.id)}
                             disabled={isOperating}
                             title="Delete container"

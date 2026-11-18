@@ -181,14 +181,14 @@ function ResultLine({ result }: { result: MachineResult }) {
       );
     case "rejected":
       return (
-        <span className="inline-flex items-start gap-1 text-destructive">
+        <span className="inline-flex items-start gap-1 text-failure">
           <X className="mt-0.5 h-3 w-3 shrink-0" />
           <span className="break-words">Key rejected: {result.message}</span>
         </span>
       );
     case "unreachable":
       return (
-        <span className="inline-flex items-start gap-1 text-destructive">
+        <span className="inline-flex items-start gap-1 text-failure">
           <WifiOff className="mt-0.5 h-3 w-3 shrink-0" />
           <span className="break-words">Unreachable: {result.message}</span>
         </span>
@@ -455,7 +455,7 @@ export function LinearConnectDialog({
             </fieldset>
           )}
           {error && (
-            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-failure">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span className="break-words">{error}</span>
             </div>

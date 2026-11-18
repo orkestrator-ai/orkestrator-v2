@@ -17,10 +17,10 @@
  * | `preparer` | `reviewModel`, else `addressFindingsModel` (the bespoke preparation session) |
  * | `reviewer` | the reviewers, in order, each with its lens |
  * | `consolidator` | `consolidationModel`, else the preparer |
- * | `fixer` | `addressFindingsModel` |
+ * | `addresser` | `addressFindingsModel` |
  * | `describer` | the saved pull request default (the bespoke PR tab's) |
  *
- * Parameters: `autoFix` (from `autoAddressFindings`), `autoPr` and `targetBranch`. The review instruction
+ * Parameters: `autoAddressFindings`, `autoPr` and `targetBranch`. The review instruction
  * is the optional `reviewInstruction` run input (`markdown@1`), which the
  * discovery review's built-in writes where today's reviewer prompt has it.
  * The run id is derived from the workflow id (`multi-review-<id>`), so a
@@ -119,7 +119,7 @@ export function multiReviewGraphRoles(
     preparer: binding(preparer),
     reviewer: workflow.reviewers.map((reviewer) => binding(reviewer)),
     consolidator: binding(workflow.consolidationModel ?? preparer),
-    fixer: binding(workflow.addressFindingsModel),
+    addresser: binding(workflow.addressFindingsModel),
   };
 }
 
@@ -128,8 +128,7 @@ export function multiReviewGraphParams(
   workflow: Pick<MultiReviewWorkflow, "autoAddressFindings" | "autoPr" | "targetBranch">,
 ): Record<string, string | boolean> {
   return {
-    // The template parameter keeps its graph name until to-do 4740 task 3.
-    autoFix: workflow.autoAddressFindings === true,
+    autoAddressFindings: workflow.autoAddressFindings === true,
     autoPr: workflow.autoPr === true,
     [MULTI_REVIEW_GRAPH_TARGET_BRANCH_PARAM]: workflow.targetBranch,
   };

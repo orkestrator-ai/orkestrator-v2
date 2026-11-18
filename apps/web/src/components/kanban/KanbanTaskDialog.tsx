@@ -209,9 +209,7 @@ const TASK_DIALOG_CONTENT_CLASS =
  */
 const TASK_VIEW_DIALOG_CONTENT_CLASS =
   "[--modal-max-width:72rem] h-[90vh] max-h-[90vh] overflow-hidden flex flex-col gap-0 p-0 sm:p-0";
-/** Workspace-tab styling: a 2px Signal Blue underline on the active tab (DESIGN.md). */
-const TICKET_VIEW_TAB_CLASS =
-  "h-9 flex-none rounded-none border-0 border-b-2 border-transparent px-1 pb-2 text-sm text-muted-foreground shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none dark:data-[state=active]:border-primary dark:data-[state=active]:bg-transparent";
+const TICKET_VIEW_TAB_CLASS = "h-9 flex-none px-1 pb-2";
 const KIND_OPTIONS = TICKET_KINDS.map((kind) => ({ value: kind, label: TICKET_KIND_LABELS[kind] }));
 const TASK_DIALOG_BODY_CLASS = "min-h-0 flex-1";
 const TASK_DIALOG_BODY_INNER_CLASS = "space-y-4 p-6";
@@ -1238,7 +1236,7 @@ export function KanbanTaskDialog({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                  className="h-7 w-7 text-muted-foreground hover:text-failure"
                   onClick={handleDelete}
                   aria-label="Delete task"
                 >
@@ -1271,10 +1269,7 @@ export function KanbanTaskDialog({
                 </DialogTitle>
               )}
               <div className="flex flex-wrap items-end gap-3">
-                <TabsList
-                  aria-label="Ticket view"
-                  className="h-auto gap-4 rounded-none bg-transparent p-0"
-                >
+                <TabsList variant="underline" aria-label="Ticket view" className="gap-4">
                   <TabsTrigger value="ticket" className={TICKET_VIEW_TAB_CLASS}>
                     <FileText aria-hidden />
                     Ticket

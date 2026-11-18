@@ -1,10 +1,12 @@
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
-import { MAX_BUILD_PIPELINE_ITERATIONS } from "@orkestrator/protocol/build-pipeline";
+import {
+  BUILD_STEP_KEYS,
+  MAX_BUILD_PIPELINE_ITERATIONS,
+} from "@orkestrator/protocol/build-pipeline";
 import {
   isBuildStepInstructions,
   MAX_BUILD_STEP_INSTRUCTIONS_BYTES,
 } from "@orkestrator/protocol/build-pipeline-stage-instructions";
-import { PUBLIC_BUILD_STEPS } from "@orkestrator/protocol/public-api-inputs-build";
 import type {
   PublicBuildPipelineActionResult,
   PublicBuildPipelineDetail,
@@ -27,7 +29,7 @@ import { parseSelection, reviewerLenses, SELECTION_HELP } from "./workflows.js";
  */
 
 /** `--step` and `--instructions` targets: the pipeline's steps and the review preparation. */
-const STAGES = [...PUBLIC_BUILD_STEPS, "preparation"] as const;
+const STAGES = [...BUILD_STEP_KEYS, "preparation"] as const;
 type Stage = (typeof STAGES)[number];
 
 interface StepInput {
@@ -451,7 +453,7 @@ export const buildCommands: CommandSpec[] = [
         connection: session.identity,
         human: keyValues([
           ...summaryLines(build),
-          ...PUBLIC_BUILD_STEPS.filter((key) => build.steps[key]).map((key): [string, unknown] => [
+          ...BUILD_STEP_KEYS.filter((key) => build.steps[key]).map((key): [string, unknown] => [
             key,
             stepText(build.steps[key]),
           ]),

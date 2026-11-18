@@ -607,7 +607,7 @@ describe("BuildChatTab reports and verdicts", () => {
   test("moves onto and past the Prepare node with the arrow keys", async () => {
     const packageSession: BuildPipeline["sessions"][number] = {
       ...pipeline.sessions[0]!,
-      phase: "rework",
+      phase: "package-preparation",
       sessionKey: "package-key",
       sdkSessionId: "package-session",
       label: REVIEW_PACKAGE_SESSION_LABEL,

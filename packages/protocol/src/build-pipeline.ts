@@ -183,6 +183,7 @@ export type BuildPhase =
   | "addressing-findings"
   | "verifying"
   | "reworking"
+  | "preparing-package"
   | "creating-pr"
   | "resolving-conflicts"
   | "paused"
@@ -190,21 +191,41 @@ export type BuildPhase =
   | "failed";
 
 export type ResumableBuildPhase = Exclude<BuildPhase, "paused" | "complete" | "failed">;
+/**
+ * The stage a pipeline session runs. `package-preparation` is the dedicated
+ * review-package preparation session ({@link REVIEW_PACKAGE_SESSION_LABEL}),
+ * which runs while the pipeline is `preparing-package`.
+ */
 export type PipelineSessionPhase =
-  "build" | "review" | "address-findings" | "verify" | "rework" | "pr" | "resolve-conflicts";
+  | "build"
+  | "review"
+  | "address-findings"
+  | "verify"
+  | "rework"
+  | "package-preparation"
+  | "pr"
+  | "resolve-conflicts";
 
-/** Durable handoff from an explicit UI restart to the background supervisor. */
+/**
+ * Durable handoff from an explicit UI restart to the background supervisor.
+ *
+ * Package preparation restarts as `review-package`, never as a `session`
+ * restart: its session needs the preparation prompt. `implementationPhase` is
+ * the round's implementation step (Build in the first round, Rework after
+ * it); the preparation and the validation it plans run `preparing-package`.
+ */
 export type PipelineRestartRequest =
-  | { kind: "session"; phase: PipelineSessionPhase }
+  | { kind: "session"; phase: Exclude<PipelineSessionPhase, "package-preparation"> }
   | { kind: "review-package"; implementationPhase: "build" | "rework" }
   | { kind: "validation"; implementationPhase: "build" | "rework" };
 
 /**
  * Durable handoff from an explicit UI skip to the background supervisor: the
- * stage that was stopped, whose successor the supervisor opens next.
+ * stage that was stopped, whose successor the supervisor opens next. Package
+ * preparation cannot be skipped: the review reads the package it prepares.
  */
 export type PipelineSkipRequest = {
-  phase: Exclude<PipelineSessionPhase, "pr" | "resolve-conflicts">;
+  phase: Exclude<PipelineSessionPhase, "pr" | "resolve-conflicts" | "package-preparation">;
 };
 
 /**
@@ -489,13 +510,16 @@ export function isPipelineIndependentReviewLabel(label: string): boolean {
 /**
  * Which configured step owns a session phase.
  *
- * Every phase maps to its own step except `rework`: it re-implements against
+ * Every phase maps to its own step except two. `rework` re-implements against
  * verification feedback, which is build work, and it has no launcher control of
  * its own. Falling back to a repository default there would ignore the harness
- * the user just chose for the build.
+ * the user just chose for the build. `package-preparation` runs under
+ * {@link BuildPipeline.reviewPreparation} when one is configured, and
+ * otherwise under the Address Findings step.
  */
 export function stepKeyForSessionPhase(phase: PipelineSessionPhase): BuildStepKey {
   if (phase === "rework") return "build";
+  if (phase === "package-preparation") return "address-findings";
   return phase;
 }
 
@@ -682,12 +706,13 @@ export function verificationCriterionResults(
 }
 
 /**
- * Display label the backend assigns to the dedicated review-package session.
+ * Display label the backend assigns to the dedicated review-package session,
+ * whose phase is `package-preparation`.
  *
- * Fan-out and review-preparation pipelines create a session with this label.
- * Single-review pipelines reuse the build or fix session instead, so callers
- * that need to recognize every preparation turn should use
- * {@link isReviewPackagePreparationSession}.
+ * Fan-out and review-preparation pipelines create that session every round;
+ * single-review pipelines reuse the build or rework session instead, and open
+ * the dedicated one only to prepare again. Callers that need to recognize
+ * every preparation turn should use {@link isReviewPackagePreparationSession}.
  */
 export const REVIEW_PACKAGE_SESSION_LABEL = "Package Preparation Session";
 
@@ -1044,7 +1069,7 @@ export interface PipelineSession {
    */
   addressFindingsReportKind?: PipelineAddressFindingsReportKind;
   /**
-   * The bounded copy of the `fix-result` this Address session submitted and
+   * The bounded copy of the `address-findings-result` this Address session submitted and
    * the backend accepted. Absent until then, on other phases, and on Address
    * sessions without {@link addressFindingsReportKind}.
    */
@@ -1200,8 +1225,8 @@ function isPipelineReviewIssueCounts(value: unknown): value is PipelineReviewIss
 /**
  * Whether this session is the turn that produced the review-package plan.
  *
- * The dedicated session is labelled {@link REVIEW_PACKAGE_SESSION_LABEL}. The
- * default single-review path reuses a build or fix session and records that
+ * The dedicated session runs in the `package-preparation` phase. The
+ * default single-review path reuses a build or rework session and records that
  * with {@link PipelineSession.producedReviewPackagePlan}. Older snapshots
  * without that field still fall back to live structured-request bookkeeping,
  * but only on the single-review path: fan-out and explicit review-preparation
@@ -1221,7 +1246,7 @@ export function isReviewPackagePreparationSession(
   pipeline?: Pick<BuildPipeline, "reviewers" | "steps" | "agentType" | "reviewPreparation">,
 ): boolean {
   if (!session) return false;
-  if (session.label === REVIEW_PACKAGE_SESSION_LABEL) return true;
+  if (session.phase === "package-preparation") return true;
   if (session.phase !== "build" && session.phase !== "rework") return false;
   if (session.producedReviewPackagePlan === true) return true;
   if (pipeline && (usesReviewFanout(pipeline) || pipeline.reviewPreparation)) {
@@ -1230,7 +1255,12 @@ export function isReviewPackagePreparationSession(
   return session.structuredRequestId !== undefined || session.structuredResultStatus !== undefined;
 }
 
-/** The active work in a build/fix phase that still holds a validation run. */
+/**
+ * The active work of package preparation once it planned a validation run:
+ * the run itself, or preparing again when the run was cancelled or a review
+ * retry asked for a new package. Both happen in the `preparing-package`
+ * phase, after the preparation session that planned the run.
+ */
 export function reviewValidationStage(
   pipeline: Pick<
     BuildPipeline,
@@ -1238,11 +1268,7 @@ export function reviewValidationStage(
   >,
   phase: ResumableBuildPhase | undefined,
 ): "validation" | "review-package" | null {
-  if (
-    !pipeline.validationRun ||
-    pipeline.reviewPackage ||
-    (phase !== "building" && phase !== "reworking")
-  ) {
+  if (!pipeline.validationRun || pipeline.reviewPackage || phase !== "preparing-package") {
     return null;
   }
   if (pipeline.reviewRetryRequested) return "review-package";
@@ -1646,6 +1672,7 @@ const BUILD_PHASES = new Set<BuildPhase>([
   "addressing-findings",
   "verifying",
   "reworking",
+  "preparing-package",
   "creating-pr",
   "resolving-conflicts",
   "paused",
@@ -1660,6 +1687,7 @@ const SESSION_PHASES = new Set<PipelineSessionPhase>([
   "address-findings",
   "verify",
   "rework",
+  "package-preparation",
   "pr",
   "resolve-conflicts",
 ]);
@@ -2246,7 +2274,8 @@ function isPipelineRestartRequest(value: unknown): value is PipelineRestartReque
   if (value.kind === "session") {
     return (
       Object.keys(value).every((key) => key === "kind" || key === "phase") &&
-      SESSION_PHASES.has(value.phase as PipelineSessionPhase)
+      SESSION_PHASES.has(value.phase as PipelineSessionPhase) &&
+      value.phase !== "package-preparation"
     );
   }
   return (
@@ -2262,7 +2291,8 @@ function isPipelineSkipRequest(value: unknown): value is PipelineSkipRequest {
     Object.keys(value).every((key) => key === "phase") &&
     SESSION_PHASES.has(value.phase as PipelineSessionPhase) &&
     value.phase !== "pr" &&
-    value.phase !== "resolve-conflicts"
+    value.phase !== "resolve-conflicts" &&
+    value.phase !== "package-preparation"
   );
 }
 

@@ -93,7 +93,7 @@ const ACTION_DEFINITIONS: Record<
       "Prepares the shared review package and consolidates findings for Multi Review and for build pipelines.",
     icon: <ScanSearch className="h-4 w-4" />,
   },
-  fixReviewIssues: {
+  addressFindings: {
     label: "Address review findings",
     description:
       "Addresses the consolidated findings after Multi Review and in every build pipeline.",

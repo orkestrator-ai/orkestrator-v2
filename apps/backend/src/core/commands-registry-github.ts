@@ -25,7 +25,7 @@ import {
   updateGitHubIssue,
   updateGitHubIssueComment,
   updateGitHubIssueStatus,
-} from "./github.js";
+} from "./git/index.js";
 import {
   asString,
   requireGitHubProject,

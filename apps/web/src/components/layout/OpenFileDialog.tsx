@@ -228,7 +228,7 @@ export function OpenFileDialog({ enabled = true }: { enabled?: boolean } = {}) {
           )}
 
           {canOpenFiles && !isLoading && error && (
-            <div className="px-3 py-10 text-center text-sm text-destructive">{error}</div>
+            <div className="px-3 py-10 text-center text-sm text-failure">{error}</div>
           )}
 
           {canOpenFiles && !isLoading && !error && results.length === 0 && (

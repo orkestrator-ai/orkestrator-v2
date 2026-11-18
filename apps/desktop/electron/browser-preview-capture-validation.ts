@@ -117,12 +117,16 @@ export function startCaptureInput(value: unknown): BrowserPreviewStartCaptureInp
     if (result.originalCaptureId !== undefined && !isWebAnnotationId(result.originalCaptureId)) {
       throw new Error("Expected an original capture ID");
     }
+    if (result.sampleUnstable !== undefined && typeof result.sampleUnstable !== "boolean") {
+      throw new Error("Expected a boolean unstable-region sampling flag");
+    }
     resultStart = {
       requestId: result.requestId,
       ...(result.masks !== undefined ? { masks: captureMasks(result.masks) } : {}),
       ...(typeof result.originalCaptureId === "string"
         ? { originalCaptureId: result.originalCaptureId }
         : {}),
+      ...(result.sampleUnstable === true ? { sampleUnstable: true } : {}),
     };
   } else if (result !== undefined) {
     throw new Error("Result details require the result purpose");

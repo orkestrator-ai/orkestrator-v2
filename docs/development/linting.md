@@ -267,7 +267,7 @@ new.
     `nodes/`, `change-tracking/`, `transcript-artifacts/`, `scheduled-jobs/`,
     `mcp-management/`, `public-api/`, `http-bridge/`, `web-annotations/`,
     `permission-rules/`, `self-improvement/`, `opencode2/`, `control-mcp/`,
-    `plan-usage/`, `features/`, `previews/`, `worktrees/`) are reached only through their
+    `plan-usage/`, `features/`, `previews/`, `worktrees/`, `git/`) are reached only through their
     `index.ts`, which re-exports by name (never `export *`). A new domain folder starts with an `index.ts`
     and a pattern in both the `apps/backend/src/**` and the `tests/unit/**`
     overrides. Where routing a leaf module through `index.ts` would close a
@@ -279,7 +279,9 @@ new.
     re-exporting a module from `index.ts` would itself close a cycle for the
     folder's other importers (`opencode2/container-server-lifecycle.ts`,
     `host-database-server.ts` and `provider-login.ts`, which reach the command
-    layer, and `worktrees/removal-reads.ts`, which reaches change tracking),
+    layer, `worktrees/removal-reads.ts`, which reaches change tracking, and
+    seven `git/` modules such as `git/pr-monitor-runtime.ts`, which reaches
+    the PR monitor commands),
     leave it out of `index.ts` and name it as an exception. The same
     goes for a domain's test support imported by a test-only entrypoint whose
     file name the test globs do not match (`previews/test-support.ts`, which

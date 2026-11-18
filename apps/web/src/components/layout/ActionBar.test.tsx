@@ -5588,7 +5588,7 @@ describe("ActionBar pull request actions", () => {
       name: "failed",
       summary: { passed: 3, total: 4, pending: 0 },
       label: "3 of 4 CI checks passed; 1 failed; all checks complete",
-      colorClass: "text-red-600",
+      colorClass: "text-failure",
       state: "failed",
     },
   ])("shows $name CI checks inside the View PR action", ({ summary, label, colorClass, state }) => {

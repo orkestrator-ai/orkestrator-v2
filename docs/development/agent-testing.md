@@ -4317,7 +4317,7 @@ mise run test:agent:coordinator --credential-source codex --scenario routing
    chooses by the change's size (the user's decision of 2026-11-14), so
    `review-handled` passes on either path and names it. `multi-review`: one
    Multi Review of that environment, and `review-auto-actions-off` then also
-   requires that the call does not set `autoFix` or `autoPr` to true and the
+   requires that the call does not set `autoAddressFindings` or `autoPr` to true and the
    workflow record has both off (the run's saved Multi Review defaults are off,
    so the record shows what the coordinator asked for); the harness cancels the
    review. `own-review`: no Multi Review, a successful `get_worker_changes` on

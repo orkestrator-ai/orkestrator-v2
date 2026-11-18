@@ -267,7 +267,7 @@ export function OpenCodeProvidersSection() {
           </Button>
         </div>
       ) : null}
-      {login.error ? <p className="text-xs text-destructive">{login.error}</p> : null}
+      {login.error ? <p className="text-xs text-failure">{login.error}</p> : null}
       {notice ? (
         <p role="status" className="flex items-center gap-2 text-xs text-success">
           <Check className="h-3.5 w-3.5" />
@@ -275,7 +275,7 @@ export function OpenCodeProvidersSection() {
         </p>
       ) : null}
       {error ? (
-        <p className="flex items-start gap-2 text-xs text-destructive">
+        <p className="flex items-start gap-2 text-xs text-failure">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           {error}
         </p>

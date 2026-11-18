@@ -11,7 +11,7 @@ import {
 import type { CommandContext } from "../src/core/commands-context";
 import { resetNetworkOwnerCache } from "../src/core/container-network-owner";
 import type { Environment } from "../src/core/models";
-import { formatGithubRangesSeed, githubRangesSeedFile } from "../src/core/github-ranges-cache";
+import { formatGithubRangesSeed, githubRangesSeedFile } from "../src/core/git/github-ranges-cache";
 import {
   tempDir,
   withDockerScript,

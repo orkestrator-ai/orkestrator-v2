@@ -282,7 +282,7 @@ function ValidationOutputModal({
               Loading output…
             </div>
           ) : error ? (
-            <div role="alert" className="whitespace-pre-wrap text-red-300">
+            <div role="alert" className="whitespace-pre-wrap text-failure">
               {error}
             </div>
           ) : combinedOutput ? (
@@ -593,7 +593,7 @@ export function ReviewValidationStatus({
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="-my-1 size-6 shrink-0 text-muted-foreground hover:text-destructive"
+                          className="-my-1 size-6 shrink-0 text-muted-foreground hover:text-failure"
                           aria-label={`Stop ${result.command}`}
                           title={
                             result.status === "running"
@@ -696,7 +696,7 @@ export function ReviewValidationStatus({
           </ul>
         </details>
       )}
-      {run.error && <p className="mt-2 text-destructive">{run.error}</p>}
+      {run.error && <p className="mt-2 text-failure">{run.error}</p>}
       <p className="mt-2 text-muted-foreground">
         Command output is saved as review evidence. Independent checks run concurrently when their
         resource requirements allow it.

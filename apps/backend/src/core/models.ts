@@ -170,7 +170,7 @@ export interface Environment extends Omit<
   prRecheckAfterAgentCompletionArmedAt?: string;
   /**
    * The merged PR whose notice the environment's open agent tabs have not been
-   * sent yet (`pr-merge-tab-notices.ts`). `updateEnvironment` sets it on the
+   * sent yet (`git/pr-merge-tab-notices.ts`). `updateEnvironment` sets it on the
    * write that records the merge and drops it when the PR changes; the sender
    * clears it once every tab has the notice.
    */

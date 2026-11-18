@@ -1371,7 +1371,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     );
   });
 
-  test("opens each story once and closes it with mouse and keyboard", async () => {
+  test("opens each story once and closes it with its close control", async () => {
     seedStores(
       featureWithStories({
         stories: [
@@ -1403,7 +1403,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     );
     expect(screen.getAllByRole("tab", { name: "Story One" })).toHaveLength(1);
 
-    fireEvent.keyDown(screen.getByRole("button", { name: "Close Story One" }), { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Close Story One" }));
     await waitFor(() =>
       expect(screen.queryByRole("tab", { name: "Story One" }) === null).toBe(true),
     );
@@ -1490,7 +1490,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     );
   });
 
-  test("truncates story tab titles only beyond 24 characters", async () => {
+  test("truncates visible story titles beyond 24 characters and exposes the full name", async () => {
     const exact = "123456789012345678901234";
     const long = `${exact}5`;
     seedStores(
@@ -1505,7 +1505,7 @@ describe("FeaturesView lifecycle and navigation", () => {
         name: `${exact} Story description 1 acceptance criteria`,
       }),
     );
-    expect(screen.getByRole("tab", { name: exact })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: exact }).textContent).toBe(exact);
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Stories" }), {
       button: 0,
       ctrlKey: false,
@@ -1515,7 +1515,7 @@ describe("FeaturesView lifecycle and navigation", () => {
         name: `${long} Story description 1 acceptance criteria`,
       }),
     );
-    expect(screen.getByRole("tab", { name: `${exact}...` })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: long }).textContent).toBe(`${exact}...`);
   });
 });
 

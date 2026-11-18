@@ -1,3 +1,5 @@
+import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
+
 /**
  * MIME identification and preview routing for transcript media and files.
  *
@@ -88,7 +90,7 @@ const EXTENSION_MIME: Record<string, string> = {
 };
 
 export function fileExtension(path: string): string {
-  const name = path.split("?")[0]?.split("#")[0]?.split(/[\\/]/).pop() ?? "";
+  const name = urlPathOrFilename(path).split(/[\\/]/).pop() ?? "";
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
@@ -101,7 +103,29 @@ export function dataUrlMime(url: string | undefined): string | null {
 
 /** MIME from trusted metadata: a data URL's declared type, else the extension. */
 export function declaredMime(path: string, fileUrl?: string): string {
-  return dataUrlMime(fileUrl) ?? EXTENSION_MIME[fileExtension(path)] ?? "application/octet-stream";
+  const inlineMime = dataUrlMime(fileUrl);
+  if (inlineMime) return inlineMime;
+  const localPath = fileUrl ? parseLocalFilePathFromUrl(fileUrl) : null;
+  return (
+    mimeForExtension(fileExtension(localPath ?? path)) ??
+    (fileUrl && /^https?:\/\//i.test(fileUrl)
+      ? mimeForExtension(fileExtension(fileUrl))
+      : undefined) ??
+    "application/octet-stream"
+  );
+}
+
+function urlPathOrFilename(reference: string): string {
+  if (!/^https?:\/\//i.test(reference)) return reference;
+  try {
+    return new URL(reference).pathname;
+  } catch {
+    return "";
+  }
+}
+
+function mimeForExtension(extension: string): string | undefined {
+  return Object.hasOwn(EXTENSION_MIME, extension) ? EXTENSION_MIME[extension] : undefined;
 }
 
 export function previewKindForMime(mime: string): FilePreviewKind {

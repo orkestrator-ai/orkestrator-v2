@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_OUTPUT_BYTES, MAX_TOOL_TITLE_BYTES } from "./config.js";
+import { join } from "node:path";
+import {
+  MAX_TOOL_ARGUMENT_BYTES,
+  MAX_TOOL_OUTPUT_BYTES,
+  MAX_TOOL_TITLE_BYTES,
+  workingDirectory,
+} from "./config.js";
 import { readTodos, renderToolCall } from "./tool-rendering.js";
 
 describe("renderToolCall", () => {
@@ -406,6 +412,104 @@ describe("computer use", () => {
       args: { actions: [], description: "x".repeat(MAX_TOOL_TITLE_BYTES * 2) },
     });
     expect(Buffer.byteLength(rendered.toolTitle ?? "")).toBeLessThanOrEqual(MAX_TOOL_TITLE_BYTES);
+  });
+});
+
+describe("screen recordings", () => {
+  const record = (mode: unknown, result?: unknown) =>
+    renderToolCall({ type: "recordScreen", args: { mode }, ...(result ? { result } : {}) });
+  const success = (value: unknown) => ({ status: "success", value });
+
+  test("a started recording says so and offers no file", () => {
+    const rendered = record("START_RECORDING", success({}));
+    expect(rendered.toolName).toBe("recordScreen");
+    expect(rendered.toolTitle).toBe("Start screen recording");
+    expect(rendered.toolArgs).toEqual({ mode: "START_RECORDING" });
+    expect(rendered.toolOutput).toBe("Recording started.");
+    expect(rendered.toolFile).toBeUndefined();
+  });
+
+  test("a saved recording reports its length and offers the file", () => {
+    const rendered = record(
+      "SAVE_RECORDING",
+      success({ path: "/workspace/recordings/run.mp4", recordingDurationMs: 12_345 }),
+    );
+    expect(rendered.toolTitle).toBe("Save screen recording");
+    expect(rendered.toolOutput).toBe("Recording saved (12.3 s) to /workspace/recordings/run.mp4");
+    expect(rendered.toolFile).toEqual({ filePath: "/workspace/recordings/run.mp4" });
+    // The video's length, not the call's: the card claims no run time.
+    expect(rendered.toolDurationMs).toBeUndefined();
+  });
+
+  test("a long recording's length reads in minutes", () => {
+    const rendered = record(
+      "SAVE_RECORDING",
+      success({ path: "/w/a.mp4", recordingDurationMs: 245_000 }),
+    );
+    expect(rendered.toolOutput).toBe("Recording saved (4 min 05 s) to /w/a.mp4");
+  });
+
+  test("a relative path resolves against the workspace", () => {
+    const rendered = record("SAVE_RECORDING", success({ path: "recordings/run.mp4" }));
+    expect(rendered.toolFile).toEqual({ filePath: join(workingDirectory, "recordings/run.mp4") });
+  });
+
+  test("a discarded recording is never offered, even with a path", () => {
+    const rendered = record(
+      "DISCARD_RECORDING",
+      success({ path: "/workspace/x.mp4", wasPriorRecordingCancelled: true }),
+    );
+    expect(rendered.toolTitle).toBe("Discard screen recording");
+    expect(rendered.toolOutput).toBe(
+      "A recording that was already running was cancelled first.\nRecording discarded. No video was kept.",
+    );
+    expect(rendered.toolFile).toBeUndefined();
+  });
+
+  test("a save that reported no path, or an unopenable one, says why", () => {
+    const missing = record("SAVE_RECORDING", success({ recordingDurationMs: 500 }));
+    expect(missing.toolOutput).toBe(
+      "Recording saved (0.5 s), but no file path was reported, so it cannot be opened here.",
+    );
+    expect(missing.toolFile).toBeUndefined();
+
+    const tooLong = record("SAVE_RECORDING", success({ path: `/${"a".repeat(5_000)}.mp4` }));
+    expect(tooLong.toolOutput).toBe("Recording saved, but its reported path is too long to open.");
+    expect(tooLong.toolFile).toBeUndefined();
+  });
+
+  test("a failed recording keeps its error and offers no file", () => {
+    const rendered = record("SAVE_RECORDING", {
+      status: "error",
+      error: { message: "Screen recording permission denied" },
+    });
+    expect(rendered.toolError).toBe("Screen recording permission denied");
+    expect(rendered.toolFile).toBeUndefined();
+  });
+
+  test("a running call has a title but no outcome yet", () => {
+    const rendered = record("SAVE_RECORDING");
+    expect(rendered.toolTitle).toBe("Save screen recording");
+    expect(rendered.toolOutput).toBeUndefined();
+    expect(rendered.toolFile).toBeUndefined();
+  });
+
+  test("malformed shapes degrade to a plain card instead of throwing", () => {
+    for (const call of [
+      { type: "recordScreen" },
+      { type: "recordScreen", args: { mode: 7 } },
+      { type: "recordScreen", args: { mode: "PAUSE" }, result: success("nope") },
+      { type: "recordScreen", args: {}, result: success({ path: 5, recordingDurationMs: "x" }) },
+    ]) {
+      const rendered = renderToolCall(call);
+      expect(rendered.toolName).toBe("recordScreen");
+      expect(rendered.toolTitle).toBe("Screen recording");
+      expect(rendered.toolFile).toBeUndefined();
+    }
+    // A mode this bridge does not know still offers a reported path.
+    expect(record("EXPORT", success({ path: "/w/b.webm" })).toolFile).toEqual({
+      filePath: "/w/b.webm",
+    });
   });
 });
 

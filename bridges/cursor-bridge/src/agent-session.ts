@@ -75,7 +75,7 @@ import {
   rewindTranscriptTo,
   startTranscriptEpoch,
 } from "./transcript.js";
-import { appendResumeFallbackNotice, applyInteractionUpdate } from "./translate.js";
+import { appendResumeFallbackNotice, applyInteractionUpdate, savedFilePart } from "./translate.js";
 import { trackTurnEvidence, type TurnEvidence } from "./change-evidence.js";
 import {
   assertSessionOpen,
@@ -1354,6 +1354,7 @@ function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): 
           imageSource: rendered.toolImage.imageSource,
         });
       }
+      if (rendered.toolFile) parts.push(savedFilePart(rendered.toolFile, messageId, callId));
     }
   }
   pushHistoricRow(state, row, planned);

@@ -41,6 +41,7 @@ import {
 import {
   base64Prefix,
   dataUrlBase64,
+  declaredMime,
   imageDimensionsFromBytes,
 } from "@/lib/chat/rich-markdown/media-types";
 import { MediaGalleryDialog } from "@/components/chat/rich/MediaGallery";
@@ -58,25 +59,6 @@ import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 const log = createLogger("web.chat");
-
-function isImageReference(pathOrUrl?: string): boolean {
-  if (!pathOrUrl) return false;
-  if (pathOrUrl.startsWith("data:image/")) return true;
-  const lower = pathOrUrl.toLowerCase();
-  return [
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".webp",
-    ".avif",
-    ".svg",
-    ".bmp",
-    ".ico",
-    ".tif",
-    ".tiff",
-  ].some((ext) => lower.includes(ext));
-}
 
 /** The decoded image would exceed the viewer's pixel ceiling. */
 class ImageTooLargeError extends Error {
@@ -234,7 +216,7 @@ export function FilePart({
   const ownerDropsUnreadable = Boolean(onLoadUnavailable);
 
   const displayName = filename || path.split(/[\\/]/).pop() || path || "file";
-  const isImage = alwaysImage || isImageReference(fileUrl) || isImageReference(path);
+  const isImage = alwaysImage || declaredMime(path, fileUrl).startsWith("image/");
   // Only the thumbnail-bearing surface gets the tile chrome. A part that is
   // never eagerly loaded would otherwise sit as an empty card until clicked.
   const showThumbnailTile = isImage && eagerPreview;

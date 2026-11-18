@@ -525,10 +525,7 @@ export function DesignLibrary({
         {announcement}
       </p>
       {listError && (
-        <div
-          role="alert"
-          className="flex items-center justify-between gap-2 text-sm text-destructive"
-        >
+        <div role="alert" className="flex items-center justify-between gap-2 text-sm text-failure">
           <span>Could not load designs: {listError}</span>
           <Button type="button" size="sm" variant="outline" onClick={() => void load(0)}>
             Retry
@@ -536,7 +533,7 @@ export function DesignLibrary({
         </div>
       )}
       {actionError && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-sm text-failure">
           {actionError}
         </p>
       )}

@@ -11,8 +11,7 @@ import type {
 } from "@orkestrator/protocol/coordinator";
 import { canFastForwardUpstream } from "@orkestrator/protocol/coordinator-upstream-merge";
 import { CommandFailedError, runCommand } from "./shell.js";
-import { runGitWithFsmonitorFallback } from "./git-fsmonitor.js";
-import { runRemoteGit } from "./git-noninteractive-env.js";
+import { runGitWithFsmonitorFallback, runRemoteGit } from "./git/index.js";
 import { isProjectHomeEnvironment, projectHomeBranchUpdates } from "./project-home-environment.js";
 import type { StorageService } from "./storage.js";
 

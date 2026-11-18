@@ -143,7 +143,7 @@ export function AgentSignInCard({
       </div>
 
       {error ? (
-        <p role="alert" className="mt-3 flex items-start gap-2 text-xs text-destructive">
+        <p role="alert" className="mt-3 flex items-start gap-2 text-xs text-failure">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           {error}
         </p>

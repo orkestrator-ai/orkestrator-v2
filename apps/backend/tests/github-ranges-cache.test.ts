@@ -14,7 +14,7 @@ import {
   prepareGithubRangesSeedBind,
   readGithubRangesSeed,
   validIpv4Cidr,
-} from "../src/core/github-ranges-cache";
+} from "../src/core/git/github-ranges-cache";
 import { CommandFailedError } from "../src/core/shell";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { writeGithubRangesSeed } from "../scripts/github-ranges-seed";

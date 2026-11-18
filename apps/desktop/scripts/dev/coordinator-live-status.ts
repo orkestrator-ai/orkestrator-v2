@@ -177,7 +177,7 @@ export function statusReviewPrompt(probe: StatusProbe): string {
   return [
     HARNESS_PREAMBLE,
     "",
-    `1. Call the Orkestrator launch_multi_review tool once with a fresh requestId, environmentId "${probe.revieweeEnvironmentId}", autoFix false and autoPr false. Leave out reviewers, reviewModel, fixModel, targetBranch and reviewInstruction so the saved defaults apply.`,
+    `1. Call the Orkestrator launch_multi_review tool once with a fresh requestId, environmentId "${probe.revieweeEnvironmentId}", autoAddressFindings false and autoPr false. Leave out reviewers, reviewModel, addressFindingsModel, targetBranch and reviewInstruction so the saved defaults apply.`,
     "2. Then finish this turn at once with a one-line summary.",
     "",
     "Later turns:",

@@ -89,7 +89,7 @@ export function useGraphRunCodeRewind(
         </AlertDialogHeader>
         <div className="flex min-w-0 flex-col gap-3 text-sm">
           {request?.error ? (
-            <p role="alert" className="text-destructive">
+            <p role="alert" className="text-failure">
               {request.error}
             </p>
           ) : !preview ? (
@@ -97,7 +97,7 @@ export function useGraphRunCodeRewind(
           ) : (
             <>
               {preview.blocked ? (
-                <p role="alert" className="text-destructive">
+                <p role="alert" className="text-failure">
                   {preview.blocked}
                 </p>
               ) : null}

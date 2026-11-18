@@ -316,6 +316,115 @@ daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
 
+## VPNKit host loopback in the reachability check (8305) (2026-11-18)
+
+To-do 8305 (retired on 2026-11-18; read it with `git show
+b2c91abb9:docs/todo/containers-and-environments/8305-vpnkit-host-loopback-address.md`):
+the backend's container host reachability check never probed VPNKit's host
+loopback address, `192.168.65.2`
+([found on 2026-11-17](#rootless-name-checks-and-restarts-on-pasta-and-vpnkit-2026-11-17)),
+so a rootless daemon on RootlessKit's VPNKit driver with host loopback
+enabled was reported `blocked`. The initial implementation added it as the
+third candidate (after `10.0.2.2` and `10.0.2.1`) and used HTTP 405 for
+candidate selection. The subsequent review fix requires a signed challenge
+from the backend on both probe networks before selecting a candidate
+([container lifecycle](../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)).
+Run in worktree `orkestrator-v2-20261118-010826-536a339f5f4d` from `main` at
+`b2c91abb9` with the change applied.
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8-arch1-3, x86_64), the same
+  static `vpnkit` at `~/.local/bin/vpnkit` (`vpnkit --version` prints
+  `7f0eff0dd99b576c5474de53b4454a157c642834`) and `pasta` from the `passt`
+  package as on 2026-11-17. The host's rootful daemon was only read, for the
+  images; its firewall and network were not touched, and nothing was pulled.
+- **Daemons:** disposable host rootless daemons from `mise run
+  docker:disposable` (Engine 29.9.2, RootlessKit 3.3.0 with
+  `--detach-netns`, builtin port driver, pool `172.30.0.0/16` as /24s), each
+  stopped with `docker:disposable -- stop` afterwards:
+  `v8305` (`--net vpnkit --host-loopback`, with
+  `orkestrator-v2:dev-104151c15db8`,
+  `sha256:7d43f9a8e7cbfe0a70f637c97f439905e31f8d734316e89a29409ee4743dde11`,
+  capabilities `egress-gateway=1`, `egress-filter=1`, `network-policy=3`),
+  then, with only `bash:3.2` (Alpine, busybox `wget`) copied in as the probe
+  image: `p8305` (pasta, `--host-loopback`), `g8305` (gvisor-tap-vsock,
+  `--host-loopback`), `s8305` (slirp4netns 1.3.3, `--host-loopback`), `d8305`
+  (VPNKit, host loopback refused) and `r8305` (slirp4netns, refused).
+- **The check:** a one-off harness ran the production `AgentToolsServer` on
+  the wildcard address and an ephemeral port with the production Docker peer
+  filter, on a throwaway data directory, and the real
+  `ContainerHostReachabilityService.check("manual")` against it. The pinned
+  busybox probe image could not be copied in (the host holds it by digest
+  only), so the harness refused `docker pull` and the check used its fallback
+  image, the path a host that cannot pull takes. On `v8305` it ran once with
+  the protocol file from `main` (before) and once with the change (after).
+
+| Daemon | `host-gateway` | `10.0.2.2` | `10.0.2.1` | `192.168.65.2` | Verdict | `hostAddress` | Elapsed |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| VPNKit, host loopback, before | refused | timeout | timeout | not probed | `blocked` | none | 11.8 s |
+| VPNKit, host loopback, after | refused | timeout | timeout | **405** | `reachable` | `192.168.65.2` | 12.3 s |
+| pasta, host loopback | refused | **405** | not probed | not probed | `reachable` | `10.0.2.2` | 1.3 s |
+| gvisor-tap-vsock, host loopback | refused | unreachable | **405** | not probed | `reachable` | `10.0.2.1` | 5.0 s |
+| slirp4netns, host loopback | refused | **405** | not probed | not probed | `reachable` | `10.0.2.2` | 1.2 s |
+| VPNKit, refused | refused | timeout | timeout | unreachable | `blocked` | none | 15.4 s |
+| slirp4netns, refused | refused | unreachable | unreachable | timeout | `blocked` | none | 10.3 s |
+
+  Each cell is both probes, from the default bridge and from a temporary
+  environment-style network, which agreed every time. Every answer the
+  server gave arrived from the peer `127.0.0.1`. With host loopback refused
+  the verdict stays `blocked` with the rootless remediation; the extra
+  `192.168.65.2` probe adds up to one probe timeout (5 s) to that verdict on
+  slirp4netns.
+- **Agent tools from a container on VPNKit.** On `v8305`, with
+  `RUN_LIVE_DOCKER_TESTS=1`, the image above, the daemon's `env` variables
+  and `TMPDIR` on the home filesystem, through `test:logged` with
+  `--parallel=1` and a JUnit report:
+
+  | Suite | Result |
+  | --- | --- |
+  | Live network (`container-live-network.test.ts`, C22, C24, C26) | **5 pass, 0 fail, 52 assertions**, 48.2 s; C22's live case 21.8 s, its host check `reachable` |
+  | Rootless host loopback (`container-live-rootless-host-loopback.test.ts`) | **1 pass, 66 assertions**, 46.5 s |
+
+  The rootless host-loopback suite no longer assumes `10.0.2.2`: it takes the
+  address the check chose, which was `192.168.65.2`. Its report: restricted
+  runtimes behind the egress gateway and with an in-container firewall
+  reached the named service port by `host.docker.internal` and by
+  `192.168.65.2` (200) and nothing else (curl 7 for the other loopback
+  listener and the loopback-bound gateway, by name or address); the full
+  runtime reached every loopback listener (the gateway answering 401, or 421
+  to the `host.docker.internal` Host header); both listeners saw only
+  `127.0.0.1`; runtime root could rewrite the in-container firewall (401
+  afterwards) but not the gateway's (curl 7). This initial run used stand-ins
+  that answered a non-POST `/mcp` with 405. The live network suite's stand-in
+  now also signs challenges, and the host-loopback suite uses the production
+  agent tools listener.
+- **An existing container's alias.** On `v8305`, a container created with
+  `--add-host host.docker.internal:192.168.65.2`, restarted with `docker
+  restart`, then passed to `ensureContainerAgentToolsHost` with no host
+  address (no check has answered): before the change the alias was rewritten
+  to the namespace bridge `172.30.0.1`, which refuses; after it,
+  `192.168.65.2` was kept.
+- **Cleanup.** Before each `stop` the daemon held no container, custom
+  network or volume; `docker:disposable -- status` reported no instance
+  afterwards. No provider turns, credentials, app profile or real data
+  directory were used.
+- **Not covered:** arm64; the peer-evidence script
+  (`agent-tools-peer-evidence.ts`, which needs the busybox image) on VPNKit;
+  a daemon restart with the VPNKit alias in place (the alias case above
+  restarted the container, not the daemon); and a LAN host at
+  `192.168.65.2` answering on the agent tools port, which only the unit tests
+  cover.
+
+**Review follow-up (2026-11-18).** On disposable VPNKit and slirp4netns
+daemons on beelink with the same environment image, the production agent tools
+listener and the pinned BusyBox probe selected VPNKit's `192.168.65.2` with
+signed replies on both networks. The VPNKit host-loopback and live network
+suites passed. A restricted workload used a throwaway bearer over
+`host.docker.internal` to complete `tools/list` against the production listener.
+With slirp4netns host loopback refused, discovery reported `blocked` with no
+explicit host address, the live loopback-refused suite passed, and a disposable
+container with a stale `192.168.65.2` mapping resolved the namespace gateway
+after alias repair.
+
 ## Rootless name checks and restarts on pasta and VPNKit (2026-11-17)
 
 To-dos [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
@@ -425,10 +534,11 @@ gvisor-tap-vsock on 2026-11-11.
 
   So `10.0.2.2` does not answer on VPNKit, as on 2026-11-04, because
   VPNKit's network is `192.168.65.0/24` and its host loopback is
-  `192.168.65.2`. The backend's reachability check probes only `10.0.2.2`
+  `192.168.65.2`. The backend's reachability check probed only `10.0.2.2`
   and `10.0.2.1`, so on a VPNKit daemon with host loopback enabled it
-  reports `blocked` although the host answers. That is a new defect,
-  [8305](../todo/containers-and-environments/8305-vpnkit-host-loopback-address.md);
+  reported `blocked` although the host answered. That was a new defect,
+  8305, fixed on 2026-11-18
+  ([its run](#vpnkit-host-loopback-in-the-reachability-check-8305-2026-11-18));
   the backend's check itself was not run in this session. Refusing host
   loopback on VPNKit does block `192.168.65.2`, so nothing is open by
   default. On pasta, `10.0.2.2` is the host loopback address when it is
@@ -447,7 +557,8 @@ gvisor-tap-vsock on 2026-11-11.
 - **Not covered:** arm64, `live-restore` on with pasta or VPNKit, a real
   addressed upstream on rootless (Docker named its upstream through
   `host(...)` on both drivers), and the backend's reachability check on
-  VPNKit with host loopback (8305). No provider turns, credentials or app
+  VPNKit with host loopback (8305, since
+  [run on 2026-11-18](#vpnkit-host-loopback-in-the-reachability-check-8305-2026-11-18)). No provider turns, credentials or app
   profile were used.
 
 ## Container state signals on a firewalled Linux Engine host (2026-11-17)

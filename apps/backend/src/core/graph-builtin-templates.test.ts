@@ -259,7 +259,7 @@ const ROLE_KEYS = [
   "review",
   "review2",
   "reviewPreparation",
-  "fixReviewIssues",
+  "addressFindings",
   "verify",
   "pr",
   "resolve",
@@ -342,7 +342,7 @@ describe("Multi Review template ↔ multi-review-service", () => {
     expect(nodeResultKinds(plan, "consolidate")).toEqual([
       MULTI_REVIEW_STEP_TURNS.consolidate.result,
     ]);
-    expect(nodeResultKinds(plan, "fix")).toEqual([
+    expect(nodeResultKinds(plan, "address-findings")).toEqual([
       MULTI_REVIEW_STEP_TURNS["address-findings"].result,
     ]);
     expect(nodeResultKinds(plan, "describe-pr")).toEqual([]);
@@ -366,10 +366,10 @@ describe("Multi Review template ↔ multi-review-service", () => {
     expect(nodeTurn(plan, "consolidate")).toBe(
       MULTI_REVIEW_STEP_TURNS.consolidate.readOnly ? "read-only" : "write",
     );
-    // The Fix is an interactive build-mode tab the user can talk to.
+    // Address Findings is an interactive build-mode tab the user can talk to.
     expect(MULTI_REVIEW_INTERACTIVE_ADDRESS_FINDINGS.mode).toBe("build");
-    expect(nodeTurn(plan, "fix")).toBe("write");
-    expect(agent(plan, "fix").askHuman).toBe(
+    expect(nodeTurn(plan, "address-findings")).toBe("write");
+    expect(agent(plan, "address-findings").askHuman).toBe(
       MULTI_REVIEW_INTERACTIVE_ADDRESS_FINDINGS.interactionPolicy ===
         INTERACTIVE_AGENT_INTERACTION_POLICY,
     );
@@ -383,7 +383,7 @@ describe("Multi Review template ↔ multi-review-service", () => {
     expect(reports.collect).toEqual({ ...REVIEW_FANOUT_FAN_IN });
   });
 
-  test("auto-fix and auto-PR routing", () => {
+  test("auto Address Findings and auto-PR routing", () => {
     for (const autoFix of [false, true]) {
       for (const autoPr of [false, true]) {
         for (const report of FINDINGS) {
@@ -398,15 +398,15 @@ describe("Multi Review template ↔ multi-review-service", () => {
             else if (addressFindingsResultCompletes({ complete })) queueAutoPr(workflow);
             const engine = { fix: fixes, pr: workflow.autoPrLaunch?.state === "pending" };
             const ran = route(plan, {
-              params: { autoFix, autoPr },
-              values: { "consolidate.report": report, "fix.result": { complete } },
+              params: { autoAddressFindings: autoFix, autoPr },
+              values: { "consolidate.report": report, "address-findings.result": { complete } },
             });
             expect({
               autoFix,
               autoPr,
               report,
               complete,
-              fix: ran.has("fix"),
+              fix: ran.has("address-findings"),
               pr: ran.has("pr"),
             }).toEqual({
               autoFix,
@@ -434,13 +434,13 @@ describe("Multi Review template ↔ multi-review-service", () => {
       expect({
         reviewers: rows.reviewers.map(sourceOf),
         preparer: sourceOf(rows.reviewModel),
-        fixer: sourceOf(rows.addressFindingsModel),
+        addresser: sourceOf(rows.addressFindingsModel),
       }).toEqual({
         reviewers: rows.reviewers.map((_, index) =>
           roleSource(roles.get("reviewer")!, index, set, additional),
         ),
         preparer: roleSource(roles.get("preparer")!, 0, set, additional),
-        fixer: roleSource(roles.get("fixer")!, 0, set, additional),
+        addresser: roleSource(roles.get("addresser")!, 0, set, additional),
       });
       // Consolidation uses the preparation model unless the launch picks one.
       expect(roles.get("consolidator")!.defaultsFrom).toEqual(roles.get("preparer")!.defaultsFrom);
@@ -512,7 +512,7 @@ describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
   });
 
   test("result kinds per stage, for a panel run", () => {
-    // The default launch has two reviewers, so Build and Fix leave the package
+    // The default launch has two reviewers, so Build and Rework leave the package
     // to the preparation session and submit nothing themselves.
     expect(usesPackagePreparationSession(panel)).toBe(true);
     for (const id of plan.order) {
@@ -577,7 +577,11 @@ describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
   test("routing after review", () => {
     for (const report of FINDINGS) {
       const ran = route(plan, { values: { "consolidate.report": report } });
-      expect({ report, address: ran.has("address"), verify: ran.has("verify") }).toEqual({
+      expect({
+        report,
+        address: ran.has("address-findings"),
+        verify: ran.has("verify"),
+      }).toEqual({
         report,
         address: stageAfterReview(report).sessionPhase === "address-findings",
         verify: true,
@@ -617,12 +621,12 @@ describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
     expect(loopStops).toEqual([verdicts[3]!]);
   });
 
-  test("Fix runs from the second round", () => {
+  test("Rework runs from the second round", () => {
     expect(buildPipelineStage("rework").round).toBe("later");
     expect(loop.laterOnly).toEqual(nodesFor(plan, stages, "rework"));
     const values = { "consolidate.report": findings(0, 0) };
-    expect(route(plan, { iteration: 1, values }).has("fix")).toBe(false);
-    expect(route(plan, { iteration: 2, values }).has("fix")).toBe(true);
+    expect(route(plan, { iteration: 1, values }).has("rework")).toBe(false);
+    expect(route(plan, { iteration: 2, values }).has("rework")).toBe(true);
   });
 
   test("routing after Ship: conflicts open conflict resolution", () => {
@@ -656,7 +660,7 @@ describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
   });
 
   test("nodes share a role exactly when their stages share a step's settings and instructions", () => {
-    // Fix runs under Build's step; preparation and consolidation share the
+    // Rework runs under Build's step; preparation and consolidation share the
     // preparation step; each reviewer reads its own `reviewers` entry.
     const settingsOf = (stage: BuildPipelineStage) =>
       stage.key === "preparation" || stage.key === "consolidation"
@@ -688,7 +692,7 @@ describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
       expect({
         reviewers: defaults.reviewers.map(source),
         preparer: source(defaults.reviewPreparation),
-        fixer: source(defaults.steps["address-findings"]),
+        addresser: source(defaults.steps["address-findings"]),
         verifier: source(defaults.steps.verify),
         describer: source(defaults.steps.pr),
         resolver: source(defaults.steps["resolve-conflicts"]),
@@ -697,7 +701,7 @@ describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
           roleSource(roles.get("reviewer")!, index, set, additional),
         ),
         preparer: roleSource(roles.get("preparer")!, 0, set, additional),
-        fixer: roleSource(roles.get("fixer")!, 0, set, additional),
+        addresser: roleSource(roles.get("addresser")!, 0, set, additional),
         verifier: roleSource(roles.get("verifier")!, 0, set, additional),
         describer: roleSource(roles.get("describer")!, 0, set, additional),
         resolver: roleSource(roles.get("resolver")!, 0, set, additional),

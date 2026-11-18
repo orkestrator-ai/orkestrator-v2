@@ -272,7 +272,7 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
               </div>
             ) : null}
             {error ? (
-              <p role="alert" className="text-destructive">
+              <p role="alert" className="text-failure">
                 {error}
               </p>
             ) : null}

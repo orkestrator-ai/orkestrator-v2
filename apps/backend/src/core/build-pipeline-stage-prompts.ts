@@ -204,6 +204,10 @@ export class BuildPipelineStagePrompts {
         images: pipeline.taskSnapshot.images,
       };
     }
+    if (phase === "package-preparation") {
+      // `startReviewPackagePreparation` supplies this stage's prompt and schema.
+      throw new Error("Package preparation has no default stage prompt");
+    }
     if (phase === "pr") {
       if (pipeline.delivery?.policy === "push-no-pr") {
         const forcePush = forcePushUpstream(pipeline);

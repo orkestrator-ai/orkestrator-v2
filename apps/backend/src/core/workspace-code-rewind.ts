@@ -26,7 +26,7 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import { isGraphRunTerminal } from "@orkestrator/protocol/graphs/run";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
-import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
+import { retryGitWithoutFsmonitorOnTimeout } from "./git/index.js";
 import type { Environment, PersistedBuildPipeline } from "./models.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 

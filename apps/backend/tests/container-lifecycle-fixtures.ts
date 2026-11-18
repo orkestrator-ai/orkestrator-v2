@@ -7,7 +7,7 @@ import type { CommandContext } from "../src/core/commands-context.js";
 import type { Environment } from "../src/core/models.js";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks.js";
 import { BackendRuntime } from "../src/core/backend-runtime.js";
-import { githubRangesSeedFile } from "../src/core/github-ranges-cache.js";
+import { githubRangesSeedFile } from "../src/core/git/github-ranges-cache.js";
 
 /**
  * Small, dependency-free fixtures for container lifecycle suites. They avoid

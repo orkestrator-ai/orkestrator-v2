@@ -421,7 +421,7 @@ export function BugReportSheet({ scope }: { scope?: NodeScope | null } = {}) {
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-destructive"
+                  className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-failure"
                   onClick={() => {
                     if (confirmDiscard) void discard();
                     else setConfirmDiscard(true);
@@ -576,7 +576,7 @@ export function BugReportSheet({ scope }: { scope?: NodeScope | null } = {}) {
 
         <div className="relative min-h-0 flex-1">
           {loadError ? (
-            <div className="grid h-full place-items-center p-6 text-center text-sm text-destructive">
+            <div className="grid h-full place-items-center p-6 text-center text-sm text-failure">
               <div className="space-y-3">
                 <p>{loadError}</p>
                 <Button

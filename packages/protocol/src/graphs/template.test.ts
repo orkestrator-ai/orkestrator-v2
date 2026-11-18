@@ -343,7 +343,8 @@ const GRAMMAR_CASES: Case[] = [
   },
   {
     name: "predicate path grammar",
-    edit: (t) => (node(t, "fix").when = { path: "params..autoFix", op: "exists" }),
+    edit: (t) =>
+      (node(t, "address-findings").when = { path: "params..autoAddressFindings", op: "exists" }),
     path: "nodes[5].when.path",
     code: "pattern",
   },
@@ -808,14 +809,15 @@ const BOUND_CASES: Case[] = [
   },
   {
     name: "field path length",
-    edit: (t) => (node(t, "fix").when = { path: `a${"b".repeat(B.maxPathChars)}`, op: "exists" }),
+    edit: (t) =>
+      (node(t, "address-findings").when = { path: `a${"b".repeat(B.maxPathChars)}`, op: "exists" }),
     path: "nodes[5].when.path",
     code: "too_long",
   },
   {
     name: "field path segments",
     edit: (t) =>
-      (node(t, "fix").when = {
+      (node(t, "address-findings").when = {
         path: repeat(B.maxPathSegments + 1, () => "a").join("."),
         op: "exists",
       }),
@@ -1106,19 +1108,19 @@ const SHAPE_CASES: Case[] = [
   },
   {
     name: "continue session without a source",
-    edit: (t) => (node(t, "fix").session = { mode: "continue" }),
+    edit: (t) => (node(t, "address-findings").session = { mode: "continue" }),
     path: "nodes[5].session.from",
     code: "required",
   },
   {
     name: "unknown session mode",
-    edit: (t) => (node(t, "fix").session = { mode: "resume" }),
+    edit: (t) => (node(t, "address-findings").session = { mode: "resume" }),
     path: "nodes[5].session.mode",
     code: "enum",
   },
   {
     name: "fresh session with a source",
-    edit: (t) => (node(t, "fix").session = { mode: "fresh", from: "plan" }),
+    edit: (t) => (node(t, "address-findings").session = { mode: "fresh", from: "plan" }),
     path: "nodes[5].session.from",
     code: "unknown_field",
   },
@@ -1341,7 +1343,7 @@ const SHAPE_CASES: Case[] = [
   {
     name: "duplicate loop member",
     key: "build-pipeline-loop",
-    edit: (t) => t.loops[0].nodes.push("fix"),
+    edit: (t) => t.loops[0].nodes.push("rework"),
     path: "loops[0].nodes[7]",
     code: "duplicate",
   },
@@ -1411,7 +1413,7 @@ const SHAPE_CASES: Case[] = [
   },
   {
     name: "duplicate parameter key",
-    edit: (t) => (t.parameters[1].key = "autoFix"),
+    edit: (t) => (t.parameters[1].key = "autoAddressFindings"),
     path: "parameters[1].key",
     code: "duplicate",
   },
@@ -1570,8 +1572,8 @@ const SHAPE_CASES: Case[] = [
   {
     name: "subgraph param pass-through grammar",
     key: "design-bake-off",
-    edit: (t) => (node(t, "review").params = { autoFix: { param: "Auto Fix" } }),
-    path: "nodes[4].params.autoFix.param",
+    edit: (t) => (node(t, "review").params = { autoAddressFindings: { param: "Auto Fix" } }),
+    path: "nodes[4].params.autoAddressFindings.param",
     code: "pattern",
   },
   {
@@ -1785,7 +1787,7 @@ describe("accepted variations", () => {
 
   test("session continue and askHuman", () => {
     const template = draft();
-    Object.assign(node(template, "fix"), {
+    Object.assign(node(template, "address-findings"), {
       session: { mode: "continue", from: "plan" },
       askHuman: true,
     });

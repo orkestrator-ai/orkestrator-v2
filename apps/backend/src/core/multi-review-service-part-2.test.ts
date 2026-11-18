@@ -2536,7 +2536,7 @@ for (const kind of ["prepare", "address-findings"] as const) {
                 toolMode
                   ? kind === "prepare"
                     ? "submit_validation_plan"
-                    : "submit_fix_result"
+                    : "submit_address_findings_result"
                   : undefined,
               );
               expect(provider.sends.get(nextId)!.options.workflowResultKey).toBe(
@@ -2721,7 +2721,7 @@ test.each(["recovers", "exhausted"] as const)(
 test("Address Findings gets one result reminder in its existing session and fails after a second miss", async () => {
   const provider = new Provider(false);
   provider.statusValue = "running";
-  const environmentId = "env-fix-result-reminder";
+  const environmentId = "env-address-findings-result-reminder";
   await withService(
     environmentId,
     provider,
@@ -2755,9 +2755,11 @@ test("Address Findings gets one result reminder in its existing session and fail
       expect(provider.sends.get(requestId)!.prompt).toContain(
         "Your Address Findings work is already done",
       );
-      expect(provider.sends.get(requestId)!.options.workflowResultTool).toBe("submit_fix_result");
+      expect(provider.sends.get(requestId)!.options.workflowResultTool).toBe(
+        "submit_address_findings_result",
+      );
       expect(provider.sends.get(requestId)!.options.workflowResultKey).toBe(requestId);
-      expect(failed.error).toContain("without calling submit_fix_result");
+      expect(failed.error).toContain("without calling submit_address_findings_result");
       expect(provider.sends.size).toBe(2);
     },
     { toolMode: true },

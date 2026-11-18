@@ -20,6 +20,14 @@ import {
 } from "@/components/chat/QueuedPromptStack";
 import { shouldAutoSteer } from "@/components/native-agent/auto-steer";
 import { Button } from "@/components/ui/button";
+import {
+  COMPOSE_FRAME_CLASS_NAME,
+  COMPOSE_COLUMN_CLASS_NAME,
+} from "@/components/chat/NativeComposeBar";
+import {
+  COMPOSE_MAX_INPUT_HEIGHT,
+  COMPOSE_MIN_INPUT_HEIGHT,
+} from "@/components/chat/compose-metrics";
 import { Textarea } from "@/components/ui/textarea";
 import {
   useBuildPipelineStore,
@@ -364,7 +372,7 @@ export function PipelineMessageComposer({ state }: { state: PipelineComposerStat
   };
 
   return (
-    <div className="mx-auto w-full max-w-[56rem]">
+    <div className={COMPOSE_COLUMN_CLASS_NAME}>
       {recoveredTexts.map((text) => (
         <details key={text} className="mb-2 rounded-lg border border-border bg-input-surface p-3">
           <summary>Retained message — check the transcript before sending again</summary>
@@ -378,7 +386,7 @@ export function PipelineMessageComposer({ state }: { state: PipelineComposerStat
         </p>
       )}
       <QueuedPromptStack ref={queueStackRef} queue={queue} onExit={returnFromQueue} />
-      <div className="rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
+      <div className={COMPOSE_FRAME_CLASS_NAME}>
         <div className="flex items-end gap-2">
           <Textarea
             ref={inputRef}
@@ -386,8 +394,9 @@ export function PipelineMessageComposer({ state }: { state: PipelineComposerStat
             disabled={messageBlocked}
             onChange={(event) => setDraft(event.target.value)}
             maxLength={MAX_PIPELINE_USER_MESSAGE_LENGTH}
-            rows={2}
-            className="min-h-0 resize-none border-none bg-transparent px-1 py-1 shadow-none focus-visible:outline-none"
+            rows={1}
+            style={{ minHeight: COMPOSE_MIN_INPUT_HEIGHT, maxHeight: COMPOSE_MAX_INPUT_HEIGHT }}
+            className="min-h-0 resize-none overflow-y-auto border-none bg-transparent px-1 py-1 leading-5 shadow-none focus-visible:outline-none"
             placeholder="Send a message to the agent..."
             aria-label="Send a message to the agent"
             onKeyDown={handleKeyDown}

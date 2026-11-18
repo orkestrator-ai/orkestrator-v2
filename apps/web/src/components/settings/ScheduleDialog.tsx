@@ -663,7 +663,7 @@ export function ScheduleDialog({
             </>
           ) : null}
           {problem ? (
-            <p className="text-sm text-red-300" role="alert">
+            <p className="text-sm text-failure" role="alert">
               {problem}
             </p>
           ) : null}

@@ -32,7 +32,7 @@ export function NodeWorkspaceStatus({
       role="alert"
       className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-sm"
     >
-      <p className="flex items-center gap-2 text-destructive">
+      <p className="flex items-center gap-2 text-failure">
         <AlertTriangle className="h-4 w-4" aria-hidden="true" />
         {failure}
       </p>

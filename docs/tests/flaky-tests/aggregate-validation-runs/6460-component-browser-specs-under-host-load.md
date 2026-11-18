@@ -105,3 +105,11 @@ Observed 2026-11-13 on `declarative-apt-packages-7e73967deb64-r1` at `a5191e523`
   `getByRole('tablist', { name: 'Build pipeline' })` tab timing out at 30 s,
   and each stopped at a different step (`:788` after the reload, `:806` near
   the end), the same symptom this case lists at `:776` and `:809`.
+
+## Recurrence (2026-11-18)
+
+Desktop Chromium failed `a Grok tab that started its own session closes it when a resume replaces it` (`e2e/CloseRetention.spec.ts:289`). At line 320, the restored answer count stayed at zero instead of one for the 30-second assertion window. It passed on the runner retry.
+
+The aggregate command was `ORKESTRATOR_REVIEW_VALIDATION=1 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=9 ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=7200000 mise run test:logged -- --name browser -- mise run test:browser`. The nine-worker component suite completed with 1,783 passed, 155 skipped, and two retry passes among 1,940 cases. All 20 public-site cases passed. The branch base was `259e88d90c9cb3e6e24de95d8333dbc5a12cbef2` and the tested fix was `eac72b3b7`.
+
+The isolated owning spec command `ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name address-fill-rule-close-retention-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx --no-install playwright test --config e2e/playwright.config.ts e2e/CloseRetention.spec.ts --workers=1 --retries=0 --output output/address-findings-00005/close-retention-owner` passed in 258.8 s. `mise run flaky:recurrence` confirmed case 6460 is open on the observing base. The tested fix affects the design evidence page and the Claude tmux approval card. The failure occurred in the Grok session resume fixture. The cause remains open.

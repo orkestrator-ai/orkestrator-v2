@@ -35,9 +35,9 @@ describe("Build Pipeline built-in ↔ the protocol's pipeline contract", () => {
     expect(agent("review").fanOut).toEqual({ min: 1, max: MAX_BUILD_PIPELINE_REVIEWERS });
   });
 
-  test("Fix runs under Build's step, so it shares Build's role", () => {
+  test("Rework runs under Build's step, so it shares Build's role", () => {
     expect(stepKeyForSessionPhase("rework")).toBe("build");
-    expect(agent("fix").role).toBe(agent("build").role);
+    expect(agent("rework").role).toBe(agent("build").role);
   });
 
   test("per-stage instructions and a reviewer focus are launch settings of a step", () => {

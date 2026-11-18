@@ -343,7 +343,7 @@ export function HostPathPickerDialog() {
           </form>
         )}
         {createFolderError && (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-sm text-failure">
             {createFolderError}
           </p>
         )}
@@ -353,7 +353,7 @@ export function HostPathPickerDialog() {
           aria-busy={isLoading}
         >
           {error ? (
-            <p role="alert" className="p-3 text-sm text-destructive">
+            <p role="alert" className="p-3 text-sm text-failure">
               {error}
             </p>
           ) : !listing ? (

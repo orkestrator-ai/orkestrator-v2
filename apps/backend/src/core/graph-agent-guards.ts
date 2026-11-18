@@ -70,7 +70,7 @@ import {
   type GraphGuardPeerSource,
   type GraphPushEvidence,
 } from "./graph-agent-remote-attribution.js";
-import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
+import { retryGitWithoutFsmonitorOnTimeout } from "./git/index.js";
 import { classifyFetchFailure } from "./container-git-fetch.js";
 import { retryWithBackoff, type RetryPolicy } from "./abortable-timing.js";
 import { graphCommandErrorLine } from "./graph-system-environment.js";

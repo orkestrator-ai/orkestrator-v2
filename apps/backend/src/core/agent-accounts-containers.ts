@@ -6,7 +6,7 @@ import {
 import {
   deliverRuntimeSeedBeforeBoot,
   prepareEgressGatewayWithSeed,
-} from "./github-ranges-seed-delivery.js";
+} from "./git/github-ranges-seed-delivery.js";
 import { startDockerContainer } from "./container-start.js";
 import { createHash } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";

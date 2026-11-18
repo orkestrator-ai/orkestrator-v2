@@ -52,7 +52,7 @@ function scriptFindings(w: GraphReviewWorld): void {
         })
       : undefined,
   );
-  w.fakes.scripts.set("fix", ({ port }) =>
+  w.fakes.scripts.set("address-findings", ({ port }) =>
     port === "result"
       ? {
           complete: true,
@@ -218,7 +218,7 @@ async function measureReview(width: number): Promise<ReviewMeasurement> {
         .map((activation) => activation.outputs.report!),
       consolidatedReport: output("consolidate", "report"),
       packageId: output("package", "package"),
-      addressFindingsResult: output("fix", "result"),
+      addressFindingsResult: output("address-findings", "result"),
     };
   } finally {
     for (const spy of Object.values(spies)) spy.mockRestore();

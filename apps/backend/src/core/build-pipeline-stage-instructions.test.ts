@@ -71,7 +71,7 @@ function scriptRound(provider: FakeProvider): void {
     const value =
       phase === "review"
         ? reportFor("One finding.", "Inverted branch")
-        : phase === "build" || phase === "rework"
+        : phase === "build" || phase === "rework" || phase === "package-preparation"
           ? TEST_REVIEW_PREPARATION
           : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT

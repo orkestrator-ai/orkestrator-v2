@@ -28,8 +28,8 @@ import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { localServerFields } from "./commands-local-server-lifecycle.js";
 import { reapOrphanedLocalServers } from "./local-server-reaper.js";
-import * as credentials from "./github-credentials.js";
-import { GitHubCliSelection } from "./github-cli-binary.js";
+import * as credentials from "./git/github-credentials.js";
+import { GitHubCliSelection } from "./git/index.js";
 import * as shell from "./shell.js";
 import { StorageService } from "./storage.js";
 

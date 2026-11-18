@@ -15,7 +15,7 @@ import {
   LinearMergedLabels,
   linearMergedLabelRetryDelay,
 } from "./linear-merged-label.js";
-import { PrMonitorRuntime } from "./pr-monitor-runtime.js";
+import { PrMonitorRuntime } from "./git/pr-monitor-runtime.js";
 import { StorageService } from "./storage.js";
 
 /**

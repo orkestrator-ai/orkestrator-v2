@@ -991,7 +991,7 @@ describe("process and platform command behavior", () => {
 
   test("preserves the RootlessKit alias while the initial host probe is pending", async () => {
     process.env.FAKE_DOCKER_ROOTLESS = "1";
-    process.env.FAKE_DOCKER_HOSTS_OUTPUT = "10.0.2.2 host.docker.internal\n";
+    process.env.FAKE_DOCKER_HOSTS_OUTPUT = "192.168.65.2 host.docker.internal\n";
     process.env.FAKE_DOCKER_GATEWAY = "172.17.0.1";
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -1011,11 +1011,13 @@ describe("process and platform command behavior", () => {
     const check = service.check("boot");
     try {
       expect(service.containerHostAddress()).toBeNull();
-      await __testing.ensureContainerAgentToolsHost(
-        "container-existing",
-        undefined,
-        service.containerHostAddress(),
-      );
+      expect(
+        await __testing.ensureContainerAgentToolsHost(
+          "container-existing",
+          undefined,
+          service.snapshot(),
+        ),
+      ).toBe(false);
       expect(await readCommandLog()).not.toContain(
         "docker exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root",
       );
@@ -1026,8 +1028,22 @@ describe("process and platform command behavior", () => {
     }
   });
 
-  // slirp4netns's and gvisor-tap-vsock's host loopback addresses alike.
-  for (const alias of ["10.0.2.2", "10.0.2.1"]) {
+  test("rewrites a stale VPNKit alias after discovery is blocked", async () => {
+    process.env.FAKE_DOCKER_ROOTLESS = "1";
+    process.env.FAKE_DOCKER_HOSTS_OUTPUT =
+      "192.168.65.2 host.docker.internal\n172.17.0.1 host.docker.internal\n";
+    process.env.FAKE_DOCKER_GATEWAY = "172.17.0.1";
+
+    expect(
+      await __testing.ensureContainerAgentToolsHost("container-existing", undefined, {
+        status: "blocked",
+      }),
+    ).toBe(true);
+    expect(await readCommandLog()).toContain("orkestrator-host-repair 172.17.0.1");
+  });
+
+  // slirp4netns's (and pasta's), gvisor-tap-vsock's and VPNKit's host loopback addresses alike.
+  for (const alias of ["10.0.2.2", "10.0.2.1", "192.168.65.2"]) {
     test(`preserves the RootlessKit alias ${alias} when topology discovery fails`, async () => {
       process.env.FAKE_DOCKER_HOSTS_OUTPUT = `${alias} host.docker.internal\n`;
       process.env.FAKE_DOCKER_FAIL_INFO = "daemon temporarily unavailable";
@@ -1042,7 +1058,10 @@ describe("process and platform command behavior", () => {
     test(`explicit host address overrides the namespace gateway (existing=${existing})`, async () => {
       process.env.FAKE_DOCKER_HOSTS_OUTPUT = `${existing} host.docker.internal\n`;
       process.env.FAKE_DOCKER_GATEWAY = "172.17.0.1";
-      await __testing.ensureContainerAgentToolsHost("container-existing", undefined, "10.0.2.2");
+      await __testing.ensureContainerAgentToolsHost("container-existing", undefined, {
+        status: "reachable",
+        hostAddress: "10.0.2.2",
+      });
       const log = await readCommandLog();
       expect(log.includes("docker exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root")).toBe(
         existing !== "10.0.2.2",
@@ -1138,6 +1157,7 @@ describe("process and platform command behavior", () => {
       ...fixture.context,
       agentTools,
       containerHostReachability: {
+        snapshot: () => ({ status: "reachable" }),
         checkEnvironmentContainer,
       } as unknown as CommandContext["containerHostReachability"],
     } as CommandContext;

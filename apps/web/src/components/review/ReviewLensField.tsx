@@ -140,7 +140,7 @@ export function ReviewLensField({
           />
           <p
             id={errorId}
-            className={cn("text-[11px] leading-snug", error ? "text-red-400" : "text-zinc-500")}
+            className={cn("text-[11px] leading-snug", error ? "text-failure" : "text-zinc-500")}
           >
             {error ??
               `${byteCount.format(bytes)} / ${byteCount.format(REVIEW_LENS_INSTRUCTION_MAX_BYTES)} bytes`}

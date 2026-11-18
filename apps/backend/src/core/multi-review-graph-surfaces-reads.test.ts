@@ -76,7 +76,7 @@ describe("CLI review commands on a graph-engine review", () => {
       reviewers: [opus, sonnet],
       reviewModel: opus,
       // The CLI's public wire name (to-do 4740 task 3).
-      fixModel: opus,
+      addressFindingsModel: opus,
     };
     const launched = ok<{ workflowId: string; phase: string; outcome: string; ui: string }>(
       await harness.call("review.launch", input, { requestId: "graph-review" }),
@@ -114,7 +114,7 @@ describe("CLI review commands on a graph-engine review", () => {
       id: workflowId,
       phase: "reviewing",
       targetBranch: "main",
-      automation: { autoFix: false, autoPr: false },
+      automation: { autoAddressFindings: false, autoPr: false },
     });
     // The summary is bounded: nothing of the graph run or its sessions.
     expect(JSON.stringify(reviewing)).not.toContain("multi-review-");

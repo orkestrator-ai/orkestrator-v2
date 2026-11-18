@@ -892,7 +892,7 @@ function BackgroundTaskDetails({
           <pre
             className={cn(
               "max-h-40 overflow-auto whitespace-pre-wrap break-words font-sans text-xs",
-              line.label === "Error" ? "text-destructive/90" : "text-muted-foreground/90",
+              line.label === "Error" ? "text-failure/90" : "text-muted-foreground/90",
             )}
           >
             {line.text}
@@ -994,7 +994,7 @@ function BackgroundTaskActivitySlot({
         variant="ghost"
         size="icon-sm"
         className={cn(
-          "absolute inset-0 size-7 rounded-full bg-cyan-400/10 p-0 text-cyan-300 transition-opacity duration-150 hover:bg-destructive/15 hover:text-destructive",
+          "absolute inset-0 size-7 rounded-full bg-cyan-400/10 p-0 text-cyan-300 transition-opacity duration-150 hover:bg-destructive/15 hover:text-failure",
           !stopping &&
             "opacity-100 md:hover-fine:opacity-0 md:hover-fine:group-hover/stoppable:opacity-100 md:hover-fine:focus-visible:opacity-100",
         )}
@@ -1151,9 +1151,7 @@ export function BackgroundTaskCard({
               <div
                 className={cn(
                   "mt-1 truncate text-xs",
-                  outcomePreview.label === "Error"
-                    ? "text-destructive/90"
-                    : "text-muted-foreground/80",
+                  outcomePreview.label === "Error" ? "text-failure/90" : "text-muted-foreground/80",
                 )}
               >
                 {outcomePreview.text}
@@ -1174,7 +1172,7 @@ export function BackgroundTaskCard({
       </div>
 
       {stopError ? (
-        <div role="alert" className="px-3 pb-2 text-xs text-destructive">
+        <div role="alert" className="px-3 pb-2 text-xs text-failure">
           {stopError}
         </div>
       ) : null}
@@ -1568,7 +1566,7 @@ export function TaskGroupPart({
         </CollapsibleTrigger>
       </div>
       {stopError ? (
-        <div role="alert" className="px-3 pb-2 text-xs text-destructive">
+        <div role="alert" className="px-3 pb-2 text-xs text-failure">
           {stopError}
         </div>
       ) : null}

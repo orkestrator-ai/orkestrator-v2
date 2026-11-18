@@ -905,7 +905,7 @@ export function MultiReviewReviewerTab({
       />
     </div>
   ) : error && messages.length > 0 ? (
-    <div className="mx-3 mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive @sm:mx-6">
+    <div className="mx-3 mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-failure @sm:mx-6">
       {error}
     </div>
   ) : null;
@@ -923,7 +923,7 @@ export function MultiReviewReviewerTab({
         {history.notice ? <span>{history.notice}</span> : null}
         {historyNotice ? <span>{historyNotice}</span> : null}
         {historyError ? (
-          <span role="alert" className="text-destructive">
+          <span role="alert" className="text-failure">
             {historyError}
           </span>
         ) : null}
@@ -962,7 +962,7 @@ export function MultiReviewReviewerTab({
           ) : snapshot?.status === "completed" ? (
             <CheckCircle2 className="size-4 text-success" />
           ) : snapshot?.status === "failed" ? (
-            <AlertCircle className="size-4 text-destructive" />
+            <AlertCircle className="size-4 text-failure" />
           ) : null}
           {stoppable && (
             <Button

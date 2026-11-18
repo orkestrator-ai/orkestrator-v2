@@ -489,7 +489,7 @@ export function GraphRunInspector({
             value={shownView}
             onValueChange={(value) => setView(value as "details" | "transcript")}
           >
-            <TabsList aria-label="Inspector views" className="h-7 rounded-md p-0.5">
+            <TabsList variant="segmented" aria-label="Inspector views">
               <TabsTrigger className="h-6 px-2 text-xs" value="details">
                 Details
               </TabsTrigger>

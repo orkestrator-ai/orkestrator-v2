@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 
 const TONE_CLASS: Record<AgentMailNoticeTone, string> = {
   success: "text-success",
-  failure: "text-red-400",
+  failure: "text-failure",
   attention: "text-amber-400",
   info: "text-sky-400",
 };

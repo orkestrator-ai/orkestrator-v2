@@ -1,5 +1,5 @@
 /**
- * The turn-end after-capture prompt (to-do 0047 task 3). When a request's turn
+ * The turn-end after-capture prompt (#2311). When a request's turn
  * has finished and this note has no after-capture yet, the request card offers
  * a one-click capture of what the preview shows now. Nothing here captures,
  * navigates or reloads by itself: the user presses the button, and the capture

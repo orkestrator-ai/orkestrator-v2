@@ -361,11 +361,11 @@ function RuntimeNoticeCard({
     severity === "error"
       ? {
           button:
-            "border-destructive/35 bg-destructive/10 text-destructive hover:border-destructive/55 hover:bg-destructive/15",
+            "border-destructive/35 bg-destructive/10 text-failure hover:border-destructive/55 hover:bg-destructive/15",
           dialog: "border-destructive/30",
           summary: "border-destructive/30 bg-destructive/10",
-          title: "text-destructive",
-          method: "text-destructive/65",
+          title: "text-failure",
+          method: "text-failure/65",
         }
       : severity === "info"
         ? {
@@ -1519,7 +1519,7 @@ function McpServerRow({
         ) : null}
       </div>
       {server.error ? (
-        <p className="break-words px-2.5 pb-1 pl-6 text-destructive">{server.error}</p>
+        <p className="break-words px-2.5 pb-1 pl-6 text-failure">{server.error}</p>
       ) : null}
       {server.hint ? (
         <p className="break-words px-2.5 pb-1 pl-6 text-muted-foreground">{server.hint}</p>
@@ -1580,7 +1580,7 @@ export function McpServersPanel({
         </span>
         <span className="ml-auto text-muted-foreground">
           {formatCount(servers.length, "server")}
-          {unhealthy > 0 ? <span className="text-destructive"> · {unhealthy} down</span> : null}
+          {unhealthy > 0 ? <span className="text-failure"> · {unhealthy} down</span> : null}
         </span>
       </button>
       {expanded ? (

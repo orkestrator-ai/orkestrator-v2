@@ -9,11 +9,11 @@
  */
 
 /**
- * RootlessKit's address for the host's loopback interface under slirp4netns
- * (and vpnkit). Rootless Docker refuses connections to it unless the daemon
- * runs with `DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`; the
- * backend uses it for `host.docker.internal` only once a probe through it
- * succeeded.
+ * RootlessKit's address for the host's loopback interface under its
+ * slirp4netns and pasta network drivers. Rootless Docker refuses connections
+ * to it unless the daemon runs with
+ * `DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`; the backend uses
+ * it for `host.docker.internal` only once a probe through it succeeded.
  */
 export const ROOTLESSKIT_HOST_LOOPBACK_ADDRESS = "10.0.2.2";
 
@@ -26,15 +26,29 @@ export const ROOTLESSKIT_HOST_LOOPBACK_ADDRESS = "10.0.2.2";
 export const ROOTLESSKIT_GVISOR_HOST_LOOPBACK_ADDRESS = "10.0.2.1";
 
 /**
+ * RootlessKit's host loopback address under its VPNKit network driver, which
+ * `dockerd-rootless.sh` picks on a host without slirp4netns or pasta when
+ * `vpnkit` is installed. VPNKit's network is `192.168.65.0/24` (the namespace
+ * gets `192.168.65.3`, gateway and resolver `192.168.65.1`), so `10.0.2.2`
+ * does not answer there (observed with RootlessKit 3.3.0 and vpnkit
+ * `7f0eff0d`; host loopback refused blocks this address too).
+ */
+export const ROOTLESSKIT_VPNKIT_HOST_LOOPBACK_ADDRESS = "192.168.65.2";
+
+/**
  * Every host loopback address RootlessKit's network drivers use, in the
- * order the reachability check probes them: slirp4netns first, as
- * `dockerd-rootless.sh` prefers it, then gvisor-tap-vsock. The check never
- * reads the driver, so a backend run as another user or against a remote
- * daemon finds the address the same way.
+ * order the reachability check probes them: slirp4netns's (and pasta's)
+ * first, as `dockerd-rootless.sh` prefers them, then gvisor-tap-vsock's, then
+ * VPNKit's. The check never reads the driver, so a backend run as another
+ * user or against a remote daemon finds the address the same way. Outside its
+ * own driver an address can leave RootlessKit's namespace through the
+ * driver's NAT, so the check accepts one only when the agent tools server's
+ * own answer comes back through it.
  */
 export const ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES: readonly string[] = [
   ROOTLESSKIT_HOST_LOOPBACK_ADDRESS,
   ROOTLESSKIT_GVISOR_HOST_LOOPBACK_ADDRESS,
+  ROOTLESSKIT_VPNKIT_HOST_LOOPBACK_ADDRESS,
 ];
 
 /** Whether `address` is one of RootlessKit's host loopback addresses. */

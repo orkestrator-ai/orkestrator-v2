@@ -255,11 +255,16 @@ function pipelineLoopTemplate(): GraphTemplateV1 {
         branches: [{ to: "issues", when: { path: "report.issues", op: "nonEmpty" } }],
         otherwise: "clean",
       } as GraphNodeSpec,
-      agent("address", "write", [REPORT, CODE], [CODE, { name: "report", type: "fix-result@1" }]),
+      agent(
+        "address",
+        "write",
+        [REPORT, CODE],
+        [CODE, { name: "report", type: "address-findings-result@1" }],
+      ),
       agent(
         "verify",
         "read",
-        [CODE, { name: "address", type: "fix-result@1", required: false }],
+        [CODE, { name: "address", type: "address-findings-result@1", required: false }],
         [VERDICT, CODE],
       ),
     ],

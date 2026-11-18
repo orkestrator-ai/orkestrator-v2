@@ -15,6 +15,18 @@ export * from "./commands-terminal.js";
 export * from "./commands-environment.js";
 export * from "./commands-servers.js";
 export * from "./commands-files.js";
-export * from "./github-credentials.js";
+export {
+  containerGitHubCredentialSource,
+  getContainerGitHubCredentialStatus,
+  getGitHubTokenLogin,
+  getHostGitHubToken,
+  gitHubCliEnv,
+  gitHubCredentialSource,
+  resolveContainerGitHubToken,
+  resolveGitHubToken,
+  type ContainerGitHubCredentialSource,
+  type GitHubCliConfigSource,
+  type GitHubCredentialSource,
+} from "./git/index.js";
 export * from "./commands-containers.js";
 export * from "./commands-projects.js";

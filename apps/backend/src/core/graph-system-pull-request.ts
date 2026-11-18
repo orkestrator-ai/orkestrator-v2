@@ -27,7 +27,7 @@ import {
   type GhPrListEntry,
   type PrDetectionResult,
 } from "./commands-review.js";
-import { resolveGitHubRepository } from "./github.js";
+import { resolveGitHubRepository } from "./git/index.js";
 import {
   GraphSystemActionError,
   graphProviderError,

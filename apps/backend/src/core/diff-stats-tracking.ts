@@ -4,10 +4,8 @@ import {
   type EnvironmentDiffBaseline,
 } from "@orkestrator/protocol/diff-stats";
 import { stat } from "node:fs/promises";
-import { runRemoteGit } from "./git-noninteractive-env.js";
-import { GitFetchScheduler } from "./git-fetch-scheduler.js";
+import { gitDockerScanPool, GitFetchScheduler, runRemoteGit } from "./git/index.js";
 import { runCommand } from "./shell.js";
-import { gitDockerScanPool } from "./git-docker-scan-pool.js";
 import {
   CONTAINER_TREE_MAX_AGE_MS,
   DiffStatsService,

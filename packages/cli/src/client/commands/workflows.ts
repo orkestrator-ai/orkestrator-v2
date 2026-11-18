@@ -381,22 +381,10 @@ export const workflowCommands: CommandSpec[] = [
         description: `Address Findings model: ${SELECTION_HELP}`,
       },
       {
-        name: "fix-model",
-        kind: "string",
-        valueName: "SELECTION",
-        description: "Former name of --address-findings-model.",
-      },
-      {
         name: "auto-address-findings",
         kind: "boolean",
         negatable: true,
         description: "Start Address Findings when consolidation reports findings.",
-      },
-      {
-        name: "auto-fix",
-        kind: "boolean",
-        negatable: true,
-        description: "Former name of --auto-address-findings.",
       },
       {
         name: "auto-pr",
@@ -420,10 +408,8 @@ export const workflowCommands: CommandSpec[] = [
     ],
     inputFields: {
       reviewer: "reviewers",
-      "address-findings-model": "fixModel",
-      "fix-model": "fixModel",
-      "auto-address-findings": "autoFix",
-      "auto-fix": "autoFix",
+      "address-findings-model": "addressFindingsModel",
+      "auto-address-findings": "autoAddressFindings",
       focus: "reviewers",
       "focus-file": "reviewers",
       "instruction-file": "reviewInstruction",
@@ -440,13 +426,8 @@ export const workflowCommands: CommandSpec[] = [
         return lens ? { ...row, lens } : row;
       });
       const reviewModel = stringOption(options, "review-model");
-      const addressFindingsFlag = stringOption(options, "address-findings-model")
-        ? "--address-findings-model"
-        : "--fix-model";
-      const fixModel =
-        stringOption(options, "address-findings-model") ?? stringOption(options, "fix-model");
-      const autoFix =
-        optionalBoolean(options, "auto-address-findings") ?? optionalBoolean(options, "auto-fix");
+      const addressFindingsModel = stringOption(options, "address-findings-model");
+      const autoAddressFindings = optionalBoolean(options, "auto-address-findings");
       const autoPr = optionalBoolean(options, "auto-pr");
       const instructionFile = stringOption(options, "instruction-file");
       const reviewInstruction =
@@ -466,8 +447,15 @@ export const workflowCommands: CommandSpec[] = [
           environmentId: parsed.positionals.environment,
           ...(reviewers.length ? { reviewers } : {}),
           ...(reviewModel ? { reviewModel: parseSelection(reviewModel, "--review-model") } : {}),
-          ...(fixModel ? { fixModel: parseSelection(fixModel, addressFindingsFlag) } : {}),
-          ...(autoFix !== undefined ? { autoFix } : {}),
+          ...(addressFindingsModel
+            ? {
+                addressFindingsModel: parseSelection(
+                  addressFindingsModel,
+                  "--address-findings-model",
+                ),
+              }
+            : {}),
+          ...(autoAddressFindings !== undefined ? { autoAddressFindings } : {}),
           ...(autoPr !== undefined ? { autoPr } : {}),
           ...(options["target-branch"] !== undefined
             ? { targetBranch: options["target-branch"] }
@@ -552,10 +540,9 @@ export const workflowCommands: CommandSpec[] = [
         kind: "boolean",
         description: "Open the Address Findings session tab instead.",
       },
-      { name: "fix", kind: "boolean", description: "Former name of --address-findings." },
       REQUEST_ID_OPTION,
     ],
-    inputFields: { workflow: "workflowId", fix: "surface", "address-findings": "surface" },
+    inputFields: { workflow: "workflowId", "address-findings": "surface" },
     idOutput: "workflow ID",
     async run(context, parsed) {
       const workflowId = parsed.positionals.workflow as string;
@@ -564,9 +551,7 @@ export const workflowCommands: CommandSpec[] = [
         "review.open",
         {
           workflowId,
-          ...(parsed.options.fix === true || parsed.options["address-findings"] === true
-            ? { surface: "fix" }
-            : {}),
+          ...(parsed.options["address-findings"] === true ? { surface: "address-findings" } : {}),
         },
         parsed.options,
       );

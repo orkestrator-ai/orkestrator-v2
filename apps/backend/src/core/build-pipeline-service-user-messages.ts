@@ -25,6 +25,7 @@ import {
 import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import {
   discardPreparationResult,
+  preparesReviewPackage,
   resumablePhase,
   sessionAgent,
   sessionForCurrentPhase,
@@ -317,8 +318,7 @@ export class BuildPipelineUserMessages {
       // result authoritative either. Invalidate conservatively before delivery.
       const phase = resumablePhase(candidate.phase);
       const session = sessionForCurrentPhase(candidate);
-      if (session && (phase === "building" || phase === "reworking"))
-        discardPreparationResult(session);
+      if (session && preparesReviewPackage(phase)) discardPreparationResult(session);
       await this.ctx.save(candidate, candidate.backendRevision);
       const result = await this.steerLiveTurn(candidate, message.text, requestId);
       if (result.kind !== "unconfirmed") {
@@ -399,7 +399,7 @@ export class BuildPipelineUserMessages {
     if (active?.state !== "running") return { kind: "not-sent" };
 
     const unconfirmed = (): LiveSteerResult => {
-      if (phase === "building" || phase === "reworking") discardPreparationResult(session);
+      if (preparesReviewPackage(phase)) discardPreparationResult(session);
       return {
         kind: "unconfirmed",
         error: new Error(
@@ -424,7 +424,7 @@ export class BuildPipelineUserMessages {
     }
     switch (outcome.outcome) {
       case "applied":
-        if (phase === "building" || phase === "reworking") discardPreparationResult(session);
+        if (preparesReviewPackage(phase)) discardPreparationResult(session);
         return { kind: "steered" };
       case "rejected":
         return { kind: "refused", error: new Error(nativeAgentSteerRejectionMessage(outcome)) };

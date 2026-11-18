@@ -184,8 +184,8 @@ describe("role bindings", () => {
       { platform: "claude", model: "opus" },
       { platform: "claude", model: "opus" },
     ]);
-    // fixReviewIssues and pr unset → the app's default agent.
-    expect(roles.fixer).toEqual({ platform: "codex" });
+    // addressFindings and pr unset → the app's default agent.
+    expect(roles.addresser).toEqual({ platform: "codex" });
     expect(roles.describer).toEqual({ platform: "codex" });
     expect(created[0]!.launch).toEqual({ requestedBy: "user" });
     expect(created[0]!.template).toMatchObject({ id: "sample-review", scope: "user" });
@@ -270,7 +270,7 @@ describe("role bindings", () => {
       global: { ...config.global, enabledAgentPlatforms: ["claude", "codex"] },
     });
     const error = await rejection(
-      service().launch(request({ roles: { fixer: { platform: "opencode" } } }), {
+      service().launch(request({ roles: { addresser: { platform: "opencode" } } }), {
         requestedBy: "user",
       }),
     );
@@ -281,11 +281,13 @@ describe("role bindings", () => {
 describe("parameters, inputs and defaults", () => {
   test("parameters are checked against their declarations", async () => {
     const error = await rejection(
-      service().launch(request({ params: { autoFix: "yes" } }), { requestedBy: "user" }),
+      service().launch(request({ params: { autoAddressFindings: "yes" } }), {
+        requestedBy: "user",
+      }),
     );
     expect(error.code).toBe("invalid-launch");
     await service().launch(request({ params: { autoPr: true } }), { requestedBy: "user" });
-    expect(created[0]!.params).toEqual({ autoFix: true, autoPr: true });
+    expect(created[0]!.params).toEqual({ autoAddressFindings: true, autoPr: true });
   });
 
   test("the workspace input is filled from the existing environment's HEAD", async () => {
@@ -299,7 +301,7 @@ describe("parameters, inputs and defaults", () => {
     await service().launch(
       request({
         roles: { reviewer: [{ platform: "codex" }, { platform: "opencode", model: "big" }] },
-        params: { autoFix: false },
+        params: { autoAddressFindings: false },
         saveDefaults: true,
       }),
       { requestedBy: "user" },
@@ -313,7 +315,7 @@ describe("parameters, inputs and defaults", () => {
       { platform: "codex" },
       { platform: "opencode", model: "big" },
     ]);
-    expect(options.params).toEqual({ autoFix: false, autoPr: false });
+    expect(options.params).toEqual({ autoAddressFindings: false, autoPr: false });
     expect(options.environment.default).toBe("existing");
     // A later launch without bindings starts from them.
     await service().launch(request(), { requestedBy: "cli" });
@@ -321,7 +323,7 @@ describe("parameters, inputs and defaults", () => {
       { platform: "codex" },
       { platform: "opencode", model: "big" },
     ]);
-    expect(created[1]!.params?.autoFix).toBe(false);
+    expect(created[1]!.params?.autoAddressFindings).toBe(false);
   });
 });
 

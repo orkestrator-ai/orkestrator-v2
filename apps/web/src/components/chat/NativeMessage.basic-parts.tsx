@@ -745,8 +745,8 @@ export function ToolPart({
             {toolError && (
               <div className="px-3 py-2">
                 <div className="flex items-start gap-2">
-                  <AlertCircle className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5" />
-                  <pre className="text-xs font-mono text-destructive whitespace-pre-wrap break-all">
+                  <AlertCircle className="w-3.5 h-3.5 text-failure shrink-0 mt-0.5" />
+                  <pre className="text-xs font-mono text-failure whitespace-pre-wrap break-all">
                     {toolError}
                   </pre>
                 </div>
@@ -1127,8 +1127,8 @@ export function EditToolPart({
             {toolError && (
               <div className="px-3 py-2">
                 <div className="flex items-start gap-2">
-                  <AlertCircle className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5" />
-                  <pre className="text-xs font-mono text-destructive whitespace-pre-wrap break-all">
+                  <AlertCircle className="w-3.5 h-3.5 text-failure shrink-0 mt-0.5" />
+                  <pre className="text-xs font-mono text-failure whitespace-pre-wrap break-all">
                     {toolError}
                   </pre>
                 </div>

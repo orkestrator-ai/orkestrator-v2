@@ -91,6 +91,7 @@ import { currentPageForService } from "./annotations/format";
 import { useBrowserAnnotations } from "./annotations/useBrowserAnnotations";
 import {
   BROWSER_ADDRESS_FORM_CLASS,
+  BROWSER_ADDRESS_FRAME_CLASS,
   BROWSER_ADDRESS_INPUT_CLASS,
   BROWSER_TOOLBAR_ACTIONS_CLASS,
   BROWSER_TOOLBAR_CLASS,
@@ -790,8 +791,10 @@ function ServicePreview({
         >
           <div
             className={cn(
-              "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-input-surface shadow-sm transition-colors focus-within:border-ring",
-              attachError ? "border-destructive/70" : "border-border",
+              BROWSER_ADDRESS_FRAME_CLASS,
+              attachError
+                ? "border-destructive/70 [--browser-address-outline-color:var(--color-destructive)]"
+                : "border-border",
             )}
           >
             <PreviewServicePicker
@@ -974,7 +977,7 @@ function ServicePreview({
       {(attachError || nativeState?.error) && (
         <div
           role="alert"
-          className="min-w-0 shrink-0 border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-xs text-destructive break-words [overflow-wrap:anywhere]"
+          className="min-w-0 shrink-0 border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-xs text-failure break-words [overflow-wrap:anywhere]"
         >
           {attachError ?? nativeState?.error}
         </div>
@@ -1195,7 +1198,7 @@ function PreviewIntentChooser({
           </p>
         ) : null}
         {error && (
-          <p role="alert" className="text-destructive">
+          <p role="alert" className="text-failure">
             {error}
           </p>
         )}

@@ -301,10 +301,10 @@ const ADAPTERS: readonly GraphTypeAdapter[] = Object.freeze([
     apply: (value) => ({ markdown: ticketMarkdown(value as GraphTicketV1) }),
   },
   {
-    id: "fix-result-to-file-list",
+    id: "address-findings-result-to-file-list",
     label: "Address Findings result → files",
     description: "The files a fix or build changed, each with the fix summary as its reason.",
-    from: "fix-result@1",
+    from: "address-findings-result@1",
     to: "file-list@1",
     apply: (value) => ({
       files: field<string[]>(value, "filesChanged").map((path) => ({

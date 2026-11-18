@@ -795,7 +795,7 @@ describe("a deny policy", () => {
     expect(getPendingInteractions(session.id)).toEqual([]);
     expect(
       await call.options.canUseTool!(
-        "mcp__orkestrator__submit_fix_result",
+        "mcp__orkestrator__submit_address_findings_result",
         {},
         context("no-server"),
       ),
@@ -895,7 +895,7 @@ for (const policy of [ASK_POLICY, DENY_POLICY]) {
     const call = await nextQueryCall();
     for (const name of [
       "submit_review_report",
-      "submit_fix_result",
+      "submit_address_findings_result",
       "validate_workflow_result",
       "get_workflow_result_status",
       "report_finding",

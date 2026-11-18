@@ -191,11 +191,11 @@ describe("§9.4 with items fan-out", () => {
       ],
       ["diagnose/item.validate:failure-3/diagnosis-1"],
     ]);
-    expect(latest(run, "fix").inputs.diagnosis).toBe(merged.id);
+    expect(latest(run, "address-findings").inputs.diagnosis).toBe(merged.id);
     // Iteration 2 is clean: diagnose skips as a whole (its `when`), and so does the rest.
     expect(latest(run, "diagnose", 2)).toMatchObject({ state: "skipped" });
     expect(latest(run, "diagnose", 2).branchKey).toBeUndefined();
-    expect(latest(run, "fix", 2).state).toBe("skipped");
+    expect(latest(run, "address-findings", 2).state).toBe("skipped");
   });
 
   test("a branch's prompt sees one failure, its index and id; it may cite exactly that item", async () => {
@@ -239,7 +239,7 @@ describe("inside an inlined sub-graph (item 402)", () => {
       parameters: [],
       roles: [
         { key: "diagnoser", multiplicity: "one" },
-        { key: "fixer", multiplicity: "one" },
+        { key: "addresser", multiplicity: "one" },
       ],
       inputs: [
         { name: "plan", type: "validation-plan@2" },
@@ -258,7 +258,7 @@ describe("inside an inlined sub-graph (item 402)", () => {
           id: "repair",
           kind: "subgraph",
           template: { scope: "user", id: "repair-loop" },
-          roles: { diagnoser: "diagnoser", fixer: "fixer" },
+          roles: { diagnoser: "diagnoser", addresser: "addresser" },
           inputs: [
             { name: "plan", type: "validation-plan@2" },
             { name: "target", type: "workspace@1" },
@@ -364,7 +364,9 @@ describe("maxBranches", () => {
     expect(run.fanOuts).toBeUndefined();
     expect(h.world.fakes.callsOf("start", "diagnose")).toHaveLength(0);
     // Nothing downstream ran on a partial set.
-    expect(live(run, "fix").every((activation) => activation.state !== "complete")).toBe(true);
+    expect(
+      live(run, "address-findings").every((activation) => activation.state !== "complete"),
+    ).toBe(true);
   });
 
   test("an empty list records an empty fan-out and skips the position", async () => {

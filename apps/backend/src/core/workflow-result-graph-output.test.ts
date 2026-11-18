@@ -382,7 +382,7 @@ describe("graph output slots", () => {
     const builtIn = crypto.randomUUID();
     await workflowResults.prepare({
       resultKey: builtIn,
-      kind: "fix-result",
+      kind: "address-findings-result",
       ...scope,
       provider: "codex",
     });
@@ -521,7 +521,7 @@ describe("graph output slots", () => {
     await expect(
       workflowResults.prepare({
         resultKey: crypto.randomUUID(),
-        kind: "fix-result",
+        kind: "address-findings-result",
         ...base,
         toolName: "submit_fix",
       }),

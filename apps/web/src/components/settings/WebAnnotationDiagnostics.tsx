@@ -154,7 +154,7 @@ export function WebAnnotationDiagnostics() {
         </ul>
       )}
       {error && (
-        <p role="alert" className="text-[11px] text-destructive">
+        <p role="alert" className="text-[11px] text-failure">
           {error}
         </p>
       )}

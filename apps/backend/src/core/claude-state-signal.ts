@@ -147,11 +147,15 @@ async function prepareSignalHost(
   containerId: string,
   context: Pick<CommandContext, "agentTools" | "containerHostReachability">,
 ): Promise<void> {
-  await ensureContainerAgentToolsHost(
-    containerId,
-    undefined,
-    context.containerHostReachability?.containerHostAddress?.(),
-  );
+  if (
+    !(await ensureContainerAgentToolsHost(
+      containerId,
+      undefined,
+      context.containerHostReachability?.snapshot(),
+    ))
+  ) {
+    throw new Error("The container's RootlessKit host alias is awaiting verification");
+  }
   await ensureContainerHostServicePorts(containerId, context.agentTools?.servicePort?.() ?? null);
 }
 

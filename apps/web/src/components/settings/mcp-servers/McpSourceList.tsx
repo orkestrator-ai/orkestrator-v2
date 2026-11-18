@@ -40,7 +40,7 @@ const STATUS_TONE: Record<McpDefinitionStatus, string> = {
   shadowed: "border-white/15 text-muted-foreground",
   disabled: "border-white/15 text-muted-foreground",
   "policy-excluded": "border-amber-500/30 text-amber-300",
-  invalid: "border-red-500/30 text-red-300",
+  invalid: "border-failure/30 text-failure",
   unsupported: "border-amber-500/30 text-amber-300",
   protected: "border-blue-500/30 text-blue-300",
 };
@@ -273,7 +273,7 @@ export function McpSourceList({
                 <p
                   className={cn(
                     "flex items-center gap-1 text-xs",
-                    broken ? "text-red-300" : "text-muted-foreground",
+                    broken ? "text-failure" : "text-muted-foreground",
                   )}
                 >
                   {broken ? <FileWarning className="h-3.5 w-3.5" aria-hidden="true" /> : null}

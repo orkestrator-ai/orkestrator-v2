@@ -45,27 +45,28 @@ import type {
   DefinedCommandHandler,
   RegistryDependencies,
 } from "./commands-registry-types.js";
-import { sanitizeGitHubError } from "./github.js";
 import {
   addGitHubPullRequestComment,
   addGitHubPullRequestReviewComment,
+  changeGitHubPullRequestLabel,
+  getGitHubPullRequest,
+  getGitHubPullRequestFiles,
+  getGitHubPullRequestTimeline,
+  type GitHubPullRequestStateAction,
+  listGitHubPullRequests,
   listGitHubRepositoryAssignableUsers,
   listGitHubRepositoryLabels,
   mergeGitHubPullRequest,
   replyGitHubPullRequestReviewThread,
+  sanitizeGitHubError,
   setGitHubPullRequestFileViewed,
   setGitHubPullRequestLabels,
-  changeGitHubPullRequestLabel,
   setGitHubPullRequestReviewers,
   setGitHubPullRequestThreadResolved,
   submitGitHubPullRequestReview,
   updateGitHubPullRequestComment,
   updateGitHubPullRequestState,
-  type GitHubPullRequestStateAction,
-} from "./github-pull-request-actions.js";
-import { getGitHubPullRequestFiles } from "./github-pull-request-files.js";
-import { getGitHubPullRequestTimeline } from "./github-pull-request-timeline.js";
-import { getGitHubPullRequest, listGitHubPullRequests } from "./github-pull-requests.js";
+} from "./git/index.js";
 
 type Args = Readonly<Record<string, unknown>>;
 

@@ -166,7 +166,7 @@ class FakeProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : phase === "build" || phase === "rework"
+        : phase === "build" || phase === "rework" || phase === "package-preparation"
           ? TEST_REVIEW_PREPARATION
           : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
@@ -713,7 +713,7 @@ describe("BuildPipelineService", () => {
       expect(retried.sessions.at(-1)).toMatchObject({ phase: "address-findings" });
       expect(provider.created.at(-1)?.options?.mode).toBe("build");
       expect(dispatch.mode).toBe("build");
-      // The retried Address turn opens its own fix-result slot.
+      // The retried Address turn opens its own address-findings-result slot.
       expect(dispatch.schema).toEqual(REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA);
       expect(retried.sessions.at(-1)?.addressFindingsReportKind).toBe("address-findings-result");
       expect(dispatch.prompt).toContain("Address this exact finding");

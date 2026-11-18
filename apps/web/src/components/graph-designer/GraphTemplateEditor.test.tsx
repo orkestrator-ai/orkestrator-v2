@@ -39,14 +39,14 @@ describe("GraphTemplateEditor", () => {
 
     const parameters = within(container.querySelector('[aria-label="Parameters"]') as HTMLElement);
     const key = parameters.getAllByLabelText("Key")[0] as HTMLInputElement;
-    expect(key.value).toBe("autoFix");
+    expect(key.value).toBe("autoAddressFindings");
     fireEvent.change(key, { target: { value: "fixAutomatically" } });
     fireEvent.blur(key);
     const current = harness.current();
     expect(current.parameters[0]!.key).toBe("fixAutomatically");
-    expect(JSON.stringify(current.nodes.find((node) => node.id === "fix")!.when)).toContain(
-      "params.fixAutomatically",
-    );
+    expect(
+      JSON.stringify(current.nodes.find((node) => node.id === "address-findings")!.when),
+    ).toContain("params.fixAutomatically");
   });
 
   test("roles: rename follows the nodes, panel roles take additional reviewers last", () => {
@@ -113,7 +113,7 @@ describe("GraphEdgeEditor and GraphLoopEditor", () => {
     expect(harness.current().loops![0]!.carry.length).toBe(template.loops![0]!.carry.length - 1);
     // Taking a node out drops the carries that touch it.
     fireEvent.click(screen.getAllByRole("button", { name: "Take out" })[0]!);
-    expect(harness.current().loops![0]!.nodes).not.toContain("fix");
+    expect(harness.current().loops![0]!.nodes).not.toContain("rework");
     expect(harness.current().loops![0]!.carry).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: /Delete loop/ }));
     expect(harness.current().loops).toEqual([]);

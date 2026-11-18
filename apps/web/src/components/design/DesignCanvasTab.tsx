@@ -1301,7 +1301,7 @@ export function DesignCanvasTab({
         {localError && (
           <div
             role="alert"
-            className="flex items-center gap-2 border-b border-divider px-3 py-1.5 text-xs text-destructive"
+            className="flex items-center gap-2 border-b border-divider px-3 py-1.5 text-xs text-failure"
           >
             <span className="flex-1">{localError}</span>
             <button type="button" aria-label="Dismiss" onClick={() => setLocalError(null)}>

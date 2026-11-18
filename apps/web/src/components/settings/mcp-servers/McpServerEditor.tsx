@@ -411,7 +411,7 @@ export function McpServerEditor({
           </DialogHeader>
 
           {loadError ? (
-            <p className="text-sm text-red-300" role="alert">
+            <p className="text-sm text-failure" role="alert">
               {loadError}
             </p>
           ) : loading ? (

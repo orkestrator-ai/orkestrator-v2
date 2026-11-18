@@ -27,7 +27,7 @@ tests again because the root test config excludes backend sources. The
 corrected invocation passed:
 
 ```sh
-mise run test:logged -- --name pr-monitor-agent-completion -- bun test --cwd apps/backend ./src/core/pr-monitor-agent-completion.integration.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name pr-monitor-agent-completion -- bun test --cwd apps/backend ./src/core/git/pr-monitor-agent-completion.integration.test.ts --parallel=1 --only-failures
 ```
 
 `docs/development/testing-guide.md` now records the package-cwd requirement

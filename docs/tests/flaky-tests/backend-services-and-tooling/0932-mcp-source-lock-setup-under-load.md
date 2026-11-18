@@ -27,7 +27,7 @@ The complete unchanged source-store and fsmonitor owners passed sequentially
 with one Bun worker (exit 0, 9.8 s):
 
 ```sh
-mise run test:logged -- --name recorded-backend-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/git-fsmonitor.test.ts ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name recorded-backend-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/git/fsmonitor.test.ts ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures
 ```
 
 The passing logged runner discarded detailed output. No source-store code,

@@ -262,7 +262,7 @@ export function AnnotationPanel({
         {capture.error && (
           <div
             role="alert"
-            className="flex shrink-0 items-start gap-2 border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-[11px] text-destructive"
+            className="flex shrink-0 items-start gap-2 border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-[11px] text-failure"
           >
             <span className="min-w-0 flex-1">{capture.error}</span>
             <button type="button" className="underline" onClick={capture.clearError}>

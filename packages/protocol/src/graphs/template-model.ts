@@ -91,7 +91,7 @@ export const GRAPH_ROLE_DEFAULT_ACTION_KEYS = [
   "review",
   "review2",
   "reviewPreparation",
-  "fixReviewIssues",
+  "addressFindings",
   "verify",
   "pr",
   "resolve",

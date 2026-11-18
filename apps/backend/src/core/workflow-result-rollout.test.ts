@@ -7,7 +7,7 @@ describe("WorkflowResultRollout", () => {
     const rollout = new WorkflowResultRollout(async () => undefined);
     expect(rollout.allows("codex", "review-report")).toBe(true);
     expect(rollout.allows("claude", "feature-plan-state")).toBe(true);
-    expect(rollout.allows("cursor", "fix-result")).toBe(true);
+    expect(rollout.allows("cursor", "address-findings-result")).toBe(true);
     expect(rollout.allows("grok", "consolidated-review")).toBe(true);
     expect(rollout.allows("pi", "verification-result")).toBe(true);
     expect(rollout.allows("opencode", "review-report")).toBe(true);
@@ -42,7 +42,7 @@ describe("WorkflowResultRollout", () => {
     }));
     await rollout.refresh();
     expect(rollout.allows("codex", "review-report")).toBe(true);
-    expect(rollout.allows("codex", "fix-result")).toBe(false);
+    expect(rollout.allows("codex", "address-findings-result")).toBe(false);
     expect(rollout.allows("claude", "review-report")).toBe(false);
   });
 

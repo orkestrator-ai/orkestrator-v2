@@ -188,7 +188,7 @@ export function TurnChangesHistory({
         </ol>
       ) : null}
       {status === "error" ? (
-        <p role="alert" className="px-1 py-1 text-xs text-destructive">
+        <p role="alert" className="px-1 py-1 text-xs text-failure">
           {message}
         </p>
       ) : null}

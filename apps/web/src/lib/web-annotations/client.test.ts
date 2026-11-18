@@ -89,4 +89,19 @@ describe("web annotation client", () => {
       webAnnotationFeatures(fixtureCapabilities({ batch: false }), true).maxRequestAnnotations,
     ).toBe(1);
   });
+
+  test("advisory result diffs follow their own capability, on every client that reads", () => {
+    // Older backends never name it.
+    expect(webAnnotationFeatures(fixtureCapabilities(), true).resultDiffs).toBe(false);
+    const advertised = fixtureCapabilities({ resultDiffs: true });
+    expect(webAnnotationFeatures(advertised, true).resultDiffs).toBe(true);
+    // Read-only: web and iOS review results too, without desktop capture.
+    expect(webAnnotationFeatures(advertised, false).resultDiffs).toBe(true);
+    expect(webAnnotationFeatures({ ...advertised, mode: "read-only" }, false).resultDiffs).toBe(
+      true,
+    );
+    expect(webAnnotationFeatures({ ...advertised, mode: "disabled" }, true).resultDiffs).toBe(
+      false,
+    );
+  });
 });

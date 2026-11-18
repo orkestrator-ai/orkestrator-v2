@@ -9,7 +9,7 @@
  *
  * Path roots, by where a predicate appears:
  * - node `when` and gate branches: an input port name of that node, `params`
- *   or `run` (`report.issues`, `params.autoFix`, `run.iteration`);
+ *   or `run` (`report.issues`, `params.autoAddressFindings`, `run.iteration`);
  * - loop `until`: `<nodeId>.<port>` of a node in the region
  *   (`verify.verdict.complete`), plus `params` and `run`;
  * - edge `filter`: a field of one list element (`severity`).

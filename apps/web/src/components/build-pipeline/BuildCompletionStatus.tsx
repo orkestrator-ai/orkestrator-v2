@@ -134,8 +134,8 @@ export function BuildCompletionStatus({ pipeline }: BuildCompletionStatusProps) 
           className="flex flex-wrap items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2"
           role="alert"
         >
-          <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
-          <span className="min-w-0 flex-1 text-xs text-destructive">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0 text-failure" />
+          <span className="min-w-0 flex-1 text-xs text-failure">
             {pipeline.error ??
               "An unattended interaction could not be resolved safely, so the active phase stopped."}
           </span>
@@ -147,8 +147,8 @@ export function BuildCompletionStatus({ pipeline }: BuildCompletionStatusProps) 
           className="flex flex-wrap items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2"
           role="alert"
         >
-          <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
-          <span className="min-w-0 flex-1 text-xs text-destructive">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0 text-failure" />
+          <span className="min-w-0 flex-1 text-xs text-failure">
             {copy!.label}: {pipeline.completionCommentError ?? copy!.fallback}
           </span>
           {retryButton("completion", copy!.retryLabel)}

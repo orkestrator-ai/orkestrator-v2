@@ -92,6 +92,7 @@ const ACCESS: Record<string, WebAnnotationCommandAccess> = {
   [c.receipt]: "read",
   [c.assetGet]: "read",
   [c.migrationStatus]: "read",
+  [c.resultDiff]: "read",
   [c.draftGet]: "draft",
   [c.draftSave]: "draft",
   [c.draftDelete]: "draft",
@@ -117,4 +118,12 @@ export function webAnnotationAccessAllowed(
   if (mode === "enabled") return true;
   if (mode === "disabled") return false;
   return access !== "author";
+}
+
+/** Advisory diffs follow annotation readability and the host feature flag. */
+export function resultDiffsAllowed(ctx: {
+  rolloutMode: WebAnnotationRolloutMode;
+  options: { resultDiffs?: boolean };
+}): boolean {
+  return ctx.rolloutMode !== "disabled" && ctx.options.resultDiffs !== false;
 }

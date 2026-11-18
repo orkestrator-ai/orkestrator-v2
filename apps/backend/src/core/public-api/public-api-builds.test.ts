@@ -50,7 +50,7 @@ function launchInput(build: BuildHarness): Record<string, unknown> {
     environmentId: "env-1",
     steps: {
       build: { instructions: TEXT.build },
-      address: { instructions: "Address the reported findings" },
+      "address-findings": { instructions: "Address the reported findings" },
       verify: {
         agent: "codex",
         model: "gpt-5.5",
@@ -116,8 +116,8 @@ describe("build.launch", () => {
       pipelineId: pipeline.id,
     });
     if (!detail.ok) throw new Error(detail.error.message);
-    expect(detail.result.steps.address).toBeDefined();
-    expect(detail.result.steps).not.toHaveProperty("address-findings");
+    expect(detail.result.steps["address-findings"]).toBeDefined();
+    expect(detail.result.steps).not.toHaveProperty("address");
     expect(pipeline.source).toEqual({ type: "kanban", taskId: build.ticketId });
     expect(pipeline.taskSnapshot.title).toBe("Add a --verbose flag");
     expect(pipeline.maxIterations).toBe(2);
@@ -303,6 +303,7 @@ describe("build.launch", () => {
       ["model-without-agent", { ...base, steps: { pr: { model: "opus" } } }, "invalid-input"],
       ["reviewer-without-model", { ...base, reviewers: [{ agent: "claude" }] }, "invalid-input"],
       ["unknown-step", { ...base, steps: { ship: { agent: "claude" } } }, "invalid-input"],
+      ["former-step-name", { ...base, steps: { address: { agent: "claude" } } }, "invalid-input"],
       [
         "review-and-reviewers",
         {

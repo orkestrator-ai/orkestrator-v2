@@ -583,7 +583,7 @@ const BUILT_IN_KINDS: readonly WorkflowResultKindDefinition[] = [
         ? validateReconciliationContext(value, slot.context)
         : [],
   }),
-  builtInKind("fix-result", () => REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA, {
+  builtInKind("address-findings-result", () => REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA, {
     validator: parses(parseAddressFindingsResult),
     finalContent: finalAddressFindingsResult,
   }),

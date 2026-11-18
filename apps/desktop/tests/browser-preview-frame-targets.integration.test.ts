@@ -1,5 +1,5 @@
 /**
- * Element targets inside same-origin iframes (todo 0047 task 5) in real
+ * Element targets inside same-origin iframes (#2363) in real
  * Chromium, with the page scripts in a CDP isolated world as the desktop runs
  * them, picked with real pointer input, resolved again after a frame
  * navigation and after a reload. happy-dom gives every frame an opaque origin

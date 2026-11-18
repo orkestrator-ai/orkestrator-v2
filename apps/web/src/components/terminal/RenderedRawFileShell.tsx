@@ -81,7 +81,7 @@ export function RenderedRawFileShell({
             </span>
           )}
           {headerActions}
-          <TabsList className="h-7 rounded-md p-0.5">
+          <TabsList variant="segmented">
             <TabsTrigger className="h-6 px-2 text-xs" value="rendered">
               Rendered
             </TabsTrigger>

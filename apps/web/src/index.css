@@ -780,7 +780,7 @@ body[data-orkestrator-dev-profile]::before {
 }
 
 .merge-conflicts-name {
-  --text-shimmer-highlight: color-mix(in oklab, var(--color-destructive) 75%, white);
+  --text-shimmer-highlight: color-mix(in oklab, var(--color-failure) 75%, white);
 }
 
 .needs-answer-name {
@@ -797,9 +797,12 @@ body[data-orkestrator-dev-profile]::before {
 
   /* The static highlight: the band's colour, held still. */
   .merge-ready-name,
-  .merge-conflicts-name,
   .needs-answer-name {
     color: var(--text-shimmer-highlight);
+  }
+
+  .merge-conflicts-name {
+    color: var(--color-failure);
   }
 }
 

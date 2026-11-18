@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { normalizeConfiguredProjectFiles, isPathInsideRoot } from "../commands-project-files.js";
 import { validateRelativeFilePath } from "../path-safety.js";
-import { runGitWithFsmonitorFallback } from "../git-fsmonitor.js";
+import { runGitWithFsmonitorFallback } from "../git/index.js";
 import {
   mailAttachmentSpoolDir,
   sweepProjectHomeMailAttachments,

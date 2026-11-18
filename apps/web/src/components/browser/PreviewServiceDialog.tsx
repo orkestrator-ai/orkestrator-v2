@@ -266,7 +266,7 @@ export function PreviewServiceDialog({
             Open this service from the environment's browser button
           </label>
           {error && (
-            <p role="alert" className="text-sm text-destructive">
+            <p role="alert" className="text-sm text-failure">
               {error}
             </p>
           )}

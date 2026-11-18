@@ -236,7 +236,7 @@ function AccountSection({
       ) : null}
 
       {error ? (
-        <p role="alert" className="text-destructive">
+        <p role="alert" className="text-failure">
           {error}
         </p>
       ) : null}

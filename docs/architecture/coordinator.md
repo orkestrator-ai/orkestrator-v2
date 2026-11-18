@@ -2210,7 +2210,7 @@ or logs. Operator reads are unchanged.
 
 `requiredFailed` is GitHub's `isRequired`, which the PR monitor asks only
 when its rollup shows a failing check, cached per PR head and failing set
-(`pr-required-checks.ts`). A PR whose only failing checks are not required
+(`git/pr-required-checks.ts`). A PR whose only failing checks are not required
 stays quiet: no `pr-checks-failed` wake, and still not ready to merge. When
 GitHub does not answer, or an older node does not relay the count, it is
 null and every failing check counts; that notice says the check may not be
@@ -2718,8 +2718,8 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
   pipeline record alone. The mailbox directory
   (`storage-agent-mail-directory.ts`) publishes one mailbox of kind
   `pipeline` per worker of a running pipeline, with `pipelineWorker`: step
-  (`build`, `preparation`, `review`, `consolidation`, `address`, `verify`,
-  `fix`, `pr`, `resolve-conflicts`), round, reviewer slot, label, model and
+  (`build`, `preparation`, `review`, `consolidation`, `address-findings`,
+  `verify`, `rework`, `pr`, `resolve-conflicts`), round, reviewer slot, label, model and
   status (`running`, `idle`, `finished`, `failed`, `cancelled`).
   `list_mailboxes` with `environmentId` lists them (with `nodeId` too, on a
   leaf), and `get_build_pipeline` carries the same list as `workers`
@@ -3323,7 +3323,7 @@ created resources only; there is no per-resource opt-in.
 structured `notice` (resource kind and ids, state, tone), a subject such as
 "Multi Review api-fix is ready to address", a bounded Markdown body (at most
 eight 400-character detail lines) and the calls that read more or act —
-`get_multi_review`, `address_multi_review`, `open_multi_review_fix`,
+`get_multi_review`, `address_multi_review`, `open_multi_review_address_findings`,
 `get_build_pipeline`, `resume_build_pipeline`, `restart_build_pipeline_step`,
 `get_graph_run`,
 `get_tab_state`, `get_tab_transcript`, `get_environment`,
@@ -3506,8 +3506,8 @@ What an omitted choice resolves to:
 | --- | --- | --- |
 | `launch_environment`, `launch_job` | `agent` | The saved default agent (environment → repository → app settings; a job reads its environment's tier) when it is enabled, else the first enabled platform: `defaults.agent` from `get_launch_options` (`defaultLaunchAgent`, `control-shared-actions.ts`). A launch on another node resolves on that node |
 | `launch_environment`, `launch_job` | `modelId`, `reasoningId`, `fastMode` | The platform column across environment → repository → app settings, else the agent's own default (`defaultReasoningId` for effort) |
-| `launch_multi_review` | `reviewers`, `reviewModel`, `fixModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count, each reviewer with its position's saved focus (`multiReview.reviewerLenses`); Review preparation and Address Findings review issues, each falling back to Review |
-| `launch_multi_review` | `autoFix`, `autoPr` | The saved app-level Auto-fix and Auto-PR, which the button reads; a requested `autoPr: true` turns an omitted `autoFix` on |
+| `launch_multi_review` | `reviewers`, `reviewModel`, `addressFindingsModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count, each reviewer with its position's saved focus (`multiReview.reviewerLenses`); Review preparation and Address Findings review issues, each falling back to Review |
+| `launch_multi_review` | `autoAddressFindings`, `autoPr` | The saved app-level Auto-address findings and Auto-PR, which the button reads; a requested `autoPr: true` turns an omitted `autoAddressFindings` on |
 | `start_build_pipeline` | `agentType`, `steps`, `reviewers`, `reviewPreparation` | `buildPipelineConfiguredDefaults` (`packages/protocol/src/build-pipeline-defaults.ts`), the resolver the Build button uses |
 
 Every one of these can be overridden. A coordinator is told to override only
@@ -3558,8 +3558,8 @@ A reviewer row, in `launch_multi_review` or
 `start_build_pipeline`'s `reviewers`, may carry `lens: { label, instruction }`:
 the reviewer's focus, a label of at most 64 characters and an instruction of at
 most 4 KiB ([reviewer lenses](review-preparation.md#reviewer-lenses)). The
-tools refuse a longer or blank one, and `reviewModel`, `fixModel` and
-`reviewPreparation` take none. Explicit rows replace the saved rows and their
+tools refuse a longer or blank one, and `reviewModel`, `addressFindingsModel`
+and `reviewPreparation` take none. Explicit rows replace the saved rows and their
 saved focus. The coordinator is told to set a lens only when the user asks for
 a focus.
 
@@ -3581,8 +3581,9 @@ Every launch reports what will run. `launch_environment` and `launch_job` return
 `selection: { agent, model, reasoning, source }`, where `source` is `requested`
 if the call set `modelId` or `reasoningId` and `default` otherwise. `model` is
 null when no tier pins one and the agent picks its own. The Multi Review result
-reports its rows the same way, plus `autoFix` and `autoPr` with a source of
-`default`, `requested` or `implied` (auto-fix turned on by a requested auto-PR).
+reports its rows the same way, plus `autoAddressFindings` and `autoPr` with a
+source of `default`, `requested` or `implied` (auto-address findings turned on by
+a requested auto-PR).
 `start_build_pipeline` reports the pipeline's
 `agentType`, `steps`, `reviewers` and `reviewPreparation`, with a per-step and
 per-field `source`; a step's stored instructions are reported as
@@ -3626,7 +3627,7 @@ only its own workers' markers.
 
 Use `launch_multi_review` for an environment's **Multi Review** button. Pass a
 stable `requestId` and the environment ID. Omitted `reviewers`, `reviewModel`
-and `fixModel` use the saved Multi Review defaults exactly as the button does
+and `addressFindingsModel` use the saved Multi Review defaults exactly as the button does
 (see [Launch defaults](#launch-defaults)); explicit rows (`agent`, `model`,
 optional `reasoningEffort`) replace them one field at a time. Omitted
 `targetBranch` and `reviewInstruction` use the repository's PR base branch
@@ -3636,7 +3637,7 @@ instruction explicitly clears the instruction for this launch. The result's
 field, whether they were `requested`, `default` or `implied`. A reused active
 review keeps its own rows and auto-actions.
 
-Optional `autoFix` and `autoPr` match the launch dialog's **Auto-fix after
+Optional `autoAddressFindings` and `autoPr` match the launch dialog's **Auto-fix after
 consolidation** and **Auto-PR after fix or clean review** checkboxes, which open on the saved
 app-level settings. Omitted, they use those settings. With both on, the review
 runs end to end through the button's own code path in `MultiReviewService`:
@@ -3653,7 +3654,7 @@ runs end to end through the button's own code path in `MultiReviewService`:
 Consolidation with nothing to fix skips Address Findings: with `autoPr` on, the save
 that settles it at `ready` records `autoPrLaunch: { basis: "clean-review",
 state: "pending" }` (`queueCleanReviewAutoPr`) and step 3 follows, whatever
-`autoFix` says.
+`autoAddressFindings` says.
 
 The PR intent is only ever recorded with proof that an Address Findings run completed or that
 there was nothing to fix, so the PR cannot come before an Address Findings run. A failed, stopped, superseded or unconfirmed Address Findings records
@@ -3663,11 +3664,11 @@ bounded retries. The PR launch retries three times before `failed`. Each step
 is durable, so a restart resumes at the step it reached. Nothing in this flow
 merges.
 
-`autoPr: true` with `autoFix` omitted also turns auto-fix on, because a
+`autoPr: true` with `autoAddressFindings` omitted also turns it on, because a
 coordinator asking for an automatic PR wants the whole flow. An explicit
-`autoFix: false` with `autoPr: true` keeps the button's meaning: the PR follows a
+`autoAddressFindings: false` with `autoPr: true` keeps the button's meaning: the PR follows a
 Address Findings started with `address_multi_review`. `get_multi_review` reports
-`automation: { autoFix, autoPr, prLaunch?, next }`, where `next` says in one
+`automation: { autoAddressFindings, autoPr, prLaunch?, next }`, where `next` says in one
 sentence what runs next and whether the coordinator has to act.
 
 This action has no build-pipeline prerequisite. It reopens an active review
@@ -3678,9 +3679,9 @@ navigation: an inactive environment receives the durable tab and selection,
 which its renderer adopts when the user returns.
 
 `open_multi_review` reopens/focuses that root without starting work.
-`open_multi_review_fix` opens/focuses the authoritative Address Findings provider session
+`open_multi_review_address_findings` opens/focuses the authoritative Address Findings provider session
 without sending a turn. `address_multi_review` now opens the root first and
-records the backend's idempotent fix handoff; the supervisor publishes and
+records the backend's idempotent Address Findings handoff; the supervisor publishes and
 selects Address Findings after confirmed dispatch when the foreground action initiated that
 attempt. A background retry or backend-restart resume publishes Address Findings without
 changing the current tab or pane. A repeated address call returns the existing
@@ -3702,7 +3703,7 @@ Read the result before reporting success:
   return the workflow snapshot with controller fences removed.
 - `outcome: "pending"` on address confirms a durable intent, not prompt delivery.
   Inspect `get_multi_review` for `addressPromptPending`, `presentationError`, and
-  `fixTabId`. Do not send another fix prompt manually.
+  `addressFindingsTabId`. Do not send another Address Findings prompt manually.
 - `outcome: "partial"` is an MCP error result with the saved workflow and an
   actionable `recovery` message. A new launch whose tab cannot be published
   requests cancellation. Cancellation may still be in progress or unconfirmed;
@@ -3728,7 +3729,7 @@ authoritative reconciliation load referenced workflows before installing tabs.
 | Existing control / button family | Durable consequences and disposition |
 | --- | --- |
 | `start_multi_review` / Multi Review | Backend-only and build-gated. No longer offered to coordinators (`RETIRED_COORDINATOR_TOOLS`); `launch_multi_review` adds root-tab publication, focus, readiness checks, reattachment, and truthful recovery. Operator credentials keep their own `start_multi_review` over `review.launch`. |
-| Multi Review open / Open Address Findings session | Added `open_multi_review` and `open_multi_review_fix`; operate entirely through backend snapshots and pane persistence. No additional provider turn. |
+| Multi Review open / Open Address Findings session | Added `open_multi_review` and `open_multi_review_address_findings`; operate entirely through backend snapshots and pane persistence. No additional provider turn. |
 | `address_multi_review` / Address findings | Upgraded to the complete action above. Existing backend handoff already owns session adoption, turn idempotency, and eventual Address Findings publication; it now selects that tab when published and reports queued/partial outcomes. |
 | `start_build_pipeline` / Build | Already complete: `BuildPipelineService` owns environment provisioning, workflow persistence, Kanban/feature ownership, root-tab creation and selection, with supervisor repair. Reuse it; no duplicate wrapper added. |
 | `pause_build_pipeline`, `resume_build_pipeline`, `cancel_build_pipeline`, `cancel_multi_review` | Backend transitions already durable; these buttons have no required new pane or tab consequence. Resume refuses a pipeline that is not paused. |
@@ -3759,7 +3760,7 @@ read directly, and `get_worker_changes` refuses the project home.
 
 `launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `create_pr`,
 `resolve_conflicts`, `get_worker_changes`, `fork_worker`, `stop_worker_turn`,
-`list_worker_commands`, `run_worker_command`, `custom_fix_multi_review` and
+`list_worker_commands`, `run_worker_command`, `custom_address_multi_review` and
 `open_multi_review` (with or without `reviewerId`) also take `nodeId` for a
 worker on a connected node. The
 receipt, any adoption of the review, and a PR follow stay on the command node; the node
@@ -3767,7 +3768,7 @@ that owns the worker checks its project and refuses its checkout, then runs
 the work through a controller command (`launch_controller_terminal`,
 `open_controller_browser`, `edit_controller_worker_tab`, `create_controller_pr`,
 `resolve_controller_conflicts`, `get_controller_worker_changes`,
-`fork_controller_environment`, or the `reviewer` and `custom-fix` surfaces of `controller_multi_review_surface`
+`fork_controller_environment`, or the `reviewer` and `custom-address` surfaces of `controller_multi_review_surface`
 in `commands-registry-controller-workflows.ts`; `stop_controller_worker_turn`,
 `list_controller_worker_commands` and `run_controller_worker_command` in
 `coordinator-worker-turn-actions.ts`). Those are node-link only,
@@ -3775,7 +3776,7 @@ never reachable with a workspace grant. Job, tab and navigation IDs on that
 node derive from the command node's receipt key. So when the node link loses
 an answer, the tool returns outcome-unknown and asks for a retry with the same
 `requestId`, and the retry reattaches to what the first attempt made; nothing
-is resent automatically. A remote custom fix that is already past its handoff
+is resent automatically. A remote custom Address Findings that is already past its handoff
 when the retry arrives is reported, with its Address Findings tab, rather than refused as
 not ready. A node from before these commands answers "update that node".
 `request_root_changes` also takes `nodeId`: its request and approval stay on
@@ -3794,7 +3795,7 @@ node and only the approved answer crosses the link
 | `list_worker_commands` | The tab's `/` menu: `session.commands` for one native tab, without commands that act on a running turn (`/steer`). `refresh` re-reads the agent's list. | A read. | Nothing. |
 | `run_worker_command` | Picks one row of that menu: `session.command`'s resolution and every refusal it has (missing, ambiguous, unavailable, changed since listed, wrong arguments, busy tab, parked dispatch), dispatched as a selection, never as prompt text. `/steer` is refused. A command that starts a provider turn opens a delegation, as `send_prompt_to_tab` does, and is refused while one is open on that tab; one that answers without a turn (`bridge-local`, an Orkestrator session action such as `/compact`) opens none and says to read its output with `get_tab_transcript`. | Replays the receipt; the dispatch request ID derives from it, so a retry after a lost answer replays on the node that owns the worker. | The command runs in the tab as if the user picked it. |
 | `open_multi_review` with `reviewerId` | Opens one reviewer's read-only transcript subtab (`multi-review:<id>:reviewer:<reviewer>`). | Focuses the same tab. | Same tab the reviewer node opens in the review. A reviewer without a session yet returns `partial` with the reason. |
-| `custom_fix_multi_review` | The review tab's **Custom fix prompt**: a fix with the caller's instruction and, optionally, another model (`MultiReviewService.customFix`). | Replays the outcome and re-reads the workflow; while the handoff is pending the service itself also replays. | The Address Findings tab, as for `address_multi_review`; a custom fix never starts an automatic PR. Status wakes follow as for a default fix. |
+| `custom_address_multi_review` | The review tab's custom Address Findings prompt: an Address Findings run with the caller's instruction and, optionally, another model (`addressFindingsModel`; `MultiReviewService.customAddressFindings`). | Replays the outcome and re-reads the workflow; while the handoff is pending the service itself also replays. | The Address Findings tab, as for `address_multi_review`; a custom Address Findings never starts an automatic PR. Status wakes follow as for a default one. |
 | `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `multi-review-auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. A launched PR is followed: status wakes when it opens, conflicts, fails a check, is ready to merge, merges or closes ([Status wakes](#status-wakes)). |
 | `resolve_conflicts` | The **Resolve Conflicts** button: the worker's `Resolve` tab, with the Resolve Conflicts prompt, the `resolve` action default and the button's completion action (the PR monitor rechecks the PR when the agent finishes), against `targetBranch`, else the PR's own base branch, else the repository's PR base branch, else `main`, as `pr.resolve` does (`launchWorkerResolve` in `coordinator-pr.ts`, `launchResolveConflictsAgent` in `multi-review-auto-pr.ts`). The button's precondition applies: refused when the worker has no PR, when it is merged or closed, or when GitHub reports no conflicts (an unknown mergeability is allowed), and while the worker's pipeline owns it. Pass `nodeId` for a remote worker. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same Resolve agent. | The `Resolve` tab, opened without taking focus; an open Resolve tab, or a finished pipeline's Resolve Conflicts session, is reused instead of opening another ([Resolve launches](github-pull-requests.md#resolve-launches)). One status wake when it finishes, with the refreshed PR state; the PR stays followed. |
 | `launch_feature_plan`, `get_feature_plan` | **New feature** and **Send** on the Features board: a planning agent in its own environment turns the message into a summary and stories. Building from a plan stays the user's Build button. | Replays; a retry after a crash finds the plan that attempt created. | The plan on the Features board. A `feature-plan` association, written before planning starts: status wakes when the reply is ready and when planning fails ([Status wakes](#status-wakes)); `list_workflows` lists it. |

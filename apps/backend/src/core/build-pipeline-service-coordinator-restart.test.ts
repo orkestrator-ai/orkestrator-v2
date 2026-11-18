@@ -50,7 +50,7 @@ const failVerification = (provider: FakeProvider) => {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : phase === "build" || phase === "rework"
+        : phase === "build" || phase === "rework" || phase === "package-preparation"
           ? TEST_REVIEW_PREPARATION
           : phase === "address-findings"
             ? TEST_ADDRESS_FINDINGS_RESULT
@@ -286,7 +286,7 @@ test("failed targets ignore a session from another phase and distinguish validat
       sessionId: session.sdkSessionId,
     };
     expect(failedStepTarget(snapshot)).toEqual({ kind: "session", phase: "rework" });
-    snapshot.failureContext = { phase: "building", kind: "stage-transition" };
+    snapshot.failureContext = { phase: "preparing-package", kind: "stage-transition" };
     snapshot.validationRun = {
       id: "validation",
       status: "failed",

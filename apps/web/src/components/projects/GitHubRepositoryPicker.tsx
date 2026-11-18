@@ -119,7 +119,7 @@ function SearchableList<T>({
                 type="button"
                 onClick={() => onSelect(item)}
                 disabled={isDisabled?.(item)}
-                className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/50 focus-hairline disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
+                className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm transition-colors hover:bg-hover focus-hairline disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
               >
                 {renderItem(item)}
               </button>
@@ -143,7 +143,7 @@ function LoadingRow({ label }: { label: string }) {
 function ErrorRow({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <div className="space-y-3 rounded-lg border border-destructive/40 px-3 py-4 text-sm">
-      <p className="text-destructive" role="alert">
+      <p className="text-failure" role="alert">
         {message}
       </p>
       <Button type="button" variant="outline" size="sm" onClick={onRetry}>
@@ -502,7 +502,7 @@ export function GitHubRepositoryPicker({
                   search the rest.
                 </p>
                 {activeRepositories.pageError && (
-                  <p role="alert" className="text-sm text-destructive">
+                  <p role="alert" className="text-sm text-failure">
                     {activeRepositories.pageError}
                   </p>
                 )}
@@ -593,7 +593,7 @@ export function GitHubRepositoryPicker({
       </div>
 
       {cloneError && (
-        <p className="text-sm text-destructive" role="alert">
+        <p className="text-sm text-failure" role="alert">
           {cloneError}
         </p>
       )}

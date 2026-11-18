@@ -1,5 +1,5 @@
 /**
- * The page-side frame kit's pure parts (todo 0047 task 5): a frame document's
+ * The page-side frame kit's pure parts (#2363): a frame document's
  * identity never carries an origin, query, fragment or token-like segment, and
  * the kit's limits mirror the protocol's. Frame traversal itself needs a real
  * browser and is covered in browser-preview-frame-targets.integration.test.ts.

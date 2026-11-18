@@ -859,7 +859,7 @@ describe("coordinator command registry", () => {
         actionDefaults: {
           review: { platform: "claude", model: "opus", reasoningEffort: "high" },
           review2: { platform: "codex", model: "gpt-5.6" },
-          fixReviewIssues: { platform: "codex", model: "gpt-5.6", reasoningEffort: "medium" },
+          addressFindings: { platform: "codex", model: "gpt-5.6", reasoningEffort: "medium" },
         },
         multiReview: { autoFix: true, reviewerCount: 2 },
       },

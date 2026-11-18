@@ -550,7 +550,7 @@ test("review preparation startup failure retries without setup or another Build"
       expect(failed.phase).toBe("failed");
       expect(failed.sessions[0]?.status).toBe("idle");
       const retried = await service.retryStage(started.id);
-      expect(retried.phase).toBe("reworking");
+      expect(retried.phase).toBe("preparing-package");
       expect(retried.sessions.at(-1)?.label).toBe(REVIEW_PACKAGE_SESSION_LABEL);
       expect(retried.sessions.at(-1)?.status).toBe("running");
       expect((await pipeline(storage, started.id)).sessions[0]?.status).toBe("idle");

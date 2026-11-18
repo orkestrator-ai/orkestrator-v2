@@ -10,7 +10,7 @@ export const CRITERION_STATES: Record<
   { label: string; icon: typeof Circle; className: string }
 > = {
   passed: { label: "Passed", icon: CheckCircle2, className: "text-success" },
-  failed: { label: "Failed", icon: XCircle, className: "text-destructive" },
+  failed: { label: "Failed", icon: XCircle, className: "text-failure" },
   "not-checked": { label: "Not checked", icon: CircleHelp, className: "text-amber-500" },
   unchecked: { label: "Not verified yet", icon: Circle, className: "text-muted-foreground/60" },
 };

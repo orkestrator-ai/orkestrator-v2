@@ -202,9 +202,9 @@ function LinearCardContent({
 }
 
 const CARD_CLASS = cn(
-  "group relative block w-full overflow-hidden rounded-lg border bg-card p-3 pl-4 text-left shadow-sm",
-  "transition-[border-color,box-shadow,background-color]",
-  "border-border hover:border-primary/50 hover:bg-accent/20 hover:shadow-md",
+  "group relative block w-full overflow-hidden rounded-lg border bg-card p-3 pl-4 text-left",
+  "transition-[border-color,background-color]",
+  "border-border hover:border-primary/50",
   "outline-none focus-hairline",
 );
 
@@ -345,6 +345,7 @@ function LinearBoardCard({
           CARD_CLASS,
           draggable && "cursor-grab active:cursor-grabbing",
           selected && "border-primary bg-primary/10 ring-1 ring-primary hover:border-primary",
+          !selected && !isDragging && !carried && "hover:bg-hover/50",
           // The preview follows the pointer; the originals stay as dashed placeholders.
           (isDragging || carried) && "border-dashed border-primary/60 bg-primary/5 opacity-50",
         )}

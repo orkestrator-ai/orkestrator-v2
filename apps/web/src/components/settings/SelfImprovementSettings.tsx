@@ -268,7 +268,7 @@ export function SelfImprovementSettings({
       }
     >
       <div className="space-y-8">
-        {error ? <p className="text-sm text-red-400">{error}</p> : null}
+        {error ? <p className="text-sm text-failure">{error}</p> : null}
         {notice ? <p className="text-sm text-amber-400">{notice}</p> : null}
 
         <section className="space-y-3" aria-labelledby="self-improvement-run">

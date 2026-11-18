@@ -40,7 +40,7 @@ export const COORDINATOR_SURFACE_ACTIONS = Object.freeze([
   "open-browser",
   "create-pr",
   "resolve-conflicts",
-  "custom-fix",
+  "custom-address",
   "launch-feature-plan",
   "request-root-changes",
   "propose-agents-md-update",

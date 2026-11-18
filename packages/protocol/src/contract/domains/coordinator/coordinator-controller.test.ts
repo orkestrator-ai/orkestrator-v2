@@ -65,14 +65,14 @@ const CRITICAL: Record<string, readonly string[]> = {
   start_controller_build_pipeline: ["coordinatorLaunchId"],
   launch_controller_multi_review: ["reservedId"],
   launch_multi_review: ["reservedId"],
-  controller_multi_review_surface: ["fixModel"],
+  controller_multi_review_surface: ["addressFindingsModel"],
   start_controller_multi_review: ["reservedId", "buildPipelineId"],
   fork_controller_environment: ["controlRequestId", "delegation"],
   launch_coordinator_node_environment: ["requestId"],
   open_coordinator_node_delegation: ["requestId"],
   send_coordinator_node_mail: ["requestId", "attachments", "deliverNow", "replyToMessageId"],
   start_coordinator_node_build_pipeline: ["requestId"],
-  coordinator_node_multi_review_surface: ["requestId", "fixModel"],
+  coordinator_node_multi_review_surface: ["requestId", "addressFindingsModel"],
   start_coordinator_node_multi_review: ["requestId", "buildPipelineId"],
 };
 

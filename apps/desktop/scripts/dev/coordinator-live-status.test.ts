@@ -73,8 +73,8 @@ describe("status prompts", () => {
   test("the review prompt launches without rows and acts on each notice", () => {
     const prompt = statusReviewPrompt(probe);
     expect(prompt).toContain(`environmentId "${probe.revieweeEnvironmentId}"`);
-    expect(prompt).toContain("autoFix false and autoPr false");
-    expect(prompt).toContain("Leave out reviewers, reviewModel, fixModel");
+    expect(prompt).toContain("autoAddressFindings false and autoPr false");
+    expect(prompt).toContain("Leave out reviewers, reviewModel, addressFindingsModel");
     expect(prompt).toContain("address_multi_review");
     expect(prompt).toContain(`${STATUS_REVIEW_DONE_MARKER} ${probe.token}`);
     expect(prompt).toContain("Never wait, sleep, poll");

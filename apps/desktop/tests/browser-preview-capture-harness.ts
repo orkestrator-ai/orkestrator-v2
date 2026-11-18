@@ -85,6 +85,8 @@ export class CaptureContents extends EventEmitter {
     sensitiveComplete: true,
   };
   image = { width: 1_600, height: 1_000 };
+  /** Bitmaps for successive `capturePage()` calls; empty means all white. */
+  captureBitmaps: Buffer[] = [];
   /** Simulate a native image whose pixels cannot be read back for masking. */
   bitmapUnavailable = false;
   onCapture: () => void = () => undefined;
@@ -140,7 +142,7 @@ export class CaptureContents extends EventEmitter {
   readonly capturePage = mock(async () => {
     this.onCapture();
     const width = this.emulation ? Number(this.emulation.viewSize.width) * 2 : this.image.width;
-    const image = fakeImage(width, this.image.height);
+    const image = fakeImage(width, this.image.height, this.captureBitmaps.shift());
     if (this.bitmapUnavailable) delete image.toBitmap;
     return image;
   });
@@ -368,6 +370,7 @@ export function createHarness(options: HarnessOptions = {}) {
     capturePollIntervalMs: 0,
     pins: { livePollIntervalMs: 0, sleep: async () => undefined },
     stability: { deadlineMs: 10, quietMs: 1 },
+    unstableSampleDelayMs: 0,
     now: () => Date.parse("2026-09-24T10:00:00.000Z"),
     ...options.manager,
   });

@@ -992,7 +992,7 @@ export function UnassignedNativeAgentComposer({
               className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
             >
               <History className="mr-2 h-4 w-4" />
-              Resume Session
+              Resume session
             </Button>
           ) : null
         }

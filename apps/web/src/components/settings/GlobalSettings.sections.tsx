@@ -980,9 +980,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       <DataSavingSetting />
       <AutoSteerSetting checked={autoSteer} onCheckedChange={setAutoSteer} />
 
-      {/* Preferred Editor */}
+      {/* Preferred editor */}
       <div className="space-y-3">
-        <SettingsSectionHeader icon={<Code2 className="h-4 w-4" />} title="Preferred Editor">
+        <SettingsSectionHeader icon={<Code2 className="h-4 w-4" />} title="Preferred editor">
           Editor for "Open in Editor" (Cmd+O)
         </SettingsSectionHeader>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -1074,7 +1074,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
       {/* Claude Code credentials */}
       <div className="space-y-3">
-        <SettingsSectionHeader title="Claude Code Credentials">
+        <SettingsSectionHeader title="Claude Code credentials">
           Controls whether containerized environments start signed in to Claude Code.
         </SettingsSectionHeader>
         <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
@@ -1120,9 +1120,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         </div>
       </div>
 
-      {/* Environment Files */}
+      {/* Environment files */}
       <div className="space-y-3">
-        <SettingsSectionHeader title="Environment Files">
+        <SettingsSectionHeader title="Environment files">
           Project files to copy into each new container and local worktree (comma-separated)
         </SettingsSectionHeader>
         <Input
@@ -1333,9 +1333,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     renderPlatform(
       "claude",
       <>
-        {/* Anthropic API Key */}
+        {/* Anthropic API key */}
         <div className="space-y-3">
-          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="Anthropic API Key">
+          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="Anthropic API key">
             Optional API-key override for Claude Code in containers
           </SettingsSectionHeader>
           <div className="relative">
@@ -1458,7 +1458,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       "opencode",
       <>
         <div className="space-y-3">
-          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="OpenCode Zen API Key">
+          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="OpenCode Zen API key">
             Used to read your OpenCode Zen (Go) plan usage. Stored by Orkestrator and never sent to
             an agent environment.
           </SettingsSectionHeader>
@@ -1507,7 +1507,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         </div>
 
         <div className="space-y-3 border-t border-border/60 pt-5">
-          <SettingsSectionHeader icon={<Boxes className="h-4 w-4" />} title="Model Providers">
+          <SettingsSectionHeader icon={<Boxes className="h-4 w-4" />} title="Model providers">
             Only models from these OpenCode providers appear in model pickers. Filtering happens
             before the catalog reaches the app, so excluded providers are never loaded.
           </SettingsSectionHeader>
@@ -1612,7 +1612,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       "cursor",
       <>
         <div className="space-y-3">
-          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="Cursor API Key">
+          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="Cursor API key">
             Required for Cursor Agent inside Linux containers. A macOS Cursor login is stored in
             Keychain and cannot be mounted into a container.
           </SettingsSectionHeader>
@@ -1719,9 +1719,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     const previewColors = getPreviewColors(terminalBackgroundColor);
     return (
       <SettingsPageLayout title="Terminal">
-        {/* Font Family */}
+        {/* Font family */}
         <div className="space-y-3">
-          <Label>Font Family</Label>
+          <Label>Font family</Label>
           <Select value={terminalFontFamily} onValueChange={setTerminalFontFamily}>
             <SelectTrigger className="w-full max-w-xs">
               <SelectValue placeholder="Select font" />
@@ -1740,10 +1740,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </p>
         </div>
 
-        {/* Font Size */}
+        {/* Font size */}
         <div className="space-y-3">
           <div className="flex justify-between max-w-xs">
-            <Label>Font Size</Label>
+            <Label>Font size</Label>
             <span className="text-sm font-medium">{terminalFontSize}px</span>
           </div>
           <Slider
@@ -1756,10 +1756,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           />
         </div>
 
-        {/* Scrollback Buffer */}
+        {/* Scrollback buffer */}
         <div className="space-y-3">
           <div className="flex justify-between max-w-xs">
-            <Label>Scrollback Buffer</Label>
+            <Label>Scrollback buffer</Label>
             <span className="text-sm font-medium">{terminalScrollback.toLocaleString()} lines</span>
           </div>
           <Slider
@@ -1843,9 +1843,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           )}
         </div>
 
-        {/* Background Color */}
+        {/* Background color */}
         <div className="space-y-3">
-          <Label>Background Color</Label>
+          <Label>Background color</Label>
           <div className="flex gap-3 items-center">
             <Input
               type="color"
@@ -1910,7 +1910,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderNetwork = () => (
     <SettingsPageLayout
-      title="Network Whitelist"
+      title="Network whitelist"
       description={<>Domains allowed in "Restricted" mode. {ALLOWLIST_ENTRY_HINT}</>}
     >
       <div className="space-y-4">
@@ -2321,7 +2321,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         ) : null}
       </div>
       <div className="space-y-3">
-        <SettingsSectionHeader title="Save Logs to Disk">
+        <SettingsSectionHeader title="Save logs to disk">
           Write application logs to disk for troubleshooting
         </SettingsSectionHeader>
         <button
@@ -2551,7 +2551,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               <>
                 Runs Claude&apos;s native chat by driving the Claude CLI under tmux instead of the
                 Agent SDK. Turning this on adds the Native backend choice to Settings → Claude and
-                Claude Tmux Tab to the new-agent-tab menu. While it is off every new Claude session
+                Claude Tmux tab to the new-agent-tab menu. While it is off every new Claude session
                 uses the Agent SDK; tmux tabs that are already open keep running.
               </>
             }

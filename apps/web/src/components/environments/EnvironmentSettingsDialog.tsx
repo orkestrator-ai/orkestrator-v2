@@ -868,11 +868,11 @@ export function EnvironmentSettingsDialog({
             </div>
             {isLocalEnvironment && (
               <div className="space-y-4">
-                <Label>Environment Type</Label>
+                <Label>Environment type</Label>
                 <div className="flex items-center gap-2 p-3 rounded-md bg-zinc-900">
                   <Laptop className="h-4 w-4 text-blue-500 shrink-0" />
                   <div>
-                    <div className="font-medium text-sm">Local Environment</div>
+                    <div className="font-medium text-sm">Local environment</div>
                     <div className="text-xs text-muted-foreground">
                       Uses a git worktree on your machine (no Docker container)
                     </div>
@@ -880,7 +880,7 @@ export function EnvironmentSettingsDialog({
                 </div>
                 {environment.worktreePath && (
                   <div className="space-y-2">
-                    <Label>Worktree Location</Label>
+                    <Label>Worktree location</Label>
                     <div className="flex items-center gap-2 p-2 rounded-md bg-zinc-900">
                       <FolderOpen className="h-4 w-4 text-muted-foreground shrink-0" />
                       <span className="text-sm font-mono truncate">{environment.worktreePath}</span>
@@ -893,7 +893,7 @@ export function EnvironmentSettingsDialog({
               </div>
             )}
             <div className="space-y-2">
-              <Label>Disk Usage</Label>
+              <Label>Disk usage</Label>
               <EnvironmentDiskUsageBreakdown environmentId={environment.id} />
             </div>
           </div>
@@ -1077,7 +1077,7 @@ export function EnvironmentSettingsDialog({
                 <>
                   <Globe className="h-4 w-4 text-blue-500 shrink-0" />
                   <div>
-                    <div className="font-medium text-sm">Full Network Access</div>
+                    <div className="font-medium text-sm">Full network access</div>
                     <div className="text-xs text-muted-foreground">
                       Unrestricted internet access. Whitelist does not apply.
                     </div>
@@ -1087,7 +1087,7 @@ export function EnvironmentSettingsDialog({
                 <>
                   <Shield className="h-4 w-4 text-success shrink-0" />
                   <div>
-                    <div className="font-medium text-sm">Restricted Network Access</div>
+                    <div className="font-medium text-sm">Restricted network access</div>
                     <div className="text-xs text-muted-foreground">
                       Only whitelisted domains are accessible.
                     </div>
@@ -1099,13 +1099,13 @@ export function EnvironmentSettingsDialog({
               <>
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Use Global Defaults</Label>
+                    <Label>Use global defaults</Label>
                     <p className="text-xs text-muted-foreground">Use default allowed domains</p>
                   </div>
                   <Switch checked={useGlobalDefaults} onCheckedChange={setUseGlobalDefaults} />
                 </div>
                 <div className="space-y-2">
-                  <Label>Allowed Domains</Label>
+                  <Label>Allowed domains</Label>
                   <p className="text-xs text-muted-foreground">{ALLOWLIST_ENTRY_HINT}</p>
                   <p className="text-xs text-muted-foreground">{ALLOWLIST_RESIDUAL_RISK}</p>
                   <Textarea
@@ -1140,12 +1140,12 @@ export function EnvironmentSettingsDialog({
                       Testing...
                     </>
                   ) : (
-                    "Test DNS Resolution"
+                    "Test DNS resolution"
                   )}
                 </Button>
                 {testResults && (
                   <div className="border border-zinc-700 rounded-md p-3 space-y-2 text-sm max-h-32 overflow-y-auto">
-                    <div className="font-medium">DNS Test Results:</div>
+                    <div className="font-medium">DNS test results:</div>
                     {testResults.map((result, i) => (
                       <div key={i} className="flex items-start gap-2">
                         {result.resolvable ? (
@@ -1275,7 +1275,7 @@ export function EnvironmentSettingsDialog({
                   onClick={() => setShowAddPortForm(true)}
                 >
                   <Plus className="h-4 w-4 mr-1" />
-                  Add Port
+                  Add port
                 </Button>
               )}
             </div>
@@ -1313,7 +1313,7 @@ export function EnvironmentSettingsDialog({
             )}
             {portMappings.length === 0 && !showAddPortForm && (
               <p className="text-sm text-muted-foreground">
-                No port mappings configured. Click "Add Port" to expose a container port.
+                No port mappings configured. Click "Add port" to expose a container port.
               </p>
             )}
             {portMappingsChanged && environment.containerId && (
@@ -1327,7 +1327,7 @@ export function EnvironmentSettingsDialog({
             )}
             {showAddPortForm && (
               <div className="space-y-3 p-3 rounded-md border border-zinc-700">
-                <p className="text-sm font-medium">Add Port Mapping</p>
+                <p className="text-sm font-medium">Add port mapping</p>
                 <div className="space-y-2">
                   <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
                     <Input
@@ -1539,7 +1539,7 @@ export function EnvironmentSettingsDialog({
       <FullscreenSettingsLayout
         open={open}
         onOpenChange={onOpenChange}
-        title="Environment Settings"
+        title="Environment settings"
         menuItems={menuItems}
         defaultSection={initialSection}
         sectionRequest={sectionRequest}
@@ -1555,7 +1555,7 @@ export function EnvironmentSettingsDialog({
                   Saving...
                 </>
               ) : (
-                "Save Changes"
+                "Save changes"
               )}
             </Button>
           </>

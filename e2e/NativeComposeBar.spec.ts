@@ -258,9 +258,9 @@ test("compose controls stay reachable in a narrow viewport", async ({ page }, te
   await expect(next).toContainText("Queued prompt 4");
   await page.getByRole("textbox", { name: "Send a message" }).fill("");
   await strip.getByTitle("View queued prompts").click();
-  await expect(page.getByRole("dialog", { name: "Queued Prompts" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Queued prompts" })).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog", { name: "Queued Prompts" })).toBeHidden();
+  await expect(page.getByRole("dialog", { name: "Queued prompts" })).toBeHidden();
 
   await page.getByRole("button", { name: "Address all" }).click();
   await expect(page.getByTestId("native-send-count")).toHaveText("1");

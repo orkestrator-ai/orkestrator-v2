@@ -18,7 +18,7 @@ import {
 
 /**
  * The always-on essential log: a small rotating file of content-free events,
- * written whatever "Save Logs to Disk" says, so the first occurrence of a crash
+ * written whatever "Save logs to disk" says, so the first occurrence of a crash
  * or a silent fallback is already on disk. A file rather than a table, because it
  * has to work when the database is the failing part. One process owns it: the
  * desktop in the app and the backend when standalone. Everything else relays.

@@ -31,7 +31,7 @@ export const GITHUB_WORKFLOW_STAGES: Array<{
   },
   {
     id: "inprogress",
-    label: "In Progress",
+    label: "In progress",
     color: "bg-violet-500",
     wash: "from-violet-500/10",
   },

@@ -116,7 +116,7 @@ function ContainerInitializationLogs({
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b bg-muted/30">
         <Loader2 className="h-4 w-4 animate-spin text-primary" />
-        <span className="text-sm font-medium">Initializing Container</span>
+        <span className="text-sm font-medium">Initializing container</span>
       </div>
 
       {/* Floats at the top right of the log, below the header. */}

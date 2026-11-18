@@ -151,7 +151,7 @@ describe("Docker settings section", () => {
           <DockerSettings />
         </DockerAvailabilityProvider>,
       );
-      await screen.findByText("System Resources");
+      await screen.findByText("System resources");
       await act(async () => {
         for (const callback of callbacks.values()) callback();
       });
@@ -162,14 +162,14 @@ describe("Docker settings section", () => {
         </DockerAvailabilityProvider>,
       );
       expect(screen.getByText(/Docker is not running/)).toBeTruthy();
-      expect(screen.queryByText("System Resources") === null).toBe(true);
+      expect(screen.queryByText("System resources") === null).toBe(true);
       expect(callbacks.size).toBe(0);
       view.rerender(
         <DockerAvailabilityProvider available>
           <DockerSettings />
         </DockerAvailabilityProvider>,
       );
-      await screen.findByText("System Resources");
+      await screen.findByText("System resources");
       expect(calls.filter((command) => command === "get_docker_system_stats")).toHaveLength(3);
       view.unmount();
       expect(callbacks.size).toBe(0);
@@ -214,13 +214,13 @@ describe("Docker settings section", () => {
           </AccountMachineProvider>
         </DockerAvailabilityProvider>,
       );
-      await screen.findByText("System Resources");
+      await screen.findByText("System resources");
       available = false;
       // The first timer belongs to the availability probe; the panel has its own timer.
       const probe = [...callbacks.values()].find(({ delay }) => delay === 5_000)!;
       await act(async () => probe.callback());
       expect(screen.getByText(/Docker is not running/)).toBeTruthy();
-      expect(screen.queryByText("System Resources") === null).toBe(true);
+      expect(screen.queryByText("System resources") === null).toBe(true);
       expect(callbacks.size).toBe(1);
       const statsReads = calls.filter((command) => command === "get_docker_system_stats").length;
       await act(async () => probe.callback());
@@ -271,7 +271,7 @@ describe("Docker settings section", () => {
           <DockerSettings />
         </AccountMachineProvider>,
       );
-      await screen.findByText("System Resources");
+      await screen.findByText("System resources");
       const [probe, refresh] = panelTimers;
       expect(callbacks.size).toBe(3);
       fireEvent.click(screen.getByTitle("Reattach to project"));
@@ -281,7 +281,7 @@ describe("Docker settings section", () => {
       probeState = "error";
       await act(async () => probe!());
       expect(screen.getByRole("status", { hidden: true }).textContent).toBe("Link interrupted");
-      expect(screen.getByText("System Resources")).toBeTruthy();
+      expect(screen.getByText("System resources")).toBeTruthy();
       expect(screen.getByRole("alertdialog")).toBe(dialog);
       expect((name as HTMLInputElement).value).toBe("Keep this name");
       expect(callbacks.size).toBe(3);
@@ -296,11 +296,11 @@ describe("Docker settings section", () => {
       probeState = "stopped";
       await act(async () => probe!());
       expect(screen.queryByRole("alertdialog") === null).toBe(true);
-      expect(screen.queryByText("System Resources") === null).toBe(true);
+      expect(screen.queryByText("System resources") === null).toBe(true);
       expect(callbacks.size).toBe(1);
       probeState = "available";
       await act(async () => probe!());
-      await screen.findByText("System Resources");
+      await screen.findByText("System resources");
       expect(statsReads).toBe(4);
       view.unmount();
       expect(callbacks.size).toBe(0);
@@ -349,7 +349,7 @@ describe("Docker settings section", () => {
       expect(callbacks.size).toBe(1);
       failing = false;
       await act(async () => Array.from(callbacks.values())[0]!());
-      await screen.findByText("System Resources");
+      await screen.findByText("System resources");
       expect(screen.queryByText("Node unavailable") === null).toBe(true);
       expect(reads).toContain("get_docker_system_stats");
       expect(callbacks.size).toBe(3);

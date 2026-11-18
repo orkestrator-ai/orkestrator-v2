@@ -77,9 +77,9 @@ test("Settings lists the backend's permission rules and removes one", async ({
   // This check uses no agent, Docker or GitHub: let credential-free profiles
   // reach the workspace through the ordinary optional-tool dialogs.
   for (const name of [
-    "Continue Without Claude",
-    "Continue Without Docker",
-    "Continue Without GitHub CLI",
+    "Continue without Claude",
+    "Continue without Docker",
+    "Continue without GitHub CLI",
   ]) {
     await page.addLocatorHandler(page.getByRole("button", { name, exact: true }), (button) =>
       button.click(),
@@ -129,9 +129,9 @@ test("approval card remembers, auto-applies in the background, survives restart 
   };
   let current = status();
   for (const name of [
-    "Continue Without Claude",
-    "Continue Without Docker",
-    "Continue Without GitHub CLI",
+    "Continue without Claude",
+    "Continue without Docker",
+    "Continue without GitHub CLI",
   ]) {
     await page.addLocatorHandler(page.getByRole("button", { name, exact: true }), (button) =>
       button.click(),

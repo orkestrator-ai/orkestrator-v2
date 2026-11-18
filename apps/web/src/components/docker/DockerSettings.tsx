@@ -320,11 +320,11 @@ function DockerSettingsPanel() {
     return (
       <SettingsPageLayout title="Containers">
         <DockerImageStatusPanel />
-        {/* System Resources */}
+        {/* System resources */}
         {stats && (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium">System Resources</h3>
+              <h3 className="text-sm font-medium">System resources</h3>
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" onClick={() => setShowCleanupReview(true)}>
                   <Trash2 className="h-4 w-4 mr-1" />
@@ -399,10 +399,10 @@ function DockerSettingsPanel() {
           </div>
         )}
 
-        {/* Orkestrator Containers */}
+        {/* Orkestrator containers */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium">Orkestrator Containers</h3>
+            <h3 className="text-sm font-medium">Orkestrator containers</h3>
             {orphanedCount > 0 && (
               <Button variant="destructive" size="sm" onClick={() => setShowCleanupReview(true)}>
                 <Trash2 className="h-4 w-4 mr-1" />
@@ -576,7 +576,7 @@ function DockerSettingsPanel() {
       >
         <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
           <AlertDialogHeader>
-            <AlertDialogTitle>Reattach Container to Project</AlertDialogTitle>
+            <AlertDialogTitle>Reattach container to project</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-4">
                 <p>Reattach this container to a project by creating a new environment entry.</p>
@@ -590,7 +590,7 @@ function DockerSettingsPanel() {
                 )}
 
                 <div className="space-y-2">
-                  <Label htmlFor="project-select">Select Project</Label>
+                  <Label htmlFor="project-select">Select project</Label>
                   <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
                     <SelectTrigger id="project-select">
                       <SelectValue placeholder="Choose a project..." />
@@ -606,7 +606,7 @@ function DockerSettingsPanel() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="env-name">Environment Name</Label>
+                  <Label htmlFor="env-name">Environment name</Label>
                   <Input
                     id="env-name"
                     value={reattachName}

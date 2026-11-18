@@ -64,11 +64,11 @@ ORKESTRATOR_LOG_LEVEL=info,bridge=debug,updater=trace orkestrator serve --port 4
 
 It takes a default level, areas, or both, in the syntax
 [logging.md](logging.md#live-settings) describes, sits on top of the stored
-**Log Detail** setting, and reaches every bridge the backend launches. Logging is
+**Log detail** setting, and reaches every bridge the backend launches. Logging is
 configured before flags are parsed, so a flag would have to be read twice for no
 new ability; one syntax serves the desktop, `serve` and the bridges alike. A
 launcher that cannot set an environment (a service manager does: systemd's
-`Environment=`, launchd's `EnvironmentVariables`) can use **Log Detail** in
+`Environment=`, launchd's `EnvironmentVariables`) can use **Log detail** in
 Settings instead, which applies live.
 
 ## Selecting a backend
@@ -307,7 +307,7 @@ not advertise at its version before sending it.
 | `graph status RUN` / `graph cancel RUN` | `graph.status` / `graph.cancel` | the graph run record (states and counts) / `GraphRunService.cancel` (refused once the run ended) | read / process |
 | `pr create ENV [--target-branch B]` | `pr.create` | the Create PR button: `session.start`'s job path with the shared PR prompt, the `PR` tab title and the `pr` action default, then PR monitoring; refused when the environment has a PR | provider, external |
 | `pr resolve ENV [--target-branch B]` | `pr.resolve` | the Resolve Conflicts button: the same path with the shared resolve prompt, the `Resolve` title, the `resolve` action default and the PR refresh on completion. Always a new tab with its own receipt; the button can reuse this tab, but this action never resends to one | provider, external |
-| `pr push ENV` | `pr.push` | the Push Changes button: the same path with the shared push prompt, the `Git Push` title and the `push` action default; refused unless the environment has an open PR | provider, external |
+| `pr push ENV` | `pr.push` | the Push changes button: the same path with the shared push prompt, the `Git Push` title and the `push` action default; refused unless the environment has an open PR | provider, external |
 | `pr get ENV` / `pr timeline ENV` / `pr files ENV [--path P]` / `pr options ENV` | `pr.get` / `pr.timeline` / `pr.files` / `pr.options` | the environment's pull request, read live through the viewer's commands; `pr get` reports `attachment` (`stored`, `detected`, `none`, `unknown`) | read |
 | `pr list PROJECT [--filter F] [--query Q]` | `pr.list` | the viewer's pull request list | read |
 | `pr merge ENV --yes [--method M] [--keep-branch] [--cleanup] [--expected-head-sha S]` | `pr.merge` | the Merge and Merge and Cleanup buttons: `merge_environment_pr`, settled from GitHub | external, filesystem, process |
@@ -411,7 +411,7 @@ answered.
   [control-mcp.md](control-mcp.md#leaf-nodes)).
 - **Not copied for a leaf launch:** files a leaf project lacks are not seeded
   from the command node's project root for `environment launch --node`, as the
-  portal's New Environment does; the leaf's own project files apply.
+  portal's New environment does; the leaf's own project files apply.
 
 Paths passed to project commands are on the **backend** host. Prompt, patch,
 stdin, attachment and credential files are read on the machine running the

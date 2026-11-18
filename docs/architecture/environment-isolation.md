@@ -135,7 +135,7 @@ arbitrary repository. The project's part:
 - Offer standalone one-shot tasks for suites that need a throwaway database,
   so validation can schedule them without hand-building one.
 
-The Environment Files setting (`envFilePatterns`) still copies a `.env` from
+The Environment files setting (`envFilePatterns`) still copies a `.env` from
 the project checkout into each new worktree; a copied file with fixed ports
 still collides, so the derived file is the one to prefer.
 

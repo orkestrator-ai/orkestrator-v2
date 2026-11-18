@@ -369,7 +369,7 @@ test("another machine's row copies the environment's ID, not its machine-qualifi
   const row = environment("feature");
   renderInAppCommandScope(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
   fireEvent.contextMenu(screen.getByRole("button", { name: "feature, on Machine A, Idle" }));
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Copy Environment ID" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Copy environment ID" }));
   expect(mockWriteText).toHaveBeenCalledWith("feature");
 });
 
@@ -483,7 +483,7 @@ test("a remote row disarms when focus leaves the shell for a child frame", () =>
     expect(screen.queryByRole("alertdialog") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /frame-target/ }));
     fireEvent.keyDown(window, { key: "Backspace", metaKey: true });
-    expect(screen.getByRole("alertdialog", { name: "Delete Environment" })).toBeTruthy();
+    expect(screen.getByRole("alertdialog", { name: "Delete environment" })).toBeTruthy();
   } finally {
     frameDocument.body.replaceChildren();
   }

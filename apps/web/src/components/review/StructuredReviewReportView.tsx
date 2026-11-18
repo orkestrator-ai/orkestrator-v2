@@ -267,7 +267,7 @@ function IssuesSection({ issues }: { issues: readonly ReviewIssue[] }) {
 function CoverageGapsSection({ gaps }: { gaps: readonly ReviewCoverageGap[] }) {
   return (
     <Section
-      title={`Test Coverage Gaps · ${gaps.length}`}
+      title={`Test coverage gaps · ${gaps.length}`}
       icon={<FileWarning className="size-4 text-orange-400" />}
     >
       <List
@@ -401,7 +401,7 @@ function ReportArticle({
           <div>
             {showRawJson && (
               <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-cyan-400/80">
-                Validated JSON Schema
+                Validated JSON schema
               </p>
             )}
             {showHeading && (
@@ -450,7 +450,7 @@ function ReportArticle({
         </pre>
       )}
 
-      <Section title="Review Scope">
+      <Section title="Review scope">
         <dl className="grid gap-x-5 gap-y-2 text-sm @md:grid-cols-2">
           <div>
             <dt className="text-xs text-muted-foreground">Target branch</dt>
@@ -549,7 +549,7 @@ function ReportArticle({
         )}
       </Section>
 
-      <Section title="What Changed">
+      <Section title="What changed">
         <div className="space-y-3 text-sm leading-relaxed text-foreground/90">
           <p>{changed.overview}</p>
           <dl className="grid gap-3 @md:grid-cols-2">
@@ -580,7 +580,7 @@ function ReportArticle({
         </div>
       </Section>
 
-      <Section title="Risk Profile" icon={<ShieldCheck className="size-4 text-amber-400" />}>
+      <Section title="Risk profile" icon={<ShieldCheck className="size-4 text-amber-400" />}>
         <div className="flex flex-wrap gap-2">
           <span
             className={cn(
@@ -614,7 +614,7 @@ function ReportArticle({
         <p className="mt-3 text-sm text-foreground/85">{report.riskProfile.reasoning}</p>
       </Section>
 
-      <Section title="Test Results" icon={<TestTube2 className="size-4 text-violet-400" />}>
+      <Section title="Test results" icon={<TestTube2 className="size-4 text-violet-400" />}>
         <div className="mb-3 flex flex-wrap gap-4 text-sm">
           <span>{report.testResults.total} total</span>
           <span className="text-success">{report.testResults.passed} passed</span>

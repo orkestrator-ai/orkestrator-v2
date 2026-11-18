@@ -585,14 +585,14 @@ node ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-window
   Selecting one of the command node's own environments returns the central
   region to the window's own workspace, whose selection was cleared while
   another node's was shown.
-- **Creating on another node** opens that node's New Environment dialog on
+- **Creating on another node** opens that node's New environment dialog on
   its scope, so the node's defaults — the command node's inherited settings
   laid over its own — and start apply as they would there.
 - **Project and environment menus** of another node offer what the node's
-  own sidebar does. Dialogs (Repository Settings, Delete Project, an
+  own sidebar does. Dialogs (Repository settings, Delete project, an
   environment's Settings) open on the node's scope, so they read and write the
   node's own state and a project is deleted with its environments as there;
-  Fork and Restart are routed commands; Open Repo on GitHub uses the
+  Fork and Restart are routed commands; Open repo on GitHub uses the
   project's repository hint; folders are arranged through the owner's
   sidebar layout.
 - **The title bar** shows the shown environment's name, host meters and agent

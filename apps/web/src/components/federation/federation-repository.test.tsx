@@ -115,14 +115,14 @@ for (const bound of [true, false]) {
   const destination = bound ? "bound command node" : "remote fallback";
   for (const [action, boardTab] of [
     ["Open Coordinator", "coordinator"],
-    ["Open Board", "kanban"],
-    ["New Environment", null],
+    ["Open board", "kanban"],
+    ["New environment", null],
   ] as const) {
     test(`${action} targets the repository member on the ${destination}`, async () => {
       appCommandStore(uiStore).setState({
         selectedProjectId: "previous-project",
         selectedEnvironmentId: "previous-environment",
-        projectBoardTab: action === "Open Board" ? "coordinator" : "kanban",
+        projectBoardTab: action === "Open board" ? "coordinator" : "kanban",
       });
       const create = mock((_projectId: string) => undefined);
       const stop = onCreateEnvironmentRequest(create);
@@ -175,10 +175,10 @@ for (const bound of [true, false]) {
         .map((item) => item.textContent),
     ).toEqual([
       ...(bound ? [] : ["Open Coordinator"]),
-      "Open Board",
-      "Open Repo on GitHub",
-      "Repository Settings",
-      "New Environment",
+      "Open board",
+      "Open repo on GitHub",
+      "Repository settings",
+      "New environment",
       "Collapse",
     ]);
     for (const item of within(menu).getAllByRole("menuitem")) {
@@ -187,7 +187,7 @@ for (const bound of [true, false]) {
   });
 }
 
-test("a non-GitHub repository menu omits Open Repo on GitHub", async () => {
+test("a non-GitHub repository menu omits Open repo on GitHub", async () => {
   const { menu } = await renderRepositoryMenu({
     bound: false,
     repository: "gitlab.example/acme/app",
@@ -198,9 +198,9 @@ test("a non-GitHub repository menu omits Open Repo on GitHub", async () => {
       .map((item) => item.textContent),
   ).toEqual([
     "Open Coordinator",
-    "Open Board",
-    "Repository Settings",
-    "New Environment",
+    "Open board",
+    "Repository settings",
+    "New environment",
     "Collapse",
   ]);
 });
@@ -491,13 +491,13 @@ test("a repository heading's menu acts on the project it opens, in that machine'
         .map((item) => item.textContent),
     ).toEqual([
       "Open Coordinator",
-      "Open Board",
-      "Open Repo on GitHub",
-      "Repository Settings",
-      "New Environment",
+      "Open board",
+      "Open repo on GitHub",
+      "Repository settings",
+      "New environment",
       "Collapse",
     ]);
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Open Repo on GitHub" }));
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Open repo on GitHub" }));
     expect(open).toHaveBeenCalledWith(
       "https://github.com/acme/app",
       "_blank",
@@ -505,7 +505,7 @@ test("a repository heading's menu acts on the project it opens, in that machine'
     );
 
     fireEvent.click(
-      within(await openMenu()).getByRole("menuitem", { name: "Repository Settings" }),
+      within(await openMenu()).getByRole("menuitem", { name: "Repository settings" }),
     );
     await waitFor(() =>
       expect(useRemoteWorkspaceStore.getState().requests.a?.request).toEqual({
@@ -541,11 +541,11 @@ test("a repository heading's menu disables writes while its machine is unavailab
     fireEvent.contextMenu(screen.getByRole("button", { name: "Open acme/app on Machine A" }));
   });
   const menu = await screen.findByRole("menu");
-  for (const name of ["Repository Settings", "New Environment"]) {
+  for (const name of ["Repository settings", "New environment"]) {
     expect(within(menu).getByRole("menuitem", { name }).getAttribute("data-disabled")).toBe("");
   }
   expect(
-    within(menu).getByRole("menuitem", { name: "Open Board" }).hasAttribute("data-disabled"),
+    within(menu).getByRole("menuitem", { name: "Open board" }).hasAttribute("data-disabled"),
   ).toBe(false);
 });
 

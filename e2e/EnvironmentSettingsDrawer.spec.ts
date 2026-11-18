@@ -18,7 +18,7 @@ test("environment settings opened from the projects drawer are usable on a phone
   await touchTap(page, page.getByRole("menuitem", { name: "Settings" }));
 
   // The drawer gives way to the dialog instead of trapping it underneath.
-  const settings = page.getByRole("dialog", { name: "Environment Settings" });
+  const settings = page.getByRole("dialog", { name: "Environment settings" });
   await expect(settings).toBeVisible();
   await expect(drawer).toHaveCount(0);
 
@@ -59,7 +59,7 @@ test("closing drawer-opened settings with the keyboard returns focus to the draw
   await settingsItem.focus();
   await page.keyboard.press("Enter");
 
-  const settings = page.getByRole("dialog", { name: "Environment Settings" });
+  const settings = page.getByRole("dialog", { name: "Environment settings" });
   await expect(settings).toBeVisible();
   await expect(drawer).toHaveCount(0);
   // The dialog takes focus while open, so the keyboard stays inside it.
@@ -87,7 +87,7 @@ test("bottom-bar environment settings return focus after first load and cached r
     page.getByRole("button", { name: "Close projects and environments" }).last(),
   );
   const drawerTrigger = page.getByRole("button", { name: "Open projects and environments" });
-  const settings = page.getByRole("dialog", { name: "Environment Settings" });
+  const settings = page.getByRole("dialog", { name: "Environment settings" });
   for (const closeWithKeyboard of [false, true]) {
     await touchTap(page, drawerTrigger);
     await touchTap(page, drawer.getByRole("button", { name: "Environment settings", exact: true }));

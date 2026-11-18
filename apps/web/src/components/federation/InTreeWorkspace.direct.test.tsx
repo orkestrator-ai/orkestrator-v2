@@ -301,7 +301,7 @@ for (const dialog of WORKSPACE_DIALOGS) {
   });
 }
 
-test("select: Add Project and New Environment open in the node's workspace once its stores have hydrated", async () => {
+test("select: Add Project and New environment open in the node's workspace once its stores have hydrated", async () => {
   renderRegion();
   // The machine's "Add project" entry: an empty project.
   act(() => openMachineWorkspace({ connectionId: LEAF, projectId: "", title: "Machine A" }));

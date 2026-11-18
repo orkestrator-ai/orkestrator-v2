@@ -1800,14 +1800,14 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
     showInspectorTab("Report");
     const consolidated = screen.getByRole("article", { name: "Consolidated Multi Review" });
-    expect(screen.getByRole("button", { name: "Review Scope" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Review scope" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Issues · 1" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Test Coverage Gaps · 1" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Test coverage gaps · 1" })).toBeTruthy();
     expect(consolidated.textContent).not.toContain("Shared finding");
     expect(consolidated.textContent).not.toContain("The failure branch");
 
     fireEvent.click(screen.getByRole("button", { name: "Issues · 1" }));
-    fireEvent.click(screen.getByRole("button", { name: "Test Coverage Gaps · 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test coverage gaps · 1" }));
     expect(consolidated.textContent).toContain("Shared finding");
     expect(consolidated.textContent).toContain("The failure branch");
     fireEvent.click(

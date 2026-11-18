@@ -29,7 +29,7 @@ import { CommitField, EditorTabs, FormSection, TextField } from "./graph-form-co
 /**
  * The editable inspector of one node (report §7.2): its id, label and
  * description, then the form of its kind. An agent node's form has five tabs
- * (Prompt, Inputs/Outputs, Capabilities, Execution, Mock run); system and
+ * (Prompt, Inputs/outputs, Capabilities, Execution, Mock run); system and
  * human nodes end with their mock-run pins (item 213). The header's buttons are
  * the keyboard equivalents of drawing on the canvas: "Connect to…" and
  * "Loop…" (also C and L on a focused node), and Delete.
@@ -39,7 +39,7 @@ type AgentTab = "prompt" | "ports" | "capabilities" | "execution" | "mock";
 
 const AGENT_TABS: ReadonlyArray<{ value: AgentTab; label: string }> = [
   { value: "prompt", label: "Prompt" },
-  { value: "ports", label: "Inputs/Outputs" },
+  { value: "ports", label: "Inputs/outputs" },
   { value: "capabilities", label: "Capabilities" },
   { value: "execution", label: "Execution" },
   { value: "mock", label: "Mock run" },

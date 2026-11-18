@@ -240,7 +240,7 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
         </div>
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-base font-semibold text-foreground">
-            {snapshot?.repository.fullName ?? "GitHub Issues"}
+            {snapshot?.repository.fullName ?? "GitHub issues"}
           </h2>
           <p className="truncate text-xs text-muted-foreground">
             {snapshot

@@ -107,7 +107,7 @@ test("the draft walks through details, acceptance criteria and confirm in one ta
   expect(screen.getByText(/closes this environment's terminal shells/)).toBeTruthy();
   expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
   holder.state = { phase: "promoted", pipelineId: "pipeline-1" };
-  fireEvent.click(screen.getByRole("button", { name: "Confirm Auto-pipeline" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm auto-pipeline" }));
   await waitFor(() => expect(node.calls("confirm_auto_pipeline")).toHaveLength(1));
   const ticket = parseAutoPipelineTicket(node.calls("confirm_auto_pipeline")[0]!.args.ticket);
   expect(ticket.title).toBe("Reviewed feature");
@@ -154,7 +154,7 @@ test("criterion line breaks normalize and blank criteria block confirmation with
   fireEvent.change(criterion, { target: { value: "\n\r\n" } });
   expect(criterion.getAttribute("aria-invalid")).toBe("true");
   goTo(/^4?\s*Confirm$/);
-  const confirm = screen.getByRole("button", { name: "Confirm Auto-pipeline" });
+  const confirm = screen.getByRole("button", { name: "Confirm auto-pipeline" });
   expect(confirm.hasAttribute("disabled")).toBe(true);
   expect(screen.getByRole("list", { name: "Before confirming" }).textContent).toContain(
     "empty acceptance criterion",
@@ -180,7 +180,7 @@ test("a promotion in progress shows its status and locks the draft", async () =>
   expect(await screen.findByText(/Promoting environment/)).toBeTruthy();
   expect(screen.getByText("Files to commit")).toBeTruthy();
   expect(
-    screen.getByRole("button", { name: "Confirm Auto-pipeline" }).hasAttribute("disabled"),
+    screen.getByRole("button", { name: "Confirm auto-pipeline" }).hasAttribute("disabled"),
   ).toBe(true);
 });
 
@@ -325,7 +325,7 @@ test("a draft whose confirmation already began is read-only and confirms the sub
   goTo(/^4?\s*Confirm$/);
   expect(screen.getByRole("alert").textContent).toContain("admission rejected");
   holder.state = { phase: "promoted", pipelineId: "pipeline-1" };
-  fireEvent.click(screen.getByRole("button", { name: "Confirm Auto-pipeline" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm auto-pipeline" }));
   await waitFor(() => expect(node.calls("confirm_auto_pipeline")).toHaveLength(1));
   expect(node.calls("confirm_auto_pipeline")[0]!.args.ticket).toEqual(reviewed);
   expect(node.calls("save_auto_pipeline_edits")).toHaveLength(0);

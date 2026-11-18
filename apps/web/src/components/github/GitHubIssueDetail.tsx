@@ -763,7 +763,7 @@ export function GitHubIssueDetailContent({
                     ) : (
                       <Container className="h-3.5 w-3.5" />
                     )}
-                    Build Container
+                    Build container
                   </Button>
                   <Button
                     type="button"
@@ -782,7 +782,7 @@ export function GitHubIssueDetailContent({
                     ) : (
                       <FolderGit2 className="h-3.5 w-3.5" />
                     )}
-                    Build Local
+                    Build local
                   </Button>
                   {selectedPipeline?.environmentId && (
                     <Button
@@ -792,7 +792,7 @@ export function GitHubIssueDetailContent({
                       onClick={() => void navigateToPipeline(selectedPipeline)}
                     >
                       <ExternalLink className="h-3.5 w-3.5" />
-                      View Build
+                      View build
                     </Button>
                   )}
                   {selectedPipeline && (
@@ -897,7 +897,7 @@ export function GitHubIssueDetailContent({
                   ) : (
                     <Trash2 className="h-3.5 w-3.5" />
                   )}
-                  Close Issue
+                  Close issue
                 </Button>
               </section>
             </>
@@ -931,7 +931,7 @@ export function GitHubIssueDetailContent({
               }}
             >
               {closing && <Loader2 className="h-4 w-4 animate-spin" />}
-              Close Issue
+              Close issue
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

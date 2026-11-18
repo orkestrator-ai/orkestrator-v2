@@ -228,7 +228,7 @@ async function openProject(page: Page, projectName: string, timeout = 30_000) {
 
 async function prBaseBranchInDialog(page: Page, projectName: string): Promise<string> {
   await page.getByText(projectName, { exact: true }).first().click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Repository Settings" }).click();
+  await page.getByRole("menuitem", { name: "Repository settings" }).click();
   await page.getByText("Branches", { exact: true }).click();
   const field = page.locator("#prBaseBranch");
   await expect(field).toBeVisible({ timeout: 15_000 });
@@ -354,9 +354,9 @@ test("a CLI-initialized project and its cascade removal reach an open renderer",
     // This lifecycle check does not use an agent or Docker. Let credential-free
     // profiles reach the workspace through the ordinary optional-tool dialogs.
     for (const name of [
-      "Continue Without Claude",
-      "Continue Without Docker",
-      "Continue Without GitHub CLI",
+      "Continue without Claude",
+      "Continue without Docker",
+      "Continue without GitHub CLI",
     ]) {
       await page.addLocatorHandler(page.getByRole("button", { name, exact: true }), (button) =>
         button.click(),

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { sidebarActivity } from "./agent-testing/sidebar-activity";
 
-test("Copy Environment ID writes the selected row's ID to the browser clipboard and shows a toast", async ({
+test("Copy environment ID writes the selected row's ID to the browser clipboard and shows a toast", async ({
   page,
   context,
   browserName,
@@ -27,7 +27,7 @@ test("Copy Environment ID writes the selected row's ID to the browser clipboard 
     } else {
       await row.click({ button: "right" });
     }
-    await page.getByRole("menuitem", { name: "Copy Environment ID", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Copy environment ID", exact: true }).click();
     const toast = page.locator("[data-sonner-toast]").filter({ hasText: id });
     await expect(toast.getByText("Copied environment ID", { exact: true })).toBeVisible();
     await expect(toast.getByText(id, { exact: true })).toBeVisible();

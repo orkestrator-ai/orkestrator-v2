@@ -227,23 +227,23 @@ export function ProjectGroupHeader({
         <ContextMenuContent>
           <ContextMenuItem onClick={menu.openBoard}>
             <LayoutGrid className="h-4 w-4 mr-2" />
-            Open Board
+            Open board
           </ContextMenuItem>
           {menu.openGithub && (
             <ContextMenuItem onClick={menu.openGithub}>
               <GithubIcon className="h-4 w-4 mr-2" />
-              Open Repo on GitHub
+              Open repo on GitHub
             </ContextMenuItem>
           )}
           <ContextMenuSeparator />
           <ContextMenuItem disabled={!writable} onClick={menu.openSettings}>
             <Settings2 className="h-4 w-4 mr-2" />
-            Repository Settings
+            Repository settings
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem disabled={!writable} onClick={menu.newEnvironment}>
             <Plus className="h-4 w-4 mr-2" />
-            New Environment
+            New environment
           </ContextMenuItem>
           {menu.copyToMachine && (
             <ContextMenuItem disabled={!writable} onClick={menu.copyToMachine}>
@@ -269,7 +269,7 @@ export function ProjectGroupHeader({
           <ContextMenuSeparator />
           <ContextMenuItem variant="destructive" disabled={!writable} onClick={menu.deleteProject}>
             <Trash2 className="h-4 w-4 mr-2" />
-            Delete Project
+            Delete project
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>

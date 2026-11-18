@@ -824,7 +824,7 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(projectItems[1]!);
     expect(
       await screen.findByRole("heading", {
-        name: "Create Ork (Environment) - Project Two",
+        name: "Create Ork (environment) - Project Two",
       }),
     ).toBeTruthy();
   });
@@ -1585,7 +1585,7 @@ describe("HierarchicalSidebar", () => {
 
     fireEvent.click(screen.getByTitle("Create environment"));
 
-    const prompt = await screen.findByLabelText(/Initial Prompt/i);
+    const prompt = await screen.findByLabelText(/Initial prompt/i);
     prompt.focus();
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
@@ -1594,7 +1594,7 @@ describe("HierarchicalSidebar", () => {
     fireEvent.change(prompt, {
       target: { value: "Use this screenshot" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(createEnvironmentMock).toHaveBeenCalledWith(
@@ -1637,7 +1637,7 @@ describe("HierarchicalSidebar", () => {
     renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
-    fireEvent.click(await screen.findByRole("button", { name: "Create Environment" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create environment" }));
 
     expect(await screen.findByText("No GitHub CLI credentials found")).toBeTruthy();
     expect(createEnvironmentMock).not.toHaveBeenCalled();
@@ -1658,9 +1658,9 @@ describe("HierarchicalSidebar", () => {
     renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
-    await screen.findByText(/^Create Ork \(Environment\)/);
+    await screen.findByText(/^Create Ork \(environment\)/);
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalledWith(
@@ -1679,7 +1679,7 @@ describe("HierarchicalSidebar", () => {
         background: true,
         silent: true,
       });
-      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+      expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
     });
 
     resolveStart?.();
@@ -1696,7 +1696,7 @@ describe("HierarchicalSidebar", () => {
     renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
-    const createButton = await screen.findByRole("button", { name: "Create Environment" });
+    const createButton = await screen.findByRole("button", { name: "Create environment" });
     fireEvent.click(createButton);
 
     await waitFor(() => {
@@ -1709,7 +1709,7 @@ describe("HierarchicalSidebar", () => {
       await Promise.resolve();
     });
     await waitFor(() =>
-      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true),
+      expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true),
     );
   });
 
@@ -1717,9 +1717,9 @@ describe("HierarchicalSidebar", () => {
     renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
-    const prompt = await screen.findByLabelText(/Initial Prompt/i);
+    const prompt = await screen.findByLabelText(/Initial prompt/i);
     fireEvent.change(prompt, { target: { value: "Implement billing exports" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(createEnvironmentMock).toHaveBeenCalledWith(
@@ -1737,7 +1737,7 @@ describe("HierarchicalSidebar", () => {
         { background: true, silent: true },
       );
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
-      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+      expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
     });
   });
 
@@ -1750,7 +1750,7 @@ describe("HierarchicalSidebar", () => {
     try {
       renderInAppCommandScope(<HierarchicalSidebar />);
       fireEvent.click(screen.getByTitle("Create environment"));
-      fireEvent.click(await screen.findByRole("button", { name: "Create Environment" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Create environment" }));
 
       await waitFor(() =>
         expect(logs.records()).toContainEqual(
@@ -1764,7 +1764,7 @@ describe("HierarchicalSidebar", () => {
           }),
         ),
       );
-      expect(screen.getByText(/^Create Ork \(Environment\)/)).toBeTruthy();
+      expect(screen.getByText(/^Create Ork \(environment\)/)).toBeTruthy();
       expect(updateEnvironmentAgentSettingsMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).not.toHaveBeenCalled();
     } finally {
@@ -1776,15 +1776,15 @@ describe("HierarchicalSidebar", () => {
     renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
-    await screen.findByText(/^Create Ork \(Environment\)/);
+    await screen.findByText(/^Create Ork \(environment\)/);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() =>
-      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true),
+      expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true),
     );
 
     fireEvent.click(screen.getByTitle("Create environment"));
-    await screen.findByText(/^Create Ork \(Environment\)/);
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await screen.findByText(/^Create Ork \(environment\)/);
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() =>
       expect(createEnvironmentMock).toHaveBeenCalledWith(
@@ -1811,7 +1811,7 @@ describe("HierarchicalSidebar", () => {
           title: "Project One",
         }),
       );
-      await screen.findByText(/^Create Ork \(Environment\)/);
+      await screen.findByText(/^Create Ork \(environment\)/);
       expect(createEnvironmentMock).not.toHaveBeenCalled();
       expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
     } finally {
@@ -1819,7 +1819,7 @@ describe("HierarchicalSidebar", () => {
     }
   });
 
-  describe("another node's workspace: the node's New Environment dialog its window asked for", () => {
+  describe("another node's workspace: the node's New environment dialog its window asked for", () => {
     const initialRemote = useRemoteWorkspaceStore.getState();
     // The window asks through its own store, keyed by the node the host shows.
     const askForCreate = (projectId: string) =>
@@ -1835,10 +1835,10 @@ describe("HierarchicalSidebar", () => {
         renderInAppCommandScope(<NodeWorkspaceHost />);
         // Its defaults come from config, so the dialog waits for it.
         await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+        expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
 
         act(() => appCommandStore(configStore).setState({ hasLoaded: true }));
-        await screen.findByText(/^Create Ork \(Environment\)/);
+        await screen.findByText(/^Create Ork \(environment\)/);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
       } finally {
         forgetRequest();
@@ -1884,16 +1884,16 @@ describe("HierarchicalSidebar", () => {
               });
           });
           // Config and projects arrived first; the initial probe is still pending.
-          expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+          expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
           expect(createEnvironmentMock).not.toHaveBeenCalled();
 
           view.rerender(sidebar(true));
-          await screen.findByText(/^Create Ork \(Environment\)/);
+          await screen.findByText(/^Create Ork \(environment\)/);
           expect(
             screen.getByRole("button", { name: available ? /^Containerized$/ : /^Local$/ })
               .className,
           ).toContain("font-bold");
-          fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+          fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
           await waitFor(() => {
             expect(createEnvironmentMock).toHaveBeenCalledWith(
@@ -1916,12 +1916,12 @@ describe("HierarchicalSidebar", () => {
             );
           });
           await waitFor(() =>
-            expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true),
+            expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true),
           );
           // A later availability update must not replay the consumed request.
           view.rerender(sidebar(false));
           view.rerender(sidebar(true));
-          expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+          expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
           expect(createEnvironmentMock).toHaveBeenCalledTimes(1);
         } finally {
           forgetRequest();
@@ -1936,14 +1936,14 @@ describe("HierarchicalSidebar", () => {
       askForCreate(project.id);
       try {
         const view = renderInAppCommandScope(<NodeWorkspaceHost />);
-        expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+        expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
         projectsValue = [project];
         projectsLoadingValue = true;
         act(() => appCommandStore(projectStore).setState({ hasLoaded: true, projects: [project] }));
-        expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+        expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
         projectsLoadingValue = false;
         view.rerender(<NodeWorkspaceHost />);
-        await screen.findByText(/^Create Ork \(Environment\)/);
+        await screen.findByText(/^Create Ork \(environment\)/);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
       } finally {
         forgetRequest();
@@ -1955,12 +1955,12 @@ describe("HierarchicalSidebar", () => {
       askForCreate(project.id);
       try {
         const view = renderInAppCommandScope(<NodeWorkspaceHost />);
-        expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+        expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
         // A later project refresh must not revive an already discarded request.
         projectsValue = [project];
         act(() => appCommandStore(projectStore).setState({ projects: [project] }));
         view.rerender(<NodeWorkspaceHost />);
-        expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+        expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
       } finally {
         forgetRequest();
@@ -1972,20 +1972,20 @@ describe("HierarchicalSidebar", () => {
       askForCreate(project.id);
       try {
         const view = renderInAppCommandScope(<NodeWorkspaceHost />);
-        expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+        expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
         act(() => {
           appCommandStore(configStore).getState().setError("Config could not be loaded");
           appCommandStore(configStore).getState().setLoading(false);
         });
         view.rerender(<NodeWorkspaceHost />);
-        expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+        expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
         act(() => {
           const state = appCommandStore(configStore).getState();
           state.setError(null);
           state.setConfig(structuredClone(state.config));
         });
-        await screen.findByText(/^Create Ork \(Environment\)/);
+        await screen.findByText(/^Create Ork \(environment\)/);
       } finally {
         forgetRequest();
       }
@@ -2001,7 +2001,7 @@ describe("HierarchicalSidebar", () => {
     try {
       renderInAppCommandScope(<HierarchicalSidebar />);
       fireEvent.click(screen.getByTitle("Create environment"));
-      fireEvent.click(await screen.findByRole("button", { name: "Create Environment" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Create environment" }));
 
       await waitFor(() =>
         expect(logs.records()).toContainEqual(
@@ -2019,7 +2019,7 @@ describe("HierarchicalSidebar", () => {
       expect(updateEnvironmentMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).not.toHaveBeenCalled();
       expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
-      expect(screen.getByText(/^Create Ork \(Environment\)/)).toBeTruthy();
+      expect(screen.getByText(/^Create Ork \(environment\)/)).toBeTruthy();
     } finally {
       logs.restore();
     }
@@ -2034,9 +2034,9 @@ describe("HierarchicalSidebar", () => {
     try {
       renderInAppCommandScope(<HierarchicalSidebar />);
       fireEvent.click(screen.getByTitle("Create environment"));
-      const prompt = await screen.findByLabelText(/Initial Prompt/i);
+      const prompt = await screen.findByLabelText(/Initial prompt/i);
       fireEvent.change(prompt, { target: { value: "Rename after startup" } });
-      fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+      fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
       await waitFor(() =>
         expect(logs.records()).toContainEqual(
@@ -2051,7 +2051,7 @@ describe("HierarchicalSidebar", () => {
           }),
         ),
       );
-      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+      expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
       expect(createEnvironmentMock).toHaveBeenCalledWith(
         "project-1",
         undefined,
@@ -2268,7 +2268,7 @@ describe("HierarchicalSidebar", () => {
       {
         ...createdEnvironment,
         id: "env-local",
-        name: "Local Environment",
+        name: "Local environment",
         environmentType: "local",
         containerId: null,
         worktreePath: undefined,
@@ -2282,7 +2282,7 @@ describe("HierarchicalSidebar", () => {
 
     try {
       renderInAppCommandScope(<HierarchicalSidebar />);
-      fireEvent.click(screen.getByRole("button", { name: "Local Environment" }));
+      fireEvent.click(screen.getByRole("button", { name: "Local environment" }));
       await waitFor(() =>
         expect(logs.records()).toContainEqual(
           expect.objectContaining({
@@ -2347,7 +2347,7 @@ describe("HierarchicalSidebar", () => {
     expect(restartEnvironmentMock).not.toHaveBeenCalledWith("env-stopped");
 
     fireEvent.click(screen.getByTitle("Delete selected"));
-    fireEvent.click(await screen.findByRole("button", { name: "Delete All" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete all" }));
     await waitFor(() => {
       expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-running");
       expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-stopped");
@@ -2401,7 +2401,7 @@ describe("HierarchicalSidebar", () => {
     renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Delete selected"));
-    fireEvent.click(await screen.findByRole("button", { name: "Delete All" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete all" }));
 
     await waitFor(() => {
       expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-failed-cleanup");
@@ -2533,7 +2533,7 @@ describe("HierarchicalSidebar", () => {
       );
 
       fireEvent.click(screen.getByTitle("Delete selected"));
-      fireEvent.click(await screen.findByRole("button", { name: "Delete All" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Delete all" }));
       await waitFor(() =>
         expect(logs.records()).toContainEqual(
           expect.objectContaining({
@@ -2632,7 +2632,7 @@ describe("HierarchicalSidebar", () => {
     const projectButton = screen.getByRole("button", { name: /^Project One/i });
 
     fireEvent.contextMenu(projectButton);
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Repository Settings" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Repository settings" }));
 
     expect(screen.getByRole("status", { name: "Loading repository settings…" })).toBeTruthy();
     // The dialog is a lazily imported chunk now, so resolving it is a real
@@ -2662,7 +2662,7 @@ describe("HierarchicalSidebar", () => {
     renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete project" }));
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
     await waitFor(() => {
@@ -2681,7 +2681,7 @@ describe("HierarchicalSidebar", () => {
     try {
       renderInAppCommandScope(<HierarchicalSidebar />);
       fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
-      fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Delete project" }));
       fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
       await waitFor(() =>
@@ -2978,7 +2978,7 @@ describe("HierarchicalSidebar", () => {
     expect(screen.queryByRole("option") === null).toBe(true);
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
     fireEvent.contextMenu(screen.getByRole("button", { name: "Project One 1" }));
-    fireEvent.click(screen.getByText("Delete Project"));
+    fireEvent.click(screen.getByText("Delete project"));
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(removeProjectMock).toHaveBeenCalledWith(project.id));
     expect(deleteEnvironmentMock.mock.calls.map(([id]) => id)).toEqual([
@@ -2987,7 +2987,7 @@ describe("HierarchicalSidebar", () => {
     ]);
   });
 
-  test("project row returns to the project's last tab; Open Board opens its coordinator", () => {
+  test("project row returns to the project's last tab; Open board opens its coordinator", () => {
     projectsValue = [project, { ...project, id: "project-2", name: "Project Two", order: 1 }];
     act(() => appCommandStore(uiStore).setState({ projectBoardTabs: [] }));
     renderInAppCommandScope(<HierarchicalSidebar />);
@@ -3001,7 +3001,7 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(row);
       expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("kanban");
       fireEvent.contextMenu(row);
-      fireEvent.click(screen.getByText("Open Board"));
+      fireEvent.click(screen.getByText("Open board"));
       expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
     }
     // Each project kept its own last tab.
@@ -3288,7 +3288,7 @@ describe("HierarchicalSidebar", () => {
       renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.contextMenu(await screen.findByTitle("Collapse folder Work"));
-      fireEvent.click(await screen.findByRole("menuitem", { name: "Remove Folder" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Remove folder" }));
 
       await waitFor(() =>
         expect(arrangeProjectsMock).toHaveBeenCalledWith({
@@ -3377,7 +3377,7 @@ describe("HierarchicalSidebar", () => {
       renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.contextMenu(await screen.findByTitle("Collapse folder Work"));
-      fireEvent.click(await screen.findByRole("menuitem", { name: "Rename Folder" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Rename folder" }));
 
       const input = await screen.findByLabelText("Rename folder Work");
       fireEvent.change(input, { target: { value: "Personal" } });
@@ -3401,7 +3401,7 @@ describe("HierarchicalSidebar", () => {
       renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.contextMenu(await screen.findByTitle("Expand folder Work"));
-      fireEvent.click(await screen.findByRole("menuitem", { name: "Rename Folder" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Rename folder" }));
 
       const input = await screen.findByLabelText("Rename folder Work");
       // The stored name is the normalized one, so the collapse entry has to be

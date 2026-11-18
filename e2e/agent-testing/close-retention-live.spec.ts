@@ -119,7 +119,7 @@ function sidebarNavigator(page: Page, projectName: string) {
     const expand = page.getByRole("button", { name: `Expand project ${projectName}` });
     const entry = page.getByText(name, { exact: true }).first();
     await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
-    for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+    for (const label of ["Continue without Docker", "Continue without GitHub CLI"]) {
       const continueButton = page.getByRole("button", { name: label, exact: true });
       if (await continueButton.isVisible()) await continueButton.click();
     }
@@ -291,12 +291,12 @@ test.describe("live close retention", () => {
         ).toHaveCount(0);
 
         await page.getByRole("button", { name: "New native agent tab" }).click();
-        await page.getByRole("button", { name: "Resume Session" }).click();
+        await page.getByRole("button", { name: "Resume session" }).click();
         await page
           .getByRole("dialog", { name: "Resume a session" })
           .getByRole("button", { name: new RegExp(`^${label}\\b.*Choose a previous session`) })
           .click();
-        const picker = page.getByRole("dialog", { name: "Resume Session" });
+        const picker = page.getByRole("dialog", { name: "Resume session" });
         // The environment is a fresh worktree and every provider scopes its
         // list to the workspace, so the newest row is the conversation just
         // closed. Its title is the provider's own (often generated), so the

@@ -114,7 +114,7 @@ export const EFFORT_LABELS: Record<ClaudeEffortLevel, string> = {
   low: "Low",
   medium: "Medium",
   high: "High",
-  xhigh: "Extra High",
+  xhigh: "Extra high",
   max: "Max",
 };
 export const EFFORT_DESCRIPTIONS: Record<ClaudeEffortLevel, string> = {

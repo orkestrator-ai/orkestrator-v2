@@ -81,7 +81,7 @@ test("details, acceptance criteria and confirm are steps of the same tab", async
       return original(command, args);
     };
   });
-  await page.getByRole("button", { name: "Confirm Auto-pipeline" }).click();
+  await page.getByRole("button", { name: "Confirm auto-pipeline" }).click();
   await expect(page.getByText(/Promoting environment/)).toBeVisible();
   await expect(page.getByText(/Auto-pipeline started/)).toBeVisible();
   const ticket = parseAutoPipelineTicket(
@@ -141,7 +141,7 @@ test("a blank criterion blocks confirmation and says why", async ({ page }, test
   await expect(criterion).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByText("Enter an acceptance criterion.")).toBeVisible();
   await page.getByRole("button", { name: "Next", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Confirm Auto-pipeline" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Confirm auto-pipeline" })).toBeDisabled();
   await expect(page.getByRole("list", { name: "Before confirming" })).toContainText(
     "empty acceptance criterion",
   );
@@ -189,7 +189,7 @@ test("adopted Build inspector keeps its original notes and criteria", async ({
     .getByRole("tab", { name: /^Build,/ })
     .first()
     .click();
-  await page.getByText("Original Build notes and acceptance criteria", { exact: true }).click();
+  await page.getByText("Original build notes and acceptance criteria", { exact: true }).click();
   await expect(page.getByText("Finished interactive feature work.", { exact: true })).toBeVisible();
   await page.screenshot({
     path: path.resolve(`output/visual-previews/auto-pipeline-build-${testInfo.project.name}.png`),
@@ -224,7 +224,7 @@ test("a refused confirmation keeps the draft and shows its reason beside Confirm
   await body.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
-  const confirm = page.getByRole("button", { name: "Confirm Auto-pipeline" });
+  const confirm = page.getByRole("button", { name: "Confirm auto-pipeline" });
   await expect(confirm).toBeInViewport();
   await confirm.click();
   const alert = page.getByRole("alert");
@@ -254,10 +254,10 @@ test("a ticket whose confirmation began is read-only and can be confirmed again"
   await steps(page)
     .getByRole("button", { name: /Confirm/ })
     .click();
-  await page.getByRole("button", { name: "Confirm Auto-pipeline" }).click();
+  await page.getByRole("button", { name: "Confirm auto-pipeline" }).click();
   await expect(page.getByRole("alert")).toContainText("did not close");
   await expect(page.getByText(/can no longer change/)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Confirm Auto-pipeline" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Confirm auto-pipeline" })).toBeEnabled();
   await steps(page)
     .getByRole("button", { name: /Details/ })
     .click();

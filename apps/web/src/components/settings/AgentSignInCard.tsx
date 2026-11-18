@@ -11,7 +11,7 @@
  * - Codex: the accounts list below adds and switches logins; this card only
  *   says whether the active one is signed in.
  * - Cursor: the card wraps `CursorSdkSignIn`, passed as children.
- * - OpenCode: provider logins are listed under Provider Sign-in below.
+ * - OpenCode: provider logins are listed under Provider sign-in below.
  * - Grok and Pi: the terminal command is named; their logins are interactive
  *   CLI flows Orkestrator does not drive.
  */

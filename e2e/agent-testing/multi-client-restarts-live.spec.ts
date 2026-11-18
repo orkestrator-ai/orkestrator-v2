@@ -296,9 +296,9 @@ async function openEnvironment(page: Page, fixtureName: string, environmentName:
   const clicks: string[] = [];
   for (const deadline = Date.now() + 90_000; Date.now() < deadline;) {
     for (const label of [
-      "Continue Without Docker",
-      "Continue Without GitHub CLI",
-      "Continue Without Claude",
+      "Continue without Docker",
+      "Continue without GitHub CLI",
+      "Continue without Claude",
     ]) {
       const button = page.getByRole("button", { name: label, exact: true });
       if (await button.isVisible()) {

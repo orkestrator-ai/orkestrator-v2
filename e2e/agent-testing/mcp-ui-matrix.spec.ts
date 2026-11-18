@@ -136,9 +136,9 @@ function profileCredentialSources(status: Status): string[] | null {
  */
 async function closeStartupNotices(page: Page) {
   const notices = [
-    page.getByRole("button", { name: "Continue Without Claude", exact: true }),
-    page.getByRole("button", { name: "Continue Without Docker", exact: true }),
-    page.getByRole("button", { name: "Continue Without GitHub CLI", exact: true }),
+    page.getByRole("button", { name: "Continue without Claude", exact: true }),
+    page.getByRole("button", { name: "Continue without Docker", exact: true }),
+    page.getByRole("button", { name: "Continue without GitHub CLI", exact: true }),
     page
       .getByRole("dialog", { name: "Docker containers can't reach Orkestrator", exact: true })
       .getByRole("button", { name: "Close", exact: true })

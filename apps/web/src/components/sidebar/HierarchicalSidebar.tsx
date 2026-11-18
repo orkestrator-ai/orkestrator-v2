@@ -1460,7 +1460,7 @@ export function HierarchicalSidebar() {
               onClick={handleDeleteSelected}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete All
+              Delete all
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

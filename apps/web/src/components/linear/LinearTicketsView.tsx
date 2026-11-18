@@ -887,7 +887,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
           </Button>
           <div className="min-w-0">
             <h2 className="truncate text-lg font-semibold text-foreground">
-              {issueForHeader?.title ?? "Linear Ticket"}
+              {issueForHeader?.title ?? "Linear ticket"}
             </h2>
             {issueForHeader && <IssueMetadata issue={issueForHeader} />}
           </div>
@@ -918,7 +918,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
                 onClick={() => void navigateToPipeline(selectedPipeline)}
               >
                 <ExternalLink className="h-3.5 w-3.5" />
-                View Build
+                View build
                 <span className="text-xs text-muted-foreground">({selectedPipeline.phase})</span>
               </Button>
             )}
@@ -998,7 +998,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
                   )}
                   {detail.projectName && (
                     <div className="rounded-md border border-border/60 p-3">
-                      <div className="text-xs text-muted-foreground">Linear Project</div>
+                      <div className="text-xs text-muted-foreground">Linear project</div>
                       <div>{detail.projectName}</div>
                     </div>
                   )}
@@ -1249,7 +1249,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
     <div className="flex h-full flex-col bg-background">
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-6 py-4">
         <div className="min-w-0">
-          <h2 className="text-lg font-semibold text-foreground">Linear Tickets</h2>
+          <h2 className="text-lg font-semibold text-foreground">Linear tickets</h2>
           {!connected ? (
             <p className="text-sm text-muted-foreground">Linear is not connected</p>
           ) : boardState === "linked" && boardLink ? (

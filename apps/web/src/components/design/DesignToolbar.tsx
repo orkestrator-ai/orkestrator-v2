@@ -290,7 +290,7 @@ function toolsOf(props: DesignToolbarProps): DesignTool[] {
       id: "export",
       label: "Export design to repository",
       icon: Save,
-      tooltip: "Export a revision to the repository (Save As)",
+      tooltip: "Export a revision to the repository (Save as)",
       disabled: !canvas || busyExport,
       onSelect: props.onExport,
     },

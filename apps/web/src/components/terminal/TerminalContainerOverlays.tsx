@@ -102,7 +102,7 @@ export function TerminalContainerOverlays({
                   <span className="inline-flex">
                     <Button onClick={onStartOverlayClick} variant="outline">
                       <Play className="mr-2 h-4 w-4" />
-                      {isLocalEnvironment ? "Start Environment" : "Start Container"}
+                      {isLocalEnvironment ? "Start environment" : "Start container"}
                     </Button>
                   </span>
                 </ContextMenuTrigger>
@@ -116,7 +116,7 @@ export function TerminalContainerOverlays({
                     disabled={!onCreateScript}
                   >
                     <FilePlus2 className="mr-2 h-4 w-4" />
-                    Create Script
+                    Create script
                   </ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>

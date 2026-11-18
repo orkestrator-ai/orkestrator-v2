@@ -208,7 +208,7 @@ describe("resolveAgentDefaults", () => {
     expect((container as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText("Containers unavailable while Docker stopped")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]![0].environmentType).toBe("local");
   });
@@ -232,7 +232,7 @@ describe("resolveAgentDefaults", () => {
         (screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled,
       ).toBe(true);
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]![0].environmentType).toBe("local");
   });
@@ -258,7 +258,7 @@ describe("resolveAgentDefaults", () => {
     );
     expect(screen.getByText("Containers unavailable while Docker stopped")).toBeTruthy();
     expect(screen.getByText("Unavailable without a local project checkout")).toBeTruthy();
-    const submit = screen.getByRole("button", { name: "Create Environment" });
+    const submit = screen.getByRole("button", { name: "Create environment" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(submit);
     expect(onCreate).not.toHaveBeenCalled();
@@ -362,7 +362,7 @@ describe("resolveAgentDefaults", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: "Create Ork (Environment) - Orkestrator",
+        name: "Create Ork (environment) - Orkestrator",
       }),
     ).toBeTruthy();
     expect(screen.queryByRole("radiogroup", { name: "Default Agent" }) === null).toBe(true);
@@ -370,7 +370,7 @@ describe("resolveAgentDefaults", () => {
     expect(getAgentModelPicker()).toBeTruthy();
     expect(screen.queryByRole("checkbox", { name: "Use TUI" }) === null).toBe(true);
     expect(
-      (screen.getByRole("checkbox", { name: "Launch Agent" }) as HTMLButtonElement).getAttribute(
+      (screen.getByRole("checkbox", { name: "Launch agent" }) as HTMLButtonElement).getAttribute(
         "data-state",
       ),
     ).toBe("checked");
@@ -399,27 +399,27 @@ describe("resolveAgentDefaults", () => {
     expect(promptTab.getAttribute("aria-selected")).toBe("true");
     expect(
       screen
-        .getByLabelText(/Initial Prompt/i)
+        .getByLabelText(/Initial prompt/i)
         .closest('[role="tabpanel"]')
         ?.getAttribute("data-state"),
     ).toBe("active");
 
     fireEvent.mouseDown(setupTab, { button: 0, ctrlKey: false });
     expect(setupTab.getAttribute("aria-selected")).toBe("true");
-    fireEvent.change(screen.getByLabelText(/Environment Name/i), {
+    fireEvent.change(screen.getByLabelText(/Environment name/i), {
       target: { value: "mobile-tabs" },
     });
 
     fireEvent.mouseDown(promptTab, { button: 0, ctrlKey: false });
-    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+    fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
       target: { value: "Keep this task" },
     });
     fireEvent.mouseDown(setupTab, { button: 0, ctrlKey: false });
 
-    expect((screen.getByLabelText(/Environment Name/i) as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText(/Environment name/i) as HTMLInputElement).value).toBe(
       "mobile-tabs",
     );
-    expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+    expect((screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement).value).toBe(
       "Keep this task",
     );
   });
@@ -434,12 +434,12 @@ describe("resolveAgentDefaults", () => {
     );
 
     const panels = {
-      Prompt: screen.getByLabelText(/Initial Prompt/i).closest('[role="tabpanel"]'),
-      Setup: screen.getByLabelText(/Environment Name/i).closest('[role="tabpanel"]'),
-      Agent: screen.getByRole("checkbox", { name: "Launch Agent" }).closest('[role="tabpanel"]'),
+      Prompt: screen.getByLabelText(/Initial prompt/i).closest('[role="tabpanel"]'),
+      Setup: screen.getByLabelText(/Environment name/i).closest('[role="tabpanel"]'),
+      Agent: screen.getByRole("checkbox", { name: "Launch agent" }).closest('[role="tabpanel"]'),
       Access: screen.getByRole("button", { name: "Restricted" }).closest('[role="tabpanel"]'),
       Ports: screen
-        .getByRole("button", { name: /Port Configuration/ })
+        .getByRole("button", { name: /Port configuration/ })
         .closest('[role="tabpanel"]'),
     };
 
@@ -516,7 +516,7 @@ describe("resolveAgentDefaults", () => {
       });
       expect(
         screen
-          .getByLabelText(/Environment Name/i)
+          .getByLabelText(/Environment name/i)
           .closest('[role="tabpanel"]')
           ?.getAttribute("data-mobile-transition"),
       ).toBe("backward");
@@ -534,14 +534,14 @@ describe("resolveAgentDefaults", () => {
     );
 
     expect(screen.getByRole("tab", { name: "Prompt" }).getAttribute("aria-selected")).toBe("true");
-    fireEvent.click(screen.getByRole("checkbox", { name: "Launch Agent" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Launch agent" }));
 
     await waitFor(() => {
       expect(screen.getByRole("tab", { name: "Agent" }).getAttribute("aria-selected")).toBe("true");
     });
     expect(
       screen
-        .getByRole("checkbox", { name: "Launch Agent" })
+        .getByRole("checkbox", { name: "Launch agent" })
         .closest('[role="tabpanel"]')
         ?.getAttribute("data-mobile-transition"),
     ).toBe("forward");
@@ -564,7 +564,7 @@ describe("resolveAgentDefaults", () => {
     expect(screen.getByRole("tab", { name: "Setup" }).getAttribute("aria-selected")).toBe("true");
     expect(
       screen
-        .getByLabelText(/Environment Name/i)
+        .getByLabelText(/Environment name/i)
         .closest('[role="tabpanel"]')
         ?.getAttribute("data-mobile-transition"),
     ).toBe("forward");
@@ -579,7 +579,7 @@ describe("resolveAgentDefaults", () => {
     });
     expect(
       screen
-        .getByLabelText(/Initial Prompt/i)
+        .getByLabelText(/Initial prompt/i)
         .closest('[role="tabpanel"]')
         ?.getAttribute("data-mobile-transition") === null,
     ).toBe(true);
@@ -589,7 +589,7 @@ describe("resolveAgentDefaults", () => {
     const { unmount } = renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
-    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    const prompt = screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement;
     const focus = mock(() => {});
     prompt.focus = focus;
 
@@ -610,33 +610,33 @@ describe("resolveAgentDefaults", () => {
     };
     const { unmount } = renderInAppCommandScope(<CreateEnvironmentDialog open={true} {...props} />);
 
-    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+    fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
       target: { value: "  Keep this draft  " },
     });
-    fireEvent.change(screen.getByLabelText(/Environment Name/i), {
+    fireEvent.change(screen.getByLabelText(/Environment name/i), {
       target: { value: "discard-this-name" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
     fireEvent.click(screen.getByRole("button", { name: /Local/ }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Launch Agent" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Launch agent" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect((screen.getByLabelText(/Environment Name/i) as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText(/Environment name/i) as HTMLInputElement).value).toBe("");
 
     unmount();
     renderInAppCommandScope(<CreateEnvironmentDialog open={true} {...props} />);
     await waitFor(() => {
-      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+      expect((screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement).value).toBe(
         "Keep this draft",
       );
     });
-    expect((screen.getByLabelText(/Environment Name/i) as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText(/Environment name/i) as HTMLInputElement).value).toBe("");
     expect(
-      screen.getByRole("checkbox", { name: "Launch Agent" }).getAttribute("aria-checked"),
+      screen.getByRole("checkbox", { name: "Launch agent" }).getAttribute("aria-checked"),
     ).toBe("true");
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -657,7 +657,7 @@ describe("resolveAgentDefaults", () => {
       projectId,
     };
     const firstRender = renderInAppCommandScope(<CreateEnvironmentDialog open={true} {...props} />);
-    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+    fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
       target: { value: "Remove this draft" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -667,18 +667,18 @@ describe("resolveAgentDefaults", () => {
       <CreateEnvironmentDialog open={true} {...props} />,
     );
     await waitFor(() => {
-      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+      expect((screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement).value).toBe(
         "Remove this draft",
       );
     });
-    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+    fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
       target: { value: "   " },
     });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     secondRender.unmount();
 
     renderInAppCommandScope(<CreateEnvironmentDialog open={true} {...props} />);
-    expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement).value).toBe("");
   });
 
   test("clears a saved draft after successful environment creation", async () => {
@@ -689,7 +689,7 @@ describe("resolveAgentDefaults", () => {
       projectId,
     };
     const firstRender = renderInAppCommandScope(<CreateEnvironmentDialog open={true} {...props} />);
-    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+    fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
       target: { value: "Saved until creation" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -699,16 +699,16 @@ describe("resolveAgentDefaults", () => {
       <CreateEnvironmentDialog open={true} {...props} />,
     );
     await waitFor(() => {
-      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+      expect((screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement).value).toBe(
         "Saved until creation",
       );
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(props.onCreate).toHaveBeenCalled());
     secondRender.unmount();
 
     renderInAppCommandScope(<CreateEnvironmentDialog open={true} {...props} />);
-    expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement).value).toBe("");
   });
 
   test("submits the selected restricted network mode", async () => {
@@ -718,7 +718,7 @@ describe("resolveAgentDefaults", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -733,7 +733,7 @@ describe("resolveAgentDefaults", () => {
       const view = renderInAppCommandScope(
         <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
       );
-      const prompt = screen.getByLabelText(/Initial Prompt/i);
+      const prompt = screen.getByLabelText(/Initial prompt/i);
       for (const keys of [{}, { shiftKey: true }, { altKey: true }]) {
         fireEvent.keyDown(prompt, { key: "Enter", ...keys });
       }
@@ -759,17 +759,17 @@ describe("resolveAgentDefaults", () => {
       true,
     );
     expect(
-      (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Create environment" }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(
       (screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(
-      (screen.getByRole("checkbox", { name: "Launch Agent" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("checkbox", { name: "Launch agent" }) as HTMLButtonElement).disabled,
     ).toBe(true);
-    expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).disabled).toBe(true);
+    expect((screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement).disabled).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter", metaKey: true });
     expect(onCreate).not.toHaveBeenCalled();
   });
@@ -810,10 +810,10 @@ describe("resolveAgentDefaults", () => {
     );
 
     await selectAgentPlatform("Codex");
-    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+    fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
       target: { value: "Review the migration plan" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -835,7 +835,7 @@ describe("resolveAgentDefaults", () => {
     await selectAgentPlatform("Codex");
     await selectAgentModel(/GPT-6-Luna/);
     await selectReasoning("High");
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -898,7 +898,7 @@ describe("resolveAgentDefaults", () => {
     );
 
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Codex B"));
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
@@ -959,7 +959,7 @@ describe("resolveAgentDefaults", () => {
     );
 
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Codex B"));
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
@@ -1005,7 +1005,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
@@ -1046,7 +1046,7 @@ describe("resolveAgentDefaults", () => {
     );
 
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Repo Codex"));
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
@@ -1083,7 +1083,7 @@ describe("resolveAgentDefaults", () => {
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     // The default is dropped whole rather than contributing its model, so the
     // dialog opens on the app default agent and that agent's configured model.
@@ -1141,7 +1141,7 @@ describe("resolveAgentDefaults", () => {
     expect(screen.getByRole("menuitemradio", { name: /Composer 2\.5/ })).toBeTruthy();
     fireEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -1346,7 +1346,7 @@ describe("resolveAgentDefaults", () => {
       expect(getAgentModelPicker().textContent).toContain("Codex B");
       expect(getAgentModelPicker().textContent).toContain("High");
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -1401,7 +1401,7 @@ describe("resolveAgentDefaults", () => {
     await selectAgentPlatform("Codex");
 
     expect(getAgentModelPicker().textContent).toContain("Codex B");
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -1433,7 +1433,7 @@ describe("resolveAgentDefaults", () => {
     );
 
     await selectAgentPlatform("OpenCode");
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -1453,7 +1453,7 @@ describe("resolveAgentDefaults", () => {
 
     await selectAgentPlatform("Claude");
     await selectAgentModel(/Default \(recommended\)/);
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -1470,7 +1470,7 @@ describe("resolveAgentDefaults", () => {
 
     await selectAgentPlatform("Codex");
     await selectReasoning("Default");
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -1520,7 +1520,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({ agentType: "claude", claudeMode: "native" }),
@@ -1573,7 +1573,7 @@ describe("resolveAgentDefaults", () => {
     );
 
     expect(getAgentModelPicker().textContent).toContain("High");
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1709,7 +1709,7 @@ describe("resolveAgentDefaults", () => {
     expect(await screen.findByRole("menuitemradio", { name: /Model A/ })).toBeTruthy();
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Model B/ }));
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1796,7 +1796,7 @@ describe("resolveAgentDefaults", () => {
     expect(getAgentModelPicker().textContent).toContain("Default");
 
     await selectReasoning("Deep");
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -1936,7 +1936,7 @@ describe("resolveAgentDefaults", () => {
       expect(getAgentModelPicker().textContent).toContain("Codex Favorite");
       expect(getAgentModelPicker().textContent).toContain("High");
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -2207,7 +2207,7 @@ describe("resolveAgentDefaults", () => {
     expect(screen.getByRole("menuitemradio", { name: /Cached Model/ })).toBeTruthy();
     fireEvent.click(configuredOption);
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
@@ -2437,7 +2437,7 @@ describe("resolveAgentDefaults", () => {
     // Still valid in the arriving catalogue, so the choice survives — now
     // rendered with the catalogue's friendly name rather than the raw id.
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Configured"));
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({ model: "provider/configured" }),
@@ -2564,7 +2564,7 @@ describe("resolveAgentDefaults", () => {
       );
 
       await selectAgentPlatform(agentLabel);
-      fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+      fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
       await waitFor(() => {
         expect(onCreate).toHaveBeenCalledWith(
@@ -2583,11 +2583,11 @@ describe("resolveAgentDefaults", () => {
       <CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />,
     );
 
-    fireEvent.change(screen.getByLabelText(/Environment Name/i), {
+    fireEvent.change(screen.getByLabelText(/Environment name/i), {
       target: { value: "  local-review  " },
     });
-    fireEvent.click(screen.getByRole("checkbox", { name: "Launch Agent" }));
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Launch agent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -2647,7 +2647,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -2709,7 +2709,7 @@ describe("resolveAgentDefaults", () => {
     rerender(<CreateEnvironmentDialog open={false} {...props} />);
     rerender(<CreateEnvironmentDialog open={true} {...props} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -2732,7 +2732,7 @@ describe("resolveAgentDefaults", () => {
       <CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />,
     );
 
-    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    const prompt = screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement;
     prompt.focus();
 
     const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
@@ -2746,7 +2746,7 @@ describe("resolveAgentDefaults", () => {
     fireEvent.change(prompt, {
       target: { value: "Use this screenshot" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -2781,7 +2781,7 @@ describe("resolveAgentDefaults", () => {
         onCreate={mock(async () => {})}
       />,
     );
-    screen.getByLabelText(/Initial Prompt/i).focus();
+    screen.getByLabelText(/Initial prompt/i).focus();
     const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
     Object.defineProperty(pasteEvent, "clipboardData", {
       value: {
@@ -2819,7 +2819,7 @@ describe("resolveAgentDefaults", () => {
         onCreate={mock(async () => {})}
       />,
     );
-    screen.getByLabelText(/Initial Prompt/i).focus();
+    screen.getByLabelText(/Initial prompt/i).focus();
 
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
@@ -2856,7 +2856,7 @@ describe("resolveAgentDefaults", () => {
     renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
-    screen.getByLabelText(/Initial Prompt/i).focus();
+    screen.getByLabelText(/Initial prompt/i).focus();
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
     await waitFor(() => expect(screen.getByAltText(/initial-prompt-/)).toBeTruthy());
@@ -2885,7 +2885,7 @@ describe("resolveAgentDefaults", () => {
     renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
-    screen.getByLabelText(/Initial Prompt/i).focus();
+    screen.getByLabelText(/Initial prompt/i).focus();
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
     await waitFor(() => {
@@ -2912,7 +2912,7 @@ describe("resolveAgentDefaults", () => {
       <CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />,
     );
 
-    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    const prompt = screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement;
     prompt.focus();
 
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
@@ -2929,7 +2929,7 @@ describe("resolveAgentDefaults", () => {
     fireEvent.change(prompt, {
       target: { value: "Use text only" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -2962,7 +2962,7 @@ describe("resolveAgentDefaults", () => {
         onCreate={mock(async () => {})}
       />,
     );
-    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    const prompt = screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement;
     prompt.focus();
     const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
 
@@ -2989,7 +2989,7 @@ describe("resolveAgentDefaults", () => {
         onCreate={mock(async () => {})}
       />,
     );
-    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    const prompt = screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement;
     prompt.focus();
     const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
 
@@ -3015,7 +3015,7 @@ describe("resolveAgentDefaults", () => {
       <CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />,
     );
 
-    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    const prompt = screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement;
     prompt.focus();
 
     const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
@@ -3038,14 +3038,14 @@ describe("resolveAgentDefaults", () => {
       <CreateEnvironmentDialog open={true} {...props} />,
     );
 
-    screen.getByLabelText(/Environment Name/i).focus();
+    screen.getByLabelText(/Environment name/i).focus();
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await Promise.resolve();
     expect(mockReadImage).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "Launch Agent" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Launch agent" }));
     await waitFor(() => {
-      expect(screen.queryByLabelText(/Initial Prompt/i) === null).toBe(true);
+      expect(screen.queryByLabelText(/Initial prompt/i) === null).toBe(true);
     });
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await Promise.resolve();
@@ -3078,7 +3078,7 @@ describe("resolveAgentDefaults", () => {
         onCreate={mock(async () => {})}
       />,
     );
-    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    const prompt = screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement;
     prompt.focus();
     const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
     document.dispatchEvent(pasteEvent);
@@ -3116,7 +3116,7 @@ describe("resolveAgentDefaults", () => {
         onCreate={mock(async () => {})}
       />,
     );
-    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    const prompt = screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement;
     prompt.focus();
     const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
     document.dispatchEvent(pasteEvent);
@@ -3142,7 +3142,7 @@ describe("resolveAgentDefaults", () => {
     renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={mock(async () => {})} />,
     );
-    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    const prompt = screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement;
     prompt.focus();
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await waitFor(() => expect(rgba).toHaveBeenCalledTimes(1));
@@ -3166,7 +3166,7 @@ describe("resolveAgentDefaults", () => {
     renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={mock(async () => {})} />,
     );
-    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    const prompt = screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement;
     prompt.focus();
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await waitFor(() => expect(size).toHaveBeenCalledTimes(1));
@@ -3192,12 +3192,12 @@ describe("resolveAgentDefaults", () => {
     renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
-    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    const prompt = screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement;
     prompt.focus();
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
 
-    screen.getByLabelText(/Environment Name/i).focus();
+    screen.getByLabelText(/Environment name/i).focus();
     pendingImage.resolve({ rgba, size });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -3226,7 +3226,7 @@ describe("resolveAgentDefaults", () => {
     renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
-    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    const prompt = screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement;
     prompt.focus();
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
@@ -3235,7 +3235,7 @@ describe("resolveAgentDefaults", () => {
     await waitFor(() => expect(screen.getAllByAltText(/initial-prompt-/)).toHaveLength(1));
     await waitFor(() =>
       expect(
-        (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+        (screen.getByRole("button", { name: "Create environment" }) as HTMLButtonElement).disabled,
       ).toBe(false),
     );
     firstImage.resolve({ rgba: firstRgba, size: firstSize });
@@ -3257,7 +3257,7 @@ describe("resolveAgentDefaults", () => {
     renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={mock(async () => {})} />,
     );
-    screen.getByLabelText(/Initial Prompt/i).focus();
+    screen.getByLabelText(/Initial prompt/i).focus();
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
 
@@ -3405,7 +3405,7 @@ describe("resolveAgentDefaults", () => {
       dataTransfer: attachmentDataTransfer([file]),
     });
     const create = screen.getByRole("button", {
-      name: "Create Environment",
+      name: "Create environment",
     }) as HTMLButtonElement;
     expect(create.disabled).toBe(true);
     fireEvent.click(create);
@@ -3462,9 +3462,9 @@ describe("resolveAgentDefaults", () => {
     fireEvent.drop(screen.getByRole("dialog"), {
       dataTransfer: attachmentDataTransfer([disabledFile]),
     });
-    fireEvent.click(screen.getByRole("checkbox", { name: "Launch Agent" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Launch agent" }));
     await act(async () => disabledBuffer.resolve(new TextEncoder().encode("late").buffer));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Launch Agent" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Launch agent" }));
     expect(screen.queryByText("disabled.txt") === null).toBe(true);
     expect(toastSuccessMock).not.toHaveBeenCalled();
   });
@@ -3494,18 +3494,18 @@ describe("resolveAgentDefaults", () => {
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Port Configuration/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Add Port Mapping" }));
+    fireEvent.click(screen.getByRole("button", { name: /Port configuration/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Add port mapping" }));
     const containerPort = screen.getByPlaceholderText("Container");
     const hostPort = screen.getByPlaceholderText("Host");
     fireEvent.change(containerPort, { target: { value: "0" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter", metaKey: true });
     expect(onCreate).not.toHaveBeenCalled();
 
     fireEvent.change(containerPort, { target: { value: "8080" } });
     fireEvent.change(hostPort, { target: { value: "18080" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -3527,7 +3527,7 @@ describe("resolveAgentDefaults", () => {
     const trashButton = document.querySelector("svg.lucide-trash-2")?.closest("button");
     expect(trashButton).toBeTruthy();
     fireEvent.click(trashButton!);
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ portMappings: [] }));
     });
@@ -3547,7 +3547,7 @@ describe("resolveAgentDefaults", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "Protocol" }));
     const udpOption = await screen.findByRole("option", { name: "UDP" });
     fireEvent.click(udpOption);
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
@@ -3571,7 +3571,7 @@ describe("resolveAgentDefaults", () => {
     const containerPort = screen.getByPlaceholderText("Container");
     const hostPort = screen.getByPlaceholderText("Host");
     const createButton = screen.getByRole("button", {
-      name: "Create Environment",
+      name: "Create environment",
     }) as HTMLButtonElement;
 
     for (const invalidHostPort of ["", "0", "-1"]) {
@@ -3633,7 +3633,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
     const createButton = screen.getByRole("button", {
-      name: "Create Environment",
+      name: "Create environment",
     }) as HTMLButtonElement;
 
     fireEvent.change(screen.getByPlaceholderText("Host"), { target: { value: "0" } });
@@ -3660,7 +3660,7 @@ describe("resolveAgentDefaults", () => {
     renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={onCreate} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(screen.getByRole("dialog")).toBeTruthy();
@@ -3675,10 +3675,10 @@ describe("resolveAgentDefaults", () => {
     renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={onCreate} />,
     );
-    const nameInput = screen.getByLabelText(/Environment Name/i);
+    const nameInput = screen.getByLabelText(/Environment name/i);
     fireEvent.change(nameInput, { target: { value: "Keep this name" } });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
@@ -3763,14 +3763,14 @@ describe("CreateEnvironmentDialog feature builds", () => {
       />,
     );
 
-    expect(screen.getByLabelText(/Initial Prompt/i)).toBeTruthy();
+    expect(screen.getByLabelText(/Initial prompt/i)).toBeTruthy();
     expect(screen.queryByLabelText(/Feature name/i) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
 
     expect(screen.getByLabelText(/Feature name/i)).toBeTruthy();
     expect(screen.getByLabelText(/Acceptance criteria/i)).toBeTruthy();
-    expect(screen.queryByLabelText(/Initial Prompt/i) === null).toBe(true);
+    expect(screen.queryByLabelText(/Initial prompt/i) === null).toBe(true);
   });
 
   test("shares the initial prompt text with the feature description in both directions", () => {
@@ -3783,7 +3783,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+    fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
       target: { value: "Add a dark mode toggle." },
     });
     fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
@@ -3794,7 +3794,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       target: { value: "Add a dark mode toggle to the header." },
     });
     fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
-    expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+    expect((screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement).value).toBe(
       "Add a dark mode toggle to the header.",
     );
   });
@@ -3813,7 +3813,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
     rerender(<CreateEnvironmentDialog open={false} {...props} />);
     rerender(<CreateEnvironmentDialog open {...props} />);
-    expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+    expect((screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement).value).toBe(
       "Keep this feature description.",
     );
     chooseFeature({});
@@ -3822,7 +3822,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     );
   });
 
-  test("preserves edited feature drafts through mobile navigation and Launch Agent changes", async () => {
+  test("preserves edited feature drafts through mobile navigation and Launch agent changes", async () => {
     const props = {
       projectId: "feature-draft-navigation",
       onOpenChange: mock(() => {}),
@@ -3830,7 +3830,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       onCreateFeatureBuild: mock(async (_input: CreateFeatureBuildInput) => true),
     };
     const { rerender } = renderInAppCommandScope(<CreateEnvironmentDialog open {...props} />);
-    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+    fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
       target: { value: "Saved draft A" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -3848,7 +3848,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     });
     expect(screen.getByRole("tab", { name: "Agent" }).getAttribute("aria-selected")).toBe("true");
     expect(description.value).toBe("Edited description B");
-    const launchAgent = screen.getByRole("checkbox", { name: "Launch Agent" });
+    const launchAgent = screen.getByRole("checkbox", { name: "Launch agent" });
     fireEvent.click(launchAgent);
     expect(launchAgent.getAttribute("aria-checked")).toBe("false");
     expect(description.value).toBe("Edited description B");
@@ -3884,7 +3884,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       view.rerender(<CreateEnvironmentDialog open={false} {...props} />);
       view.rerender(<CreateEnvironmentDialog open {...props} />);
-      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+      expect((screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement).value).toBe(
         "Saved feature draft",
       );
       props.onOpenChange.mockClear();
@@ -3914,7 +3914,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       // hide whether submission preserved or deleted the previously saved one.
       view.unmount();
       renderInAppCommandScope(<CreateEnvironmentDialog open {...props} />);
-      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+      expect((screen.getByLabelText(/Initial prompt/i) as HTMLTextAreaElement).value).toBe(
         outcome === "successful" ? "" : "Saved feature draft",
       );
     });
@@ -3933,11 +3933,11 @@ describe("CreateEnvironmentDialog feature builds", () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+    fireEvent.change(screen.getByLabelText(/Initial prompt/i), {
       target: { value: "Add sign in with passkeys." },
     });
     fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
-    const createButton = screen.getByRole("button", { name: "Create Environment" });
+    const createButton = screen.getByRole("button", { name: "Create environment" });
     expect((createButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(createButton);
 
@@ -3965,7 +3965,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       description: "Adds a toggle to the header.",
       acceptanceCriteria: "The preference survives a reload.",
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
 
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalled());
     expect(onCreate).not.toHaveBeenCalled();
@@ -3995,7 +3995,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     );
 
     chooseFeature({ description: "Add sign in with passkeys." });
-    const createButton = screen.getByRole("button", { name: "Create Environment" });
+    const createButton = screen.getByRole("button", { name: "Create environment" });
     expect((createButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(createButton);
 
@@ -4017,7 +4017,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     );
 
     chooseFeature({});
-    const createButton = screen.getByRole("button", { name: "Create Environment" });
+    const createButton = screen.getByRole("button", { name: "Create environment" });
     expect((createButton as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(createButton);
     expect(onCreateFeatureBuild).not.toHaveBeenCalled();
@@ -4096,7 +4096,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       />,
     );
 
-    screen.getByLabelText(/Initial Prompt/i).focus();
+    screen.getByLabelText(/Initial prompt/i).focus();
     await act(async () => {
       document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
       await Promise.resolve();
@@ -4146,7 +4146,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(mockReadImage).not.toHaveBeenCalled();
     expect(pasteEvent.defaultPrevented).toBe(false);
     expect(
-      (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Create environment" }) as HTMLButtonElement).disabled,
     ).toBe(false);
   });
 
@@ -4175,7 +4175,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
     expect(screen.getByAltText("reference.png")).toBeTruthy();
     expect(screen.getByText("notes.txt")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]![0].initialPromptAttachments.map(({ name }) => name)).toEqual([
       "reference.png",
@@ -4215,7 +4215,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(mockReadImage).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]![0].initialPromptAttachments).toHaveLength(20);
   });
@@ -4391,7 +4391,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(screen.queryByAltText("late.png") === null).toBe(true);
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(
-      (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Create environment" }) as HTMLButtonElement).disabled,
     ).toBe(false);
   });
 
@@ -4591,7 +4591,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
     chooseFeature({ name: "   " });
     expect(
-      (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Create environment" }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 
@@ -4603,7 +4603,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
    * their own dialog rather than costing them a duplicate.
    */
   function submitFeature() {
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
   }
 
   test("reuses the request id when an unchanged create is retried", async () => {
@@ -4736,7 +4736,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
     chooseFeature({ name: "Dark mode toggle" });
     expect(
-      (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Create environment" }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 
@@ -4787,7 +4787,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       "Resolve conflicts agent, model and reasoning",
     ]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalled());
     const request = onCreateFeatureBuild.mock.calls[0]![0];
     expect((request.reviewers as unknown[]).length).toBe(2);

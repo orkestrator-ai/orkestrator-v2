@@ -149,7 +149,7 @@ the old per-provider semantics for *new* closes (an old Claude bridge's DELETE
 deletes history), and history that pre-retention builds already deleted cannot
 be recovered.
 
-A tab opened from **Resume Session** (an unassigned tab, then a platform)
+A tab opened from **Resume session** (an unassigned tab, then a platform)
 creates no provider session while its picker is open: the backend resumes into
 a tab with no mapping, and the tab starts its own session only if the picker is
 dismissed or the resume fails. The resume then sends no composer controls, so

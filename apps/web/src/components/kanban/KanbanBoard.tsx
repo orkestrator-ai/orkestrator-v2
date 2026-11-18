@@ -42,7 +42,7 @@ import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 const COLUMNS: { id: KanbanStatus; label: string; color: string }[] = [
   { id: "backlog", label: "Backlog", color: "bg-zinc-500" },
-  { id: "in-progress", label: "In Progress", color: "bg-blue-500" },
+  { id: "in-progress", label: "In progress", color: "bg-blue-500" },
   { id: "review", label: "Review", color: "bg-amber-500" },
   { id: "done", label: "Done", color: "bg-green-500" },
 ];

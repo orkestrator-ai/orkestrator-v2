@@ -214,7 +214,7 @@ export function SlashCommandMenu<TCommand extends SlashCommandOption>({
       onMouseDown={(event) => event.preventDefault()}
     >
       <div className="p-1">
-        <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Slash Commands</div>
+        <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Slash commands</div>
         <span role="status" aria-live="polite" className="sr-only">
           {announcement}
         </span>

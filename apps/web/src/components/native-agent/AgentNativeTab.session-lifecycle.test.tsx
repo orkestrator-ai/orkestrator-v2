@@ -1518,13 +1518,13 @@ describe("AgentNativeTab", () => {
     });
 
     renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
-    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume session" }));
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Codex/ }));
 
     expect(await screen.findByRole("button", { name: "Retry save" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
 
-    expect(await screen.findByRole("dialog", { name: "Resume Session" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "Resume session" })).toBeTruthy();
     expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(2);
   });
 
@@ -2924,8 +2924,8 @@ describe("AgentNativeTab", () => {
     expect(screen.getByText("I found three concrete gaps")).toBeTruthy();
     expect(screen.queryByText((text) => text.includes("orkestrator-handoff")) === null).toBe(true);
 
-    fireEvent.click(screen.getByText("Resume Session"));
-    const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+    fireEvent.click(screen.getByText("Resume session"));
+    const dialog = await screen.findByRole("dialog", { name: "Resume session" });
     fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
 
     await waitFor(() =>
@@ -2978,7 +2978,7 @@ describe("AgentNativeTab", () => {
       />,
     );
 
-    const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+    const dialog = await screen.findByRole("dialog", { name: "Resume session" });
     fireEvent.click(within(dialog).getByRole("button", { name: /Current destination/ }));
     await waitFor(() => expect(resumeNativeAgentSessionMock).toHaveBeenCalledTimes(1));
     expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.agentHandoffId).toBe(
@@ -3165,7 +3165,7 @@ describe("AgentNativeTab", () => {
       const label = platform === "cursor" ? "Cursor Agent" : "Codex";
       expect(screen.queryByText(`Refreshing ${label} session…`) === null).toBe(true);
       expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
-      expect(screen.queryByText("Connection Failed") === null).toBe(true);
+      expect(screen.queryByText("Connection failed") === null).toBe(true);
       expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
     },
   );
@@ -3179,7 +3179,7 @@ describe("AgentNativeTab", () => {
 
     // The backend answered, and answered with nothing. That is recoverable
     // state the user has to be able to see and retry, not a pending connection.
-    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Connection failed")).toBeTruthy());
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
   });
@@ -3201,7 +3201,7 @@ describe("AgentNativeTab", () => {
     // transcript-loading shimmer alive above a brand-new composer.
     expect(screen.queryByText("Refreshing Pi session…") === null).toBe(true);
     expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
-    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByText("Connection failed") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
   });
 
@@ -3235,7 +3235,7 @@ describe("AgentNativeTab", () => {
 
     await waitFor(() => expect(reads).toBe(1));
     await act(() => clock.advance(500));
-    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Connection failed")).toBeTruthy());
     expect(
       screen.getByText(
         "The native agent runtime no longer holds this session. Retry to start a new one.",
@@ -3270,7 +3270,7 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalledTimes(2));
     expect(screen.queryByText("Refreshing Pi session…") === null).toBe(true);
     expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
-    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByText("Connection failed") === null).toBe(true);
   });
 
   test("shows a new tab's opening prompt while its first session is created", async () => {
@@ -3338,7 +3338,7 @@ describe("AgentNativeTab", () => {
     expect(container.querySelector("svg.agent-connecting-logo") === null).toBe(true);
     expect(screen.queryByText("Refreshing Cursor Agent session…") === null).toBe(true);
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
-    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByText("Connection failed") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
 
     sessionProjectionMock.mockImplementation(defaultProjection);
@@ -3803,7 +3803,7 @@ describe("AgentNativeTab", () => {
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-new-cursor-retry" data={freshTab("cursor")} isActive />,
     );
-    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Connection failed")).toBeTruthy());
 
     let settleRead: ((value: unknown) => void) | undefined;
     sessionProjectionMock.mockImplementation(
@@ -3896,7 +3896,7 @@ describe("AgentNativeTab", () => {
         await Promise.resolve();
       });
 
-      await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+      await waitFor(() => expect(screen.getByText("Connection failed")).toBeTruthy());
       // The actionable reason, not "Unable to connect".
       expect(screen.getByText("Cursor SDK bridge is not available")).toBeTruthy();
       expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
@@ -4000,7 +4000,7 @@ describe("AgentNativeTab", () => {
     // first has returned. Counting is what makes the first completion release
     // only its own claim; a boolean — or anything that resets to zero — would
     // reopen the gate while a session is still being created, and the empty read
-    // that follows is exactly the false Connection Failed this all exists to
+    // that follows is exactly the false Connection failed this all exists to
     // prevent.
     sessionProjectionMock.mockImplementation(async () => null as never);
     const settles: Array<() => void> = [];
@@ -4043,7 +4043,7 @@ describe("AgentNativeTab", () => {
     expect(sessionProjectionMock).not.toHaveBeenCalled();
     expect(screen.getByText("Connecting to Codex...")).toBeTruthy();
     expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
-    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByText("Connection failed") === null).toBe(true);
 
     sessionProjectionMock.mockImplementation(defaultProjection);
     await act(async () => {
@@ -4114,7 +4114,7 @@ describe("AgentNativeTab", () => {
     // Holding the empty read back is scoped to session creation alone. Once
     // `ensure` has returned there is a session to resolve, so an empty read is
     // the backend answering — and the user needs the retry control.
-    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Connection failed")).toBeTruthy());
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
@@ -4127,7 +4127,7 @@ describe("AgentNativeTab", () => {
       <AgentNativeTab tabId="tab-connect-error" data={identity("codex")} isActive />,
     );
 
-    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Connection failed")).toBeTruthy());
     expect(screen.getByText("bridge refused the session")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
@@ -4145,7 +4145,7 @@ describe("AgentNativeTab", () => {
       />,
     );
 
-    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Connection failed")).toBeTruthy());
     expect(screen.getByText("provider session was not found")).toBeTruthy();
     expect(ensureNativeAgentSessionMock).not.toHaveBeenCalled();
   });

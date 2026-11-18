@@ -584,7 +584,7 @@ test.describe("Coordinator checkout sync with a slow remote", () => {
       // The panel opens inside the fetch cooldown, so its own fetch-on-open
       // does not reach the remote: the typed check makes the slow fetch.
       await page.goto(status.browserUrl!);
-      for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+      for (const label of ["Continue without Docker", "Continue without GitHub CLI"]) {
         const button = page.getByRole("button", { name: label, exact: true });
         if (await button.isVisible().catch(() => false)) await button.click();
       }

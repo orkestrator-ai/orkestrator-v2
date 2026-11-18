@@ -626,7 +626,7 @@ export function AutoPipelineTab({
                     onClick={() => void confirm()}
                   >
                     {promoting && <Loader2 className="animate-spin" />}
-                    Confirm Auto-pipeline
+                    Confirm auto-pipeline
                   </Button>
                 )}
               </div>

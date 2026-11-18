@@ -181,12 +181,12 @@ test("Docker fixture container merge from the UI reaches the origin and every vi
       await selectEnvironment(second, localName);
       await toolbarButton(page, "Merge PR").click();
       const dialog = page.getByRole("alertdialog");
-      await expect(dialog.getByText("Merge Pull Request")).toBeVisible();
+      await expect(dialog.getByText("Merge pull request")).toBeVisible();
       await dialog.getByRole("button", { name: "Merge PR", exact: true }).click();
       await expect(page.getByText("Branch merged").first()).toBeVisible({ timeout: 60_000 });
-      await expect(toolbarButton(page, "PR Merged")).toBeVisible({ timeout: 15_000 });
+      await expect(toolbarButton(page, "PR merged")).toBeVisible({ timeout: 15_000 });
       await expect(toolbarButton(page, "Merge PR")).toHaveCount(0);
-      await expect(toolbarButton(page, "Clean Up")).toBeVisible();
+      await expect(toolbarButton(page, "Clean up")).toBeVisible();
       expect(inContainer(containerId, `cat ${FAKE_GH_DIR}/calls`)).toContain(
         `pr merge ${prUrl} --squash --delete-branch`,
       );
@@ -206,7 +206,7 @@ test("Docker fixture container merge from the UI reaches the origin and every vi
 
     await test.step("the inactive second window shows the merge on return", async () => {
       await selectEnvironment(second, containerName);
-      await expect(toolbarButton(second, "PR Merged")).toBeVisible({ timeout: 15_000 });
+      await expect(toolbarButton(second, "PR merged")).toBeVisible({ timeout: 15_000 });
       await expect(toolbarButton(second, "Merge PR")).toHaveCount(0);
       await second.close();
     });
@@ -214,7 +214,7 @@ test("Docker fixture container merge from the UI reaches the origin and every vi
     await test.step("a reload shows the merged PR", async () => {
       await reloadApp(page, testInfo);
       await selectEnvironment(page, containerName);
-      await expect(toolbarButton(page, "PR Merged")).toBeVisible({ timeout: 30_000 });
+      await expect(toolbarButton(page, "PR merged")).toBeVisible({ timeout: 30_000 });
       await expect(toolbarButton(page, "Merge PR")).toHaveCount(0);
     });
   } finally {

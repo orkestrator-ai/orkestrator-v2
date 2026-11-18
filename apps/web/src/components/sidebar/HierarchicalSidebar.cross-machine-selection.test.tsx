@@ -420,7 +420,7 @@ describe("bulk actions", () => {
     expect(items).toContain("On Down on Machine Down (unavailable, skipped)");
     expect(writesTo(fake, "a")).toEqual([]);
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Delete All" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete all" }));
 
     await waitFor(() => expect(selected()).toEqual([]));
     expect(fake.callsTo("a", "delete_environment").map((call) => call.args)).toEqual([
@@ -566,7 +566,7 @@ describe("bulk action admission", () => {
 
     fireEvent.click(screen.getByTitle("Delete selected"));
     const dialog = await screen.findByRole("alertdialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Delete All" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete all" }));
 
     await waitFor(() =>
       expect(fake.callsTo("a", "delete_environment").map((call) => call.args)).toEqual([

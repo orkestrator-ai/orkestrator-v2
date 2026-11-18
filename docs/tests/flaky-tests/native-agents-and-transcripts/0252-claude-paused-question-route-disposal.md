@@ -260,3 +260,20 @@ Left `open` by the Playwright default-deadline triage. Every recorded failure is
   passed (21.9 s).
 - **Recurrence check:** `mise run flaky:recurrence -- 0252 --base 00a44c9eb581a28cc7c5462eda5028e0f96c68bf --registry-ref origin/main`
   reported `open`. No assertion, retry, deadline or skip in the spec was changed.
+
+## Recurrence 2026-11-18 (badge typography review repair)
+
+- **Branch and base:** `replace-badges-counts-76b9062d6cda-r1` at `863e9f1cc`,
+  base `b2c91abb94de8144c119aeccf4a31cf26b655d3b`.
+- **Command:** `ORKESTRATOR_VALIDATION_GRANTED_WORKERS=3 mise run test:logged -- --name browser -- mise run test:browser`.
+  The 30-minute watchdog stopped the three-worker run at case 1891 of 1932
+  before final suite totals were available.
+- **Failure:** the mobile paused-question case at `e2e/ClaudeInteractions.spec.ts:100`
+  hit `apiRequestContext.fetch: Request context disposed` in its snapshot
+  route callback at line 107.
+- **Owner rerun:** `env -u NODE_ENV mise run test:logged -- --name badges-claude-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts ClaudeInteractions.spec.ts --workers=1 --output output/00010/claude-owner-results`
+  passed all six cases in 36.3 seconds. The aggregate used a separate
+  loopback namespace and fixture server.
+- **Evidence:** `/tmp/orkestrator-test-run.XQb8AI/browser.log.gz`.
+  `mise run flaky:recurrence -- 0252 --base b2c91abb94de8144c119aeccf4a31cf26b655d3b --registry-ref origin/main`
+  reported `open`. The spec and application paths in the case were unchanged.

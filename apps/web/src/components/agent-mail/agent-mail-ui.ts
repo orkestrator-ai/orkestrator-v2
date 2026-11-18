@@ -1,13 +1,8 @@
 import {
   AGENT_MAIL_HOURLY_LIMIT_REASON,
-  AGENT_MAIL_USER_PARTICIPANT,
   agentMailAwaitingAgent,
-  agentMailboxId,
-  agentMailAddressLabel,
-  formatAgentMailAddressLabel,
   isAgentMailBudgetHeld,
   type AgentMailMessageSummary,
-  type AgentMailParticipant,
   type MailboxCapabilities,
 } from "@orkestrator/protocol/agent-mail";
 import * as backend from "@/lib/backend";
@@ -15,8 +10,7 @@ import { createAgentMailApi, type AgentMailApi } from "@/lib/backend/agent-mail"
 import { backendApiForScope } from "@/lib/backend/client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useNodeScope } from "@/lib/node-scope/providers";
-import { appCommandScope } from "@/lib/node-scope-slots";
-import { agentMailStore, useAgentMailStore } from "@/stores/agentMailStore";
+import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 
 export type AgentMailStatusTone = "muted" | "progress" | "warning" | "error";
@@ -132,40 +126,6 @@ export function formatAgentMailTime(iso: string): string {
 }
 
 /**
- * Open the messages panel on one tab: its conversations, or with `compose`
- * the person's own conversation with it. The panel is the tab's node's
- * (`scope`; the app's command scope for a caller with none yet).
- */
-export function openAgentMailForTab(
-  environmentId: string,
-  tabId: string,
-  mode: "inbox" | "compose" = "inbox",
-  scope: NodeScope = appCommandScope(),
-): void {
-  const mailboxId = agentMailboxId(environmentId, tabId);
-  scope
-    .store(agentMailStore)
-    .getState()
-    .openPanel(
-      mode === "compose"
-        ? { focus: mailboxId, conversation: [mailboxId, AGENT_MAIL_USER_PARTICIPANT] }
-        : { focus: mailboxId },
-    );
-}
-
-/** Open the conversation between two participants, in `scope`'s panel. */
-export function openAgentMailConversation(
-  a: string,
-  b: string,
-  scope: NodeScope = appCommandScope(),
-): void {
-  scope
-    .store(agentMailStore)
-    .getState()
-    .openPanel({ conversation: [a, b] });
-}
-
-/**
  * An environment's current name, for mail that names it by id: the
  * environment store's, or a loaded mailbox descriptor's. Undefined until one
  * of them knows it, and for an id this node does not have.
@@ -185,24 +145,6 @@ export function useAgentMailEnvironmentName(environmentId: string | undefined): 
     return undefined;
   });
   return fromEnvironments || fromMailboxes || undefined;
-}
-
-/**
- * A conversation participant as mail names it: an agent by its environment
- * and tab, `fix-login-bug · Claude 2`; anyone else, coordinators included,
- * by its own name.
- */
-export function agentMailParticipantLabel(
-  participant: Pick<AgentMailParticipant, "kind" | "displayName" | "environmentName">,
-): string {
-  if (participant.kind !== "agent" || !participant.environmentName) return participant.displayName;
-  return formatAgentMailAddressLabel(
-    agentMailAddressLabel({
-      environmentId: "",
-      environmentName: participant.environmentName,
-      tabName: participant.displayName,
-    }),
-  );
 }
 
 /**

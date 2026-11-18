@@ -368,8 +368,6 @@ test("a rename in the warm scope shows before the next summary, and the summary 
   expect(["alpha", "beta-2", "gamma"].every((name, index) => rows[index]!.startsWith(name))).toBe(
     true,
   );
-  // The summary-only mail badge is kept on the renamed row.
-  expect(screen.getAllByLabelText("2 unread agent messages").length).toBeGreaterThan(0);
 
   // Suspended, the scope no longer hears its node: the summary is the row again.
   act(() => scope.setTier("suspended"));

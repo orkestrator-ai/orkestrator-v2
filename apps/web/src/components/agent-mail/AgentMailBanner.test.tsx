@@ -137,7 +137,6 @@ describe("AgentMailBanner", () => {
         expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled).toBe(
           true,
         );
-      expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
       view.rerender(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
       expect(screen.queryByText(/Delivery waiting: Codex/) === null).toBe(true);
       expect(
@@ -169,8 +168,6 @@ describe("AgentMailBanner", () => {
     fireEvent.click(resume);
     expect(retry).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "View" }));
-    expect(appCommandStore(agentMailStore).getState().panel).toEqual({ focus: mailboxId });
 
     view.rerender(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("Delivery paused: loop budget")).toBeTruthy();
@@ -243,8 +240,8 @@ describe("AgentMailBanner", () => {
     renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("1 message in inbox · pull only")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Deliver now" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "View" }));
-    expect(appCommandStore(agentMailStore).getState().panel).toEqual({ focus: mailboxId });
+    // Mail is read inline in the transcript; the banner links to no panel.
+    expect(screen.queryByRole("button", { name: "View" }) === null).toBe(true);
   });
 
   test("releases newest-first snapshots oldest first, preserving send order for timestamp ties", async () => {
@@ -320,7 +317,6 @@ describe("AgentMailBanner", () => {
       const view = renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
       expect(screen.getByText("1 message in inbox · waiting for an agent")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
-      expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
       view.unmount();
     }
   });
@@ -358,7 +354,6 @@ describe("AgentMailBanner", () => {
     const text = screen.getByText(/^2 messages in inbox · Mail from another project/);
     expect(text.classList.contains("truncate")).toBe(false);
     expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
-    expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
   });
 
   test("a muted tab's inbox mail offers no Deliver now", () => {

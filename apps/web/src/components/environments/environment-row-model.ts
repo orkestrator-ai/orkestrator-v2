@@ -59,8 +59,6 @@ export interface EnvironmentRowFacts {
   /** An action on it is in flight from this client. */
   busy: boolean;
   hasUnreadWork: boolean;
-  unreadMail: number;
-  failedMail: boolean;
   prMergeState: PrMergeState | null;
   /** The owning machine, whenever this client can show machines. */
   machine: EnvironmentRowMachine | null;

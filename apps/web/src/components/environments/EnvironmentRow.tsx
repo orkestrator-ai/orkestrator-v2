@@ -506,8 +506,6 @@ export function EnvironmentRow({
   const changesDescriptionId = useId();
   const stateDescription = [
     facts.hasUnreadWork && "New completed activity",
-    facts.unreadMail > 0 && `${facts.unreadMail} unread agent messages`,
-    facts.failedMail && "Agent message delivery failed",
     facts.prState && `Pull request ${facts.prState}`,
     facts.autoMerge && "Auto-merge enabled",
     subtitle,
@@ -660,20 +658,6 @@ export function EnvironmentRow({
                     )}
                   {facts.hasUnreadWork && (
                     <UnreadBellIcon className="h-3 w-3" aria-label="New completed activity" />
-                  )}
-                  {facts.unreadMail > 0 && (
-                    <span
-                      className="min-w-4 rounded-full bg-primary-fill px-1 text-center font-mono text-[10px] leading-4 text-primary-foreground"
-                      aria-label={`${facts.unreadMail} unread agent messages`}
-                    >
-                      {facts.unreadMail > 99 ? "99+" : facts.unreadMail}
-                    </span>
-                  )}
-                  {facts.failedMail && (
-                    <span
-                      className="h-2 w-2 shrink-0 rounded-full bg-amber-400"
-                      aria-label="Agent message delivery failed"
-                    />
                   )}
                 </span>
                 {subtitle && (

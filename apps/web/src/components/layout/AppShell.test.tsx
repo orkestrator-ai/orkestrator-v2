@@ -13,7 +13,6 @@ import * as realSidebar from "./Sidebar";
 import * as realOpenFileDialog from "./OpenFileDialog";
 import * as realAgentInfoButton from "./AgentInfoButton";
 import * as realSystemUsageIndicator from "./SystemUsageIndicator";
-import * as realAgentMailPanel from "@/components/agent-mail/AgentMailPanel";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
@@ -58,7 +57,6 @@ const useRealUIStore = realUIStore;
 const INITIAL_PROJECT_BOARD_TAB = uiStore().getState().projectBoardTab;
 const realAgentInfoButtonSnapshot = { ...realAgentInfoButton };
 const realSystemUsageIndicatorSnapshot = { ...realSystemUsageIndicator };
-const realAgentMailPanelSnapshot = { ...realAgentMailPanel };
 const INITIAL_PORTAL = portalStore.getState();
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const realResizableSnapshot = { ...realResizable };
@@ -166,11 +164,6 @@ mock.module("./SystemUsageIndicator", () => ({
   ),
 }));
 
-// Observable as a slot: the banner's View opens it in whichever layout is shown.
-mock.module("@/components/agent-mail/AgentMailPanel", () => ({
-  AgentMailPanel: () => <div data-testid="agent-mail-panel-host" />,
-}));
-
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
   useMediaQuery: () => isMobile,
@@ -227,7 +220,6 @@ afterAll(() => {
   mock.module("./OpenFileDialog", () => realOpenFileDialogSnapshot);
   mock.module("./AgentInfoButton", () => realAgentInfoButtonSnapshot);
   mock.module("./SystemUsageIndicator", () => realSystemUsageIndicatorSnapshot);
-  mock.module("@/components/agent-mail/AgentMailPanel", () => realAgentMailPanelSnapshot);
 });
 
 function seedPaneLayout(tabs: TabInfo[], activeTabId: string | null, activePaneId = "pane-a") {

@@ -59,8 +59,8 @@ export interface ProjectCardDetails {
 
 /**
  * The header of a project in the sidebar, for this window's machine and other
- * machines alike: the drag handle and name, the environment count, agent-mail
- * badges, the hover card, the context menu, the project home's activity, the
+ * machines alike: the drag handle and name, the environment count, the hover
+ * card, the context menu, the project home's activity, the
  * "+" button and the chevron. `SortableProjectGroup` and `RemoteProjectGroup`
  * only supply the facts and actions.
  */
@@ -71,8 +71,6 @@ export function ProjectGroupHeader({
   labelClassName,
   icon,
   card,
-  unreadMail,
-  failedMail,
   highlighted,
   ariaCurrent,
   sortable,
@@ -94,8 +92,6 @@ export function ProjectGroupHeader({
   /** The machine home or project icon before the name. */
   icon?: ReactNode;
   card: ProjectCardDetails;
-  unreadMail: number;
-  failedMail: boolean;
   /** Selected, or revealed by the project search. */
   highlighted: boolean;
   ariaCurrent: "page" | "true" | undefined;
@@ -189,20 +185,6 @@ export function ProjectGroupHeader({
               <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
                 {card.environmentCount}
               </span>
-            )}
-            {unreadMail > 0 && (
-              <span
-                className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-cyan-400/90 px-1 font-mono text-[10px] text-zinc-950"
-                aria-label={`${unreadMail} unread agent messages`}
-              >
-                {unreadMail > 99 ? "99+" : unreadMail}
-              </span>
-            )}
-            {failedMail && (
-              <span
-                className="h-2 w-2 shrink-0 rounded-full bg-amber-400"
-                aria-label="Agent message delivery failed"
-              />
             )}
           </button>
         </ContextMenuTrigger>

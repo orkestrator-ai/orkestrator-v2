@@ -117,53 +117,6 @@ describe("agentMailStore authoritative adoption", () => {
     expect(appCommandStore(agentMailStore).getState().mailboxes.size).toBe(0);
     expect(appCommandStore(agentMailStore).getState().bodies.size).toBe(0);
   });
-
-  test("reports a later injection failure for a message sent by this client", () => {
-    const sent = { ...message(1), placement: "pending-inject" as const };
-    appCommandStore(agentMailStore).getState().trackSent(sent);
-    const failed = mailbox(2, 2);
-    failed.messages[0] = {
-      ...failed.messages[0]!,
-      placement: "inject_failed",
-      placementReason: "rejected",
-    };
-    appCommandStore(agentMailStore).getState().setMailbox(failed);
-
-    expect(appCommandStore(agentMailStore).getState().failedSent.get(sent.id)).toMatchObject({
-      id: sent.id,
-      body: sent.body,
-    });
-    expect(appCommandStore(agentMailStore).getState().sent.has(sent.id)).toBe(false);
-  });
-
-  test("reports failure after an intermediate revision invalidates the body cache", () => {
-    const sent = { ...message(1), placement: "pending-inject" as const };
-    appCommandStore(agentMailStore).getState().setMailbox(mailbox(1, 1));
-    appCommandStore(agentMailStore).getState().trackSent(sent);
-    const held = mailbox(2, 2);
-    held.messages[0] = {
-      ...held.messages[0]!,
-      placement: "pending-inject",
-      placementReason: "busy",
-    };
-    appCommandStore(agentMailStore).getState().setMailbox(held);
-    expect(appCommandStore(agentMailStore).getState().bodies.has(sent.id)).toBe(false);
-
-    const failed = mailbox(3, 3);
-    failed.messages[0] = {
-      ...failed.messages[0]!,
-      placement: "inject_failed",
-      placementReason: "rejected",
-    };
-    appCommandStore(agentMailStore).getState().setMailbox(failed);
-
-    expect(appCommandStore(agentMailStore).getState().failedSent.get(sent.id)).toMatchObject({
-      id: sent.id,
-      body: sent.body,
-      placement: "inject_failed",
-      placementReason: "rejected",
-    });
-  });
 });
 
 describe("transcript mailbox requests", () => {
@@ -255,14 +208,12 @@ describe("transcript mailbox requests", () => {
     requestAgentMailMailbox("env-1", "tab-1");
     await waitFor(() => expect(refreshMailboxes).toHaveBeenCalledTimes(1));
     appCommandStore(agentMailStore).getState().setMailbox(mailbox(1));
-    appCommandStore(agentMailStore).getState().updateDraft("pair", { body: "draft" });
     appCommandStore(agentMailStore).getState().clear();
-    expect(appCommandStore(agentMailStore).getState().drafts.size).toBe(0);
     expect(appCommandStore(agentMailStore).getState().mailboxes.size).toBe(0);
     requestAgentMailMailbox("env-1", "tab-1");
     await waitFor(() => expect(refreshMailboxes).toHaveBeenCalledTimes(2));
   });
-  test("summary reconciliation refreshes cached transcript destinations without local sent tracking", async () => {
+  test("summary reconciliation refreshes cached transcript destinations", async () => {
     const refreshMailboxes = mock(async () => undefined);
     appCommandStore(agentMailStore).setState({ refreshMailboxes });
     appCommandStore(agentMailStore).getState().setMailbox(mailbox(1));

@@ -20,8 +20,6 @@ function Header({
       accessibleLabel="Open Checkout"
       label="This computer"
       card={{ environmentCount: 0, runningCount: 0, openHint: "Open project" }}
-      unreadMail={0}
-      failedMail={false}
       highlighted={false}
       ariaCurrent={undefined}
       sortable={false}

@@ -10,12 +10,7 @@ import {
 import type { AgentMailApi } from "@/lib/backend/agent-mail";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { agentMailSenderLabel } from "@/lib/chat/client-only-messages";
-import {
-  deliverNowNotice,
-  formatAgentMailTime,
-  openAgentMailForTab,
-  useAgentMailScope,
-} from "./agent-mail-ui";
+import { deliverNowNotice, formatAgentMailTime, useAgentMailScope } from "./agent-mail-ui";
 import {
   AGENT_MAIL_HOURLY_LIMIT_REASON,
   agentMailAwaitingAgent,
@@ -56,7 +51,7 @@ export function AgentMailBanner({
   const mailbox = useAgentMailStore((state) => state.mailboxes.get(mailboxId));
   const refreshMailbox = useAgentMailStore((state) => state.refreshMailbox);
   const refreshSummary = useAgentMailStore((state) => state.refreshSummary);
-  const { scope, api } = useAgentMailScope();
+  const { api } = useAgentMailScope();
   const [dismissedRevision, setDismissedRevision] = useState<number>();
   const [actionError, setActionError] = useState<string>();
 
@@ -302,14 +297,6 @@ export function AgentMailBanner({
           Deliver now
         </Button>
       )}
-      <Button
-        size="sm"
-        variant="ghost"
-        className={FLOATING_NOTICE_ACTION}
-        onClick={() => openAgentMailForTab(environmentId, tabId, "inbox", scope)}
-      >
-        View
-      </Button>
     </>
   );
   const sender = newest ? agentMailSenderLabel(newest.from) : undefined;

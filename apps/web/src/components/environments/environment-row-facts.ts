@@ -32,8 +32,6 @@ export interface LocalEnvironmentRowInputs {
   activity: AgentActivity;
   running: boolean;
   buildPipeline: boolean;
-  unreadMail: number;
-  failedMail: boolean;
   prMergeState: PrMergeState | null;
   /** The window's machine, when this client can show machines. */
   machine: { name: string; colorToken: string | undefined } | null;
@@ -69,8 +67,6 @@ export function localEnvironmentRowFacts(
     live: true,
     busy: false,
     hasUnreadWork: environment.hasUnreadWork === true,
-    unreadMail: inputs.unreadMail,
-    failedMail: inputs.failedMail,
     prMergeState: inputs.prMergeState,
     machine: inputs.machine
       ? {
@@ -131,8 +127,6 @@ export function nodeEnvironmentRowFacts(
     live: machine.transport === "connected",
     busy: actions.busy,
     hasUnreadWork: environment.hasUnreadWork,
-    unreadMail: environment.agentMailUnread ?? 0,
-    failedMail: environment.agentMailFailed === true,
     // Decided from the machine's relayed PR reading and monitor health.
     prMergeState: nodeEnvironmentPrMergeState(environment, machine, requireChecks),
     machine: {

@@ -1,5 +1,4 @@
 import { detectShortcutPlatform } from "@/lib/keyboard-shortcuts";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useCallback, useRef, type KeyboardEvent } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -39,7 +38,6 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
 import { useFileDirtyStore } from "@/stores";
-import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { agentMailCapabilities, resolveTabDisplayName } from "@orkestrator/protocol/agent-mail";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -49,7 +47,6 @@ import type { TabType } from "@/contexts";
 import { getWorkflowTabTitle } from "./workflow-tab-title";
 import { TabLaunchOverrideMarker } from "./TabLaunchOverrideMarker";
 import { TAB_ICON_CLASS, TabShell } from "./TabShell";
-import { useConfigStore } from "@/stores/configStore";
 import { usePreviewServiceStore } from "@/stores/previewServiceStore";
 import { parsePreviewTabTarget } from "@orkestrator/protocol/preview-services";
 
@@ -114,8 +111,6 @@ export function DraggableTab({
   canCloseToRight = true,
   canClose,
 }: DraggableTabProps) {
-  // This node's messages panel (plan item 4001); the command node outside a node scope.
-  const mailScope = useScopesWithCommandFallback().scope;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: createDraggableTabId(tab.id, paneId),
   });
@@ -142,9 +137,6 @@ export function DraggableTab({
         ? "claude"
         : null;
   const mailCapabilities = agentMailCapabilities(tab.type, mailAgent, Boolean(mailAgent));
-  const messagingEnabled = useConfigStore(
-    (state) => state.config.global.agentMessaging?.enabled === true,
-  );
 
   /*
    * Agent-assigned session title. The neutral projection is the source for
@@ -466,16 +458,6 @@ export function DraggableTab({
       )}
 
       <ContextMenuContent>
-        {owningEnvironmentId && messagingEnabled && mailCapabilities.canPull && (
-          <>
-            <ContextMenuItem
-              onClick={() => openAgentMailForTab(owningEnvironmentId, tab.id, "inbox", mailScope)}
-            >
-              Messages…
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-          </>
-        )}
         {onRefresh && (
           <>
             <ContextMenuItem onClick={onRefresh}>Refresh</ContextMenuItem>

@@ -5,11 +5,7 @@ import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail"
 import { agentMailStore } from "@/stores/agentMailStore";
 import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
-import {
-  agentMailParticipantLabel,
-  agentMailStatus,
-  useAgentMailEnvironmentName,
-} from "./agent-mail-ui";
+import { agentMailStatus, useAgentMailEnvironmentName } from "./agent-mail-ui";
 import { appCommandStore } from "@/test/app-command-store";
 
 describe("agentMailStatus", () => {
@@ -28,40 +24,6 @@ describe("agentMailStatus", () => {
     expect(agentMailStatus({ ...stored, ackedAt: "now" }, { canPull: false }).label).toBe(
       "handled",
     );
-  });
-});
-
-describe("agentMailParticipantLabel", () => {
-  test.each([
-    ["worker on omarchy-hp", undefined, "worker on omarchy-hp"],
-    ["Claude 2 on omarchy-hp", "worker", "worker · Claude 2 on omarchy-hp"],
-  ])("formats a node participant named %s", (displayName, environmentName, expected) => {
-    // Older leaves use the environment as their title. The backend omits the
-    // redundant environmentName before adding the node suffix to displayName.
-    expect(agentMailParticipantLabel({ kind: "agent", displayName, environmentName })).toBe(
-      expected,
-    );
-  });
-
-  test("names an agent by its environment and tab, and anyone else by its own name", () => {
-    expect(
-      agentMailParticipantLabel({
-        kind: "agent",
-        displayName: "Claude 2",
-        environmentName: "fix-login-bug",
-      }),
-    ).toBe("fix-login-bug · Claude 2");
-    // A closed tab whose environment is gone keeps the name its messages carried.
-    expect(agentMailParticipantLabel({ kind: "agent", displayName: "Claude 2" })).toBe("Claude 2");
-    // The coordinator's mailbox lives in a "Coordinator" environment; it stays a coordinator.
-    expect(
-      agentMailParticipantLabel({
-        kind: "coordinator",
-        displayName: "Project coordinator",
-        environmentName: "Coordinator",
-      }),
-    ).toBe("Project coordinator");
-    expect(agentMailParticipantLabel({ kind: "user", displayName: "You" })).toBe("You");
   });
 });
 

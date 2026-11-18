@@ -1,9 +1,5 @@
 import { useEffect } from "react";
-import {
-  agentMailboxId,
-  agentMailKind,
-  agentMailParticipantKey,
-} from "@orkestrator/protocol/agent-mail";
+import { agentMailboxId, agentMailKind } from "@orkestrator/protocol/agent-mail";
 import { agentMailStatus } from "@/components/agent-mail/agent-mail-ui";
 import type { AgentMailToolCall } from "@/lib/chat/agent-mail-tool-call";
 import {
@@ -54,9 +50,6 @@ export function MailToolPart({
     ? mailbox?.messages.find((message) => message.id === call.messageId)
     : undefined;
 
-  const senderKey = call.from ? agentMailParticipantKey(call.from) : undefined;
-  const participants: [string, string] | undefined =
-    senderKey && recipientId ? [senderKey, recipientId] : undefined;
   const descriptor = mailbox?.descriptor;
   const toCoordinator =
     call.to?.environmentId === "coordinator" ||
@@ -97,7 +90,6 @@ export function MailToolPart({
         body: call.body ?? "",
         ...(call.attachments ? { attachments: call.attachments } : {}),
         ...(state ? { status: agentMailStatus(state, descriptor?.capabilities) } : {}),
-        ...(participants ? { participants } : {}),
       }
     : {
         messageId: call.messageId ?? expansionKey,
@@ -112,7 +104,6 @@ export function MailToolPart({
         body: call.body ?? "_Loading message…_",
         ...(call.attachments ? { attachments: call.attachments } : {}),
         status: { label: "read", tone: "muted" },
-        ...(participants ? { participants } : {}),
       };
 
   return <MailTile mail={mail} expansionKey={expansionKey} />;

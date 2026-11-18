@@ -277,7 +277,7 @@ test("does no hover-card formatting while the card is closed", () => {
   }
 });
 
-test("shows authoritative unseen and failed agent-mail badges", () => {
+test("shows no agent-mail badges: mail is read in the transcript", () => {
   appCommandStore(agentMailStore).setState({
     summary: new Map([
       [
@@ -299,8 +299,8 @@ test("shows authoritative unseen and failed agent-mail badges", () => {
   });
 
   renderItem(makeEnvironment());
-  expect(screen.getByLabelText("2 unread agent messages")).toBeTruthy();
-  expect(screen.getByLabelText("Agent message delivery failed")).toBeTruthy();
+  expect(screen.queryByLabelText("2 unread agent messages") === null).toBe(true);
+  expect(screen.queryByLabelText("Agent message delivery failed") === null).toBe(true);
 });
 
 test("only reacts to its own resolved activity state", () => {

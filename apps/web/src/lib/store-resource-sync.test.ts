@@ -295,7 +295,6 @@ describe("agent-mail binding", () => {
     requestResourceResync();
     await waitForState(() => refreshMailboxes.mock.calls.length === 1, "observed mailbox resync");
     expect(refreshMailboxes).toHaveBeenCalledWith([{ environmentId: "env-1", tabId: "tab-1" }]);
-    expect(appCommandStore(agentMailStore).getState().sent.size).toBe(0);
   });
 
   test("adopts authoritative summaries only while messaging is enabled", async () => {
@@ -360,55 +359,9 @@ describe("agent-mail binding", () => {
     expect(refreshMailbox).toHaveBeenCalledWith("env-1", "tab-1");
   });
 
-  test("deduplicates tracked sent destinations during a summary refresh", async () => {
+  test("skips an empty batch and retries after a stale mailbox refresh fails", async () => {
     detach?.();
-    appCommandStore(configStore)
-      .getState()
-      .updateGlobalConfig({
-        agentMessaging: {
-          ...appCommandStore(configStore).getState().config.global.agentMessaging!,
-          enabled: true,
-        },
-      });
-    const trackedMessage = {
-      version: 1 as const,
-      id: "message-1",
-      threadId: "message-1",
-      requestId: "request-1",
-      createdAt: new Date(0).toISOString(),
-      from: { kind: "user" as const },
-      toEnvironmentId: "env-1",
-      toTabId: "tab-1",
-      toIncarnationId: "incarnation-1",
-      body: "hello",
-      bodyBytes: 5,
-      trust: "user" as const,
-      injectDepth: 0,
-      threadDepth: 0,
-      placement: "pending-inject" as const,
-      revision: 1,
-    };
-    appCommandStore(agentMailStore).getState().trackSent(trackedMessage);
-    appCommandStore(agentMailStore)
-      .getState()
-      .trackSent({
-        ...trackedMessage,
-        id: "message-2",
-        requestId: "request-2",
-      });
-    const refreshMailboxes = mock(async () => undefined);
-    appCommandStore(agentMailStore).setState({ refreshMailboxes });
-    detach = startTestStoreResourceSync({
-      getAgentMailSummary: async () => ({ revision: 2, mailboxes: [] }),
-    });
-
-    dispatchResourceChange({ resource: "agent-mail-summary", id: "all", revision: 2 });
-    await waitForState(() => refreshMailboxes.mock.calls.length === 1, "mailbox batch refresh");
-    expect(refreshMailboxes).toHaveBeenCalledWith([{ environmentId: "env-1", tabId: "tab-1" }]);
-  });
-
-  test("skips an empty sent batch and retries after a tracked mailbox refresh fails", async () => {
-    detach?.();
+    const mailboxId = "env-1\0tab-1";
     appCommandStore(configStore)
       .getState()
       .updateGlobalConfig({
@@ -419,8 +372,10 @@ describe("agent-mail binding", () => {
       });
     const refreshMailboxes = mock(async () => undefined);
     appCommandStore(agentMailStore).setState({ refreshMailboxes });
+    let entries: unknown[] = [];
+    let summaryRevision = 2;
     detach = startTestStoreResourceSync({
-      getAgentMailSummary: async () => ({ revision: 2, mailboxes: [] }),
+      getAgentMailSummary: async () => ({ revision: summaryRevision, mailboxes: entries }) as never,
     });
     dispatchResourceChange({ resource: "agent-mail-summary", id: "all", revision: 2 });
     await waitForState(
@@ -429,32 +384,41 @@ describe("agent-mail binding", () => {
     );
     expect(refreshMailboxes).not.toHaveBeenCalled();
 
-    appCommandStore(agentMailStore)
-      .getState()
-      .trackSent({
-        version: 1,
-        id: "tracked-message",
-        threadId: "tracked-message",
-        requestId: "tracked-request",
-        createdAt: new Date(0).toISOString(),
-        from: { kind: "user" },
-        toEnvironmentId: "env-1",
-        toTabId: "tab-1",
-        toIncarnationId: "incarnation-1",
-        body: "hello",
-        bodyBytes: 5,
-        trust: "user",
-        injectDepth: 0,
-        threadDepth: 0,
-        placement: "pending-inject",
-        revision: 1,
-      });
+    // A transcript cached this mailbox at revision 1; the summary moves past it.
+    appCommandStore(agentMailStore).setState({
+      mailboxes: new Map([
+        [
+          mailboxId,
+          {
+            descriptor: { mailboxId, environmentId: "env-1", tabId: "tab-1" },
+            messages: [],
+            revision: 1,
+          } as never,
+        ],
+      ]),
+    });
+    const entry = (revision: number) => ({
+      mailboxId,
+      projectId: "project-1",
+      environmentId: "env-1",
+      tabId: "tab-1",
+      revision,
+      unreadCount: 0,
+      userUnseenCount: 0,
+      agentUnackedCount: 0,
+      pendingInjectCount: 0,
+      failedInjectCount: 0,
+    });
     refreshMailboxes.mockImplementationOnce(async () => {
       throw new Error("mailbox batch offline");
     });
+    summaryRevision = 3;
+    entries = [entry(3)];
     dispatchResourceChange({ resource: "agent-mail-summary", id: "all", revision: 3 });
     await waitForState(() => refreshMailboxes.mock.calls.length === 1, "failed mailbox batch");
 
+    summaryRevision = 4;
+    entries = [entry(4)];
     dispatchResourceChange({ resource: "agent-mail-summary", id: "all", revision: 4 });
     await waitForState(() => refreshMailboxes.mock.calls.length === 2, "retried mailbox batch");
   });

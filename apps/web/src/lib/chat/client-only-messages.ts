@@ -215,6 +215,12 @@ export function agentMailSenderLabel(from: MailActor, environmentName?: string):
 }
 
 export function createPeerMailNativeMessage(message: PeerMailDisplayMessage): NativeMessage {
+  // Throws on an address the mailbox helpers refuse (empty or holding NUL);
+  // callers render such mail as an unreadable notice rather than trust it.
+  if (message.to) {
+    agentMailParticipantKey(message.from);
+    agentMailboxId(message.to.environmentId, message.to.tabId);
+  }
   const kind = agentMailKind(message);
   const sender = agentMailSenderLabel(message.from);
   const address = agentMailSenderAddress(message.from);
@@ -250,14 +256,6 @@ export function createPeerMailNativeMessage(message: PeerMailDisplayMessage): Na
       ...(message.attachments?.length
         ? {
             attachments: message.attachments.map(({ name, bytes }) => ({ name, bytes })),
-          }
-        : {}),
-      ...(message.to
-        ? {
-            participants: [
-              agentMailParticipantKey(message.from),
-              agentMailboxId(message.to.environmentId, message.to.tabId),
-            ] as [string, string],
           }
         : {}),
     },

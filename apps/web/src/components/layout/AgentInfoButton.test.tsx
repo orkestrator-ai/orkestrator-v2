@@ -532,20 +532,16 @@ afterEach(() => {
 });
 
 describe("AgentInfoButton popover lifecycle", () => {
-  test("shows the tab messages action only while agent messaging is enabled", () => {
+  test("offers no messages panel action, even with agent messaging enabled", () => {
     const original = structuredClone(appCommandStore(configStore).getState().config);
-    const disabled = structuredClone(original);
-    disabled.global.agentMessaging = { ...disabled.global.agentMessaging!, enabled: false };
-    appCommandStore(configStore).setState({ config: disabled });
+    const enabled = structuredClone(original);
+    enabled.global.agentMessaging = { ...enabled.global.agentMessaging!, enabled: true };
+    appCommandStore(configStore).setState({ config: enabled });
     try {
       renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
+      // Mail is read inline in the transcript.
       expect(screen.queryByRole("button", { name: "Messages…" }) === null).toBe(true);
-
-      const enabled = structuredClone(disabled);
-      enabled.global.agentMessaging = { ...enabled.global.agentMessaging!, enabled: true };
-      act(() => appCommandStore(configStore).setState({ config: enabled }));
-      expect(screen.getByRole("button", { name: "Messages…" })).toBeTruthy();
     } finally {
       act(() => appCommandStore(configStore).setState({ config: original }));
     }

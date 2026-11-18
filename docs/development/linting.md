@@ -363,8 +363,8 @@ baseline:
 
 - **`workspace-command-bound-call`** (source guard, plan item 4007). Uses of
   a command-bound export in a module of a node's workspace: the value-import
-  graph from `WorkspaceContent`, `NodeWorkspaceLayout`, `OpenFileDialog` and
-  `AgentMailPanel` (static imports, re-exports and `import()`; type-only
+  graph from `WorkspaceContent`, `NodeWorkspaceLayout` and `OpenFileDialog`
+  (static imports, re-exports and `import()`; type-only
   imports are not followed). An in-tree leaf renders these modules under its
   own node scope, so a `lib/backend` named export there, or another module's
   export bound to `commandBackendClient`/`portalBackendClient` (the Claude

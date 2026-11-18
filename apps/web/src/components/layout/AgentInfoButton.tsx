@@ -66,11 +66,9 @@ import {
   AGENT_PLATFORM_LABELS,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
-import { agentMailCapabilities } from "@orkestrator/protocol/agent-mail";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { MultiReviewReviewer } from "@orkestrator/protocol/multi-review";
 import type { AgentSessionAccount } from "@orkestrator/protocol/agent-accounts";
-import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
 import { SignInExpiry } from "@/components/native-agent/SignInExpiry";
 import { SessionBranchPicker } from "@/components/native-agent/SessionBranchPicker";
@@ -412,9 +410,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   );
   const enabledAgentPlatforms = useConfigStore(
     (state) => state.config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
-  );
-  const messagingEnabled = useConfigStore(
-    (state) => state.config.global.agentMessaging?.enabled === true,
   );
   /*
    * Every platform can send and receive a transfer, so the only thing that can
@@ -1042,28 +1037,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
           />
           {activeSession ? (
             <div className="space-y-5">
-              {activeTab &&
-              !isWorkflowSession &&
-              messagingEnabled &&
-              agentMailCapabilities("agent-native", activeSession.provider).canPull ? (
-                <div className="flex gap-2 border-b border-border/60 pb-4">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      close();
-                      openAgentMailForTab(
-                        activeSession.environmentId,
-                        activeTab.id,
-                        "inbox",
-                        nodeScope,
-                      );
-                    }}
-                  >
-                    Messages…
-                  </Button>
-                </div>
-              ) : null}
               <div>
                 <UsagePanel
                   usage={usage}

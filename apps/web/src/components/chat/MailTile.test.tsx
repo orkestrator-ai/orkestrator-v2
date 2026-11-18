@@ -72,21 +72,15 @@ describe("the Open action on a notice about a worker", () => {
     mail({ kind: "notice", sender: "Workflow", notice: noticeValue });
   const openButton = () => screen.queryByRole("button", { name: /Open worker/ });
 
-  test("opens that worker's tab, beside the conversation button", () => {
+  test("opens that worker's tab", () => {
     appCommandStore(environmentStore).setState({
       environments: [{ id: "worker-env", projectId: "project-1", name: "api-fix" } as Environment],
     });
     appCommandStore(paneLayoutStore).getState().hydration.set("worker-env", "done");
-    renderInAppCommandScope(
-      <MailTile
-        mail={{ ...noticeMail(workerNotice()), participants: ["a", "b"] }}
-        expansionKey="k"
-      />,
-    );
+    renderInAppCommandScope(<MailTile mail={noticeMail(workerNotice())} expansionKey="k" />);
     const button = screen.getByRole("button", { name: "Open worker api-fix" });
     // A sibling of the header button, so no control nests in another.
     expect(button.closest("button[aria-expanded]") === null).toBe(true);
-    expect(screen.getByRole("button", { name: "Open conversation" })).toBeTruthy();
     fireEvent.click(button);
     expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("worker-env");
     expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
@@ -504,19 +498,7 @@ describe("MailTile", () => {
     expect(sender.firstElementChild!.className).toContain("truncate");
   });
 
-  test("opens the conversation between sender and recipient", () => {
-    appCommandStore(agentMailStore).setState({ panel: null });
-    renderInAppCommandScope(
-      <MailTile mail={mail({ participants: ["env-2\0tab-2", "env-1\0tab-1"] })} expansionKey="c" />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
-    expect(appCommandStore(agentMailStore).getState().panel).toEqual({
-      conversation: ["env-2\0tab-2", "env-1\0tab-1"],
-    });
-    appCommandStore(agentMailStore).setState({ panel: null });
-  });
-
-  test("offers no conversation without both participants", () => {
+  test("reads inline: the tile links to no messages panel", () => {
     renderInAppCommandScope(<MailTile mail={mail()} expansionKey="none" />);
     expect(screen.queryByRole("button", { name: "Open conversation" }) === null).toBe(true);
   });

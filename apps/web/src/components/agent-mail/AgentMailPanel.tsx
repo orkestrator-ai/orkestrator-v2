@@ -398,7 +398,7 @@ function RecipientPicker({
                   {mailbox.environmentName} · {mailbox.projectName}
                 </span>
               </span>
-              <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px]">
+              <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] tracking-wide">
                 {mailbox.presence.replaceAll("_", " ")}
               </span>
             </button>

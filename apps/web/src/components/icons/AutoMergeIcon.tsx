@@ -19,7 +19,12 @@ export function AutoMergeIcon({
       className={cn("relative inline-flex size-5 shrink-0 items-end justify-start", className)}
     >
       <GitMerge className={cn("h-4 w-4", iconClassName)} />
-      <span className="absolute top-0 right-0 text-[9px] leading-none font-semibold">A</span>
+      <svg className="absolute top-0 right-0 size-2" viewBox="0 0 8 8" fill="currentColor">
+        <path
+          fillRule="evenodd"
+          d="M3.35 1h1.3l2.6 7H5.9l-.68-1.9H2.78L2.1 8H.75L3.35 1ZM4 2.65l-.83 2.3h1.66L4 2.65Z"
+        />
+      </svg>
     </span>
   );
 }

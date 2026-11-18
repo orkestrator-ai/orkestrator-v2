@@ -223,7 +223,7 @@ test("a paused question and approval wait past ten minutes on every provider, th
       const expand = page.getByRole("button", { name: `Expand project ${fixture.name}` });
       const entry = page.getByText(name, { exact: true }).first();
       await expect(expand.or(entry)).toBeVisible({ timeout: 90_000 });
-      for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+      for (const label of ["Continue without Docker", "Continue without GitHub CLI"]) {
         const button = page.getByRole("button", { name: label, exact: true });
         if (await button.isVisible()) await button.click();
       }

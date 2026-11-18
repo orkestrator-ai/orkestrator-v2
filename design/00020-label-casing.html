@@ -11,11 +11,11 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00020</p>
       <h1>00020 · Settle label casing: sentence case for buttons, menus and headings</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-low">Low</span>
         <span class="pill">Copy</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 6 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 6 / 6 images</span
         >
       </div>
 
@@ -143,9 +143,10 @@
       </section>
 
       <section class="capture" id="cap-new-tab-menu-desktop">
-        <h3>New tab menu <span class="pill">desktop 1440×900</span></h3>
+        <h3>New tab toolbar tooltips <span class="pill">desktop sources 1440×900</span></h3>
         <p class="how">
-          Open the menu with New Terminal Tab, New Root Terminal and New Browser Tab.
+          Hover the terminal, root terminal and browser buttons in that order. Each image stacks
+          three matching toolbar crops because the live toolbar shows one tooltip at a time.
         </p>
         <div class="pair">
           <figure class="shot">
@@ -155,7 +156,7 @@
             <div class="frame">
               <img
                 src="images/00020/before-new-tab-menu-desktop.png"
-                alt="Before: New tab menu (desktop)"
+                alt="Before: New Terminal Tab, New Root Terminal and New Browser Tab tooltips"
                 loading="lazy"
               />
             </div>
@@ -167,7 +168,7 @@
             <div class="frame">
               <img
                 src="images/00020/after-new-tab-menu-desktop.png"
-                alt="After: New tab menu (desktop)"
+                alt="After: New terminal tab, New root terminal and New browser tab tooltips"
                 loading="lazy"
               />
             </div>
@@ -177,9 +178,17 @@
 
       <section class="capture" id="cap-settings-global-defaults-desktop">
         <h3>
-          A settings page with “Use Global Defaults” <span class="pill">desktop 1440×900</span>
+          Network settings with “Use global defaults” <span class="pill">desktop 1440×900</span>
         </h3>
-        <p class="how">Open an environment’s agent settings.</p>
+        <p class="how">
+          Open a container environment’s settings, select Network, and turn off “Use global
+          defaults” so the allowed-domains field is editable.
+        </p>
+        <p>
+          <b>Coverage exception.</b> This Network pair replaces the requested Agent settings pair
+          for the shared-defaults switch. Agent settings inherit defaults per field and have no
+          equivalent switch. The evidence badge counts the two Network images in this slot.
+        </p>
         <div class="pair">
           <figure class="shot">
             <figcaption>
@@ -190,7 +199,7 @@
             <div class="frame">
               <img
                 src="images/00020/before-settings-global-defaults-desktop.png"
-                alt="Before: A settings page with “Use Global Defaults” (desktop)"
+                alt="Before: Network settings with “Use Global Defaults” off (desktop)"
                 loading="lazy"
               />
             </div>
@@ -202,7 +211,7 @@
             <div class="frame">
               <img
                 src="images/00020/after-settings-global-defaults-desktop.png"
-                alt="After: A settings page with “Use Global Defaults” (desktop)"
+                alt="After: Network settings with “Use global defaults” off (desktop)"
                 loading="lazy"
               />
             </div>
@@ -230,53 +239,53 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Before images captured on <b>unmodified</b> code for every slot below, and committed
             under <code>design/images/00020/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Every image slot on this page shows a picture (the evidence badge reads “6 / 6”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Hits were classified in Notes, and each decision below is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Type-check and the owning tests pass (commands below);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >DESIGN.md or PRODUCT.md updated if needed: Add the casing rule to DESIGN.md Do’s.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" aria-label="Done" checked /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -284,14 +293,57 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
-      </p>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          <b>Hit classification.</b> The JSX search found 55 matches on the baseline. 50 were
+          generic interface labels and now use sentence case. The five remaining lines are
+          references to Multi Review and Linear. The pass also covered multiline labels, tooltips,
+          dialog titles, menu items, tabs, accessible names and toasts supplied by the renderer.
+          Acronyms, proper names, established product terms, user and provider content, and
+          machine-readable strings keep their casing.
+        </li>
+        <li>
+          <b>Decision.</b> Use sentence case for interface copy with proper-noun, acronym and
+          product-term exceptions. Direct edits keep each label and its accessible name readable in
+          source and preserve the capitalization of names. Title case for buttons and dialog titles
+          would match some desktop conventions and require a second rule. The convention is recorded
+          in <a href="../DESIGN.md#do">DESIGN.md</a>.
+        </li>
+      </ul>
+      <p>
+        All pairs use the same headless <code>design-00020</code> profile, fixture, dark theme,
+        default zoom and 1440×900 viewport. The before views use unmodified <code>b2c91abb9</code>.
+        The stopped container fixture exposes its Network settings without running Docker. Terminal
+        output is masked in the new tab capture.
+      </p>
+      <h3>Before and after paths for the pull request</h3>
+      <ul>
+        <li>
+          <b>Network settings.</b> “Restricted network access”, “Allowed domains” and “Test DNS
+          resolution” use sentence case. The full-access label follows the same rule. The fixture
+          uses restricted mode.
+          <ul>
+            <li><code>design/images/00020/before-network-settings-desktop.png</code></li>
+            <li><code>design/images/00020/after-network-settings-desktop.png</code></li>
+          </ul>
+        </li>
+        <li>
+          <b>New tab toolbar.</b> The screenshots show “New terminal tab”, “New root terminal” and
+          “New browser tab”. Each column uses the same crop and order across three real hover
+          captures from that revision. Terminal output is masked in the source captures.
+          <ul>
+            <li><code>design/images/00020/before-new-tab-menu-desktop.png</code></li>
+            <li><code>design/images/00020/after-new-tab-menu-desktop.png</code></li>
+          </ul>
+        </li>
+        <li>
+          <b>Use global defaults.</b> The Network capture shows the sentence-case label with the
+          switch off and the allowed-domains field enabled.
+          <ul>
+            <li><code>design/images/00020/before-settings-global-defaults-desktop.png</code></li>
+            <li><code>design/images/00020/after-settings-global-defaults-desktop.png</code></li>
+          </ul>
+        </li>
       </ul>
 
       <footer>

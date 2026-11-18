@@ -46,7 +46,7 @@ export const FONT_OPTIONS = [
   { value: "Monaco", label: "Monaco" },
   { value: "Menlo", label: "Menlo" },
   { value: "Consolas", label: "Consolas" },
-  { value: "monospace", label: "System Monospace" },
+  { value: "monospace", label: "System monospace" },
 ] as const;
 
 /** Regex to validate hex color format (#RGB or #RRGGBB) */

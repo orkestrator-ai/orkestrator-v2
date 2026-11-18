@@ -129,7 +129,7 @@ async function authenticatedInvoke(page: Page, status: Status): Promise<Invoke> 
  * the sidebar is first used; close it whenever it covers the page.
  */
 async function closeLoginNotices(page: Page) {
-  const notices = ["Continue Without Claude", "Continue Without Codex"].map((name) =>
+  const notices = ["Continue without Claude", "Continue Without Codex"].map((name) =>
     page.getByRole("button", { name, exact: true }),
   );
   await page.addLocatorHandler(
@@ -150,9 +150,9 @@ function sidebarNavigator(page: Page, projectName: string) {
     await expect(expand.or(entry).first()).toBeVisible({ timeout: 30_000 });
     for (const label of [
       "Continue Without Codex",
-      "Continue Without Claude",
-      "Continue Without Docker",
-      "Continue Without GitHub CLI",
+      "Continue without Claude",
+      "Continue without Docker",
+      "Continue without GitHub CLI",
     ]) {
       const continueButton = page.getByRole("button", { name: label, exact: true });
       if (await continueButton.isVisible()) await continueButton.click({ timeout: 5_000 });

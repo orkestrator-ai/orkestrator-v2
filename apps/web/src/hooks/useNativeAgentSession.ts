@@ -818,7 +818,7 @@ export function useNativeAgentSession<TMessage = unknown>({
    * the two are indistinguishable at the call site. Spawning a fresh agent is
    * slow enough — seconds, for a cold ACP bridge — that ordinary background
    * refreshes land squarely in the middle of it, and one of them settling the
-   * connection surface is what flashes Connection Failed on a tab that goes on
+   * connection surface is what flashes Connection failed on a tab that goes on
    * to connect perfectly well.
    */
   const establishingSessionRef = useRef(0);
@@ -2301,7 +2301,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     }
     setIsRefreshing(true);
     // Leave the previous identity's failure behind so Retry is not stuck on
-    // Connection Failed for the whole reconnect, and a later platform cannot
+    // Connection failed for the whole reconnect, and a later platform cannot
     // inherit a completed read it never made.
     setRuntimeError(null);
     setHasCompletedRead(false);

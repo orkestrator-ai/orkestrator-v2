@@ -329,7 +329,7 @@ describe("the manifest is what is written", () => {
     expect([...files.keys()].some((name) => name.startsWith("logs/debug/"))).toBe(false);
     expect(files.has("logs/essential/essential.jsonl")).toBe(true);
     expect(manifest.absent.find((item) => item.name === "logs/debug")?.reason).toContain(
-      "Save Logs to Disk is off",
+      "Save logs to disk is off",
     );
   });
 

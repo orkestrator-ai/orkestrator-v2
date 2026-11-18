@@ -447,7 +447,7 @@ announcement.
 
 ## Save, export and download
 
-Export (Save As) writes one exact committed revision to a repository-relative
+Export (Save as) writes one exact committed revision to a repository-relative
 `.orkdes` path (`design/exports.ts`, `design/export-writer.ts`). By default
 designs go to the `designs/` folder; the dialog has separate **Folder** and
 **File name** fields (the folder may be emptied to save in the repository root,
@@ -848,7 +848,7 @@ journey, so every design command goes to that backend.
 - Harness findings, not product defects: page commands fail authentication
   until the window reloads onto the new connection, so the spec reloads until
   the version answers; and an isolated backend with no agent makes the
-  renderer open its blocking "AI CLI Required" dialog, so each backend gets a
+  renderer open its blocking "AI CLI required" dialog, so each backend gets a
   toolchain directory holding a stub `pi` that only exits 1. The 2.22.3
   backend also left `git fsmonitor--daemon` processes behind on macOS; the
   pairing backends now run with `core.fsmonitor=false`.
@@ -921,7 +921,7 @@ existing Keychain item has. No login, no billed turn.
   (`stopPackagedAppsThenRemoveProfile` in `packaged-electron-app.ts`)
   removes the root only once both apps and the backend are proven stopped;
   either app's failed snapshot or stop keeps it.
-- Both renderers open "Claude Code Is Not Logged In" for a CLI with only an
+- Both renderers open "Claude Code is not logged in" for a CLI with only an
   API key in its settings; the notice is non-blocking and the spec dismisses
   it, as the other fake-model specs do. Both releases retitle the tab after
   the first message ("Design chat 3", then the first-message title), and

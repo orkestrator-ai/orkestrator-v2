@@ -152,7 +152,7 @@ test("real gateway saves a design and rehydrates another client's edits", async 
         canvasId: canvas.id,
         linkId: link.id,
       });
-    // Save As remembers the file the design was opened from.
+    // Save as remembers the file the design was opened from.
     await page.getByRole("button", { name: "Export design to repository" }).click();
     const exportDialog = page.getByRole("dialog", { name: "Export design to repository" });
     await expect(exportDialog.getByLabel("Folder")).toHaveValue("designs");

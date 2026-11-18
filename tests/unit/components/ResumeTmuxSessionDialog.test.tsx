@@ -48,7 +48,7 @@ describe("ResumeTmuxSessionDialog", () => {
         onResume={() => {}}
       />,
     );
-    expect(screen.queryByText("Resume Session") === null).toBe(true);
+    expect(screen.queryByText("Resume session") === null).toBe(true);
     expect(listPreviousSessionsMock).not.toHaveBeenCalled();
   });
 

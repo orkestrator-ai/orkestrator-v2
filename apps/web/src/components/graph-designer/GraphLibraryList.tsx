@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 
 const ENGINE_LABELS: Record<string, string> = {
   "multi-review": "Multi Review",
-  "build-pipeline": "Build Pipeline",
+  "build-pipeline": "build pipeline",
   "looped-review": "Looped Review",
 };
 
@@ -58,6 +58,7 @@ function TrustBadge({ summary }: { summary: GraphTemplateSummary }) {
 function EngineBadge({ summary }: { summary: GraphTemplateSummary }) {
   if (summary.scope !== "builtin" || !summary.engine) return null;
   const engine = ENGINE_LABELS[summary.engine] ?? summary.engine;
+  const engineLabel = engine.charAt(0).toUpperCase() + engine.slice(1);
   const retired = summary.engineStatus === "retired";
   return (
     <span
@@ -70,11 +71,11 @@ function EngineBadge({ summary }: { summary: GraphTemplateSummary }) {
       )}
       title={
         retired
-          ? `${engine}'s engine was retired: duplicate this template to run it as a graph`
+          ? `${engineLabel}'s engine was retired: duplicate this template to run it as a graph`
           : `Runs on the ${engine} engine; duplicate it to run a copy as a graph`
       }
     >
-      {retired ? "Retired engine" : `${engine} engine`}
+      {retired ? "Retired engine" : `${engineLabel} engine`}
     </span>
   );
 }

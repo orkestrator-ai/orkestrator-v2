@@ -100,7 +100,7 @@ function stopGroup(child: ChildProcess): Promise<void> {
 }
 
 async function openSchedules(page: Page) {
-  for (const name of ["Continue Without Docker", "Continue Without Claude", "Hide"]) {
+  for (const name of ["Continue without Docker", "Continue without Claude", "Hide"]) {
     const button = page.getByRole("button", { name, exact: true });
     if (await button.isVisible().catch(() => false)) await button.click().catch(() => undefined);
   }

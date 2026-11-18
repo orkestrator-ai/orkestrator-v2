@@ -103,8 +103,8 @@ describe.skipIf(!CHROMIUM)("in-page deadlines", () => {
       await page.setContent(`
         <button id="row">row</button>
         <div role="alertdialog" aria-labelledby="t1" id="first">
-          <h2 id="t1">Claude Code Is Not Logged In</h2>
-          <button onclick="document.getElementById('first').remove()">Continue Without Claude</button>
+          <h2 id="t1">Claude Code is not logged in</h2>
+          <button onclick="document.getElementById('first').remove()">Continue without Claude</button>
         </div>
         <div role="dialog" id="second"><h2>Notice</h2></div>
         <script>
@@ -114,7 +114,7 @@ describe.skipIf(!CHROMIUM)("in-page deadlines", () => {
         </script>`);
       const dismissed: string[] = [];
       expect(await dismissDialogs(page, dismissed)).toBe(2);
-      expect(dismissed).toEqual(["Claude Code Is Not Logged In", "Notice"]);
+      expect(dismissed).toEqual(["Claude Code is not logged in", "Notice"]);
       expect(await page.locator('[role="dialog"], [role="alertdialog"]').count()).toBe(0);
       // Nothing open: no work, nothing reported.
       expect(await dismissDialogs(page, dismissed)).toBe(0);

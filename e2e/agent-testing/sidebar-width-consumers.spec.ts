@@ -190,7 +190,7 @@ test("the sidebar's animated width lays out a real terminal and editor at most t
     );
 
     // None of the optional-tool notices matter to a local fixture, and each blocks the sidebar.
-    for (const name of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+    for (const name of ["Continue without Docker", "Continue without GitHub CLI"]) {
       await page.addLocatorHandler(page.getByRole("button", { name, exact: true }), (button) =>
         button.click(),
       );

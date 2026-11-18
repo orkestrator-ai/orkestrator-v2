@@ -851,22 +851,27 @@ test("nested rewind history retains every transcript and validation across reloa
 test("retained validation stays read-only beside its live replacement after reload", async ({
   page,
 }) => {
+  const inspector = page.getByTestId("pipeline-inspector");
+  const restartValidation = inspector.getByRole("button", {
+    name: "Restart validation",
+    exact: true,
+  });
   await page.goto("/pipeline-flow?scenario=validation-rewind");
   for (const reload of [false, true]) {
     if (reload) await page.reload();
     await node(page, "Previous attempt").click();
     await page.getByRole("button", { name: "Validation", exact: true }).click();
-    await expect(page.getByText("Retained validation failure", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Restart validation", exact: true })).toHaveCount(
-      0,
-    );
+    await expect(inspector.getByText("Retained validation failure", { exact: true })).toBeVisible();
+    await expect(restartValidation).toHaveCount(0);
     await node(page, "Validation").click({ button: "right" });
+    const menu = page.getByRole("menu");
+    await expect(menu).toBeVisible();
     await expect(
-      page.getByRole("menuitem", { name: "Restart validation", exact: true }),
+      menu.getByRole("menuitem", { name: "Restart validation", exact: true }),
     ).toHaveCount(0);
     await page.keyboard.press("Escape");
     await node(page, "Prepare").click();
-    await page.getByRole("button", { name: "Restart validation", exact: true }).click();
+    await restartValidation.click();
     await expect
       .poll(() =>
         page.evaluate(

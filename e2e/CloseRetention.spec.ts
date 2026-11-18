@@ -204,12 +204,12 @@ async function closeTab(page: Page, platform: Platform) {
 /** Open a new agent tab and resume the conversation whose row shows `prompt`. */
 async function resumeInNewTab(page: Page, platform: Platform, prompt: string) {
   await page.getByRole("button", { name: "New agent tab" }).click();
-  await page.getByRole("button", { name: "Resume Session" }).click();
+  await page.getByRole("button", { name: "Resume session" }).click();
   await page
     .getByRole("dialog", { name: "Resume a session" })
     .getByRole("button", { name: new RegExp(`^${LABELS[platform]}\\b.*Choose a previous session`) })
     .click();
-  const picker = page.getByRole("dialog", { name: "Resume Session" });
+  const picker = page.getByRole("dialog", { name: "Resume session" });
   await picker.getByRole("button", { name: new RegExp(prompt) }).click();
   await expect(picker).toHaveCount(0);
 }
@@ -302,19 +302,19 @@ for (const platform of ["cursor", "pi", "opencode", "grok"] as const) {
     );
     // Opened to resume, then the picker is dismissed: the tab starts its own.
     await page.getByRole("button", { name: "New agent tab" }).click();
-    await page.getByRole("button", { name: "Resume Session" }).click();
+    await page.getByRole("button", { name: "Resume session" }).click();
     await page
       .getByRole("dialog", { name: "Resume a session" })
       .getByRole("button", { name: new RegExp(`^${label}\\b.*Choose a previous session`) })
       .click();
-    const picker = page.getByRole("dialog", { name: "Resume Session" });
+    const picker = page.getByRole("dialog", { name: "Resume session" });
     await expect(picker).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(picker).toHaveCount(0);
     await expect(composer(page, platform)).toBeVisible({ timeout: 30_000 });
 
     // Its empty transcript still offers a resume, which replaces that session.
-    await page.getByRole("button", { name: "Resume Session" }).click();
+    await page.getByRole("button", { name: "Resume session" }).click();
     await picker.getByRole("button", { name: new RegExp(first) }).click();
     await expect(picker).toHaveCount(0);
     await expect(page.getByText(`Answer to: ${first}`)).toHaveCount(1, { timeout: 30_000 });

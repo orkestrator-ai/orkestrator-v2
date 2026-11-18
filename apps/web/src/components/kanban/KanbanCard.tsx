@@ -85,16 +85,16 @@ function getBuildPhaseDisplay(phase: BuildPhase): { label: string; className: st
   switch (phase) {
     case "creating-environment":
       return {
-        label: "Creating Env",
+        label: "Creating env",
         className: "bg-blue-500/15 text-blue-400 border-blue-500/30",
       };
     case "starting-environment":
       return {
-        label: "Starting Env",
+        label: "Starting env",
         className: "bg-blue-500/15 text-blue-400 border-blue-500/30",
       };
     case "waiting-for-setup":
-      return { label: "Setting Up", className: "bg-blue-500/15 text-blue-400 border-blue-500/30" };
+      return { label: "Setting up", className: "bg-blue-500/15 text-blue-400 border-blue-500/30" };
     case "building":
       return { label: "Building", className: "bg-amber-500/15 text-amber-400 border-amber-500/30" };
     case "reviewing":
@@ -104,7 +104,7 @@ function getBuildPhaseDisplay(phase: BuildPhase): { label: string; className: st
       };
     case "addressing-findings":
       return {
-        label: "Addressing Findings",
+        label: "Addressing findings",
         className: "bg-amber-500/15 text-amber-400 border-amber-500/30",
       };
     case "verifying":

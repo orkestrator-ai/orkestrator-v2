@@ -32,7 +32,7 @@ export type RestartLaunchedTerminalOutcome =
   | { kind: "cancelled" };
 
 /**
- * Reconnect for a tab the backend launched (Run Commands, an agent CLI tab).
+ * Reconnect for a tab the backend launched (Run commands, an agent CLI tab).
  *
  * The renderer may only attach to these tabs' shells, never create one, so
  * once the backend that owned the shell has restarted (and cleared the tab's

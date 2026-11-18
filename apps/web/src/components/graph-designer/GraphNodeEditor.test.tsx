@@ -56,9 +56,9 @@ describe("GraphNodeEditor", () => {
     expect(harness.selections.at(-1)).toBeNull();
   });
 
-  test("Inputs/Outputs: rename a port (edges follow), change its type, render mode and collect policy", () => {
+  test("Inputs/outputs: rename a port (edges follow), change its type, render mode and collect policy", () => {
     const { harness, container } = renderNode(bakeOff(), "judge");
-    tab("Inputs/Outputs");
+    tab("Inputs/outputs");
     const briefs = container.querySelector('[data-graph-port-editor="in:briefs"]')!.parentElement!;
     const name = within(briefs).getByLabelText("Name") as HTMLInputElement;
     fireEvent.change(name, { target: { value: "candidates" } });

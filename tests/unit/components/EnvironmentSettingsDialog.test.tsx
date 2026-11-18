@@ -249,10 +249,10 @@ describe("EnvironmentSettingsDialog", () => {
       fireEvent.change(editor, { target: { value: invalid } });
       expect(screen.getByText(`Invalid domain or port: ${invalid}`)).toBeTruthy();
       expect(
-        (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+        (screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement).disabled,
       ).toBe(true);
       expect(
-        (screen.getByRole("button", { name: "Test DNS Resolution" }) as HTMLButtonElement).disabled,
+        (screen.getByRole("button", { name: "Test DNS resolution" }) as HTMLButtonElement).disabled,
       ).toBe(true);
     }
     fireEvent.change(editor, {
@@ -260,9 +260,9 @@ describe("EnvironmentSettingsDialog", () => {
     });
     expect(screen.queryByText(/Invalid domain or port/) === null).toBe(true);
     expect(
-      (screen.getByRole("button", { name: "Test DNS Resolution" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Test DNS resolution" }) as HTMLButtonElement).disabled,
     ).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() =>
       expect(mockUpdateAllowedDomains).toHaveBeenCalledWith("env-1", [
         "service.example:5432",
@@ -287,7 +287,7 @@ describe("EnvironmentSettingsDialog", () => {
     // Each platform has its own tab now, so choosing a mode for Codex cannot
     // move Claude or OpenCode the way the old shared control did.
     fireEvent.click(screen.getByRole("radio", { name: /^Terminal/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(mockUpdateEnvironmentAgentSettings).toHaveBeenCalledWith("env-1", {
@@ -983,7 +983,7 @@ describe("EnvironmentSettingsDialog", () => {
   });
 
   function addHostPort(hostPort: string) {
-    fireEvent.click(screen.getByRole("button", { name: "Add Port" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add port" }));
     fireEvent.change(screen.getByPlaceholderText("Host"), {
       target: { value: hostPort },
     });
@@ -1013,7 +1013,7 @@ describe("EnvironmentSettingsDialog", () => {
       screen.getByText(/Saved port changes apply when this container is rebuilt/),
     ).toBeTruthy();
     expect(screen.queryByText(/will be preserved/) === null).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(mockUpdatePortMappings).toHaveBeenCalledTimes(1));
     // Saving is not a request to replace the container, implicitly or otherwise.
@@ -1051,7 +1051,7 @@ describe("EnvironmentSettingsDialog", () => {
     const reset = screen.getByRole("button", { name: "Reset container…" }) as HTMLButtonElement;
     expect(reset.disabled).toBe(true);
     expect(reset.getAttribute("title")).toBe("Start Docker to reset this container");
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(mockUpdatePortMappings).toHaveBeenCalledTimes(1));
     expect(onRestart).not.toHaveBeenCalled();

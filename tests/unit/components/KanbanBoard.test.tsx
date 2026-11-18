@@ -181,7 +181,7 @@ describe("KanbanBoard ticket sources", () => {
     renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
 
     expect(screen.getByText("Backlog")).toBeTruthy();
-    expect(screen.getByText("In Progress")).toBeTruthy();
+    expect(screen.getByText("In progress")).toBeTruthy();
     await waitFor(() => {
       expect(loadTasksMock).toHaveBeenCalledWith("project-1");
     });

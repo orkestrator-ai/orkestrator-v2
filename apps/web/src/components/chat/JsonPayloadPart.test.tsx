@@ -86,7 +86,7 @@ describe("JsonPayloadPart", () => {
     expect(screen.getByText("Structured review report")).toBeTruthy();
     expect(screen.getByText(/Ready: with-fixes/)).toBeTruthy();
     // The report's own sections stay unmounted until the fold-out is opened.
-    expect(screen.queryByText("Review Scope") === null).toBe(true);
+    expect(screen.queryByText("Review scope") === null).toBe(true);
   });
 
   test("opens the report's sections on demand", () => {
@@ -99,7 +99,7 @@ describe("JsonPayloadPart", () => {
 
     fireEvent.click(screen.getByText("Structured review report"));
 
-    expect(screen.getByText("Review Scope")).toBeTruthy();
+    expect(screen.getByText("Review scope")).toBeTruthy();
     expect(screen.getByText("Verdict")).toBeTruthy();
     // The trigger already names the report; the card must not repeat it.
     expect(screen.queryByRole("heading", { name: "Structured review report" }) === null).toBe(true);
@@ -305,7 +305,7 @@ describe("JsonPayloadPart expansion persistence", () => {
     );
 
     fireEvent.click(screen.getByText("Structured review report"));
-    fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
+    fireEvent.click(screen.getByRole("button", { name: /What changed/ }));
     expect(screen.getByText(TEST_STRUCTURED_REVIEW_REPORT.whatChanged.overview)).toBeTruthy();
 
     view.unmount();
@@ -538,7 +538,7 @@ describe("NativeMessage find-index alignment", () => {
     expect(searchText).toBe(renderedSearchText(view.container));
 
     fireEvent.click(screen.getByText("Structured review report"));
-    expect(screen.getByText("Review Scope")).toBeTruthy();
+    expect(screen.getByText("Review scope")).toBeTruthy();
   });
 
   test("a build pipeline address prompt renders its findings as a report, not raw JSON", () => {
@@ -565,7 +565,7 @@ describe("NativeMessage find-index alignment", () => {
 
     fireEvent.click(screen.getByText("Review findings"));
     fireEvent.click(screen.getByText("Issues · 1"));
-    fireEvent.click(screen.getByText("Test Coverage Gaps · 1"));
+    fireEvent.click(screen.getByText("Test coverage gaps · 1"));
 
     // The report's own finding card: severity badge, confidence and location.
     expect(screen.getByText("P1")).toBeTruthy();

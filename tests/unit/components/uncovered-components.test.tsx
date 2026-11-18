@@ -64,8 +64,8 @@ describe("previously indirect component contracts", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    fireEvent.click(screen.getByRole("button", { name: "Switch To Build" }));
-    fireEvent.click(screen.getByRole("button", { name: "Approve Plan" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch to Build" }));
+    fireEvent.click(screen.getByRole("button", { name: "Approve plan" }));
     expect(dismiss).toHaveBeenCalledTimes(1);
     expect(switchMode).toHaveBeenCalledTimes(1);
     expect(approve).toHaveBeenCalledTimes(1);
@@ -79,7 +79,7 @@ describe("previously indirect component contracts", () => {
       />,
     );
     expect(
-      (screen.getByRole("button", { name: "Approve Plan" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Approve plan" }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 

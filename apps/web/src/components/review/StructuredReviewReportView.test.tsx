@@ -74,13 +74,13 @@ describe("StructuredReviewReportView", () => {
     const headings = screen.getAllByRole("heading").map((heading) => heading.textContent);
     expect(headings.filter((heading) => !heading?.startsWith("1. "))).toEqual([
       "Structured review report",
-      "Review Scope",
-      "What Changed",
-      "Risk Profile",
-      "Test Results",
+      "Review scope",
+      "What changed",
+      "Risk profile",
+      "Test results",
       "Strengths",
       "Issues · 1",
-      "Test Coverage Gaps · 1",
+      "Test coverage gaps · 1",
       "Verdict",
       "Summary of change",
       "Review summary",
@@ -224,11 +224,11 @@ describe("StructuredReviewReportView", () => {
     // A collapsed report still says what it concluded.
     expect(screen.getByText(/Ready: with-fixes · 1 issue · 1 coverage gap/)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
+    fireEvent.click(screen.getByRole("button", { name: /What changed/ }));
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
     expect(screen.queryByText("Long-running state changed.") === null).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
+    fireEvent.click(screen.getByRole("button", { name: /What changed/ }));
     expect(screen.queryByText("Adds structured reviews.") === null).toBe(true);
   });
 
@@ -236,7 +236,7 @@ describe("StructuredReviewReportView", () => {
     render(<StructuredReviewReportView report={report} showRawJson={false} />);
 
     expect(screen.queryByRole("button", { name: /Inspect raw JSON/ }) === null).toBe(true);
-    expect(screen.queryByText("Validated JSON Schema") === null).toBe(true);
+    expect(screen.queryByText("Validated JSON schema") === null).toBe(true);
     expect(screen.getByRole("heading", { name: "Structured review report" })).toBeTruthy();
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
   });
@@ -258,20 +258,20 @@ describe("StructuredReviewReportView", () => {
     // The article stays named for assistive technology even with no visible
     // heading, and the sections themselves are untouched.
     expect(screen.getByLabelText("Structured review report")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /What Changed/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /What changed/ })).toBeTruthy();
   });
 
   test("still offers the raw inspector when only the heading is suppressed", () => {
     render(<StructuredReviewReportView report={report} showHeading={false} />);
 
     expect(screen.queryByRole("heading", { name: "Structured review report" }) === null).toBe(true);
-    expect(screen.getByText("Validated JSON Schema")).toBeTruthy();
+    expect(screen.getByText("Validated JSON schema")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Inspect raw JSON/ })).toBeTruthy();
   });
 
   test("keeps an expanded section open across a re-render of the report", () => {
     const { rerender } = render(<StructuredReviewReportView report={report} collapsibleSections />);
-    fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
+    fireEvent.click(screen.getByRole("button", { name: /What changed/ }));
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
 
     // A build pipeline re-renders this on every backend push. Deriving the
@@ -292,7 +292,7 @@ describe("StructuredReviewReportView", () => {
         sectionExpansionKey="review-1/section"
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
+    fireEvent.click(screen.getByRole("button", { name: /What changed/ }));
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
 
     view.unmount();
@@ -309,7 +309,7 @@ describe("StructuredReviewReportView", () => {
 
   test("closes a section again on a second click of its disclosure", () => {
     render(<StructuredReviewReportView report={report} collapsibleSections />);
-    const disclosure = screen.getByRole("button", { name: /What Changed/ });
+    const disclosure = screen.getByRole("button", { name: /What changed/ });
 
     fireEvent.click(disclosure);
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
@@ -478,7 +478,7 @@ describe("StructuredReviewReportView", () => {
     expect(
       screen.getByText("No high-confidence issues were found in the reviewed scope."),
     ).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Test Coverage Gaps · 0" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Test coverage gaps · 0" })).toBeTruthy();
     expect(screen.getByText("None.")).toBeTruthy();
   });
 });

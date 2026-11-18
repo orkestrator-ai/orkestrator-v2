@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export const DEFAULT_NEW_FOLDER_NAME = "New Folder";
+const DEFAULT_NEW_FOLDER_NAME = "New Folder";
 
 interface CreateFolderDialogProps {
   parentDirectory: string | null;

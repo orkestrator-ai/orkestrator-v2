@@ -813,20 +813,20 @@ describe("EnvironmentItem copy address", () => {
     expect(writeTextMock).toHaveBeenCalledWith("localhost:49152");
   });
 
-  test("context menu shows Copy Address when port is mapped", () => {
+  test("context menu shows Copy address when port is mapped", () => {
     const env = makeEnvironment({ entryPort: 3000, hostEntryPort: 49152 });
     const { container } = renderItem(env);
 
     const contextMenu = container.querySelector('[data-testid="context-menu-content"]');
     expect(contextMenu).not.toBeNull();
-    expect(contextMenu!.textContent).toContain("Copy Address");
+    expect(contextMenu!.textContent).toContain("Copy address");
   });
 
-  test("context menu Copy Address copies to clipboard when clicked", () => {
+  test("context menu Copy address copies to clipboard when clicked", () => {
     const env = makeEnvironment({ entryPort: 3000, hostEntryPort: 49152 });
     const { container } = renderItem(env);
 
-    const copyItem = findMenuItem(container, "Copy Address");
+    const copyItem = findMenuItem(container, "Copy address");
     expect(copyItem).not.toBeUndefined();
 
     fireEvent.click(copyItem!);
@@ -838,7 +838,7 @@ describe("EnvironmentItem copy address", () => {
     const env = makeEnvironment({ entryPort: 3000, hostEntryPort: 49152 });
     const { container } = renderItem(env);
 
-    const copyItem = findMenuItem(container, "Copy Address");
+    const copyItem = findMenuItem(container, "Copy address");
     expect(copyItem).not.toBeUndefined();
     fireEvent.click(copyItem!);
 
@@ -847,12 +847,12 @@ describe("EnvironmentItem copy address", () => {
     });
   });
 
-  test("context menu does not show Copy Address when no port is mapped", () => {
+  test("context menu does not show Copy address when no port is mapped", () => {
     const env = makeEnvironment({ entryPort: 3000 });
     const { container } = renderItem(env);
 
     const contextMenu = container.querySelector('[data-testid="context-menu-content"]');
-    expect(contextMenu!.textContent).not.toContain("Copy Address");
+    expect(contextMenu!.textContent).not.toContain("Copy address");
   });
 
   test("tooltip address is not clickable when port is not mapped", async () => {
@@ -875,7 +875,7 @@ describe("EnvironmentItem copy environment ID", () => {
     const env = makeEnvironment({ id: "env-copy-me" });
     const { container } = renderItem(env);
 
-    fireEvent.click(findMenuItem(container, "Copy Environment ID")!);
+    fireEvent.click(findMenuItem(container, "Copy environment ID")!);
 
     expect(mockWriteText).toHaveBeenCalledWith("env-copy-me");
     await waitFor(() => {
@@ -889,7 +889,7 @@ describe("EnvironmentItem copy environment ID", () => {
     mockWriteText.mockRejectedValueOnce(new Error("clipboard unavailable"));
     const { container } = renderItem(makeEnvironment());
 
-    fireEvent.click(findMenuItem(container, "Copy Environment ID")!);
+    fireEvent.click(findMenuItem(container, "Copy environment ID")!);
 
     await waitFor(() => {
       expect(toastErrorMock).toHaveBeenCalledWith("Failed to copy environment ID");
@@ -909,38 +909,38 @@ describe("EnvironmentItem copy initial prompt", () => {
     });
   });
 
-  test("context menu shows Copy Initial Prompt when an initial prompt is stored", () => {
+  test("context menu shows Copy initial prompt when an initial prompt is stored", () => {
     const env = makeEnvironment({ initialPrompt: "Review the migration plan" });
     const { container } = renderItem(env);
 
     const contextMenu = container.querySelector('[data-testid="context-menu-content"]');
     expect(contextMenu).not.toBeNull();
-    expect(contextMenu!.textContent).toContain("Copy Initial Prompt");
+    expect(contextMenu!.textContent).toContain("Copy initial prompt");
   });
 
-  test("context menu Copy Initial Prompt copies the prompt to clipboard", () => {
+  test("context menu Copy initial prompt copies the prompt to clipboard", () => {
     const env = makeEnvironment({ initialPrompt: "Review the migration plan" });
     const { container } = renderItem(env);
 
-    const copyItem = findMenuItem(container, "Copy Initial Prompt");
+    const copyItem = findMenuItem(container, "Copy initial prompt");
     expect(copyItem).not.toBeUndefined();
 
     fireEvent.click(copyItem!);
     expect(writeTextMock).toHaveBeenCalledWith("Review the migration plan");
   });
 
-  test("context menu Copy Initial Prompt trims stored prompt text before copying", () => {
+  test("context menu Copy initial prompt trims stored prompt text before copying", () => {
     const env = makeEnvironment({ initialPrompt: "  Review the migration plan\n" });
     const { container } = renderItem(env);
 
-    const copyItem = findMenuItem(container, "Copy Initial Prompt");
+    const copyItem = findMenuItem(container, "Copy initial prompt");
     expect(copyItem).not.toBeUndefined();
 
     fireEvent.click(copyItem!);
     expect(writeTextMock).toHaveBeenCalledWith("Review the migration plan");
   });
 
-  test("context menu Copy Initial Prompt shows an error toast when clipboard write fails", async () => {
+  test("context menu Copy initial prompt shows an error toast when clipboard write fails", async () => {
     writeTextMock = mock(() => Promise.reject(new Error("clipboard unavailable")));
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText: writeTextMock },
@@ -950,7 +950,7 @@ describe("EnvironmentItem copy initial prompt", () => {
     const env = makeEnvironment({ initialPrompt: "Review the migration plan" });
     const { container } = renderItem(env);
 
-    const copyItem = findMenuItem(container, "Copy Initial Prompt");
+    const copyItem = findMenuItem(container, "Copy initial prompt");
     expect(copyItem).not.toBeUndefined();
 
     fireEvent.click(copyItem!);
@@ -960,12 +960,12 @@ describe("EnvironmentItem copy initial prompt", () => {
     });
   });
 
-  test("context menu does not show Copy Initial Prompt without stored prompt text", () => {
+  test("context menu does not show Copy initial prompt without stored prompt text", () => {
     const env = makeEnvironment({ initialPrompt: "   " });
     const { container } = renderItem(env);
 
     const contextMenu = container.querySelector('[data-testid="context-menu-content"]');
-    expect(contextMenu!.textContent).not.toContain("Copy Initial Prompt");
+    expect(contextMenu!.textContent).not.toContain("Copy initial prompt");
   });
 });
 
@@ -1061,10 +1061,10 @@ describe("EnvironmentItem menu actions and selection", () => {
 
     const deleteItem = findMenuItem(container, "Delete");
     expect(deleteItem).not.toBeUndefined();
-    expect(container.textContent).not.toContain("Delete Environment");
+    expect(container.textContent).not.toContain("Delete environment");
 
     fireEvent.click(deleteItem!);
-    expect(container.textContent).toContain("Delete Environment");
+    expect(container.textContent).toContain("Delete environment");
     expect(container.textContent).toContain("delete-me");
     expect(onDelete).not.toHaveBeenCalled();
 
@@ -1273,9 +1273,9 @@ describe("EnvironmentItem mobile actions menu", () => {
 
     expect(actionsMenuLabels(menu)).toEqual([
       "Settings",
-      "Copy Environment ID",
-      "Copy Address",
-      "Copy Initial Prompt",
+      "Copy environment ID",
+      "Copy address",
+      "Copy initial prompt",
       "Fork local",
       "Fork container",
       "Stop",
@@ -1297,7 +1297,7 @@ describe("EnvironmentItem mobile actions menu", () => {
 
     expect(actionsMenuLabels(menu)).toEqual([
       "Settings",
-      "Copy Environment ID",
+      "Copy environment ID",
       "Fork local",
       "Fork container",
       "Delete",
@@ -1317,7 +1317,7 @@ describe("EnvironmentItem mobile actions menu", () => {
 
     expect(actionsMenuLabels(menu)).toEqual([
       "Settings",
-      "Copy Environment ID",
+      "Copy environment ID",
       "Fork local",
       "Fork container",
       "Start",
@@ -1355,7 +1355,7 @@ describe("EnvironmentItem mobile actions menu", () => {
     await closeActionsMenu(menu);
   });
 
-  test("Copy Address copies the mapped host address", async () => {
+  test("Copy address copies the mapped host address", async () => {
     const writeText = mock(() => Promise.resolve());
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText },
@@ -1367,11 +1367,11 @@ describe("EnvironmentItem mobile actions menu", () => {
     await openActionsMenu();
     const menu = await findActionsMenu();
 
-    await selectActionsMenuItem(menu, "Copy Address");
+    await selectActionsMenuItem(menu, "Copy address");
     expect(writeText).toHaveBeenCalledWith("localhost:49152");
   });
 
-  test("Copy Initial Prompt copies the trimmed prompt", async () => {
+  test("Copy initial prompt copies the trimmed prompt", async () => {
     const writeText = mock(() => Promise.resolve());
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText },
@@ -1383,7 +1383,7 @@ describe("EnvironmentItem mobile actions menu", () => {
     await openActionsMenu();
     const menu = await findActionsMenu();
 
-    await selectActionsMenuItem(menu, "Copy Initial Prompt");
+    await selectActionsMenuItem(menu, "Copy initial prompt");
     expect(writeText).toHaveBeenCalledWith("Review the migration plan");
   });
 
@@ -1409,7 +1409,7 @@ describe("EnvironmentItem mobile actions menu", () => {
 
     await selectActionsMenuItem(menu, "Delete");
     await waitFor(() => {
-      expect(container.textContent).toContain("Delete Environment");
+      expect(container.textContent).toContain("Delete environment");
     });
     expect(onDelete).not.toHaveBeenCalled();
 
@@ -1498,8 +1498,8 @@ describe("EnvironmentItem on a desktop viewport", () => {
 
     expect(contextMenuLabels(container)).toEqual([
       "Settings",
-      "Copy Environment ID",
-      "Copy Address",
+      "Copy environment ID",
+      "Copy address",
       "Fork local",
       "Fork container",
       "Stop",

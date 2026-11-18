@@ -238,7 +238,7 @@ export function OpenCodeProvidersSection() {
   return (
     <div className="space-y-3">
       <div className="flex items-start justify-between gap-3">
-        <SettingsSectionHeader icon={<PlugZap className="h-4 w-4" />} title="Provider Sign-in">
+        <SettingsSectionHeader icon={<PlugZap className="h-4 w-4" />} title="Provider sign-in">
           The model providers OpenCode is signed in to, shared by every local environment. OpenCode
           cannot tell an expired key from a valid one: if a model request fails with HTTP 401, sign
           in again here. Containers copy the login in when they start.

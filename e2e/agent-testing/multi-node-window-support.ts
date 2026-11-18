@@ -229,9 +229,9 @@ export function writeEvidence(name: string, value: unknown): string {
 /** Startup dialogs the credential-free fixture opens, closed for this run only. */
 export async function dismissDialogs(page: Page): Promise<void> {
   for (const text of [
-    "Continue Without Claude",
-    "Continue Without GitHub CLI",
-    "Continue Without Docker",
+    "Continue without Claude",
+    "Continue without GitHub CLI",
+    "Continue without Docker",
     "Continue anyway",
     "Dismiss",
   ]) {

@@ -546,7 +546,7 @@ test("repository settings waits for saved config, saves through the owner's proj
     expectDomAbsent(screen.queryByLabelText("Name"));
     act(() => appCommandStore(configStore).getState().setConfig(savedConfig));
     fireEvent.click(await screen.findByRole("button", { name: "Branches" }));
-    const branch = (await screen.findByLabelText("Default Branch")) as HTMLInputElement;
+    const branch = (await screen.findByLabelText("Default branch")) as HTMLInputElement;
     expect(branch.value).toBe("saved-main");
     fireEvent.click(screen.getByRole("button", { name: "General" }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "renamed" } });

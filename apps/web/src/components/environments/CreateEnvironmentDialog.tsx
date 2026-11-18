@@ -667,7 +667,7 @@ export function CreateEnvironmentDialog({
   // whatever was known on first render.
   const effectiveFeatureModels = featureModels ?? defaultFeatureModels;
   /**
-   * The task text, shared by both intents: it is the prompt's "Initial Prompt"
+   * The task text, shared by both intents: it is the prompt's "Initial prompt"
    * and the feature's "Description". Switching intent keeps what was typed, so
    * the two fields always show the same text.
    */
@@ -1232,7 +1232,7 @@ export function CreateEnvironmentDialog({
    * Terminal-versus-native is no longer a per-environment choice in this
    * dialog: it comes from each platform's own Settings column, which is where
    * every other launcher reads it from. The checkbox that used to override it
-   * here is now Launch Agent.
+   * here is now Launch agent.
    */
   const availableModels = modelsForAgent(modelCatalog, agentType);
   const pickerModels = enabledAgentPlatforms.flatMap((platform) =>
@@ -1581,7 +1581,7 @@ export function CreateEnvironmentDialog({
   };
 
   // Cmd+Enter (Ctrl+Enter off macOS) from anywhere in the dialog does what the
-  // Create Environment button does, including staying inert while it is disabled.
+  // Create environment button does, including staying inert while it is disabled.
   // Capture before Radix consumes Enter on checkbox and select triggers. Stop
   // propagation so the chord cannot also toggle, open, or activate a control.
   const handleDialogKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -1638,12 +1638,12 @@ export function CreateEnvironmentDialog({
             <DialogTitle
               aria-label={
                 projectName
-                  ? `Create Ork (Environment) - ${projectName}`
-                  : "Create Ork (Environment)"
+                  ? `Create Ork (environment) - ${projectName}`
+                  : "Create Ork (environment)"
               }
               className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 text-xl leading-tight"
             >
-              <span className="shrink-0">Create Ork (Environment)</span>
+              <span className="shrink-0">Create Ork (environment)</span>
               {projectName && (
                 <span className="max-w-full truncate font-mono text-sm text-muted-foreground">
                   {projectName}
@@ -1796,7 +1796,7 @@ export function CreateEnvironmentDialog({
                 </div>
               </div>
 
-              {/* Environment Name */}
+              {/* Environment name */}
               <div className="border-b border-divider px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-center sm:gap-4 sm:px-6">
                 <Label
                   htmlFor="environment-name"
@@ -1807,7 +1807,7 @@ export function CreateEnvironmentDialog({
                 <div className="grid min-w-0 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_7rem] sm:gap-4">
                   <Input
                     id="environment-name"
-                    aria-label="Environment Name (optional)"
+                    aria-label="Environment name (optional)"
                     placeholder="e.g., feature-dark-mode"
                     value={environmentName}
                     onChange={(e) => setEnvironmentName(e.target.value)}
@@ -1987,7 +1987,7 @@ export function CreateEnvironmentDialog({
                   <div className="flex items-center gap-2 sm:px-1">
                     <Checkbox
                       id="launch-agent"
-                      aria-label="Launch Agent"
+                      aria-label="Launch agent"
                       checked={launchAgent}
                       onCheckedChange={(checked) => setLaunchAgent(checked === true)}
                       disabled={isLoading}
@@ -2003,7 +2003,7 @@ export function CreateEnvironmentDialog({
               </div>
             </TabsContent>
 
-            {/* Port Configuration - only for containerized environments */}
+            {/* Port configuration - only for containerized environments */}
             {environmentType === "containerized" && (
               <TabsContent
                 value="ports"
@@ -2025,7 +2025,7 @@ export function CreateEnvironmentDialog({
                       >
                         <div className="flex items-center gap-2">
                           <Network className="h-4 w-4" />
-                          <span className="text-sm font-medium">Port Configuration</span>
+                          <span className="text-sm font-medium">Port configuration</span>
                           {portMappings.length > 0 && (
                             <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                               {portMappings.length} port{portMappings.length !== 1 ? "s" : ""}
@@ -2129,7 +2129,7 @@ export function CreateEnvironmentDialog({
                         className="w-full"
                       >
                         <Plus className="h-4 w-4 mr-2" />
-                        Add Port Mapping
+                        Add port mapping
                       </Button>
                     </CollapsibleContent>
                   </Collapsible>
@@ -2193,7 +2193,7 @@ export function CreateEnvironmentDialog({
                         htmlFor="initial-prompt"
                         className="mb-2 block text-sm font-medium text-muted-foreground sm:mb-0 sm:pt-2"
                       >
-                        Initial Prompt <span className="sr-only">(optional)</span>
+                        Initial prompt <span className="sr-only">(optional)</span>
                       </Label>
                       <div className="space-y-2">
                         <Textarea
@@ -2248,7 +2248,7 @@ export function CreateEnvironmentDialog({
             className="h-9 px-5 font-bold shadow-[0_8px_24px_rgba(59,130,246,0.22)]"
           >
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {isLoading && loadingLabel ? loadingLabel : "Create Environment"}
+            {isLoading && loadingLabel ? loadingLabel : "Create environment"}
           </Button>
         </DialogFooter>
       </DialogContent>

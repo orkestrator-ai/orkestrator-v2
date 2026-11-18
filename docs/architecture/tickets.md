@@ -451,7 +451,7 @@ width) and one wide content column on the right; sections never sit side by
 side.
 
 - **Ticket**: the bar has Build… (the build launcher, disabled while a build
-  of the ticket runs), Edit (the markdown editor, in place) and View Build.
+  of the ticket runs), Edit (the markdown editor, in place) and View build.
   The index lists the ticket's sections (summary, criteria, the other
   structured sections, Delivery), Images, Comments and activity (the
   lifecycle's comments are the activity) and Pull request. Index entries are

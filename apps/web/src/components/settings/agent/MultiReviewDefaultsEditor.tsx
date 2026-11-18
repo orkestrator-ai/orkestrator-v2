@@ -445,7 +445,7 @@ export function MultiReviewDefaultsEditor({
             index={index}
             entry={reviewerEntry(tier, index)}
             fallbackEntry={index === 0 ? { platform: fallbackAgent } : reviewFallbackEntry}
-            fallbackLabel={index === 0 ? "App default" : "Follows Review"}
+            fallbackLabel={index === 0 ? "App default" : "Follows review"}
             inheritFallbackFieldsWhenConfigured={index >= DEFAULT_MULTI_REVIEW_REVIEWER_COUNT}
             canInherit={canInherit}
             tiers={tiers}

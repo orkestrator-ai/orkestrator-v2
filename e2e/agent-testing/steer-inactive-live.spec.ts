@@ -1,6 +1,6 @@
 /**
  * Queued native steering on the inactive path (todo 0005 task 7): a prompt
- * queued behind a running turn is steered into it from the Queued Prompts
+ * queued behind a running turn is steered into it from the Queued prompts
  * dialog, the renderer loses the command's response, the user switches to
  * another environment while the steer takes effect, then returns and reloads.
  * The queue must show the steered prompt gone and the next one still waiting,
@@ -120,9 +120,9 @@ test.beforeEach(async ({ page }) => {
   });
   // A credential-free profile has no Claude login; only the Claude case
   // points Claude at a model, so the other cases meet this startup check.
-  const claudeLogin = page.getByRole("alertdialog", { name: "Claude Code Is Not Logged In" });
+  const claudeLogin = page.getByRole("alertdialog", { name: "Claude Code is not logged in" });
   await page.addLocatorHandler(claudeLogin, async () => {
-    await claudeLogin.getByRole("button", { name: "Continue Without Claude", exact: true }).click();
+    await claudeLogin.getByRole("button", { name: "Continue without Claude", exact: true }).click();
   });
 });
 
@@ -285,7 +285,7 @@ for (const platform of ["codex", "claude", "cursor"] as const) {
         const expand = page.getByRole("button", { name: `Expand project ${fixture.name}` });
         const entry = page.getByText(name, { exact: true }).first();
         await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
-        for (const continueLabel of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+        for (const continueLabel of ["Continue without Docker", "Continue without GitHub CLI"]) {
           const button = page.getByRole("button", { name: continueLabel, exact: true });
           if (await button.isVisible()) await button.click();
         }
@@ -306,7 +306,7 @@ for (const platform of ["codex", "claude", "cursor"] as const) {
       await page.goto(status.browserUrl!);
       await openEnvironment(target!.name);
       await page.getByTitle("View queued prompts").click();
-      const dialog = page.getByRole("dialog", { name: "Queued Prompts" });
+      const dialog = page.getByRole("dialog", { name: "Queued prompts" });
       await expect(dialog.getByRole("button", { name: "Steer", exact: true })).toHaveCount(2);
       let dropped = false;
       await page.route("**/__orkestrator/invoke", async (route) => {

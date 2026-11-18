@@ -133,14 +133,12 @@ test("dragging a project writes the new project order to its own machine", async
   await expect(page.getByTestId("calls")).toHaveText("[]");
 });
 
-test("row accessibility retains badges and deleting without hover warns about its PR", async ({
+test("row accessibility retains activity and PR status and deleting without hover warns about its PR", async ({
   page,
 }, testInfo) => {
   await page.goto("/remote-machine-tree?accessible-state=1");
   const row = page.getByRole("button", { name: "b, on Remote, Idle", exact: true });
-  await expect(row).toHaveAccessibleDescription(
-    /New completed activity.*2 unread agent messages.*Pull request open/,
-  );
+  await expect(row).toHaveAccessibleDescription("New completed activity. Pull request open");
   expect(await row.ariaSnapshot()).toContain('button "b, on Remote, Idle"');
   const preview = `${process.cwd()}/output/visual-previews`;
   await page.screenshot({ path: `${preview}/review-row-${testInfo.project.name}.png` });

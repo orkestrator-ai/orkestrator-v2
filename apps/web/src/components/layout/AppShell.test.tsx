@@ -1,5 +1,6 @@
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
 import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import * as realResizable from "@/components/ui/resizable";
@@ -288,6 +289,32 @@ afterEach(() => {
 });
 
 describe("AppShell", () => {
+  test.each([false, true])(
+    "mounts no inbox or mail panel with messaging enabled (mobile: %s)",
+    (mobile) => {
+      isMobile = mobile;
+      const store = appCommandStore(configStore);
+      const { config } = store.getState();
+      store.setState({
+        config: {
+          ...config,
+          global: {
+            ...config.global,
+            agentMessaging: normalizeAgentMessagingSettings({ enabled: true }),
+          },
+        },
+      });
+      try {
+        renderInAppCommandScope(<AppShell>Workspace</AppShell>);
+        expect(screen.queryByRole("button", { name: /^Agent mail\b/i, hidden: true })).toBeNull();
+        expect(screen.queryByTestId("agent-mail-panel")).toBeNull();
+      } finally {
+        cleanup();
+        store.setState({ config });
+      }
+    },
+  );
+
   test("an open files sheet stays hidden over a remote workspace across layout changes", () => {
     filesPanelOpen = true;
     isMobile = false;

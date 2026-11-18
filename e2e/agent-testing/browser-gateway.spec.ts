@@ -1486,6 +1486,10 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
 }) => {
   test.skip(process.env.ORKESTRATOR_AGENT_TEST_REVIEW !== "1", "opt-in isolated Codex turn");
   test.setTimeout(240_000);
+  await page.addLocatorHandler(
+    page.getByRole("button", { name: "Continue without Claude" }),
+    (button) => button.click(),
+  );
   const status = await profileStatus();
   expect(status.flavor).toBe("agent-test");
   const invoke = await authenticatedInvoke(page, status);
@@ -1596,8 +1600,10 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
     await page.getByText(target!.name, { exact: true }).first().click();
     // The recipient tab's mail banner releases it; there is no messages panel.
     const mailPill = page.getByRole("button", { name: /^Agent mail: / });
-    if (await mailPill.isVisible().catch(() => false)) await mailPill.click();
-    await page.getByRole("button", { name: "Deliver now", exact: true }).click();
+    const deliverNow = page.getByRole("button", { name: "Deliver now", exact: true });
+    await expect(mailPill.or(deliverNow).first()).toBeVisible({ timeout: 15_000 });
+    if (await mailPill.isVisible()) await mailPill.click();
+    await deliverNow.click();
     await expect
       .poll(
         async () => (await readMail()).messages.find(({ id }) => id === message.id)?.placement,
@@ -1632,7 +1638,10 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
     expect((await readMail()).messages.find(({ id }) => id === message.id)?.placement).toBe(
       "injected",
     );
-    await expect(page.getByRole("button", { name: "Deliver now", exact: true })).toHaveCount(0);
+    await expect(
+      page.locator("[data-mail-tile]").filter({ hasText: `QA receipt notification: ${marker}.` }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(deliverNow).toHaveCount(0);
     expect((await readSession()).dispatchedRequestIds).toEqual(after.dispatchedRequestIds);
     expect((await fs.readFile(receivedFile, "utf8")).trim()).toBe(marker);
   } finally {
@@ -1650,6 +1659,11 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
 test("agent mail rehydrates after an inactive recipient is opened and the page reloads", async ({
   page,
 }) => {
+  // Pull-only mail does not need a signed-in agent.
+  await page.addLocatorHandler(
+    page.getByRole("button", { name: "Continue without Claude" }),
+    (button) => button.click(),
+  );
   const status = await profileStatus();
   expect(status.status).toBe("ready");
   expect(status.browserUrl).toBeTruthy();

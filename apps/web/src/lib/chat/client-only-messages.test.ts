@@ -14,6 +14,7 @@ import {
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
   isOptimisticNativeMessage,
+  PEER_MAIL_UNREADABLE_TEXT,
   positionOptimisticNativeMessage,
   presentPeerMailCarrierRow,
   presentPeerMailRows,
@@ -124,6 +125,56 @@ describe("client-only optimistic messages", () => {
       ...overrides,
     };
   }
+
+  test.each(["", "\0"])("notices invalid carrier addresses (%#)", (invalid) => {
+    const local = mailMessage({}).from;
+    const coordinator = {
+      ...local,
+      kind: "coordinator",
+      coordinatorId: "coordinator",
+      conversationId: "conversation",
+    };
+    const node = {
+      kind: "node",
+      nodeId: "bk_remote",
+      nodeName: "Remote",
+      role: "agent",
+      projectId: "p",
+      environmentId: "worker",
+      tabId: "agent",
+      title: "Codex",
+    };
+    const to = { environmentId: "recipient", tabId: "agent" };
+    const row = (from: object, recipient?: typeof to) =>
+      presentPeerMailCarrierRow({
+        id: "source-row",
+        createdAt: "2026-08-28T10:00:00.000Z",
+        content:
+          '<orkestrator-peer-message version="1">\n<orkestrator-peer-payload-json>\n' +
+          JSON.stringify({
+            from,
+            to: recipient,
+            body: "Report",
+            trust: "same-project",
+            messageId: "mail",
+          }) +
+          "\n</orkestrator-peer-payload-json>\n</orkestrator-peer-message>",
+      });
+    expect(row(local)?.[0]?.peerMail?.body).toBe("Report");
+    expect(row(coordinator)?.[0]?.peerMail?.body).toBe("Report");
+    expect(row(node, to)?.[0]?.peerMail?.body).toBe("Report");
+    for (const rows of [
+      row({ ...local, environmentId: invalid }),
+      row({ ...coordinator, tabId: invalid }),
+      row({ ...node, tabId: invalid }, to),
+      row({ ...node, nodeId: invalid }, to),
+      row(local, { ...to, tabId: invalid }),
+    ]) {
+      expect(rows).toHaveLength(1);
+      expect(rows?.[0]?.content).toBe(PEER_MAIL_UNREADABLE_TEXT);
+      expect(rows?.[0]?.peerMail).toBeUndefined();
+    }
+  });
 
   test("a carrier's attached images reach the tile by name and size, never by path", () => {
     const [row] = createPeerMailNativeMessagesFromCarrier({

@@ -78,7 +78,7 @@ export function AgentMailBanner({
     mailbox.messages.length < mailbox.total
   )
     return null;
-  const messages = mailbox.messages;
+  const messages = mailbox.messages.filter((message) => !message.discardedAt);
   const failed = messages.find((message) => message.placement === "inject_failed");
   const failedCount = messages.filter((message) => message.placement === "inject_failed").length;
   const paused = messages.find(isAgentMailBudgetHeld);
@@ -251,30 +251,21 @@ export function AgentMailBanner({
     awaitingAgent[0] ??
     releasable[0] ??
     inInbox[0];
+  const discardable = failed ?? paused ?? pending;
 
   const actions = (
     <>
       {failed && (
-        <>
-          <Button
-            size="sm"
-            variant="secondary"
-            className={FLOATING_NOTICE_ACTION}
-            disabled={deliveryHeldReason !== undefined}
-            onClick={() => void retry(failed.id)}
-          >
-            <RotateCcw className="size-3" />
-            Retry
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className={FLOATING_NOTICE_ACTION}
-            onClick={() => void discard(failed.id)}
-          >
-            Discard
-          </Button>
-        </>
+        <Button
+          size="sm"
+          variant="secondary"
+          className={FLOATING_NOTICE_ACTION}
+          disabled={deliveryHeldReason !== undefined}
+          onClick={() => void retry(failed.id)}
+        >
+          <RotateCcw className="size-3" />
+          Retry
+        </Button>
       )}
       {paused && (
         <Button
@@ -295,6 +286,16 @@ export function AgentMailBanner({
           onClick={() => void deliver()}
         >
           Deliver now
+        </Button>
+      )}
+      {discardable && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className={FLOATING_NOTICE_ACTION}
+          onClick={() => void discard(discardable.id)}
+        >
+          Discard
         </Button>
       )}
     </>

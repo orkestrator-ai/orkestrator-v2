@@ -557,6 +557,57 @@ describe("AgentMailBanner", () => {
     expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
   });
 
+  test.each([
+    ["pending-inject", undefined],
+    ["inject-held", "loop-budget-exhausted"],
+    ["inject-held", "hourly-limit"],
+  ] as const)(
+    "discards the displayed %s delivery (%s) and refreshes the banner",
+    async (placement, placementReason) => {
+      install(placement, { placementReason });
+      const store = appCommandStore(agentMailStore);
+      const snapshot = store.getState().mailboxes.get(mailboxId)!;
+      const discarded = { ...snapshot.messages[0]!, discardedAt: new Date(1).toISOString() };
+      const discard = spyOn(backend, "discardAgentMailInject").mockResolvedValue({
+        ...discarded,
+        body: "hello",
+      });
+      const refreshSummary = mock(async () => undefined);
+      store.setState({
+        refreshSummary,
+        refreshMailbox: async () => {
+          if (discard.mock.calls.length > 0) {
+            store.setState({
+              mailboxes: new Map([[mailboxId, { ...snapshot, messages: [discarded] }]]),
+            });
+          }
+        },
+      });
+      renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+      await waitFor(() => expect(refreshSummary).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+
+      await waitFor(() => expect(screen.queryByRole("region", { name: "Agent mail" })).toBeNull());
+      expect(discard).toHaveBeenCalledWith("env-1", "tab-1", discarded.id);
+      expect(refreshSummary).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  test.each(["Retry", "Discard"])("shows the error when %s is refused", async (action) => {
+    install("inject_failed", { placementReason: "rejected" });
+    const command = spyOn(
+      backend,
+      action === "Retry" ? "retryAgentMailInject" : "discardAgentMailInject",
+    ).mockRejectedValue(new Error("Delivery changed. Try again."));
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    fireEvent.click(screen.getByRole("button", { name: action }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe("Delivery changed. Try again.");
+    expect(command).toHaveBeenCalledWith("env-1", "tab-1", "message-inject_failed");
+    expect(screen.getByRole("button", { name: action })).toBeTruthy();
+  });
+
   for (const [placement, placementReason, text] of [
     ["inject-held", "hourly-limit", "Delivery paused: hourly limit · resumes on its own"],
     ["pending-inject", "retrying", "Delivery was refused · retrying automatically"],

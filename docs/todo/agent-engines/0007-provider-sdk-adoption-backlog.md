@@ -31,7 +31,7 @@ pins undercut one of them is it raised below (task 1).
 8. **Pi compaction controls**: custom instructions, `abortCompaction`, auto-compaction toggle. Status: done (custom instructions 2026-11-03: `/compact <instructions>` behind `actions.compactInstructions`, on for Claude and Pi; 2026-11-06: Stop ends a Pi compaction through the cancel routes, and an Auto-compact composer toggle per session that never writes Pi's settings file). Live check on a signed-in Pi was to-do 7280 (retired 2026-11-10); how it works is in [native-agent-commands.md](../../architecture/native-agent-commands.md).
 9. **Second ACP agent**: Gemini CLI or Claude-over-ACP through `AcpProviderConfig`. Status: deferred (decision recorded: until a user asks for a specific agent).
 10. **Grok MCP elicitation**: `mcp-form` and `mcp-url` cards over `_x.ai/mcp/elicit`. Status: done (2026-10-31; proved signed in on 1.0.67 through the bridge).
-11. **Grok `costUsdTicks` qualification**: once two billed Grok turns establish the tick unit, record the conversion in the `usage.ts` comment and make `parseUsdCost` accept ticks. Status: blocked (waits on 7568: 0007 task 11, the billed Grok turns).
+11. **Grok `costUsdTicks` qualification**: establish the tick unit and scope, then show ticks-only costs. Status: done (2026-11-18; per-turn ticks from the pinned 1.0.77 binary's own docs and wire structs, converted at 10¹⁰ per USD, explicit USD first, ambiguous values unknown; see Assumptions and decisions). A billed reconciliation stays in the manual-test checklist as confirmation, not as a gate.
 12. **OpenCode `find.*` and Session V2 features**: unused 1.x file search; V2 waits on 0008. Status: done for `find.*` (moved to "Decided out"); Session V2 stays with 0008.
 13. **Living-doc drift**: fix `agent-engines.md` (Grok Build, Claude compatibility surface) and `upgrade-agents.md`. Status: done (`docs(agent-engines): fix Claude compatibility surface and Grok ACP drift`).
 
@@ -268,13 +268,34 @@ Probed live 2026-10-31 on 1.0.67: `agent stdio` does forward both modes, the ans
 
 ### 11. Grok `costUsdTicks` qualification
 
-**Problem.** Grok turns show no cost because the tick unit is not confirmed for ACP.
+**Problem.** Grok turns showed no cost because the tick unit and scope were not confirmed for ACP.
 
-**Context.** Grok documents 10¹⁰ ticks per USD for `grok sessions` and headless output; whether ACP's `costUsdTicks` is the same quantity, and whether it is per turn or cumulative, needs two billed turns of different sizes. That run is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (2026-11-10).
+**Context.** Grok documents 10¹⁰ ticks per USD for `grok usage` and headless output. The open question was whether ACP's `costUsdTicks` is the same quantity, and whether it is per turn or cumulative. The billed run planned for it in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (2026-11-10) needs a signed-in Grok CLI and the xAI billing dashboard; this host has no Grok login.
 
-**Investigation.** Ticks are still ignored (`bridges/acp-bridge/src/usage.ts`); the fixture in `usage.test.ts` fits the documented unit, and the bridge treats ACP cost as a cumulative session snapshot.
+**Investigation.** Read 2026-11-18 from the pinned Grok `1.0.77` binary (`strings` over the managed toolchain's `grok`), with no login and no billed turn:
 
-**Decisions.** None left here: once the checklist run records both samples, write the conversion, the samples and the date in the `usage.ts` comment and change `parseUsdCost` to accept ticks (per turn or cumulative, as the run shows).
+- Unit. The embedded docs say headless `total_cost_usd_ticks` "is the same value in exact integer ticks (1 USD = 10^10 ticks)", with the example `0.01268905` USD = `126890500` ticks, and that `grok usage`'s `costUsdTicks` "is 10^10 ticks per USD (divide by `1e10` for dollars)".
+- Same field. ACP's `costUsdTicks` is a member of the `PromptUsage` struct (`inputTokens`, `outputTokens`, `totalTokens`, `cacheCreationTokens`, `reasoningTokens`, `modelCalls`, `apiDurationMs`, `costUsdTicks`, `costIsPartial`, plus `modelUsage` and `usageIsIncomplete`), the shape `turn_completed`'s `usage` and the prompt result's `_meta.usage` carry. The `grok usage` per-turn `UsageSummary` has the same fields under the same names.
+- Scope. `PromptUsage` is the prompt's own usage: the headless docs call ACP `_meta.usage.inputTokens` "(PromptUsage) ... the full prompt sum", and the recorded fixture is one model call of 15,675 tokens at 226,620,000 ticks ($0.022662). The bridge already treats the token counts beside the ticks as per turn. So the ticks are per turn (per prompt), not a running session total.
+- Other carriers. `response_completed` carries `ResponseUsage` (five token fields, no ticks); ACP `usage_update`'s USD `cost` is the session's cumulative total.
+- Ambiguity. Grok omits its own cost floats when `costIsPartial` or `usageIsIncomplete` is set, so ticks beside either flag are a lower bound.
+
+**Decisions.**
+
+- **What evidence qualifies the conversion?**
+  - **The pinned binary's embedded docs and wire structs (recommended; chosen).**
+    - Pros: available without a login or spend; ties the ACP field to the documented unit by name and struct; reproducible at every pin bump.
+    - Cons: static evidence, not an observed bill; a server that stamped a different quantity under the same name would not show here.
+  - **Wait for the billed checklist run.**
+    - Pros: reconciles against the dashboard.
+    - Cons: needs a signed-in Grok and a human reading billing; kept the cost hidden for weeks with no date in sight.
+- **Where do per-turn ticks show?**
+  - **On each turn's row, and summed into the panel's session cost only while every counted turn had qualified ticks (recommended; chosen).**
+    - Pros: matches the session scope other providers give `costUsd`; usage history, which sums rows, stays exact.
+    - Cons: one turn without ticks hides the session cost for the rest of the session.
+  - **The last turn's ticks as the panel's cost.**
+    - Pros: simplest.
+    - Cons: a per-turn amount under a session label.
 
 ### 12. OpenCode `find.*` and Session V2 features
 
@@ -556,7 +577,31 @@ a new live run. Kept task 11 open for the remaining ACP cost qualification.
 ### Task 11: needs live Grok runs
 
 It needs a signed-in Grok CLI and billed turns. The exact steps are under
-"Qualification".
+"Qualification". (Superseded 2026-11-18 by the entry below.)
+
+### Task 11: qualified from the pinned binary and built (2026-11-18)
+
+Chose the recommended options in task 11. `bridges/acp-bridge/src/usage.ts`
+records the evidence and the 10¹⁰ conversion (`GROK_TICKS_PER_USD`):
+
+- Ticks are read only from per-turn carriers (`turn_completed`, the prompt
+  result and its `_meta`); ticks on `response_completed` or `usage_update`
+  are refused because their scope is not one turn.
+- `costIsPartial`, `usageIsIncomplete`, a malformed value, or a turn where
+  one attempt reported ticks and another did not, make that turn's cost
+  unknown (`costUsdTicksUnknown`).
+- A turn's row (`turns[].costUsd`) carries its own ticks in dollars. The
+  panel's `costUsd` is the session's summed ticks (`sessionCostUsdTicks`),
+  which become unknown for the rest of the session once a counted turn had
+  tokens but no qualified ticks. Sessions persisted before this change have
+  no tick total and keep showing no cost.
+- An explicit USD `usage_update.cost` takes precedence on the panel and on
+  the row, as before. That figure is ACP's cumulative session cost, so a row
+  holding it is session-scoped; this predates the change and is unchanged.
+- Ticks keep `costSource: "provider"`: the amount is Grok's, only rescaled.
+
+The billed checklist item now confirms the shipped conversion against the
+dashboard instead of gating it.
 
 ### Task 12: drop `find.*`
 
@@ -739,11 +784,10 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     agent is that record plus a platform id in
     `packages/protocol/src/agent-platforms.ts`, with packaging covered by
     `tests/unit/bridge-packaging.test.ts`.
-  - Grok cost. `costUsdTicks` is ignored (`bridges/acp-bridge/src/usage.ts`),
-    and cost is taken only from an explicit USD `usage_update.cost`. Grok
-    documents 10¹⁰ ticks per USD for its own session stats (task 11), so the
-    unit is no longer the blocker. What remains is whether ACP's field is per
-    turn or cumulative; the qualification below settles it.
+  - Grok cost (task 11, done 2026-11-18). `costUsdTicks` is read as each
+    turn's cost at 10¹⁰ per USD (`bridges/acp-bridge/src/usage.ts`); an
+    explicit USD `usage_update.cost` still takes precedence. The billed
+    confirmation is under "Qualification".
   - Grok `GROK_DISABLE_EXPERIMENTS=1` (1.0.70) for bridge children. It would
     stop config-file experiments changing the default model or update channel,
     but also overrides experiments a user joined. Decide with a user report.
@@ -768,7 +812,8 @@ Unadopted today. Each line says what blocks it or what decision it needs.
 
 The billed Grok `costUsdTicks` run moved to the
 [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
-2026-11-10; task 11 is the code change that follows it.
+2026-11-10. Task 11 was built on 2026-11-18 from the pinned binary's own
+evidence; the checklist run now confirms it against billing.
 
 ## Constraints and rationale
 
@@ -797,6 +842,12 @@ The billed Grok `costUsdTicks` run moved to the
     component gets a rendering test with synthetic projections.
 
 ## Needs verification
+
+- Grok tick costs (task 11) rest on static evidence from the pinned `1.0.77`
+  binary. No billed turn has been reconciled against the xAI dashboard yet;
+  that run is in the manual-test checklist. Recheck the `PromptUsage` field
+  list on each Grok bump (`strings` over the managed `grok`, search
+  `costUsdTicks`).
 
 - Re-check each deferred item against the current pins before scheduling it.
   At Claude SDK `0.3.314` the symbols below are still present

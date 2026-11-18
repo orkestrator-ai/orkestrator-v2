@@ -104,6 +104,9 @@ export function publicContextUsage(state: SessionState) {
         ...(state.usage.sessionTokens === undefined
           ? {}
           : { sessionTokens: state.usage.sessionTokens }),
+        ...(state.usage.sessionCostUsdTicks === undefined
+          ? {}
+          : { sessionCostUsdTicks: state.usage.sessionCostUsdTicks }),
         ...(state.usage.turns?.length ? { turns: state.usage.turns } : {}),
         source: provider,
         updatedAt: state.usage.updatedAt,

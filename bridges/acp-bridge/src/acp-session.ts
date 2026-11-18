@@ -32,7 +32,10 @@ import {
   ACP_COST_SOURCE,
   acpUsageTokenCount,
   accumulateAttemptUsage,
+  addSessionCostUsdTicks,
   parseAcpTurnUsage,
+  qualifiedCostUsdTicks,
+  ticksToUsd,
   type AcpTurnUsage,
 } from "./usage.js";
 import { acpSignInMissing, assertAcpSignedIn } from "./acp-credentials.js";
@@ -2421,6 +2424,23 @@ export function recordTurnUsage(state: SessionState, payload: unknown): void {
         ? reportedTurnTokens
         : Math.max(0, previous.sessionTokens - (previous.lastTurnTokens ?? 0)) + reportedTurnTokens
       : previous?.sessionTokens;
+  // Ticks follow the token count exactly: a late carrier replaces the last
+  // turn's share of the session total instead of adding to it.
+  const replacesLastTurn = !turnInFlight && reportedTurnTokens !== undefined;
+  const lastTurnCostUsdTicks = replacesLastTurn
+    ? qualifiedCostUsdTicks(accumulatedTurn)
+    : previous?.lastTurnCostUsdTicks;
+  const sessionCostUsdTicks = replacesLastTurn
+    ? addSessionCostUsdTicks(
+        previous?.sessionTokens === undefined || previous.sessionCostUsdTicks === undefined
+          ? undefined
+          : Math.max(0, previous.sessionCostUsdTicks - (previous.lastTurnCostUsdTicks ?? 0)),
+        previous?.sessionTokens === undefined
+          ? 0
+          : Math.max(0, previous.sessionTokens - (previous.lastTurnTokens ?? 0)),
+        accumulatedTurn,
+      )
+    : previous?.sessionCostUsdTicks;
   state.usage = {
     turn: accumulatedTurn,
     ...(previous?.turns?.length ? { turns: previous.turns } : {}),
@@ -2432,6 +2452,8 @@ export function recordTurnUsage(state: SessionState, payload: unknown): void {
         ? {}
         : { lastTurnTokens: reportedTurnTokens }),
     ...(lateSessionTokens === undefined ? {} : { sessionTokens: lateSessionTokens }),
+    ...(lastTurnCostUsdTicks === undefined ? {} : { lastTurnCostUsdTicks }),
+    ...(sessionCostUsdTicks === undefined ? {} : { sessionCostUsdTicks }),
     ...(modelId ? { modelId } : {}),
     ...(durationMs === undefined ? {} : { durationMs }),
     updatedAt: new Date().toISOString(),
@@ -2453,6 +2475,12 @@ export function finalizeHistoryReplayTurnUsage(state: SessionState): void {
   const previous = state.usage;
   const lastTurnTokens = acpTurnTokenCount(turn);
   const modelId = state.sessionConfig.composer.selectedModelId;
+  const lastTurnCostUsdTicks =
+    lastTurnTokens === undefined ? previous?.lastTurnCostUsdTicks : qualifiedCostUsdTicks(turn);
+  const sessionCostUsdTicks =
+    lastTurnTokens === undefined
+      ? previous?.sessionCostUsdTicks
+      : addSessionCostUsdTicks(previous?.sessionCostUsdTicks, previous?.sessionTokens, turn);
   state.usage = {
     turn,
     ...(previous?.turns?.length ? { turns: previous.turns } : {}),
@@ -2462,6 +2490,8 @@ export function finalizeHistoryReplayTurnUsage(state: SessionState): void {
         ? {}
         : { sessionTokens: previous.sessionTokens }
       : { sessionTokens: (previous?.sessionTokens ?? 0) + lastTurnTokens }),
+    ...(lastTurnCostUsdTicks === undefined ? {} : { lastTurnCostUsdTicks }),
+    ...(sessionCostUsdTicks === undefined ? {} : { sessionCostUsdTicks }),
     ...(modelId ? { modelId } : {}),
     updatedAt: new Date().toISOString(),
   };
@@ -2473,10 +2503,24 @@ export function finalizeTurnUsage(state: SessionState): void {
     ? acpTurnTokenCount(state.currentTurnUsage)
     : undefined;
   if (!state.usage || lastTurnTokens === undefined) return;
+  const turn = state.currentTurnUsage!;
+  const turnTicks = qualifiedCostUsdTicks(turn);
+  const sessionCostUsdTicks = addSessionCostUsdTicks(
+    state.usage.sessionCostUsdTicks,
+    state.usage.sessionTokens,
+    turn,
+  );
   state.usage.lastTurnTokens = lastTurnTokens;
   state.usage.sessionTokens = (state.usage.sessionTokens ?? 0) + lastTurnTokens;
+  if (turnTicks === undefined) delete state.usage.lastTurnCostUsdTicks;
+  else state.usage.lastTurnCostUsdTicks = turnTicks;
+  if (sessionCostUsdTicks === undefined) delete state.usage.sessionCostUsdTicks;
+  else state.usage.sessionCostUsdTicks = sessionCostUsdTicks;
+  // An explicit USD figure takes precedence over ticks. Without one, the
+  // turn's own qualified ticks are this row's cost: Grok reports them per
+  // prompt, so they are exactly this turn's spend.
+  const turnCostUsd = turn.costUsd ?? (turnTicks === undefined ? undefined : ticksToUsd(turnTicks));
   const turnId = state.currentTurnRequestId || `turn-${state.promptSequence}`;
-  const turn = state.currentTurnUsage!;
   state.usage.turns = [
     ...(state.usage.turns ?? []).filter((entry) => entry.turnId !== turnId),
     {
@@ -2484,7 +2528,7 @@ export function finalizeTurnUsage(state: SessionState): void {
       // `finalizeTurnUsage` commits one completed turn exactly once, so this
       // is the turn's own time.
       at: new Date().toISOString(),
-      ...(turn.costUsd === undefined ? {} : { costUsd: turn.costUsd, costSource: ACP_COST_SOURCE }),
+      ...(turnCostUsd === undefined ? {} : { costUsd: turnCostUsd, costSource: ACP_COST_SOURCE }),
       ...(turn.inputTokens === undefined ? {} : { inputTokens: turn.inputTokens }),
       ...(turn.outputTokens === undefined ? {} : { outputTokens: turn.outputTokens }),
       ...(turn.cacheReadTokens === undefined ? {} : { cacheReadTokens: turn.cacheReadTokens }),

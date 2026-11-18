@@ -527,6 +527,13 @@ export interface PersistedUsage {
   lastTurnTokens?: number;
   /** Cumulative tokens consumed by completed turns in this session. */
   sessionTokens?: number;
+  /** Qualified Grok ticks of the most recently completed turn; absent when unknown. */
+  lastTurnCostUsdTicks?: number;
+  /**
+   * Summed qualified Grok ticks of every turn counted in `sessionTokens`.
+   * Absent once any counted turn's cost was unknown (`addSessionCostUsdTicks`).
+   */
+  sessionCostUsdTicks?: number;
   modelId?: string;
   durationMs?: number;
   updatedAt: string;

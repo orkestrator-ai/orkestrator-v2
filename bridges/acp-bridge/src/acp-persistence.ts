@@ -211,6 +211,12 @@ export function restorePersistedUsage(value: unknown): PersistedUsage | null {
     ...(Number.isSafeInteger(value.sessionTokens) && Number(value.sessionTokens) >= 0
       ? { sessionTokens: Number(value.sessionTokens) }
       : {}),
+    ...(Number.isSafeInteger(value.lastTurnCostUsdTicks) && Number(value.lastTurnCostUsdTicks) >= 0
+      ? { lastTurnCostUsdTicks: Number(value.lastTurnCostUsdTicks) }
+      : {}),
+    ...(Number.isSafeInteger(value.sessionCostUsdTicks) && Number(value.sessionCostUsdTicks) >= 0
+      ? { sessionCostUsdTicks: Number(value.sessionCostUsdTicks) }
+      : {}),
     ...(typeof value.modelId === "string" ? { modelId: value.modelId.slice(0, 1_024) } : {}),
     ...(Number.isSafeInteger(value.durationMs) && Number(value.durationMs) >= 0
       ? { durationMs: Number(value.durationMs) }

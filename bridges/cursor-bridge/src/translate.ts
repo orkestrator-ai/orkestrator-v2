@@ -15,6 +15,7 @@
  *    let an unobserved session grow without limit.
  */
 import { randomBytes } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import {
   MAX_ACTIVE_SUBAGENTS_PER_SESSION,
   MAX_MESSAGE_TEXT_BYTES,
@@ -52,6 +53,7 @@ import {
   toolSourceStates,
   type BridgeMessage,
   type BridgeCompactionPart,
+  type BridgeFilePart,
   type BridgeImagePart,
   type BridgeProgressPart,
   type BridgeStatusPart,
@@ -330,6 +332,9 @@ function applyToolCall(
   }
   if (phase === "settled" && rendered.toolImage) {
     appendToolImage(state, message, callId, rendered.toolImage);
+  }
+  if (phase === "settled" && rendered.toolFile) {
+    appendToolFile(state, message, callId, rendered.toolFile);
   }
 
   part.toolName = rendered.toolName;
@@ -665,6 +670,48 @@ function appendToolImage(
   };
   message.parts.push(part);
   chargeNewEntry(state, part);
+}
+
+/**
+ * Show a file a tool call saved — a screen recording — as a file row beside
+ * its card.
+ *
+ * Keyed on the call id, like `appendToolImage`, so a re-rendered settled call
+ * cannot append a second row.
+ */
+function appendToolFile(
+  state: SessionState,
+  message: BridgeMessage,
+  callId: string,
+  file: NonNullable<RenderedToolCall["toolFile"]>,
+): void {
+  const part = savedFilePart(file, message.id, callId);
+  if (message.parts.some((candidate) => candidate.sourcePartId === part.sourcePartId)) return;
+  message.parts.push(part);
+  chargeNewEntry(state, part);
+}
+
+/**
+ * The transcript row for a file a tool call saved. Shared with history
+ * hydration so a reload shows the same row the live turn did.
+ *
+ * Only the path travels: the renderer reads the bytes when the user opens the
+ * row, through the same file preview a prompt attachment uses, so the
+ * environment's containment and size rules decide whether it can be played.
+ */
+export function savedFilePart(
+  file: NonNullable<RenderedToolCall["toolFile"]>,
+  messageId: string,
+  callId: string,
+): BridgeFilePart {
+  return {
+    type: "file",
+    content: file.filePath,
+    fileUrl: pathToFileURL(file.filePath).href,
+    sourcePartId: `file:${callId}`,
+    sourceMessageId: messageId,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 /**

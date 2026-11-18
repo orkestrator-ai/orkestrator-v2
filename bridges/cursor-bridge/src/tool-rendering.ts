@@ -11,6 +11,7 @@
  * and a tool variant added upstream must degrade to a plain card, not throw on
  * the event loop that is streaming a live turn.
  */
+import { isAbsolute, resolve } from "node:path";
 import type { ToolCall } from "@cursor/sdk";
 import type { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
@@ -20,6 +21,7 @@ import {
   MAX_TOOL_DIFF_BYTES,
   MAX_TOOL_OUTPUT_BYTES,
   MAX_TOOL_TITLE_BYTES,
+  workingDirectory,
 } from "./config.js";
 import { CURSOR_CUSTOM_USER_TOOLS_SERVER, hostedToolOwner } from "./mcp.js";
 import { boundText } from "./transcript.js";
@@ -42,6 +44,15 @@ export interface RenderedToolCall {
    * transcript snapshot; the renderer fetches it once, on demand.
    */
   toolImage?: { filePath: string; caption: string; imageSource: "generated" | "viewed" };
+  /**
+   * A non-image file this call left on disk: a saved screen recording.
+   *
+   * The absolute path only. The transcript shows it as an ordinary file row,
+   * and the renderer opens it through the environment's own media rules
+   * (workspace containment, container `/workspace`, read and playback bounds),
+   * so a recording it cannot reach says why rather than failing silently.
+   */
+  toolFile?: { filePath: string };
   toolName: string;
   toolTitle?: string;
   toolArgs?: JsonObject;
@@ -104,10 +115,7 @@ const RENDERED_TOOL_KINDS: Record<ToolCall["type"], boolean> = {
   generateImage: true,
   // SDK 1.0.37.
   computerUse: true,
-  // Screen recording has no transcript representation here: the artifact is a
-  // video the bridge does not stage and the renderer cannot play inline. The
-  // generic card at least reports that it ran.
-  recordScreen: false,
+  recordScreen: true,
 };
 
 export function renderToolCall(call: unknown, health?: RuntimeHealthRecorder): RenderedToolCall {
@@ -165,6 +173,9 @@ export function renderToolCall(call: unknown, health?: RuntimeHealthRecorder): R
       break;
     case "computerUse":
       renderComputerUse(rendered, args, result);
+      break;
+    case "recordScreen":
+      renderRecordScreen(rendered, args, result);
       break;
     default:
       renderGeneric(rendered, args, result);
@@ -547,6 +558,82 @@ function computerUseOutcome(value: JsonObject): string {
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+/**
+ * Longest recording path offered as an openable file. Linux's `PATH_MAX`; a
+ * longer value is not a path any environment could read, and the bridge does
+ * not keep an unbounded SDK string on a row.
+ */
+const MAX_SAVED_FILE_PATH_BYTES = 4_096;
+
+const RECORD_SCREEN_TITLES: Record<string, string> = {
+  START_RECORDING: "Start screen recording",
+  SAVE_RECORDING: "Save screen recording",
+  DISCARD_RECORDING: "Discard screen recording",
+};
+
+/**
+ * One step of a screen recording: start, save or discard.
+ *
+ * Only a save that reported a path offers the video. The card says what
+ * became of the recording in every other case — discarded, saved without a
+ * path, or saved under a path too long to open — so the absence of a file
+ * row is never left to be guessed at. Whether the saved file can actually be
+ * read is the environment's decision, made when the user opens it; the
+ * renderer reports a refusal (outside the workspace, deleted, too large) in
+ * its own words. `recordingDurationMs` is the length of the video, not how
+ * long the call ran, so it is reported in the output and never as the card's
+ * duration.
+ */
+function renderRecordScreen(
+  rendered: RenderedToolCall,
+  args: JsonObject,
+  result: ToolResult,
+): void {
+  const mode = readString(args.mode);
+  rendered.toolTitle = (mode && RECORD_SCREEN_TITLES[mode]) ?? "Screen recording";
+  rendered.toolArgs = compact({
+    mode: boundTextOrUndefined(mode, MAX_TOOL_TITLE_BYTES),
+  });
+  const value = successValue(result);
+  if (!value) return;
+  const lines: string[] = [];
+  if (value.wasPriorRecordingCancelled === true) {
+    lines.push("A recording that was already running was cancelled first.");
+  }
+  if (mode === "START_RECORDING") {
+    lines.push("Recording started.");
+  } else if (mode === "DISCARD_RECORDING") {
+    lines.push("Recording discarded. No video was kept.");
+  } else {
+    const reported = readString(value.path);
+    const length = readDuration(value.recordingDurationMs);
+    const lengthNote = length === undefined ? "" : ` (${formatRecordingLength(length)})`;
+    if (!reported) {
+      lines.push(
+        mode === "SAVE_RECORDING"
+          ? `Recording saved${lengthNote}, but no file path was reported, so it cannot be opened here.`
+          : stringify(value),
+      );
+    } else if (Buffer.byteLength(reported) > MAX_SAVED_FILE_PATH_BYTES) {
+      lines.push(`Recording saved${lengthNote}, but its reported path is too long to open.`);
+    } else {
+      const filePath = isAbsolute(reported) ? reported : resolve(workingDirectory, reported);
+      lines.push(`Recording saved${lengthNote} to ${filePath}`);
+      rendered.toolFile = { filePath };
+    }
+  }
+  rendered.toolOutput = boundText(lines.filter(Boolean).join("\n"), MAX_TOOL_OUTPUT_BYTES);
+}
+
+/** "12.3 s" under a minute, "4 min 05 s" above it. */
+function formatRecordingLength(ms: number): string {
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes} min ${String(seconds).padStart(2, "0")} s`;
 }
 
 function renderGeneric(rendered: RenderedToolCall, args: JsonObject, result: ToolResult): void {

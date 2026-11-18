@@ -91,10 +91,10 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
             reviewModel: Schema.optionalKey(
               describe(selection, "Omit for the saved consolidation model."),
             ),
-            fixModel: Schema.optionalKey(
+            addressFindingsModel: Schema.optionalKey(
               describe(selection, "Omit for the saved Address Findings model."),
             ),
-            autoFix: Schema.optionalKey(
+            autoAddressFindings: Schema.optionalKey(
               describe(Schema.Boolean, AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION),
             ),
             autoPr: Schema.optionalKey(describe(Schema.Boolean, AUTO_PR_FIELD_DESCRIPTION)),
@@ -143,7 +143,11 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
 
   for (const [name, surface, title] of [
     ["open_multi_review", "root", "Open or focus the Multi Review tab"],
-    ["open_multi_review_fix", "fix", "Open or focus the Multi Review Address Findings tab"],
+    [
+      "open_multi_review_address_findings",
+      "address-findings",
+      "Open or focus the Multi Review Address Findings tab",
+    ],
   ] as const) {
     server.registerTool(
       name,

@@ -12,6 +12,7 @@ import { useWebAnnotationScope } from "@/hooks/useWebAnnotations";
 import { AnnotationImage } from "./AnnotationImage";
 import { useAnnotationPanel } from "./panel-context";
 import { ResultCapture } from "./ResultCapturePrompt";
+import { ResultDiff } from "./ResultDiff";
 import {
   captureConditionLabels,
   citedEvidenceLabel,
@@ -63,6 +64,7 @@ function Comparison({
   afterCaptureId: string;
   comparison?: WebAnnotationComparisonMetadata | null;
 }) {
+  const { features } = useAnnotationPanel();
   const recorded = comparison ?? null;
   const before = useCapture(environmentId, recorded?.comparedCaptureId ?? beforeCaptureId);
   const after = useCapture(environmentId, afterCaptureId);
@@ -109,6 +111,15 @@ function Comparison({
           {label}. Compare with care: these images are not directly comparable.
         </p>
       ))}
+      {features.resultDiffs && metadata && (
+        <ResultDiff
+          environmentId={environmentId}
+          afterCaptureId={afterCaptureId}
+          afterAssetId={
+            after ? (after.regionCrop?.sourceAssetId ?? after.assetIds[0] ?? null) : null
+          }
+        />
+      )}
     </div>
   );
 }
@@ -160,7 +171,7 @@ function AgentReport({
         <ul aria-label="Checks" className="space-y-0.5">
           {result.checks.map((check, index) => (
             <li key={`${check.description}-${index}`}>
-              <span className={check.outcome === "failed" ? "text-destructive" : undefined}>
+              <span className={check.outcome === "failed" ? "text-failure" : undefined}>
                 {check.description}: {CHECK_OUTCOME[check.outcome]}
               </span>{" "}
               <span className="text-muted-foreground">

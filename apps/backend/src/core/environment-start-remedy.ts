@@ -3,7 +3,7 @@ import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   isGitSshUnreachableMessage,
 } from "./commands-error-text.js";
-import { detectHttpsRemedy } from "./git-ssh-transport.js";
+import { detectHttpsRemedy } from "./git/index.js";
 import type { Environment, Project } from "./models.js";
 import type { runCommand } from "./shell.js";
 

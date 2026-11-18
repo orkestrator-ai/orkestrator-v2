@@ -81,7 +81,7 @@ describe("coordinator launch on the graph engine", () => {
       // The tool's public field names (to-do 4740 task 3).
       reviewers: rows.reviewers,
       reviewModel: rows.reviewModel,
-      fixModel: rows.addressFindingsModel,
+      addressFindingsModel: rows.addressFindingsModel,
       autoPr: true,
     });
     expect(result.isError).not.toBe(true);
@@ -89,14 +89,14 @@ describe("coordinator launch on the graph engine", () => {
       outcome: string;
       delivery: string;
       workflow: { id: string; phase: string; automation: Record<string, unknown> };
-      selection: { autoFix: boolean; autoPr: boolean; source: Record<string, string> };
+      selection: { autoAddressFindings: boolean; autoPr: boolean; source: Record<string, string> };
     };
     expect(content.outcome).toBe("opened");
     expect(content.delivery).toBe("async");
     expect(content.selection).toMatchObject({
-      autoFix: true,
+      autoAddressFindings: true,
       autoPr: true,
-      source: { autoFix: "implied", autoPr: "requested" },
+      source: { autoAddressFindings: "implied", autoPr: "requested" },
     });
     const stored = await c.w.workflow(content.workflow.id);
     expect(stored).toMatchObject({
@@ -108,7 +108,7 @@ describe("coordinator launch on the graph engine", () => {
     // The run is bound from the same automation the record holds.
     const launched = await c.drive(stored.id, (current) => current.phase === "reviewing");
     const run = await c.w.run(launched);
-    expect(run.bindings.params).toMatchObject({ autoFix: true, autoPr: true });
+    expect(run.bindings.params).toMatchObject({ autoAddressFindings: true, autoPr: true });
     // The coordinator owns the review, never its graph run.
     const associations = await c.w.fixture.storage.coordinators.listCoordinatorWorkflowAssociations(
       c.scope.projectId,
@@ -127,7 +127,7 @@ describe("coordinator launch on the graph engine", () => {
     const run = await c.w.run(
       await c.drive(workflow.id, (current) => current.phase !== "preparing"),
     );
-    expect(run.bindings.params).toMatchObject({ autoFix: false, autoPr: true });
+    expect(run.bindings.params).toMatchObject({ autoAddressFindings: false, autoPr: true });
   });
 });
 
@@ -184,7 +184,7 @@ describe("get_multi_review on a graph-engine record", () => {
       projectId: c.w.projectId,
       phase: "reviewing",
       automation: {
-        autoFix: false,
+        autoAddressFindings: false,
         autoPr: false,
         next: "Stops at ready; address_multi_review starts Address Findings.",
       },
@@ -224,7 +224,7 @@ describe("get_multi_review on a graph-engine record", () => {
     expect(both.graph).toMatchObject({
       phase: "completed",
       automation: {
-        autoFix: true,
+        autoAddressFindings: true,
         autoPr: true,
         // No tab: the graph's pull request is a system node, not an agent tab.
         prLaunch: { state: "launched" },

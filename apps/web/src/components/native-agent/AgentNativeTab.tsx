@@ -431,7 +431,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
           // still the thing they want to send.
           <div
             role="alert"
-            className="shrink-0 border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-center text-sm text-destructive"
+            className="shrink-0 border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-center text-sm text-failure"
           >
             {durabilityError}
           </div>
@@ -515,7 +515,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
   }
   if (durabilityError) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center text-sm text-destructive">
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center text-sm text-failure">
         <p>{durabilityError}</p>
         {pendingDurabilityOperation ? (
           <Button

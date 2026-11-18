@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDown } from "lucide-react";
-import {
-  REVIEW_PACKAGE_SESSION_LABEL,
-  isSupersededPipelineSession,
-} from "@orkestrator/protocol/build-pipeline";
+import { isSupersededPipelineSession } from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { type BuildPipeline, type PipelineSession } from "@/stores/buildPipelineStore";
@@ -22,6 +19,8 @@ import {
 } from "@orkestrator/protocol/structured-review-transcript";
 import { useVirtuosoScrollState } from "@/hooks";
 import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
+import { COMPOSE_COLUMN_CLASS_NAME } from "@/components/chat/NativeComposeBar";
+import { COMPOSE_DOCK_GROUND_CLASS_NAME } from "@/components/chat/NativeComposeDock";
 import { cn } from "@/lib/utils";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
@@ -281,7 +280,7 @@ export function PipelineSessionTranscript({
       session?.startedAt ?? transcriptFallbackCreatedAt,
       session?.interactionTranscript,
     );
-    if (session?.label === REVIEW_PACKAGE_SESSION_LABEL) {
+    if (session?.phase === "package-preparation") {
       return hideMachineOutputText(transcript, {
         stripTrailingPayload: true,
         trailingPayloadRootKeys: REVIEW_PACKAGE_PLAN_ROOT_KEYS,
@@ -316,7 +315,6 @@ export function PipelineSessionTranscript({
     session?.phase,
     session?.startedAt,
     session?.interactionTranscript,
-    session?.label,
     structuredResultAccepted,
     transcriptFallbackCreatedAt,
   ]);
@@ -470,9 +468,14 @@ export function PipelineSessionTranscript({
           </RichTranscriptScopeContext.Provider>
         </div>
         {visible && (composer || !isAtBottom) && (
-          <div className="shrink-0 px-3 pt-2 pb-4">
+          <div
+            className={cn(
+              "relative isolate shrink-0 px-2 pt-2 pb-4 sm:px-4",
+              COMPOSE_DOCK_GROUND_CLASS_NAME,
+            )}
+          >
             {!isAtBottom && (
-              <div className="mx-auto mb-1 flex w-full max-w-[56rem] justify-end">
+              <div className={cn(COMPOSE_COLUMN_CLASS_NAME, "mb-1 flex justify-end")}>
                 <button
                   type="button"
                   onClick={scrollToBottom}

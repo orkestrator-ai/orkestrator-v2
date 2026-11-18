@@ -52,7 +52,7 @@ export type GraphPromptResolutionProblem =
 
 /** One way a tag can resolve. */
 export interface GraphPromptTargetUse {
-  /** Source key: `input.report`, `params.autoFix`, `lens`, …; `value` for a type template. */
+  /** Source key: `input.report`, `params.autoAddressFindings`, `lens`, …; `value` for a type template. */
   source: string;
   /** Path inside the source; `[]` stands for any list element. */
   path: string[];

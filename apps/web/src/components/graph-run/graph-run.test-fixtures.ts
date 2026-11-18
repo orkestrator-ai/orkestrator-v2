@@ -39,20 +39,20 @@ const ROLES: Record<GraphTemplateExampleKey, GraphRun["bindings"]["roles"]> = {
     preparer: { platform: "claude", model: "opus" },
     reviewer: [{ platform: "codex" }, { platform: "claude", reasoningEffort: "high" }],
     consolidator: { platform: "claude" },
-    fixer: { platform: "claude" },
+    addresser: { platform: "claude" },
     describer: { platform: "claude" },
   },
   "build-pipeline-loop": {
     builder: { platform: "claude", model: "opus" },
     preparer: { platform: "claude" },
     reviewer: { platform: "codex" },
-    fixer: { platform: "claude" },
+    addresser: { platform: "claude" },
     verifier: { platform: "codex" },
   },
   "design-bake-off": {},
   "failure-diagnosis": {
     diagnoser: { platform: "claude" },
-    fixer: { platform: "codex" },
+    addresser: { platform: "codex" },
   },
 };
 

@@ -86,7 +86,7 @@ export function PreviewDiagnostics({
       className={cn(
         "min-w-0 shrink-0 border-b px-3 py-1.5 text-xs",
         diagnosis?.severity === "error"
-          ? "border-destructive/20 bg-destructive/10 text-destructive"
+          ? "border-destructive/20 bg-destructive/10 text-failure"
           : diagnosis?.severity === "warning"
             ? "border-amber-500/20 bg-amber-500/10 text-amber-200"
             : "border-border/60 bg-muted/20 text-muted-foreground",

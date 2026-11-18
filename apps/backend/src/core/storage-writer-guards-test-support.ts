@@ -1442,6 +1442,15 @@ const RAW_WRITER_EXEMPTIONS = new Map([
   ["storage-retired-features.ts", "a one-shot retirement inside a migration at open"],
   ["storage-public-operation-rows.ts", "a one-shot layout upgrade inside a migration at open"],
   ["storage-workflow-vocabulary-upgrade.ts", "a one-shot rename inside a migration at open"],
+  [
+    "storage-package-preparation-phase-upgrade.ts",
+    "a one-shot phase move inside a migration at open",
+  ],
+  ["storage-graph-vocabulary-upgrade.ts", "a one-shot rename inside a migration at open"],
+  [
+    "storage-coordinator-receipt-vocabulary-upgrade.ts",
+    "a one-shot rename inside a migration at open",
+  ],
 ]);
 
 export type RawWrite = { location: string; call: string; store: string | null };

@@ -1,5 +1,6 @@
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
+  BUILD_STEP_KEYS,
   isBuildPipeline,
   isStartBuildPipelineInput,
   MAX_BUILD_PIPELINE_ITERATIONS,
@@ -15,11 +16,6 @@ import {
 } from "@orkestrator/protocol/build-pipeline-stage-instructions";
 import { kanbanTaskBuildTicket } from "@orkestrator/protocol/build-pipeline-tickets";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
-import {
-  buildStepKeyForPublicStep,
-  PUBLIC_BUILD_STEPS,
-  type PublicBuildStepKey,
-} from "@orkestrator/protocol/public-api-inputs-build";
 import type {
   PublicBuildPipelineActionResult,
   PublicBuildPipelineDetail,
@@ -90,8 +86,7 @@ export interface BuildLaunchInput {
   baseBranch?: string;
   baseCommit?: string;
   agent?: AgentPlatform;
-  /** Keyed by the public step names; the build's own keys are set at launch. */
-  steps?: Partial<Record<PublicBuildStepKey, StepInput>>;
+  steps?: Partial<Record<BuildStepKey, StepInput>>;
   reviewers?: StepInput[];
   reviewPreparation?: StepInput;
   maxIterations?: number;
@@ -205,12 +200,12 @@ export function parseBuildLaunch(input: Record<string, unknown>): BuildLaunchInp
   if (input.steps !== undefined) {
     if (!isObject(input.steps)) throw invalid("steps must be an object");
     try {
-      onlyKeys(input.steps, PUBLIC_BUILD_STEPS);
+      onlyKeys(input.steps, BUILD_STEP_KEYS);
     } catch (error) {
       throw invalid(`steps: ${(error as Error).message}`);
     }
     steps = {};
-    for (const key of PUBLIC_BUILD_STEPS) {
+    for (const key of BUILD_STEP_KEYS) {
       if (input.steps[key] === undefined) continue;
       steps[key] = parseStep(input.steps[key], `steps.${key}`, {
         lens: key === "review",
@@ -330,16 +325,7 @@ async function requestedStart(
     projectId: input.projectId,
     environmentType,
     ...(input.agent ? { agentType: input.agent } : {}),
-    ...(input.steps
-      ? {
-          steps: Object.fromEntries(
-            Object.entries(input.steps).map(([key, step]) => [
-              buildStepKeyForPublicStep(key as PublicBuildStepKey),
-              step,
-            ]),
-          ) as Partial<Record<BuildStepKey, StepInput>>,
-        }
-      : {}),
+    ...(input.steps ? { steps: input.steps } : {}),
     ...(input.reviewers ? { reviewers: input.reviewers } : {}),
     ...(input.reviewPreparation ? { reviewPreparation: input.reviewPreparation } : {}),
     taskTitle: build.title,
@@ -480,8 +466,8 @@ export function publicBuildPipelineDetail(
 ): PublicBuildPipelineDetail {
   const pipeline = record.snapshot as BuildPipeline;
   const steps: PublicBuildPipelineDetail["steps"] = {};
-  for (const key of PUBLIC_BUILD_STEPS) {
-    const summary = stepSummary(pipeline.steps?.[buildStepKeyForPublicStep(key)]);
+  for (const key of BUILD_STEP_KEYS) {
+    const summary = stepSummary(pipeline.steps?.[key]);
     if (summary) steps[key] = summary;
   }
   return {

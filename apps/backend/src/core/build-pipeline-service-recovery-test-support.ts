@@ -244,7 +244,7 @@ export class ScriptedProvider implements BuildPipelineProvider {
         requestId,
         value: (phase === "review"
           ? cleanReview
-          : phase === "build" || phase === "rework"
+          : phase === "build" || phase === "rework" || phase === "package-preparation"
             ? TEST_REVIEW_PREPARATION
             : phase === "address-findings"
               ? TEST_ADDRESS_FINDINGS_RESULT

@@ -374,7 +374,7 @@ export function AgentLaunchDialog({
                     ))}
                   </datalist>
                   {!branchValid && (
-                    <p className="mt-1.5 text-xs text-destructive">Enter a valid branch name.</p>
+                    <p className="mt-1.5 text-xs text-failure">Enter a valid branch name.</p>
                   )}
                 </>
               )}
@@ -396,7 +396,7 @@ export function AgentLaunchDialog({
               ) : error ? (
                 <p
                   role="alert"
-                  className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                  className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-failure"
                 >
                   {error}
                 </p>

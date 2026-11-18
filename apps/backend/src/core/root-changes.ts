@@ -6,7 +6,7 @@ import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
-import { runGitWithFsmonitorFallback } from "./git-fsmonitor.js";
+import { runGitWithFsmonitorFallback } from "./git/index.js";
 import { CommandFailedError, runCommand, runCommandBuffer } from "./shell.js";
 import { containerExecArgs } from "./tmux-shared.js";
 

@@ -182,7 +182,7 @@ export function EnvironmentMoveSection({ environment, onUpdate }: EnvironmentMov
           {environment.lifecycleError}
         </p>
       ) : null}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? <p className="text-sm text-failure">{error}</p> : null}
 
       <AlertDialog open={showConfirm} onOpenChange={(open) => !moving && setShowConfirm(open)}>
         <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>

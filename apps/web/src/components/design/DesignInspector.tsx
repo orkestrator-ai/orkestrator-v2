@@ -619,7 +619,7 @@ function InspectorBody({
                   </Button>
                 </div>
                 {newPropertyError && (
-                  <p id={newPropertyErrorId} className="text-[11px] text-destructive">
+                  <p id={newPropertyErrorId} className="text-[11px] text-failure">
                     {newPropertyError}
                   </p>
                 )}
@@ -678,7 +678,7 @@ function InspectorBody({
             </p>
           )}
           {!status.pending && !submitting && status.failure && (
-            <div role="alert" className="space-y-1 text-destructive">
+            <div role="alert" className="space-y-1 text-failure">
               <p className="break-words">{status.failure.message}</p>
               {failureProperties.length > 0 && (
                 <p className="break-words">Rejected: {failureProperties.join(", ")}</p>
@@ -695,7 +695,7 @@ function InspectorBody({
               </p>
             )}
           {(errorNames.length > 0 || tooMany) && (
-            <p className="text-destructive">
+            <p className="text-failure">
               {tooMany
                 ? `Apply at most ${MAX_STYLE_PROPERTIES} properties at once.`
                 : `Fix ${errorNames.length === 1 ? "1 invalid value" : `${errorNames.length} invalid values`} before applying.`}

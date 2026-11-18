@@ -151,6 +151,40 @@ describe("turn-end result capture prompt", () => {
     expect(navigateToPageMock).not.toHaveBeenCalled();
   });
 
+  test("asks the desktop for the unstable-region sample only when diffs are advertised", async () => {
+    backend.capabilities = fixtureCapabilities({ resultDiffs: true });
+    captureApi.api.getCaptureCapabilities = async () => ({
+      contractVersion: 2,
+      modes: ["element", "text", "region", "page"],
+      features: {
+        keyboardSelection: true,
+        recapture: true,
+        receipts: true,
+        resultCapture: { stability: true, masks: true, unstableRegions: true },
+        regionCrop: true,
+        responsiveSets: null,
+        livePins: true,
+        showOnPage: true,
+        expiredNotices: true,
+      },
+    });
+    seed({ result: result() });
+    renderInAppCommandScope(<AnnotationHarness />);
+
+    const prompt = await screen.findByRole("region", { name: "Capture the result" });
+    fireEvent.click(captureButton(prompt));
+    await waitFor(() => expect(captureApi.mocks.startCapture).toHaveBeenCalledTimes(1));
+    const start = captureApi.mocks.startCapture.mock.calls[0]![0] as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(start.result).toEqual({
+      requestId: REQUEST_ID,
+      originalCaptureId: "capture-element",
+      sampleUnstable: true,
+    });
+  });
+
   test("on another page it warns and navigates only when the user asks", async () => {
     seed({ result: result(), route: "/billing" });
     renderInAppCommandScope(<AnnotationHarness />);

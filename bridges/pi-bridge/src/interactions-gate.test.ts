@@ -636,7 +636,7 @@ test("a read-only reviewer may use its own attempt's result tools under every ap
       return {
         tools:
           server.id === "orkestrator"
-            ? [...attemptTools, "submit_fix_result"].map((name) => ({ name }))
+            ? [...attemptTools, "submit_address_findings_result"].map((name) => ({ name }))
             : [{ name: "submit_review_report" }],
         async call() {
           return { content: [{ type: "text", text: "ok" }] };
@@ -670,7 +670,9 @@ test("a read-only reviewer may use its own attempt's result tools under every ap
       }
       // A tool this attempt does not offer, the same name from another server,
       // and the read-only gate itself all still hold.
-      expect(await requestToolApproval(state, "fix", "submit_fix_result", own)).toMatchObject({
+      expect(
+        await requestToolApproval(state, "fix", "submit_address_findings_result", own),
+      ).toMatchObject({
         block: true,
       });
       expect(

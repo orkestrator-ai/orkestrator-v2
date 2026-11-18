@@ -18,10 +18,10 @@ export const GRAPH_BUILT_IN_PROMPT_IDS = [
   "review-package-preparation",
   "discovery-review",
   "consolidation",
-  "fix-review-issues",
-  "address-review",
+  "address-findings",
+  "pipeline-address-findings",
   "build",
-  "pipeline-fix",
+  "pipeline-rework",
   "verify",
   "pull-request-description",
   "resolve-conflicts",
@@ -82,13 +82,13 @@ const workspaceOutput = (required: boolean) => ({
 });
 const addressFindingsResultOutput = (required: boolean) => ({
   name: "report",
-  types: ["fix-result"],
+  types: ["address-findings-result"],
   required,
   description: "What was changed and what was validated.",
 });
 /**
  * The sealed package a stage reads its recorded validation from, as the
- * pipeline's Address and Verify builders do (`recordedValidationSection`).
+ * pipeline's Address Findings and Verify builders do (`recordedValidationSection`).
  */
 const recordedValidationInput: GraphBuiltInPromptPort = {
   name: "package",
@@ -197,7 +197,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     textMaxBytes: 16 * KIB,
   },
   {
-    id: "fix-review-issues",
+    id: "address-findings",
     label: "Address review findings",
     description:
       "Addresses every issue and coverage gap in a report, making sensible assumptions without asking questions, and reports what it changed.",
@@ -215,14 +215,14 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     outputs: [addressFindingsResultOutput(true), workspaceOutput(false)],
     profiles: ["builder"],
     backend:
-      "addressFindingsReportPrompt (build-pipeline-prompts.ts) as the Multi Review fix sends it; multiReviewCustomAddressFindingsPrompt (protocol multi-review.ts) with a user instruction",
+      "addressFindingsReportPrompt (build-pipeline-prompts.ts) as Multi Review's Address Findings sends it; multiReviewCustomAddressFindingsPrompt (protocol multi-review.ts) with a user instruction",
     textMaxBytes: 8 * KIB,
   },
   {
-    id: "address-review",
+    id: "pipeline-address-findings",
     label: "Address Findings",
     description:
-      "The Build Pipeline's Address stage: fixes the review's findings and validates the fix for the verifier.",
+      "The Build Pipeline's Address Findings stage: fixes the review's findings and validates the fix for the verifier.",
     inputs: [
       {
         name: "report",
@@ -245,7 +245,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     label: "Build",
     description: "Implements the ticket completely without asking questions, then validates it.",
     inputs: [ticketInput(true), workspaceInput(false)],
-    // Optional: today's Build turn submits no fix result (a panel review
+    // Optional: today's Build turn submits no Address Findings result (a panel review
     // prepares the package in its own session; one reviewer's Build submits
     // the package preparation instead).
     outputs: [workspaceOutput(false), addressFindingsResultOutput(false)],
@@ -254,7 +254,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     textMaxBytes: 16 * KIB,
   },
   {
-    id: "pipeline-fix",
+    id: "pipeline-rework",
     label: "Rework unmet criteria",
     description:
       "Fixes the acceptance criteria verification found unmet, establishing reproduction before excusing an unrelated failure.",
@@ -269,7 +269,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
       },
       workspaceInput(false),
     ],
-    // Optional, as for Build: today's Fix turn submits no fix result.
+    // Optional, as for Build: today's Rework turn submits no Address Findings result.
     outputs: [workspaceOutput(false), addressFindingsResultOutput(false)],
     profiles: ["builder"],
     backend: "reworkPrompt (build-pipeline-prompts.ts)",
@@ -284,11 +284,11 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
       ticketInput(true),
       workspaceInput(false),
       {
-        name: "address",
-        types: ["fix-result"],
+        name: "addressFindings",
+        types: ["address-findings-result"],
         required: false,
         render: "json-frame",
-        description: "What the Address stage reported, when it ran.",
+        description: "What the Address Findings stage reported, when it ran.",
       },
       recordedValidationInput,
     ],

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getGitHubPullRequestTimeline } from "../src/core/github-pull-request-timeline";
+import { getGitHubPullRequestTimeline } from "../src/core/git/github-pull-request-timeline";
 import {
   REF,
   TOKEN,

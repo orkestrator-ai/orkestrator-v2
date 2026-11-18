@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { FileText, Hammer, StickyNote } from "lucide-react";
+import { FileText, Hammer, Info, StickyNote } from "lucide-react";
 import {
   hasKeyInformation,
   type BuildPipelineKeyInformation,
@@ -498,7 +498,8 @@ function KeyInformationContents({
 
 function LeadProse({ text }: { text: string }) {
   return (
-    <div className="rounded-lg border-l-2 border-blue-400/60 bg-muted/15 px-4 py-3">
+    <div className="flex items-start gap-2 rounded-lg border border-blue-400/30 bg-muted/15 px-4 py-3">
+      <Info aria-hidden="true" className="mt-1.5 size-4 shrink-0 text-blue-400" />
       <TabProse text={text} lead />
     </div>
   );

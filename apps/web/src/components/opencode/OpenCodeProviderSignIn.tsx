@@ -180,7 +180,7 @@ export function OpenCodeProviderSignIn({
         <Button type="button" size="sm" variant="ghost" onClick={() => void login.cancel()}>
           Cancel sign-in
         </Button>
-        {error ? <p className="text-destructive">{error}</p> : null}
+        {error ? <p className="text-failure">{error}</p> : null}
       </div>
     );
   }
@@ -287,7 +287,7 @@ export function OpenCodeProviderSignIn({
             )}
           </>
         )}
-        {error ? <p className="text-xs text-destructive">{error}</p> : null}
+        {error ? <p className="text-xs text-failure">{error}</p> : null}
         <Button type="button" size="sm" variant="ghost" onClick={() => void login.cancel()}>
           Cancel sign-in
         </Button>
@@ -400,7 +400,7 @@ export function OpenCodeProviderSignIn({
         </Button>
       )}
 
-      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      {error ? <p className="text-xs text-failure">{error}</p> : null}
       {onCancel ? (
         <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
           Cancel

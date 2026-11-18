@@ -117,20 +117,18 @@ describe("review.*", () => {
   test("review.launch runs the Multi Review button once per request key", async () => {
     const { harness } = await setup();
     const reviews = fakeReviews(harness);
-    const input = { environmentId: "env-1", autoFix: true, autoPr: true };
+    const input = { environmentId: "env-1", autoAddressFindings: true, autoPr: true };
     const launched = await harness.call("review.launch", input, { requestId: "review-key" });
     if (!launched.ok) throw new Error(`${launched.error.code}: ${launched.error.message}`);
     expect(launched.result).toMatchObject({ workflowId: "review-1", outcome: "opened" });
     expect(reviews.launches).toHaveLength(1);
     const sent = reviews.launches[0]!;
-    // The CLI's public `autoFix` reaches the button action as `autoAddressFindings`.
     expect(sent.input).toMatchObject({
       environmentId: "env-1",
       autoAddressFindings: true,
       autoPr: true,
       requestId: launched.receipt!.operationId,
     });
-    expect(sent.input).not.toHaveProperty("autoFix");
     expect(String(sent.reservedId)).toMatch(/^public-[0-9a-f]{32}$/);
 
     const replay = await harness.call("review.launch", input, { requestId: "review-key" });
@@ -177,12 +175,24 @@ describe("review.*", () => {
       );
       expect(!refused.ok && refused.error.code).toBe("invalid-input");
     }
-    const lensOnFix = await harness.call(
+    const lensOnAddressFindings = await harness.call(
       "review.launch",
-      { environmentId: "env-1", fixModel: { agent: "claude", model: "opus", lens } },
-      { requestId: "review-lens-fix" },
+      { environmentId: "env-1", addressFindingsModel: { agent: "claude", model: "opus", lens } },
+      { requestId: "review-lens-address-findings" },
     );
-    expect(!lensOnFix.ok && lensOnFix.error.code).toBe("invalid-input");
+    expect(!lensOnAddressFindings.ok && lensOnAddressFindings.error.code).toBe("invalid-input");
+    // The former public names are unknown fields.
+    for (const [index, former] of [
+      { fixModel: { agent: "claude", model: "opus" } },
+      { autoFix: true },
+    ].entries()) {
+      const refused = await harness.call(
+        "review.launch",
+        { environmentId: "env-1", ...former },
+        { requestId: `review-former-${index}` },
+      );
+      expect(!refused.ok && refused.error.code).toBe("invalid-input");
+    }
   });
 
   test("a review whose tab could not open is a partial outcome with its recovery", async () => {

@@ -71,7 +71,7 @@ export const OPERATOR_TOOL_ACTIONS: Readonly<Record<string, readonly PublicActio
     list_multi_reviews: ["review.list"],
     get_multi_review: ["review.get"],
     open_multi_review: ["review.open"],
-    open_multi_review_fix: ["review.open"],
+    open_multi_review_address_findings: ["review.open"],
     address_multi_review: ["review.address"],
     cancel_multi_review: ["review.cancel"],
     // The action bar's PR, Resolve and Merge buttons.

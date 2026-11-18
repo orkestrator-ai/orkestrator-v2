@@ -197,7 +197,7 @@ import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
 import { ContainerHostReachabilityService } from "./container-host-reachability.js";
 import { probeCreator } from "./container-host-reachability-creator.js";
 import {
-  ensureContainerAgentToolsHost,
+  prepareContainerAgentToolsRoute,
   ensureContainerHostServicePorts,
 } from "./commands-environment.js";
 import { APP_VERSION, BUILD_COMMIT, DOCKER_IMAGE } from "./constants.js";
@@ -297,8 +297,8 @@ import {
 } from "./workspace-code-rewind.js";
 import { WorkspaceWriters } from "./workspace-writers.js";
 import { GraphNodeSystemExecutor } from "./graph-node-system.js";
-import { PrAutoMergeController } from "./pr-auto-merge.js";
-import { resolveTabsSettled } from "./pr-auto-merge-resolve-settled.js";
+import { resolveTabsSettled } from "./git/pr-auto-merge-resolve-settled.js";
+import { PrAutoMergeController } from "./git/pr-auto-merge.js";
 import { createGraphEnvironmentShell } from "./graph-system-environment.js";
 import { readEnvironmentBranchPushState } from "./build-pipeline-branch-push.js";
 import { graphPushedCommitOfEffectKey } from "./graph-system-push.js";
@@ -434,6 +434,7 @@ export class OrkestratorBackend {
         | "revokeTab"
         | "workflowResultConnection"
         | "servicePort"
+        | "signLoopbackProbe"
         | "issueStateSignal"
         | "issueWorktreeSignal"
         | "issueTmuxHookSignal"
@@ -512,6 +513,7 @@ export class OrkestratorBackend {
           | "revokeTab"
           | "workflowResultConnection"
           | "servicePort"
+          | "signLoopbackProbe"
           | "issueStateSignal"
           | "issueWorktreeSignal"
           | "issueTmuxHookSignal"
@@ -619,17 +621,14 @@ export class OrkestratorBackend {
         ? undefined
         : new ContainerHostReachabilityService({
             servicePort: () => this.agentTools.servicePort?.() ?? null,
+            signLoopbackProbe: (challenge) => this.agentTools.signLoopbackProbe?.(challenge),
             ownerNamespace: dockerOwnerNamespace(options.dataDir),
             creator: probeCreator(options.runtimeFlavor ?? "production", options.dataDir),
             fallbackImage: () => options.dockerImage ?? DOCKER_IMAGE,
             // Read lazily: the gateway that receives events is created after init.
             emit,
             prepareContainer: async (containerId) => {
-              await ensureContainerAgentToolsHost(
-                containerId,
-                undefined,
-                this.containerHostReachability?.containerHostAddress(),
-              );
+              await prepareContainerAgentToolsRoute(containerId, this.containerHostReachability);
               await ensureContainerHostServicePorts(
                 containerId,
                 this.agentTools.servicePort?.() ?? null,
@@ -1351,8 +1350,21 @@ export class OrkestratorBackend {
           if (!projectGit) throw new Error("Project Git service is unavailable");
           return projectGit.beginTurnAfterMergeSync(projectId);
         },
-        resolveAgentToolConnection: (environmentId, projectId, tabId, target) =>
-          this.agentTools.connection(environmentId, projectId, target, tabId),
+        resolveAgentToolConnection: async (environmentId, projectId, tabId, target) => {
+          if (target === "container" && this.containerHostReachability) {
+            const environment = await storage.getEnvironment(environmentId);
+            if (!environment?.containerId) throw new Error("Container is unavailable");
+            await prepareContainerAgentToolsRoute(
+              environment.containerId,
+              this.containerHostReachability,
+            );
+            await ensureContainerHostServicePorts(
+              environment.containerId,
+              this.agentTools.servicePort?.() ?? null,
+            );
+          }
+          return this.agentTools.connection(environmentId, projectId, target, tabId);
+        },
         artifactLedger,
         artifactDispatch,
         coordinatorNodeContext: async () => {

@@ -172,7 +172,7 @@ export function EnvironmentDiskUsageView({
           </>
         ) : (
           <>
-            <span className="text-destructive">{error ?? "Disk usage is unavailable."}</span>
+            <span className="text-failure">{error ?? "Disk usage is unavailable."}</span>
             <Button variant="ghost" size="sm" onClick={onRefresh}>
               Retry
             </Button>
@@ -198,7 +198,7 @@ export function EnvironmentDiskUsageView({
           </div>
           <p className="text-xs text-muted-foreground">
             Allocated on disk · measured {formatRelativeTime(measuredAt)}
-            {error && <span className="text-destructive"> · {error}</span>}
+            {error && <span className="text-failure"> · {error}</span>}
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading}>

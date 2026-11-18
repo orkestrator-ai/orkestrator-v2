@@ -42,7 +42,7 @@ describe("prompts", () => {
       routingDeliveryPrompt(probe),
     ]) {
       expect(prompt).not.toMatch(
-        /pipeline|ticket|multi review|launch_|create_|start_|environment type|autoFix|autoPr|pull request/i,
+        /pipeline|ticket|multi review|launch_|create_|start_|environment type|autoAddressFindings|autoFix|autoPr|pull request/i,
       );
     }
   });
@@ -294,7 +294,11 @@ describe("review case", () => {
         evaluateRoutingReview({
           ...base,
           messages: [
-            row("launch_multi_review", { environmentId: "env-1", autoFix: false, autoPr: false }),
+            row("launch_multi_review", {
+              environmentId: "env-1",
+              autoAddressFindings: false,
+              autoPr: false,
+            }),
           ],
           review: { id: "r1", environmentId: "env-1" },
         }),

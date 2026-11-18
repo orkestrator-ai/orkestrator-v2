@@ -57,7 +57,7 @@ function verdictWith(provider: FakeProvider, verify: Record<string, unknown>) {
     requestId,
     value: (provider.phases.get(sessionId) === "review"
       ? cleanReview
-      : provider.phases.get(sessionId) === "build" || provider.phases.get(sessionId) === "rework"
+      : ["build", "rework", "package-preparation"].includes(provider.phases.get(sessionId) ?? "")
         ? TEST_REVIEW_PREPARATION
         : verify) as T,
   });

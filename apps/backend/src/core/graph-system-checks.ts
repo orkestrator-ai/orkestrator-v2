@@ -24,7 +24,7 @@ import {
   type GraphCheckSummaryState,
 } from "@orkestrator/protocol/graphs/types";
 import { parsePrCheckSummary } from "./commands-review.js";
-import { resolveGitHubRepository } from "./github.js";
+import { resolveGitHubRepository } from "./git/index.js";
 import {
   GraphSystemActionError,
   type GraphSystemActionContext,

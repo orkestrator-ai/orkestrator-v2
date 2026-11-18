@@ -169,8 +169,7 @@ export function resolveAgentDefaults(
   } as const;
 }
 
-const MOBILE_TAB_TRIGGER_CLASSES =
-  "h-11 min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-1 py-1 text-[10px] leading-none data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none";
+const MOBILE_TAB_TRIGGER_CLASSES = "h-11 min-w-0 flex-col gap-0.5 px-1 text-xs";
 const MOBILE_TAB_CONTENT_CLASSES =
   "create-environment-mobile-tab-panel mt-0 data-[state=inactive]:hidden";
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
@@ -1656,8 +1655,9 @@ export function CreateEnvironmentDialog({
             className="min-h-0 gap-0"
           >
             <TabsList
+              variant="underline"
               aria-label="Environment configuration sections"
-              className="sticky top-0 z-10 m-2 flex h-auto w-[calc(100%-1rem)] shrink-0 rounded-xl border border-border/80 bg-zinc-950/95 p-1 shadow-lg shadow-black/15 backdrop-blur sm:hidden"
+              className="sticky top-0 z-10 mx-2 w-auto shrink-0 gap-1 border-b border-divider bg-background sm:hidden"
             >
               <TabsTrigger
                 value="prompt"

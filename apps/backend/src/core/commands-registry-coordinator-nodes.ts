@@ -1287,27 +1287,34 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     const surface = args.surface;
     if (
       surface !== "root" &&
-      surface !== "fix" &&
+      surface !== "address-findings" &&
       surface !== "address" &&
       surface !== "reviewer" &&
-      surface !== "custom-fix"
+      surface !== "custom-address"
     ) {
-      throw new Error("Expected surface root, fix, address, reviewer or custom-fix.");
+      throw new Error(
+        "Expected surface root, address-findings, address, reviewer or custom-address.",
+      );
     }
     const reviewerId =
       surface === "reviewer" ? asNonBlankString(args.reviewerId, "reviewerId") : undefined;
     let customAddressFindings:
-      { requestId: string; instruction: string; fixModel?: unknown } | undefined;
-    if (surface === "custom-fix") {
+      { requestId: string; instruction: string; addressFindingsModel?: unknown } | undefined;
+    if (surface === "custom-address") {
       const instruction = asNonBlankString(args.instruction, "instruction").trim();
       if (instruction.length > MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH)
-        throw new Error("The custom fix instruction is too long");
-      if (args.fixModel !== undefined && !isMultiReviewModelSelection(args.fixModel))
-        throw new Error("Expected fixModel to be { agent, model, reasoningEffort? }");
+        throw new Error("The custom Address Findings instruction is too long");
+      if (
+        args.addressFindingsModel !== undefined &&
+        !isMultiReviewModelSelection(args.addressFindingsModel)
+      )
+        throw new Error("Expected addressFindingsModel to be { agent, model, reasoningEffort? }");
       customAddressFindings = {
         requestId: asNonBlankString(args.requestId, "requestId"),
         instruction,
-        ...(args.fixModel !== undefined ? { fixModel: args.fixModel } : {}),
+        ...(args.addressFindingsModel !== undefined
+          ? { addressFindingsModel: args.addressFindingsModel }
+          : {}),
       };
     }
     const target = await coordinatorNodeTarget(
@@ -1348,7 +1355,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       );
     }
     // Addressing starts a turn, even for a workflow already followed here.
-    if ((surface === "address" || surface === "custom-fix") && saved.snapshot.environmentId) {
+    if ((surface === "address" || surface === "custom-address") && saved.snapshot.environmentId) {
       await assertCoordinatorMayActOnEnvironment(
         context,
         caller,
@@ -1357,7 +1364,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         "review-address",
       );
     }
-    // Addressing adopts the review so its fix outcome reaches this conversation.
+    // Addressing adopts the review so its Address Findings outcome reaches this conversation.
     const adopt = async () => {
       if (owned) return;
       await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
@@ -1371,44 +1378,32 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       });
     };
     const open = (extra: JsonRecord, requestKey?: string) =>
-      target
-        .call<MultiReviewActionResult>(
-          "controller_multi_review_surface",
-          { workflowId: id, surface, ...extra },
-          requestKey,
-        )
-        .catch((error: unknown) => {
-          // A node from before the reviewer and custom-fix surfaces.
-          if (
-            error instanceof Error &&
-            error.message.includes("Expected surface root, fix or address")
-          )
-            throw new Error(
-              `${target.nodeName} runs an older Orkestrator that cannot do this yet; update it, then retry.`,
-            );
-          throw error;
-        });
+      target.call<MultiReviewActionResult>(
+        "controller_multi_review_surface",
+        { workflowId: id, surface, ...extra },
+        requestKey,
+      );
     if (surface === "address") await adopt();
     if (!customAddressFindings)
       return open(
         reviewerId ? { reviewerId } : {},
         surface === "address" ? `address:${caller.coordinatorId}:${id}` : undefined,
       );
-    const { requestId, ...fix } = customAddressFindings;
+    const { requestId, ...custom } = customAddressFindings;
     // The receipt keeps only the outcome; the workflow is read fresh, so a
-    // replay reports where the fix is now rather than where it was.
+    // replay reports where the run is now rather than where it was.
     const outcome = await withCoordinatorReceipt(
       context,
       caller,
       {
         requestId,
-        action: "custom-fix",
-        payload: { workflowId: id, ...fix, nodeId: target.nodeId },
+        action: "custom-address",
+        payload: { workflowId: id, ...custom, nodeId: target.nodeId },
       },
       async () => {
         await adopt();
         const { workflow: _workflow, ...rest } = await withRetryAdvice(RETRY_SAME_REQUEST, () =>
-          open(fix, `custom-fix:${caller.coordinatorId}:${requestId}`),
+          open(custom, `custom-address:${caller.coordinatorId}:${requestId}`),
         );
         return rest as JsonRecord;
       },

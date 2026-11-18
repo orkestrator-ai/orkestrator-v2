@@ -85,6 +85,7 @@ export interface BuildPipelineKeyInformationHost {
 const AUTHOR_BY_PHASE: Partial<Record<BuildPipeline["phase"], KeyInformationAuthor>> = {
   building: "build",
   reworking: "rework",
+  "preparing-package": "package-preparation",
   reviewing: "review",
   "addressing-findings": "address-findings",
   verifying: "verify",

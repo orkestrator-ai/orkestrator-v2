@@ -40,14 +40,14 @@ import {
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { CoordinatorNoticeRouter } from "./coordinator-notice-router.js";
-import { GitHubApiError } from "./github.js";
-import type { GitHubCliSelection } from "./github-cli-binary.js";
-import { resolveGitHubToken } from "./github-credentials.js";
 import {
   confirmGitHubPullRequestDeleted,
   getGitHubPullRequestStatus,
+  GitHubApiError,
+  type GitHubCliSelection,
   type GitHubPullRequestStatus,
-} from "./github-pull-requests.js";
+  resolveGitHubToken,
+} from "./git/index.js";
 import type { CoordinatorsStorage, StorageService } from "./storage.js";
 import type {
   WatchedPullRequest,

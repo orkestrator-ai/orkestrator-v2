@@ -113,7 +113,7 @@ describe("report_finding on the Orkestrator MCP server", () => {
   });
 
   async function attempt(
-    kind: "review-report" | "fix-result",
+    kind: "review-report" | "address-findings-result",
     provider: "claude" | "opencode" = "claude",
   ) {
     const resultKey = crypto.randomUUID();
@@ -160,7 +160,7 @@ describe("report_finding on the Orkestrator MCP server", () => {
     expect(schema.properties.finding.required).not.toContain("reviewModels");
     expect(schema.properties.finding.required).toContain("severity");
 
-    const fix = await attempt("fix-result");
+    const fix = await attempt("address-findings-result");
     expect(
       toolNames(await rpc(fix.connection.url, fix.connection.token, "tools/list")),
     ).not.toContain(REPORT_FINDING_TOOL_NAME);
@@ -291,7 +291,7 @@ describe("report_finding on the Orkestrator MCP server", () => {
   test("the OpenCode broker checks the signed capability and the attempt's kind", async () => {
     const reviewer = await attempt("review-report", "opencode");
     const other = await attempt("review-report", "opencode");
-    const fix = await attempt("fix-result", "opencode");
+    const fix = await attempt("address-findings-result", "opencode");
     inbox.track(reviewing(reviewer.resultKey));
     const { url, token } = reviewer.connection;
     expect(toolNames(await rpc(url, token, "tools/list"))).toContain(REPORT_FINDING_TOOL_NAME);

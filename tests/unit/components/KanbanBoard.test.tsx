@@ -166,6 +166,7 @@ describe("canClearTaskBuildStatus", () => {
     "addressing-findings",
     "verifying",
     "reworking",
+    "preparing-package",
     "creating-pr",
     "resolving-conflicts",
   ])("is false while actively building (phase %s) even with links", (phase) => {

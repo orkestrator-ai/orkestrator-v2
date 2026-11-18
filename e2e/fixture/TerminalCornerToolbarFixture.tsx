@@ -11,6 +11,7 @@ import { TerminalDisconnectedBanner } from "../../apps/web/src/components/termin
 import { TerminalHistoryPanel } from "../../apps/web/src/components/terminal/TerminalHistoryPanel";
 
 export function TerminalCornerToolbarFixture() {
+  const light = new URLSearchParams(window.location.search).has("light");
   const hostRef = useRef<HTMLDivElement>(null);
   const hover = useTerminalCornerHover();
   const [ready, setReady] = useState(false);
@@ -38,7 +39,11 @@ export function TerminalCornerToolbarFixture() {
         } as T;
       },
     } as Window["orkestrator"];
-    const terminal = new Terminal({ fontSize: 14, scrollback: 500 });
+    const terminal = new Terminal({
+      fontSize: 14,
+      scrollback: 500,
+      theme: light ? { background: "#ffffff", foreground: "#18181b" } : undefined,
+    });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(hostRef.current!);
@@ -58,7 +63,7 @@ export function TerminalCornerToolbarFixture() {
       terminal.dispose();
       window.orkestrator = originalBackend;
     };
-  }, []);
+  }, [light]);
 
   return (
     <main className="p-4">
@@ -97,7 +102,7 @@ export function TerminalCornerToolbarFixture() {
           ref={hostRef}
           {...hover.terminalHoverProps}
           data-testid="terminal-host"
-          className="absolute inset-0"
+          className={light ? "absolute inset-0 [--color-background:#fff]" : "absolute inset-0"}
         />
       </div>
       <output data-testid="terminal-ready">{String(ready)}</output>

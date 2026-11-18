@@ -77,7 +77,7 @@ describe("Orkestrator control MCP server", () => {
       "propose_agents_md_update",
       "launch_feature_plan",
       "get_feature_plan",
-      "custom_fix_multi_review",
+      "custom_address_multi_review",
       "create_pr",
       "resolve_conflicts",
     ];
@@ -590,7 +590,7 @@ describe("Orkestrator control MCP server", () => {
         { id: "r1", agent: "codex", model: "gpt-5.6-codex", status: "pending", lens },
         { id: "r2", agent: "codex", model: "gpt-5.6-codex", status: "pending" },
       ],
-      fixModel: { agent: "codex", model: "gpt-5.6-codex" },
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6-codex" },
     };
     overrides.set("launch_coordinator_multi_review_action", () => ({
       outcome: "opened",
@@ -628,7 +628,7 @@ describe("Orkestrator control MCP server", () => {
       { reviewers: [{ ...reviewers[0], lens: { label: "x".repeat(65), instruction: "x" } }] },
       { reviewers: [{ ...reviewers[0], lens: { label: "L", instruction: "é".repeat(2049) } }] },
       { reviewers: [{ ...reviewers[0], lens: { label: "L" } }] },
-      { fixModel: { agent: "codex", model: "gpt-5.6-codex", lens } },
+      { addressFindingsModel: { agent: "codex", model: "gpt-5.6-codex", lens } },
     ]) {
       const refused = await call("launch_multi_review", {
         requestId: "launch-bad-lens",

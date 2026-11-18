@@ -251,7 +251,7 @@ export const GRAPH_ACTION_INPUTS: Readonly<
             { agent: "codex" },
           ],
         },
-        params: { maxRounds: 2, autoFix: true },
+        params: { maxRounds: 2, autoAddressFindings: true },
       },
     ],
   },

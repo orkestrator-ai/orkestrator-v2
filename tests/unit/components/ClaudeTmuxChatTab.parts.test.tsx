@@ -5081,44 +5081,62 @@ Enter to confirm · Esc to cancel
     expect(screen.getByText("Requests 2 plan-scoped permission prompt(s).")).toBeTruthy();
   });
 
-  test("answers legacy PreToolUse approval cards", async () => {
-    appCommandStore(claudeTmuxStore).getState().setRunning(TMUX_STATE_KEY, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    appCommandStore(claudeTmuxStore)
-      .getState()
-      .addPendingApproval("tab-1", {
-        eventId: "approval-hook",
-        toolName: "Bash",
-        toolInput: { command: "bun test" },
-        payload: {},
-        receivedAt: new Date().toISOString(),
+  test.each([
+    ["Allow", "Deny", "approve"],
+    ["Deny", "Allow", "block"],
+  ])(
+    "answers legacy PreToolUse cards with %s and disables both actions during delivery",
+    async (action, otherAction, decision) => {
+      const delivery = Promise.withResolvers<void>();
+      answerPreToolUseMock.mockImplementationOnce(() => delivery.promise);
+      appCommandStore(claudeTmuxStore).getState().setRunning(TMUX_STATE_KEY, true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
       });
+      appCommandStore(claudeTmuxStore)
+        .getState()
+        .addPendingApproval("tab-1", {
+          eventId: "approval-hook",
+          toolName: "Bash",
+          toolInput: { command: "bun test" },
+          payload: {},
+          receivedAt: new Date().toISOString(),
+        });
 
-    renderInAppCommandScope(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
-
-    await waitFor(() => {
-      expect(answerPreToolUseMock).toHaveBeenCalledWith(
-        "tab-1",
-        "approval-hook",
-        "approve",
-        undefined,
-        "env-1",
+      renderInAppCommandScope(
+        <ClaudeTmuxChatTab
+          tabId="tab-1"
+          data={{ environmentId: "env-1", containerId: "container-1" }}
+          isActive
+        />,
       );
-    });
-    expect(
-      appCommandStore(claudeTmuxStore).getState().getTab(TMUX_STATE_KEY).pendingApprovals,
-    ).toEqual([]);
-  });
+
+      const selected = screen.getByRole<HTMLButtonElement>("button", { name: action });
+      const other = screen.getByRole<HTMLButtonElement>("button", { name: otherAction });
+      expect(selected.disabled).toBe(false);
+      expect(other.disabled).toBe(false);
+      try {
+        fireEvent.click(selected);
+        expect(answerPreToolUseMock).toHaveBeenCalledWith(
+          "tab-1",
+          "approval-hook",
+          decision,
+          undefined,
+          "env-1",
+        );
+        expect(selected.disabled).toBe(true);
+        expect(other.disabled).toBe(true);
+        fireEvent.click(other);
+        expect(answerPreToolUseMock).toHaveBeenCalledTimes(1);
+      } finally {
+        await act(async () => delivery.resolve());
+      }
+
+      expect(
+        appCommandStore(claudeTmuxStore).getState().getTab(TMUX_STATE_KEY).pendingApprovals,
+      ).toEqual([]);
+    },
+  );
 
   test("renders file-oriented approval paths and content previews", async () => {
     appCommandStore(claudeTmuxStore).getState().setRunning(TMUX_STATE_KEY, true, {

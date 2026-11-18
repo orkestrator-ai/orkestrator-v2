@@ -285,7 +285,7 @@ export function DesignStyleField({
         </p>
       )}
       {error && (
-        <p id={errorId} className="text-[11px] break-words text-destructive">
+        <p id={errorId} className="text-[11px] break-words text-failure">
           {error}
         </p>
       )}

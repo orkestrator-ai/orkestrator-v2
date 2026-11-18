@@ -38,6 +38,11 @@ export const BROWSER_TOOLBAR_CLASS =
   "flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 border-b border-border/80 bg-muted/25 px-2 py-1.5 @2xl/browser:flex-nowrap";
 export const BROWSER_ADDRESS_FORM_CLASS =
   "order-last flex w-full min-w-0 basis-full items-center @2xl/browser:order-none @2xl/browser:w-auto @2xl/browser:basis-0 @2xl/browser:flex-1";
+// Draw the address input's focus on the full frame, independently of the service picker's focus.
+export const BROWSER_ADDRESS_FRAME_CLASS =
+  "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-input-surface shadow-sm transition-colors " +
+  "has-[>input:focus-visible]:[outline:1px_solid_var(--browser-address-outline-color,var(--color-ring))] " +
+  "has-[>input:focus-visible]:-outline-offset-2 forced-colors:has-[>input:focus-visible]:outline-[Highlight]";
 export const BROWSER_ADDRESS_INPUT_CLASS =
   "h-full min-w-[min(10rem,60%)] flex-1 bg-transparent px-2.5 font-mono text-xs text-foreground outline-none placeholder:font-sans placeholder:text-muted-foreground";
 export const BROWSER_TOOLBAR_ACTIONS_CLASS = "ml-auto flex shrink-0 items-center gap-1.5";

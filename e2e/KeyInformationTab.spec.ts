@@ -50,6 +50,34 @@ test("right-clicking the header button goes straight to the tab", async ({ page 
   await expect(page.getByTestId("pipeline-key-information-tab")).toBeVisible();
 });
 
+test("a long unbroken summary wraps inside the narrow frame beside the icon", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/key-information-tab?view=tab&summary=long-token");
+  const summary = page
+    .getByRole("region", { name: "Summary" })
+    .getByText(/^(UnbrokenSummaryToken){12}$/);
+  await expect(summary).toBeVisible();
+  const frame = summary.locator("../..");
+  const icon = frame.locator("svg[aria-hidden='true']");
+  await expect(icon).toBeVisible();
+  await expect(frame).toHaveCSS("border-left-width", "1px");
+
+  const frameBounds = await frame.boundingBox();
+  const iconBounds = await icon.boundingBox();
+  if (!frameBounds || !iconBounds) throw new Error("Missing summary frame or icon");
+  const lines = await summary.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    return Array.from(range.getClientRects(), ({ left, right, top }) => ({ left, right, top }));
+  });
+  expect(new Set(lines.map(({ top }) => top)).size).toBeGreaterThan(1);
+  for (const line of lines) {
+    expect(line.left).toBeGreaterThanOrEqual(iconBounds.x + iconBounds.width);
+    expect(line.right).toBeLessThan(frameBounds.x + frameBounds.width);
+  }
+  await expectNoHorizontalOverflow(page);
+});
+
 test("a summary tile jumps to its section", async ({ page }) => {
   await page.goto("/key-information-tab?view=tab");
   const tab = page.getByTestId("pipeline-key-information-tab");

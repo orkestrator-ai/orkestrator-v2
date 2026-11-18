@@ -68,7 +68,7 @@ export function scriptGraphReview(
       : undefined,
   );
   const complete = options.complete ?? true;
-  w.fakes.scripts.set("fix", ({ port }) =>
+  w.fakes.scripts.set("address-findings", ({ port }) =>
     port === "result"
       ? {
           complete,

@@ -71,7 +71,7 @@ describe("build pipeline rewinds", () => {
     expect(sessionStepOrder(session("build", 0))).toBe(0);
     expect(sessionStepOrder(session("rework", 1))).toBe(0);
     expect(
-      sessionStepOrder(session("rework", 1, { label: REVIEW_PACKAGE_SESSION_LABEL })),
+      sessionStepOrder(session("package-preparation", 1, { label: REVIEW_PACKAGE_SESSION_LABEL })),
     ).toBeGreaterThan(0);
     // A build turn that also wrote the package plan is still the build step.
     expect(sessionStepOrder(session("build", 0, { producedReviewPackagePlan: true }))).toBe(0);
@@ -144,7 +144,7 @@ describe("build pipeline rewinds", () => {
 
   test("a package restart keeps the build that wrote the plan; validation keeps the preparation", () => {
     const build = session("build", 0, { producedReviewPackagePlan: true });
-    const preparation = session("rework", 0, { label: REVIEW_PACKAGE_SESSION_LABEL });
+    const preparation = session("package-preparation", 0, { label: REVIEW_PACKAGE_SESSION_LABEL });
     const review = session("review", 0);
     const packageRestart = { sessions: [structuredClone(build), structuredClone(review)] };
     supersedeSessionsFrom(

@@ -229,7 +229,7 @@ export function GraphLaunchDialog({
                 Template
               </label>
               {templatesError ? (
-                <p className="text-xs text-red-400">Could not list templates: {templatesError}</p>
+                <p className="text-xs text-failure">Could not list templates: {templatesError}</p>
               ) : (
                 <select
                   id="graph-launch-template"
@@ -270,13 +270,13 @@ export function GraphLaunchDialog({
               Compiling the template for launch…
             </p>
           )}
-          {optionsError && <p className="text-xs text-red-400">{optionsError}</p>}
+          {optionsError && <p className="text-xs text-failure">{optionsError}</p>}
           {options && draft && (
             <>
               {!options.launchable && (
                 <div
                   role="alert"
-                  className="rounded-md border border-red-500/40 p-2 text-xs text-red-300"
+                  className="rounded-md border border-failure/40 p-2 text-xs text-failure"
                 >
                   {options.blockedReason ?? "This template cannot be launched."}
                   {options.errors.slice(0, 5).map((diagnostic, index) => (
@@ -354,7 +354,7 @@ export function GraphLaunchDialog({
           )}
         </div>
         {launchError && (
-          <p role="alert" className="text-xs text-red-400">
+          <p role="alert" className="text-xs text-failure">
             {launchError}
           </p>
         )}

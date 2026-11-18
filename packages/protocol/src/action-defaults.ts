@@ -15,7 +15,7 @@ export const ACTION_DEFAULT_KEYS = Object.freeze([
   "review",
   "review2",
   "reviewPreparation",
-  "fixReviewIssues",
+  "addressFindings",
   "verify",
   "pr",
   "resolve",
@@ -107,12 +107,14 @@ export function normalizeActionDefaults(value: unknown): ActionDefaults {
     const entry = normalizeEntry(record[key]);
     if (entry) normalized[key] = entry;
   }
-  // The Address Findings default saved under its new name. The settings key
-  // stays `fixReviewIssues` until to-do 4740 tasks 3 and 5; without this read a
-  // settings write here would drop a key saved under the new name.
-  if (!normalized.fixReviewIssues) {
-    const entry = normalizeEntry(record.addressFindings);
-    if (entry) normalized.fixReviewIssues = entry;
+  // The config.json upgrade (to-do 4740): builds before this one saved the
+  // Address Findings default as `fixReviewIssues`. Settings are not in the
+  // database, so there is no storage migration for them; this reads the old
+  // key once and only ever writes `addressFindings`, so the next settings write
+  // drops the old key. Nothing else reads `fixReviewIssues`.
+  if (!normalized.addressFindings) {
+    const entry = normalizeEntry(record.fixReviewIssues);
+    if (entry) normalized.addressFindings = entry;
   }
   return normalized;
 }

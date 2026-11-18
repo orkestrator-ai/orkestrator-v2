@@ -34,10 +34,10 @@ cannot be judged by reading the code.
 
 ## The Address Findings → Verify handoff
 
-Address Findings is a typed stage like Review and Verify. Its turn opens a `fix-result`
-workflow result slot, the same kind Multi Review's fix step submits
+Address Findings is a typed stage like Review and Verify. Its turn opens an `address-findings-result`
+workflow result slot, the same kind Multi Review's Address Findings step submits
 (`build-pipeline-context.ts` `workflowResultKind`), over the tool transport
-(`submit_fix_result`) or, where the rollout keeps it off, the provider-enforced
+(`submit_address_findings_result`) or, where the rollout keeps it off, the provider-enforced
 schema. The prompt (`addressValidationInstruction`) says what goes where:
 `summary`, `filesChanged`, `commandsRun` with each check's result, the repairs
 and their commits in `notes`, and every finding left unaddressed and every
@@ -59,7 +59,7 @@ no check still fails and `limitations` is empty.
   Verify, which judges the round.
 - **Verify reads it** (`verificationAddressFindingsReport` in
   `build-pipeline-address-findings-report.ts`) as an untrusted JSON evidence frame
-  (`<address-fix-result-json>`, framed by `ADDRESS_FIX_RESULT_FRAME_INSTRUCTION`
+  (`<address-findings-result-json>`, framed by `ADDRESS_FINDINGS_RESULT_FRAME_INSTRUCTION`
   from `review-evidence-frames.ts`), as another agent's claim to check against
   the diff. Only this round's live Address Findings session after its latest review
   counts. A round whose clean review went straight to Verify, or whose Address Findings
@@ -460,8 +460,8 @@ log hashes remain readable during upgrades.
 `autoAddressFindings` and `autoPr` are fixed on the workflow at launch. The
 launch dialog opens its two checkboxes on the saved app-level settings
 (`multiReview.autoFix` and `multiReview.autoPr`). Coordinator launches
-(`launch_multi_review`, whose fields are still `autoFix` and `autoPr` until
-to-do 4740 task 3) take the same saved values unless the call sets them, and a
+(`launch_multi_review`, whose fields are `autoAddressFindings` and `autoPr`)
+take the same saved values unless the call sets them, and a
 requested `autoPr: true` turns an omitted Auto-address findings on
 (`multiReviewAutomation` in `coordinator-launch-defaults.ts`). Both paths then
 run the same `MultiReviewService` code:
@@ -521,9 +521,9 @@ built-in Multi Review template inlined as a copy
 package and pull request system nodes. Roles are bound from the review's own
 input: the preparer is `reviewModel` (else `addressFindingsModel`), the
 reviewer panel is the reviewers in order with their lenses, the consolidator is
-`consolidationModel` (else the preparer), the fixer is `addressFindingsModel`,
+`consolidationModel` (else the preparer), the addresser is `addressFindingsModel`,
 and the pull request describer takes the saved `pr` default. The template's
-`autoFix` parameter (from `autoAddressFindings`) and `autoPr` are the run's
+`autoAddressFindings` parameter and `autoPr` are the run's
 parameters. The review instruction is the run's optional
 `reviewInstruction` input (`markdown@1`, up to 128 KiB encoded); a longer one
 refuses the start while the graph engine is selected, and never switches
@@ -535,7 +535,7 @@ when its revision moved, projects it onto the record under the controller lease
 `preparationSession`, `package` the sealed `reviewPackage`, each `review`
 branch `panel.N` reviewer N (status, session, report attributed by the backend,
 `report_progress` issues as provisional findings), `consolidate` the
-`reviewSession`, `consolidatedReport` and `consolidationOverlap`, `fix` the
+`reviewSession`, `consolidatedReport` and `consolidationOverlap`, `address-findings` the
 `addressFindingsSession` and `addressFindingsResult`, and `describe-pr`/`pr` the `autoPrLaunch`. The
 consolidated report's graph source ids (`review/panel.2/issue-3`,
 `review/panel.2/coverage-gap-1`) are translated to `reviewer-2/issue-3` by the
@@ -1125,6 +1125,16 @@ process-local; after a restart the tab shows the persisted draft.
   step fails, the state's `reviewed` field carries that ticket; the tab shows it
   read-only and offers confirming it again or drafting again, because the
   backend refuses edits to it.
+- **A started pipeline replaces the tab.** When the tab reads `promoted`, it
+  selects the pipeline's `claude-build` tab (which the backend adds to the
+  layout while starting the pipeline) and closes itself
+  (`auto-pipeline-handoff.ts`). The handoff waits, bounded, for the build tab
+  to reach the window's layout, outlives the tab's unmount, and moves focus
+  only while the Auto-pipeline tab is still selected in the focused pane; a
+  tab or pane the user chose meanwhile keeps focus. A confirmation that finishes
+  after unmount starts the handoff from its state read, without waiting for a
+  return to the environment. If the build tab never arrives the tab
+  stays open with its "Auto-pipeline started" notice.
 - **Unsaved edits are never dropped.** A failed save keeps the newest edits
   pending, warns that they are unsaved, retries (a bounded number of times, or
   on demand) and saves them again when the tab unmounts. Edits whose save still

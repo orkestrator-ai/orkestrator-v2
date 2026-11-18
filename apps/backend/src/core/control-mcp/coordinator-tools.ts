@@ -361,7 +361,7 @@ export function registerCoordinatorWorkflowTools(
     {
       title: "Start a structured build pipeline",
       description:
-        "Start Orkestrator's durable build/review/verify/PR workflow, the build pipeline, in a new pipeline environment. This is the default for any work whose whole spec is known (a ticket, or settled with the user). Omit agentType, steps, reviewers and reviewPreparation to run the Build button's saved defaults: the same build agent, Multi Review reviewers, preparation/consolidation, fix, verify, PR and conflict-resolution models. Override one only when the user has asked for a specific agent, model, effort or reviewer set, or has given instructions for a step; any field you leave out keeps its saved default. Delivery follows the ticket's delivery policy when Verify passes (none means open-pr): set it on the ticket; push-no-pr pushes and stops, with no automatic review.",
+        "Start Orkestrator's durable build/review/verify/PR workflow, the build pipeline, in a new pipeline environment. This is the default for any work whose whole spec is known (a ticket, or settled with the user). Omit agentType, steps, reviewers and reviewPreparation to run the Build button's saved defaults: the same build agent, Multi Review reviewers, preparation/consolidation, Address Findings, verify, PR and conflict-resolution models. Override one only when the user has asked for a specific agent, model, effort or reviewer set, or has given instructions for a step; any field you leave out keeps its saved default. Delivery follows the ticket's delivery policy when Verify passes (none means open-pr): set it on the ticket; push-no-pr pushes and stops, with no automatic review.",
       inputSchema: toolInput(
         Schema.Struct({
           requestId: str({ trim: true, min: 1, max: 256 }),
@@ -383,7 +383,7 @@ export function registerCoordinatorWorkflowTools(
               strictObject({
                 build: Schema.optionalKey(buildStepOverrideSchema),
                 review: Schema.optionalKey(buildStepOverrideSchema),
-                address: Schema.optionalKey(buildStepOverrideSchema),
+                "address-findings": Schema.optionalKey(buildStepOverrideSchema),
                 verify: Schema.optionalKey(buildStepOverrideSchema),
                 pr: Schema.optionalKey(buildStepOverrideSchema),
                 "resolve-conflicts": Schema.optionalKey(buildStepOverrideSchema),
@@ -427,7 +427,7 @@ export function registerCoordinatorWorkflowTools(
                 max: MAX_BUILD_PIPELINE_ITERATIONS,
                 maxMessage: `maxIterations must be at most ${MAX_BUILD_PIPELINE_ITERATIONS}, the Build Pipeline's iteration limit.`,
               }),
-              `Optional. Review/fix/verify rounds before the pipeline gives up, from 1 to ${MAX_BUILD_PIPELINE_ITERATIONS}. Omit for the default.`,
+              `Optional. Review/Address Findings/verify/Rework rounds before the pipeline gives up, from 1 to ${MAX_BUILD_PIPELINE_ITERATIONS}. Omit for the default.`,
             ),
           ),
           nodeId: describe(
@@ -453,14 +453,8 @@ export function registerCoordinatorWorkflowTools(
       if (input.existingEnvironmentId && !target) {
         await invoke("get_environment", { environmentId: input.existingEnvironmentId });
       }
-      // The tool keeps its public step name `address` until to-do 4740 task 3;
-      // the build's own step is `address-findings`.
-      const { address, ...steps } = input.steps ?? {};
       const scoped = {
         ...input,
-        ...(input.steps
-          ? { steps: { ...steps, ...(address ? { "address-findings": address } : {}) } }
-          : {}),
         projectId: coordinatorScope.projectId,
         delegationBaseBranch: baseBranch,
         delegationBaseCommit: baseCommit,
@@ -495,7 +489,7 @@ export function registerCoordinatorWorkflowTools(
     {
       title: "Get a build pipeline",
       description:
-        "Read authoritative state for a coordinator-associated build pipeline, including workers: every agent session it has started (build, each reviewer, preparation, consolidation, address, verify, fix, PR, conflict resolution, every round), each with its mailbox address, step, round, slot, label, agent, model and status (running, idle, finished, failed, cancelled). Message one worker with send_message (toEnvironmentId the pipeline environment, toTabId its address) and read its transcript with get_tab_transcript (tabId its address). verificationResult is the newest Verify verdict; criteria gives each acceptance criterion's result and evidence (failed first) and the commit Verify judged them on.",
+        "Read authoritative state for a coordinator-associated build pipeline, including workers: every agent session it has started (build, each reviewer, preparation, consolidation, Address Findings, verify, Rework, PR, conflict resolution, every round), each with its mailbox address, step, round, slot, label, agent, model and status (running, idle, finished, failed, cancelled). Message one worker with send_message (toEnvironmentId the pipeline environment, toTabId its address) and read its transcript with get_tab_transcript (tabId its address). verificationResult is the newest Verify verdict; criteria gives each acceptance criterion's result and evidence (failed first) and the commit Verify judged them on.",
       inputSchema: toolInput(
         Schema.Struct({
           pipelineId: str({ trim: true, min: 1, max: 200 }),

@@ -576,7 +576,7 @@ export function SkillsSettings({
                             {skill.shadowed && (
                               <span
                                 title="A higher-precedence directory provides a skill with this name, so this copy is not loaded"
-                                className="shrink-0 rounded bg-zinc-800 px-1 text-[9px] uppercase tracking-wide text-muted-foreground"
+                                className="shrink-0 rounded bg-zinc-800 px-1 text-[11px] uppercase tracking-wide text-muted-foreground"
                               >
                                 Shadowed
                               </span>
@@ -628,7 +628,7 @@ export function SkillsSettings({
                       <h4 className="truncate text-sm font-medium text-foreground">
                         {selected.name}
                       </h4>
-                      <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
+                      <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
                         {selected.plugin
                           ? `Plugin · ${selected.plugin}`
                           : SCOPE_LABELS[selected.scope]}

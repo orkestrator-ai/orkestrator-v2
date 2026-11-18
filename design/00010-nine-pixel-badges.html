@@ -11,16 +11,19 @@
       <p class="crumbs"><a href="00000-index.html">Design tasks</a> / 00010</p>
       <h1>00010 · Replace 9px badges and counts</h1>
       <div class="meta">
-        <span class="status" data-status="todo">To do</span>
+        <span class="status" data-status="done">Done</span>
         <span class="pill sev-medium">Medium</span>
         <span class="pill">Typography</span>
-        <span class="pill evidence-badge" data-evidence-badge data-complete="false"
-          >Evidence 0 / 8 images</span
+        <span class="pill evidence-badge" data-evidence-badge data-complete="true"
+          >Evidence 8 / 8 images</span
         >
       </div>
 
       <h2>Problem</h2>
-      <p>Twelve uses of <code>text-[9px]</code> sit below every size the spec allows.</p>
+      <p>
+        Twelve badges, tags, captions, and icon glyphs in scope used <code>text-[9px]</code>, below
+        the design spec’s smallest text size.
+      </p>
       <div class="rule">
         <div>A count inside a filled pill may also be 10px.</div>
         <div class="src">
@@ -28,8 +31,10 @@
         </div>
       </div>
 
-      <h2>Find every instance</h2>
+      <h2>Find the original instances</h2>
       <pre><code>grep -rnE --include=*.tsx "text-\[9px\]" apps/web/src | grep -v "\.test\."</code></pre>
+
+      <p>The remaining 9px Linear assignee initials fall outside the scope below.</p>
 
       <h2>Scope</h2>
       <table>
@@ -49,7 +54,7 @@
             <td>mailbox presence tag</td>
           </tr>
           <tr>
-            <td><code>apps/web/src/components/build/BuildLaunchDialog.tsx:696</code></td>
+            <td><code>apps/web/src/components/build/BuildLaunchDialog.tsx:709</code></td>
             <td>step number badge on a step icon</td>
           </tr>
           <tr>
@@ -65,7 +70,7 @@
             <td>the “A” glyph inside an icon</td>
           </tr>
           <tr>
-            <td><code>apps/web/src/components/kanban/KanbanTaskDialog.tsx:928</code></td>
+            <td><code>apps/web/src/components/kanban/KanbanTaskDialog.tsx:927</code></td>
             <td>image filename caption on a thumbnail</td>
           </tr>
           <tr>
@@ -86,8 +91,7 @@
       <h2>Approach</h2>
       <ol>
         <li>
-          Counts in filled pills: raise to 10px (the documented exception) and widen the pill if
-          needed.
+          Counts and step numbers in filled pills: raise to 10px and widen the pill if needed.
         </li>
         <li>Uppercase tags and captions: raise to 11px with <code>tracking-wide</code>.</li>
         <li>
@@ -163,7 +167,7 @@
             <div class="frame">
               <img
                 src="images/00010/before-plugin-tags-desktop.png"
-                alt="Before: Plugins browser with tags (desktop)"
+                alt="Before: Empty Plugins browser in the isolated profile (desktop)"
                 loading="lazy"
               />
             </div>
@@ -175,7 +179,7 @@
             <div class="frame">
               <img
                 src="images/00010/after-plugin-tags-desktop.png"
-                alt="After: Plugins browser with tags (desktop)"
+                alt="After: Empty Plugins browser in the isolated profile (desktop)"
                 loading="lazy"
               />
             </div>
@@ -268,53 +272,53 @@ mise run lint</code></pre>
       <h2>Acceptance checklist</h2>
       <ul class="check">
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Before images captured on <b>unmodified</b> code for every slot below, and committed
+          <input type="checkbox" checked aria-label="Done" /><span
+            >Before images captured on <b>unmodified</b> code for every slot above, and committed
             under <code>design/images/00010/</code>.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >After images captured after the change, with the same profile, data, theme, viewport
             and file names, and committed beside the before images.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >Every image slot on this page shows a picture (the evidence badge reads “8 / 8”).</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >I have looked at each pair and written what changed, and anything that did
             <b>not</b> change that should have, in Notes.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Hits were classified in Notes, and each decision below is recorded with the option
+          <input type="checkbox" checked aria-label="Done" /><span
+            >Hits were classified in Notes, and each decision above is recorded with the option
             chosen.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
-            >Type-check and the owning tests pass (commands below);
+          <input type="checkbox" checked aria-label="Done" /><span
+            >Type-check and the owning tests pass (commands above);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >The browser check includes a page reload and, for layout-affecting changes, the narrow
             viewport.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >DESIGN.md or PRODUCT.md updated if needed: None expected.</span
           >
         </li>
         <li>
-          <input type="checkbox" aria-label="Done" /><span
+          <input type="checkbox" checked aria-label="Done" /><span
             >Status set to <b>Done</b> on this page and in
             <a href="00000-index.html">the index</a>.</span
           >
@@ -322,14 +326,46 @@ mise run lint</code></pre>
       </ul>
 
       <h2>Notes</h2>
-      <p class="note">
-        Fill in as you work: classification of each hit, the options chosen, what changed in each
-        image pair, anything deferred.
+      <p>
+        Captured in headless Chromium using the isolated <code>design-00010</code> profile and its
+        seeded project. Both desktop runs used dark mode, a 1440×900 viewport, and 100% zoom at 1×
+        pixel density. The baseline was captured before editing the worktree. The title-bar pair was
+        recaptured with the original and updated renderer source respectively, hiding only the
+        development profile overlay, which covered the mail button.
       </p>
+      <h3>Typography by role</h3>
       <ul>
-        <li>Hit classification: <span class="muted">not started</span></li>
-        <li>Decisions chosen: <span class="muted">not started</span></li>
-        <li>What changed per image pair: <span class="muted">not started</span></li>
+        <li>
+          10px filled pills for the title-bar and project unread counts and the Build and Review
+          step numbers.
+        </li>
+        <li>
+          11px with <code>tracking-wide</code> for the mailbox presence tag, design style tag,
+          ticket image caption, both plugin status tags, and both skill status tags.
+        </li>
+        <li>
+          Chose the recommended SVG path for the decorative Auto-merge “A.” It inherits the icon
+          color and scales with the icon. All three callers use the same default icon size. Keeping
+          the text glyph would preserve its exact rendering and retain a 9px text style.
+        </li>
+      </ul>
+      <h3>What each pair shows</h3>
+      <ul>
+        <li>
+          The amber Agent Mail pill shows the same two unread messages with a larger 10px numeral.
+        </li>
+        <li>
+          The cyan project pill shows the same two unread messages at 10px beside the environment
+          count.
+        </li>
+        <li>
+          The Build dialog step numbers are larger at 10px and stay centered in their 16px badges.
+        </li>
+        <li>
+          The Plugins browser shows its real empty state in both captures. The isolated backend
+          always returns an empty plugin catalog, so plugin tags are absent in this pair. Both tag
+          styles are set to 11px in the renderer.
+        </li>
       </ul>
 
       <footer>

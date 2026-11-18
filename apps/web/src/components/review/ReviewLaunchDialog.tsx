@@ -87,7 +87,7 @@ function Step({
       <div className="hidden flex-col items-center sm:flex" aria-hidden="true">
         <div className="relative grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/35 bg-cyan-500/10 text-cyan-300">
           {icon}
-          <span className="absolute -right-1.5 -top-1.5 grid size-4 place-items-center rounded-full bg-zinc-800 text-[9px] font-semibold text-zinc-300 ring-1 ring-zinc-600">
+          <span className="absolute -right-1.5 -top-1.5 grid size-4 place-items-center rounded-full bg-zinc-800 text-[10px] font-semibold text-zinc-300 ring-1 ring-zinc-600">
             {number}
           </span>
         </div>

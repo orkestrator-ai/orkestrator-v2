@@ -149,7 +149,7 @@ export function DesignStyleField({
         </label>
         {inline && (
           <span
-            className="shrink-0 rounded-sm bg-muted px-1 text-[9px] leading-4 text-foreground"
+            className="shrink-0 rounded-sm bg-muted px-1 text-[11px] leading-4 tracking-wide text-foreground"
             title="Authored inline declaration on this element"
           >
             inline

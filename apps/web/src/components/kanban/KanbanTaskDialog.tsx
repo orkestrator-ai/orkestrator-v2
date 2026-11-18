@@ -924,7 +924,7 @@ export function KanbanTaskDialog({
                     >
                       <X className="h-3 w-3" />
                     </Button>
-                    <div className="absolute bottom-0 left-0 right-0 bg-background/80 px-1 py-0.5 text-[9px] text-muted-foreground truncate opacity-0 group-hover/img:opacity-100 transition-opacity">
+                    <div className="absolute bottom-0 left-0 right-0 bg-background/80 px-1 py-0.5 text-[11px] tracking-wide text-muted-foreground truncate opacity-0 group-hover/img:opacity-100 transition-opacity">
                       {img.filename}
                     </div>
                   </div>

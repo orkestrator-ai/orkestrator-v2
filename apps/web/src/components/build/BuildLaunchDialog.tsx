@@ -706,7 +706,7 @@ function BuildStepCard({
           {icon}
           <span
             data-build-step-number={number}
-            className="absolute -right-1.5 -top-1.5 grid size-4 place-items-center rounded-full bg-zinc-800 text-[9px] font-semibold text-zinc-300 ring-1 ring-zinc-600"
+            className="absolute -right-1.5 -top-1.5 grid size-4 place-items-center rounded-full bg-zinc-800 text-[10px] font-semibold text-zinc-300 ring-1 ring-zinc-600"
           >
             {number}
           </span>

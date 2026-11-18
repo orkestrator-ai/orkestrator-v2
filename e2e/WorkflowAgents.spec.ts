@@ -11,6 +11,7 @@ test("a workflow card keeps its name and lists its agents inside it", async ({
   await expect(
     page.getByText("3 running · 1 queued · 1/5 done — Build: introductions"),
   ).toBeVisible();
+  await expect(page.getByText(/Run ID: fixture-run-123/)).toHaveCount(0);
 
   const title = card.getByText(/^Build investor Discover/);
   const titleBounds = await title.boundingBox();
@@ -18,7 +19,7 @@ test("a workflow card keeps its name and lists its agents inside it", async ({
   const root = page.locator("[data-background-task-id]");
   if (process.env.WORKFLOW_AGENTS_CAPTURE === "1") {
     await root.screenshot({
-      path: `output/visual-previews/workflow-review-running-collapsed-${testInfo.project.name}.png`,
+      path: `output/visual-previews/workflow-fixes-running-collapsed-${testInfo.project.name}.png`,
     });
   }
 
@@ -33,6 +34,11 @@ test("a workflow card keeps its name and lists its agents inside it", async ({
   await expect(agents.getByText("Using Read")).toBeVisible();
   await expect(agents.getByText("Explore", { exact: true })).toBeVisible();
   await expect(agents.getByText("workflow-subagent", { exact: true })).toHaveCount(0);
+  const receipt = root.locator("pre").filter({ hasText: "Run ID: fixture-run-123" });
+  await expect(receipt).toBeVisible();
+  await expect(receipt).toContainText("Transcript dir: /fixture/transcripts");
+  await expect(receipt).toContainText("Script file: /fixture/workflow.js");
+  await expect(receipt).toContainText('resumeFromRunId: "fixture-run-123"');
   const phase = agents.getByText("Foundations", { exact: true });
   if (testInfo.project.name.startsWith("mobile")) {
     await expect(phase).toBeHidden();
@@ -41,7 +47,7 @@ test("a workflow card keeps its name and lists its agents inside it", async ({
   }
   if (process.env.WORKFLOW_AGENTS_CAPTURE === "1") {
     await root.screenshot({
-      path: `output/visual-previews/workflow-review-running-expanded-${testInfo.project.name}.png`,
+      path: `output/visual-previews/workflow-fixes-running-expanded-${testInfo.project.name}.png`,
     });
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
@@ -64,7 +70,7 @@ test("the launch keeps one workflow card and its agent outcomes after settlement
     await expect(card).toBeVisible();
     if (!reload && process.env.WORKFLOW_AGENTS_CAPTURE === "1") {
       await root.screenshot({
-        path: `output/visual-previews/workflow-review-stopped-collapsed-${testInfo.project.name}.png`,
+        path: `output/visual-previews/workflow-fixes-stopped-collapsed-${testInfo.project.name}.png`,
       });
     }
     await card.focus();
@@ -72,16 +78,32 @@ test("the launch keeps one workflow card and its agent outcomes after settlement
     await expect(card).toHaveAttribute("aria-expanded", "true");
     const agents = page.getByRole("region", { name: "3 workflow agents" });
     const stopped = agents.locator('[data-workflow-agent-status="stopped"]');
-    await expect(stopped.getByText("Workflow stopped before this agent finished")).toBeVisible();
+    await expect(stopped.getByText("Workflow ended before this agent finished")).toBeVisible();
     await expect(stopped.getByTitle("0 tool uses")).toBeVisible();
     await expect(stopped.getByTitle("0 tokens")).toBeVisible();
     await expect(agents.getByText("Fixture check failed")).toBeVisible();
     await expect(agents.getByText(/ active$/)).toHaveCount(0);
-    await expect(root.getByText(/Workflow launched in background/)).toHaveCount(0);
+    await expect(root.getByText(/Run ID: fixture-run-123/)).toBeVisible();
     if (reload && process.env.WORKFLOW_AGENTS_CAPTURE === "1") {
       await root.screenshot({
-        path: `output/visual-previews/workflow-review-stopped-expanded-${testInfo.project.name}.png`,
+        path: `output/visual-previews/workflow-fixes-stopped-expanded-${testInfo.project.name}.png`,
       });
     }
+  }
+});
+
+test("a workflow outline explains why its agent rows are absent", async ({ page }, testInfo) => {
+  await page.goto("/workflow-agents?outline");
+  const card = page.getByRole("button", { name: /^Workflow Build investor Discover/ });
+  await expect(card.getByText("3 running · 1 queued · 1/5 done")).toBeVisible();
+  await card.focus();
+  await card.press("Enter");
+  const details = page.getByRole("region", { name: "Workflow agents" });
+  await expect(details.getByText("5 agents not shown")).toBeVisible();
+  await expect(details.getByRole("list")).toHaveCount(0);
+  if (process.env.WORKFLOW_AGENTS_CAPTURE === "1") {
+    await page.locator("[data-background-task-id]").screenshot({
+      path: `output/visual-previews/workflow-fixes-outline-${testInfo.project.name}.png`,
+    });
   }
 });

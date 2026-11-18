@@ -1072,10 +1072,10 @@ export function BackgroundTaskCard({
   const [stopError, setStopError] = useState<string | null>(null);
   const presentation = backgroundTaskPresentation(task);
   const workflow = task.kind === "workflow";
-  const shownResult =
+  const launchReceipt =
     workflow && result?.startsWith("Workflow launched in background. Task ID: ")
-      ? undefined
-      : result;
+      ? result
+      : undefined;
   const startedAt = task.startedAt ?? launchStartedAt;
   const durationLabel = useAgentRuntimeLabel(
     presentation.status,
@@ -1104,14 +1104,15 @@ export function BackgroundTaskCard({
   const hasBody = Boolean(
     shownCommand ||
     prompt ||
-    shownResult ||
+    result ||
     resultPending ||
     outcome.length > 0 ||
     task.outputTail ||
     task.outputFile ||
     metaEntries.length > 0 ||
     children.length > 0 ||
-    (task.workflowAgents?.length ?? 0) > 0,
+    (task.workflowAgents?.length ?? 0) > 0 ||
+    (task.workflowAgentsOmitted ?? 0) > 0,
   );
 
   // The failure belongs to the attempt, not the task: a later status change
@@ -1223,7 +1224,11 @@ export function BackgroundTaskCard({
           {prompt ? <BackgroundTaskTextBlock label="Prompt" text={prompt} /> : null}
           <BackgroundTaskDetails task={task} containerId={containerId} />
           <WorkflowAgentList agents={task.workflowAgents} omitted={task.workflowAgentsOmitted} />
-          <AgentResultBlock result={shownResult} />
+          {launchReceipt ? (
+            <BackgroundTaskTextBlock label="Launch result" text={launchReceipt} mono />
+          ) : (
+            <AgentResultBlock result={result} />
+          )}
           <BackgroundTaskChildList tasks={children} containerId={containerId} />
         </div>
       </CollapsibleContent>

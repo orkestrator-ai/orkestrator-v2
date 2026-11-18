@@ -14,7 +14,7 @@ import {
 } from "./session-manager-background-tasks.js";
 import {
   ignoreWorkflowTaskEdge,
-  isWorkflowRelaunch,
+  isTaskRelaunch,
   parseWorkflowProgress,
   settleWorkflowAgents,
   taskEdgeDescription,
@@ -274,21 +274,27 @@ export function persistedWorkflowLaunch(
   toolUseId: string,
 ): BackgroundTaskSystemMessage | undefined {
   if (typeof output !== "string") return undefined;
-  const match =
-    /^Workflow launched in background\. Task ID: ([^\r\n]+)\r?\nSummary: ([^\r\n]*)/.exec(
-      output.slice(
-        0,
-        MAX_PERSISTED_BACKGROUND_TASK_ID_LENGTH + MAX_PERSISTED_BACKGROUND_TASK_TEXT_LENGTH + 64,
-      ),
-    );
+  const match = /^Workflow launched in background\. Task ID: ([^\r\n]+)\r?\nSummary: /.exec(
+    output.slice(0, MAX_PERSISTED_BACKGROUND_TASK_ID_LENGTH + 64),
+  );
   const taskId = persistedTaskIdentifier(match?.[1]);
-  if (!taskId) return undefined;
+  if (!taskId || !match) return undefined;
+  // Older receipts end after the summary. Full receipts delimit the summary
+  // with the resume fields, so line breaks inside the description survive.
+  const summary = output.slice(
+    match[0].length,
+    match[0].length +
+      MAX_PERSISTED_BACKGROUND_TASK_TEXT_LENGTH +
+      2 * MAX_PERSISTED_BACKGROUND_TASK_PATH_LENGTH +
+      64,
+  );
+  const resumeFields = /\r?\nTranscript dir: [^\r\n]*(?:\r?\n)+Script file: /.exec(summary);
   return {
     subtype: "task_started",
     task_id: taskId,
     tool_use_id: toolUseId,
     task_type: "local_workflow",
-    description: persistedTaskText(match?.[2]),
+    description: persistedTaskText(resumeFields ? summary.slice(0, resumeFields.index) : summary),
   };
 }
 
@@ -322,14 +328,7 @@ export function reducePersistedBackgroundTaskMessage(
   timestamp: number,
 ): Record<string, BackgroundTaskSnapshot> {
   const stored = tasks?.[message.task_id];
-  // A new launch under a finished task's id starts a fresh run, just as in
-  // the live iterator. Late progress from the old run must not revive it.
-  const resumedRun =
-    message.subtype === "task_started" &&
-    stored !== undefined &&
-    !LIVE_BACKGROUND_TASK_STATUSES.has(stored.status) &&
-    (isWorkflowRelaunch(message, stored) ||
-      (message.tool_use_id !== undefined && message.tool_use_id !== stored.toolUseId));
+  const resumedRun = stored !== undefined && isTaskRelaunch(message, stored);
   if (!resumedRun && ignoreWorkflowTaskEdge(message, stored)) return tasks ?? {};
   const previous = resumedRun
     ? {

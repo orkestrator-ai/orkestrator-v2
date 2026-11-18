@@ -117,10 +117,25 @@ const launch: TranscriptMessage = {
       toolUseId: workflow.toolUseId,
       toolArgs: { script: "fixture script" },
       toolState: "success",
-      toolOutput: `Workflow launched in background. Task ID: ${workflow.id}\nSummary: ${workflow.description}`,
+      detailRef: "fixture-workflow-receipt",
     },
   ],
 };
+
+async function loadWorkflowReceipt(detailRef: string) {
+  return {
+    detailRef,
+    toolOutput: [
+      `Workflow launched in background. Task ID: ${workflow.id}`,
+      `Summary: ${workflow.description}`,
+      "Transcript dir: /fixture/transcripts",
+      "Script file: /fixture/workflow.js",
+      '(Edit this file and re-invoke Workflow with {scriptPath: "/fixture/workflow.js"}.)',
+      "Run ID: fixture-run-123",
+      'To resume after editing the script: Workflow({scriptPath: "/fixture/workflow.js", resumeFromRunId: "fixture-run-123"})',
+    ].join("\n"),
+  };
+}
 
 const settled: BackgroundTaskSnapshot = {
   ...workflow,
@@ -131,7 +146,7 @@ const settled: BackgroundTaskSnapshot = {
     {
       ...workflow.workflowAgents[1]!,
       status: "stopped",
-      error: "Workflow stopped before this agent finished",
+      error: "Workflow ended before this agent finished",
       toolUses: 0,
       totalTokens: 0,
     },
@@ -142,19 +157,32 @@ const settled: BackgroundTaskSnapshot = {
 export function WorkflowAgentsFixture() {
   const params = new URLSearchParams(window.location.search);
   const [isSettled, setIsSettled] = useState(params.has("settled"));
-  const task = isSettled ? settled : workflow;
-  const launchRows = normalizeNativeMessages(
-    applyClaudeBackgroundTaskStates([launch], { [task.id]: task }),
-  );
+  const outline = params.has("outline");
+  const task: BackgroundTaskSnapshot = outline
+    ? {
+        id: workflow.id,
+        description: workflow.description,
+        kind: "workflow",
+        status: "running",
+        startedAt,
+        workflowAgentCounts: { total: 5, running: 3, queued: 1, finished: 1, failed: 0 },
+        workflowAgentsOmitted: 5,
+      }
+    : isSettled
+      ? settled
+      : workflow;
+  const launchRows = outline
+    ? []
+    : normalizeNativeMessages(applyClaudeBackgroundTaskStates([launch], { [task.id]: task }));
   const messages = params.has("before")
     ? rowlessBackgroundTaskMessages(before, [])
     : [...launchRows, ...rowlessBackgroundTaskMessages([task], launchRows)];
   return (
     <main className="mx-auto max-w-3xl space-y-3 p-4" data-testid="workflow-agents-fixture">
       {messages.map((message) => (
-        <NativeMessage key={message.id} message={message} />
+        <NativeMessage key={message.id} message={message} loadToolDetails={loadWorkflowReceipt} />
       ))}
-      {!params.has("before") && !isSettled ? (
+      {!params.has("before") && !outline && !isSettled ? (
         <button
           type="button"
           onClick={() => {

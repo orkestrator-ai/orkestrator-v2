@@ -117,7 +117,7 @@ describe("normalizeClaudeBackgroundTasks", () => {
         workflowAgentCounts: { total: 8, running: 1, queued: 1, finished: 6, failed: 1 },
         workflowAgents: [
           { index: 0, label: "Plan", state: "done", durationMs: 4000, tokens: 10, toolCalls: 1 },
-          { index: 1, label: "Skip", state: "done", skipped: true },
+          { index: 1, label: "Skip", state: "error", skipped: true, error: "skipped by user" },
           {
             index: 2,
             label: "Build: saved",

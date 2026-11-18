@@ -28,7 +28,7 @@ import {
 } from "../session-manager-messages.js";
 import {
   ignoreWorkflowTaskEdge,
-  isWorkflowRelaunch,
+  isTaskRelaunch,
   settleWorkflowAgents,
   taskEdgeDescription,
   workflowAgentHookTaskIds,
@@ -127,28 +127,23 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
     return "stop";
   const parsed = persistedBackgroundTaskMessage({ message });
   const stored = session.backgroundTasks?.[taskMessage.task_id];
-  // A `SendMessage` resume re-runs a finished agent under its old task
-  // id, announced by a `task_started` from the resuming call. That is a
-  // new run, not a late edge of the old one: left terminal, nothing
-  // held this query's input open for it, and the CLI stopped the agent
-  // once its idle wind-down ran out.
+  const parked = session.claudeRuntime?.tasks.settling.get(taskMessage.task_id);
+  const knownRun = stored ?? parked;
   const resumedRun =
-    taskMessage.subtype === "task_started" &&
-    stored !== undefined &&
-    !LIVE_BACKGROUND_TASK_STATUSES.has(stored.status) &&
-    ((parsed !== undefined && isWorkflowRelaunch(parsed, stored)) ||
-      (typeof taskMessage.tool_use_id === "string" &&
-        taskMessage.tool_use_id !== stored.toolUseId));
-  const knownRun = stored ?? session.claudeRuntime?.tasks.settling.get(taskMessage.task_id);
+    knownRun !== undefined && parsed !== undefined && isTaskRelaunch(parsed, knownRun);
   if (!resumedRun && parsed && ignoreWorkflowTaskEdge(parsed, knownRun)) return "stop";
   const correlated = takeProvisionalBackgroundTask(session, taskMessage.tool_use_id);
   if (resumedRun) {
-    // The finished run's parked snapshot must not describe this one.
+    // Both the parked snapshot and any requested stop belong to the old run.
     takeSettlingBackgroundTask(session, taskMessage.task_id);
+    session.claudeRuntime?.tasks.stopRequested.delete(taskMessage.task_id);
   }
+  const terminalPatch =
+    taskMessage.patch?.status !== undefined &&
+    !LIVE_BACKGROUND_TASK_STATUSES.has(taskMessage.patch.status);
   const previous = resumedRun
     ? {
-        ...stored,
+        ...knownRun,
         ...RUN_SCOPED_TASK_METADATA_RESET,
         toolUseId: undefined,
         status: "running" as const,
@@ -159,7 +154,7 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
         outputFile: undefined,
         usage: undefined,
       }
-    : (stored ?? correlated.task);
+    : (stored ?? (terminalPatch ? parked : undefined) ?? correlated.task);
   const patchedStatus = taskMessage.patch?.status ?? previous?.status ?? "running";
   // Within one run, level and edge messages may be delivered in either
   // order, so a late start/progress edge must enrich a terminal record
@@ -210,7 +205,9 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
     if (previous && LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)) {
       persistSettledWorkflowDetails(session, task);
     }
-    const owner = backgroundTaskOwner(session, task.id) ?? correlated.owner;
+    const owner =
+      backgroundTaskOwner(session, task.id) ??
+      (parked && previous === parked ? session.claudeRuntime : correlated.owner);
     session.claudeRuntime?.tasks.live.delete(task.id);
     // A finishing task sends its terminal patch before the
     // `task_notification` edge, while the CLI is still queueing the

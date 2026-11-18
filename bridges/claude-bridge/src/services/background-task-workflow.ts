@@ -3,7 +3,7 @@
 // A `local_workflow` task runs its agents inside the workflow. They are not
 // tasks: no `task_*` frame names them, and the CLI reports them only as rows of
 // the workflow's own `workflow_progress`. Its `task_progress` frames also reuse
-// two fields for that progress (CLI 2.1.326): `description` holds the latest
+// two fields for agent-specific progress (CLI 2.1.326): `description` holds the latest
 // agent's "phase: label" and `last_tool_name` holds its label. Read like any
 // other task's frames, those renamed the workflow card on every agent update
 // and dropped every agent's own details.
@@ -137,7 +137,7 @@ function isRunningAgent(agent: BackgroundWorkflowAgent): boolean {
 }
 
 function isFailedAgent(agent: BackgroundWorkflowAgent): boolean {
-  return agent.state === "error" && agent.endedWithRun === undefined;
+  return agent.state === "error" && !agent.skipped && agent.endedWithRun === undefined;
 }
 
 type WorkflowAgentLabels = NonNullable<BackgroundTaskSnapshot["workflowAgentLabels"]>;
@@ -296,15 +296,24 @@ type WorkflowEdge = Pick<
   "subtype" | "task_type" | "workflow_progress"
 >;
 
-export function isWorkflowRelaunch(
+/** An explicit start can replace a workflow even if its previous run still looks live. */
+export function isTaskRelaunch(
   message: BackgroundTaskSystemMessage,
   previous: BackgroundTaskSnapshot,
 ): boolean {
-  return (
+  if (message.subtype !== "task_started") return false;
+  if (
     isWorkflowTaskEdge(message, previous) &&
     message.run_id !== undefined &&
-    previous.workflowRunId !== undefined &&
-    message.run_id !== previous.workflowRunId
+    previous.workflowRunId !== undefined
+  ) {
+    return message.run_id !== previous.workflowRunId;
+  }
+  return (
+    message.tool_use_id !== undefined &&
+    message.tool_use_id !== previous.toolUseId &&
+    (!LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) ||
+      (previous.toolUseId !== undefined && isWorkflowTaskEdge(message, previous)))
   );
 }
 
@@ -335,11 +344,12 @@ export function settleWorkflowAgents(
   const agents = task.workflowAgents;
   if (!agents || LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) return task;
   const counts = task.workflowAgentCounts;
+  const explanation = reason ?? "Workflow ended before this agent finished";
   return {
     ...task,
     workflowAgents: agents.map((agent) =>
       agent.state === "start" || agent.state === "progress"
-        ? { ...agent, state: "error", endedWithRun: "stopped", error: agent.error ?? reason }
+        ? { ...agent, state: "error", endedWithRun: "stopped", error: agent.error ?? explanation }
         : agent,
     ),
     workflowAgentCounts: counts && {

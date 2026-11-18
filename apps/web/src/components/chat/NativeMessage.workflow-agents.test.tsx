@@ -96,6 +96,29 @@ describe("workflow agents", () => {
     expect(within(rows[3]!).queryByTitle("0 tokens")).toBeFalsy();
   });
 
+  test("omitted agent details alone make a snapshot outline expandable", () => {
+    renderInAppCommandScope(
+      <BackgroundTaskCard
+        task={{
+          id: "outline",
+          status: "running",
+          kind: "workflow",
+          description: "Outline only",
+          workflowAgentsOmitted: 5,
+          workflowAgentCounts: { total: 5, running: 2, queued: 1, finished: 2, failed: 0 },
+        }}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: /^Workflow Outline only/ });
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(within(trigger).getByText("2 running · 1 queued · 2/5 done")).toBeTruthy();
+    const details = screen.getByRole("region", { name: "Workflow agents" });
+    expect(within(details).getByText("5 agents not shown")).toBeTruthy();
+    expect(within(details).queryByRole("list")).toBeFalsy();
+  });
+
   test("labels counts from older or partial snapshots", () => {
     expect(workflowAgentsStatusLine(agents, undefined, undefined, 5)).toContain("Shown agents: ");
     expect(

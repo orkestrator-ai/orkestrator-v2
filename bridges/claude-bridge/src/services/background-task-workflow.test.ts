@@ -9,6 +9,7 @@ import {
 } from "./background-task-workflow.js";
 import { readPersistedSessionMessages } from "./session-manager-persistence.js";
 import { backgroundTasksForSnapshot } from "./background-task-snapshot.js";
+import { stopBackgroundTask } from "./session-manager-background-tasks.js";
 import {
   persistedBackgroundTaskMessage,
   reducePersistedBackgroundTaskMessage,
@@ -23,6 +24,7 @@ import {
   getSession,
   materializePersistedSession,
   mockSdkGetSessionMessages,
+  queryControlOverrides,
   settleSessionPreferenceWritesForTesting,
   type SdkSessionMessage,
   nextQueryCall,
@@ -142,6 +144,17 @@ describe("workflow progress rows", () => {
     expect(parsed.counts).toEqual({ total: 66, running: 1, queued: 64, finished: 1, failed: 1 });
     expect(parseWorkflowProgress(rows, 3)).toMatchObject({ omitted: 5, counts: { partial: true } });
   });
+
+  test("counts user skips as finished without giving them failure priority", () => {
+    const skipped = Array.from({ length: MAX_WORKFLOW_AGENTS }, (_, index) =>
+      agentRow(index + 1, { state: "error", skipped: true, error: "skipped by user" }),
+    );
+    const parsed = parseWorkflowProgress([agentRow(0, { state: "error" }), ...skipped])!;
+    expect(parsed.agents).toHaveLength(MAX_WORKFLOW_AGENTS);
+    expect(parsed.agents[0]).toMatchObject({ index: 0, state: "error" });
+    expect(parsed.agents[1]).toMatchObject({ index: 2, state: "error", skipped: true });
+    expect(parsed.counts).toEqual({ total: 65, running: 0, queued: 0, finished: 65, failed: 1 });
+  });
 });
 
 function applyLiveFrames(
@@ -209,6 +222,27 @@ describe("workflow task edges", () => {
     expect(settled?.status).toBe("completed");
     expect(settled?.description).toBe(started.description);
     expect(settled?.workflowAgents?.map((agent) => agent.state)).toEqual(["done", "done"]);
+  });
+
+  test("heartbeats update agent counts without replacing the latest agent with the title", () => {
+    const frames = [
+      started,
+      progress([agentRow(1)], "Build: saved"),
+      {
+        ...progress([agentRow(1, { state: "done" }), agentRow(2)]),
+        description: started.description,
+        last_tool_name: undefined,
+      },
+    ];
+    const { session, turn } = liveTurn("Workflow heartbeat");
+    applyLiveFrames(turn, frames);
+    for (const task of [session.backgroundTasks?.["wf-1"], replay(frames)?.["wf-1"]]) {
+      expect(task).toMatchObject({
+        description: started.description,
+        progressSummary: "Build: saved",
+        workflowAgentCounts: { total: 2, finished: 1, running: 1 },
+      });
+    }
   });
 
   test("an ordinary agent's progress still names its tool", () => {
@@ -290,6 +324,54 @@ describe("workflow task edges", () => {
     });
   }
 
+  test.each(["running", "paused"] as const)(
+    "a distinct same-id start replaces a %s workflow and fences off its late edges",
+    (oldStatus) => {
+      const useRunId = oldStatus === "running";
+      const priorRun = {
+        tool_use_id: started.tool_use_id,
+        run_id: useRunId ? "run-a" : undefined,
+      };
+      const nextRun = {
+        tool_use_id: useRunId ? priorRun.tool_use_id : "toolu-resume",
+        run_id: useRunId ? "run-b" : undefined,
+      };
+      const restart = [
+        { ...started, ...priorRun },
+        { ...progress([agentRow(1)], "Old progress"), ...priorRun },
+        { ...started, ...priorRun, subtype: "task_updated", patch: { status: oldStatus } },
+        { ...started, ...nextRun, description: "New run" },
+      ];
+      const late = [
+        { ...progress([agentRow(1)], "Old progress"), ...priorRun },
+        { ...started, ...priorRun, subtype: "task_updated", patch: { status: "failed" } },
+        { ...started, ...priorRun, subtype: "task_notification", status: "failed" },
+      ];
+      const { session, turn } = liveTurn("Workflow relaunched before settlement");
+      applyLiveFrames(turn, [...restart, ...late]);
+      for (const task of [
+        session.backgroundTasks?.["wf-1"],
+        replay([...restart, ...late])?.["wf-1"],
+      ]) {
+        expect(task).toMatchObject({
+          status: "running",
+          description: "New run",
+          toolUseId: nextRun.tool_use_id,
+        });
+        expect(task?.progressSummary).toBeUndefined();
+        expect(task?.workflowAgents).toBeUndefined();
+      }
+      const newProgress = { ...progress([agentRow(2)]), ...nextRun };
+      applyLiveFrames(turn, [newProgress]);
+      for (const task of [
+        session.backgroundTasks?.["wf-1"],
+        replay([...restart, ...late, newProgress])?.["wf-1"],
+      ]) {
+        expect(task?.workflowAgents?.map((agent) => agent.index)).toEqual([2]);
+      }
+    },
+  );
+
   test("compact terminal rows keep stable labels and ignore later progress", () => {
     const frames = [
       started,
@@ -355,6 +437,139 @@ describe("workflow task edges", () => {
     );
   });
 
+  test("a sparse terminal patch and notification retain a released workflow parked by the live set", async () => {
+    const session = await materializePersistedSession();
+    const prompt = sendPrompt(session.id, "run");
+    const call = await nextQueryCall();
+    const [launch, , patch, notification] = capturedWorkflow.systemFrames;
+    const id = launch!.task_id;
+    const agents = [
+      agentRow(0, { state: "start", startedAt: undefined }),
+      agentRow(1, { error: "Provider explanation" }),
+      agentRow(2),
+    ];
+    call.push(launch);
+    call.push({
+      ...progress(agents),
+      task_id: id,
+      tool_use_id: launch!.tool_use_id,
+      run_id: launch!.run_id,
+    });
+    await waitFor(() => session.backgroundTasks?.[id]?.workflowAgents?.length === 3);
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => session.status === "idle");
+    const runtime = session.claudeRuntime!;
+    call.push({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+    await waitFor(() => runtime.tasks.settling.has(id));
+    expect(session.backgroundTasks?.[id]).toBeUndefined();
+
+    call.push(patch);
+    await waitFor(() => session.backgroundTasks?.[id]?.status === "completed");
+    const expectSettledWorkflow = (task: BackgroundTaskSnapshot | undefined) => {
+      expect(task).toMatchObject({
+        status: "completed",
+        description: launch!.description,
+        toolUseId: launch!.tool_use_id,
+      });
+      expect(task?.workflowAgents?.map(({ error }) => error)).toEqual([
+        "Workflow ended before this agent finished",
+        "Provider explanation",
+        "Workflow ended before this agent finished",
+      ]);
+      expect(task?.workflowAgents?.map(({ endedWithRun }) => endedWithRun)).toEqual([
+        "stopped",
+        "stopped",
+        "stopped",
+      ]);
+    };
+    expectSettledWorkflow(backgroundTasksForSnapshot(session.backgroundTasks)[id]);
+    call.push(notification);
+    await waitFor(() => !runtime.tasks.settling.has(id));
+    expect(runtime.latestTurn.isAwaitingContinuation()).toBe(true);
+    expectSettledWorkflow(backgroundTasksForSnapshot(session.backgroundTasks)[id]);
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+    await settleSessionPreferenceWritesForTesting();
+
+    mockSdkGetSessionMessages.mockResolvedValue(capturedWorkflow.rollout as SdkSessionMessage[]);
+    const hydrated = await readPersistedSessionMessages(session);
+    expectSettledWorkflow(hydrated?.backgroundTasks?.[id]);
+  });
+
+  test("replays a multiline description from a full receipt without SDK start frames", async () => {
+    const description = "Inspect the fixture\nReview the workflow\n\nPublish the results";
+    const liveDescription = `\n${description}`;
+    const session = await materializePersistedSession();
+    const { turn } = createPromptTurnForTesting(session);
+    const launch = capturedWorkflow.systemFrames[0]!;
+    applyLiveFrames(turn, [{ ...launch, description: liveDescription }]);
+    const rollout = structuredClone(capturedWorkflow.rollout);
+    const launchRecord = rollout[1]!;
+    if (!Array.isArray(launchRecord.message.content)) throw new Error("Expected launch receipt");
+    launchRecord.message.content[0]!.content = [
+      `Workflow launched in background. Task ID: ${launch.task_id}`,
+      `Summary: ${liveDescription}`,
+      "",
+      "Transcript dir: /fixture/transcripts",
+      "Script file: /fixture/workflow.js",
+      "(Edit this file and re-invoke Workflow.)",
+      "Run ID: fixture-run",
+      "To resume after editing the script, use resumeFromRunId.",
+    ].join("\n");
+    mockSdkGetSessionMessages.mockResolvedValue(rollout as SdkSessionMessage[]);
+    const hydrated = await readPersistedSessionMessages(session);
+    expect(session.backgroundTasks?.[launch.task_id]?.description).toBe(description);
+    expect(hydrated?.backgroundTasks?.[launch.task_id]?.description).toBe(description);
+  });
+
+  test("a successful control stop explains queued and running agent outcomes", async () => {
+    queryControlOverrides.stopTask = async () => {};
+    const created = createSession("Stop workflow");
+    track(created.id);
+    const prompt = sendPrompt(created.id, "run");
+    const call = await nextQueryCall();
+    const session = getSession(created.id)!;
+    call.push(started);
+    call.push(progress([agentRow(0, { state: "start", startedAt: undefined }), agentRow(1)]));
+    await waitFor(() => session.backgroundTasks?.["wf-1"]?.workflowAgents?.length === 2);
+    expect(await stopBackgroundTask(session.id, "wf-1")).toEqual({ ok: true });
+    expect(session.backgroundTasks?.["wf-1"]).toMatchObject({
+      status: "killed",
+      workflowAgents: [0, 1].map((index) =>
+        expect.objectContaining({
+          index,
+          endedWithRun: "stopped",
+          error: "Workflow ended before this agent finished",
+        }),
+      ),
+    });
+    call.finish();
+    await prompt;
+  });
+
+  test("an in-flight control stop does not settle a replacement workflow", async () => {
+    const acknowledged = Promise.withResolvers<void>();
+    queryControlOverrides.stopTask = () => acknowledged.promise;
+    const created = createSession("Relaunch during workflow stop");
+    track(created.id);
+    const prompt = sendPrompt(created.id, "run");
+    const call = await nextQueryCall();
+    const session = getSession(created.id)!;
+    call.push({ ...started, run_id: "old-run" });
+    await waitFor(() => session.claudeRuntime?.tasks.live.has("wf-1") === true);
+    const stop = stopBackgroundTask(session.id, "wf-1");
+    expect(session.claudeRuntime?.tasks.stopRequested.has("wf-1")).toBe(true);
+    call.push({ ...started, run_id: "new-run" });
+    await waitFor(() => session.backgroundTasks?.["wf-1"]?.workflowRunId === "new-run");
+    expect(session.claudeRuntime?.tasks.stopRequested.has("wf-1")).toBe(false);
+    acknowledged.resolve();
+    expect(await stop).toEqual({ ok: true });
+    expect(session.backgroundTasks?.["wf-1"]?.status).toBe("running");
+    call.finish();
+    await prompt;
+  });
+
   test("stops active agent rows when a workflow loses its process", async () => {
     const created = createSession("Workflow process exit");
     track(created.id);
@@ -392,9 +607,9 @@ describe("workflow task edges", () => {
     expect(
       backgroundTasksForSnapshot(session.backgroundTasks)["wf-1"]?.workflowAgents,
     ).toHaveLength(1);
-    expect(backgroundTasksForSnapshot(session.backgroundTasks, 10)["wf-1"]?.workflowAgents).toBe(
-      undefined,
-    );
+    const outline = backgroundTasksForSnapshot(session.backgroundTasks, 10)["wf-1"];
+    expect(outline?.workflowAgents).toBeUndefined();
+    expect(outline?.workflowAgentsOmitted).toBe(1);
   });
 });
 
@@ -453,6 +668,39 @@ describe("workflow agent hooks", () => {
     expect(session.backgroundTasks?.["agent-0"]).toBeUndefined();
     expect(runtime.tasks.live.has("agent-0")).toBe(false);
 
+    await subagentHook("SubagentStart", "unclaimed", "Explore");
+    await subagentHook("SubagentStop", "unclaimed", "Explore");
+    expect(session.backgroundTasks?.unclaimed).toMatchObject({ status: "completed" });
+    expect(runtime.tasks.settling.has("unclaimed")).toBe(true);
+    expect(runtime.latestTurn.isAwaitingContinuation()).toBe(false);
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "unclaimed",
+      status: "completed",
+      summary: "Ordinary subagent completed",
+    });
+    await waitFor(() => !runtime.tasks.settling.has("unclaimed"));
+    expect(runtime.latestTurn.isAwaitingContinuation()).toBe(true);
+    expect(session.backgroundTasks?.unclaimed?.summary).toBe("Ordinary subagent completed");
+    call.push({
+      type: "assistant",
+      parent_tool_use_id: null,
+      message: {
+        id: "ordinary-continuation",
+        role: "assistant",
+        content: [{ type: "text", text: "The ordinary subagent finished." }],
+      },
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => !runtime.latestTurn.isAwaitingContinuation());
+
+    await subagentHook("SubagentStart", "hook-only", "Explore");
+    await subagentHook("SubagentStop", "hook-only", "Explore");
+    expect(session.backgroundTasks?.["hook-only"]?.status).toBe("completed");
+    expect(runtime.tasks.settling.has("hook-only")).toBe(true);
+    expect(runtime.latestTurn.isAwaitingContinuation()).toBe(false);
+
     await subagentHook("SubagentStart", "ordinary", "Explore");
     // The confirmed task's stop still triggers the normal root continuation.
     call.push({ ...started, task_id: "ordinary", task_type: "local_agent" });
@@ -461,6 +709,7 @@ describe("workflow agent hooks", () => {
     expect(runtime.latestTurn.isAwaitingContinuation()).toBe(true);
     call.finish();
     await prompt;
+    await waitFor(() => runtime.tasks.settling.size === 0);
   });
 
   test("a workflow's agents never become tasks of their own", async () => {

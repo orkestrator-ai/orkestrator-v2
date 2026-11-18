@@ -350,13 +350,14 @@ export function taskMessageMetadata(
 ): BackgroundTaskMetadata {
   const workflow = isWorkflowTaskEdge(message, previous);
   // On every other subtype `summary` is the terminal report, not a status.
-  // Workflow progress puts the latest agent in `description` and may repeat
-  // the launch title in `summary`.
+  // Agent-specific workflow progress carries a label in last_tool_name and
+  // the phase and label in description. Heartbeats and closing frames carry
+  // rows too, but repeat the launch title without naming an agent.
   const progressSummary =
     message.subtype !== "task_progress"
       ? undefined
       : workflow
-        ? message.description
+        ? message.last_tool_name && message.description
         : message.summary;
   return {
     ...(message.task_type
@@ -793,6 +794,17 @@ export async function stopBackgroundTask(
   if (typeof stopTask !== "function") {
     return NO_CONTROL_CHANNEL;
   }
+  const workflowRunReplaced = () => {
+    if (task.taskType !== "local_workflow") return false;
+    const latest =
+      session.backgroundTasks?.[taskId] ?? session.claudeRuntime?.tasks.settling.get(taskId);
+    return (
+      latest !== undefined &&
+      (latest.startedAt !== task.startedAt ||
+        (task.workflowRunId !== undefined && latest.workflowRunId !== task.workflowRunId) ||
+        (task.toolUseId !== undefined && latest.toolUseId !== task.toolUseId))
+    );
+  };
   // Before the request: the CLI's `stopped` edge can come back ahead of its
   // answer to it.
   const { stopRequested } = owner!.tasks;
@@ -802,6 +814,7 @@ export async function stopBackgroundTask(
   try {
     await stopTask.call(control, taskId);
   } catch (error) {
+    if (workflowRunReplaced()) return NO_CONTROL_CHANNEL;
     // No stop reached the CLI, so a later edge for this task is its own.
     stopRequested.delete(taskId);
     // A terminal provider notification can win the race with the rejected stop
@@ -832,7 +845,7 @@ export async function stopBackgroundTask(
   // only the turn's `for await` loop reads that — a stop issued after the turn
   // has no reader, so the snapshot is patched here rather than waited for. The
   // notification, if one does arrive, lands on the same terminal state.
-  if (settleBackgroundTask(session, taskId, "killed")) {
+  if (!workflowRunReplaced() && settleBackgroundTask(session, taskId, "killed")) {
     emitBackgroundTaskSnapshot(session);
   }
   return { ok: true };

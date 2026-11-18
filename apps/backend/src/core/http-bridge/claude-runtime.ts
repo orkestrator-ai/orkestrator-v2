@@ -168,6 +168,7 @@ function workflowAgentStatus(
     case "done":
       return row.skipped === true ? "skipped" : "completed";
     case "error":
+      if (row.skipped === true) return "skipped";
       return row.endedWithRun !== undefined ? "stopped" : "failed";
     default:
       return undefined;

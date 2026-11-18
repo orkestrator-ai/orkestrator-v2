@@ -189,34 +189,43 @@ function WorkflowAgentUsage({ agent }: { agent: NativeAgentWorkflowAgent }) {
 
 /** The agents a workflow task reports, in run order. */
 export function WorkflowAgentList({
-  agents,
+  agents = [],
   omitted = 0,
 }: {
   agents: readonly NativeAgentWorkflowAgent[] | undefined;
   omitted?: number;
 }) {
-  if (!agents || agents.length === 0) return null;
+  if (agents.length === 0 && omitted <= 0) return null;
+  const hasAgents = agents.length > 0;
   const live = agents.filter(isLiveWorkflowAgent).length;
   return (
-    <section aria-label={`${agents.length} workflow agents`} className="mb-3">
+    <section
+      aria-label={hasAgents ? `${agents.length} workflow agents` : "Workflow agents"}
+      className="mb-3"
+    >
       <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         <span>Workflow agents</span>
-        <span className="font-normal tabular-nums text-muted-foreground">{agents.length}</span>
+        {hasAgents ? (
+          <span className="font-normal tabular-nums text-muted-foreground">{agents.length}</span>
+        ) : null}
         {live > 0 ? (
           <span className="ml-auto font-medium normal-case tracking-normal text-amber-600 dark:text-amber-300">
             {live} active
           </span>
         ) : null}
       </div>
-      <ol className="divide-y divide-border/50 overflow-hidden rounded-md border border-border/50">
-        {agents.map((agent) => (
-          <WorkflowAgentRow key={agent.index} agent={agent} />
-        ))}
-      </ol>
+      {hasAgents ? (
+        <ol className="divide-y divide-border/50 overflow-hidden rounded-md border border-border/50">
+          {agents.map((agent) => (
+            <WorkflowAgentRow key={agent.index} agent={agent} />
+          ))}
+        </ol>
+      ) : null}
       {omitted > 0 ? (
         <div className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
           <MinusCircle className="size-3" aria-hidden />
-          {omitted} more {omitted === 1 ? "agent" : "agents"} not shown
+          {omitted} {hasAgents ? "more " : ""}
+          {omitted === 1 ? "agent" : "agents"} not shown
         </div>
       ) : null}
     </section>

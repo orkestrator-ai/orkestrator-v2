@@ -257,7 +257,7 @@ export function BuildChatTab({
               ) : pipeline.phase === "complete" ? (
                 <CheckCircle2 className="h-3 w-3 shrink-0 text-success" />
               ) : pipeline.phase === "failed" ? (
-                <AlertCircle className="h-3 w-3 shrink-0 text-destructive" />
+                <AlertCircle className="h-3 w-3 shrink-0 text-failure" />
               ) : (
                 <Circle className="h-3 w-3 shrink-0" />
               )}
@@ -351,7 +351,7 @@ export function BuildChatTab({
         notices={
           <>
             {pipeline.error && !interactionFailure && (
-              <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+              <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-failure">
                 {pipeline.error}
               </div>
             )}

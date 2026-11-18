@@ -318,7 +318,7 @@ export function AnnotationEditor({
       {saveState.status === "error" && (
         <div
           role="alert"
-          className="space-y-1 rounded border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive"
+          className="space-y-1 rounded border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-failure"
         >
           <p>Not saved: {saveState.error}</p>
           <p className="text-muted-foreground">

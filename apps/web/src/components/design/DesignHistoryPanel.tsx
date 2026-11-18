@@ -365,7 +365,7 @@ export function DesignHistoryPanel({
         {submitted && (
           <p
             role={submittedIntent?.failure ? "alert" : "status"}
-            className={submittedIntent?.failure ? "text-destructive" : "text-muted-foreground"}
+            className={submittedIntent?.failure ? "text-failure" : "text-muted-foreground"}
           >
             {submittedIntent?.failure
               ? `${submitted.label} failed: ${failureText(submittedIntent.failure)}`
@@ -396,7 +396,7 @@ export function DesignHistoryPanel({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {error && (
-          <div role="alert" className="grid gap-1 px-3 py-2 text-destructive">
+          <div role="alert" className="grid gap-1 px-3 py-2 text-failure">
             <p>History could not be loaded: {error.message}</p>
           </div>
         )}
@@ -538,7 +538,7 @@ export function DesignHistoryPanel({
                       ))}
                     </div>
                     {checkpointError && (
-                      <p role="alert" className="text-destructive">
+                      <p role="alert" className="text-failure">
                         {checkpointError.message}
                       </p>
                     )}

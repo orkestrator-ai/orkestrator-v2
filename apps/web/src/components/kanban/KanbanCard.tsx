@@ -356,7 +356,7 @@ export function KanbanCard({
                 data-testid="kanban-card-criteria"
                 className={cn(
                   "flex shrink-0 items-center gap-1",
-                  tally.failed > 0 && "text-destructive",
+                  tally.failed > 0 && "text-failure",
                 )}
                 title={`${tally.passed} passed, ${tally.failed} failed, ${tally["not-checked"]} not checked, ${tally.unchecked} not verified yet`}
               >

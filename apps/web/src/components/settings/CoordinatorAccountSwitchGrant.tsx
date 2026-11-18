@@ -72,7 +72,7 @@ export function CoordinatorSwitchRecordRow({ record }: { record: CoordinatorAcco
         <span className="font-medium">{record.nodeName}</span>:{" "}
         {record.fromAccountLabel ?? record.fromAccountId ?? "previous account"} →{" "}
         <span className="font-medium">{record.toAccountLabel}</span>
-        {outcome ? <span className="ml-1.5 text-destructive">{outcome}</span> : null}
+        {outcome ? <span className="ml-1.5 text-failure">{outcome}</span> : null}
       </p>
       <p className="text-muted-foreground">
         Asked by {record.coordinatorName}
@@ -198,7 +198,7 @@ export function CoordinatorAccountSwitchGrant({
     return () => controller.abort();
   }, [load, machine]);
 
-  if (!state) return error ? <p className="mt-4 text-xs text-destructive">{error}</p> : null;
+  if (!state) return error ? <p className="mt-4 text-xs text-failure">{error}</p> : null;
   const granted = state.grants[platform];
   const id = `coordinator-switch-grant-${platform}`;
   const where = machineName ?? "this machine";
@@ -247,7 +247,7 @@ export function CoordinatorAccountSwitchGrant({
               </p>
             </InfoHint>
           </div>
-          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+          {error ? <p className="text-xs text-failure">{error}</p> : null}
           {switches.length > 0 ? (
             <div className="flex flex-wrap items-center gap-2 pt-1">
               <p className="text-xs text-muted-foreground">Switched without asking</p>

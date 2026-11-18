@@ -454,7 +454,7 @@ export function NativeAgentInteractionCard({
               Open authorization page <ExternalLink className="size-3.5" />
             </Button>
           ) : (
-            <p className="mt-2 text-xs text-destructive">The authorization URL is invalid.</p>
+            <p className="mt-2 text-xs text-failure">The authorization URL is invalid.</p>
           )
         ) : null}
 

@@ -3813,7 +3813,7 @@ export function SharedNativeAgentController({
     submissionError ? (
       <div
         key="send-error"
-        className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+        className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-failure"
       >
         <span>{submissionError}</span>
         {commandComposer.offerLiteralForDraft ? (

@@ -282,7 +282,7 @@ export function UsageSettings() {
           </div>
 
           {error ? (
-            <p className="flex items-start gap-2 text-xs text-destructive">
+            <p className="flex items-start gap-2 text-xs text-failure">
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               {error}
             </p>

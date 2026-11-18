@@ -1238,7 +1238,7 @@ export function KanbanTaskDialog({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                  className="h-7 w-7 text-muted-foreground hover:text-failure"
                   onClick={handleDelete}
                   aria-label="Delete task"
                 >

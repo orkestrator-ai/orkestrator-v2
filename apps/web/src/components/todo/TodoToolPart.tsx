@@ -210,8 +210,8 @@ export function TodoToolPart({
             {toolError && (
               <div className="border-t border-destructive/20 px-3 py-2">
                 <div className="flex items-start gap-2">
-                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
-                  <pre className="whitespace-pre-wrap break-all font-mono text-xs text-destructive/80">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-failure" />
+                  <pre className="whitespace-pre-wrap break-all font-mono text-xs text-failure/80">
                     {toolError}
                   </pre>
                 </div>

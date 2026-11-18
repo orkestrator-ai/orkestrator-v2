@@ -3087,13 +3087,27 @@ test("native result recapture compares real screenshots and excludes editor reda
     });
     const first = started.status === "captured" ? started : await awaitCaptureEnd(TAB_ID);
     if (first.status !== "captured") throw new Error(`Capture failed: ${first.status}`);
-    await inPreview(`(() => {
-      document.getElementById("diff-fixture-style").textContent += ${JSON.stringify(
-        `@keyframes diff-test-flash { 0% { background: #fff } 50% { background: #000 } }
-         ${banner} { animation: diff-test-flash 600ms steps(1) infinite !important; }`,
-      )};
-      return true;
-    })()`);
+    // Change the fixture only after Electron has acquired the first real
+    // frame. A free-running animation can land on the same phase twice on
+    // a busy host, which would make an empty motion mask legitimate.
+    await s().app.evaluate(
+      ({ webContents }, { origin, banner }) => {
+        const contents = webContents
+          .getAllWebContents()
+          .find((candidate) => !candidate.isDestroyed() && candidate.getURL().startsWith(origin))!;
+        const capturePage = contents.capturePage;
+        contents.capturePage = async (...args: Parameters<typeof capturePage>) => {
+          contents.capturePage = capturePage;
+          const image = await capturePage.apply(contents, args);
+          await contents.mainFrame.executeJavaScript(`new Promise((resolve) => {
+            document.querySelector(${JSON.stringify(banner)}).style.backgroundColor = "#000";
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)));
+          })`);
+          return image;
+        };
+      },
+      { origin: previewOrigin(), banner },
+    );
     const replacement = await preview<BrowserPreviewSelectionStatus>("startCapture", {
       tabId: TAB_ID,
       mode: "page",

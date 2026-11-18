@@ -41,12 +41,16 @@ import {
   type WebAnnotationSummary,
 } from "../../../web-annotations.js";
 import {
+  WEB_ANNOTATION_DIFF_LIMITS,
+  type WebAnnotationResultDiff,
+} from "../../../web-annotations-diff.js";
+import {
   assertNoDeclaredProvenance,
   isWebAnnotationDestination,
   validateWebAnnotationCaptureInput,
 } from "../../../web-annotations-validation.js";
 import { defineCommand } from "../../command.js";
-import { modelRecord, opaqueRecord } from "../../model-schema.js";
+import { modelRecord, opaqueRecord, variantRecord } from "../../model-schema.js";
 import { webAnnotationsDomain } from "./domain.js";
 
 type Results = WebAnnotationCommandResults;
@@ -865,9 +869,42 @@ export const webAnnotationResultCaptureCommand = defineCommand({
       ).check(Schema.isMaxLength(WEB_ANNOTATION_LIMITS.redactionRegions)),
     ),
     targetResolution: optional(Schema.Unknown),
+    // The unstable-region mask (`operations.resultDiffs`); bounds-checked by
+    // the service like the other metadata.
+    originalMasks: optional(
+      Schema.Struct({
+        captureId: Schema.NullOr(Id),
+        rects: Schema.Array(
+          Schema.Struct({ x: Coordinate, y: Coordinate, width: Coordinate, height: Coordinate }),
+        ).check(Schema.isMaxLength(2 * WEB_ANNOTATION_LIMITS.redactionRegions)),
+      }),
+    ),
+    unstableRegions: optional(
+      Schema.Array(
+        Schema.Struct({ x: Coordinate, y: Coordinate, width: Coordinate, height: Coordinate }),
+      ).check(Schema.isMaxLength(WEB_ANNOTATION_DIFF_LIMITS.unstableRegions)),
+    ),
     provenance: NoProvenance,
   }),
   result: envelope<"web_annotation_result_capture">()({ result: ResultRecord, captureId: Str }),
+  critical: [],
+});
+
+const ResultDiffRecord = variantRecord<WebAnnotationResultDiff>()({
+  status: Schema.Literals(["compared", "incomparable"]),
+  advisory: Schema.Literal(true),
+  beforeCaptureId: NullableString,
+  afterCaptureId: Str,
+});
+
+export const webAnnotationResultDiffCommand = defineCommand({
+  domain,
+  name: c.resultDiff,
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({ environmentId: Id, captureId: Id }),
+  result: envelope<"web_annotation_result_diff">()({ diff: ResultDiffRecord }),
   critical: [],
 });
 
@@ -1008,6 +1045,7 @@ export const WEB_ANNOTATIONS_COMMANDS = [
   webAnnotationRequestResponseCommand,
   webAnnotationRequestFollowUpCommand,
   webAnnotationResultCaptureCommand,
+  webAnnotationResultDiffCommand,
   webAnnotationsMigrateCommand,
   webAnnotationsMigrationStatusCommand,
   webAnnotationArchiveCommand,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -22,6 +22,14 @@ import {
 import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  COMPOSE_FRAME_CLASS_NAME,
+  COMPOSE_COLUMN_CLASS_NAME,
+} from "@/components/chat/NativeComposeBar";
+import {
+  COMPOSE_MAX_INPUT_HEIGHT,
+  COMPOSE_MIN_INPUT_HEIGHT,
+} from "@/components/chat/compose-metrics";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
@@ -97,7 +105,7 @@ function FeatureListItem({
         "w-full rounded-md border px-3 py-2 text-left transition-colors",
         isSelected
           ? "border-primary/40 bg-primary/10"
-          : "border-transparent hover:border-border hover:bg-muted/35",
+          : "border-transparent hover:border-border hover:bg-hover/30",
       )}
     >
       <div className="truncate text-sm font-medium text-foreground">
@@ -850,6 +858,23 @@ export function NativeStyleChatPanel({
     // latest exchange.
     activation: "latest",
   });
+  const dockRef = useRef<HTMLDivElement>(null);
+  const [dockHeight, setDockHeight] = useState(0);
+
+  useLayoutEffect(() => {
+    const dock = dockRef.current;
+    if (!dock) return;
+
+    const measure = () => setDockHeight(dock.offsetHeight);
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(dock);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
 
   const handleSend = useCallback(() => {
     const trimmed = draft.trim();
@@ -913,7 +938,8 @@ export function NativeStyleChatPanel({
                     </div>
                   </div>
                 )}
-                <div className="h-32" aria-hidden="true" />
+                {/* The dock's fade extends 2rem above its measured box. */}
+                <div style={{ height: `calc(${dockHeight}px + 2rem)` }} aria-hidden="true" />
               </>
             }
             scrollProps={scrollProps}
@@ -923,6 +949,7 @@ export function NativeStyleChatPanel({
       </div>
 
       <NativeComposeDock
+        rootRef={dockRef}
         centered={false}
         topAccessory={
           !isAtBottom ? (
@@ -938,13 +965,14 @@ export function NativeStyleChatPanel({
           ) : null
         }
       >
-        <div className="mx-auto mb-4 mt-2 w-[min(calc(100%_-_2rem),56rem)] shrink-0 rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
+        <div className={cn(COMPOSE_COLUMN_CLASS_NAME, COMPOSE_FRAME_CLASS_NAME, "mb-4 mt-2")}>
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder={placeholder}
             rows={1}
-            className="max-h-[160px] min-h-7 resize-none border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:outline-none"
+            style={{ minHeight: COMPOSE_MIN_INPUT_HEIGHT, maxHeight: COMPOSE_MAX_INPUT_HEIGHT }}
+            className="min-h-0 resize-none overflow-y-auto border-0 bg-transparent px-0 py-0 text-sm leading-5 shadow-none focus-visible:outline-none"
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();

@@ -9,31 +9,18 @@ interface StatusIndicatorProps {
   className?: string;
 }
 
-const statusConfig: Record<EnvironmentStatus, { color: string; label: string; bgColor: string }> = {
-  running: {
-    color: "bg-green-500",
-    bgColor: "bg-green-500/20",
-    label: "Running",
-  },
-  stopped: {
-    color: "bg-zinc-500",
-    bgColor: "bg-zinc-500/20",
-    label: "Stopped",
-  },
-  error: {
-    color: "bg-failure",
-    bgColor: "bg-failure/20",
-    label: "Error",
-  },
-  creating: {
-    color: "bg-blue-500",
-    bgColor: "bg-blue-500/20",
-    label: "Creating",
-  },
+const statusConfig: Record<
+  EnvironmentStatus,
+  { color: string; label: string; labelColor?: string }
+> = {
+  running: { color: "text-status-running", label: "Running" },
+  stopped: { color: "text-status-stopped", label: "Stopped", labelColor: "text-muted-foreground" },
+  error: { color: "text-status-error", label: "Error" },
+  creating: { color: "text-status-creating", label: "Creating" },
   stopping: {
-    color: "bg-orange-500",
-    bgColor: "bg-orange-500/20",
+    color: "text-status-stopped",
     label: "Stopping",
+    labelColor: "text-muted-foreground",
   },
 };
 
@@ -44,38 +31,18 @@ export function StatusIndicator({ status, showLabel = false, className }: Status
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div className={cn("flex items-center gap-1.5", className)}>
+        <div className={cn("flex items-center gap-1.5", className, config.color)}>
           {showSpinner ? (
-            <Loader2
-              className={cn(
-                "h-3 w-3 animate-spin",
-                status === "creating" && "text-blue-500",
-                status === "stopping" && "text-orange-500",
-              )}
-            />
+            <Loader2 className="h-3 w-3 animate-spin" />
           ) : (
             <div
               className={cn(
-                "h-2 w-2 rounded-full",
-                config.color,
+                "h-2 w-2 rounded-full bg-current",
                 status === "running" && "animate-pulse",
               )}
             />
           )}
-          {showLabel && (
-            <span
-              className={cn(
-                "text-xs",
-                status === "running" && "text-status-running",
-                status === "stopped" && "text-muted-foreground",
-                status === "error" && "text-status-error",
-                status === "creating" && "text-blue-500",
-                status === "stopping" && "text-orange-500",
-              )}
-            >
-              {config.label}
-            </span>
-          )}
+          {showLabel && <span className={cn("text-xs", config.labelColor)}>{config.label}</span>}
         </div>
       </TooltipTrigger>
       <TooltipContent side="right">

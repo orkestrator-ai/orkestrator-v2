@@ -17,37 +17,41 @@ mock.module("@/components/ui/tooltip", () => ({
 import { StatusIndicator } from "../../../apps/web/src/components/environments/StatusIndicator";
 
 describe("StatusIndicator", () => {
-  test("shows loader icon for creating status", () => {
-    const { container } = render(<StatusIndicator status="creating" />);
-    // Loader2 renders an SVG with animate-spin class
-    const spinner = container.querySelector(".animate-spin");
-    expect(spinner).toBeTruthy();
-  });
-
-  test("shows label when showLabel is true", () => {
-    const { container } = render(<StatusIndicator status="running" showLabel />);
-    // Find the label span (not the tooltip content)
-    const label = container.querySelector("span.text-xs");
-    expect(label?.textContent).toBe("Running");
-  });
-
-  test("shows correct label for stopped status", () => {
-    const { container } = render(<StatusIndicator status="stopped" showLabel />);
-    const label = container.querySelector("span.text-xs");
-    expect(label?.textContent).toBe("Stopped");
-  });
-
-  test("shows correct label for error status", () => {
-    const { container } = render(<StatusIndicator status="error" showLabel />);
-    const label = container.querySelector("span.text-xs");
-    expect(label?.textContent).toBe("Error");
-  });
-
-  test("shows correct label for creating status", () => {
-    const { container } = render(<StatusIndicator status="creating" showLabel />);
-    const label = container.querySelector("span.text-xs");
-    expect(label?.textContent).toBe("Creating");
-  });
+  test.each([
+    ["running", "Running", "text-status-running", "div.bg-current.animate-pulse", "text-xs"],
+    [
+      "stopped",
+      "Stopped",
+      "text-status-stopped",
+      "div.bg-current",
+      "text-xs text-muted-foreground",
+    ],
+    ["error", "Error", "text-status-error", "div.bg-current", "text-xs"],
+    [
+      "creating",
+      "Creating",
+      "text-status-creating",
+      'svg.animate-spin[stroke="currentColor"]',
+      "text-xs",
+    ],
+    [
+      "stopping",
+      "Stopping",
+      "text-status-stopped",
+      'svg.animate-spin[stroke="currentColor"]',
+      "text-xs text-muted-foreground",
+    ],
+  ] as const)(
+    "renders the %s token, glyph and inline label",
+    (status, labelText, tokenClass, glyphSelector, labelClass) => {
+      const { container } = render(<StatusIndicator status={status} showLabel />);
+      const indicator = container.querySelector(`.${tokenClass}`);
+      expect(indicator?.querySelector(`:scope > ${glyphSelector}`)).toBeTruthy();
+      const label = indicator?.querySelector(":scope > span.text-xs");
+      expect(label?.textContent).toBe(labelText);
+      expect(label?.className).toBe(labelClass);
+    },
+  );
 
   test("does not show label when showLabel is false", () => {
     const { container } = render(<StatusIndicator status="running" showLabel={false} />);

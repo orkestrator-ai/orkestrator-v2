@@ -1,4 +1,42 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
+
+async function selectSource(source: Locator) {
+  await expect(source).toBeVisible();
+  await source.evaluate((element) => {
+    const selection = window.getSelection()!;
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+}
+
+function pinColors(pin: Locator) {
+  return pin.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const tailStyle = getComputedStyle(element, "::after");
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d")!;
+    const pixel = (color: string) => {
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      return Array.from(context.getImageData(0, 0, 1, 1).data);
+    };
+    const primary = style.getPropertyValue("--color-primary-fill");
+    const background = style.getPropertyValue("--color-background");
+    return {
+      fill: pixel(style.backgroundColor),
+      tail: pixel(tailStyle.backgroundColor),
+      ring: pixel(style.borderBottomColor),
+      foreground: pixel(style.color),
+      primary: pixel(primary),
+      primaryForeground: pixel(style.getPropertyValue("--color-primary-foreground")),
+      hover: pixel(`color-mix(in srgb, ${primary} 85%, ${background})`),
+    };
+  });
+}
 
 for (const key of ["Enter", "Escape"]) {
   test(`${key} in an annotation comment returns to the draft and the next Enter sends`, async ({
@@ -9,16 +47,7 @@ for (const key of ["Enter", "Escape"]) {
     const composer = page.getByRole("textbox", { name: "Message Codex" });
     await composer.fill("Please revise this");
 
-    const source = page.getByText("The header needs more spacing", { exact: true });
-    await expect(source).toBeVisible();
-    await source.evaluate((element) => {
-      const selection = window.getSelection()!;
-      const range = document.createRange();
-      range.selectNodeContents(element);
-      selection.removeAllRanges();
-      selection.addRange(range);
-      document.dispatchEvent(new Event("selectionchange"));
-    });
+    await selectSource(page.getByText("The header needs more spacing", { exact: true }));
     await page.getByRole("button", { name: "Add to chat", exact: true }).click();
     const comment = page.getByRole("textbox", { name: "Optional comment for annotation 1" });
     await comment.fill("Keep the wording");
@@ -61,3 +90,42 @@ for (const key of ["Enter", "Escape"]) {
     await expect(page.getByTestId("compose-annotation-count")).toHaveCount(0);
   });
 }
+
+test("annotation pins use the primary colors and keep an opaque tail on hover", async ({
+  page,
+}, testInfo) => {
+  await page.addInitScript(() => sessionStorage.setItem("held-send-ready", "true"));
+  await page.goto("/native-held-send?annotations");
+  await selectSource(page.getByText("The header needs more spacing", { exact: true }));
+  await page.getByRole("button", { name: "Add to chat", exact: true }).click();
+
+  const editorPin = page.getByLabel("Transcript reference 1", { exact: true });
+  const { primary, primaryForeground, hover } = await pinColors(editorPin);
+  const ring = [255, 255, 255, 255];
+  await expect
+    .poll(() => pinColors(editorPin))
+    .toMatchObject({
+      fill: primary,
+      tail: primary,
+      ring,
+      foreground: primaryForeground,
+    });
+  await page.getByRole("textbox", { name: "Optional comment for annotation 1" }).press("Escape");
+  await page.mouse.move(0, 0);
+
+  const marker = page.getByRole("button", { name: "Edit comment for transcript reference 1" });
+  await expect
+    .poll(() => pinColors(marker))
+    .toMatchObject({
+      fill: primary,
+      tail: primary,
+      ring,
+      foreground: primaryForeground,
+    });
+  if (!testInfo.project.use.hasTouch) {
+    await marker.hover();
+    expect(hover).not.toEqual(primary);
+    expect(hover[3]).toBe(255);
+    await expect.poll(() => pinColors(marker)).toMatchObject({ fill: hover, tail: hover, ring });
+  }
+});

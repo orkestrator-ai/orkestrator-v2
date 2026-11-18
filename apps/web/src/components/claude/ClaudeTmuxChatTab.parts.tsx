@@ -12,6 +12,14 @@ import {
   Square,
   X,
 } from "lucide-react";
+import {
+  COMPOSE_FRAME_CLASS_NAME,
+  COMPOSE_COLUMN_CLASS_NAME,
+} from "@/components/chat/NativeComposeBar";
+import {
+  COMPOSE_MAX_INPUT_HEIGHT,
+  COMPOSE_MIN_INPUT_HEIGHT,
+} from "@/components/chat/compose-metrics";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks";
 import { useNodeScope } from "@/lib/node-scope/providers";
@@ -1008,7 +1016,7 @@ export function TmuxComposeBar({
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 12 * 20 + 16)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSE_MAX_INPUT_HEIGHT)}px`;
   }, [value]);
 
   const selectSlashCommand = (command: SlashCommand) => {
@@ -1201,7 +1209,8 @@ export function TmuxComposeBar({
   return (
     <div
       className={cn(
-        "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]",
+        COMPOSE_COLUMN_CLASS_NAME,
+        COMPOSE_FRAME_CLASS_NAME,
         layout === "bottom" ? "mb-4 mt-2" : "my-0",
       )}
     >
@@ -1343,14 +1352,14 @@ export function TmuxComposeBar({
           // editing; focus stays here for the next prompt.
           readOnly={submitting || queueSubmitting}
           aria-busy={submitting || queueSubmitting}
-          rows={2}
+          rows={1}
           autoFocus={autoFocus && !isMobile}
           className={cn(
             "w-full resize-none bg-transparent text-sm leading-5",
             "px-1 py-1 focus:outline-none placeholder:text-muted-foreground/60",
             "disabled:opacity-60 read-only:opacity-60",
           )}
-          style={{ minHeight: 28, maxHeight: 12 * 20 + 16 }}
+          style={{ minHeight: COMPOSE_MIN_INPUT_HEIGHT, maxHeight: COMPOSE_MAX_INPUT_HEIGHT }}
         />
       </div>
 

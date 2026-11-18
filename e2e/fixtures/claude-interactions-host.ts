@@ -30,6 +30,7 @@ for (const key of Object.keys(process.env)) {
     delete process.env[key];
 }
 const coordinator = process.env.CLAUDE_FIXTURE_COORDINATOR === "1";
+let nextRequestId = 0;
 // A deterministic MCP executor stands in for worker launch. The scripted SDK
 // sends the permitted call to this loopback server and consumes its receipt
 // before it asks a question; no real environment or provider is started.
@@ -219,10 +220,11 @@ const server = Bun.serve({
         input?: Record<string, unknown>;
       };
       const call = turns.get(sessionId)!;
+      const requestId = `request-${++nextRequestId}`;
       if (mode === "tool") {
         const decision = call.options.canUseTool!(tool!, input ?? {}, {
           signal: new AbortController().signal,
-          requestId: `request-${tool}-${(history.get(sessionId) ?? []).length}`,
+          requestId,
           toolUseID: `tool-use-${tool}-${(history.get(sessionId) ?? []).length}`,
         } as never);
         void Promise.resolve(decision).then((value) => settle(sessionId, value));
@@ -240,7 +242,7 @@ const server = Bun.serve({
               },
             ],
           },
-          { signal: new AbortController().signal, requestId: "request-question" } as never,
+          { signal: new AbortController().signal, requestId } as never,
         );
         void Promise.resolve(decision).then((value) => settle(sessionId, value));
         return Response.json({ raised: true });
@@ -265,7 +267,7 @@ const server = Bun.serve({
                 },
               }),
         } as never,
-        { signal: new AbortController().signal, requestId: `request-${mode}` },
+        { signal: new AbortController().signal, requestId },
       );
       void Promise.resolve(result).then((value) => settle(sessionId, value));
       return Response.json({ raised: true });

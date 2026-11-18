@@ -3,6 +3,7 @@ import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
   captureEvents,
+  createSession,
   getPendingInteractions,
   getPendingPlanApprovals,
   getPendingQuestions,
@@ -10,10 +11,12 @@ import {
   answerQuestion,
   nextQueryCall,
   queryControlOverrides,
+  readSessionPreferences,
   releaseWithBackgroundWork,
   respondToInteraction,
   respondToPlanApproval,
   sendPrompt,
+  track,
   waitFor,
 } from "./session-manager-test-harness.js";
 
@@ -49,16 +52,25 @@ async function survivingCli(name: string, onReinitialize?: (call: QueryCall) => 
   let current: QueryCall | undefined;
   const reinitialize = mock(() => onReinitialize!(current!));
   if (onReinitialize) queryControlOverrides.reinitialize = reinitialize;
-  const launched = await releaseWithBackgroundWork(name, "agent-bg", undefined, ASK);
-  current = launched.call;
-  launched.firstPrompt.catch(() => undefined);
-  return { ...launched, reinitialize };
+  const session = createSession(name);
+  track(session.id);
+  session.executionPolicy = ASK;
+  const firstPrompt = sendPrompt(session.id, "first prompt");
+  void firstPrompt.catch(() => undefined);
+  const call = await nextQueryCall();
+  const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+  expect((await input.next()).done).toBe(false);
+  call.push({ type: "result", subtype: "success" });
+  await firstPrompt;
+  await waitFor(() => session.status === "idle");
+  expect(session.claudeRuntime?.state).toBe("open");
+  current = call;
+  return { session, call, input, reinitialize };
 }
 
 /**
  * Write a follow-up into the surviving CLI and wait until it is submitted. The
- * prompt itself stays open while the CLI's background agent runs; the
- * harness's teardown settles it.
+ * harness's teardown settles the follow-up.
  */
 async function rejoin(
   session: { id: string },
@@ -116,23 +128,139 @@ describe("rejoining a live Claude CLI", () => {
 
   test.each([
     ["answers without any inventory", async () => ({})],
-    ["cannot re-read it", undefined],
     ["fails the re-read", async () => Promise.reject(new Error("Query closed"))],
   ] as const)(
     "a CLI that %s leaves the inventory unknown: the cards held stand",
     async (_label, onReinitialize) => {
-      const { session, call, input } = await survivingCli(
+      let decision: Promise<Decision> | undefined;
+      const { session, input } = await survivingCli(
         `rejoin-unknown-${_label.length}`,
-        onReinitialize,
+        async (call) => {
+          decision = call.options.canUseTool!("Write", WRITE, cliRequest("held"));
+          return onReinitialize();
+        },
       );
-      // A background agent asked before the rejoin; the bridge holds its card.
-      const decision = call.options.canUseTool!("Write", WRITE, cliRequest("held"));
-      await waitFor(() => getPendingInteractions(session.id).length === 1);
+      // An idle runtime incurs the read. A missing inventory must not
+      // withdraw a request delivered while the SDK handles initialize.
       await rejoin(session, input);
       expect(session.claudeRuntime?.rejoins).toBe(1);
       expect(getPendingInteractions(session.id).map((card) => card.id)).toEqual(["held"]);
       expect(respondToInteraction("held", { action: "accept" }, session.id)).toBe(true);
       expect(await decision).toEqual({ behavior: "allow", updatedInput: WRITE });
+    },
+  );
+
+  test("a warm join succeeds when the CLI has no inventory control", async () => {
+    const { session, input } = await survivingCli("rejoin-unsupported");
+    await rejoin(session, input);
+    expect(session.claudeRuntime?.rejoins).toBe(1);
+  });
+
+  test("joining a CLI that still owns background work leaves an outstanding hook alone", async () => {
+    const hook = Promise.withResolvers<{ permissionDecision: "allow" }>();
+    const signal = new AbortController();
+    const reinitialize = mock(async () => signal.abort());
+    queryControlOverrides.reinitialize = reinitialize;
+    const { session, input, call, firstPrompt } = await releaseWithBackgroundWork(
+      "rejoin-background-hook",
+      "agent-bg",
+      undefined,
+      ASK,
+    );
+    void firstPrompt.catch(() => undefined);
+    const runtime = session.claudeRuntime;
+    // Represent a pending PreToolUse callback on the existing SDK transport.
+    const decision = Promise.race([
+      hook.promise,
+      new Promise((resolve) => signal.signal.addEventListener("abort", () => resolve("deny"))),
+    ]);
+    await rejoin(session, input);
+    expect(session.claudeRuntime).toBe(runtime);
+    expect(reinitialize).not.toHaveBeenCalled();
+    hook.resolve({ permissionDecision: "allow" });
+    expect(await decision).toEqual({ permissionDecision: "allow" });
+    call.finish();
+  });
+
+  test("withdrawing an approved ExitPlanMode restores the live mode before denying", async () => {
+    const transition = Promise.withResolvers<void>();
+    const setPermissionMode = mock(async (mode: string) => {
+      if (mode !== "plan") await transition.promise;
+    });
+    queryControlOverrides.setPermissionMode = setPermissionMode;
+    const session = createSession("withdraw-during-plan-exit");
+    track(session.id);
+    const firstPrompt = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
+    void firstPrompt.catch(() => undefined);
+    const call = await nextQueryCall();
+    const cli = new AbortController();
+    const capture = captureEvents();
+    try {
+      const answer = call.options.canUseTool!(
+        "ExitPlanMode",
+        { plan: "# Plan" },
+        cliRequest("plan-transition", cli.signal),
+      );
+      await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
+      expect(respondToPlanApproval("plan-transition", true)).toBe(true);
+      await waitFor(() => setPermissionMode.mock.calls.length === 1);
+      cli.abort();
+      transition.resolve();
+      expect(await answer).toEqual({
+        behavior: "deny",
+        message: "The plan approval was withdrawn",
+      });
+      expect(setPermissionMode.mock.calls.at(-1)).toEqual(["plan"]);
+      expect(session.planMode).toBe(true);
+      expect(await readSessionPreferences(session.id.slice("session-".length))).toMatchObject({
+        planMode: true,
+      });
+      expect(capture.events.some((event) => event.type === "plan.exit-requested")).toBe(false);
+    } finally {
+      transition.resolve();
+      capture.stop();
+      call.finish();
+      await firstPrompt;
+    }
+  });
+
+  test.each(["form", "url"] as const)(
+    "a live MCP %s elicitation shares its card, refuses a settled replay, and withdraws on exit",
+    async (mode) => {
+      const { session, call } = await survivingCli(`elicitation-${mode}`);
+      const request = {
+        serverName: "fixture",
+        message: "Supply a value",
+        ...(mode === "form"
+          ? {
+              mode,
+              requestedSchema: {
+                type: "object" as const,
+                properties: { team: { type: "string" as const } },
+              },
+            }
+          : { mode, url: "https://example.com/sign-in", elicitationId: "fixture-url" }),
+      };
+      const deliver = (requestId: string) =>
+        call.options.onElicitation!(request, { requestId, signal: new AbortController().signal });
+      const first = deliver("mcp-first");
+      const replay = deliver("mcp-first");
+      expect(getPendingInteractions(session.id).map((card) => card.kind)).toEqual([`mcp-${mode}`]);
+      const response =
+        mode === "form"
+          ? { action: "accept" as const, content: { team: "core" } }
+          : { action: "accept" as const };
+      expect(respondToInteraction("mcp-first", response, session.id)).toBe(true);
+      expect(await first).toEqual(response);
+      expect(await replay).toEqual(response);
+      expect(await deliver("mcp-first")).toEqual({ action: "cancel" });
+
+      const pending = deliver("mcp-pending");
+      expect(getPendingInteractions(session.id).map((card) => card.id)).toEqual(["mcp-pending"]);
+      call.finish();
+      expect(await pending).toEqual({ action: "cancel" });
+      expect(getPendingInteractions(session.id)).toEqual([]);
+      expect(respondToInteraction("mcp-pending", response, session.id)).toBe(false);
     },
   );
 
@@ -221,8 +349,8 @@ describe("rejoining a live Claude CLI", () => {
     expect(getPendingInteractions(session.id).map((card) => card.id)).toEqual(["remount"]);
 
     await rejoin(session, input);
-    expect(reinitialize).toHaveBeenCalledTimes(1);
-    expect(session.claudeRuntime?.rejoins).toBe(1);
+    expect(reinitialize).not.toHaveBeenCalled();
+    expect(session.claudeRuntime?.rejoins).toBe(0);
     expect(respondToInteraction("remount", { action: "decline" }, session.id)).toBe(true);
     expect((await decision).behavior).toBe("deny");
   });

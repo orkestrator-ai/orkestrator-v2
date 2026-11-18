@@ -1374,11 +1374,13 @@ export async function ensureClientSessionAlias(
 export async function applySessionPlanMode(
   session: SessionState,
   planMode: boolean,
-  persist = true,
 ): Promise<void> {
-  if (persist) await persistSessionMetadata(session, planMode);
-  if (!planMode || session.planMode !== true) {
-  }
+  await persistSessionMetadata(session, planMode);
+  publishSessionPlanMode(session, planMode);
+}
+
+/** Announce a plan-mode change that has already been persisted. */
+export function publishSessionPlanMode(session: SessionState, planMode: boolean): void {
   session.planMode = planMode;
   eventEmitter.emit({
     type: "session.updated",

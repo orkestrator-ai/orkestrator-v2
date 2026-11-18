@@ -39,6 +39,13 @@ test("a rejoin recovers a permission only the live CLI still holds, once", async
   const result = JSON.parse(line.slice(REJOIN_RESULT_SENTINEL.length));
 
   expect(result).toEqual({
+    bridgeRejoined: true,
+    recoveredBridgeQuestion: true,
+    liveBackgroundHookSurvived: true,
+    elicitationDeliveries: 1,
+    sdkReplayedElicitation: false,
+    cliListedPendingElicitation: false,
+    sdkReturnedElicitationInventory: false,
     // A request whose frame was lost is listed by the CLI's initialize answer,
     // redelivered once, and the answer given on that card reaches the CLI.
     dropped: true,

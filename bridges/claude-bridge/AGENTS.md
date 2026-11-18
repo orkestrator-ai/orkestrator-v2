@@ -168,12 +168,13 @@ mode is never taken as given. Under an `ask` or `deny` policy
   every open card withdraws and later deliveries are refused. A card withdraws
   on the signal it is handed and leaves its store in the same tick, so no
   answer lands on a request the CLI withdrew. A new card kind must do both.
-- **A rejoin re-reads what the CLI still waits on; a remount does not.**
+- **A rejoin reads the inventory on an idle warm CLI.**
   `prepareJoin` calls `recoverClaudeRequestsOnRejoin` (`live-claude-control.ts`)
-  before writing the prompt: `reinitialize()` makes the SDK redeliver the
-  permissions and dialogs the CLI lists. The tab's card reads never reach the
-  CLI. A missing or unreadable inventory is unknown, never "nothing pending":
-  it withdraws nothing and never refuses the join. `reinitialize()` restates
+  before writing the prompt when the CLI owes no work. `reinitialize()` makes
+  the SDK redeliver the permissions and dialogs the CLI lists. A tab remount
+  only reads bridge-held cards. A busy join skips the read because
+  reinitializing settles outstanding hook callbacks. A missing or unreadable inventory is unknown and leaves
+  held cards and prompt admission intact. `reinitialize()` restates
   the launch's initialize payload, so keep MCP servers, plugins and managed
   settings on `argv` delivery (`claudeExecutableOptions`), or every rejoin
   would restore the launch's MCP set over `setMcpServers`. Elicitations are not

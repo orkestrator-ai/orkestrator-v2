@@ -1,6 +1,6 @@
 import { createBridgeDiagnostics } from "@orkestrator/protocol/node/bridge-diagnostics";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import type { SDKAssistantMessageError } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, SDKAssistantMessageError } from "@anthropic-ai/claude-agent-sdk";
 import type {
   NormalizedMessage,
   PermissionMode,
@@ -19,6 +19,7 @@ export interface PromptTestHooks {
   afterAttachmentCanonicalValidation?: (filePath: string) => void | Promise<void>;
   afterAttachmentInitialValidation?: (filePath: string) => void | Promise<void>;
   onQueryStarted?: () => void;
+  spawnClaudeCodeProcess?: Options["spawnClaudeCodeProcess"];
 }
 
 /**

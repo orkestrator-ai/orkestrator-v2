@@ -7,8 +7,8 @@
 // already: its initialize answer holds the models and the account, and its
 // control channel answers `/usage`.
 //
-// A prompt written into a CLI that survived its earlier turn (a rejoin) also
-// re-reads that CLI's initialize inventory: the requests it still waits on.
+// A prompt joining an idle CLI that survived its earlier turn also
+// re-reads that CLI's initialize inventory.
 
 import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -153,7 +153,8 @@ export async function reinitializeLiveClaude(
  * A prompt is being written into `runtime`, a CLI that outlived the turn that
  * started it: recover the permission requests only that CLI still knows of.
  *
- * Only the join path calls this. A tab that remounts reads the cards the
+ * Only the join path calls this, when the runtime owes no work. A tab that
+ * remounts reads the cards the
  * bridge already holds (`/interactions`, `/questions`, `/plan-approvals`) and
  * never reaches a CLI, so it is not a rejoin and costs no control request.
  * Never throws and never refuses the join.

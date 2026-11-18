@@ -240,10 +240,10 @@ async function prepareJoin(turn: TurnState, plan: QueryPlan, running: ClaudeRunt
       required,
     });
     recordMcpConfigRevision(session, plan, running.mcp);
-    // An actual rejoin of a surviving CLI: learn what it still waits on before
-    // the prompt is written. Never refuses the join; an unread inventory is
-    // unknown, and the cards the bridge already holds stand.
-    await recoverClaudeRequestsOnRejoin(running);
+    // Reinitializing settles outstanding CLI hooks. A retained turn can still
+    // be measuring or authorizing a background tool, so only read the
+    // inventory on a warm CLI that owes no work.
+    if (!claudeRuntimeOwesWork(running)) await recoverClaudeRequestsOnRejoin(running);
     return await sdkPromptMessages(sdkPrompt, turn.promptUuid);
   } catch (error) {
     abandonJoin(turn, running);
@@ -291,7 +291,7 @@ async function prepareLaunch(turn: TurnState): Promise<boolean> {
 }
 
 /** Launch the session's CLI with this turn as its first. */
-function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
+function launchClaudeRuntime(turn: TurnState, plan: QueryPlan, testHooks?: PromptTestHooks) {
   const { session, options, abortController, stream } = turn;
   const { plugins, sdkPrompt, queryEnvironment, mcpServers, mcpServerNames, mcpServersKey } = plan;
   const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, turn.promptUuid);
@@ -307,7 +307,12 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
     turn.thisTurn!;
   const queryIterator = query({
     prompt: heldSdkPrompt.prompt,
-    options: claudeQueryOptions(turn, plan, turnFor, mcp, requests),
+    options: {
+      ...claudeQueryOptions(turn, plan, turnFor, mcp, requests),
+      ...(testHooks?.spawnClaudeCodeProcess && {
+        spawnClaudeCodeProcess: testHooks.spawnClaudeCodeProcess,
+      }),
+    },
   });
   const liveQuery = Object.assign(queryIterator, {
     pushInput: (message: SDKUserMessage) => turnFor().pushSteerInput(message),
@@ -458,7 +463,7 @@ export async function runTurnOnRuntime(
   }
   if (!turn.runtime) {
     if (!(await prepareLaunch(turn))) return false;
-    const { launched, queryIterator, markEnded } = launchClaudeRuntime(turn, plan);
+    const { launched, queryIterator, markEnded } = launchClaudeRuntime(turn, plan, testHooks);
     // The prompt is already held in the SDK's input, so nothing here has to wait
     // for the CLI to boot. `supportedAgents()` can only be answered once it has,
     // which is seconds on a cold start: awaiting it held the dispatch (and the

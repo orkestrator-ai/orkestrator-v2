@@ -353,9 +353,8 @@ export interface ClaudeRuntime {
    */
   readonly requests: ClaudeControlRequests;
   /**
-   * How many prompts were written into this process after its first, each of
-   * which re-read the CLI's pending requests (`recoverClaudeRequestsOnRejoin`).
-   * A tab that remounts reads the bridge's cards and never counts here.
+   * Inventory read attempts on warm joins (`recoverClaudeRequestsOnRejoin`).
+   * A busy join or tab remount never counts here.
    */
   rejoins: number;
   /** The newest turn: it owns the root conversation. */

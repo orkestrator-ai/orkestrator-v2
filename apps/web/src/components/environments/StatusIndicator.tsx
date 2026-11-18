@@ -9,12 +9,19 @@ interface StatusIndicatorProps {
   className?: string;
 }
 
-const statusConfig: Record<EnvironmentStatus, { color: string; label: string }> = {
+const statusConfig: Record<
+  EnvironmentStatus,
+  { color: string; label: string; labelColor?: string }
+> = {
   running: { color: "text-status-running", label: "Running" },
-  stopped: { color: "text-status-stopped", label: "Stopped" },
+  stopped: { color: "text-status-stopped", label: "Stopped", labelColor: "text-muted-foreground" },
   error: { color: "text-status-error", label: "Error" },
   creating: { color: "text-status-creating", label: "Creating" },
-  stopping: { color: "text-status-stopped", label: "Stopping" },
+  stopping: {
+    color: "text-status-stopped",
+    label: "Stopping",
+    labelColor: "text-muted-foreground",
+  },
 };
 
 export function StatusIndicator({ status, showLabel = false, className }: StatusIndicatorProps) {
@@ -35,7 +42,7 @@ export function StatusIndicator({ status, showLabel = false, className }: Status
               )}
             />
           )}
-          {showLabel && <span className="text-xs">{config.label}</span>}
+          {showLabel && <span className={cn("text-xs", config.labelColor)}>{config.label}</span>}
         </div>
       </TooltipTrigger>
       <TooltipContent side="right">

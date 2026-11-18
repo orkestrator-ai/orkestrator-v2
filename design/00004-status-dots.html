@@ -37,7 +37,8 @@
       </div>
 
       <h2>Find every instance</h2>
-      <pre><code>grep -rnE --include=*.tsx "(running|ready|finished|done)[^\n]{0,60}bg-(green|emerald)-[0-9]{3}" apps/web/src | grep -v "\.test\."</code></pre>
+      <pre><code>git grep -n -C 3 -E 'bg-(green|emerald)-[0-9]{3}' -- 'apps/web/src/**/*.tsx' ':!*.test.tsx'</code></pre>
+      <p class="note">Read the surrounding conditions and labels to classify each hit.</p>
 
       <h2>Scope</h2>
       <table>
@@ -75,6 +76,10 @@
             <td>finished dot, emerald-500</td>
           </tr>
           <tr>
+            <td><code>apps/web/src/components/settings/GlobalSettings.sections.tsx:2164</code></td>
+            <td>Web Client running dot and pulse, deferred with the settings surface</td>
+          </tr>
+          <tr>
             <td><code>apps/web/src/components/kanban/KanbanBoard.tsx:47</code></td>
             <td>Done column dot, green-500 (column identity or status?)</td>
           </tr>
@@ -90,8 +95,8 @@
       <h2>Approach</h2>
       <ol>
         <li>
-          Make <code>StatusIndicator</code> read dot and ring colors from the status tokens (for
-          example <code>bg-status-running</code>), so label and dot cannot disagree.
+          Make <code>StatusIndicator</code> use status tokens for dots and spinners. Inline labels
+          inherit their status color where it provides sufficient contrast.
         </li>
         <li>Point the other running, ready and finished dots at the same tokens.</li>
         <li>Decide the Stopping color (below) and the Kanban column dots, then apply.</li>
@@ -179,8 +184,11 @@
       </section>
 
       <section class="capture" id="cap-status-tooltip-desktop">
-        <h3>StatusIndicator with label shown <span class="pill">desktop 1440×900</span></h3>
-        <p class="how">Hover the dot or open a surface that passes showLabel.</p>
+        <h3>Project search status dots <span class="pill">desktop 1440×900</span></h3>
+        <p class="how">
+          Reload the app, open project search, filter to the fixture environments, and hover a
+          status dot.
+        </p>
         <div class="pair">
           <figure class="shot">
             <figcaption>
@@ -189,7 +197,7 @@
             <div class="frame">
               <img
                 src="images/00004/before-status-tooltip-desktop.png"
-                alt="Before: StatusIndicator with label shown (desktop)"
+                alt="Project search before token adoption, showing the fixture environment status dots"
                 loading="lazy"
               />
             </div>
@@ -201,7 +209,7 @@
             <div class="frame">
               <img
                 src="images/00004/after-status-tooltip-desktop.png"
-                alt="After: StatusIndicator with label shown (desktop)"
+                alt="Project search after token adoption, showing the same fixture environment status dots"
                 loading="lazy"
               />
             </div>
@@ -279,6 +287,7 @@
 
       <h2>Verification</h2>
       <pre><code>mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+NODE_ENV=test mise run test:logged -- --name status-indicator -- bun test ./tests/unit/components/StatusIndicator.test.tsx --parallel=2 --only-failures
 NODE_ENV=test mise run test:logged -- --name env-status -- bun test --cwd apps/web ./src/components/environments --parallel=2 --only-failures
 mise run format:check
 mise run lint</code></pre>
@@ -321,7 +330,7 @@ mise run lint</code></pre>
         </li>
         <li>
           <input type="checkbox" aria-label="Done" checked /><span
-            >Type-check and the owning tests pass (commands below);
+            >Type-check and the owning tests pass (commands above);
             <code>mise run format:check</code> and <code>mise run lint</code> pass.</span
           >
         </li>
@@ -349,13 +358,21 @@ mise run lint</code></pre>
       <h3>Hit classification and decisions</h3>
       <ul>
         <li>
-          <code>StatusIndicator</code> gives its dot or spinner and its inline label a single status
-          color. Stopping reuses <code>status-stopped</code> and keeps the spinner. Motion
-          distinguishes the transition and leaves amber available for states that need attention.
+          <code>StatusIndicator</code> applies a status color to its dot or spinner. Inline labels
+          inherit that color except for Stopped and Stopping, which use
+          <code>muted-foreground</code>
+          for small-text contrast. Chromium measured 5.97:1 on the dark sidebar surface for both 12
+          px labels, up from 3.85:1. Stopping keeps the stopped-gray spinner.
         </li>
         <li>
           The Claude tmux and node snapshot running dots, preview service Ready dot, and subork
           Finished dot now share <code>status-running</code> as the all-clear green.
+        </li>
+        <li>
+          The Web Client settings running dot still uses <code>bg-emerald-500</code> with an
+          <code>emerald-400</code> pulse. Settings indicators, including preview publication
+          availability, are deferred. Other hits include connection and sync indicators, Linear
+          column colors, and accents for buttons, messages, and usage charts.
         </li>
         <li>
           The Kanban Done dot and the matching card stripe identify a column. All four columns keep
@@ -368,9 +385,9 @@ mise run lint</code></pre>
       </ul>
       <h3>Image pairs</h3>
       <p>
-        Playwright captured the four baseline views at <code>b2c91abb9</code> before source edits.
-        Both passes used the isolated headless <code>design-00004</code> fixture, dark theme, 100%
-        zoom, and device scale factor 1. The renderer was reloaded in each pass.
+        Playwright captured the sidebar and Kanban baseline views at <code>b2c91abb9</code> before
+        source edits. Those pairs used the isolated headless <code>design-00004</code> fixture, dark
+        theme, 100% zoom, and device scale factor 1. The renderer was reloaded in each pass.
       </p>
       <ul>
         <li>
@@ -380,12 +397,11 @@ mise run lint</code></pre>
           marker browser test exercises the circle and square working rings in motion.
         </li>
         <li>
-          <a href="#cap-status-tooltip-desktop">Labeled status indicator, desktop</a>. Running,
-          Stopped, Creating, and Error now pair each label with a matching token-colored dot or
-          spinner. Stopping changes from orange to the same gray as Stopped and keeps spinning. The
-          search dialog covers its hover tooltip, so the capture uses the production component's
-          <code>showLabel</code> variant in the live renderer. The project search path was also
-          checked after reload.
+          <a href="#cap-status-tooltip-desktop">Project search, desktop</a>. The search dialog
+          covers its hover tooltip, so the pair shows the dot-only results from the production
+          search surface after reload. Both captures used the same running and stopped worktrees in
+          the isolated <code>design-00004-review</code> profile at 1440 × 900. For the before view,
+          Playwright served the original indicator from <code>b2c91abb9</code> to the search page.
         </li>
         <li>
           <a href="#cap-kanban-columns-desktop">Kanban, desktop</a>. All four headers retain their
